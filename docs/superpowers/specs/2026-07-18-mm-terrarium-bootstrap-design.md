@@ -3,7 +3,9 @@
 **Date:** 2026-07-18
 **Status:** Approved (compressed brainstorm, autonomous session; decisions
 below were made with explicit recommendations and stand unless Chris revises)
-**Canonical architecture:** `mm-documents/mm-shrooms-app/control-gameserver-design.md`
+**Canonical architecture:** `docs/control-gameserver-design.md` (in this
+repo; moved here from mm-documents 2026-07-18 so external collaborators can
+reach it)
 
 ## 1. Purpose
 

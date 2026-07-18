@@ -15,11 +15,12 @@ websockets) connect to the Arco server; gameplay traffic addresses
 
 ## Canonical design
 
-`mm-documents/mm-shrooms-app/control-gameserver-design.md` (official path
-forward as of 2026-07-18, developed with Roger Dannenberg). Edit only there;
-do not duplicate design content into this repo. Game-design background
-(RenQuest integration, Bit scoring and loop rules, hardware) lives in
-`shroom-installations-design.md` in the same directory.
+[`docs/control-gameserver-design.md`](docs/control-gameserver-design.md)
+(official path forward as of 2026-07-18, developed with Roger Dannenberg).
+This repo is the canonical home of that doc so all collaborators can reach
+it. Game-design background (RenQuest integration, Bit scoring and loop
+rules, hardware) lives in MM-internal docs (`mm-documents/mm-shrooms-app/`)
+and is not required to work on this architecture.
 
 ## Planned layout
 
