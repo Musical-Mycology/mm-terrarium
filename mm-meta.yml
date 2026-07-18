@@ -1,0 +1,18 @@
+schema_version: 2
+slug: mm-terrarium
+display_name: Terrarium Server
+
+description: >
+  Per-installation venue server for Shroom installations: hosts the Arco
+  server (O2 hub for o2lite devices and browser websocket clients; all room
+  synthesis) and the Control+GameServer (Bit runtime, registration/role
+  assignment via Registration Nodes, scoring, adjudication) in Python on
+  pyarco. Design: mm-documents/mm-shrooms-app/control-gameserver-design.md.
+
+tech: [python, pyarco, arco, o2, cpp]
+
+github: https://github.com/Musical-Mycology/mm-terrarium
+mm_architecture_section: MM_ARCHITECTURE.md#other-repos-tools--apps
+
+tier: app
+status: pending
