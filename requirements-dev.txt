@@ -1,0 +1,8 @@
+# Development dependencies for the Control+GameServer test suite.
+#
+# Install into a venv:
+#     python -m pip install -r requirements-dev.txt
+#
+# Run the offline test suite:
+#     python -m pytest tests -v
+pytest>=8.0
