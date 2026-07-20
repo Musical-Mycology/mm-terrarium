@@ -33,8 +33,17 @@ deploy/      venue provisioning and installation networking
 docs/        repo docs; specs under docs/superpowers/specs/
 ```
 
-No implementation yet: this repo starts at the design stage. First code lands
-via the spec in `docs/superpowers/specs/`.
+`control/` and `bits/` now hold the first implementation slice: the
+Control+GameServer lifecycle engine (state machine, role/registration data
+model) and `TestBit`, a durable reference fixture. It runs entirely offline
+with no O2/Arco/pyarco dependency yet — see
+`docs/superpowers/specs/2026-07-20-control-gameserver-first-slice-design.md`
+for scope and rationale. Run the test suite with:
+
+```
+python -m pip install -r requirements-dev.txt
+python -m pytest tests -v
+```
 
 ## Relationship to other repos
 
