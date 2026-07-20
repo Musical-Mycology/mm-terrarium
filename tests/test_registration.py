@@ -10,12 +10,16 @@ def make_table():
                   capacity=None, scored=False)
     conductor = Role(name="conductor", role_class=RoleClass.UNIQUE,
                       capacity=1, scored=True)
+    understudy = Role(name="understudy", role_class=RoleClass.SHARED,
+                       capacity=None, scored=True)
     return RoleTable(
-        roles={"player": player, "jammer": jammer, "conductor": conductor},
+        roles={"player": player, "jammer": jammer, "conductor": conductor,
+               "understudy": understudy},
         node_map={
             "NODE_PLAYER": ["player"],
             "NODE_JAM": ["jammer"],
             "NODE_CONDUCTOR": ["conductor"],
+            "NODE_LEAD": ["conductor", "understudy"],
         },
     )
 
@@ -62,6 +66,17 @@ def test_retapping_a_different_node_switches_role():
     assert switch.role == "jammer"
     assert reg.assignments["ie1"][1] == "jammer"
     assert reg._counts["player"] == 0  # released when ie1 switched away
+
+
+def test_join_falls_through_a_multi_candidate_node_to_the_next_role():
+    reg = RegistrationState(make_table())
+    first = reg.join("ie1", "NODE_LEAD", State.SETUP)
+    assert first.granted is True
+    assert first.role == "conductor"  # first candidate on the fallback list
+
+    second = reg.join("ie2", "NODE_LEAD", State.SETUP)
+    assert second.granted is True
+    assert second.role == "understudy"  # conductor now full; falls through
 
 
 def test_release_all_clears_assignments_and_counts():
