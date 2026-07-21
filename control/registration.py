@@ -68,3 +68,13 @@ class RegistrationState:
         for dev in devs:
             self.release(dev)
         return devs
+
+    def counts(self) -> list[tuple[str, int, int | None]]:
+        """Live per-role (name, count, capacity) snapshot -- the public view
+        of _counts for callers outside Control (e.g. the uplink) that need
+        registration fill-state without reaching into a private attribute.
+        """
+        return [
+            (role.name, self._counts[role.name], role.capacity)
+            for role in self.role_table.roles.values()
+        ]

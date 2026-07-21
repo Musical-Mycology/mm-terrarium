@@ -88,3 +88,16 @@ def test_release_all_clears_assignments_and_counts():
     assert reg.assignments == {}
     assert reg._counts["player"] == 0
     assert reg._counts["jammer"] == 0
+
+
+def test_counts_reflects_live_registrations_and_capacity():
+    reg = RegistrationState(make_table())
+    reg.join("ie1", "NODE_PLAYER", State.SETUP)
+    reg.join("ie2", "NODE_CONDUCTOR", State.SETUP)
+
+    counts = {name: (count, capacity) for name, count, capacity in reg.counts()}
+
+    assert counts["player"] == (1, None)
+    assert counts["conductor"] == (1, 1)
+    assert counts["jammer"] == (0, None)
+    assert counts["understudy"] == (0, None)

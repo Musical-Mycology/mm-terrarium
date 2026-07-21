@@ -27,18 +27,23 @@ and is not required to work on this architecture.
 ```
 control/     Control+GameServer package (Python, on pyarco)
 bits/        Bit plugin modules (role tables, graph-builders, cues, scoring)
+uplink/      Remote command/telemetry link to a future mm-fairyring broker
 arcoserver/  Arco server build config for the Terrarium (dspmanifest.txt, prefs)
 www/         deployed web root (simulator build ships here from mm-tuneshroom)
 deploy/      venue provisioning and installation networking
 docs/        repo docs; specs under docs/superpowers/specs/
 ```
 
-`control/` and `bits/` now hold the first implementation slice: the
+`control/` and `bits/` hold the first implementation slice: the
 Control+GameServer lifecycle engine (state machine, role/registration data
-model) and `TestBit`, a durable reference fixture. It runs entirely offline
-with no O2/Arco/pyarco dependency yet — see
+model) and `TestBit`, a durable reference fixture. `uplink/` adds a
+`GameServer` observer (`UplinkAgent`) that makes that engine remotely
+drivable over a persistent outbound websocket, tested against a fake
+in-process transport plus a real local socket — see
 `docs/superpowers/specs/2026-07-20-control-gameserver-first-slice-design.md`
-for scope and rationale. Run the test suite with:
+and `docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md` for
+scope and rationale. Both run entirely offline in tests, with no O2/Arco/
+pyarco/fairyring dependency. Run the test suite with:
 
 ```
 python -m pip install -r requirements-dev.txt
@@ -52,5 +57,7 @@ python -m pytest tests -v
 - **pyarco**: Python control layer used by Control+GameServer.
 - **mm-tuneshroom**: the instrument app and browser simulator. Its web build
   deploys into `www/` as an artifact; it never contains Terrarium-side logic.
-- **mm-fairyring** (planned): cloud broker for RenQuest integration; the
-  Terrarium's uplink module talks outbound to it, never in the real-time loop.
+- **mm-fairyring** (planned): cloud broker for RenQuest integration. This
+  repo's `uplink/` module (the Terrarium-side half) is implemented and
+  talks outbound over a websocket, never in the real-time loop; the
+  broker itself doesn't exist yet.

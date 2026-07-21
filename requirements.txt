@@ -1,0 +1,2 @@
+# Runtime dependencies for the Control+GameServer / Terrarium uplink.
+websockets>=13
