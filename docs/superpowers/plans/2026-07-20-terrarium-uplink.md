@@ -1238,6 +1238,7 @@ python -m pip install -r requirements-dev.txt
 # tests/test_websocket_transport.py
 import json
 import threading
+import time
 
 import pytest
 from websockets.sync.server import serve
@@ -1284,7 +1285,19 @@ def test_send_reaches_the_server(echo_server):
 
     transport.send({"command": "run"})
 
-    assert transport.receive() == {"command": "run"}  # echoed back
+    # receive() is deliberately non-blocking (timeout=0, see the class
+    # docstring) so it never blocks a caller's tick loop -- it won't
+    # necessarily see the echo on the very first call, since that requires
+    # a real network round trip. Poll it a few times, the way a real
+    # tick-loop caller would, instead of asserting an instant reply.
+    reply = None
+    for _ in range(50):
+        reply = transport.receive()
+        if reply is not None:
+            break
+        time.sleep(0.01)
+
+    assert reply == {"command": "run"}  # echoed back
     assert received == [{"command": "run"}]
 
 
