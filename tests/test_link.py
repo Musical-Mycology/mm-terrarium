@@ -16,9 +16,11 @@ def make_agent():
 
 def test_construction_registers_as_game_server_observer():
     server = GameServer(bit_registry=REGISTRY)
-    UplinkAgent(server, FakeTransport())
-    assert server.on_state_change is not None
-    assert server.on_registration_change is not None
+    transport = FakeTransport()
+    transport.connect()
+    UplinkAgent(server, transport)
+    server.load_bit("test_bit")   # drives state transitions through the observer
+    assert any(m.get("event") == "state_changed" for m in transport.sent)
 
 
 def test_poll_does_nothing_when_disconnected():
