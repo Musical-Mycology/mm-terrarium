@@ -34,6 +34,13 @@ class Bit(ABC):
     def on_complete(self) -> None:
         """Called once when Control enters COMPLETING (scoring, closing actions)."""
 
+    def result(self) -> dict | None:
+        """Optional completion payload (e.g. score/outcome) for the uplink
+        to relay upstream once this Bit finishes. Default: nothing to
+        report.
+        """
+        return None
+
     def on_unload(self) -> None:
         """Called once when Control enters UNLOADING, after devices are released."""
 
