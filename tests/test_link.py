@@ -139,3 +139,107 @@ def test_events_not_sent_while_disconnected():
     server.load_bit("test_bit")
 
     assert transport.sent == []
+
+
+class FakeClock:
+    def __init__(self, start: float = 0.0):
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class FlakyTransport(FakeTransport):
+    def __init__(self, fail_times: int):
+        super().__init__()
+        self._fail_times = fail_times
+
+    def connect(self) -> None:
+        if self._fail_times > 0:
+            self._fail_times -= 1
+            raise ConnectionError("no route")
+        super().connect()
+
+
+def test_maintain_connection_connects_immediately_when_disconnected():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, time_source=FakeClock())
+
+    agent.maintain_connection()
+
+    assert transport.connected is True
+    assert transport.connect_count == 1
+
+
+def test_maintain_connection_is_a_noop_when_already_connected():
+    agent, server, transport = make_agent()  # helper already connects once
+    agent.maintain_connection()
+    assert transport.connect_count == 1
+
+
+def test_reconnect_sends_resync_snapshot():
+    agent, server, transport = make_agent()
+    server.load_bit("test_bit")
+    server.join("ie1", "TEST_PLAYER_NODE")
+    transport.disconnect()
+    transport.sent.clear()
+
+    agent.maintain_connection()
+
+    assert transport.sent[0] == {"event": "state_changed", "state": "SETUP"}
+    reg_event = transport.sent[1]
+    assert reg_event["event"] == "registration_changed"
+    roles = {r["role"]: r["count"] for r in reg_event["roles"]}
+    assert roles["player"] == 1
+
+
+def test_resync_omits_registration_snapshot_when_no_bit_loaded():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, time_source=FakeClock())
+
+    agent.maintain_connection()
+
+    assert transport.sent == [{"event": "state_changed", "state": "IDLE"}]
+
+
+def test_failed_connect_backs_off_before_retrying():
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FlakyTransport(fail_times=1)
+    agent = UplinkAgent(server, transport, time_source=clock)
+
+    agent.maintain_connection()  # fails, schedules retry at t=1.0
+    assert transport.connected is False
+
+    clock.advance(0.5)
+    agent.maintain_connection()  # too soon (0.5s < 1.0s backoff)
+    assert transport.connected is False
+
+    clock.advance(0.6)  # total 1.1s elapsed -- past the 1.0s backoff
+    agent.maintain_connection()
+    assert transport.connected is True
+
+
+def test_backoff_doubles_on_repeated_failures():
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FlakyTransport(fail_times=2)
+    agent = UplinkAgent(server, transport, time_source=clock)
+
+    agent.maintain_connection()  # fail 1, next attempt scheduled at t=1.0
+    clock.advance(1.0)
+    agent.maintain_connection()  # fail 2, next attempt scheduled at t=3.0
+    assert transport.connected is False
+
+    clock.advance(1.9)  # t=2.9, still short of 3.0
+    agent.maintain_connection()
+    assert transport.connected is False
+
+    clock.advance(0.2)  # t=3.1
+    agent.maintain_connection()
+    assert transport.connected is True
