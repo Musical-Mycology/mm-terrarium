@@ -5,4 +5,5 @@
 #
 # Run the offline test suite:
 #     python -m pytest tests -v
+-r requirements.txt
 pytest>=8.0
