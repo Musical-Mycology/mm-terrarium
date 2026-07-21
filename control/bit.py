@@ -41,6 +41,14 @@ class Bit(ABC):
         """
         return None
 
+    def status(self) -> dict:
+        """Optional generic key/value read-out for the Terrarium Console to
+        render as a table. Default: nothing to report. A Bit overrides this
+        to surface its own live state. This is also the seam a future
+        Lux Aeterna / Arco health read-out rides on.
+        """
+        return {}
+
     def on_unload(self) -> None:
         """Called once when Control enters UNLOADING, after devices are released."""
 

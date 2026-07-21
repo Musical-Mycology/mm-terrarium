@@ -47,3 +47,7 @@ class TestBit(Bit):
 
     def on_unload(self) -> None:
         self._unloaded = True
+
+    def status(self) -> dict:
+        return {"elapsed": round(self._elapsed, 2),
+                "run_duration": self._run_duration}
