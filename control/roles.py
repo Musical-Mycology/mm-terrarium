@@ -20,6 +20,13 @@ class Role:
     # per-role graph-builder work). Unused in this slice; present so the
     # schema doesn't change later.
     ugen_manifest: list = field(default_factory=list)
+    # Placeholder for this role's per-player light-lane declaration, sibling
+    # to ugen_manifest. Light is authored in the same timeline as sound
+    # (see mm-documents shroom-installations-design.md); this exists so the
+    # schema doesn't change when the first real Bit declares light lanes.
+    # The Terrarium Console displays it; it never drives Lux Aeterna's render
+    # loop. Unused in this slice.
+    light_manifest: list = field(default_factory=list)
 
 
 @dataclass
