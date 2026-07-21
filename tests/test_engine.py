@@ -110,3 +110,97 @@ def test_on_unload_exception_still_reaches_idle():
     server.run()
     server.tick(3.0)
     assert server.state == State.IDLE
+
+
+def test_on_state_change_fires_for_every_transition():
+    server = make_server()
+    transitions = []
+    server.on_state_change = lambda old, new: transitions.append((old, new))
+
+    server.load_bit("test_bit")
+    server.run()
+    server.tick(1.0)
+    server.tick(1.5)  # crosses TestBit's 2.0s completion threshold
+
+    assert transitions == [
+        (State.IDLE, State.LOADING),
+        (State.LOADING, State.LOADED),
+        (State.LOADED, State.SETUP),
+        (State.SETUP, State.RUNNING),
+        (State.RUNNING, State.COMPLETING),
+        (State.COMPLETING, State.UNLOADING),
+        (State.UNLOADING, State.IDLE),
+    ]
+
+
+def test_on_state_change_fires_on_failed_load_bit():
+    server = make_server()
+    transitions = []
+    server.on_state_change = lambda old, new: transitions.append((old, new))
+
+    with pytest.raises(BitLoadError):
+        server.load_bit("no_such_bit")
+
+    assert transitions == [
+        (State.IDLE, State.LOADING),
+        (State.LOADING, State.IDLE),
+    ]
+
+
+def test_on_registration_change_fires_only_on_granted_join():
+    server = make_server()
+    server.load_bit("test_bit")
+    calls = []
+    server.on_registration_change = lambda: calls.append(server.registration.counts())
+
+    denied = server.join("ie1", "NO_SUCH_NODE")
+    assert denied.granted is False
+    assert calls == []
+
+    granted = server.join("ie1", "TEST_PLAYER_NODE")
+    assert granted.granted is True
+    assert len(calls) == 1
+    counts = {name: count for name, count, _capacity in calls[0]}
+    assert counts["player"] == 1
+
+
+def test_abort_requires_active_bit():
+    server = make_server()
+    with pytest.raises(InvalidTransition):
+        server.abort()
+
+
+def test_abort_from_setup_unloads_and_releases_devices():
+    server = make_server()
+    released = []
+    server.on_release = released.append
+    server.hello("ie1", "Tuneshroom 1", "1.0")
+    server.load_bit("test_bit")
+    server.join("ie1", "TEST_PLAYER_NODE")
+
+    server.abort()
+
+    assert server.state == State.IDLE
+    assert server.bit is None
+    assert released == ["ie1"]
+
+
+def test_abort_runs_on_complete_before_unloading():
+    server = make_server()
+    server.load_bit("test_bit")
+    server.run()
+    bit = server.bit
+
+    server.abort()
+
+    assert bit._completed is True
+    assert server.state == State.IDLE
+
+
+def test_abort_survives_on_complete_exception():
+    server = make_server()
+    server.load_bit("exploding_complete_bit")
+
+    server.abort()  # must not raise
+
+    assert server.state == State.IDLE
