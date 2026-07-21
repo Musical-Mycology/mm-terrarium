@@ -121,6 +121,31 @@ def test_bit_completed_sent_at_unload_when_result_present():
     assert completed == [{"event": "bit_completed", "result": {"score": 99}}]
 
 
+def test_exploding_result_does_not_wedge_state_machine():
+    class ExplodingResultBit(TestBit):
+        def result(self):
+            raise RuntimeError("boom")
+
+    server = GameServer(bit_registry={"exploding_result_bit": ExplodingResultBit})
+    released = []
+    server.on_release = released.append
+    transport = FakeTransport()
+    UplinkAgent(server, transport)
+    transport.connect()
+
+    server.hello("ie1", "Tuneshroom 1", "1.0")
+    server.load_bit("exploding_result_bit")
+    server.join("ie1", "TEST_PLAYER_NODE")
+    server.run()
+    server.tick(3.0)  # crosses TestBit's default 2.0s completion threshold
+
+    assert server.state.name == "IDLE"
+    assert released == ["ie1"]  # device was released, not stranded
+    assert server.bit is None
+    assert server.registration is None
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+
+
 def test_no_bit_completed_event_when_result_is_none():
     agent, server, transport = make_agent()
     server.load_bit("test_bit")

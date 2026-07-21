@@ -92,7 +92,11 @@ class UplinkAgent:
         bit = self.game_server.bit
         if bit is None:
             return
-        result = bit.result()
+        try:
+            result = bit.result()
+        except Exception:
+            logger.exception("Bit.result raised; not sending bit_completed")
+            return
         if result is not None:
             self._send(protocol.bit_completed_event(result))
 
