@@ -29,5 +29,12 @@ class DevicePool:
     def get(self, dev: str) -> DeviceInfo | None:
         return self._devices.get(dev)
 
+    def all(self) -> list[DeviceInfo]:
+        """Every known device, insertion order -- the public view for the
+        Terrarium Console snapshot. Returns a fresh list; mutating it does
+        not affect the pool.
+        """
+        return list(self._devices.values())
+
     def __len__(self) -> int:
         return len(self._devices)

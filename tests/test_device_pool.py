@@ -22,3 +22,15 @@ def test_repeated_hello_from_same_device_updates_in_place():
     pool.hello("ie3", "Tuneshroom 3", "1.1")
     assert len(pool) == 1
     assert pool.get("ie3").protoversion == "1.1"
+
+
+def test_all_returns_every_known_device():
+    from control.device_pool import DevicePool
+    pool = DevicePool()
+    pool.hello("ie1", "Shroom One", "1")
+    pool.hello("ie2", "Shroom Two", "1")
+    devs = pool.all()
+    assert [d.dev for d in devs] == ["ie1", "ie2"]
+    # returns a fresh list, not the internal dict's view
+    devs.clear()
+    assert len(pool) == 2
