@@ -1208,16 +1208,6 @@ from console.server import ConsoleServer
 from control.engine import GameServer
 
 
-def _poll_until(fn, timeout=2.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = fn()
-        if result:
-            return result
-        time.sleep(0.02)
-    return fn()
-
-
 def test_get_root_serves_index_html():
     server = ConsoleServer(port=0)
     server.start()
@@ -1236,9 +1226,8 @@ def test_client_gets_snapshot_and_command_round_trips():
     server.start()
     try:
         with ws_connect(f"ws://127.0.0.1:{server.port}/ws") as ws:
-            # a newly-connected client is picked up on the next agent.poll()
-            _poll_until(lambda: (agent.poll(), server)[1] and _has_new(server))
-            # drive the agent until the snapshot is delivered
+            # _recv_event drives agent.poll() until the event arrives; the
+            # first poll drains the new client and sends its snapshot.
             snap = _recv_event(ws, agent, "snapshot")
             assert snap["state"] == "IDLE"
             assert snap["installed_bits"] == ["TestBit"]
@@ -1248,12 +1237,6 @@ def test_client_gets_snapshot_and_command_round_trips():
             assert state["state"] in ("LOADING", "LOADED", "SETUP")
     finally:
         server.stop()
-
-
-def _has_new(server):
-    # non-consuming peek is not part of the API; poll() consumes. This helper
-    # just gives _poll_until a truthy signal after the first poll ran.
-    return True
 
 
 def _recv_event(ws, agent, event_name, timeout=2.0):
