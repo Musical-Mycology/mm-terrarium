@@ -28,6 +28,7 @@ and is not required to work on this architecture.
 control/     Control+GameServer package (Python, on pyarco)
 bits/        Bit plugin modules (role tables, graph-builders, cues, scoring)
 uplink/      Remote command/telemetry link to a future mm-fairyring broker
+console/     Terrarium Console: local admin panel (HTTP+websocket)
 arcoserver/  Arco server build config for the Terrarium (dspmanifest.txt, prefs)
 www/         deployed web root (simulator build ships here from mm-tuneshroom)
 deploy/      venue provisioning and installation networking
@@ -43,7 +44,14 @@ in-process transport plus a real local socket — see
 `docs/superpowers/specs/2026-07-20-control-gameserver-first-slice-design.md`
 and `docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md` for
 scope and rationale. Both run entirely offline in tests, with no O2/Arco/
-pyarco/fairyring dependency. Run the test suite with:
+pyarco/fairyring dependency. `console/` adds the Terrarium Console: a
+Bit-agnostic local admin panel (served over a single-port HTTP+websocket)
+that loads/runs/aborts a Bit and live-monitors lifecycle state,
+registration, devices, and per-role audio + light manifests — the durable
+front-end fixture every Bit reuses. It attaches to the same engine
+observer list as the uplink and runs entirely offline in tests. See
+`docs/superpowers/specs/2026-07-21-terrarium-console-design.md`. Run the
+test suite with:
 
 ```
 python -m pip install -r requirements-dev.txt

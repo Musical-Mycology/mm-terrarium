@@ -2,9 +2,9 @@
 state machine described in design spec section 3. O2-agnostic by design --
 callers (a future O2lite transport layer) drive it through hello/load_bit/
 run/join/tick and observe device releases via on_release. Also observable
-by the Terrarium uplink
-(docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md) via
-on_state_change/on_registration_change, and remotely abortable via
+by any number of add_observer() observers (the Terrarium uplink
+and the Terrarium Console both attach) via on_state_change/
+on_registration_change/on_devices_change, and remotely abortable via
 abort() -- GameServer stays agnostic to who's watching or calling either.
 """
 
@@ -36,15 +36,15 @@ class GameServer:
         # Set by a transport layer: called once per device released during
         # UNLOADING, so it can send that device's /ie<N>/release message.
         self.on_release = None
-        # Set by UplinkAgent: called with (old_state, new_state) on every
-        # state transition.
-        self.on_state_change = None
-        # Set by UplinkAgent: called with no arguments after a join grants a
-        # role. Callers read self.registration.counts() for the snapshot.
-        self.on_registration_change = None
+        # Observers registered via add_observer(). Each may implement any of
+        # on_state_change(old, new), on_registration_change(),
+        # on_devices_change(); missing methods are skipped. Both the uplink
+        # and the Terrarium Console attach here and run simultaneously.
+        self._observers: list = []
 
     def hello(self, dev: str, name: str, protoversion: str) -> None:
         self.devices.hello(dev, name, protoversion)
+        self._notify("on_devices_change")
 
     def load_bit(self, name: str) -> None:
         if self.state != State.IDLE:
@@ -78,8 +78,9 @@ class GameServer:
             return JoinResult(granted=False,
                                reason="no Bit accepting registrations")
         result = self.registration.join(dev, node, self.state)
-        if result.granted and self.on_registration_change:
-            self.on_registration_change()
+        if result.granted:
+            self._notify("on_registration_change")
+            self._notify("on_devices_change")
         return result
 
     def tick(self, dt: float) -> None:
@@ -118,6 +119,7 @@ class GameServer:
         if self.on_release:
             for dev in released:
                 self.on_release(dev)
+        self._notify("on_devices_change")
         try:
             self.bit.on_unload()
         except Exception:
@@ -126,8 +128,27 @@ class GameServer:
         self.registration = None
         self._set_state(State.IDLE)
 
+    def add_observer(self, observer) -> None:
+        """Register an observer object. The engine calls, when present,
+        observer.on_state_change(old, new), observer.on_registration_change(),
+        and observer.on_devices_change(). Notification is in registration
+        order; a raising observer is logged and never interrupts the engine
+        or its peers.
+        """
+        self._observers.append(observer)
+
+    def _notify(self, method: str, *args) -> None:
+        for observer in self._observers:
+            callback = getattr(observer, method, None)
+            if callback is None:
+                continue
+            try:
+                callback(*args)
+            except Exception:
+                logger.exception("observer %r %s raised; continuing",
+                                 observer, method)
+
     def _set_state(self, new_state: State) -> None:
         old_state = self.state
         self.state = new_state
-        if self.on_state_change:
-            self.on_state_change(old_state, new_state)
+        self._notify("on_state_change", old_state, new_state)

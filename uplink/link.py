@@ -23,8 +23,7 @@ class UplinkAgent:
         self._time_source = time_source
         self._next_attempt_at = 0.0
         self._backoff = self.INITIAL_BACKOFF_SECONDS
-        game_server.on_state_change = self._on_state_change
-        game_server.on_registration_change = self._on_registration_change
+        game_server.add_observer(self)
 
     def maintain_connection(self) -> None:
         """Call once per tick-loop iteration, alongside poll(). Attempts to
@@ -83,7 +82,7 @@ class UplinkAgent:
         except (InvalidTransition, BitLoadError) as exc:
             self._send(protocol.error_event(command_name, str(exc)))
 
-    def _on_state_change(self, old_state: State, new_state: State) -> None:
+    def on_state_change(self, old_state: State, new_state: State) -> None:
         self._send(protocol.state_changed_event(new_state.name))
         if new_state == State.UNLOADING:
             self._send_bit_completed()
@@ -100,7 +99,7 @@ class UplinkAgent:
         if result is not None:
             self._send(protocol.bit_completed_event(result))
 
-    def _on_registration_change(self) -> None:
+    def on_registration_change(self) -> None:
         counts = self.game_server.registration.counts()
         self._send(protocol.registration_changed_event(counts))
 

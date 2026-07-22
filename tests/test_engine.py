@@ -1,8 +1,58 @@
+from types import SimpleNamespace
+
 import pytest
 
 from bits.test_bit import TestBit
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.state import State
+
+
+def test_add_observer_notifies_multiple_observers_of_state_changes():
+    from types import SimpleNamespace
+    from bits.test_bit import TestBit
+    from control.engine import GameServer
+    a, b = [], []
+    server = GameServer({"TestBit": TestBit})
+    server.add_observer(SimpleNamespace(
+        on_state_change=lambda old, new: a.append(new)))
+    server.add_observer(SimpleNamespace(
+        on_state_change=lambda old, new: b.append(new)))
+    server.load_bit("TestBit")
+    assert a == b and len(a) >= 3  # both saw the same transitions
+
+
+def test_observer_exception_does_not_break_engine_or_peers():
+    from types import SimpleNamespace
+    from bits.test_bit import TestBit
+    from control.engine import GameServer
+    seen = []
+    server = GameServer({"TestBit": TestBit})
+
+    def boom(old, new):
+        raise RuntimeError("observer blew up")
+
+    server.add_observer(SimpleNamespace(on_state_change=boom))
+    server.add_observer(SimpleNamespace(
+        on_state_change=lambda old, new: seen.append(new)))
+    server.load_bit("TestBit")            # must not raise
+    assert len(seen) >= 3                  # peer still notified
+
+
+def test_on_devices_change_fires_on_hello_join_and_unload():
+    from types import SimpleNamespace
+    from bits.test_bit import TestBit
+    from control.engine import GameServer
+    calls = []
+    server = GameServer({"TestBit": TestBit})
+    server.add_observer(SimpleNamespace(
+        on_devices_change=lambda: calls.append("devices")))
+    server.hello("ie1", "Shroom One", "1")        # +1
+    server.load_bit("TestBit")
+    server.join("ie1", "TEST_PLAYER_NODE")        # +1 (granted)
+    n_before_abort = len(calls)
+    server.abort()                                 # +1 (unload releases devices)
+    assert len(calls) == n_before_abort + 1
+    assert n_before_abort == 2
 
 
 class ExplodingCompleteBit(TestBit):
@@ -115,7 +165,8 @@ def test_on_unload_exception_still_reaches_idle():
 def test_on_state_change_fires_for_every_transition():
     server = make_server()
     transitions = []
-    server.on_state_change = lambda old, new: transitions.append((old, new))
+    server.add_observer(SimpleNamespace(
+        on_state_change=lambda old, new: transitions.append((old, new))))
 
     server.load_bit("test_bit")
     server.run()
@@ -136,7 +187,8 @@ def test_on_state_change_fires_for_every_transition():
 def test_on_state_change_fires_on_failed_load_bit():
     server = make_server()
     transitions = []
-    server.on_state_change = lambda old, new: transitions.append((old, new))
+    server.add_observer(SimpleNamespace(
+        on_state_change=lambda old, new: transitions.append((old, new))))
 
     with pytest.raises(BitLoadError):
         server.load_bit("no_such_bit")
@@ -151,7 +203,8 @@ def test_on_registration_change_fires_only_on_granted_join():
     server = make_server()
     server.load_bit("test_bit")
     calls = []
-    server.on_registration_change = lambda: calls.append(server.registration.counts())
+    server.add_observer(SimpleNamespace(
+        on_registration_change=lambda: calls.append(server.registration.counts())))
 
     denied = server.join("ie1", "NO_SUCH_NODE")
     assert denied.granted is False

@@ -30,3 +30,12 @@ def test_unique_role_has_integer_capacity():
     conductor = Role(name="conductor", role_class=RoleClass.UNIQUE,
                       capacity=1, scored=True)
     assert conductor.capacity == 1
+
+
+def test_role_has_empty_light_manifest_by_default():
+    from control.roles import Role, RoleClass
+    role = Role(name="player", role_class=RoleClass.SHARED,
+                capacity=None, scored=True)
+    assert role.light_manifest == []
+    # sibling placeholder to ugen_manifest; distinct list instances
+    assert role.light_manifest is not role.ugen_manifest

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrarium Console</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem; color: #111; }
+  h1 { font-size: 1.2rem; } h2 { font-size: 1rem; margin: 1rem 0 .3rem; }
+  #state { font-weight: 600; }
+  button { margin-right: .5rem; padding: .3rem .7rem; }
+  table { border-collapse: collapse; margin-top: .3rem; }
+  th, td { border: 1px solid #ccc; padding: .2rem .5rem; text-align: left; }
+  #log { height: 8rem; overflow: auto; background: #f6f6f6; padding: .3rem;
+         font-family: ui-monospace, monospace; white-space: pre-wrap; }
+  .conn-down { color: #a00; }
+</style>
+</head>
+<body>
+<h1>Terrarium Console <span id="conn" class="conn-down">(connecting…)</span></h1>
+
+<p>State: <span id="state">—</span> &nbsp; Loaded Bit: <span id="loaded">—</span></p>
+
+<h2>Controls</h2>
+<div>
+  <select id="bitPicker"></select>
+  <button id="loadBtn">Load Bit</button>
+  <button id="runBtn">Run</button>
+  <button id="abortBtn">Abort</button>
+</div>
+
+<h2>Registration</h2>
+<table id="registration"><thead><tr><th>Role</th><th>Count</th><th>Capacity</th></tr></thead><tbody></tbody></table>
+
+<h2>Roles &amp; media manifests</h2>
+<table id="roles"><thead><tr><th>Role</th><th>Class</th><th>Cap</th><th>Scored</th><th>ugen_manifest</th><th>light_manifest</th></tr></thead><tbody></tbody></table>
+
+<h2>Devices</h2>
+<table id="devices"><thead><tr><th>Device</th><th>Name</th><th>Role</th></tr></thead><tbody></tbody></table>
+
+<h2>Bit status</h2>
+<table id="bitStatus"><tbody></tbody></table>
+
+<h2>Event log</h2>
+<div id="log"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let ws;
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { $("conn").textContent = "(connected)"; $("conn").className = ""; };
+  ws.onclose = () => {
+    $("conn").textContent = "(disconnected — retrying)";
+    $("conn").className = "conn-down";
+    setTimeout(connect, 1000);
+  };
+  ws.onmessage = (e) => handle(JSON.parse(e.data));
+}
+
+function send(command, extra) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(Object.assign({ command }, extra || {})));
+  }
+}
+
+$("loadBtn").onclick = () => send("load_bit", { name: $("bitPicker").value });
+$("runBtn").onclick = () => send("run");
+$("abortBtn").onclick = () => send("abort");
+
+function rows(tbodySel, data, cells) {
+  const tbody = document.querySelector(tbodySel + " tbody");
+  tbody.innerHTML = "";
+  for (const item of data) {
+    const tr = document.createElement("tr");
+    for (const c of cells(item)) {
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+function renderRegistration(reg) {
+  rows("#registration", reg, (r) => [r.role, r.count, r.capacity ?? "∞"]);
+}
+function renderRoles(roles) {
+  rows("#roles", roles, (r) => [r.role, r.class, r.capacity ?? "∞", r.scored,
+    JSON.stringify(r.ugen_manifest), JSON.stringify(r.light_manifest)]);
+}
+function renderDevices(devs) {
+  rows("#devices", devs, (d) => [d.dev, d.name, d.role ?? "—"]);
+}
+function renderStatus(status) {
+  rows("#bitStatus", Object.entries(status || {}), (kv) => [kv[0], kv[1]]);
+}
+function populateBits(bits) {
+  const sel = $("bitPicker");
+  sel.innerHTML = "";
+  for (const b of bits) {
+    const opt = document.createElement("option");
+    opt.value = b; opt.textContent = b;
+    sel.appendChild(opt);
+  }
+}
+function log(level, message) {
+  const el = $("log");
+  el.textContent += `[${level}] ${message}\n`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function handle(msg) {
+  switch (msg.event) {
+    case "snapshot":
+      $("state").textContent = msg.state;
+      $("loaded").textContent = msg.loaded_bit ?? "—";
+      populateBits(msg.installed_bits);
+      renderRegistration(msg.registration);
+      renderRoles(msg.roles);
+      renderDevices(msg.devices);
+      renderStatus(msg.bit_status);
+      break;
+    case "state_changed":
+      $("state").textContent = msg.state;
+      log("info", "state → " + msg.state);
+      break;
+    case "registration_changed": renderRegistration(msg.roles); break;
+    case "devices_changed": renderDevices(msg.devices); break;
+    case "bit_status": renderStatus(msg.status); break;
+    case "bit_completed": log("info", "bit completed: " + JSON.stringify(msg.result)); break;
+    case "error": log("error", msg.command + ": " + msg.message); break;
+    case "log": log(msg.level, msg.message); break;
+  }
+}
+
+connect();
+</script>
+</body>
+</html>

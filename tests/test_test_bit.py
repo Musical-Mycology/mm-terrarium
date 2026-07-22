@@ -43,3 +43,25 @@ def test_update_completes_after_run_duration_elapses():
     assert bit.update(0.4) is False
     assert bit.update(0.4) is False
     assert bit.update(0.4) is True  # 1.2s elapsed >= 1.0s
+
+
+def test_bit_status_defaults_to_empty_dict():
+    from control.roles import RoleTable
+    from control.bit import Bit
+
+    class MinimalBit(Bit):
+        @property
+        def role_table(self) -> RoleTable:
+            return RoleTable(roles={}, node_map={})
+
+    assert MinimalBit().status() == {}
+
+
+def test_test_bit_status_reports_elapsed_and_duration():
+    from bits.test_bit import TestBit
+    bit = TestBit(run_duration=5.0)
+    bit.on_run_start()
+    bit.update(1.5)
+    status = bit.status()
+    assert status["run_duration"] == 5.0
+    assert status["elapsed"] == 1.5
