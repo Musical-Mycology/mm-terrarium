@@ -16,6 +16,10 @@ class JoinResult:
     scored: bool | None = None
     reason: str | None = None
     hint: str | None = None
+    # Composed per-role config blob for /ie<N>/role -- filled by
+    # GameServer.join on granted results (control/role_config.py);
+    # RegistrationState itself never touches it.
+    config: dict | None = None
 
 
 class RegistrationState:

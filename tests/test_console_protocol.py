@@ -7,7 +7,20 @@ def test_role_view_shape():
                 capacity=None, scored=True)
     assert protocol.role_view(role) == {
         "role": "player", "class": "SHARED", "capacity": None,
-        "scored": True, "ugen_manifest": [], "light_manifest": []}
+        "scored": True, "ugen_manifest": [], "light_manifest": {},
+        "welcome": None}
+
+
+def test_role_view_carries_v2_manifest_and_welcome():
+    role = Role(name="player", role_class=RoleClass.SHARED,
+                capacity=None, scored=True,
+                light_manifest={"instruments": [
+                    {"instrument": "bloom", "target": "primary"}]},
+                welcome={"light": {"instrument": "bloom"}})
+    view = protocol.role_view(role)
+    assert view["light_manifest"] == {"instruments": [
+        {"instrument": "bloom", "target": "primary"}]}
+    assert view["welcome"] == {"light": {"instrument": "bloom"}}
 
 
 def test_device_view_shape():

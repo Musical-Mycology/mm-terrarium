@@ -64,10 +64,24 @@ return to a clean waiting state. Landed in the first-slice spec
   has casual foot traffic). Control stays **Bit-agnostic** — it never evaluates
   a win condition itself; the Bit signals completion from `update(dt)`.
 - **Data model:** `RoleTable` (static, Bit-declared: `Role` = name/class/
-  capacity/`scored`/`ugen_manifest` + node fallback map), `DevicePool`
-  (Control-global, `dev → connection info`, survives Bit lifecycles),
-  `RegistrationState` (runtime `dev → (node, role, class)` with live per-role
-  counts via the public `counts()` accessor).
+  capacity/`scored`/`ugen_manifest`/`light_manifest` — the latter in
+  luxaeterna's **light-manifest v2 wire shape** — plus an optional `welcome`
+  pair declaring the role's light+audio adoption ceremony in one place, and
+  the node fallback map), `DevicePool` (Control-global, `dev → connection
+  info`, survives Bit lifecycles), `RegistrationState` (runtime
+  `dev → (node, role, class)` with live per-role counts via the public
+  `counts()` accessor).
+- **Per-role config blobs (PR #5):** `control/role_config.py` validates each
+  Bit's authored `light_manifest`/`welcome` declarations at `load_bit`
+  (shallow structural checks with located errors — a typo'd Bit fails as a
+  load-time `BitLoadError`, never as a device-side parse error
+  mid-installation) and composes the `/ie<N>/role` config blob at grant time:
+  the v2 manifest with `bit_name`/`bit_version`/`role` provenance stamped and
+  the welcome **light** half folded in, deep-copied. Granted joins surface the
+  blob on `JoinResult.config` for the future o2lite transport; the welcome
+  **audio** half never ships to the device — it stays readable off
+  `Role.welcome` for the future Arco cue path. `Bit.version` +
+  `GameServer.bit_name` (the registry key) supply the provenance.
 - **`Bit` interface:** minimal hook set — `role_table`, `on_setup_enter()`,
   `on_run_start()`, `update(dt)`, `on_complete()`, `on_unload()`, plus optional
   `result()` (completion payload) and `status()` (generic key/value read-out).
@@ -87,7 +101,10 @@ each granted by its own Registration Node — which is what makes the
 scored-vs-jam RUNNING join rule a *tested* behavior rather than an assumption.
 It auto-signals completion after a fixed duration so the whole lifecycle is
 exercisable with no live Arco. It is the lone exemplar of the `ugen_manifest` /
-`light_manifest` / `status()` seams.
+`light_manifest` / `status()` seams — and as of PR #5 its `player` role carries
+a **real light-manifest v2 declaration** (one instrument, note + CC lanes) plus
+a welcome pair, the declaration that formally froze the v2 schema; `jammer`
+keeps the empty defaults so the no-light path stays exercised.
 
 ### `uplink/` — outbound remote control (the *outbound* sibling)
 `UplinkAgent`: makes `GameServer` remotely drivable/observable over a
@@ -131,8 +148,9 @@ venue" question. Landed in
   command parsing and the byte-identical `state_changed` / `registration_changed`
   builders (single source of truth).
 - Two schema-stable seams landed with it so the panel is a genuine fixture:
-  `Role.light_manifest` (sibling to `ugen_manifest`, empty placeholder — light
-  is authored in the same timeline as sound from day one) and `Bit.status()`.
+  `Role.light_manifest` (sibling to `ugen_manifest` — a placeholder until
+  PR #5 froze it to the light-manifest v2 wire shape; `role_view` now also
+  carries the role's `welcome` declaration) and `Bit.status()`.
 - **Trust model:** trusted-LAN operator, **no authentication**, default bind
   **`127.0.0.1`** with `0.0.0.0` LAN exposure an explicit opt-in. This
   assumption is load-bearing — the moment a console faces an untrusted network,
@@ -159,8 +177,8 @@ honor them in any new work:
    `MM_HARDWARE_DESIGN.md` and `mm-shrooms-app/shroom-installations-design.md`).
    The console's relationship to it is **monitor, never drive**, exactly the
    boundary drawn for Arco: it *displays* each role's declared `light_manifest`
-   as placeholder data; it never instantiates Arco ugens and never pushes frames
-   to Lux Aeterna's render loop. (A future Lux Aeterna health read-out — Art-Net
+   (real light-manifest v2 declarations as of PR #5); it never instantiates
+   Arco ugens and never pushes frames to Lux Aeterna's render loop. (A future Lux Aeterna health read-out — Art-Net
    link up? WLED reachable? — is anticipated through the generic `Bit.status()`
    seam, but needs Lux Aeterna actually running, so it is a later slice.)
 
@@ -183,7 +201,12 @@ honor them in any new work:
   against a protocol contract a future fairyring can implement independently.
   The broker itself does not exist. Chain: Terrarium uplink → mm-fairyring →
   RenQuest trigger.
-- **Lux Aeterna** — the lighting renderer (see boundary rule 3).
+- **Lux Aeterna** — the lighting renderer (see boundary rule 3). As of PR #5
+  the repos also share a **wire contract**: the per-role config blobs Control
+  composes carry `light_manifest` in luxaeterna's light-manifest v2 shape
+  (parsed device-side by `LightManifest.from_dict`; ratified in luxaeterna's
+  2026-07-22 session-lifecycle spec §9, adopted here in
+  `docs/superpowers/specs/2026-07-22-light-manifest-v2-adoption-design.md`).
 
 ## Not yet built / deferred
 
@@ -193,8 +216,12 @@ Kept explicit so the doc doesn't over-claim:
   design framing, but nothing talks to a live O2 network or Arco server yet —
   the whole suite runs against fakes (`FakeO2Lite`-style transport,
   `FakeTransport`, a localhost websocket for the console server).
-- **Real ugen graph-building on Arco** and **real scoring.** `ugen_manifest` /
-  `light_manifest` are placeholders; `on_complete()` scoring is a stub hook.
+- **Real ugen graph-building on Arco** and **real scoring.** `ugen_manifest`
+  is still a placeholder and `on_complete()` scoring is a stub hook.
+  (`light_manifest` is no longer a placeholder — v2 schema frozen, validated
+  at load — but nothing *sends* the composed `/ie<N>/role` blob yet: the
+  o2lite transport that reads `JoinResult.config`, and the Arco cue path that
+  plays the welcome audio half, are both unbuilt.)
 - **Real Bits beyond `TestBit`.** No production Bit exists.
 - **The mm-fairyring broker** (the uplink's other end) and its auth/identity /
   venue-ID scheme.

@@ -65,3 +65,33 @@ def test_test_bit_status_reports_elapsed_and_duration():
     status = bit.status()
     assert status["run_duration"] == 5.0
     assert status["elapsed"] == 1.5
+
+
+def test_player_role_declares_v2_light_manifest_and_welcome():
+    bit = TestBit()
+    table = bit.role_table
+    player = table.roles["player"]
+    assert player.light_manifest == {
+        "instruments": [
+            {"instrument": "bloom", "target": "primary",
+             "params": {"base_hue": 0.33},
+             "lanes": [{"source": "note", "dest": "trigger"},
+                       {"source": "cc:74", "dest": "base_hue"}]},
+        ],
+    }
+    assert player.welcome == {
+        "light": {"instrument": "bloom", "params": {"base_hue": 0.33},
+                  "duration": 1.5},
+        "audio": {"instrument": "chime", "duration": 1.5},
+    }
+
+
+def test_jammer_role_keeps_empty_light_defaults():
+    bit = TestBit()
+    table = bit.role_table
+    assert table.roles["jammer"].light_manifest == {}
+    assert table.roles["jammer"].welcome is None
+
+
+def test_test_bit_declares_a_version():
+    assert TestBit().version == "0.1"

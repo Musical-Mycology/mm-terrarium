@@ -13,6 +13,7 @@ import logging
 from control.bit import Bit
 from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
+from control.role_config import compose_role_config, validate_role_declarations
 from control.state import State
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,9 @@ class GameServer:
         self.state = State.IDLE
         self.devices = DevicePool()
         self.bit: Bit | None = None
+        # Registry key of the loaded Bit; provenance for /ie<N>/role blobs
+        # and the Console. Set in load_bit, cleared in _unload.
+        self.bit_name: str | None = None
         self.registration: RegistrationState | None = None
         # Set by a transport layer: called once per device released during
         # UNLOADING, so it can send that device's /ie<N>/release message.
@@ -54,11 +58,15 @@ class GameServer:
         try:
             bit_cls = self.bit_registry[name]
             bit = bit_cls()
+            role_table = bit.role_table
+            validate_role_declarations(role_table)
+            registration = RegistrationState(role_table)
         except Exception as exc:
             self._set_state(State.IDLE)
             raise BitLoadError(f"failed to load Bit {name!r}: {exc}") from exc
         self.bit = bit
-        self.registration = RegistrationState(bit.role_table)
+        self.bit_name = name
+        self.registration = registration
         self._set_state(State.LOADED)
         self._enter_setup()
 
@@ -79,6 +87,12 @@ class GameServer:
                                reason="no Bit accepting registrations")
         result = self.registration.join(dev, node, self.state)
         if result.granted:
+            # Compose from the registration's role-table snapshot -- Bits
+            # build role_table per property access, so a fresh call could
+            # return different Role objects than the ones counts track.
+            role = self.registration.role_table.roles[result.role]
+            result.config = compose_role_config(
+                self.bit_name, self.bit.version, role)
             self._notify("on_registration_change")
             self._notify("on_devices_change")
         return result
@@ -125,6 +139,7 @@ class GameServer:
         except Exception:
             logger.exception("Bit.on_unload raised; returning to IDLE anyway")
         self.bit = None
+        self.bit_name = None
         self.registration = None
         self._set_state(State.IDLE)
 

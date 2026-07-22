@@ -32,6 +32,7 @@ def role_view(role) -> dict:
         "scored": role.scored,
         "ugen_manifest": role.ugen_manifest,
         "light_manifest": role.light_manifest,
+        "welcome": role.welcome,
     }
 
 
