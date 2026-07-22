@@ -117,7 +117,7 @@ The harness needs to inject MIDI without a live o2lite client. `FakeO2Lite` live
   - on a **granted join**: `LightManifest.from_dict(join_result.config["light_manifest"])` → `build_session(manifest, shroom_capability())` → hold the session. `build_session` **already enqueues the initial swap**, so luxaeterna plays welcome → RUNNING on its own — the bridge does *not* call `swap` again. (A role *switch* — a later re-grant with a different manifest — is what calls `session.swap(new_manifest)`; not exercised in this slice.)
   - on **release** (bit complete/unload → `on_release`): `session.clear()` → luxaeterna CLOSING fade → IDLE.
 - **`led_smoke.py`** — the runnable demo. Constructs `GameServer(TestBit())`, a `Universe`, a `WebSimBackend(serve=True)`, and an `OutputLoop(universe, backend, on_frame=session.render_into)`; starts the loop; then runs the scripted scenario (§6); prints where to point a browser.
-- **Canned-MIDI injector** — a tiny timed script `[(t_seconds, (status, d1, d2)), …]` played via `session.feed_midi(...)` during RUNNING: one note-on, then a `cc:74` ramp 0→127, then note-off.
+- **Canned-MIDI injector** — a tiny timed script `[(t_seconds, (status, d1, d2)), …]` played via `session.feed_midi(...)` during RUNNING. Because bloom captures its color from `hue` **at note-on** (§7), the script **interleaves repeated note-ons across the `cc:74` ramp** so the hue visibly sweeps — a single held note would never change color. Raw MIDI values are fine: luxaeterna's `dispatch_midi` normalizes CC and velocity to 0–1 (`d2/127.0`) before the lane routes them.
 
 The harness lives under `harness/` for cross-repo idiom consistency with mm-tuneshroom; the Slice-2 Python device sim will grow alongside it. (Adjustable — `sim/` is an alternative package name.)
 
@@ -131,10 +131,12 @@ TestBit.role_table
   → DeviceBridge: LightManifest.from_dict → build_session(+shroom_capability)
        (initial swap enqueued by build_session)  luxaeterna: IDLE→LOADING(welcome flash)→RUNNING
   → GameServer.run()                 SETUP→RUNNING
-  → main loop @44 Hz: GameServer.tick(dt)
-       t=0.5s  feed_midi(note-on)    → bloom triggers
-       t=0.6–1.6s  cc:74 sweep 0→127 → hue sweeps
-       t=1.7s  feed_midi(note-off)
+  → main loop @44 Hz: GameServer.tick(dt)   [after base_hue→hue fix, §7]
+       t=0.5s      feed_midi(note-on)  hue starts at 0.33 (green) → bloom
+       t=0.6–1.6s  cc:74 ramp 0→127 (luxaeterna → hue 0.0→1.0),
+                   INTERLEAVED with a note-on every ~0.15s
+                   → each new voice adopts the current hue → visible sweep
+       t=1.7s      feed_midi(note-off)
   → TestBit auto-completes (fixed duration)  RUNNING→COMPLETING→UNLOADING
        → on_release → DeviceBridge: session.clear()  luxaeterna: CLOSING fade→IDLE
   → idle breathing continues; render thread keeps painting
@@ -143,9 +145,22 @@ TestBit.role_table
 
 Two clocks run concurrently and independently, matching luxaeterna's threading model: the harness main loop drives `GameServer.tick` + MIDI injection (caller thread → thread-safe enqueue), while `OutputLoop`'s daemon thread drains the queue and renders at 44 Hz.
 
-## 7. A contract risk this slice is designed to surface (a feature, not a bug)
+The interleaved note-ons during the ramp are load-bearing, not cosmetic: `_bloom_voice` snapshots `shared["hue"]` into a `Const` color **when the voice spawns**, so a CC change only recolors *subsequently* triggered voices. The test in §8(c) asserts hue progression across those successive voices, not within one sustained note.
 
-`TestBit`'s manifest wires `cc:74 → base_hue` and its welcome uses `params: {base_hue: 0.33}`. luxaeterna's `bloom` preset exposes a hue-ish param, and **an unknown lane `dest` raises at resolve time** (`binding.resolve` validates `dest` against `instrument.param_names()`). If bloom's param is actually `hue` (not `base_hue`), `build_session` on TestBit's manifest will **raise** — which is exactly the cross-repo drift this harness exists to catch. Reconciling the param name (in `TestBit` or in luxaeterna's bloom preset) is **expected in-slice work**; the plan should verify the exact param name on `origin/main` and align one side.
+## 7. Pre-verified contract fix: `base_hue` → `hue` (confirmed before planning)
+
+Verified directly against luxaeterna v2 (`origin/main` / `claude/bounded-midi-drain`, read via `git show` — the working tree is stale v1, see §4): the `bloom` preset declares **exactly one param, `hue`** (`_BLOOM_PARAMS = frozenset({"hue"})`), and `LightSynth.param_names()` returns `set(self.shared)` = `{"hue"}`. `TestBit` authors **`base_hue`**, which fails at *two* layers:
+
+1. `registry.build("bloom", base_hue=0.33)` → `_make_bloom` raises `KeyError` (it deliberately rejects unknown params rather than silently dropping them);
+2. even past that, the `cc:74 → base_hue` lane hits `binding.resolve`'s guard → `ValueError: instrument 'bloom': cc lane 'cc:74' routes to unknown param 'base_hue'; known params: ['hue']`.
+
+**Fix (in scope for this slice, mm-terrarium side): rename `base_hue` → `hue`.** `hue` is luxaeterna's canonical, established bloom param (0–1 HSV); the renderer owns the instrument-param vocabulary, so mm-terrarium conforms — no luxaeterna change. Blast radius is three files, changed together (9 occurrences):
+
+- `bits/test_bit.py` — instrument `params`, the `cc:74` lane `dest`, and the `welcome` `params`;
+- `tests/test_test_bit.py` — the assertions mirroring the manifest;
+- `tests/test_role_config.py` — the fixture manifest mirroring TestBit's shape. (Role-config composition is luxaeterna-agnostic, so this file won't *fail* against luxaeterna, but it must not keep teaching the wrong param name.)
+
+The sibling `note` lane's `dest: "trigger"` stays untouched — `binding.resolve` ignores `dest` for `note` sources (a note lane always calls `noteon`); only `cc:` lanes validate `dest`.
 
 ## 8. Error handling & testing
 
@@ -156,7 +171,7 @@ Two clocks run concurrently and independently, matching luxaeterna's threading m
 
 **Testing**
 - **luxaeterna** (headless, no browser): unit tests for `WebSimBackend` — frames recorded in order; capability message shape/content; GRB byte→color decode correctness; `serve=False` record-only path. Extends existing `FakeBackend`/e2e patterns. Plus a test that `feed_midi` reaches an instrument only in RUNNING.
-- **mm-terrarium**: `tests/test_led_smoke.py` — runs the §6 pipeline with `WebSimBackend(serve=False)`, no port, no browser, and asserts: (a) welcome frames present in the LOADING window; (b) bloom-trigger frames after the note-on; (c) hue progression across the `cc:74` ramp (e.g. GRB byte ordering shifts green→red as documented in luxaeterna's own e2e test); (d) closing fade toward zero after release; (e) return to idle. This is the durable **in-process full-stack regression**.
+- **mm-terrarium**: `tests/test_led_smoke.py` — runs the §6 pipeline with `WebSimBackend(serve=False)`, no port, no browser, and asserts: (a) welcome frames present in the LOADING window; (b) bloom-trigger frames after the first note-on; (c) hue progression across the **successive note-triggered voices** as the `cc:74` ramp advances (GRB byte ordering shifts as hue climbs — cf. luxaeterna's own e2e test asserting CC74=0 → red>green); (d) closing fade toward zero after release; (e) return to idle. This is the durable **in-process full-stack regression**.
 - Both preserve the "no hardware, no browser needed in CI" property that both repos already hold.
 
 ## 9. Docs & tools to update
@@ -185,3 +200,4 @@ This spec covers **Slice 1 only.** Recorded here so the plan does not accidental
 - LED sim home: **luxaeterna** (a proper backend). Integration harness home: **mm-terrarium** (`harness/`).
 - Cross-repo dep: **mm-terrarium → luxaeterna** (dev/test).
 - Wired-slice sequencing: **Python sim + browser Tuneshroom both in Slice 2**, in parallel, against one wire.
+- **Pre-verified before planning:** bloom's only param is `hue`; the `base_hue` → `hue` rename (three files, §7) is in-scope Slice-1 work, no luxaeterna change.
