@@ -7,3 +7,10 @@
 #     python -m pytest tests -v
 -r requirements.txt
 pytest>=8.0
+
+# --- Optional: LED simulator harness (harness/led_smoke.py, tests/test_led_smoke.py) ---
+# These need the sibling luxaeterna renderer with its web-sim extra. Install it
+# editable (adjust the path if your checkout lives elsewhere):
+#     python -m pip install -e "/Users/chris/projects/luxaeterna[websim]"
+# tests/test_led_smoke.py and tests/test_device_bridge.py importorskip luxaeterna,
+# so the core suite still runs without it.
