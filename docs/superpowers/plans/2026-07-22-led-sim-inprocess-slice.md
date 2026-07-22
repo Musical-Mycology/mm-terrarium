@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **luxaeterna branch base:** all Phase A work branches from **`origin/main`** (canonical merged v2), branch name `claude/websim-led-simulator`. The luxaeterna *working tree is checked out at stale v1* — a fetch + fresh branch off `origin/main` is the first step. Never edit the v1 working-tree files in place.
-- **No `midi_capacity`:** `midi_capacity` does NOT exist on `origin/main` (only on the unmerged `bounded-midi-drain` fast-follow). Every `build_session(...)` / `LightSession(...)` call uses **only** `clock=` — never pass `midi_capacity`.
+- **Omit `midi_capacity`:** `origin/main` advanced to `3e5f2e9` (PR #5 merged the `bounded-midi-drain` fast-follow *after* this plan was drafted), which adds a **defaulted** `midi_capacity: int = 256` to `LightSession`/`build_session`. Our code simply **omits** it — every `build_session(...)` call passes **only** `clock=` and relies on the default. Do not add or thread `midi_capacity`. (The captured signatures in this plan already match `3e5f2e9`; branch off current `origin/main`.)
 - **`websockets` is an optional extra in luxaeterna.** `luxaeterna/backends/websim.py` MUST import `websockets` **lazily** (inside methods, never at module top) so `from luxaeterna.backends.websim import WebSimBackend` and record-only mode work without the extra installed.
 - **Bloom's only param is `hue`** (0–1 HSV). `_make_bloom` raises `KeyError` on any other param; `binding.resolve` raises `ValueError` on an unknown cc-lane `dest`. TestBit must use `hue`, never `base_hue`.
 - **MIDI wire packing:** one int32 = `(status << 16) | (data1 << 8) | data2`. CC and velocity are normalized to 0–1 (`/127.0`) inside luxaeterna's `dispatch_midi`; callers pass raw 0–127.
