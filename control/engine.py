@@ -13,7 +13,7 @@ import logging
 from control.bit import Bit
 from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
-from control.role_config import validate_role_declarations
+from control.role_config import compose_role_config, validate_role_declarations
 from control.state import State
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,9 @@ class GameServer:
                                reason="no Bit accepting registrations")
         result = self.registration.join(dev, node, self.state)
         if result.granted:
+            role = self.registration.role_table.roles[result.role]
+            result.config = compose_role_config(
+                self.bit_name, self.bit.version, role)
             self._notify("on_registration_change")
             self._notify("on_devices_change")
         return result

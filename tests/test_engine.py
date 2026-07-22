@@ -81,12 +81,43 @@ class BadManifestBit(Bit):
         return RoleTable(roles={"player": bad}, node_map={"N": ["player"]})
 
 
+WELCOME_LIGHT_MANIFEST = {
+    "instruments": [
+        {"instrument": "bloom", "target": "primary",
+         "lanes": [{"source": "note", "dest": "trigger"}]},
+    ],
+}
+
+WELCOME_PAIR = {
+    "light": {"instrument": "bloom", "duration": 2.0},
+    "audio": {"instrument": "chime", "duration": 2.0},
+}
+
+
+class WelcomeBit(Bit):
+    version = "0.9"
+
+    @property
+    def role_table(self) -> RoleTable:
+        greeter = Role(name="greeter", role_class=RoleClass.UNIQUE,
+                       capacity=1, scored=True,
+                       light_manifest=WELCOME_LIGHT_MANIFEST,
+                       welcome=WELCOME_PAIR)
+        jammer = Role(name="jammer", role_class=RoleClass.JAM,
+                      capacity=None, scored=False)
+        return RoleTable(
+            roles={"greeter": greeter, "jammer": jammer},
+            node_map={"NODE_GREET": ["greeter"], "NODE_JAM": ["jammer"]},
+        )
+
+
 REGISTRY = {
     "test_bit": TestBit,
     "exploding_complete_bit": ExplodingCompleteBit,
     "exploding_unload_bit": ExplodingUnloadBit,
     "raising_role_table_bit": RaisingRoleTableBit,
     "bad_manifest_bit": BadManifestBit,
+    "welcome_bit": WelcomeBit,
 }
 
 
@@ -310,3 +341,51 @@ def test_load_bit_invalid_manifest_fails_cleanly_to_idle():
     assert server.state == State.IDLE
     assert server.bit is None
     assert server.registration is None
+
+
+def test_granted_join_carries_composed_config_blob():
+    server = make_server()
+    server.load_bit("welcome_bit")
+    result = server.join("ie1", "NODE_GREET")
+    assert result.granted is True
+    assert result.config == {
+        "role": "greeter",
+        "class": "UNIQUE",
+        "scored": True,
+        "light_manifest": {
+            "instruments": WELCOME_LIGHT_MANIFEST["instruments"],
+            "bit_name": "welcome_bit",
+            "bit_version": "0.9",
+            "role": "greeter",
+            "welcome": WELCOME_PAIR["light"],
+        },
+    }
+
+
+def test_denied_join_carries_no_config():
+    server = make_server()
+    server.load_bit("welcome_bit")
+    server.join("ie1", "NODE_GREET")
+    denied = server.join("ie2", "NODE_GREET")  # capacity 1
+    assert denied.granted is False
+    assert denied.config is None
+
+
+def test_role_switch_composes_the_new_roles_config():
+    server = make_server()
+    server.load_bit("welcome_bit")
+    server.join("ie1", "NODE_GREET")
+    switch = server.join("ie1", "NODE_JAM")
+    assert switch.granted is True
+    assert switch.config["role"] == "jammer"
+    assert switch.config["scored"] is False
+    # jammer declares nothing: bare provenance, no welcome key
+    assert switch.config["light_manifest"] == {
+        "bit_name": "welcome_bit", "bit_version": "0.9", "role": "jammer"}
+
+
+def test_join_with_no_bit_loaded_carries_no_config():
+    server = make_server()
+    result = server.join("ie1", "NODE_GREET")
+    assert result.granted is False
+    assert result.config is None
