@@ -12,7 +12,7 @@ description: >
 tech: [python, pyarco, arco, o2, cpp]
 
 github: https://github.com/Musical-Mycology/mm-terrarium
-mm_architecture_section: MM_ARCHITECTURE.md#other-repos-tools--apps
+mm_architecture_section: MM_ARCHITECTURE.md#per-service-summary
 
 tier: app
 status: pending
