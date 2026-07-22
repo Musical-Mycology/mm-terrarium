@@ -62,3 +62,11 @@ def test_on_release_requests_close():
 
 def test_on_release_is_safe_before_any_grant():
     DeviceBridge().on_release("dev1")                     # must not raise
+
+
+def test_on_grant_rejects_a_denied_join():
+    gs = GameServer({"test_bit": TestBit})          # no load_bit -> not accepting
+    res = gs.join("dev1", "TEST_PLAYER_NODE")
+    assert res.granted is False
+    with pytest.raises(ValueError):
+        DeviceBridge().on_grant(res)

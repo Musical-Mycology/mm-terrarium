@@ -66,7 +66,7 @@ def test_full_inprocess_stack_lights_and_fades():
         elif session.state == "running":
             break
     assert session.state == "running"
-    assert loading_frames > 0                   # welcome signature actually played
+    assert loading_frames > 10                   # welcome signature actually played
 
     # (b) dark before any note
     loop._loop_once()

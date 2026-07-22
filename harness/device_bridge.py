@@ -22,6 +22,9 @@ class DeviceBridge:
 
     def on_grant(self, join_result):
         """Build the device's LightSession from the composed /ie<N>/role blob."""
+        if not join_result.granted:
+            raise ValueError(
+                f"cannot build a session for a denied join: {join_result.reason}")
         blob = join_result.config["light_manifest"]
         manifest = LightManifest.from_dict(blob)
         self.session = build_session(manifest, self._cap, clock=self._clock)
