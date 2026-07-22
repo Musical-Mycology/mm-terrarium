@@ -318,7 +318,9 @@ def test_load_bit_records_bit_name_and_clears_it_on_unload():
 
 
 def test_bit_version_defaults_to_empty_string():
-    assert TestBit().version == ""
+    # TestBit itself now declares a version (light-manifest v2 adoption); use
+    # a Bit subclass that doesn't override it to exercise the base default.
+    assert RaisingRoleTableBit().version == ""
 
 
 def test_load_bit_raising_role_table_fails_cleanly_to_idle():
