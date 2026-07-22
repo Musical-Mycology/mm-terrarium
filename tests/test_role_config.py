@@ -71,6 +71,22 @@ def test_validate_rejects_instrument_decl_missing_required_field(missing):
         validate_role_declarations(make_table(role))
 
 
+def test_validate_rejects_non_dict_instrument_decl():
+    role = make_role(light_manifest={"instruments": ["not-a-dict"]})
+    with pytest.raises(ValueError,
+                       match=r"role 'player' light_manifest instruments\[0\]: must be a dict"):
+        validate_role_declarations(make_table(role))
+
+
+def test_validate_rejects_non_dict_instrument_params():
+    role = make_role(light_manifest={"instruments": [
+        {"instrument": "bloom", "target": "primary", "params": ["not", "a", "dict"]}]})
+    with pytest.raises(ValueError,
+                       match=r"role 'player' light_manifest instruments\[0\]: "
+                             r"'params' must be a dict"):
+        validate_role_declarations(make_table(role))
+
+
 @pytest.mark.parametrize("missing", ["source", "dest"])
 def test_validate_rejects_lane_missing_required_field(missing):
     lane = {"source": "note", "dest": "trigger"}
@@ -81,6 +97,15 @@ def test_validate_rejects_lane_missing_required_field(missing):
     with pytest.raises(ValueError,
                        match=rf"role 'player' light_manifest instruments\[0\] "
                              rf"lanes\[0\]: missing required field '{missing}'"):
+        validate_role_declarations(make_table(role))
+
+
+def test_validate_rejects_non_dict_lane():
+    role = make_role(light_manifest={"instruments": [
+        {"instrument": "bloom", "target": "primary", "lanes": ["not-a-dict"]}]})
+    with pytest.raises(ValueError,
+                       match=r"role 'player' light_manifest instruments\[0\] "
+                             r"lanes\[0\]: must be a dict"):
         validate_role_declarations(make_table(role))
 
 
@@ -101,9 +126,24 @@ def test_validate_rejects_welcome_half_without_instrument(half):
         validate_role_declarations(make_table(role))
 
 
+@pytest.mark.parametrize("half", ["light", "audio"])
+def test_validate_rejects_non_dict_welcome_params(half):
+    role = make_role(welcome={half: {"instrument": "bloom", "params": [1, 2]}})
+    with pytest.raises(ValueError,
+                       match=rf"role 'player' welcome {half!r}: 'params' must be a dict"):
+        validate_role_declarations(make_table(role))
+
+
 def test_validate_rejects_non_dict_welcome():
     role = make_role(welcome="hello")
     with pytest.raises(ValueError, match=r"role 'player' welcome: must be a dict"):
+        validate_role_declarations(make_table(role))
+
+
+def test_validate_rejects_non_dict_welcome_half_value():
+    role = make_role(welcome={"light": "bloom"})
+    with pytest.raises(ValueError,
+                       match=r"role 'player' welcome 'light': must be a dict"):
         validate_role_declarations(make_table(role))
 
 

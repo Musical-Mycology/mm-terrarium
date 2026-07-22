@@ -50,6 +50,9 @@ def _validate_light_manifest(role: Role) -> None:
             if req not in decl:
                 raise ValueError(
                     f"{decl_where}: missing required field {req!r}")
+        params = decl.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError(f"{decl_where}: 'params' must be a dict")
         lanes = decl.get("lanes", [])
         if not isinstance(lanes, list):
             raise ValueError(f"{decl_where}: 'lanes' must be a list")
@@ -82,6 +85,9 @@ def _validate_welcome(role: Role) -> None:
         if "instrument" not in decl:
             raise ValueError(
                 f"{half_where}: missing required field 'instrument'")
+        params = decl.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError(f"{half_where}: 'params' must be a dict")
 
 
 def compose_role_config(bit_name: str, bit_version: str, role: Role) -> dict:

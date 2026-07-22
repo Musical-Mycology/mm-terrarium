@@ -342,6 +342,7 @@ def test_load_bit_invalid_manifest_fails_cleanly_to_idle():
         server.load_bit("bad_manifest_bit")
     assert server.state == State.IDLE
     assert server.bit is None
+    assert server.bit_name is None
     assert server.registration is None
 
 

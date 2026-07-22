@@ -87,6 +87,9 @@ class GameServer:
                                reason="no Bit accepting registrations")
         result = self.registration.join(dev, node, self.state)
         if result.granted:
+            # Compose from the registration's role-table snapshot -- Bits
+            # build role_table per property access, so a fresh call could
+            # return different Role objects than the ones counts track.
             role = self.registration.role_table.roles[result.role]
             result.config = compose_role_config(
                 self.bit_name, self.bit.version, role)
