@@ -32,10 +32,22 @@ def test_unique_role_has_integer_capacity():
     assert conductor.capacity == 1
 
 
-def test_role_has_empty_light_manifest_by_default():
-    from control.roles import Role, RoleClass
+def test_role_light_manifest_defaults_to_empty_v2_dict():
     role = Role(name="player", role_class=RoleClass.SHARED,
                 capacity=None, scored=True)
-    assert role.light_manifest == []
-    # sibling placeholder to ugen_manifest; distinct list instances
-    assert role.light_manifest is not role.ugen_manifest
+    # v2 wire shape (see docs/superpowers/specs/
+    # 2026-07-22-light-manifest-v2-adoption-design.md section 3): a dict,
+    # empty by default -- parses device-side as "declares no light".
+    assert role.light_manifest == {}
+
+
+def test_role_welcome_defaults_to_none():
+    role = Role(name="player", role_class=RoleClass.SHARED,
+                capacity=None, scored=True)
+    assert role.welcome is None
+
+
+def test_roles_do_not_share_light_manifest_instances():
+    a = Role(name="a", role_class=RoleClass.SHARED, capacity=None, scored=True)
+    b = Role(name="b", role_class=RoleClass.SHARED, capacity=None, scored=True)
+    assert a.light_manifest is not b.light_manifest

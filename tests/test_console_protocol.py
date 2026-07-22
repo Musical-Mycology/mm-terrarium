@@ -7,7 +7,7 @@ def test_role_view_shape():
                 capacity=None, scored=True)
     assert protocol.role_view(role) == {
         "role": "player", "class": "SHARED", "capacity": None,
-        "scored": True, "ugen_manifest": [], "light_manifest": []}
+        "scored": True, "ugen_manifest": [], "light_manifest": {}}
 
 
 def test_device_view_shape():
