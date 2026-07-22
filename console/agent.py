@@ -73,10 +73,7 @@ class ConsoleAgent:
         )
 
     def _loaded_bit_name(self) -> str | None:
-        for name, cls in self.game_server.bit_registry.items():
-            if isinstance(self.game_server.bit, cls):
-                return name
-        return None
+        return self.game_server.bit_name
 
     def _devices_view(self) -> list:
         gs = self.game_server

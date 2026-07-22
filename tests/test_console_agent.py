@@ -121,6 +121,13 @@ def test_bit_status_broadcast_only_on_change():
     assert not [m for m in srv.broadcasts if m.get("event") == "bit_status"]
 
 
+def test_snapshot_loaded_bit_name_comes_from_game_server_bit_name():
+    gs, srv, agent = _server_with_agent()
+    gs.load_bit("TestBit")
+    assert gs.bit_name == "TestBit"
+    assert agent.snapshot()["loaded_bit"] == "TestBit"
+
+
 def test_bit_completed_is_broadcast_on_unload():
     gs, srv, agent = _server_with_agent()
     gs.load_bit("TestBit")
