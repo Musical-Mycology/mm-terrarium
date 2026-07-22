@@ -11,6 +11,8 @@ RUN_DURATION_SECONDS = 2.0
 
 
 class TestBit(Bit):
+    version = "0.1"
+
     def __init__(self, run_duration: float = RUN_DURATION_SECONDS):
         self._run_duration = run_duration
         self._elapsed = 0.0
@@ -21,8 +23,27 @@ class TestBit(Bit):
 
     @property
     def role_table(self) -> RoleTable:
-        player = Role(name="player", role_class=RoleClass.SHARED,
-                      capacity=None, scored=True)
+        player = Role(
+            name="player", role_class=RoleClass.SHARED, capacity=None,
+            scored=True,
+            # First real light-lane declaration: the act that freezes the
+            # light-manifest v2 authored shape (see control/roles.py).
+            # Instrument names are opaque to Control; these are luxaeterna
+            # registry names.
+            light_manifest={
+                "instruments": [
+                    {"instrument": "bloom", "target": "primary",
+                     "params": {"base_hue": 0.33},
+                     "lanes": [{"source": "note", "dest": "trigger"},
+                               {"source": "cc:74", "dest": "base_hue"}]},
+                ],
+            },
+            welcome={
+                "light": {"instrument": "bloom",
+                          "params": {"base_hue": 0.33}, "duration": 1.5},
+                "audio": {"instrument": "chime", "duration": 1.5},
+            },
+        )
         jammer = Role(name="jammer", role_class=RoleClass.JAM,
                       capacity=None, scored=False)
         return RoleTable(

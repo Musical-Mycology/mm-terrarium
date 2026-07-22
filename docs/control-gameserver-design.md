@@ -94,8 +94,12 @@ A Bit's role table declares each role with:
    and walks its fallback list. On success, Control allocates the player's ugens,
    patches their channel strip onto the role's bus, and tells the device what it
    has become: `/ie3/role "sssib" bit role class channel config`. The config blob
-   carries what the role needs the device to know (LED palette, local sample set,
-   sensor rates, scored flag). If every role on the node's list is at capacity:
+   carries what the role needs the device to know (local sample set, sensor
+   rates, scored flag, and the role's light-manifest v2 blob -- instruments
+   plus the per-role welcome gesture, with bit/role provenance stamped by
+   Control; see the luxaeterna session-lifecycle spec section 9 and this
+   repo's 2026-07-22 light-manifest-v2-adoption spec). If every role on the
+   node's list is at capacity:
    `/ie3/deny "ss" reason hint`, where hint can name another node worth trying.
    Re-tapping a different node mid-session is a role switch: Control tears down
    the old strip and answers with a fresh `/ie3/role`. The device never touches
