@@ -3,7 +3,9 @@ from types import SimpleNamespace
 import pytest
 
 from bits.test_bit import TestBit
+from control.bit import Bit
 from control.engine import BitLoadError, GameServer, InvalidTransition
+from control.roles import Role, RoleClass, RoleTable
 from control.state import State
 
 
@@ -65,10 +67,26 @@ class ExplodingUnloadBit(TestBit):
         raise RuntimeError("boom")
 
 
+class RaisingRoleTableBit(Bit):
+    @property
+    def role_table(self) -> RoleTable:
+        raise RuntimeError("role table exploded")
+
+
+class BadManifestBit(Bit):
+    @property
+    def role_table(self) -> RoleTable:
+        bad = Role(name="player", role_class=RoleClass.SHARED, capacity=None,
+                   scored=True, light_manifest=["not", "a", "dict"])
+        return RoleTable(roles={"player": bad}, node_map={"N": ["player"]})
+
+
 REGISTRY = {
     "test_bit": TestBit,
     "exploding_complete_bit": ExplodingCompleteBit,
     "exploding_unload_bit": ExplodingUnloadBit,
+    "raising_role_table_bit": RaisingRoleTableBit,
+    "bad_manifest_bit": BadManifestBit,
 }
 
 
@@ -257,3 +275,38 @@ def test_abort_survives_on_complete_exception():
     server.abort()  # must not raise
 
     assert server.state == State.IDLE
+
+
+def test_load_bit_records_bit_name_and_clears_it_on_unload():
+    server = make_server()
+    assert server.bit_name is None
+    server.load_bit("test_bit")
+    assert server.bit_name == "test_bit"
+    server.abort()
+    assert server.bit_name is None
+
+
+def test_bit_version_defaults_to_empty_string():
+    assert TestBit().version == ""
+
+
+def test_load_bit_raising_role_table_fails_cleanly_to_idle():
+    server = make_server()
+    with pytest.raises(BitLoadError):
+        server.load_bit("raising_role_table_bit")
+    assert server.state == State.IDLE
+    assert server.bit is None
+    assert server.bit_name is None
+    assert server.registration is None
+    # regression: the engine must not be wedged -- a good load still works
+    server.load_bit("test_bit")
+    assert server.state == State.SETUP
+
+
+def test_load_bit_invalid_manifest_fails_cleanly_to_idle():
+    server = make_server()
+    with pytest.raises(BitLoadError, match=r"role 'player' light_manifest"):
+        server.load_bit("bad_manifest_bit")
+    assert server.state == State.IDLE
+    assert server.bit is None
+    assert server.registration is None

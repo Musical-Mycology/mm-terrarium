@@ -12,6 +12,11 @@ class Bit(ABC):
     no-ops by default; a Bit overrides only the ones it needs.
     """
 
+    # Bit identity for provenance stamping (light-manifest v2 bit_version).
+    # The bit *name* is the registry key GameServer loaded it under -- not
+    # an attribute here, so there is nothing for an author to keep in sync.
+    version: str = ""
+
     @property
     @abstractmethod
     def role_table(self) -> RoleTable:
