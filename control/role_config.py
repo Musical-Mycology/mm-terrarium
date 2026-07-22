@@ -8,6 +8,8 @@ instrument names and params belong to luxaeterna's installation-overridable
 registry, which Control cannot see.
 """
 
+from copy import deepcopy
+
 from control.roles import Role, RoleTable
 
 # Keys Control composes into the outgoing blob at adoption time; authoring
@@ -80,3 +82,23 @@ def _validate_welcome(role: Role) -> None:
         if "instrument" not in decl:
             raise ValueError(
                 f"{half_where}: missing required field 'instrument'")
+
+
+def compose_role_config(bit_name: str, bit_version: str, role: Role) -> dict:
+    """The per-role config blob shipped in /ie<N>/role at adoption time
+    (docs/control-gameserver-design.md, player flow step 3). Deep-copied so
+    transport/Console consumers can never alias the Bit's declaration. The
+    welcome audio half is deliberately absent: it never ships to the device;
+    the future Arco cue path reads it off Role.welcome."""
+    light = deepcopy(role.light_manifest)
+    light["bit_name"] = bit_name
+    light["bit_version"] = bit_version
+    light["role"] = role.name
+    if role.welcome and "light" in role.welcome:
+        light["welcome"] = deepcopy(role.welcome["light"])
+    return {
+        "role": role.name,
+        "class": role.role_class.name,
+        "scored": role.scored,
+        "light_manifest": light,
+    }

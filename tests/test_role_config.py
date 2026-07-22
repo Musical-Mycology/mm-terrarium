@@ -112,3 +112,69 @@ def test_validate_names_the_failing_role():
                scored=False, light_manifest=[])
     with pytest.raises(ValueError, match=r"role 'jammer'"):
         validate_role_declarations(make_table(make_role(), bad))
+
+
+from control.role_config import compose_role_config
+
+
+def test_compose_stamps_provenance_and_folds_welcome_light_half():
+    role = make_role(light_manifest=GOOD_MANIFEST, welcome=GOOD_WELCOME)
+    config = compose_role_config("test_bit", "0.9", role)
+    assert config == {
+        "role": "player",
+        "class": "SHARED",
+        "scored": True,
+        "light_manifest": {
+            "instruments": GOOD_MANIFEST["instruments"],
+            "bit_name": "test_bit",
+            "bit_version": "0.9",
+            "role": "player",
+            "welcome": GOOD_WELCOME["light"],
+        },
+    }
+
+
+def test_compose_with_empty_defaults_ships_bare_provenance():
+    config = compose_role_config("test_bit", "", make_role())
+    assert config == {
+        "role": "player",
+        "class": "SHARED",
+        "scored": True,
+        "light_manifest": {"bit_name": "test_bit", "bit_version": "",
+                           "role": "player"},
+    }
+    # No welcome declared -> no welcome key; the device falls back to
+    # sys:loaded (luxaeterna lifecycle spec section 5).
+    assert "welcome" not in config["light_manifest"]
+
+
+def test_compose_audio_only_welcome_ships_no_welcome_key():
+    role = make_role(welcome={"audio": {"instrument": "chime"}})
+    config = compose_role_config("test_bit", "", role)
+    assert "welcome" not in config["light_manifest"]
+
+
+def test_compose_light_only_welcome_still_folds():
+    role = make_role(welcome={"light": {"instrument": "bloom"}})
+    config = compose_role_config("test_bit", "", role)
+    assert config["light_manifest"]["welcome"] == {"instrument": "bloom"}
+
+
+def test_compose_unique_role_class_and_scored_flag():
+    role = Role(name="conductor", role_class=RoleClass.UNIQUE, capacity=1,
+                scored=False)
+    config = compose_role_config("test_bit", "", role)
+    assert config["class"] == "UNIQUE"
+    assert config["scored"] is False
+    assert config["role"] == "conductor"
+
+
+def test_compose_never_aliases_the_authored_declaration():
+    role = make_role(light_manifest={"instruments": [
+        {"instrument": "bloom", "target": "primary", "params": {"a": 1}}]},
+        welcome={"light": {"instrument": "bloom", "params": {"b": 2}}})
+    config = compose_role_config("test_bit", "", role)
+    config["light_manifest"]["instruments"][0]["params"]["a"] = 99
+    config["light_manifest"]["welcome"]["params"]["b"] = 99
+    assert role.light_manifest["instruments"][0]["params"]["a"] == 1
+    assert role.welcome["light"]["params"]["b"] == 2
