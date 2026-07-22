@@ -156,6 +156,15 @@ venue" question. Landed in
   assumption is load-bearing — the moment a console faces an untrusted network,
   auth becomes a prerequisite, not an enhancement.
 
+### `harness/` — the in-process LED-sim harness (Slice 1)
+`DeviceBridge` + `led_smoke.py`: the first end-to-end exercise of the
+light-manifest-v2 seam. It grants TestBit's `player` role, feeds the composed
+`/ie<N>/role` blob into a luxaeterna `LightSession` (via a **dev/test dependency
+on luxaeterna** — the first code coupling, venue-server → renderer), and renders
+it to luxaeterna's new `WebSimBackend` (a browser canvas Shroom). Injects canned
+MIDI via `LightSession.feed_midi`. Still **in-process — no o2lite wire**; the
+device wire is Slice 2. Regression: `tests/test_led_smoke.py` (headless).
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -215,7 +224,9 @@ Kept explicit so the doc doesn't over-claim:
 - **Real O2lite/pyarco transport wiring.** Control connects via o2lite in the
   design framing, but nothing talks to a live O2 network or Arco server yet —
   the whole suite runs against fakes (`FakeO2Lite`-style transport,
-  `FakeTransport`, a localhost websocket for the console server).
+  `FakeTransport`, a localhost websocket for the console server). The
+  render/contract path (composed blob → luxaeterna → LEDs) is now proven
+  in-process via `harness/` (Slice 1); only the device wire itself is unbuilt.
 - **Real ugen graph-building on Arco** and **real scoring.** `ugen_manifest`
   is still a placeholder and `on_complete()` scoring is a stub hook.
   (`light_manifest` is no longer a placeholder — v2 schema frozen, validated
