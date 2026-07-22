@@ -74,13 +74,13 @@ def test_player_role_declares_v2_light_manifest_and_welcome():
     assert player.light_manifest == {
         "instruments": [
             {"instrument": "bloom", "target": "primary",
-             "params": {"base_hue": 0.33},
+             "params": {"hue": 0.33},
              "lanes": [{"source": "note", "dest": "trigger"},
-                       {"source": "cc:74", "dest": "base_hue"}]},
+                       {"source": "cc:74", "dest": "hue"}]},
         ],
     }
     assert player.welcome == {
-        "light": {"instrument": "bloom", "params": {"base_hue": 0.33},
+        "light": {"instrument": "bloom", "params": {"hue": 0.33},
                   "duration": 1.5},
         "audio": {"instrument": "chime", "duration": 1.5},
     }

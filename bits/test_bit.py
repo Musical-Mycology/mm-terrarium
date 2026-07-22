@@ -33,14 +33,14 @@ class TestBit(Bit):
             light_manifest={
                 "instruments": [
                     {"instrument": "bloom", "target": "primary",
-                     "params": {"base_hue": 0.33},
+                     "params": {"hue": 0.33},
                      "lanes": [{"source": "note", "dest": "trigger"},
-                               {"source": "cc:74", "dest": "base_hue"}]},
+                               {"source": "cc:74", "dest": "hue"}]},
                 ],
             },
             welcome={
                 "light": {"instrument": "bloom",
-                          "params": {"base_hue": 0.33}, "duration": 1.5},
+                          "params": {"hue": 0.33}, "duration": 1.5},
                 "audio": {"instrument": "chime", "duration": 1.5},
             },
         )
