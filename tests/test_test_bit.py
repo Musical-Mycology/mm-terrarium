@@ -80,7 +80,7 @@ def test_player_role_declares_v2_light_manifest_and_welcome():
         ],
     }
     assert player.welcome == {
-        "light": {"instrument": "bloom", "params": {"hue": 0.33},
+        "light": {"instrument": "glow", "params": {"hue": 0.33},
                   "duration": 1.5},
         "audio": {"instrument": "chime", "duration": 1.5},
     }
