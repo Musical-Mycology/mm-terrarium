@@ -103,8 +103,11 @@ It auto-signals completion after a fixed duration so the whole lifecycle is
 exercisable with no live Arco. It is the lone exemplar of the `ugen_manifest` /
 `light_manifest` / `status()` seams — and as of PR #5 its `player` role carries
 a **real light-manifest v2 declaration** (one instrument, note + CC lanes) plus
-a welcome pair, the declaration that formally froze the v2 schema; `jammer`
-keeps the empty defaults so the no-light path stays exercised.
+a welcome pair, the declaration that formally froze the v2 schema (its welcome
+**light** half uses luxaeterna's field-rate `glow` gesture, so the LOADING window
+actually lights — it previously pointed at `bloom`, a note-triggered voice pool
+with no note lane, and rendered dark); `jammer` keeps the empty defaults so the
+no-light path stays exercised.
 
 ### `uplink/` — outbound remote control (the *outbound* sibling)
 `UplinkAgent`: makes `GameServer` remotely drivable/observable over a
@@ -163,7 +166,10 @@ light-manifest-v2 seam. It grants TestBit's `player` role, feeds the composed
 on luxaeterna** — the first code coupling, venue-server → renderer), and renders
 it to luxaeterna's new `WebSimBackend` (a browser canvas Shroom). Injects canned
 MIDI via `LightSession.feed_midi`. Still **in-process — no o2lite wire**; the
-device wire is Slice 2. Regression: `tests/test_led_smoke.py` (headless).
+device wire is Slice 2. `led_smoke.py` takes `--hold` (serve until Ctrl-C) /
+`--seconds N` to keep the browser demo watchable — otherwise it's TestBit's
+~2 s one-shot. Regression: `tests/test_led_smoke.py` (headless) + CLI/`build()`
+unit tests in `tests/test_led_smoke_cli.py`.
 
 ## Boundary rules (the load-bearing invariants)
 

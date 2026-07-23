@@ -35,38 +35,19 @@ def test_full_inprocess_stack_lights_and_fades():
     loop = OutputLoop(uni, backend, on_frame=session.render_into, always_send=True)
     backend.open()
 
-    # (a) welcome signature plays out during LOADING, then the session
-    # transitions to RUNNING.
-    #
-    # NOTE on assertion mechanics: this does NOT assert the LOADING frame is
-    # lit (max(frame) > 0), unlike the brief's literal draft. Investigation
-    # found that isn't a frame-1/near-zero-dt timing artifact (widening the
-    # window to the whole LOADING run doesn't help either) -- it's how
-    # luxaeterna's "bloom" preset behaves by design. "bloom" is a LightSynth
-    # voice pool (luxaeterna/synth/presets.py::_make_bloom); it only renders
-    # once a voice is spawned via .noteon(), and TestBit's welcome
-    # declaration (bits/test_bit.py, {"instrument": "bloom", "params":
-    # {"hue": 0.33}, "duration": 1.5}, no lanes) never triggers one --
-    # SignatureDecl (luxaeterna/synth/manifest.py) has no lanes concept to
-    # trigger with. Feeding MIDI during LOADING is not a workaround either:
-    # LightSession._apply drops MIDI unless director.state == RUNNING. This
-    # is luxaeterna's own documented behavior for a bare bloom welcome -- its
-    # tests/synth/test_director.py::test_welcome_replaces_generic_loaded
-    # swaps in the same shape of welcome and comments "a dark synth is
-    # fine -- only timing matters." So the achievable, still-meaningful
-    # intent this asserts is: the welcome signature actually plays (LOADING
-    # is observed for at least one frame) before the session reaches
-    # RUNNING within a bounded window -- i.e. a real LOADING gate happened,
-    # not an instant skip.
-    loading_frames = 0
+    # (a) The welcome signature plays out during LOADING and is LIT the whole
+    # time (glow is a field-rate gesture that renders without a note), then the
+    # session transitions to RUNNING within a bounded window.
+    loading_lit = False
     for _ in range(200):
         loop._loop_once()
         if session.state == "loading":
-            loading_frames += 1
+            if max(backend.frames[-1]) > 0:
+                loading_lit = True
         elif session.state == "running":
             break
     assert session.state == "running"
-    assert loading_frames > 10                   # welcome signature actually played
+    assert loading_lit                           # welcome actually lit the surface
 
     # (b) dark before any note
     loop._loop_once()

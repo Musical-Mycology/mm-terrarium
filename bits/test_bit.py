@@ -39,7 +39,7 @@ class TestBit(Bit):
                 ],
             },
             welcome={
-                "light": {"instrument": "bloom",
+                "light": {"instrument": "glow",
                           "params": {"hue": 0.33}, "duration": 1.5},
                 "audio": {"instrument": "chime", "duration": 1.5},
             },
