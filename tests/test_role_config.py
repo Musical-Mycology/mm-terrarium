@@ -16,14 +16,14 @@ def make_table(*roles):
 GOOD_MANIFEST = {
     "instruments": [
         {"instrument": "bloom", "target": "primary",
-         "params": {"base_hue": 0.33},
+         "params": {"hue": 0.33},
          "lanes": [{"source": "note", "dest": "trigger"},
-                   {"source": "cc:74", "dest": "base_hue", "curve": "linear"}]},
+                   {"source": "cc:74", "dest": "hue", "curve": "linear"}]},
     ],
 }
 
 GOOD_WELCOME = {
-    "light": {"instrument": "bloom", "params": {"base_hue": 0.33},
+    "light": {"instrument": "bloom", "params": {"hue": 0.33},
               "duration": 1.5},
     "audio": {"instrument": "chime", "duration": 1.5},
 }
