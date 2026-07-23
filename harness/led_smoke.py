@@ -3,13 +3,20 @@ watch it on the Web LED simulator.
 
 Requires luxaeterna[websim] installed editable (see requirements-dev.txt):
     python -m pip install -e "/Users/chris/projects/luxaeterna[websim]"
+
+By default the demo runs TestBit's natural ~2 s lifecycle then exits. To watch it
+in a browser, keep it up longer:
+    python -m harness.led_smoke --hold          # serve until Ctrl-C
+    python -m harness.led_smoke --seconds 15    # sweep ~15 s, then complete + fade
+    python -m harness.led_smoke --host 0.0.0.0 --port 9000
 """
 
 from __future__ import annotations
 
+import argparse
 import time
 
-from bits.test_bit import TestBit
+from bits.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.engine import GameServer
 from control.state import State
 from harness.device_bridge import DeviceBridge
@@ -21,21 +28,47 @@ from luxaeterna.universe import Universe
 HOST, PORT = "127.0.0.1", 8770
 
 
-def main() -> None:
-    gs = GameServer({"test_bit": TestBit})
+def build(run_duration: float, host: str = HOST, port: int = PORT,
+          serve: bool = True, clock=time.monotonic):
+    """Construct the demo pipeline WITHOUT starting the loop.
+
+    Returns ``(loop, session, gs)``. ``run_duration`` is threaded into TestBit
+    via a factory so the Bit's RUNNING window is caller-controlled
+    (``float('inf')`` = never completes). ``serve=False`` gives a record-only
+    backend (no websockets, no port) for headless tests."""
+    gs = GameServer({"test_bit": lambda: TestBit(run_duration=run_duration)})
     cap = shroom_capability()
-    bridge = DeviceBridge(capability=cap)
+    bridge = DeviceBridge(capability=cap, clock=clock)
     gs.on_release = bridge.on_release
-
     gs.load_bit("test_bit")
-    res = gs.join("sim-dev", "TEST_PLAYER_NODE")
-    session = bridge.on_grant(res)
-
+    session = bridge.on_grant(gs.join("sim-dev", "TEST_PLAYER_NODE"))
     uni = Universe()
-    backend = WebSimBackend(capability=cap, host=HOST, port=PORT)
+    backend = WebSimBackend(capability=cap, host=host, port=port, serve=serve)
     loop = OutputLoop(uni, backend, on_frame=session.render_into, always_send=True)
+    return loop, session, gs
+
+
+def _run_duration(args) -> float:
+    if args.hold:
+        return float("inf")
+    return RUN_DURATION_SECONDS if args.seconds is None else args.seconds
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="Watch TestBit render on the Web LED simulator.")
+    ap.add_argument("--seconds", type=float, default=None,
+                    help="Keep the Bit RUNNING/sweeping this long before it "
+                         "completes + fades (default: TestBit's natural ~2 s).")
+    ap.add_argument("--hold", action="store_true",
+                    help="Serve until Ctrl-C (never auto-complete).")
+    ap.add_argument("--host", default=HOST)
+    ap.add_argument("--port", type=int, default=PORT)
+    args = ap.parse_args()
+
+    loop, session, gs = build(_run_duration(args), args.host, args.port)
     loop.start()
-    print(f"Watch the Shroom at http://{HOST}:{PORT}/  (Ctrl-C to stop)")
+    print(f"Watch the Shroom at http://{args.host}:{args.port}/  (Ctrl-C to stop)")
 
     gs.run()
     try:
