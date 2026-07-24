@@ -6,8 +6,9 @@ LED display and speakers — hosting **two processes on the same box**:
 
 - the **Arco server** (the O2 hub: HTTP, websockets, o2lite; **all** room
   synthesis), and
-- the **Control+GameServer** (a full O2 peer, services `game` and `actl`): the
-  Bit runtime, registration and role assignment, scoring, and adjudication.
+- the **Control+GameServer** (**an o2lite client** of that hub via pyarco, offering
+  services `game` and `actl`): the Bit runtime, registration and role assignment,
+  scoring, and adjudication.
 
 Interactive Elements — hardware Tuneshrooms over o2lite, phones over websockets
 — connect to the Arco server; all gameplay traffic addresses `/game/...`; and
@@ -31,12 +32,27 @@ hardware fleet.
 ```
 Phone browser --ws--+
                     v
-Shroom (o2lite) --> +--------------+    full O2, same box
+Shroom (o2lite) --> +--------------+     o2lite, same box
 Shroom (o2lite) --> | Arco server  | <--------------------> Control+GameServer
 Shroom (o2lite) --> | "arco"       |                        "game", "actl"
                     +--------------+
        each Tuneshroom offers "ie<N>", each browser offers "ui<X>"
+
+  Every arrow is an o2lite link to the hub. The Arco server relays all of it.
 ```
+
+**Routing, and why it matters.** Control reaches Arco through pyarco's
+`o2litepy` — a pure-Python **o2lite** implementation, not a full O2 peer. An
+o2lite client can offer services and receive on them, but everything it sends
+leaves over its one link to the host. So `Control → /arco` and `Arco → /actl` are
+**1 hop**, while `Shroom → /game/*` and `Control → /ie<N>/*` are **2 hops**, and
+the Arco process relays 100% of gameplay traffic alongside all room synthesis.
+Promoting Control to full O2 would buy almost nothing — the devices are o2lite
+clients whose host *is* Arco, so device traffic transits it regardless. Inside the
+Control process, collaborate by Python method call, never by addressing your own
+o2lite service (that round-trips through Arco and back). Full table and the
+cue-lead consequence: *Message Routing* + Design Rule 4 in
+[`docs/control-gameserver-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/control-gameserver-design.md).
 
 A **Bit** is a loadable game/experience module inside Control. It declares the
 **roles** players can adopt, which **Registration Nodes** (tap points — an NFC
@@ -203,9 +219,16 @@ honor them in any new work:
   engine and O2 transport this server builds on. The Arco server *is* the room's
   O2 hub and sole synthesizer.
 - **pyarco** — the Python control layer Control+GameServer will build ugen
-  graphs through. **No dependency yet** (this slice does zero graph-building);
-  its source-of-truth (submodule vs. pinned sibling) is Roger Dannenberg's open
-  decision — see *Not yet built* below.
+  graphs through, and the source of Control's o2lite link (`o2litepy`). **No
+  dependency yet** (this slice does zero graph-building); its source-of-truth
+  (submodule vs. pinned sibling) is Roger Dannenberg's open decision — see *Not
+  yet built* below. **Decision 2026-07-24:** a Python-side **patch library**
+  (Arco ugen graphs as Python objects, offered by Roger) is the substrate a
+  role's graph-builder is written against, while `ugen_manifest` stays
+  **Bit-declared data** that Control interprets — the same declare/interpret
+  split that worked for `light_manifest`, and it leaves boundary rule 1 intact.
+  Open: whether that library is pyarco's existing `arco_instr.py` or something
+  new.
 - **mm-tuneshroom** — the instrument app and browser simulator. Its web build
   deploys into the Terrarium's `www/` as an artifact; it never contains
   Terrarium-side logic. (The legacy M1a / Sensor-Check harness stays in
@@ -234,7 +257,15 @@ Kept explicit so the doc doesn't over-claim:
   render/contract path (composed blob → luxaeterna → LEDs) is now proven
   in-process via `harness/` (Slice 1); only the device wire itself is unbuilt.
 - **Real ugen graph-building on Arco** and **real scoring.** `ugen_manifest`
-  is still a placeholder and `on_complete()` scoring is a stub hook.
+  is still a placeholder and `on_complete()` scoring is a stub hook. The
+  2026-07-24 patch-library decision above sets the *shape* of the graph-builder
+  seam, not its implementation — the library itself does not exist here yet.
+- **On-target measurement.** No latency, message-rate, or discovery number has
+  been taken on real hardware. The Arco hub relays all gameplay traffic while
+  synthesizing, and cue leads must cover two hops — both need measuring on the
+  Pi 5, not on a dev workstation (a VM/WSL host cannot answer either: emulated
+  audio forces large buffers, and NAT'd virtual networking breaks O2 discovery
+  and Art-Net outright). Budget this into the o2lite bring-up slice.
   (`light_manifest` is no longer a placeholder — v2 schema frozen, validated
   at load — but nothing *sends* the composed `/ie<N>/role` blob yet: the
   o2lite transport that reads `JoinResult.config`, and the Arco cue path that
