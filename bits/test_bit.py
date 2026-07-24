@@ -32,10 +32,9 @@ class TestBit(Bit):
             # registry names.
             light_manifest={
                 "instruments": [
-                    {"instrument": "bloom", "target": "primary",
+                    {"instrument": "aurora", "target": "primary",
                      "params": {"hue": 0.33},
-                     "lanes": [{"source": "note", "dest": "trigger"},
-                               {"source": "cc:74", "dest": "hue"}]},
+                     "lanes": [{"source": "cc:74", "dest": "hue"}]},
                 ],
             },
             welcome={
