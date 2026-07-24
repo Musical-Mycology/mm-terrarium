@@ -17,7 +17,8 @@ required to work on this architecture.
 
 - **Terrarium**: the central unit in a room. One capable computer plus LED display
   and speakers. It hosts two processes: the Arco server (the O2 hub serving HTTP,
-  websockets, and o2lite) and the Control+GameServer (a full O2 peer).
+  websockets, and o2lite) and the Control+GameServer (**an o2lite client of that
+  hub**, via pyarco's `o2litepy` — see *Message Routing* below).
 - **Tuneshroom**: the physical Interactive Element. Processor, mic, speaker,
   sensors, LEDs. Joins as an o2lite client. A phone can simulate one.
 - **Bit**: a loadable game/experience module inside the Control+GameServer. A
@@ -35,12 +36,14 @@ required to work on this architecture.
 ```
 Phone browser --ws--+
                     v
-Shroom (o2lite) --> +--------------+    full O2, same box
+Shroom (o2lite) --> +--------------+     o2lite, same box
 Shroom (o2lite) --> | Arco server  | <--------------------> Control+GameServer
 Shroom (o2lite) --> | "arco"       |                        "game", "actl"
                     +--------------+
        each Tuneshroom offers "ie<N>", each browser offers "ui<X>"
              (both are Interactive Elements to the game layer)
+
+  Every arrow is an o2lite link to the hub. The Arco server relays all of it.
 ```
 
 ## Services
@@ -55,6 +58,50 @@ Shroom (o2lite) --> | "arco"       |                        "game", "actl"
 - `ui<X>`: offered by each browser client over its websocket, for state pushed to
   that UI. A phone simulating a Tuneshroom offers `ie<N>` semantics through the
   same websocket instead.
+
+## Message Routing
+
+Control is an **o2lite client**, not a full O2 peer. pyarco reaches Arco through
+`o2litepy`, a pure-Python o2lite implementation; an o2lite client can *offer*
+services (`set_services`) and receive on them (`method_new`), but every message it
+sends leaves over its single link to the host, with no local short-circuit. So
+(per Roger Dannenberg, 2026-07-24):
+
+| Path | Hops | Note |
+|---|---|---|
+| Control → `/arco` | **1** | Control's host *is* Arco. The audio-critical writer path is the cheap one. |
+| Arco → `/actl` | **1** | Same link, other direction. |
+| Shroom → `/game/*` | **2** | device → Arco → Control. |
+| Control → `/ie<N>/*` | **2** | Control → Arco → device. |
+
+Two consequences the rest of this design has to live with:
+
+1. **The Arco server relays 100% of gameplay traffic.** Every `/game/data`
+   message from every device, at whatever rate the Bit requested, is forwarded by
+   the same process doing all room synthesis — and on the fixed Terrarium that is
+   a Raspberry Pi 5 also feeding Lux Aeterna's 44 Hz render loop
+   (`MM_HARDWARE_DESIGN.md` §7.1). Message rate is a **capacity** question for the
+   hub, not just a latency question; see *Open Questions*.
+2. **Promoting Control to a full O2 peer would buy almost nothing.** The devices
+   are o2lite clients whose host is Arco, so anything addressed to `ie<N>`
+   transits Arco regardless of what Control is. Full O2 would only shorten
+   Control↔Arco, which is already one hop. Staying on o2lite/pyarco is therefore
+   the right call, not a compromise.
+
+The implementation was never wrong here — only this document was. The first-slice
+spec (2026-07-20, §7) already recorded "Control connects via o2lite, not a
+full-O2 peer binding, despite the design doc's 'full O2 peer' framing," and
+deferred revisiting it until a Python full-O2 binding exists. Point 2 above
+supersedes that deferral: even given such a binding, the device paths would not
+get shorter, so there is nothing to revisit.
+
+**Inside the Control process, call Python directly.** `game` and `actl` are both
+inbound-only today (devices → `game`, Arco → `actl`), so Control never messages
+itself — but an o2lite service addressed from its own process would round-trip
+through Arco and back. O2 addressing is for the process boundary; intra-process
+collaboration is a method call. (This is why `console/` and `uplink/` ride
+websockets rather than O2 — they were split that way for other reasons, and this
+is the second justification.)
 
 ## Roles and Registration Nodes
 
@@ -141,6 +188,12 @@ A Bit's role table declares each role with:
    true feedback paths (gesture to sound), where WiFi jitter dominates anyway.
    The `/ie<N>/play` local-sample path exists precisely so the tightest feedback
    never crosses the network.
+   **The cue lead must cover two hops, not one.** Per *Message Routing*, a
+   `/ie<N>/led` or `/ie<N>/play` cue travels Control → Arco → device, so the
+   schedule-ahead window has to absorb two WiFi legs plus the hub's forwarding
+   latency. A lead sized for one hop will land late under load. Measure the real
+   round trip on the target hardware before picking the number — this is exactly
+   what the o2lite bring-up slice has to establish.
 5. **MIDI over o2lite as packed int32** (status, data1, data2 in one word), since
    o2lite lacks O2's native `'m'` type; blobs for sysex or bulk.
 
@@ -150,7 +203,8 @@ A module loaded by Control that declares:
 
 1. its role table with classes, capacities, and node mappings,
 2. handlers for the `/game` verbs it uses,
-3. per-role graph-builders for the Bit's patch and per-player channel strips,
+3. per-role graph-builders for the Bit's patch and per-player channel strips
+   (built on the Python patch library — see *Implementation Proposal*),
 4. cue logic for device light/sound, and
 5. a scoring function over the input stream.
 
@@ -162,11 +216,46 @@ just messages.
 
 ## Implementation Proposal
 
-Control+GameServer in Python on pyarco. Bits as Python plugin modules gives us
-fast iteration on game design, and the process is a full O2 LAN peer on the same
-box, so Python overhead is irrelevant at these message rates. Anything that ever
-proves hot is isolated behind O2 addresses and portable without touching the
+Control+GameServer in Python on pyarco, as an o2lite client of the Arco server on
+the same box. Bits as Python plugin modules gives us fast iteration on game
+design, and at these message rates Python overhead is dominated by the hub relay
+either way. Anything that ever proves hot is isolated behind O2 addresses and
+portable without touching the protocol.
+
+### Sound: the patch library is the graph-builder's substrate
+
+**Decision (2026-07-24, from Roger Dannenberg's offer):** Bits build sound through
+a **Python-side patch library** — graphs of Arco ugens presented as Python
+objects — and MM's own work stays on the control side. Two things follow, and the
+split between them is the point:
+
+- **The library is the substrate for a role's graph-builder.** It is *how* Control
+  constructs and drives a patch; it is not a new authority over the graph. Design
+  Rule 3 is unchanged: Control still owns the ugen id space and remains the single
+  writer to `/arco`. A device never gains a path to Arco because a patch object
+  exists.
+- **`ugen_manifest` stays Bit-declared data**, exactly as `light_manifest` did. The
+  Bit *declares* what a role sounds like; Control *interprets* that declaration and
+  builds the graph. This is the same shape that worked for lighting, where
+  luxaeterna's light-manifest v2 became the wire form and Control stamps
+  bit/role provenance onto it — see the 2026-07-22 light-manifest-v2-adoption
+  spec. Keeping the declaration declarative is what preserves record/replay and
+  keeps the console a monitor rather than a driver.
+
+Two starter sounds Roger proposed land on paths this design already has: *play a
+sample* is the `/ie<N>/play` local-playback path (Design Rule 4), and *play FLsyn
+with MIDI* is MIDI-over-o2lite as packed int32 (Design Rule 5). Neither needs new
 protocol.
+
+This decision is directional: the library itself does not exist here yet. pyarco
+has **no dependency in this repo**, `ugen_manifest` is still a placeholder, and no
+graph-builder is written. It is recorded now so the seam is not designed twice —
+see *Open Questions* for what must be settled with Roger before code lands.
+
+**Sound and instrument design ownership is still open.** If a student wants to do
+instrument design, they author patches and this library is their tool; otherwise
+MM consumes a fixed set from Roger and worries only about control. Worth
+establishing interest before the first production Bit is scoped.
 
 ## Open Questions
 
@@ -178,3 +267,48 @@ protocol.
    (roughly 768 kbps per 16-bit mono 48k stream)?
 3. Browsers as `ui<X>` services versus a reply-address argument in `/game/hello`:
    preference?
+4. **Hub forwarding cost.** Since the Arco server relays every gameplay message
+   (*Message Routing*), does that forwarding contend with Arco's audio thread, and
+   what sustained message rate is safe with synthesis running? The fixed Terrarium
+   is a Raspberry Pi 5 also driving a 44 Hz Lux Aeterna render loop, so the
+   headroom question is concrete rather than theoretical.
+5. **Patch-library overlap.** MM has **already written a Python instrument
+   framework**: `python25/arco_instr.py` in `Musical-Mycology/pyarco` (Chris
+   Oltyan, 2026-04-08, ~830 lines — `instr_begin()` / `param()` / `Param_descr` /
+   `Instrument` / `Note` / `Score` / `Synth`, plus `Reverb`, `Multi_reverb`, and a
+   supersaw). It closely mirrors Roger's **Serpent** framework in
+   `arco/serpent/srp/instr.srp` (Oct 2024) and `arco/doc/instruments.md` — same
+   `instr_stack` / `instr_begin` / `param` / `Instrument` / `Synth` shape,
+   including the `smooth`→`Smoothb` parameter idea — so it reads as a Python port
+   of that design. Note this is **MM-side code, not upstream**: there is no
+   `rbdannenberg/pyarco`, `Musical-Mycology/pyarco` is an original repo rather
+   than a fork, and the arco repo tracks no `pyarco/` files.
+   So the question is not "is the offered library `arco_instr.py`" — it is whether
+   the offered library covers the same ground, in which case MM should retire its
+   port and converge on Roger's, or sits at a different level and the two compose.
+   Settling this before the first graph-builder avoids two overlapping
+   abstractions over one ugen graph.
+
+## Host Platform
+
+The production Terrarium is **bare-metal Linux on a Raspberry Pi 5 with a mandatory
+I2S DAC HAT** (`MM_HARDWARE_DESIGN.md` §7.1) — the Pi 5 has no analog out. There is
+no virtualization layer in the venue path, which answers the standing concern about
+emulated audio drivers forcing large buffers and high latency.
+
+That concern does apply to **development** hosts. A WSL2 or VM workstation is fine
+for the offline suite (all of what exists today) but is not a valid stand-in for
+bring-up, for two reasons, the second of which is the more disqualifying:
+
+- **Audio.** Virtualized sound devices generally cannot deliver small-buffer,
+  low-latency operation, so any latency measured there is meaningless for the
+  venue box.
+- **Networking.** WSL2's NAT'd virtual NIC puts the Linux side on its own subnet.
+  O2's UDP discovery will not reach LAN Shrooms, and Lux Aeterna's Art-Net will not
+  reach WLED controllers, without mirrored networking or manual port proxying. For
+  a box whose entire job is to be the room's O2 hub, that is a hard failure rather
+  than a degradation.
+
+**Rule:** latency, message-rate, and discovery numbers are only meaningful when
+measured on target hardware. Budget a round-trip and sustained-rate measurement
+into the o2lite bring-up slice.

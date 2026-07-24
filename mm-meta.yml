@@ -7,7 +7,9 @@ description: >
   server (O2 hub for o2lite devices and browser websocket clients; all room
   synthesis) and the Control+GameServer (Bit runtime, registration/role
   assignment via Registration Nodes, scoring, adjudication) in Python on
-  pyarco. Design: mm-documents/mm-shrooms-app/control-gameserver-design.md.
+  pyarco, as an o2lite client of that Arco server.
+  Design: docs/control-gameserver-design.md (in-repo, canonical since
+  2026-07-18).
 
 tech: [python, pyarco, arco, o2, cpp]
 
