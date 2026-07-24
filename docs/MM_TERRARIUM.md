@@ -219,7 +219,9 @@ honor them in any new work:
   engine and O2 transport this server builds on. The Arco server *is* the room's
   O2 hub and sole synthesizer.
 - **pyarco** — the Python control layer Control+GameServer will build ugen
-  graphs through, and the source of Control's o2lite link (`o2litepy`). **No
+  graphs through, and the source of Control's o2lite link (`o2litepy`). Note
+  `Musical-Mycology/pyarco` is an **original MM repo, not a fork** — there is no
+  `rbdannenberg/pyarco`, and the arco repo tracks no `pyarco/` files. **No
   dependency yet** (this slice does zero graph-building); its source-of-truth
   (submodule vs. pinned sibling) is Roger Dannenberg's open decision — see *Not
   yet built* below. **Decision 2026-07-24:** a Python-side **patch library**
@@ -227,8 +229,11 @@ honor them in any new work:
   role's graph-builder is written against, while `ugen_manifest` stays
   **Bit-declared data** that Control interprets — the same declare/interpret
   split that worked for `light_manifest`, and it leaves boundary rule 1 intact.
-  Open: whether that library is pyarco's existing `arco_instr.py` or something
-  new.
+  **Open, and load-bearing:** pyarco already carries MM's own
+  `python25/arco_instr.py` — a Python instrument framework that mirrors Roger's
+  Serpent `instr.srp` — so the real question is whether his offered library covers
+  that same ground (retire the MM port and converge) or a different level (the two
+  compose). See design-doc Open Question 5.
 - **mm-tuneshroom** — the instrument app and browser simulator. Its web build
   deploys into the Terrarium's `www/` as an artifact; it never contains
   Terrarium-side logic. (The legacy M1a / Sensor-Check harness stays in

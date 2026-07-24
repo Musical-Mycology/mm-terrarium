@@ -272,10 +272,22 @@ establishing interest before the first production Bit is scoped.
    what sustained message rate is safe with synthesis running? The fixed Terrarium
    is a Raspberry Pi 5 also driving a 44 Hz Lux Aeterna render loop, so the
    headroom question is concrete rather than theoretical.
-5. **Patch-library overlap.** pyarco already ships `python25/arco_instr.py` with a
-   Param / Instrument / Synth / Score framework. Is the offered Python patch
-   library that module, an evolution of it, or something new? Settling this before
-   the first graph-builder avoids two overlapping abstractions over one ugen graph.
+5. **Patch-library overlap.** MM has **already written a Python instrument
+   framework**: `python25/arco_instr.py` in `Musical-Mycology/pyarco` (Chris
+   Oltyan, 2026-04-08, ~830 lines — `instr_begin()` / `param()` / `Param_descr` /
+   `Instrument` / `Note` / `Score` / `Synth`, plus `Reverb`, `Multi_reverb`, and a
+   supersaw). It closely mirrors Roger's **Serpent** framework in
+   `arco/serpent/srp/instr.srp` (Oct 2024) and `arco/doc/instruments.md` — same
+   `instr_stack` / `instr_begin` / `param` / `Instrument` / `Synth` shape,
+   including the `smooth`→`Smoothb` parameter idea — so it reads as a Python port
+   of that design. Note this is **MM-side code, not upstream**: there is no
+   `rbdannenberg/pyarco`, `Musical-Mycology/pyarco` is an original repo rather
+   than a fork, and the arco repo tracks no `pyarco/` files.
+   So the question is not "is the offered library `arco_instr.py`" — it is whether
+   the offered library covers the same ground, in which case MM should retire its
+   port and converge on Roger's, or sits at a different level and the two compose.
+   Settling this before the first graph-builder avoids two overlapping
+   abstractions over one ugen graph.
 
 ## Host Platform
 
