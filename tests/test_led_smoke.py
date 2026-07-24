@@ -1,7 +1,7 @@
 """In-process full-stack regression: TestBit -> GameServer grant -> composed
 light-manifest-v2 blob -> luxaeterna session -> OutputLoop -> WebSimBackend
 recorder. Deterministic (fake clock, hand-driven ticks, no threads, no browser).
-Asserts welcome -> dark-when-running -> note lights + hue routing -> fade."""
+Asserts welcome -> lit-without-a-note -> cc-driven hue glide + breathe -> fade."""
 
 from __future__ import annotations
 
@@ -49,18 +49,30 @@ def test_full_inprocess_stack_lights_and_fades():
     assert session.state == "running"
     assert loading_lit                           # welcome actually lit the surface
 
-    # (b) dark before any note
-    loop._loop_once()
-    assert max(backend.frames[-1]) == 0
-
-    # (c) cc:74=0 -> hue red; note-on -> lit + red-dominant (GRB: byte1 red, byte0 green)
-    session.feed_midi(0xB0, 74, 0)
-    session.feed_midi(0x90, 60, 100)
+    # (b) aurora renders LIT during RUNNING with NO note-on — a field-rate gesture,
+    #     unlike the old note-triggered bloom (dark until a note). Its authored
+    #     hue 0.33 is green (GRB byte order: byte0=green, byte1=red).
     loop._loop_once()
     frame = backend.frames[-1]
-    assert max(frame) > 0
-    assert max(frame[1::3]) > max(frame[0::3])
-    lit = max(frame)
+    assert max(frame) > 0                              # lit without any note fed
+    assert max(frame[0::3]) > max(frame[1::3])         # green-dominant (hue 0.33)
+
+    # (c) cc:74 drives the hue and it GLIDES (Smooth), not a snap. Drive toward red
+    #     (cc 0); one frame later it is still green-dominant (mid-glide), and after
+    #     ~1.4 s it has become red-dominant. Brightness varies across the window
+    #     (the breathe). max(frame) == the breathe level (hsv value is always 1.0).
+    session.feed_midi(0xB0, 74, 0)                     # target hue 0 (red)
+    loop._loop_once()
+    mid = backend.frames[-1]
+    assert max(mid[0::3]) > max(mid[1::3])             # still green-dominant -> glided, not snapped
+    maxes = []
+    for _ in range(60):
+        loop._loop_once()
+        maxes.append(max(backend.frames[-1]))
+    settled = backend.frames[-1]
+    assert max(settled[1::3]) > max(settled[0::3])     # now red-dominant -> cc glided the hue
+    assert max(maxes) - min(maxes) > 0.02              # brightness breathes over the window
+    lit = max(maxes)                                    # a lit running frame for the fade check
 
     # (d) complete the Bit -> unload -> on_release -> session.clear() -> fade
     gs.run()

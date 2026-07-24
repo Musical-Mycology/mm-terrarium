@@ -73,10 +73,9 @@ def test_player_role_declares_v2_light_manifest_and_welcome():
     player = table.roles["player"]
     assert player.light_manifest == {
         "instruments": [
-            {"instrument": "bloom", "target": "primary",
+            {"instrument": "aurora", "target": "primary",
              "params": {"hue": 0.33},
-             "lanes": [{"source": "note", "dest": "trigger"},
-                       {"source": "cc:74", "dest": "hue"}]},
+             "lanes": [{"source": "cc:74", "dest": "hue"}]},
         ],
     }
     assert player.welcome == {
