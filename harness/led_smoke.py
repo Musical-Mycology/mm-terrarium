@@ -74,11 +74,13 @@ def main() -> None:
     try:
         while session.state != "running":
             time.sleep(0.02)
-        cc = 0
+        cc, step = 0, 2
         while gs.state == State.RUNNING:
-            session.feed_midi(0xB0, 74, cc)          # cc:74 -> hue
-            session.feed_midi(0x90, 60, 100)         # new voice at current hue
-            cc = (cc + 8) % 128
+            session.feed_midi(0xB0, 74, cc)          # cc:74 -> hue; aurora glides between steps
+            cc += step
+            if cc >= 127 or cc <= 0:                 # ping-pong (no wrap discontinuity)
+                cc = max(0, min(127, cc))
+                step = -step
             gs.tick(0.15)                            # advances TestBit toward complete
             time.sleep(0.15)
         time.sleep(1.2)                              # let the closing fade + idle play
