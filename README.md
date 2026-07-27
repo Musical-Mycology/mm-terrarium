@@ -6,12 +6,18 @@ LED display and speakers, hosting two processes:
 
 - the **Arco server** (O2 hub: HTTP, websockets, o2lite; all synthesis for the
   room), and
-- the **Control+GameServer** (full O2 peer, services `game` and `actl`): Bit
-  runtime, registration and role assignment, scoring, adjudication.
+- the **Control+GameServer** (an o2lite client of that hub, offering services
+  `game` and `actl`): Bit runtime, registration and role assignment, scoring,
+  adjudication.
 
 Interactive Elements (hardware Tuneshrooms over o2lite, phones over
 websockets) connect to the Arco server; gameplay traffic addresses
 `/game/...`; only Control writes to `/arco`.
+
+Arco is the only full-O2 process in the room — Control attaches over o2lite
+just like every device, so anything travelling between two clients is relayed
+by Arco (`/game/*` and `/ie<N>/*` are 2 hops; `/arco` and `/actl` are 1). See
+the design doc's *Message Routing* section.
 
 ## Canonical design
 

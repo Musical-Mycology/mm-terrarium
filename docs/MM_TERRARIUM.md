@@ -6,8 +6,15 @@ LED display and speakers — hosting **two processes on the same box**:
 
 - the **Arco server** (the O2 hub: HTTP, websockets, o2lite; **all** room
   synthesis), and
-- the **Control+GameServer** (a full O2 peer, services `game` and `actl`): the
-  Bit runtime, registration and role assignment, scoring, and adjudication.
+- the **Control+GameServer** (an **o2lite client** of that hub, offering services
+  `game` and `actl`): the Bit runtime, registration and role assignment,
+  scoring, and adjudication.
+
+Arco is the only full-O2 process in the room. Control attaches over o2lite
+exactly like every device, so Arco relays anything travelling between two
+clients — `/arco` and `/actl` are 1 hop, `/game/*` and `/ie<N>/*` are 2, and a
+sensor-to-LED round trip is 4. A full-O2 Control would shorten none of them
+(see *Message Routing* in the design doc).
 
 Interactive Elements — hardware Tuneshrooms over o2lite, phones over websockets
 — connect to the Arco server; all gameplay traffic addresses `/game/...`; and
@@ -31,7 +38,7 @@ hardware fleet.
 ```
 Phone browser --ws--+
                     v
-Shroom (o2lite) --> +--------------+    full O2, same box
+Shroom (o2lite) --> +--------------+     o2lite, same box
 Shroom (o2lite) --> | Arco server  | <--------------------> Control+GameServer
 Shroom (o2lite) --> | "arco"       |                        "game", "actl"
                     +--------------+
@@ -204,6 +211,32 @@ honor them in any new work:
    Arco ugens and never pushes frames to Lux Aeterna's render loop. (A future Lux Aeterna health read-out — Art-Net
    link up? WLED reachable? — is anticipated through the generic `Bit.status()`
    seam, but needs Lux Aeterna actually running, so it is a later slice.)
+4. **An in-process consumer is reached by a Python method call, not by O2.**
+   Control is an o2lite client, and o2lite `send()` has **no local
+   short-circuit** — addressing a service from inside the process that offers it
+   round-trips through Arco and back. O2 addressing is for the process boundary
+   only. This is why the Lux Aeterna renderer inside Control is driven by direct
+   calls (`session.feed_midi(...)`, `.swap(...)`) at **zero** hops, while the
+   same renderer on a Tuneshroom takes `/light/midi` at 2. Corollary worth
+   preserving: `game` and `actl` are **inbound-only** today (devices → `game`,
+   Arco → `actl`), so Control never messages itself and there is no round trip
+   to eliminate. Keep it that way. See design doc § *Message Routing*.
+
+## Host platform (gotcha)
+
+The venue target is **bare-metal Linux on a Raspberry Pi 5** with a mandatory
+I2S DAC HAT. **Virtualized hosts are ruled out for bring-up:** both O2 discovery
+and Art-Net-to-WLED are UDP on the LAN, and a NAT'd VM or **WSL2** host sits on
+its own virtual subnet, so neither arrives. Treat WSL2 as a non-starter rather
+than something to work around.
+
+Develop without hardware using luxaeterna's `WebSimBackend` (browser-canvas
+12-LED Shroom; `serve=False` for a headless frame recorder) — `harness/led_smoke.py`
+is the worked example. **Any timing figure must be measured on the venue box**,
+which relays every hop above through the same process doing all room synthesis
+while feeding a 44 Hz render loop. The M1a-era "round trip under 50 ms" number
+does **not** carry over — it was measured with Control not in the path. See
+design doc § *Host Platform*.
 
 ## Relationships to other repos
 
@@ -235,8 +268,9 @@ honor them in any new work:
 
 Kept explicit so the doc doesn't over-claim:
 
-- **Real O2lite/pyarco transport wiring.** Control connects via o2lite in the
-  design framing, but nothing talks to a live O2 network or Arco server yet —
+- **Real O2lite/pyarco transport wiring.** Control's binding is settled — it is
+  an o2lite client of Arco (design doc v3, *Message Routing*), and `o2litepy` is
+  the only Python binding that exists — but nothing talks to a live O2 network or Arco server yet —
   the whole suite runs against fakes (`FakeO2Lite`-style transport,
   `FakeTransport`, a localhost websocket for the console server). The
   render/contract path (composed blob → luxaeterna → LEDs) is now proven

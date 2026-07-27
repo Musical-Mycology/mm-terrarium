@@ -1,9 +1,23 @@
 # Control+GameServer Design (Official Architecture Path)
 
-**Terrarium / Tuneshroom / Bit architecture** · v2 · 2026-07-18 · Chris Oltyan — chris@musicalmycology.org, with Roger Dannenberg
+**Terrarium / Tuneshroom / Bit architecture** · v3 · 2026-07-27 · Chris Oltyan — chris@musicalmycology.org, with Roger Dannenberg
 
 **Status: OFFICIAL PATH FORWARD as of 2026-07-18. This file is the canonical
-copy.** It supersedes the earlier Musical Mycology direction of an embedded
+copy.**
+
+> **v3 (2026-07-27) — correction.** v1–v2 described the Control+GameServer as
+> "a full O2 peer" in three places. That was wrong as written and was never
+> what got built: **Control is an o2lite client of the Arco server**, exactly
+> like every device. The Arco server is the only full-O2 process in the room —
+> a hub, not a peer among peers. No Python full-O2 binding exists (only
+> `o2litepy`, which pyarco itself uses), so a full-peer Control was never
+> available; the deviation was recorded in
+> `docs/superpowers/specs/2026-07-20-control-gameserver-first-slice-design.md`
+> §7 on 2026-07-20. The new **Message Routing** and **Host Platform** sections
+> below state the consequences explicitly. Downstream repos (luxaeterna,
+> mm-tuneshroom) already cite both by name.
+
+It supersedes the earlier Musical Mycology direction of an embedded
 Arco engine on every device (mm-documents design, §4.5) and the M1a-era O2
 service conventions (`o2host` hub, `te`/`sh<pid>` services) used by the first
 test slices in mm-tuneshroom. Those slices remain valid test beds pending
@@ -17,7 +31,9 @@ required to work on this architecture.
 
 - **Terrarium**: the central unit in a room. One capable computer plus LED display
   and speakers. It hosts two processes: the Arco server (the O2 hub serving HTTP,
-  websockets, and o2lite) and the Control+GameServer (a full O2 peer).
+  websockets, and o2lite) and the Control+GameServer, which attaches to that hub
+  as an **o2lite client** — the same binding every device uses. Arco is the only
+  full-O2 process in the room. See *Message Routing* for what this costs.
 - **Tuneshroom**: the physical Interactive Element. Processor, mic, speaker,
   sensors, LEDs. Joins as an o2lite client. A phone can simulate one.
 - **Bit**: a loadable game/experience module inside the Control+GameServer. A
@@ -35,7 +51,7 @@ required to work on this architecture.
 ```
 Phone browser --ws--+
                     v
-Shroom (o2lite) --> +--------------+    full O2, same box
+Shroom (o2lite) --> +--------------+     o2lite, same box
 Shroom (o2lite) --> | Arco server  | <--------------------> Control+GameServer
 Shroom (o2lite) --> | "arco"       |                        "game", "actl"
                     +--------------+
@@ -55,6 +71,48 @@ Shroom (o2lite) --> | "arco"       |                        "game", "actl"
 - `ui<X>`: offered by each browser client over its websocket, for state pushed to
   that UI. A phone simulating a Tuneshroom offers `ie<N>` semantics through the
   same websocket instead.
+
+## Message Routing
+
+Everything in the room except the Arco server attaches over **o2lite**, and an
+o2lite client has exactly one link — to its host. Its `send()` has **no local
+short-circuit**: every message it sends leaves over that link, even one
+addressed to a service the sending process itself offers. Arco is the host for
+all of them, so Arco relays anything travelling between two clients.
+
+That single fact fixes every hop count in the design:
+
+| Path | Route | Hops |
+|---|---|---|
+| Control → `/arco` | Control's host *is* Arco | **1** |
+| Arco → `/actl` | host → its client | **1** |
+| device → `/game/*` | device → Arco → Control | **2** |
+| Control → `/ie<N>/*` | Control → Arco → device | **2** |
+| sensor-to-LED round trip | device → Arco → Control → Arco → device | **4** |
+
+Two consequences worth stating outright:
+
+**A full-O2 Control would shorten nothing.** The devices are o2lite clients
+whose host is Arco, so anything addressed to `ie<N>` transits Arco regardless of
+what Control is. Control → `/arco` is already 1 hop because Control's host *is*
+the engine. The only thing full-peer status would buy is a local short-circuit
+on messages Control sends to itself — and `game` and `actl` are both
+**inbound-only** today (devices → `game`, Arco → `actl`). Control never messages
+itself, so there is no round trip to eliminate. Keep it that way: if Control
+ever needs to reach one of its own services, call the Python method, do not
+address the o2lite service.
+
+**An in-process consumer is reached by a Python method call, not by O2.**
+Addressing an o2lite service from inside the process that offers it round-trips
+through Arco and back. O2 addressing is for the process boundary. This is why
+the Lux Aeterna renderer running inside Control is driven by direct calls
+(`session.feed_midi(...)`, `.swap(...)`) at **zero** hops, while the same
+renderer on a Tuneshroom takes `/light/midi` over the wire at 2 — see
+luxaeterna's `docs/deployment.md` for that matrix.
+
+Relaying is also a **capacity** question, not only a latency one: every hop
+above is relayed by the same Arco process doing all room synthesis, on a box
+that is simultaneously feeding a 44 Hz Lux Aeterna render loop.
 
 ## Roles and Registration Nodes
 
@@ -163,10 +221,47 @@ just messages.
 ## Implementation Proposal
 
 Control+GameServer in Python on pyarco. Bits as Python plugin modules gives us
-fast iteration on game design, and the process is a full O2 LAN peer on the same
-box, so Python overhead is irrelevant at these message rates. Anything that ever
-proves hot is isolated behind O2 addresses and portable without touching the
-protocol.
+fast iteration on game design, and the process is an o2lite client of the Arco
+server on the same box, so Python overhead is irrelevant at these message rates.
+Anything that ever proves hot is isolated behind O2 addresses and portable
+without touching the protocol.
+
+o2lite is not a compromise here — it is the only Python binding that exists
+(`o2litepy`, which pyarco itself uses), and per *Message Routing* a full-O2
+Control would not shorten a single path in the current design.
+
+## Host Platform
+
+The venue target is **bare-metal Linux on a Raspberry Pi 5**, with a mandatory
+I2S DAC HAT and no virtualization layer anywhere in the venue path.
+
+**Virtualized hosts are ruled out for bring-up.** Both transports the room
+depends on are UDP over the LAN:
+
+- **O2 discovery** is UDP. A client that cannot receive it cannot find the hub.
+- **Art-Net to WLED controllers** is UDP. Frames must reach controllers on the
+  LAN directly.
+
+A NAT'd VM or a **WSL2** host sits on its own virtual subnet, so neither arrives
+without mirrored networking or hand-rolled port proxying. Treat WSL2 as a
+non-starter for anything that must reach a live hub or real LEDs, rather than
+something to be worked around.
+
+**Develop without hardware using luxaeterna's `WebSimBackend`.** It is a
+`DMXBackend` that records DMX frames and streams them to a self-contained
+browser canvas — an on-screen 12-LED Shroom. No LEDs, no controller, no LAN, so
+it is the supported path on a laptop, VM, or WSL2 box (`serve=False` gives a
+headless frame recorder for tests). mm-terrarium's `harness/led_smoke.py` is the
+worked example.
+
+**Timing numbers are only meaningful measured on target.** Frame rate, render
+loop headroom, drain latency, and sustained message rate taken on a laptop or a
+virtualized host say nothing about the Pi 5 — which is relaying every hop in
+*Message Routing* through the same process doing all room synthesis while
+feeding a 44 Hz render loop. Do not quote a figure that was not measured on the
+venue box. The M1a-era "round trip under 50 ms" figure in particular does **not**
+carry over: it was measured against the `o2host` topology with Control not in
+the path.
 
 ## Open Questions
 
