@@ -1161,6 +1161,14 @@ def test_unchanged_frame_is_sent_once(joined):
     assert frames[0]["args"][0] == [7] * 36
 
 
+# NOTE (corrected during execution): the version below CANNOT FAIL and was
+# replaced in the shipped code. aurora's `_AURORA_BREATHE` preset animates
+# brightness with no MIDI input at all, so distinct frames appear whether or
+# not the cue path works -- verified by removing the cue calls and still
+# getting 2 distinct frames. The shipped test is differential: it runs the
+# same poll sequence twice, with and without the cc:74 sweep, on an identical
+# fake-clock schedule, and asserts the two frame SEQUENCES differ. See
+# tests/test_devicelink_frames.py for the real version.
 def test_cue_changes_the_frame(joined):
     gs, server, agent = joined
     agent.poll()
