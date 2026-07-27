@@ -287,6 +287,32 @@ def test_abort_from_setup_unloads_and_releases_devices():
     assert released == ["ie1"]
 
 
+def test_a_raising_on_release_does_not_strand_later_devices_or_wedge_unload():
+    # Any transport can wire up on_release, not just DeviceLinkAgent -- this
+    # guards _unload's release loop directly, independent of any transport's
+    # own error handling. It must fail if that loop's try/except regresses.
+    server = make_server()
+    seen = []
+
+    def raise_on_first(dev):
+        seen.append(dev)
+        if len(seen) == 1:
+            raise RuntimeError("transport blew up releasing the first device")
+
+    server.on_release = raise_on_first
+    server.hello("ie1", "Tuneshroom 1", "1.0")
+    server.hello("ie2", "Tuneshroom 2", "1.0")
+    server.load_bit("test_bit")
+    server.join("ie1", "TEST_PLAYER_NODE")
+    server.join("ie2", "TEST_JAM_NODE")
+
+    server.abort()  # must not raise, must not wedge in UNLOADING
+
+    assert server.state == State.IDLE
+    assert set(seen) == {"ie1", "ie2"}
+    assert server.registration is None
+
+
 def test_abort_runs_on_complete_before_unloading():
     server = make_server()
     server.load_bit("test_bit")
