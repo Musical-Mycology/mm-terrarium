@@ -27,15 +27,18 @@ TICK = 1.0 / 44.0
 
 
 def build(host: str = HOST, port: int = PORT,
-          run_duration: float = RUN_DURATION_SECONDS):
+          run_duration: float = RUN_DURATION_SECONDS,
+          clock=time.monotonic):
     """Construct engine + server + agent WITHOUT running a tick loop.
 
     Returns (game_server, server, agent). The server is already started and
-    bound; pass port=0 for an ephemeral port in tests."""
+    bound; pass port=0 for an ephemeral port in tests. `clock` is a pure test
+    seam -- DeviceLinkAgent/DeviceBridge already expose it, and the default
+    keeps main()'s production path byte-identical."""
     gs = GameServer({"test_bit": lambda: TestBit(run_duration=run_duration)})
     server = DeviceLinkServer(host=host, port=port)
     server.start()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=clock)
     return gs, server, agent
 
 
