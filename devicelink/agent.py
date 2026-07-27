@@ -84,7 +84,6 @@ class DeviceLinkAgent:
         if not result.granted:
             self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
             return
-        self._send(dev, protocol.role_event(dev, result.config))
         bridge = DeviceBridge(capability=self._capability, clock=self._clock)
         try:
             bridge.on_grant(result)
@@ -94,6 +93,7 @@ class DeviceLinkAgent:
                 dev, "role", "could not build light session"))
             return
         self.bridges[dev] = bridge
+        self._send(dev, protocol.role_event(dev, result.config))
 
     def _on_verb(self, dev: str, verb: str, args: list) -> None:
         reason = self.game_server.data(dev, verb, args)
@@ -108,7 +108,10 @@ class DeviceLinkAgent:
                 bridge.on_release(dev)
             except Exception:
                 logger.exception("session clear for %s failed", dev)
-        self._send(dev, protocol.release_event(dev))
+        try:
+            self._send(dev, protocol.release_event(dev))
+        except Exception:
+            logger.exception("release notify for %s failed", dev)
 
     def _on_light_cue(self, dev: str, status: int,
                       data1: int, data2: int) -> None:

@@ -168,7 +168,11 @@ class GameServer:
         released = self.registration.release_all()
         if self.on_release:
             for dev in released:
-                self.on_release(dev)
+                try:
+                    self.on_release(dev)
+                except Exception:
+                    logger.exception(
+                        "on_release raised for %s; continuing", dev)
         self._notify("on_devices_change")
         try:
             self.bit.on_unload()

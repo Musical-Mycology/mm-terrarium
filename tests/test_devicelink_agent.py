@@ -11,6 +11,7 @@ pytest.importorskip("luxaeterna")
 
 from bits.test_bit import TestBit
 from control.engine import GameServer
+from control.state import State
 from devicelink.agent import DeviceLinkAgent
 
 
@@ -48,6 +49,15 @@ class FakeServer:
 
     def addressed(self, address):
         return [m for _, m in self.sent if m["address"] == address]
+
+
+class RaisingSendServer(FakeServer):
+    """A FakeServer whose send() always raises -- exercises the boundary
+    guarantee that a transport failure notifying one device can never
+    strand another device's bridge or wedge the engine in UNLOADING."""
+
+    def send(self, client, msg):
+        raise RuntimeError("transport exploded")
 
 
 @pytest.fixture
@@ -157,3 +167,52 @@ def test_light_cue_reaches_the_devices_session(rig):
     session = agent.bridges["ie1"].session
     gs.on_light_cue("ie1", 0xB0, 74, 100)     # must not raise
     assert session is agent.bridges["ie1"].session
+
+
+def test_a_raising_transport_does_not_strand_any_device_on_release():
+    """A release-notify send failure for one device must not leave any
+    device's bridge stranded, nor wedge the engine outside IDLE -- the
+    boundary-rule-2 guarantee that both DeviceLinkAgent._on_release and
+    GameServer._unload's release loop now provide independently."""
+    gs = GameServer({"test_bit": TestBit})
+    server = RaisingSendServer()
+    agent = DeviceLinkAgent(gs, server)
+    gs.load_bit("test_bit")
+
+    _hello(server, agent, client="c1", dev="ie1")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+
+    _hello(server, agent, client="c2", dev="ie2")
+    server.deliver("c2", "/game/join", "ss", ["ie2", "TEST_JAM_NODE"])
+    agent.poll()
+
+    assert set(agent.bridges) == {"ie1", "ie2"}
+
+    gs.run()
+    gs.abort()          # must not raise, must not wedge
+
+    assert gs.state == State.IDLE
+    assert agent.bridges == {}
+
+
+def test_failing_on_grant_sends_error_not_role_and_omits_the_bridge(rig, monkeypatch):
+    gs, server, agent = rig
+    gs.load_bit("test_bit")
+
+    class ExplodingBridge:
+        def __init__(self, capability=None, clock=None):
+            pass
+
+        def on_grant(self, result):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("devicelink.agent.DeviceBridge", ExplodingBridge)
+    _hello(server, agent)
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+
+    assert server.addressed("/ie1/role") == []
+    assert server.addressed("/ie1/error")[0]["args"] == \
+        ["role", "could not build light session"]
+    assert "ie1" not in agent.bridges
