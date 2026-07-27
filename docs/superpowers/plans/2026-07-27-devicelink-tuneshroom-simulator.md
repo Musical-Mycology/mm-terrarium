@@ -1842,8 +1842,20 @@ class WebSocketLink implements DeviceLink {
 Run: `flutter test`
 Expected: all pass
 
-Run: `flutter build web --debug`
-Expected: build succeeds
+Run: `flutter analyze`
+Expected: no NEW issues. Pre-existing warnings in `lib/ffi/`, `lib/ui/`, and
+`test/rgbw_color_test.dart` are legacy and out of scope — report them, don't fix them.
+
+**Do NOT run a bare `flutter build web --debug` here.** It defaults to
+`lib/main.dart`, which imports `ffi/o2_client.dart` → `dart:ffi` (`lib/main.dart:2`),
+so it can never succeed for web while the legacy app is untouched — that is the
+whole reason this transport seam exists. The real web-build gate is Task 8's
+`flutter build web --debug -t lib/sim_main.dart`, once the simulator entry point
+exists.
+
+To prove the seam itself is web-clean now, compile a throwaway entry point that
+imports only `lib/link/*` and confirm it builds. Delete it afterwards — Task 8
+creates the real one.
 
 - [ ] **Step 9: Commit**
 
@@ -2509,6 +2521,11 @@ target.
 
 `web/` was scaffolded in this slice; before it, `ios/` was the only platform
 directory in the repo.
+
+**A bare `flutter build web` will fail, and that is expected.** It defaults to
+`lib/main.dart`, which imports `ffi/o2_client.dart` → `dart:ffi`. The legacy app
+cannot target web at all. Always build and run the simulator with
+`-t lib/sim_main.dart`.
 
 **`www/` and `lib/ffi/`, `lib/audio/`, `lib/sensors/`, `lib/core/`, `lib/ui/`
 remain legacy M1a references** and are untouched. They stay until this stack
