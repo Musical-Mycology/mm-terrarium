@@ -233,6 +233,47 @@ def test_stuck_closing_session_is_still_released(joined):
     assert server.addressed("/ie1/release")
 
 
+def test_rejoin_mid_fade_does_not_destroy_the_new_session():
+    """Regression for the _on_join staleness bug: if the same dev rejoins
+    while its previous session is still in its closing fade (self._closing
+    still has an entry for it, left over from the release that started the
+    fade), _on_join must clear that entry when it installs the new bridge.
+    Otherwise the very next poll()'s _check_closing_done sees the *new*
+    session (state "loading", not CLOSING), wrongly concludes the old fade
+    is done, and _finish_release() tears down the brand-new bridge/universe
+    -- sending a spurious /ie1/release for a device the engine still
+    believes is legitimately joined, and stranding it silently (no
+    exception, no log) until it fully re-hellos."""
+    clk = iter(FINE_CLOCK_SCHEDULE).__next__
+    gs, server, agent = _make_rig_running(clk)
+
+    gs.abort()   # ie1 starts fading; self._closing["ie1"] is now set
+    assert "ie1" in agent._closing, (
+        "setup precondition: the old session must still be mid-fade")
+
+    gs.load_bit("test_bit")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+
+    assert "ie1" in agent.bridges, (
+        "the freshly rejoined device's bridge must survive the next poll "
+        "-- it must not be torn down by the previous session's now-stale "
+        "closing-fade bookkeeping")
+    assert server.addressed("/ie1/release") == [], (
+        "no spurious /ie1/release for the new session")
+
+    fed = []
+    session = agent.bridges["ie1"].session
+    real_feed_midi = session.feed_midi
+    session.feed_midi = lambda *a: (fed.append(a), real_feed_midi(*a))[-1]
+
+    gs.on_light_cue("ie1", 0xB0, 74, 64)
+    assert fed, (
+        "a light cue to the rejoined device must actually reach its new "
+        "session's feed_midi, not silently no-op because the bridge was "
+        "torn down by stale closing bookkeeping")
+
+
 def test_a_raising_session_does_not_break_poll(joined):
     gs, server, agent = joined
 

@@ -167,6 +167,7 @@ class DeviceLinkAgent:
         self.bridges[dev] = bridge
         self._universes[dev] = Universe()
         self._last_frames.pop(dev, None)
+        self._closing.pop(dev, None)
         self._send(dev, protocol.role_event(dev, result.config))
 
     def _on_verb(self, dev: str, verb: str, args: list) -> None:
