@@ -6,8 +6,15 @@ LED display and speakers — hosting **two processes on the same box**:
 
 - the **Arco server** (the O2 hub: HTTP, websockets, o2lite; **all** room
   synthesis), and
-- the **Control+GameServer** (a full O2 peer, services `game` and `actl`): the
-  Bit runtime, registration and role assignment, scoring, and adjudication.
+- the **Control+GameServer** (an **o2lite client** of that hub, offering services
+  `game` and `actl`): the Bit runtime, registration and role assignment,
+  scoring, and adjudication.
+
+Arco is the only full-O2 process in the room. Control attaches over o2lite
+exactly like every device, so Arco relays anything travelling between two
+clients — `/arco` and `/actl` are 1 hop, `/game/*` and `/ie<N>/*` are 2, and a
+sensor-to-LED round trip is 4. A full-O2 Control would shorten none of them
+(see *Message Routing* in the design doc).
 
 Interactive Elements — hardware Tuneshrooms over o2lite, phones over websockets
 — connect to the Arco server; all gameplay traffic addresses `/game/...`; and
@@ -31,7 +38,7 @@ hardware fleet.
 ```
 Phone browser --ws--+
                     v
-Shroom (o2lite) --> +--------------+    full O2, same box
+Shroom (o2lite) --> +--------------+     o2lite, same box
 Shroom (o2lite) --> | Arco server  | <--------------------> Control+GameServer
 Shroom (o2lite) --> | "arco"       |                        "game", "actl"
                     +--------------+
