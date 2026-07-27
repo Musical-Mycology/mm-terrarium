@@ -17,9 +17,18 @@ import time
 from control.engine import GameServer
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
+from luxaeterna.synth.director import CLOSING
 from luxaeterna.universe import Universe
 
 logger = logging.getLogger(__name__)
+
+# Bound on how many render attempts a released device may spend in CLOSING
+# before it is dropped unconditionally. A session that never reports leaving
+# CLOSING (a stuck/misbehaving bit, or a signature that never completes) must
+# not wedge the device forever -- see StatusDirector.QUARANTINE_FRAMES (44
+# frames, ~1s at 44Hz) for the analogous per-binding guard this mirrors. 200
+# frames is generous headroom over the ~0.6s sys:closing signature.
+_MAX_CLOSING_FRAMES = 200
 
 
 class DeviceLinkAgent:
@@ -33,6 +42,11 @@ class DeviceLinkAgent:
         self._universes: dict[str, Universe] = {}
         self._last_frames: dict[str, bytes] = {}
         self._clients: dict[str, object] = {}     # dev -> client
+        # dev -> render-attempt count, for devices released but still being
+        # driven through their closing fade. Presence in this dict, not in
+        # self.bridges, is the source of truth for "closing" (a device can
+        # legitimately have no bridge at all -- see _on_release).
+        self._closing: dict[str, int] = {}
         game_server.add_observer(self)
         game_server.on_release = self._on_release
         game_server.on_light_cue = self._on_light_cue
@@ -54,25 +68,56 @@ class DeviceLinkAgent:
     def _render_frames(self) -> None:
         """Render each joined device's session and emit /<dev>/leds when the
         frame actually changed. Rendering runs on the tick thread: the tick
-        rate is the frame rate, and there is no second thread to race."""
+        rate is the frame rate, and there is no second thread to race.
+
+        A device that has been released (see _on_release) stays in these
+        maps -- and keeps getting rendered here -- until its session's
+        closing fade actually finishes; that is what makes the fade frames
+        go out on the wire at all. _finish_release() below is what removes
+        it and sends /<dev>/release, once CLOSING is done (or the stuck-
+        session guard fires)."""
         for dev, bridge in list(self.bridges.items()):
             universe = self._universes.get(dev)
             session = bridge.session
             if universe is None or session is None:
                 continue
+            closing = dev in self._closing
+            if closing:
+                self._closing[dev] += 1
             try:
                 session.render_into(universe)
             except Exception:
                 logger.exception("render for %s failed; skipping frame", dev)
+                if closing:
+                    self._check_closing_bound(dev)
                 continue
             frame = bytes(universe.get_frame()[:36])
-            if frame == self._last_frames.get(dev):
-                continue
-            self._last_frames[dev] = frame
-            try:
-                self._send(dev, protocol.leds_event(dev, frame))
-            except Exception:
-                logger.exception("leds send for %s failed", dev)
+            if frame != self._last_frames.get(dev):
+                self._last_frames[dev] = frame
+                try:
+                    self._send(dev, protocol.leds_event(dev, frame))
+                except Exception:
+                    logger.exception("leds send for %s failed", dev)
+            if closing:
+                self._check_closing_done(dev, session)
+
+    def _check_closing_done(self, dev: str, session) -> None:
+        try:
+            still_closing = session.state == CLOSING
+        except Exception:
+            logger.exception("state check for %s failed while closing; "
+                              "releasing", dev)
+            still_closing = False
+        if not still_closing:
+            self._finish_release(dev)
+        else:
+            self._check_closing_bound(dev)
+
+    def _check_closing_bound(self, dev: str) -> None:
+        if self._closing.get(dev, 0) >= _MAX_CLOSING_FRAMES:
+            logger.error("session for %s stuck in CLOSING after %d render "
+                         "attempts; forcing release", dev, _MAX_CLOSING_FRAMES)
+            self._finish_release(dev)
 
     # --- inbound dispatch ---------------------------------------------------
     def _handle(self, client, msg: dict) -> None:
@@ -131,14 +176,35 @@ class DeviceLinkAgent:
 
     # --- engine-owned sinks -------------------------------------------------
     def _on_release(self, dev: str) -> None:
-        bridge = self.bridges.pop(dev, None)
+        """Engine released dev. Kick off the closing fade -- but keep the
+        device in the render maps (see _render_frames) so its bridge/session
+        are still there on the next poll() to actually play the fade out and
+        emit /<dev>/leds. /<dev>/release itself is deferred to
+        _finish_release(), once CLOSING has actually finished.
+
+        A device can be released with no bridge at all (e.g. its on_grant
+        failed earlier -- see test_failing_on_grant_sends_error_not_role...):
+        nothing to fade in that case, so release immediately."""
+        bridge = self.bridges.get(dev)
+        if bridge is None:
+            try:
+                self._send(dev, protocol.release_event(dev))
+            except Exception:
+                logger.exception("release notify for %s failed", dev)
+            return
+        try:
+            bridge.on_release(dev)   # -> session.clear(): enqueues the fade
+        except Exception:
+            logger.exception("session clear for %s failed", dev)
+        self._closing[dev] = 0
+
+    def _finish_release(self, dev: str) -> None:
+        """The closing fade (or the stuck-session guard) is done: drop the
+        device from every map and send /<dev>/release."""
+        self.bridges.pop(dev, None)
         self._universes.pop(dev, None)
         self._last_frames.pop(dev, None)
-        if bridge is not None:
-            try:
-                bridge.on_release(dev)
-            except Exception:
-                logger.exception("session clear for %s failed", dev)
+        self._closing.pop(dev, None)
         try:
             self._send(dev, protocol.release_event(dev))
         except Exception:

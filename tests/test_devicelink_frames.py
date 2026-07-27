@@ -4,6 +4,7 @@ import pytest
 
 pytest.importorskip("luxaeterna")
 
+import devicelink.agent as devicelink_agent
 from bits.test_bit import TestBit
 from control.engine import GameServer
 from devicelink.agent import DeviceLinkAgent
@@ -21,6 +22,40 @@ from tests.test_devicelink_agent import FakeServer
 # the same clock values -- see test_cue_changes_the_frame, which needs that
 # to make a fair differential comparison.
 CLOCK_SCHEDULE = [i * 2.0 for i in range(1000)]
+
+# Fine-grained schedule for the release/closing-fade tests below: those need
+# more than one render_into() call to elapse across the ~0.6s sys:closing
+# GainSignature (luxaeterna's synth/status.py: _sig_closing), so the fade
+# frames are actually observable across several poll()s rather than
+# collapsing into a single one the way CLOCK_SCHEDULE's 2.0s steps do.
+FINE_CLOCK_SCHEDULE = [i * 0.02 for i in range(5000)]
+
+
+def _make_rig_running(clk):
+    """Like _make_rig(), but parameterized on the clock and driven with
+    poll() until the session actually reaches RUNNING before returning.
+    CLOCK_SCHEDULE's 2.0s steps collapse the welcome/LOADING signature into
+    a single render_into() call; a fine clock like FINE_CLOCK_SCHEDULE needs
+    several poll()s to get there, so this can't just call poll() once like
+    _make_rig() does."""
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+    gs.load_bit("test_bit")
+    server.arrive("c1")
+    server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
+    agent.poll()
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    for _ in range(200):
+        if agent.bridges["ie1"].session.state == "running":
+            break
+        agent.poll()
+    else:
+        pytest.fail("session never reached RUNNING")
+    gs.run()
+    server.sent.clear()
+    return gs, server, agent
 
 
 def _make_rig():
@@ -118,13 +153,84 @@ def test_cue_changes_the_frame():
         "aurora's own breathing already produces")
 
 
-def test_released_device_stops_emitting(joined):
-    gs, server, agent = joined
+def test_released_device_plays_the_closing_fade_then_stops():
+    """The closing fade (LightSession.clear() -> CLOSING, driven by
+    devicelink/agent.py's _on_release + _render_frames) must actually be
+    rendered and sent over the wire before the device is released -- not
+    silently skipped, which is what this test used to (wrongly) assert by
+    checking for zero frames.
+
+    bridge.on_release() only enqueues a ClearEvent; draining that queue and
+    playing the fade out both happen inside render_into(), which only runs
+    from _render_frames() on a later poll(). So the bridge/universe/last-
+    frame entries must survive on_release and keep being rendered until the
+    session's own state says CLOSING is done -- see the docs/superpowers
+    design spec (2026-07-27-devicelink-tuneshroom-simulator-design.md) sec 6
+    step 7."""
+    clk = iter(FINE_CLOCK_SCHEDULE).__next__
+    gs, server, agent = _make_rig_running(clk)
+
     gs.abort()
+    assert "ie1" in agent.bridges, (
+        "the bridge must still be present right after on_release -- it is "
+        "popped only once the closing fade itself has finished rendering, "
+        "not up front")
+    assert server.addressed("/ie1/release") == [], (
+        "/ie1/release must not fire until the fade is done")
+
+    for _ in range(200):
+        agent.poll()
+        if "ie1" not in agent.bridges:
+            break
+    else:
+        pytest.fail("released device's closing fade never finished")
+
+    fade_frames = server.addressed("/ie1/leds")
+    assert fade_frames, (
+        "the closing fade must actually render and emit at least one "
+        "/ie1/leds frame before the device is released")
+    assert "ie1" not in agent.bridges
+    assert server.addressed("/ie1/release"), (
+        "/ie1/release must be sent once the fade has finished")
+
     server.sent.clear()
     for _ in range(3):
         agent.poll()
-    assert server.addressed("/ie1/leds") == []
+    assert server.addressed("/ie1/leds") == [], (
+        "no further frames once the device is fully released")
+
+
+def test_stuck_closing_session_is_still_released(joined):
+    """A session that enqueues the clear but whose .state never reports
+    leaving CLOSING (a misbehaving bit, or a signature that never
+    completes) must not wedge the device, nor get rendered forever -- the
+    bounded guard (_MAX_CLOSING_FRAMES in devicelink/agent.py) must still
+    drop it and send /ie1/release."""
+    gs, server, agent = joined
+
+    class StuckSession:
+        state = "closing"
+
+        def clear(self) -> None:
+            pass
+
+        def render_into(self, universe) -> None:
+            pass
+
+    agent.bridges["ie1"].session = StuckSession()
+    gs.abort()
+    assert "ie1" in agent.bridges
+
+    limit = devicelink_agent._MAX_CLOSING_FRAMES
+    for _ in range(limit + 5):
+        agent.poll()
+        if "ie1" not in agent.bridges:
+            break
+    else:
+        pytest.fail("a session stuck in CLOSING was never released")
+
+    assert "ie1" not in agent.bridges
+    assert server.addressed("/ie1/release")
 
 
 def test_a_raising_session_does_not_break_poll(joined):

@@ -35,7 +35,7 @@ Success is met when:
 
 1. **Registration + role grant crosses a socket.** The simulator sends `/game/hello` then `/game/join`; a granted join returns `/ie<N>/role` whose `light_manifest` is **byte-for-byte `JoinResult.config["light_manifest"]`** — not a hand-copied fixture. A denied join returns `/ie<N>/deny` with the engine's own `reason`/`hint`.
 2. **The device renders light-manifest v2 from that blob.** The shim builds a per-device `LightSession` from the same blob it sent, and the simulator paints the resulting 12-pixel Shroom (8 ring + 4 stem, GRB).
-3. **Sensor input produces real `/game/*` traffic.** Browser orientation/motion becomes `/game/tilt` / `/game/shake` / `/game/tap`, each carrying `dev` **in the arguments** (Design Rule 2).
+3. **Sensor input produces real `/game/*` traffic.** Browser orientation/motion becomes `/game/tilt`, carrying `dev` **in the arguments** (Design Rule 2). `/game/shake` and `/game/tap` are deferred — no Bit needs them yet, and criterion 4's single-gesture demo is fully satisfied by tilt alone.
 4. **The loop closes visibly.** Tilting the phone/browser drives `cc:74`, which TestBit's `player` role already binds to `aurora`'s hue lane — so a gesture glides the Shroom's colour. This single gesture exercises criteria 1–3 at once and needs no new Bit.
 5. A **headless** integration test drives the whole path over a real local socket and asserts the above without a browser.
 
@@ -136,8 +136,8 @@ Scaffolded via `flutter create --platforms=web .`. Additive; touches no existing
    - Denied → `/ie<N>/deny (reason, hint)`. Denials are normal traffic, not errors; the simulator shows *why*.
    - Granted → `/ie<N>/role` carrying `JoinResult.config` verbatim. The agent builds this device's `DeviceBridge` → `LightSession` from that same blob.
 5. **Render** — the session's 44 Hz loop produces DMX frames; the agent emits `/ie<N>/leds` on change. The simulator paints ring + stem.
-6. **Sensor input** — orientation/motion → `/game/tilt`, `/game/shake`, `/game/tap`, `dev` in the arguments. Tilt maps to `cc:74`, which TestBit's `player` role binds to `aurora`'s hue lane.
-7. **Release** — Bit completes or Control aborts → `on_release` → per-device `session.clear()` (the closing fade) → `/ie<N>/release`.
+6. **Sensor input** — orientation/motion → `/game/tilt`, `dev` in the arguments (`/game/shake`/`/game/tap` deferred, see §2 criterion 3). Tilt maps to `cc:74`, which TestBit's `player` role binds to `aurora`'s hue lane.
+7. **Release** — Bit completes or Control aborts → `on_release` starts the per-device `session.clear()` (the closing fade). The device keeps rendering — and emitting `/ie<N>/leds` — until the fade actually finishes (bounded against a session stuck in `CLOSING`, which is force-released instead of rendered forever); only then does `/ie<N>/release` fire.
 8. **Disconnect** — socket drops, device leaves the pool, its session is cleared.
 
 ### The demo, end to end

@@ -74,6 +74,33 @@ def _hello(server, agent, client="c1", dev="ie1"):
     agent.poll()
 
 
+# A fake clock with coarse-enough steps that the ~0.6s sys:closing
+# GainSignature (luxaeterna's synth/status.py) finishes within a handful of
+# render_into() calls -- see tests/test_devicelink_frames.py for the
+# detailed fade-then-release test; this file's release tests only need to
+# know it eventually finishes, not observe the fade frames themselves.
+_CLOSING_CLOCK_SCHEDULE = [i * 0.1 for i in range(5000)]
+
+# Released devices now stay in DeviceLinkAgent.bridges until their closing
+# fade finishes (devicelink/agent.py _on_release/_render_frames), so
+# release-path tests must drive poll() forward instead of asserting
+# immediately after gs.abort(). Bounded so a regression here fails fast
+# instead of hanging.
+_CLOSING_POLL_LIMIT = 200
+
+
+def _drain_releases(agent, devs, limit=_CLOSING_POLL_LIMIT):
+    """Poll until every dev in `devs` is gone from agent.bridges (its
+    closing fade -- or the stuck-session guard -- has finished), or fail."""
+    remaining = set(devs)
+    for _ in range(limit):
+        agent.poll()
+        remaining &= set(agent.bridges)
+        if not remaining:
+            return
+    pytest.fail(f"release never finished for {remaining}")
+
+
 def test_hello_registers_the_device_in_the_pool(rig):
     gs, server, agent = rig
     _hello(server, agent)
@@ -145,14 +172,23 @@ def test_malformed_envelope_is_dropped_silently(rig):
     assert server.sent == []
 
 
-def test_release_sends_release_and_clears_the_bridge(rig):
-    gs, server, agent = rig
+def test_release_sends_release_and_clears_the_bridge():
+    """gs.abort() starts the release path (DeviceLinkAgent._on_release),
+    which now plays the device's closing fade before dropping it -- see
+    tests/test_devicelink_frames.py for the detailed fade-then-release test.
+    A fake clock (rather than the `rig` fixture's real one) is needed so the
+    fade actually finishes within a bounded number of poll()s here."""
+    clk = iter(_CLOSING_CLOCK_SCHEDULE).__next__
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
     _hello(server, agent)
     server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
     agent.poll()
     gs.run()
     gs.abort()
+    _drain_releases(agent, ["ie1"])
     assert server.addressed("/ie1/release")
     assert "ie1" not in agent.bridges
 
@@ -173,10 +209,16 @@ def test_a_raising_transport_does_not_strand_any_device_on_release():
     """A release-notify send failure for one device must not leave any
     device's bridge stranded, nor wedge the engine outside IDLE -- the
     boundary-rule-2 guarantee that both DeviceLinkAgent._on_release and
-    GameServer._unload's release loop now provide independently."""
+    GameServer._unload's release loop now provide independently. This holds
+    all the way through the closing fade too: every /<dev>/leds and the
+    eventual /<dev>/release send can fail (RaisingSendServer always raises)
+    without preventing the fade from finishing or the bridge from being
+    dropped -- _finish_release's map cleanup does not depend on the send
+    succeeding, see devicelink/agent.py."""
+    clk = iter(_CLOSING_CLOCK_SCHEDULE).__next__
     gs = GameServer({"test_bit": TestBit})
     server = RaisingSendServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
 
     _hello(server, agent, client="c1", dev="ie1")
@@ -193,6 +235,7 @@ def test_a_raising_transport_does_not_strand_any_device_on_release():
     gs.abort()          # must not raise, must not wedge
 
     assert gs.state == State.IDLE
+    _drain_releases(agent, ["ie1", "ie2"])   # must not raise, must not wedge
     assert agent.bridges == {}
 
 
