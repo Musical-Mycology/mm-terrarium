@@ -186,6 +186,29 @@ device wire is Slice 2. `led_smoke.py` takes `--hold` (serve until Ctrl-C) /
 ~2 s one-shot. Regression: `tests/test_led_smoke.py` (headless) + CLI/`build()`
 unit tests in `tests/test_led_smoke_cli.py`.
 
+### `devicelink/` — the device-facing websocket transport (Slice 2)
+Control's first device wire. The inbound sibling of `console/`, with the same
+split: `DeviceLinkServer` (socket-only, drain-based) plus `DeviceLinkAgent`
+(transport-agnostic brains, driven from the tick loop). It holds one
+`DeviceBridge` → luxaeterna `LightSession` per joined device, ships
+`JoinResult.config` verbatim as `/<dev>/role`, and streams rendered frames as
+`/<dev>/leds` on change.
+
+Messages are **JSON envelopes mirroring o2ws field-for-field**
+(`timestamp`/`address`/`typespec`/`args`) — the vocabulary is real, the framing
+is not, so the later swap to o2ws is mechanical. **Arco is not in this path**,
+so nothing here may be read as a hop count or a latency figure. Same trust
+model as the console: trusted LAN, no auth, `127.0.0.1` by default.
+
+Slice 2 also **routed `Bit.verb_handlers()`**, which had been declared on the
+`Bit` interface since the first slice but which `GameServer` never called.
+`GameServer.data(dev, verb, args)` now dispatches to it and forwards emitted
+light cues through the transport-owned `on_light_cue` sink — so a Bit still
+decides the light consequence (boundary rule 3). `TestBit` gained a `tilt`
+handler mapping tilt onto `cc:74`, making verb dispatch a tested behavior.
+
+Driver: `python -m harness.devicelink_smoke --hold`.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -268,13 +291,10 @@ design doc § *Host Platform*.
 
 Kept explicit so the doc doesn't over-claim:
 
-- **Real O2lite/pyarco transport wiring.** Control's binding is settled — it is
-  an o2lite client of Arco (design doc v3, *Message Routing*), and `o2litepy` is
-  the only Python binding that exists — but nothing talks to a live O2 network or Arco server yet —
-  the whole suite runs against fakes (`FakeO2Lite`-style transport,
-  `FakeTransport`, a localhost websocket for the console server). The
-  render/contract path (composed blob → luxaeterna → LEDs) is now proven
-  in-process via `harness/` (Slice 1); only the device wire itself is unbuilt.
+- **Real O2lite/pyarco transport wiring.** A device wire now exists
+  (`devicelink/`, Slice 2) but it is a **direct websocket to Control, not
+  o2lite through Arco** — no live O2 network, no Arco server, no clock sync.
+  The whole suite still runs against fakes and localhost sockets.
 - **Real ugen graph-building on Arco** and **real scoring.** `ugen_manifest`
   is still a placeholder and `on_complete()` scoring is a stub hook.
   (`light_manifest` is no longer a placeholder — v2 schema frozen, validated

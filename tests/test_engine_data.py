@@ -34,6 +34,24 @@ class VerbBit(Bit):
         return [(dev, 0xB0, 74, 64)]
 
 
+class NoVerbBit(Bit):
+    """A Bit that genuinely declares no extra verbs -- unlike TestBit, which
+    gained a `tilt` handler once verb dispatch became a tested behavior
+    (Slice 2). Uses Bit's default verb_handlers() -> {}."""
+
+    version = "0.1"
+
+    @property
+    def role_table(self) -> RoleTable:
+        player = Role(name="player", role_class=RoleClass.SHARED,
+                      capacity=None, scored=False)
+        return RoleTable(roles={"player": player},
+                         node_map={"NODE_A": ["player"]})
+
+    def update(self, dt: float) -> bool:
+        return False
+
+
 def _loaded_server():
     gs = GameServer({"verb_bit": VerbBit})
     gs.load_bit("verb_bit")
@@ -76,8 +94,7 @@ def test_raising_handler_is_contained():
 
 
 def test_bit_declaring_no_verbs_is_unaffected():
-    from bits.test_bit import TestBit
-    gs = GameServer({"test_bit": TestBit})
-    gs.load_bit("test_bit")
-    gs.join("ie1", "TEST_JAM_NODE")
+    gs = GameServer({"no_verb_bit": NoVerbBit})
+    gs.load_bit("no_verb_bit")
+    gs.join("ie1", "NODE_A")
     assert gs.data("ie1", "tilt", ["ie1", 0.0]) == "unknown verb 'tilt'"

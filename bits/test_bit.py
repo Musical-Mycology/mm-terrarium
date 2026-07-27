@@ -71,3 +71,17 @@ class TestBit(Bit):
     def status(self) -> dict:
         return {"elapsed": round(self._elapsed, 2),
                 "run_duration": self._run_duration}
+
+    def verb_handlers(self) -> dict:
+        """Gameplay verbs beyond the fixed lifecycle set. `tilt` maps device
+        tilt onto cc:74, which this Bit's `player` role binds to aurora's hue
+        lane -- so tilting a device glides its Shroom's colour. Boundary
+        rule 3: the Bit decides the light consequence, not the transport."""
+        return {"tilt": self._on_tilt}
+
+    def _on_tilt(self, dev: str, args: list) -> list:
+        """args: [dev, gamma]. gamma is degrees in [-90, 90]."""
+        gamma = float(args[1]) if len(args) > 1 else 0.0
+        gamma = max(-90.0, min(90.0, gamma))
+        cc = int(round((gamma + 90.0) / 180.0 * 127.0))
+        return [(dev, 0xB0, 74, cc)]
