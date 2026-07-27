@@ -756,6 +756,12 @@ in-process fake server (no sockets -- see test_devicelink_server.py)."""
 
 import pytest
 
+# devicelink.agent imports harness.device_bridge, which needs the sibling
+# luxaeterna checkout. Guard it the same way tests/test_device_bridge.py and
+# tests/test_led_smoke.py do, so the core suite still collects without it
+# (requirements-dev.txt states that contract).
+pytest.importorskip("luxaeterna")
+
 from bits.test_bit import TestBit
 from control.engine import GameServer
 from devicelink.agent import DeviceLinkAgent
@@ -828,7 +834,9 @@ def test_granted_join_sends_role_blob_byte_identical(rig):
     assert len(roles) == 1
     blob = roles[0]["args"][0]
     assert blob["role"] == "player"
-    assert blob["bit_name"] == "test_bit"
+    # Provenance is stamped INSIDE light_manifest by compose_role_config,
+    # not at the top level. Top level carries role/class/scored.
+    assert blob["light_manifest"]["bit_name"] == "test_bit"
     assert blob["light_manifest"]["instruments"][0]["instrument"] == "aurora"
 
 
@@ -1093,6 +1101,8 @@ Create `tests/test_devicelink_frames.py`:
 """DeviceLinkAgent frame streaming: render on tick, emit only on change."""
 
 import pytest
+
+pytest.importorskip("luxaeterna")
 
 from bits.test_bit import TestBit
 from control.engine import GameServer
@@ -2025,11 +2035,38 @@ void main() {
         address: '/ie1/role',
         typespec: 'b',
         args: [
-          {'role': 'player', 'bit_name': 'test_bit'}
+          {
+            'role': 'player',
+            'class': 'SHARED',
+            'scored': true,
+            'light_manifest': {
+              'bit_name': 'test_bit',
+              'bit_version': '0.1',
+              'role': 'player',
+            },
+          }
         ]));
     await Future<void>.delayed(Duration.zero);
     expect(controller.roleConfig!['role'], 'player');
     expect(controller.denyReason, isNull);
+  });
+
+  test('provenance reads bit_name from inside light_manifest', () async {
+    link.arrive(Envelope(
+        timestamp: 0,
+        address: '/ie1/role',
+        typespec: 'b',
+        args: [
+          {
+            'role': 'player',
+            'light_manifest': {
+              'bit_name': 'test_bit',
+              'bit_version': '0.1',
+            },
+          }
+        ]));
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.provenance, 'bit test_bit v0.1 · role player');
   });
 
   test('deny message captures the reason', () async {
@@ -2101,6 +2138,21 @@ class SimController extends ChangeNotifier {
   Map<String, dynamic>? roleConfig;
   String? denyReason;
   String status = 'connecting';
+
+  /// Human-readable provenance for the granted role.
+  ///
+  /// `compose_role_config` stamps `bit_name`/`bit_version` **inside**
+  /// `light_manifest`, not at the top level — the top level carries only
+  /// `role`, `class`, and `scored`. Reading them from the top level yields
+  /// nulls, so this accessor is the single place that knows the nesting.
+  String get provenance {
+    final config = roleConfig;
+    if (config == null) return '';
+    final manifest = config['light_manifest'] as Map<String, dynamic>?;
+    final name = manifest?['bit_name'] ?? '?';
+    final version = manifest?['bit_version'] ?? '?';
+    return 'bit $name v$version · role ${config['role']}';
+  }
 
   Future<void> start() async {
     _link.inbound.listen(_onEnvelope);
@@ -2228,9 +2280,7 @@ class _SimScreenState extends State<SimScreen> {
                       Text('denied: ${controller.denyReason}',
                           style: const TextStyle(color: Colors.orangeAccent)),
                     if (config != null)
-                      Text(
-                          'bit ${config['bit_name']} v${config['bit_version']} '
-                          '· role ${config['role']}',
+                      Text(controller.provenance,
                           style: const TextStyle(color: Colors.white38)),
                     Row(
                       children: [
