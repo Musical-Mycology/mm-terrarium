@@ -40,6 +40,11 @@ class GameServer:
         # Set by a transport layer: called once per device released during
         # UNLOADING, so it can send that device's /ie<N>/release message.
         self.on_release = None
+        # Set by a transport layer: called when a Bit's verb handler emits a
+        # light cue, as on_light_cue(dev, status, data1, data2). Boundary
+        # rule 3 -- the Bit decides the light consequence, the transport
+        # only delivers it to that device's renderer.
+        self.on_light_cue = None
         # Observers registered via add_observer(). Each may implement any of
         # on_state_change(old, new), on_registration_change(),
         # on_devices_change(); missing methods are skipped. Both the uplink
@@ -96,6 +101,37 @@ class GameServer:
             self._notify("on_registration_change")
             self._notify("on_devices_change")
         return result
+
+    def data(self, dev: str, verb: str, args: list) -> str | None:
+        """Route a /game/<verb> message to the loaded Bit's verb handler.
+
+        Returns None when handled, else a refusal reason a transport can
+        surface as /<dev>/error. Never raises: a device must never be able
+        to wedge Control, exactly as a Bit must never be able to.
+        """
+        if self.state not in (State.SETUP, State.RUNNING):
+            return "no Bit running"
+        if dev not in self.registration.assignments:
+            return "device not registered"
+        try:
+            handler = self.bit.verb_handlers().get(verb)
+        except Exception:
+            logger.exception("Bit.verb_handlers raised; refusing %r", verb)
+            return "handler error"
+        if handler is None:
+            return f"unknown verb {verb!r}"
+        try:
+            cues = handler(dev, args)
+        except Exception:
+            logger.exception("Bit verb handler %r raised; ignoring", verb)
+            return "handler error"
+        if cues and self.on_light_cue is not None:
+            for cue in cues:
+                try:
+                    self.on_light_cue(*cue)
+                except Exception:
+                    logger.exception("on_light_cue raised; continuing")
+        return None
 
     def tick(self, dt: float) -> None:
         if self.state != State.RUNNING:
