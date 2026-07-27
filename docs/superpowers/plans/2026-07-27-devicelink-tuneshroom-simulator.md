@@ -1112,9 +1112,15 @@ from tests.test_devicelink_agent import FakeServer
 
 @pytest.fixture
 def joined():
+    # Real wall-clock time cannot advance TestBit's 1.5 s welcome or the
+    # LOADING->RUNNING transition inside a synchronous poll() loop -- the
+    # whole test body runs in well under a millisecond. Same fake-clock
+    # idiom as tests/test_device_bridge.py; nothing in this slice measures
+    # timing, so a fast virtual clock is correct here.
+    clk = iter([i * 2.0 for i in range(1000)]).__next__
     gs = GameServer({"test_bit": TestBit})
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
     server.arrive("c1")
     server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
@@ -1257,7 +1263,10 @@ Then add the method, directly after `poll()`:
             if frame == self._last_frames.get(dev):
                 continue
             self._last_frames[dev] = frame
-            self._send(dev, protocol.leds_event(dev, frame))
+            try:
+                self._send(dev, protocol.leds_event(dev, frame))
+            except Exception:
+                logger.exception("leds send for %s failed", dev)
 ```
 
 - [ ] **Step 7: Run tests to verify they pass**
