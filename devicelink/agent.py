@@ -17,6 +17,7 @@ import time
 from control.engine import GameServer
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
+from luxaeterna.universe import Universe
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,8 @@ class DeviceLinkAgent:
         self._capability = capability
         self._clock = clock
         self.bridges: dict[str, DeviceBridge] = {}
+        self._universes: dict[str, Universe] = {}
+        self._last_frames: dict[str, bytes] = {}
         self._clients: dict[str, object] = {}     # dev -> client
         game_server.add_observer(self)
         game_server.on_release = self._on_release
@@ -46,6 +49,30 @@ class DeviceLinkAgent:
             except Exception:
                 logger.exception("devicelink inbound handling failed; "
                                  "dropping frame")
+        self._render_frames()
+
+    def _render_frames(self) -> None:
+        """Render each joined device's session and emit /<dev>/leds when the
+        frame actually changed. Rendering runs on the tick thread: the tick
+        rate is the frame rate, and there is no second thread to race."""
+        for dev, bridge in list(self.bridges.items()):
+            universe = self._universes.get(dev)
+            session = bridge.session
+            if universe is None or session is None:
+                continue
+            try:
+                session.render_into(universe)
+            except Exception:
+                logger.exception("render for %s failed; skipping frame", dev)
+                continue
+            frame = bytes(universe.get_frame()[:36])
+            if frame == self._last_frames.get(dev):
+                continue
+            self._last_frames[dev] = frame
+            try:
+                self._send(dev, protocol.leds_event(dev, frame))
+            except Exception:
+                logger.exception("leds send for %s failed", dev)
 
     # --- inbound dispatch ---------------------------------------------------
     def _handle(self, client, msg: dict) -> None:
@@ -93,6 +120,8 @@ class DeviceLinkAgent:
                 dev, "role", "could not build light session"))
             return
         self.bridges[dev] = bridge
+        self._universes[dev] = Universe()
+        self._last_frames.pop(dev, None)
         self._send(dev, protocol.role_event(dev, result.config))
 
     def _on_verb(self, dev: str, verb: str, args: list) -> None:
@@ -103,6 +132,8 @@ class DeviceLinkAgent:
     # --- engine-owned sinks -------------------------------------------------
     def _on_release(self, dev: str) -> None:
         bridge = self.bridges.pop(dev, None)
+        self._universes.pop(dev, None)
+        self._last_frames.pop(dev, None)
         if bridge is not None:
             try:
                 bridge.on_release(dev)
