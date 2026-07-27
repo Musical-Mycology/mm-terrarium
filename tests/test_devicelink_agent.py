@@ -3,6 +3,12 @@ in-process fake server (no sockets -- see test_devicelink_server.py)."""
 
 import pytest
 
+# devicelink.agent imports harness.device_bridge, which needs the sibling
+# luxaeterna checkout. Guard it the same way tests/test_device_bridge.py and
+# tests/test_led_smoke.py do, so the core suite still collects without it
+# (requirements-dev.txt states that contract).
+pytest.importorskip("luxaeterna")
+
 from bits.test_bit import TestBit
 from control.engine import GameServer
 from devicelink.agent import DeviceLinkAgent
