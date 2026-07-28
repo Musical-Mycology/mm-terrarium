@@ -91,11 +91,16 @@ return to a clean waiting state. Landed in the first-slice spec
   `GameServer.bit_name` (the registry key) supply the provenance.
 - **`Bit` interface:** minimal hook set — `role_table`, `on_setup_enter()`,
   `on_run_start()`, `update(dt)`, `on_complete()`, `on_unload()`, plus optional
-  `result()` (completion payload) and `status()` (generic key/value read-out).
+  `result()` (completion payload), `status()` (generic key/value read-out), and
+  `verb_handlers()` — **routed as of Slice 2** via `GameServer.data()`; it was
+  declared but unreachable before then.
 - **Observer hooks:** a **multi-observer** list (`add_observer()` with
   notify-all) fires `on_state_change` / `on_registration_change` /
-  `on_devices_change`, plus a single transport-owned `on_release` sink. This is
-  the shared seam the uplink and console both attach to.
+  `on_devices_change`, plus **two** transport-owned sinks: `on_release` (one
+  call per device during UNLOADING) and `on_light_cue` (added in Slice 2, for
+  cues a Bit's verb handler emits). Both are wrapped by the engine, so a
+  failing transport cannot wedge it. This is the shared seam the uplink,
+  console, and devicelink all attach to.
 - **`abort()`** — Control-initiated early termination that force-unloads while
   still running the Bit's `on_complete`/`on_unload` best-effort. COMPLETING and
   UNLOADING are **always reachable even if a Bit hook raises** (deliberate — a
@@ -206,6 +211,25 @@ Slice 2 also **routed `Bit.verb_handlers()`**, which had been declared on the
 light cues through the transport-owned `on_light_cue` sink — so a Bit still
 decides the light consequence (boundary rule 3). `TestBit` gained a `tilt`
 handler mapping tilt onto `cc:74`, making verb dispatch a tested behavior.
+
+**Release is asynchronous, and that is load-bearing.** `LightSession.clear()`
+only *enqueues* a `ClearEvent`; the queue is drained inside `render_into()`. So
+a device dropped from the render map at release never renders its closing fade
+at all — the session never even enters `CLOSING`, and the device freezes on its
+last running frame. `DeviceLinkAgent` therefore keeps a released device **in**
+`bridges`/`_universes`, tracks it in `_closing`, renders it every tick until
+`session.state` leaves `CLOSING`, and only then tears it down and sends
+`/<dev>/release`. A `_MAX_CLOSING_FRAMES` bound force-releases a session that
+never finishes closing, so one stuck device cannot render forever. Two
+consequences for anyone editing this: a fresh `/game/join` must clear that
+device's `_closing` entry (a rejoin mid-fade would otherwise destroy its own new
+session), and `/<dev>/release` arrives **after** the fade, not at the moment the
+Bit ends.
+
+**Both transport-owned sinks are guarded on the engine side.** `_unload` wraps
+each `on_release(dev)` call and `data()` wraps each `on_light_cue(...)` call, so
+a failing transport cannot strand the remaining devices or wedge Control in
+`UNLOADING`. That guarantee has its own engine-level regression test.
 
 Driver: `python -m harness.devicelink_smoke --hold`.
 
