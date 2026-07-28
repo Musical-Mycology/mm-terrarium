@@ -35,6 +35,7 @@ control/     Control+GameServer package (Python, on pyarco)
 bits/        Bit plugin modules (role tables, graph-builders, cues, scoring)
 uplink/      Remote command/telemetry link to a future mm-fairyring broker
 console/     Terrarium Console: local admin panel (HTTP+websocket)
+devicelink/  device-facing websocket transport (simulated Tuneshrooms)
 arcoserver/  Arco server build config for the Terrarium (dspmanifest.txt, prefs)
 www/         deployed web root (simulator build ships here from mm-tuneshroom)
 deploy/      venue provisioning and installation networking

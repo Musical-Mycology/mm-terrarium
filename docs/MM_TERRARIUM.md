@@ -91,11 +91,16 @@ return to a clean waiting state. Landed in the first-slice spec
   `GameServer.bit_name` (the registry key) supply the provenance.
 - **`Bit` interface:** minimal hook set — `role_table`, `on_setup_enter()`,
   `on_run_start()`, `update(dt)`, `on_complete()`, `on_unload()`, plus optional
-  `result()` (completion payload) and `status()` (generic key/value read-out).
+  `result()` (completion payload), `status()` (generic key/value read-out), and
+  `verb_handlers()` — **routed as of Slice 2** via `GameServer.data()`; it was
+  declared but unreachable before then.
 - **Observer hooks:** a **multi-observer** list (`add_observer()` with
   notify-all) fires `on_state_change` / `on_registration_change` /
-  `on_devices_change`, plus a single transport-owned `on_release` sink. This is
-  the shared seam the uplink and console both attach to.
+  `on_devices_change`, plus **two** transport-owned sinks: `on_release` (one
+  call per device during UNLOADING) and `on_light_cue` (added in Slice 2, for
+  cues a Bit's verb handler emits). Both are wrapped by the engine, so a
+  failing transport cannot wedge it. This is the shared seam the uplink,
+  console, and devicelink all attach to.
 - **`abort()`** — Control-initiated early termination that force-unloads while
   still running the Bit's `on_complete`/`on_unload` best-effort. COMPLETING and
   UNLOADING are **always reachable even if a Bit hook raises** (deliberate — a
@@ -186,6 +191,48 @@ device wire is Slice 2. `led_smoke.py` takes `--hold` (serve until Ctrl-C) /
 ~2 s one-shot. Regression: `tests/test_led_smoke.py` (headless) + CLI/`build()`
 unit tests in `tests/test_led_smoke_cli.py`.
 
+### `devicelink/` — the device-facing websocket transport (Slice 2)
+Control's first device wire. The inbound sibling of `console/`, with the same
+split: `DeviceLinkServer` (socket-only, drain-based) plus `DeviceLinkAgent`
+(transport-agnostic brains, driven from the tick loop). It holds one
+`DeviceBridge` → luxaeterna `LightSession` per joined device, ships
+`JoinResult.config` verbatim as `/<dev>/role`, and streams rendered frames as
+`/<dev>/leds` on change.
+
+Messages are **JSON envelopes mirroring o2ws field-for-field**
+(`timestamp`/`address`/`typespec`/`args`) — the vocabulary is real, the framing
+is not, so the later swap to o2ws is mechanical. **Arco is not in this path**,
+so nothing here may be read as a hop count or a latency figure. Same trust
+model as the console: trusted LAN, no auth, `127.0.0.1` by default.
+
+Slice 2 also **routed `Bit.verb_handlers()`**, which had been declared on the
+`Bit` interface since the first slice but which `GameServer` never called.
+`GameServer.data(dev, verb, args)` now dispatches to it and forwards emitted
+light cues through the transport-owned `on_light_cue` sink — so a Bit still
+decides the light consequence (boundary rule 3). `TestBit` gained a `tilt`
+handler mapping tilt onto `cc:74`, making verb dispatch a tested behavior.
+
+**Release is asynchronous, and that is load-bearing.** `LightSession.clear()`
+only *enqueues* a `ClearEvent`; the queue is drained inside `render_into()`. So
+a device dropped from the render map at release never renders its closing fade
+at all — the session never even enters `CLOSING`, and the device freezes on its
+last running frame. `DeviceLinkAgent` therefore keeps a released device **in**
+`bridges`/`_universes`, tracks it in `_closing`, renders it every tick until
+`session.state` leaves `CLOSING`, and only then tears it down and sends
+`/<dev>/release`. A `_MAX_CLOSING_FRAMES` bound force-releases a session that
+never finishes closing, so one stuck device cannot render forever. Two
+consequences for anyone editing this: a fresh `/game/join` must clear that
+device's `_closing` entry (a rejoin mid-fade would otherwise destroy its own new
+session), and `/<dev>/release` arrives **after** the fade, not at the moment the
+Bit ends.
+
+**Both transport-owned sinks are guarded on the engine side.** `_unload` wraps
+each `on_release(dev)` call and `data()` wraps each `on_light_cue(...)` call, so
+a failing transport cannot strand the remaining devices or wedge Control in
+`UNLOADING`. That guarantee has its own engine-level regression test.
+
+Driver: `python -m harness.devicelink_smoke --hold`.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -268,13 +315,10 @@ design doc § *Host Platform*.
 
 Kept explicit so the doc doesn't over-claim:
 
-- **Real O2lite/pyarco transport wiring.** Control's binding is settled — it is
-  an o2lite client of Arco (design doc v3, *Message Routing*), and `o2litepy` is
-  the only Python binding that exists — but nothing talks to a live O2 network or Arco server yet —
-  the whole suite runs against fakes (`FakeO2Lite`-style transport,
-  `FakeTransport`, a localhost websocket for the console server). The
-  render/contract path (composed blob → luxaeterna → LEDs) is now proven
-  in-process via `harness/` (Slice 1); only the device wire itself is unbuilt.
+- **Real O2lite/pyarco transport wiring.** A device wire now exists
+  (`devicelink/`, Slice 2) but it is a **direct websocket to Control, not
+  o2lite through Arco** — no live O2 network, no Arco server, no clock sync.
+  The whole suite still runs against fakes and localhost sockets.
 - **Real ugen graph-building on Arco** and **real scoring.** `ugen_manifest`
   is still a placeholder and `on_complete()` scoring is a stub hook.
   (`light_manifest` is no longer a placeholder — v2 schema frozen, validated
