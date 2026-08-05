@@ -246,7 +246,12 @@ honor them in any new work:
    engine, but a console/uplink exception must never propagate into the engine
    tick, and neither carries per-device `join`/`tick` traffic. Gameplay
    correctness never depends on either link's health.
-3. **Lux Aeterna is the lighting renderer, downstream of Bit cue logic.**
+3. **Lux Aeterna is the lighting renderer, downstream of Bit cue logic — driven
+   by the same MIDI control stream as the sound.** A Bit's gestures become MIDI
+   controller messages once; audio maps them to synthesis parameters and light
+   maps them to visual ones via `cc:<n>` lanes. There is no second vocabulary for
+   lighting, which is why Roger's `Synth` abstraction spans both (design doc
+   § *Instrument Interface*).
    [Lux Aeterna](https://github.com/Musical-Mycology/luxaeterna) is MM's Python
    DMX512 / Art-Net → WLED lighting library — the visual analog of the Arco
    audio engine — driving the Terrarium array and Shroom LEDs in a **44 Hz hot
@@ -285,15 +290,31 @@ while feeding a 44 Hz render loop. The M1a-era "round trip under 50 ms" number
 does **not** carry over — it was measured with Control not in the path. See
 design doc § *Host Platform*.
 
+**The bring-up knob is the poll period, not the hop count.** Control↔Arco
+traffic is loopback and never touches the NIC, so on-box hops cost little; what
+latency there is comes from how often each end polls. Roger runs 2 ms as his
+normal compromise and reckons 1 ms is affordable on current hardware. Reach for
+that before restructuring message paths. Off the box, the ceiling is messages
+per second rather than bandwidth — a 3-byte MIDI payload is smaller than its own
+headers — so the fix for device congestion is fewer, fatter messages. See design
+doc § *Message Routing*.
+
 ## Relationships to other repos
 
 - **arco / o2** (rbdannenberg upstream, Musical-Mycology forks) — the synthesis
   engine and O2 transport this server builds on. The Arco server *is* the room's
   O2 hub and sole synthesizer.
 - **pyarco** — the Python control layer Control+GameServer will build ugen
-  graphs through. **No dependency yet** (this slice does zero graph-building);
-  its source-of-truth (submodule vs. pinned sibling) is Roger Dannenberg's open
-  decision — see *Not yet built* below.
+  graphs through. **No dependency yet** (this slice does zero graph-building).
+  As of 2026-08-03 its source of truth appears settled **inside the arco repo**:
+  upstream `rbdannenberg/arco` now ships `pyarco/` and `o2litepy/` at the root,
+  with `doc/pyarco.md` and a worked example set under `apps/pytest/`
+  (`mintest.py` for basic synthesis, `miditest.py` for the FluidSynth path,
+  `soundfiletest.py` for playback). It also ships `pyarco.sched` (`sched.cause`)
+  and `pyarco.steps.step_to_hz` — the scheduling and pitch machinery a
+  quantized-timing Bit needs. MM's standalone `~/projects/pyarco` checkout
+  diverged from Roger's line back in July and should be treated as legacy
+  pending his confirmation (design doc open question #6).
 - **mm-tuneshroom** — the instrument app and browser simulator. Its web build
   deploys into the Terrarium's `www/` as an artifact; it never contains
   Terrarium-side logic. (The legacy M1a / Sensor-Check harness stays in
@@ -319,21 +340,40 @@ Kept explicit so the doc doesn't over-claim:
   (`devicelink/`, Slice 2) but it is a **direct websocket to Control, not
   o2lite through Arco** — no live O2 network, no Arco server, no clock sync.
   The whole suite still runs against fakes and localhost sockets.
-- **Real ugen graph-building on Arco** and **real scoring.** `ugen_manifest`
-  is still a placeholder and `on_complete()` scoring is a stub hook.
+- **Real ugen graph-building on Arco** and **real scoring.** `ugen_manifest` is
+  still an unimplemented placeholder and `on_complete()` scoring is a stub hook.
+  Its *shape* is no longer open, though: the 2026-07-28 check-in settled on the
+  **Fluid Synth ugen as the standard instrument interface**, with MIDI as the
+  control representation for both sound and light, and Roger's follow-up notes
+  specify the `Synth` abstraction Control needs on top of it. See design doc
+  § *Instrument Interface* — including the unresolved channel-per-call question
+  and the two-different-MIDI-encodings rule. Nothing of this is built.
   (`light_manifest` is no longer a placeholder — v2 schema frozen, validated
   at load — but nothing *sends* the composed `/ie<N>/role` blob yet: the
   o2lite transport that reads `JoinResult.config`, and the Arco cue path that
   plays the welcome audio half, are both unbuilt.)
-- **Real Bits beyond `TestBit`.** No production Bit exists.
+- **Real Bits beyond `TestBit`.** No production Bit exists. The first one is
+  committed and named: **Simon Says**, targeted at a **2026-12-04** demo for
+  location-based-entertainment stakeholders. Its design constraints from the
+  check-in: a leader/follower loop where command-and-control shifts between
+  devices, leadership transfer signalled in **both** light and sound, and
+  quantized timing (Arco's global float-seconds clock snapped to a musical grid
+  — eighth notes, not sixty-fourths, so the interaction stays playable).
+  `pyarco.sched` supplies the scheduling primitive.
 - **The mm-fairyring broker** (the uplink's other end) and its auth/identity /
   venue-ID scheme.
 - **Directories still unbuilt:** `arcoserver/` (Arco build config —
   dspmanifest/prefs), `www/` (simulator web root), and `deploy/` (venue
   provisioning/networking) are in the README's planned layout but not created.
-- **pyarco source-of-truth** (submodule-vs-sibling; bootstrap open question #1)
-  is Roger Dannenberg's open decision — must be settled before any Bit does real
-  graph-building.
+  `arcoserver/` now has a template to copy rather than a blank page:
+  `arco/apps/pytest/{CMakeLists.txt,dspmanifest.txt}` is exactly this pattern,
+  and note that `allugens` is *generated* from `dspmanifest.txt` — change the
+  manifest and you must rebuild before the Python side sees the new ugens, and
+  the server must have the matching DSP compiled in.
+- **pyarco source-of-truth** — no longer believed open; see *Relationships to
+  other repos* above. Awaiting one confirming sentence from Roger Dannenberg
+  before the bootstrap open question is formally closed. Still must be settled
+  before any Bit does real graph-building.
 - **Operator command interface beyond the console** (physical control, a
   Registration Node convention) remains a later decision; the console is the
   first concrete answer for a web panel.
