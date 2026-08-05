@@ -290,6 +290,15 @@ while feeding a 44 Hz render loop. The M1a-era "round trip under 50 ms" number
 does **not** carry over — it was measured with Control not in the path. See
 design doc § *Host Platform*.
 
+**The bring-up knob is the poll period, not the hop count.** Control↔Arco
+traffic is loopback and never touches the NIC, so on-box hops cost little; what
+latency there is comes from how often each end polls. Roger runs 2 ms as his
+normal compromise and reckons 1 ms is affordable on current hardware. Reach for
+that before restructuring message paths. Off the box, the ceiling is messages
+per second rather than bandwidth — a 3-byte MIDI payload is smaller than its own
+headers — so the fix for device congestion is fewer, fatter messages. See design
+doc § *Message Routing*.
+
 ## Relationships to other repos
 
 - **arco / o2** (rbdannenberg upstream, Musical-Mycology forks) — the synthesis
