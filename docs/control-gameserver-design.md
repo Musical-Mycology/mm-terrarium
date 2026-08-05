@@ -1,10 +1,21 @@
 # Control+GameServer Design (Official Architecture Path)
 
-**Terrarium / Tuneshroom / Bit architecture** · v3 · 2026-07-27 · Chris Oltyan — chris@musicalmycology.org, with Roger Dannenberg
+**Terrarium / Tuneshroom / Bit architecture** · v4 · 2026-08-05 · Chris Oltyan — chris@musicalmycology.org, with Roger Dannenberg
 
 **Status: OFFICIAL PATH FORWARD as of 2026-07-18. This file is the canonical
 copy.**
 
+> **v4 (2026-08-05) — the instrument interface, from the 2026-07-28 Roger/Chris
+> check-in and Roger's follow-up notes.** Three things that were open are now
+> decided or corrected. (a) The **Fluid Synth ugen is the standard instrument
+> interface** and MIDI is the system-wide control representation for *both*
+> sound and light — see the new *Instrument Interface* section. (b) Design rule
+> 5 was **wrong as a system-wide rule**: packed-int32 MIDI describes the device
+> path only; Arco takes typed per-verb messages and never sees a packed word.
+> (c) *Message Routing* now states what a hop actually costs, so hop counts stop
+> reading as pure overhead. Rules 1 and 2 also gained the two obligations that
+> the check-in surfaced as live failure modes.
+>
 > **v3 (2026-07-27) — correction.** v1–v2 described the Control+GameServer as
 > "a full O2 peer" in three places. That was wrong as written and was never
 > what got built: **Control is an o2lite client of the Arco server**, exactly
@@ -114,6 +125,30 @@ Relaying is also a **capacity** question, not only a latency one: every hop
 above is relayed by the same Arco process doing all room synthesis, on a box
 that is simultaneously feeding a 44 Hz Lux Aeterna render loop.
 
+**What a hop actually costs** (Roger, 2026-07-29). The hop counts above are not
+all the same price, and none of them are dominated by the wire:
+
+- **On-box hops are cheap.** Control↔Arco traffic is loopback to `127.0.0.1` —
+  through the kernel, never touching the network interface. There is no WiFi
+  latency on those hops at all.
+- **The real cost is the polling period at each end**, not the transit. Roger
+  runs **2 ms** as his normal compromise between CPU spent polling the network
+  and response time, and reckons **1 ms** is affordable on current hardware with
+  cores to spare. That is the tunable to reach for during Pi 5 bring-up.
+- **Off-box hops are limited by message *count*, not bandwidth.** A 3-byte MIDI
+  payload is smaller than its own headers, and WiFi charges per message for
+  channel contention and framing regardless of size. So the ceiling on device
+  traffic is messages-per-second, and the fix is fewer, fatter messages — not a
+  faster link. For scale: Roger's CMU laptop orchestra ran ~25 devices over
+  O2/WiFi with occasional drop-and-reconnect (which O2 handles well); published
+  experiments reaching ~500 participants needed cellular and still saw heavy
+  dropouts. Small-group rooms are comfortably inside the working range; crowd-
+  scale Bits are a different engineering problem, not a bigger version of this
+  one.
+
+None of this licenses a quoted figure — see *Host Platform*. It tells you which
+knob to turn and which hops are not worth optimizing.
+
 ## Roles and Registration Nodes
 
 A Bit's role table declares each role with:
@@ -181,6 +216,61 @@ A Bit's role table declares each role with:
    sends `/ie3/release`, frees the player's strip, and returns the device to the
    joinable pool.
 
+## Instrument Interface
+
+Decided at the 2026-07-28 check-in and refined in Roger's 2026-07-28 design
+notes. This is the shape `ugen_manifest` takes; until now it was a placeholder
+with no agreed content.
+
+**MIDI is the control representation, system-wide.** Not because the output is
+"MIDI music", but because MIDI is fundamentally a *controller* encoding — it was
+built to carry what a player physically did. Device gestures (tilt, shake, tap,
+button) map onto MIDI control messages cleanly, and instruments map controller
+numbers onto their own synthesis parameters internally. The payoff is
+interoperability: one control stream drives any instrument, so swapping a Bit's
+sound does not invalidate its gesture mapping. The cost is MIDI's coarseness —
+quantized pitch, 0–127 controllers — which is accepted for v1 and revisited only
+if a Bit genuinely needs continuous or granular control.
+
+**The same stream drives light.** Lux Aeterna's light manifests already bind
+`cc:<n>` lanes onto visual parameters (see the light-manifest v2 adoption spec),
+so a gesture that moves a filter cutoff can move a hue with no second vocabulary.
+This is why the abstraction below spans audio *and* lighting rather than being an
+audio-only concern.
+
+**The default instrument is the Fluid Synth ugen.** `Flsyn` wraps the FluidSynth
+general-MIDI library inside Arco, giving a full GM sound set for free — the right
+trade while the team's depth is hardware and game programming rather than sound
+design. A Bit's `ugen_manifest` therefore parameterizes MIDI instruments against
+`Flsyn` rather than hand-building a synthesis graph per role.
+
+**Control needs its own `Synth` abstraction** (Roger's guidance, and the piece
+that does not exist yet):
+
+- Do **not** subclass `arco_instr.Instrument` — that is a `Ugen` subclass
+  representing a collection of ugens, which is the wrong level. `Synth` is a new
+  abstract class of ours, sitting between Interactive Elements and *both* Arco
+  instruments and lighting controllers.
+- Give it **human method names**, not encoded MIDI: `noteon` / `noteoff` /
+  `program_change` / `pitch_bend` / `control_change` / `alloff`. Bit authors
+  should never hand-assemble a status byte. Keep the command set small.
+- A subclass initialized with an **Arco address plus channel** constructs MIDI
+  messages and sends them there — which is how an Interactive Element with its
+  own speaker becomes just another sound generator addressable by Control.
+
+`arco/apps/pytest/miditest.py` carries Roger's own reference implementation
+(`MidiSender`), including a documented extension path to "another object that
+would interpret MIDI in order to control some other Arco Instrument" — i.e. the
+lighting target. Start there rather than from scratch.
+
+**Open: channel-per-call, or channel-less Synths?** Roger's notes argue *against*
+a channel argument — allocate more `Synth`s instead, since a channel parameter
+implies you may send to any channel and get something, which in turn implies
+every synth must prepare instruments for all 16. His suggested shape is up to 16
+`Synth`s each owning one channel of a shared `Flsyn`. But the shipped
+`MidiSender` takes `chan` on every method. The reference code and the written
+advice disagree; settle it with him before building on either.
+
 ## Design Rules
 
 1. **Receiver-perspective addressing.** Same idiom as `/arco/...` in,
@@ -189,9 +279,26 @@ A Bit's role table declares each role with:
    carry `node`. A phone simulating shroom 3 at node A sends byte-identical
    messages with `dev="ie3"`, `node="A"`. One handler per verb in Control
    regardless of fleet size, one place to validate and log.
+
+   **Never substitute `o2lite.bridge_id` for `dev`.** o2lite hands each client a
+   per-O2-process id (`-1` until connected, non-negative after), and it is
+   tempting as a ready-made device key. It is not one: **it changes when a client
+   disconnects and reconnects**, so a device that drops mid-session comes back as
+   a different id while remaining the same player at the same role. `dev` is
+   stable by construction and is what `DevicePool` and `RegistrationState` key
+   on. Use `bridge_id` for connection bookkeeping only, never identity.
 3. **Single writer to `/arco`.** Only Control builds graphs and owns the ugen id
    space. Interactive Elements express intent to `/game`; Control decides the
    audio consequence.
+
+   **Owning the id space means freeing it.** A Bit unload must tear down every
+   ugen that Bit created, before the next Bit builds its graph. The failure this
+   guards against is real and was hit in an early prototype: loading a new Bit
+   over an old one allocated a fresh ugen set without releasing or re-addressing
+   the previous one, so the room kept playing the *old* Bit's graph while the new
+   Bit's ugens sat orphaned and silent. UNLOADING is always reachable even when a
+   Bit hook raises precisely so this teardown cannot be skipped — that guarantee
+   is worth nothing if the teardown itself does not free the ugens.
 4. **Timestamps at the source, scheduling at the sink.** Devices stamp inputs
    with `o2l_get_time()` at the physical event; Control schedules audio and cues
    ahead of time. With Arco as the sample-locked reference clock, the forwarding
@@ -199,8 +306,26 @@ A Bit's role table declares each role with:
    true feedback paths (gesture to sound), where WiFi jitter dominates anyway.
    The `/ie<N>/play` local-sample path exists precisely so the tightest feedback
    never crosses the network.
-5. **MIDI over o2lite as packed int32** (status, data1, data2 in one word), since
-   o2lite lacks O2's native `'m'` type; blobs for sysex or bulk.
+5. **The two MIDI paths use different encodings. This is correct, not an
+   oversight.** v1–v3 stated packed-int32 as a system-wide rule; that was wrong,
+   and the two paths never meet:
+
+   - **To a device** (`/ie<N>/...`, and Lux Aeterna's `/light/midi`): **packed
+     int32**, because o2lite lacks O2's native `'m'` type. Lux Aeterna's ratified
+     packing is right-aligned — `(status << 16) | (data1 << 8) | data2`. Blobs
+     for sysex or bulk.
+   - **To Arco** (`/arco/flsyn/...`): **typed per-verb messages with unpacked
+     integer arguments** — `/arco/flsyn/noteon "iiii" ref chan key vel`,
+     `/arco/flsyn/cc "iiii" ref chan num val`, and so on. No packed word is ever
+     constructed, so the missing `'m'` type is simply not a problem on this path.
+
+   **Trap worth naming.** `arco/apps/pytest/miditest.py` includes a
+   `midi_osc_fmt` helper that decodes packed MIDI **left-aligned**
+   (`status << 24 | data1 << 16 | data2 << 8`) — Roger flags in-line that this
+   is also the reverse of PortMIDI's order. It is a decoder for MIDI arriving
+   from elsewhere, and it fans straight out to the unpacked `Flsyn` calls above;
+   it is not the Control↔Arco contract. Copy it toward Lux Aeterna unexamined and
+   every value lands shifted by a byte.
 
 ## What a Bit Is, in Code Terms
 
@@ -273,3 +398,21 @@ the path.
    (roughly 768 kbps per 16-bit mono 48k stream)?
 3. Browsers as `ui<X>` services versus a reply-address argument in `/game/hello`:
    preference?
+4. **`/game/data` or `/actl/from_ie` for device input?** This design routes
+   Interactive Element input to `/game/data "stb" dev time payload` plus discrete
+   verbs like `/game/hit`. Roger's 2026-07-28 notes instead suggest
+   `/actl/from_ie` carrying `(ie_number, parameter_name, parameter_value)`,
+   dispatched to `object.from_ie(...)` on whatever object that element is bound
+   to. The intent matches — his `/actl` is "the arco controller", which in this
+   split *is* Control — but the address and the payload shape do not. Worth
+   settling before the o2lite transport lands, since it fixes the device-side
+   vocabulary.
+5. **Channel-per-call or channel-less `Synth`s?** See *Instrument Interface* —
+   the written guidance and the `MidiSender` reference implementation disagree.
+6. **Confirm pyarco's source of truth is the arco repo.** Upstream now ships
+   `pyarco/` and `o2litepy/` at the root of `rbdannenberg/arco`, with
+   `apps/pytest/mintest.py` as the worked example and `doc/pyarco.md` alongside.
+   That reads as the answer to bootstrap open question #1 (submodule vs. pinned
+   sibling), and it makes MM's standalone `pyarco` checkout a legacy fork — but
+   it is inference from code, not something Roger has stated. One sentence from
+   him closes it.
