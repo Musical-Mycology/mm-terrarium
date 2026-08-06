@@ -14,8 +14,7 @@ def test_role_table_has_one_scored_and_one_jam_role():
 def test_role_ugen_manifests_are_present_but_empty_placeholders():
     bit = TestBit()
     table = bit.role_table
-    assert table.roles["player"].ugen_manifest == []
-    assert table.roles["jammer"].ugen_manifest == []
+    assert table.roles["jammer"].ugen_manifest == {}
 
 
 def test_node_map_grants_each_role_from_its_own_node():

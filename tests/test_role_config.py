@@ -1,6 +1,6 @@
 import pytest
 
-from control.role_config import validate_role_declarations
+from control.role_config import validate_role_declarations, validate_ugen_manifest
 from control.roles import Role, RoleClass, RoleTable
 
 
@@ -218,3 +218,76 @@ def test_compose_never_aliases_the_authored_declaration():
     config["light_manifest"]["welcome"]["params"]["b"] = 99
     assert role.light_manifest["instruments"][0]["params"]["a"] == 1
     assert role.welcome["light"]["params"]["b"] == 2
+
+
+def _role(**kw):
+    base = dict(name="player", role_class=RoleClass.SHARED, capacity=None,
+                scored=True)
+    base.update(kw)
+    return Role(**base)
+
+
+def test_empty_ugen_manifest_is_valid():
+    validate_ugen_manifest(_role())                      # {} means "no audio"
+
+
+def test_ugen_manifest_must_be_a_dict():
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=[]))
+    assert "ugen_manifest" in str(ei.value) and "list" in str(ei.value)
+
+
+def test_ugen_manifest_instruments_must_be_a_list():
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest={"instruments": {}}))
+    assert "'instruments' must be a list" in str(ei.value)
+
+
+def test_ugen_manifest_instrument_field_is_required():
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest={"instruments": [{}]}))
+    assert "instruments[0]" in str(ei.value) and "instrument" in str(ei.value)
+
+
+def test_ugen_manifest_lane_source_must_be_a_cc_reference():
+    bad = {"instruments": [{"instrument": "flsyn",
+                            "lanes": [{"source": "note", "dest": "cc:74"}]}]}
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=bad))
+    assert "lanes[0]" in str(ei.value) and "cc:" in str(ei.value)
+
+
+def test_ugen_manifest_lane_dest_must_be_a_cc_reference():
+    bad = {"instruments": [{"instrument": "flsyn",
+                            "lanes": [{"source": "cc:74", "dest": "brightness"}]}]}
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=bad))
+    assert "lanes[0]" in str(ei.value) and "brightness" in str(ei.value)
+
+
+def test_ugen_manifest_drone_requires_key_and_velocity():
+    bad = {"instruments": [{"instrument": "flsyn", "drone": {"key": 45}}]}
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=bad))
+    assert "drone" in str(ei.value) and "velocity" in str(ei.value)
+
+
+def test_bad_ugen_manifest_fails_the_bit_at_load():
+    # The whole point of load-time validation: a typo'd Bit fails as a
+    # BitLoadError, never as a mid-installation surprise.
+    from control.engine import BitLoadError, GameServer
+    from control.bit import Bit
+
+    class BadBit(Bit):
+        version = "0.1"
+
+        @property
+        def role_table(self):
+            return RoleTable(
+                roles={"player": _role(
+                    ugen_manifest={"instruments": [{"program": 1}]})},
+                node_map={"N": ["player"]})
+
+    gs = GameServer({"bad": BadBit})
+    with pytest.raises(BitLoadError):
+        gs.load_bit("bad")

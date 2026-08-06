@@ -16,15 +16,17 @@ from control.roles import Role, RoleTable
 # any of them on a Role is a contract violation caught at Bit load.
 _COMPOSED_KEYS = ("welcome", "bit_name", "bit_version", "role")
 _WELCOME_HALVES = ("light", "audio")
+_CC_PREFIX = "cc:"
 
 
 def validate_role_declarations(role_table: RoleTable) -> None:
-    """Shallow structural validation of every role's light_manifest and
-    welcome against the authored subset of the v2 wire shape. Raises
-    ValueError with a message locating the offending field."""
+    """Shallow structural validation of every role's light_manifest, welcome
+    and ugen_manifest against their authored shapes. Raises ValueError with a
+    message locating the offending field."""
     for role in role_table.roles.values():
         _validate_light_manifest(role)
         _validate_welcome(role)
+        validate_ugen_manifest(role)
 
 
 def _validate_light_manifest(role: Role) -> None:
@@ -108,3 +110,61 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role) -> dict:
         "scored": role.scored,
         "light_manifest": light,
     }
+
+
+def _cc_number(ref, where: str) -> int:
+    """Parse a 'cc:<n>' reference. Both lane ends use this form: the mapping
+    to a synth parameter is FluidSynth's own reading of the controller number,
+    so there is no destination vocabulary for Control to invent here."""
+    if not isinstance(ref, str) or not ref.startswith(_CC_PREFIX):
+        raise ValueError(f"{where}: must be a {_CC_PREFIX!r} reference, got {ref!r}")
+    try:
+        num = int(ref[len(_CC_PREFIX):])
+    except ValueError:
+        raise ValueError(
+            f"{where}: {ref!r} is not a controller number") from None
+    if not 0 <= num <= 127:
+        raise ValueError(f"{where}: controller {num} is outside 0-127")
+    return num
+
+
+def validate_ugen_manifest(role: Role) -> None:
+    """Shallow structural validation of a Role's authored ugen_manifest.
+    Deliberately provisional (v0): instrument names and programs belong to the
+    Arco/FluidSynth side Control cannot see, so only shape is checked here."""
+    where = f"role {role.name!r} ugen_manifest"
+    manifest = role.ugen_manifest
+    if not isinstance(manifest, dict):
+        raise ValueError(
+            f"{where}: must be a dict, got {type(manifest).__name__}")
+    instruments = manifest.get("instruments", [])
+    if not isinstance(instruments, list):
+        raise ValueError(f"{where}: 'instruments' must be a list")
+    for idx, decl in enumerate(instruments):
+        decl_where = f"{where} instruments[{idx}]"
+        if not isinstance(decl, dict):
+            raise ValueError(f"{decl_where}: must be a dict")
+        if "instrument" not in decl:
+            raise ValueError(
+                f"{decl_where}: missing required field 'instrument'")
+        drone = decl.get("drone")
+        if drone is not None:
+            if not isinstance(drone, dict):
+                raise ValueError(f"{decl_where}: 'drone' must be a dict")
+            for req in ("key", "velocity"):
+                if req not in drone:
+                    raise ValueError(
+                        f"{decl_where} drone: missing required field {req!r}")
+        lanes = decl.get("lanes", [])
+        if not isinstance(lanes, list):
+            raise ValueError(f"{decl_where}: 'lanes' must be a list")
+        for lidx, lane in enumerate(lanes):
+            lane_where = f"{decl_where} lanes[{lidx}]"
+            if not isinstance(lane, dict):
+                raise ValueError(f"{lane_where}: must be a dict")
+            for req in ("source", "dest"):
+                if req not in lane:
+                    raise ValueError(
+                        f"{lane_where}: missing required field {req!r}")
+            _cc_number(lane["source"], f"{lane_where} source")
+            _cc_number(lane["dest"], f"{lane_where} dest")

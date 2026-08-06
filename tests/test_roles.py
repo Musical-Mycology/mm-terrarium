@@ -15,7 +15,7 @@ def make_two_role_table():
 def test_role_defaults_to_empty_ugen_manifest():
     role = Role(name="player", role_class=RoleClass.SHARED,
                 capacity=None, scored=True)
-    assert role.ugen_manifest == []
+    assert role.ugen_manifest == {}
 
 
 def test_role_table_holds_roles_and_node_fallback_lists():
