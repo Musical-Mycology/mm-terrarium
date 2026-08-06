@@ -26,12 +26,21 @@ See `MM_ARCHITECTURE.md` (MM-internal) → *Per-service summary* for the cross-r
 `MM_HARDWARE_DESIGN.md` (Tier 4 — Terrarium) for where the box sits in the
 hardware fleet.
 
-> **Status: early, offline/test-only.** Everything landed so far is pure Python
-> that runs and tests **fully offline** — no O2, Arco, pyarco, Lux Aeterna, or
-> fairyring dependency yet. The lifecycle engine, its remote uplink, and the
-> local admin console all exist and are exercised end-to-end against fakes; the
-> real-time audio/lighting outputs and real Bits do not exist yet. Keep this doc
-> honest about that line — see *Not yet built / deferred* below.
+> **Status: early, and the whole test suite still runs fully offline** against
+> fakes and localhost sockets, with **no O2 network, no Arco server and no
+> pyarco importable**. That property is load-bearing and is pinned by tests.
+>
+> What has since crossed the line into real: **Lux Aeterna** (a dev/test
+> dependency since Slice 1, driving the LED sim and per-device rendering) and,
+> as of the 2026-08-06 Tuneshroom audio slice, **pyarco** (dev/test-only,
+> reached by `PYTHONPATH`), which builds the first real ugen graph on a live
+> Arco server. `harness/led_smoke.py --audio` has been verified making sound on
+> hardware: a sustained drone whose loudness and timbre track the light off one
+> shared MIDI stream.
+>
+> Still absent: **O2/o2lite** (the device wire is a direct websocket to Control,
+> not o2lite through Arco), **fairyring**, real scoring, and any production Bit.
+> Keep this doc honest about that line: see *Not yet built / deferred* below.
 
 ## What it is, in one picture
 
@@ -125,7 +134,12 @@ both slots. The welcome light half is `glow` (a bare `bloom` welcome rendered
 needed). The running visual is `aurora`, which breathes and glides its hue under
 `cc:74`; `bloom` froze its colour at note-on, so sweeping the hue meant
 re-triggering constantly — a visible **strobe**. The running declaration
-therefore carries **no note lane**, and nothing in the pipeline feeds note-ons.
+therefore carries **no note lane**. As of the Tuneshroom audio slice the
+pipeline *does* feed a note-on, a sustained drone the audio path needs because
+FluidSynth is silent without one, but light still ignores it: no note lane, so
+the strobe fix holds. `player` also gained a `cc:11 → level` lane, which opts
+`aurora` out of its private breathing clock so Control generates the breath and
+the light and the sound read the same number.
 
 ### `uplink/` — outbound remote control (the *outbound* sibling)
 `UplinkAgent`: makes `GameServer` remotely drivable/observable over a
@@ -183,13 +197,68 @@ light-manifest-v2 seam. It grants TestBit's `player` role, feeds the composed
 `/ie<N>/role` blob into a luxaeterna `LightSession` (via a **dev/test dependency
 on luxaeterna** — the first code coupling, venue-server → renderer), and renders
 it to luxaeterna's new `WebSimBackend` (a browser canvas Shroom). Injects canned
-MIDI via `LightSession.feed_midi` — a **`cc:74` ping-pong ramp only** (no
-note-ons: `aurora` has no note lane, and it glides between the coarse steps).
+MIDI via `LightSession.feed_midi`: **a `cc:74` ping-pong ramp plus the
+Control-generated `cc:11` breath** (no note-ons: `aurora` has no note lane, and
+both glide between the coarse steps).
 Still **in-process — no o2lite wire**; the
 device wire is Slice 2. `led_smoke.py` takes `--hold` (serve until Ctrl-C) /
 `--seconds N` to keep the browser demo watchable — otherwise it's TestBit's
 ~2 s one-shot. Regression: `tests/test_led_smoke.py` (headless) + CLI/`build()`
 unit tests in `tests/test_led_smoke_cli.py`.
+
+`--audio` (off by default) additionally starts an Arco-backed voice pool and
+feeds the **same** `cc:74`/`cc:11` bytes to the synth that go to the light
+session, from one statement. `cc:74` glides aurora's hue and sweeps FluidSynth's
+filter; `cc:11` drives aurora's `level` and the synth's expression, so the
+visible breath and the audible swell are one value rather than two clocks that
+agree. Needs a hand-started Arco server (`apps/pytest/server` is a curses app)
+and `PYTHONPATH=/Users/chris/projects/arco`. Without the flag the demo is
+unchanged and needs no Arco.
+
+Two operational traps, both hit during live testing:
+
+1. **The soundfont must be a real General MIDI set.** `harness/arco_synth.py`'s
+   `DEFAULT_SOUNDFONT` points at `FluidR3_GM.sf2`, and that is the one to use. A
+   non-GM soundfont silently produces the wrong instruments, because program
+   numbers mean different things in it. The trap actually hit:
+   `VintageDreamsWaves-v2.sf2` is a 314 KB synth-waveform collection whose
+   program 89 is "Techno Bells" (percussive, decays fast) rather than the GM
+   "Warm Pad" that `bits/test_bit.py` and `control/audio.py`'s
+   `WELCOME_INSTRUMENTS` assume, so the sustained drone died within seconds.
+
+2. **Only the first client after an Arco server start gets working audio, on
+   macOS.** `pyarco`'s `arco.initialize()` unconditionally calls `reset()`,
+   which sends `/host/clear`. That tears down the server's audio stream and
+   frees every ugen, including the `Flsyn` and its loaded soundfont. The
+   server's audio re-open then fails with PortAudio `-9988, Invalid stream
+   pointer`. Practical consequence: restart the Arco server before each run of
+   `--audio`. This is upstream in Arco, not something this repo can fix.
+
+`control/breath.py` generates that shared `cc:11` value: it holds the breath
+envelope (point-for-point what luxaeterna's aurora preset used to loop on its
+own clock) and `BREATH_CC`. It moved out of `led_smoke.py`'s own `main()`
+because declaring `level` opts *every* renderer of that role out of its private
+breathing clock, not just this demo, so a generator living in one demo's
+`main()` would have left other consumers of the role rendering a static
+surface. `harness/led_smoke.py` and `devicelink/agent.py` both tick it now.
+
+### `control/audio.py` + `harness/arco_synth.py`: the first Arco write path
+`AudioBridge` is the audio-side sibling of `DeviceBridge`: it reads a role's
+`ugen_manifest`, acquires a voice, applies the role's declared cc lanes, holds
+the drone, plays the welcome audio half (its first consumer since PR #5), and
+frees every voice at unload. It is **pure and never imports pyarco**, which is
+what keeps the offline suite green. `ArcoSynthPool` is the concrete backend: one
+`Flsyn` ugen with up to 16 voices sharing it, lazy pyarco imports inside
+`start()`, and `sched.poll()` driven from the existing tick rather than
+`sched.run()` owning the loop.
+
+Two things here are **deliberately provisional**. The voice type is
+`DeviceVoice`, not `Synth`, and takes **no channel parameter**: the channel is
+real but internal, so the abstraction Roger has open is not frozen by this demo.
+And `ugen_manifest` v0 is *not* the audio-manifest freeze that light-manifest v2
+was for light: shallow validation, no cross-repo contract, no device-side
+parser. The backend living in `harness/` is likewise a holding position until
+pyarco's source-of-truth is settled.
 
 ### `harness/` — venue-array and device tooling (pre-hardware)
 Four modules landed 2026-08-06 ahead of the hardware they drive, so the student
@@ -223,11 +292,11 @@ every claim below is about code, not about a measured installation.
   `last_latency_ms` measures **dispatch, not sound**; the real tap-to-sound
   figure has to be read off a waveform and must not be quoted from this number.
 
-**Dependency gotcha:** `array_smoke` and `render_bench.main()` need luxaeterna's
-`pixelspan`, `universeset` and `power` modules, which landed on luxaeterna's
-`claude/venue-array-software` branch. Until that is on luxaeterna `main`, an
-editable install pointed at plain `main` will fail to import them.
-`tests/test_array_smoke.py` `importorskip`s luxaeterna accordingly.
+**Dependency note:** `array_smoke` and `render_bench.main()` need luxaeterna's
+`pixelspan`, `universeset` and `power` modules. Those are on luxaeterna `main`
+as of its PR #11, so a current editable install has them and no special checkout
+is needed. `tests/test_array_smoke.py` `importorskip`s luxaeterna anyway, so the
+core suite runs without it.
 
 ### `devicelink/` — the device-facing websocket transport (Slice 2)
 Control's first device wire. The inbound sibling of `console/`, with the same
@@ -242,6 +311,15 @@ Messages are **JSON envelopes mirroring o2ws field-for-field**
 is not, so the later swap to o2ws is mechanical. **Arco is not in this path**,
 so nothing here may be read as a hop count or a latency figure. Same trust
 model as the console: trusted LAN, no auth, `127.0.0.1` by default.
+
+`DeviceLinkAgent` also ticks `control/breath.py` now, feeding every joined,
+non-closing device's `cc:11` on change. The Tuneshroom audio design originally
+scoped devicelink out entirely, but that was wrong for the light half: once
+`player` declares aurora's `level` param, a connected device that is never fed
+`cc:11` renders a static surface pinned at 0.55 rather than breathing, which is
+a regression, not a deferral. So driving the breath here (light) is in scope
+and done; wiring devicelink to an `AudioBridge` (audio) remains genuinely
+deferred, see *Not yet built* below.
 
 Slice 2 also **routed `Bit.verb_handlers()`**, which had been declared on the
 `Bit` interface since the first slice but which `GameServer` never called.
@@ -336,10 +414,12 @@ yet**; the box does not exist.
 - **arco / o2** (rbdannenberg upstream, Musical-Mycology forks) — the synthesis
   engine and O2 transport this server builds on. The Arco server *is* the room's
   O2 hub and sole synthesizer.
-- **pyarco** — the Python control layer Control+GameServer will build ugen
-  graphs through. **No dependency yet** (this slice does zero graph-building);
-  its source-of-truth (submodule vs. pinned sibling) is Roger Dannenberg's open
-  decision — see *Not yet built* below.
+- **pyarco**: the Python control layer Control+GameServer builds ugen graphs
+  through. Now a **dev/test-only dependency reached by `PYTHONPATH`**, following
+  the luxaeterna precedent: nothing is vendored or submoduled, and
+  `control/audio.py` never imports it, so the whole suite still runs offline.
+  Its source-of-truth (submodule vs. pinned sibling) remains Roger Dannenberg's
+  open decision.
 - **mm-tuneshroom** — the instrument app and browser simulator. Its web build
   deploys into the Terrarium's `www/` as an artifact; it never contains
   Terrarium-side logic. (The legacy M1a / Sensor-Check harness stays in
@@ -365,12 +445,15 @@ Kept explicit so the doc doesn't over-claim:
   (`devicelink/`, Slice 2) but it is a **direct websocket to Control, not
   o2lite through Arco** — no live O2 network, no Arco server, no clock sync.
   The whole suite still runs against fakes and localhost sockets.
-- **Real ugen graph-building on Arco** and **real scoring.** `ugen_manifest`
-  is still a placeholder and `on_complete()` scoring is a stub hook.
+- **Real ugen graph-building on Arco** has a first, provisional slice: the
+  Tuneshroom audio demo builds one `Flsyn` and up to 16 voices, driven by a
+  role's `ugen_manifest` v0. Still unbuilt: per-role synthesis beyond
+  FluidSynth, the real Flsyn-parameterizing manifest schema, audio over the
+  device wire, and **real scoring** (`on_complete()` is still a stub hook).
   (`light_manifest` is no longer a placeholder — v2 schema frozen, validated
   at load — but nothing *sends* the composed `/ie<N>/role` blob yet: the
-  o2lite transport that reads `JoinResult.config`, and the Arco cue path that
-  plays the welcome audio half, are both unbuilt.)
+  o2lite transport that reads `JoinResult.config` is still unbuilt; the Arco
+  cue path that plays the welcome audio half now exists in `control/audio.py`.)
 - **Real Bits beyond `TestBit`.** No production Bit exists.
 - **The Tuneshroom LED wire cannot reach the white die.** The hardware is
   SK6812 Mini **RGBW** (4 channels, chosen for its dedicated white die and the
@@ -410,12 +493,15 @@ Kept explicit so the doc doesn't over-claim:
   [`.../2026-07-20-terrarium-uplink-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md).
 - Console:
   [`.../2026-07-21-terrarium-console-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-21-terrarium-console-design.md).
+- Tuneshroom audio:
+  [`.../2026-08-06-tuneshroom-audio-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-06-tuneshroom-audio-design.md).
 - Student hardware track (the physical build feeding the 2026-12-04 show):
   [`.../2026-08-06-student-hardware-track-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-06-student-hardware-track-design.md)
   and its plan
   [`.../plans/2026-08-06-student-hardware-track.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-06-student-hardware-track.md).
   These are where the venue-box, LED-array and Tuneshroom builds, their gates,
   and their acceptance criteria live.
+
 
 Game-design background (RenQuest integration, Bit scoring/loop rules, hardware)
 lives in MM-internal docs (`mm-documents/mm-shrooms-app/`) and is not required to

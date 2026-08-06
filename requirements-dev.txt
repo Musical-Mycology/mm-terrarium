@@ -16,8 +16,24 @@ pytest>=8.0
 # importorskip luxaeterna, so the core suite still runs without it.
 #
 # --- Venue LED array harness (harness/array_smoke.py, harness/render_bench.py) ---
-# These additionally need luxaeterna's pixelspan, universeset and power modules,
-# which landed on the luxaeterna branch `claude/venue-array-software`. Until that
-# branch is on luxaeterna main, point the editable install at a checkout that has
-# it. tests/test_array_smoke.py importorskips luxaeterna; tests/test_render_bench.py
-# needs nothing beyond the stdlib and runs in the core suite either way.
+# These additionally need luxaeterna's pixelspan, universeset and power modules.
+# Those are on luxaeterna main as of its PR #11, so a current editable install
+# has them and no special checkout is needed. tests/test_array_smoke.py
+# importorskips luxaeterna; tests/test_render_bench.py needs nothing beyond the
+# stdlib and runs in the core suite either way.
+
+# --- Optional: Arco audio (harness/led_smoke.py --audio, tests/test_arco_synth.py) ---
+# pyarco and o2litepy are NOT pip-installable. They live in the sibling arco
+# checkout and are reached by PYTHONPATH, following the dev/test-only precedent
+# set for luxaeterna. Nothing is vendored or submoduled: pyarco's
+# source-of-truth stays Roger Dannenberg's open decision (bootstrap question 1).
+#
+#     PYTHONPATH=/Users/chris/projects/arco python -m harness.led_smoke --audio
+#
+# The audio path also needs a real General MIDI soundfont; FluidR3_GM.sf2 is the
+# expected one (see docs/MM_TERRARIUM.md, harness/ section).
+#
+# o2litepy needs these two. tests/test_arco_synth.py skips without them, and
+# control/audio.py never imports pyarco at all, so the core suite runs offline.
+zeroconf
+netifaces

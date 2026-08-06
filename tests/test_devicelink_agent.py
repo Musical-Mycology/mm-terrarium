@@ -10,6 +10,7 @@ import pytest
 pytest.importorskip("luxaeterna")
 
 from bits.test_bit import TestBit
+from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
@@ -72,6 +73,44 @@ def _hello(server, agent, client="c1", dev="ie1"):
     server.arrive(client)
     server.deliver(client, "/game/hello", "sss", [dev, "sim", "1"])
     agent.poll()
+
+
+class _Clock:
+    """A hand-advanced clock. The breath only changes value every ~47 ms of
+    7-bit quantization, so a test has to move time deliberately to see a new
+    one; real time between two statements never would."""
+
+    def __init__(self, t=0.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, dt):
+        self.t += dt
+
+
+def _agent_with_joined_device(dev="ie1"):
+    """An agent with one device already joined to TEST_PLAYER_NODE -- the
+    role that declares aurora's `level` param and so needs Control to drive
+    its breath (see control/breath.py). Same deliver-then-poll() shape every
+    other join test in this file uses (e.g.
+    test_granted_join_builds_a_light_session), just factored out since the
+    breath tests below all need the same joined-device starting point. Built
+    on a hand-advanced clock (see tests at :202 and :239 for this file's
+    existing clock=clk convention) rather than real time, since the join
+    poll() itself already sends the device's first breath -- the tests need
+    to move time deliberately to observe a change from there, not rely on
+    however many microseconds elapse between two Python statements."""
+    clk = _Clock()
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+    gs.load_bit("test_bit")
+    _hello(server, agent, client="c1", dev=dev)
+    server.deliver("c1", "/game/join", "ss", [dev, "TEST_PLAYER_NODE"])
+    agent.poll()
+    return gs, server, agent, dev, clk
 
 
 # A fake clock with coarse-enough steps that the ~0.6s sys:closing
@@ -259,3 +298,50 @@ def test_failing_on_grant_sends_error_not_role_and_omits_the_bridge(rig, monkeyp
     assert server.addressed("/ie1/error")[0]["args"] == \
         ["role", "could not build light session"]
     assert "ie1" not in agent.bridges
+
+
+def test_joined_device_receives_the_breath_on_cc11():
+    # Declaring `level` opts aurora out of its own breathing clock, so Control
+    # has to drive it. Without this, a devicelink device renders a static
+    # surface: the regression this task exists to prevent. The join poll()
+    # already sent this device's first breath (see _agent_with_joined_device),
+    # so time has to move deliberately for a further poll() to send another
+    # one -- a real clock's microseconds between statements would not clear
+    # the ~47 ms quantization step, which is why this fixture hands us clk.
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+    clk.advance(1.0)
+    agent.poll()
+    assert [m for m in seen if m[0] == 0xB0 and m[1] == BREATH_CC]
+
+
+def test_breath_is_only_sent_when_the_value_changes():
+    # 44 Hz tick, ~6 s envelope: resending an unchanged 7-bit value every frame
+    # is pure noise on the render path. Pin both directions: no time movement
+    # means no resend, and moving time means exactly one.
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+    for _ in range(3):
+        agent.poll()                      # clock does not move: no resend
+    assert not [m for m in seen if m[1] == BREATH_CC]
+    clk.advance(1.0)
+    agent.poll()
+    breaths = [m for m in seen if m[1] == BREATH_CC]
+    assert len(breaths) == 1
+
+
+def test_a_closing_device_is_not_fed_the_breath():
+    # It is rendering its release fade; the breath would fight it. Genuinely
+    # non-vacuous: clk.advance(1.0) guarantees a changed value, so without the
+    # closing guard this would produce exactly one breath (see
+    # test_joined_device_receives_the_breath_on_cc11, same advance, same
+    # starting state, breath IS sent there).
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    agent._closing[dev] = 0
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+    clk.advance(1.0)
+    agent.poll()
+    assert not [m for m in seen if m[1] == BREATH_CC]

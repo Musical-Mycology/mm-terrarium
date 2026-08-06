@@ -32,7 +32,18 @@ def test_run_duration_default_is_test_bit_natural():
 
 
 def test_build_constructs_headless_pipeline():
-    loop, session, gs = build(run_duration=float("inf"), serve=False)
+    loop, session, gs, audio = build(run_duration=float("inf"), serve=False)
     assert isinstance(gs.state, State)           # a real GameServer wired up
     assert callable(session.render_into)         # luxaeterna session ready to render
     assert loop is not None
+    assert audio is None                         # no --audio: nothing audio exists
+
+
+def test_build_with_a_pool_wires_audio_and_grants_a_voice():
+    from control.audio import FakePool
+
+    pool = FakePool()
+    _loop, _session, _gs, audio = build(run_duration=float("inf"), serve=False,
+                                        pool=pool)
+    assert audio is not None
+    assert len(pool.acquired) == 2               # drone voice + welcome cue voice

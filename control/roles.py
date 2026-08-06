@@ -16,10 +16,14 @@ class Role:
     role_class: RoleClass
     capacity: int | None  # None = unlimited (shared/jam); positive int for unique
     scored: bool
-    # Placeholder for this role's per-player graph declaration (future
-    # per-role graph-builder work). Unused in this slice; present so the
-    # schema doesn't change later.
-    ugen_manifest: list = field(default_factory=list)
+    # This role's audio declaration, v0 and deliberately provisional (see
+    # docs/superpowers/specs/2026-08-06-tuneshroom-audio-design.md section 9.2).
+    # It is NOT the frozen wire contract light_manifest is, and it never ships
+    # to the device: audio is Control's business (boundary rule 1). Shape:
+    #   {"instruments": [{instrument, program?, drone?: {key, velocity},
+    #                     lanes?: [{source: "cc:<n>", dest: "cc:<n>"}]}]}
+    # Validated shallowly at Bit load (control/role_config.py). {} = no audio.
+    ugen_manifest: dict = field(default_factory=dict)
     # This role's light declaration in the light-manifest v2 wire shape
     # (luxaeterna docs/superpowers/specs/2026-07-22-synth-session-lifecycle-
     # design.md section 9; adopted here per docs/superpowers/specs/

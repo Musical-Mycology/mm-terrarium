@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import time
 
+from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
@@ -47,6 +48,11 @@ class DeviceLinkAgent:
         # self.bridges, is the source of truth for "closing" (a device can
         # legitimately have no bridge at all -- see _on_release).
         self._closing: dict[str, int] = {}
+        # Control owns the breath now (control/breath.py): a role declaring
+        # aurora's `level` param no longer breathes on its own clock, so every
+        # renderer has to be fed cc:11 or it renders a static surface.
+        self._breath_origin = self._clock()
+        self._last_breath: dict[str, int] = {}
         game_server.add_observer(self)
         game_server.on_release = self._on_release
         game_server.on_light_cue = self._on_light_cue
@@ -63,7 +69,23 @@ class DeviceLinkAgent:
             except Exception:
                 logger.exception("devicelink inbound handling failed; "
                                  "dropping frame")
+        self._feed_breath()
         self._render_frames()
+
+    def _feed_breath(self) -> None:
+        """Drive every joined device's breath. Sent on change only, and never
+        to a device mid-release-fade."""
+        value = breath_cc(self._clock() - self._breath_origin)
+        for dev, bridge in list(self.bridges.items()):
+            if dev in self._closing or bridge.session is None:
+                continue
+            if self._last_breath.get(dev) == value:
+                continue
+            self._last_breath[dev] = value
+            try:
+                bridge.session.feed_midi(0xB0, BREATH_CC, value)
+            except Exception:
+                logger.exception("breath feed for %s failed", dev)
 
     def _render_frames(self) -> None:
         """Render each joined device's session and emit /<dev>/leds when the
@@ -168,6 +190,9 @@ class DeviceLinkAgent:
         self._universes[dev] = Universe()
         self._last_frames.pop(dev, None)
         self._closing.pop(dev, None)
+        # A rejoining device must not be starved of its first breath by a
+        # stale entry from its previous session.
+        self._last_breath.pop(dev, None)
         self._send(dev, protocol.role_event(dev, result.config))
 
     def _on_verb(self, dev: str, verb: str, args: list) -> None:
@@ -206,6 +231,7 @@ class DeviceLinkAgent:
         self._universes.pop(dev, None)
         self._last_frames.pop(dev, None)
         self._closing.pop(dev, None)
+        self._last_breath.pop(dev, None)
         try:
             self._send(dev, protocol.release_event(dev))
         except Exception:
