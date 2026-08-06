@@ -206,6 +206,25 @@ agree. Needs a hand-started Arco server (`apps/pytest/server` is a curses app)
 and `PYTHONPATH=/Users/chris/projects/arco`. Without the flag the demo is
 unchanged and needs no Arco.
 
+Two operational traps, both hit during live testing:
+
+1. **The soundfont must be a real General MIDI set.** `harness/arco_synth.py`'s
+   `DEFAULT_SOUNDFONT` points at `FluidR3_GM.sf2`, and that is the one to use. A
+   non-GM soundfont silently produces the wrong instruments, because program
+   numbers mean different things in it. The trap actually hit:
+   `VintageDreamsWaves-v2.sf2` is a 314 KB synth-waveform collection whose
+   program 89 is "Techno Bells" (percussive, decays fast) rather than the GM
+   "Warm Pad" that `bits/test_bit.py` and `control/audio.py`'s
+   `WELCOME_INSTRUMENTS` assume, so the sustained drone died within seconds.
+
+2. **Only the first client after an Arco server start gets working audio, on
+   macOS.** `pyarco`'s `arco.initialize()` unconditionally calls `reset()`,
+   which sends `/host/clear`. That tears down the server's audio stream and
+   frees every ugen, including the `Flsyn` and its loaded soundfont. The
+   server's audio re-open then fails with PortAudio `-9988, Invalid stream
+   pointer`. Practical consequence: restart the Arco server before each run of
+   `--audio`. This is upstream in Arco, not something this repo can fix.
+
 `control/breath.py` generates that shared `cc:11` value: it holds the breath
 envelope (point-for-point what luxaeterna's aurora preset used to loop on its
 own clock) and `BREATH_CC`. It moved out of `led_smoke.py`'s own `main()`

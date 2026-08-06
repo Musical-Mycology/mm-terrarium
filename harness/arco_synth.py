@@ -17,7 +17,15 @@ Run a client with:
 
 from __future__ import annotations
 
-DEFAULT_SOUNDFONT = "/Users/chris/projects/fluidsynth/sf2/VintageDreamsWaves-v2.sf2"
+# Must be a real General MIDI set: program numbers only mean what bits/test_bit.py
+# and control/audio.py's WELCOME_INSTRUMENTS assume (e.g. program 89 = Warm Pad,
+# program 9 = Glockenspiel) if the soundfont follows the GM map. VintageDreamsWaves
+# is a 314 KB synth-waveform collection that does not; its program 89 is "Techno
+# Bells", which decays, so the sustained drone died within seconds during live
+# testing. FluidR3_GM is the standard GM set (also what Roger Dannenberg's own
+# arco/apps/pytest/miditest.py expects). Do not change the program numbers below
+# to "fix" this; they were correct all along, only the soundfont was wrong.
+DEFAULT_SOUNDFONT = "/Users/chris/projects/fluidsynth/sf2/FluidR3_GM.sf2"
 
 
 class ArcoVoice:
