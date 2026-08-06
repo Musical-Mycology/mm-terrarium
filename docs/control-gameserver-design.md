@@ -273,3 +273,13 @@ the path.
    (roughly 768 kbps per 16-bit mono 48k stream)?
 3. Browsers as `ui<X>` services versus a reply-address argument in `/game/hello`:
    preference?
+4. **The Control-side `Synth` abstraction is still open with Roger Dannenberg.**
+   His written notes argue against a channel parameter (allocate up to 16
+   `Synth`s sharing one `Flsyn`); his shipped `MidiSender` in
+   `arco/apps/pytest/miditest.py` takes `chan` on every method. Those disagree
+   about the API, not the implementation. The Tuneshroom audio slice ships a
+   provisional `DeviceVoice` that keeps the channel **internal**, so callers use
+   the no-channel surface while the backend does what `MidiSender` does. It is
+   named `DeviceVoice` precisely so it is not read as this question having been
+   answered. See
+   `docs/superpowers/specs/2026-08-06-tuneshroom-audio-design.md` section 9.1.

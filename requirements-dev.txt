@@ -14,3 +14,16 @@ pytest>=8.0
 #     python -m pip install -e "/Users/chris/projects/luxaeterna[websim]"
 # tests/test_led_smoke.py, tests/test_device_bridge.py and tests/test_devicelink_agent.py
 # importorskip luxaeterna, so the core suite still runs without it.
+
+# --- Optional: Arco audio (harness/led_smoke.py --audio, tests/test_arco_synth.py) ---
+# pyarco and o2litepy are NOT pip-installable. They live in the sibling arco
+# checkout and are reached by PYTHONPATH, following the dev/test-only precedent
+# set for luxaeterna. Nothing is vendored or submoduled: pyarco's
+# source-of-truth stays Roger Dannenberg's open decision (bootstrap question 1).
+#
+#     PYTHONPATH=/Users/chris/projects/arco python -m harness.led_smoke --audio
+#
+# o2litepy needs these two. tests/test_arco_synth.py skips without them, and
+# control/audio.py never imports pyarco at all, so the core suite runs offline.
+zeroconf
+netifaces
