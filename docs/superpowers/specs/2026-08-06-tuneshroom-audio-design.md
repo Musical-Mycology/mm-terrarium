@@ -276,10 +276,12 @@ Notes on the shape:
   "audio consequence" column in section 3's table is FluidSynth's own reading of
   those cc numbers, not something this manifest names.
 - `Role.ugen_manifest` changes from `list` to `dict`, matching `light_manifest`,
-  with `field(default_factory=dict)`. Blast radius: three tests assert `== []`
-  (`tests/test_test_bit.py` x2, `tests/test_roles.py` x1), and
-  `console/protocol.py` plus `console/static/index.html` pass it straight through
-  as JSON, so the console needs no change.
+  with `field(default_factory=dict)`. Blast radius: four tests assert `== []`
+  (`tests/test_test_bit.py` x2, `tests/test_roles.py` x1, and
+  `tests/test_console_protocol.py:10`, which builds a real defaulted `Role` and
+  asserts `role_view(role)` output, so it exercises the default too). No console
+  *source* change is needed: `console/protocol.py` and
+  `console/static/index.html` pass the field straight through as JSON.
 - Validation is **shallow and separate** from `control/role_config.py`'s v2
   validator: a small `validate_ugen_manifest` that checks the top-level shape and
   locates errors the same way, called at `load_bit` so a typo'd Bit fails as a

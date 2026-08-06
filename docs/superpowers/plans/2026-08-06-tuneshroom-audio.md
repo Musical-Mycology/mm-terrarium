@@ -419,7 +419,13 @@ def validate_ugen_manifest(role: Role) -> None:
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests -q`
-Expected: all PASS. `tests/test_console_protocol.py:10` uses `"ugen_manifest": []` as literal fixture data for a role *view*, not a `Role`, so it is unaffected; confirm it still passes rather than editing it.
+Expected: all PASS **after** one more edit this plan originally got wrong.
+`tests/test_console_protocol.py:5-11` builds a **real defaulted `Role`** and
+asserts `protocol.role_view(role)`, so it *does* exercise the default and its
+`"ugen_manifest": []` literal must become `{}`. That is the same one-line
+update `tests/test_roles.py` and `tests/test_test_bit.py` get. No console
+*source* change is needed: `console/protocol.py` and `console/static/index.html`
+pass the field through as JSON.
 
 - [ ] **Step 6: Commit**
 
