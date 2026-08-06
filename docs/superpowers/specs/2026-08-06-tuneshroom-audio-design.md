@@ -185,7 +185,11 @@ Contents:
   no-op for the fake.
 - **`AudioBridge`**: holds `dev -> voice`. Its surface mirrors
   `harness/device_bridge.py`, which is the light-side sibling:
-  - `on_grant(join_result)`: reads the role's `ugen_manifest`, acquires a voice,
+  - `on_grant(dev, role)`: takes the `Role` object, not a `JoinResult`, because
+    the audio declaration is read off the Role directly: audio never ships to
+    the device, so it is absent from the composed `/ie<N>/role` blob. (The
+    light-side sibling `DeviceBridge.on_grant` does take a `JoinResult`, since
+    its manifest *is* in that blob.) Reads the role's `ugen_manifest`, acquires a voice,
     sends `program_change`, plays the welcome audio cue (section 7), and records
     the role's declared cc lanes for this device.
   - `start_drone(dev)` / `stop_drone(dev)`: the sustained note, tied to the Bit's
