@@ -41,8 +41,11 @@
 | `control/audio.py` | **Create.** Pure Control-side fan-out. `DeviceVoice`/`SynthPool` protocols, `FakeVoice`/`FakePool` in-package test doubles, `AudioBridge`. Never imports pyarco. |
 | `bits/test_bit.py` | Modify: `player` gains a `ugen_manifest` and a `cc:11 -> level` light lane. |
 | `harness/arco_synth.py` | **Create.** pyarco-backed `SynthPool`. Lazy import, channel allocation, `sched.poll()` pumping, teardown. |
-| `harness/led_smoke.py` | Modify: `--audio`/`--soundfont`/`--program`, the `cc:11` breath generator, shared-stream wiring. |
+| `control/breath.py` | **Create.** The breath as a Control-owned cc:11 signal. Pure, dependency-free, consumed by both the demo and devicelink. |
+| `harness/led_smoke.py` | Modify: `--audio`/`--soundfont`/`--program`, shared-stream wiring. |
+| `devicelink/agent.py` | Modify: drive the breath, so a connected device does not render a static surface. |
 | `tests/test_audio.py` | **Create.** Every `AudioBridge` decision against fakes. No importorskip. |
+| `tests/test_breath.py` | **Create.** The breath envelope's knots, interpolation, looping, and floor. |
 | `tests/test_arco_synth.py` | **Create.** One thin integration test, skipped without pyarco and without a live server. |
 | `tests/test_roles.py`, `tests/test_test_bit.py`, `tests/test_role_config.py`, `tests/test_led_smoke_cli.py`, `tests/test_led_smoke.py` | Modify: schema change, new declarations, breath generator, shared-stream regression. |
 | `requirements-dev.txt` | Modify: optional audio heading (`zeroconf`, `netifaces`, PYTHONPATH note). |
@@ -1416,26 +1419,59 @@ a holding position until pyarco's source-of-truth is settled."
 
 ---
 
-### Task 7: The breath generator
+### Task 7: `control/breath.py`, the breath generator
 
 **Files:**
-- Modify: `harness/led_smoke.py`
-- Test: `tests/test_led_smoke_cli.py`
+- Create: `control/breath.py`
+- Test: `tests/test_breath.py` (create)
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `harness.led_smoke.breath_cc(t: float) -> int`, sampling `_AURORA_BREATHE`'s shape at time `t` (looping every 6 s) scaled to 7-bit. `BREATHE_POINTS`, `BREATHE_PERIOD`. Task 8's driver loop calls it.
+- Produces: `control.breath.breath_cc(t: float) -> int`, sampling luxaeterna's
+  `_AURORA_BREATHE` shape at time `t` (looping every 6 s) scaled to 7-bit. Plus
+  `BREATH_CC = 11`, `BREATHE_POINTS`, `BREATHE_PERIOD`. Task 8's driver loop and
+  Task 9's `DeviceLinkAgent` both call it.
 
-**Why this exact shape:** Control now generates the breath aurora used to generate itself. Reproducing `_AURORA_BREATHE` point for point means the demo looks identical to today: same period, same 0.55 floor, same never-dark property. The only change is where the number comes from.
+**Why this lives in `control/` and not in the demo.** Declaring `level` opts
+aurora out of its private breathing clock, so **every** renderer of a
+level-declaring role must now be fed the breath, not just the one demo. If the
+generator lived inside `harness/led_smoke.py`'s `main()`, it would be a demo
+script detail rather than part of the control architecture, and any other
+consumer of the same role would render a static, unbreathing surface. That is
+not hypothetical: it is exactly what `devicelink/` does today, which Task 9
+fixes. Putting the generator in `control/` is what makes the "one shared control
+stream" claim true rather than aspirational.
 
-- [ ] **Step 1: Write the failing tests**
+It is **not** in `control/audio.py`, because the breath is not audio. It is a
+control signal both media consume, and a name that says so is worth one small
+module.
 
-Add to `tests/test_led_smoke_cli.py`, and add `breath_cc` to the `harness.led_smoke` import:
+**Why this exact shape:** reproducing `_AURORA_BREATHE` point for point means the
+light looks identical to before: same 6 s period, same 0.55 floor, same
+never-dark property. The only change is where the number comes from.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_breath.py`:
 
 ```python
+"""The breath Control generates now that aurora no longer breathes itself.
+Pure and offline: no luxaeterna, no Arco, no network."""
+
+from __future__ import annotations
+
+from control.breath import BREATH_CC, breath_cc
+
+
+def test_breath_cc_is_midi_expression():
+    # cc:11 is General MIDI Expression, which FluidSynth honors as a direct
+    # attenuation, so the swell is audible on any soundfont.
+    assert BREATH_CC == 11
+
+
 def test_breath_cc_matches_auroras_own_envelope_at_the_knots():
     # Control now generates the breath aurora used to generate itself. These
-    # are luxaeterna's _AURORA_BREATHE points scaled to 7-bit, so the demo
+    # are luxaeterna's _AURORA_BREATHE points scaled to 7-bit, so the light
     # looks identical to before: same period, same floor, never dark.
     assert breath_cc(0.0) == 70          # round(0.55 * 127)
     assert breath_cc(3.0) == 127
@@ -1451,6 +1487,11 @@ def test_breath_cc_rises_monotonically_over_the_first_half():
     assert vals == sorted(vals)
 
 
+def test_breath_cc_falls_over_the_second_half():
+    vals = [breath_cc(3.0 + t / 10.0) for t in range(0, 31)]
+    assert vals == sorted(vals, reverse=True)
+
+
 def test_breath_cc_never_reaches_zero():
     assert min(breath_cc(t / 10.0) for t in range(0, 61)) >= 70
 
@@ -1459,20 +1500,35 @@ def test_breath_cc_loops_rather_than_running_off_the_end():
     assert breath_cc(13.5) == breath_cc(1.5)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 2: Run the test to verify it fails**
 
-Run: `python -m pytest tests/test_led_smoke_cli.py -v`
-Expected: FAIL at import with `ImportError: cannot import name 'breath_cc'`.
+Run: `/Users/chris/projects/mm-terrarium/.venv/bin/python -m pytest tests/test_breath.py -v`
+Expected: FAIL at collection with `ModuleNotFoundError: No module named 'control.breath'`.
 
-- [ ] **Step 3: Implement the generator**
-
-Add to `harness/led_smoke.py`, below the `HOST, PORT` line:
+- [ ] **Step 3: Implement `control/breath.py`**
 
 ```python
-# luxaeterna's _AURORA_BREATHE, point for point. Control generates the breath
-# now instead of the preset, so the light and the sound read the SAME number
-# and cannot drift. Reproducing the shape exactly keeps the demo looking
-# identical to before: same 6 s period, same 0.55 floor, never dark.
+"""The breath: a slow control signal Control generates and both media consume.
+
+luxaeterna's aurora used to breathe on its own private clock. A role that
+declares a `level` param opts out of that clock, so the envelope moves here and
+travels as cc:11 on the shared MIDI stream. A light renderer binding cc:11 to
+`level` and a sound engine binding it to expression then swell together, because
+they are reading the same number in the same tick rather than two clocks that
+happen to agree.
+
+Consequence worth stating plainly: every renderer of a level-declaring role has
+to be fed this, or it renders a static surface. harness/led_smoke.py and
+devicelink/agent.py both tick it for that reason.
+
+Pure and dependency-free: no luxaeterna, no pyarco, no clock of its own.
+"""
+
+from __future__ import annotations
+
+BREATH_CC = 11        # General MIDI Expression: a direct attenuation in FluidSynth
+
+# luxaeterna's _AURORA_BREATHE, point for point, so the light is unchanged.
 BREATHE_POINTS = [(0.0, 0.55), (3.0, 1.0), (6.0, 0.55)]
 BREATHE_PERIOD = 6.0
 
@@ -1487,20 +1543,25 @@ def breath_cc(t: float) -> int:
     return round(BREATHE_POINTS[-1][1] * 127)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: Run the test to verify it passes**
 
-Run: `python -m pytest tests/test_led_smoke_cli.py -v`
-Expected: all PASS.
+Run: `/Users/chris/projects/mm-terrarium/.venv/bin/python -m pytest tests/test_breath.py -v`
+Expected: all 7 PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add harness/led_smoke.py tests/test_led_smoke_cli.py && git commit -m "feat(harness): generate aurora's breath in Control as a cc:11 stream
+git add control/breath.py tests/test_breath.py && git commit -m "feat(control): the breath as a Control-generated cc:11 stream
 
-Reproduces luxaeterna's _AURORA_BREATHE point for point, so the demo looks
+Reproduces luxaeterna's _AURORA_BREATHE point for point, so the light looks
 identical to before. The difference is where the number comes from: once
 Control owns it, the light and the sound read the same value in the same tick
-and cannot drift."
+and cannot drift.
+
+It lives in control/ rather than in the demo because declaring `level` opts
+aurora out of its private clock, so every renderer of such a role must be fed
+this. A generator inside one demo's main() would leave every other consumer
+rendering a static surface."
 ```
 
 ---
@@ -1512,7 +1573,7 @@ and cannot drift."
 - Test: `tests/test_led_smoke_cli.py`, `tests/test_led_smoke.py`
 
 **Interfaces:**
-- Consumes: `AudioBridge`, `FakePool` (Tasks 3 and 4), `ArcoSynthPool`, `DEFAULT_SOUNDFONT` (Task 6), `breath_cc` (Task 7), TestBit's declarations (Task 5).
+- Consumes: `AudioBridge`, `FakePool` (Tasks 3 and 4), `ArcoSynthPool`, `DEFAULT_SOUNDFONT` (Task 6), `control.breath.breath_cc` and `BREATH_CC` (Task 7), TestBit's declarations (Task 5).
 - Produces: `build(...)` now returns a **4-tuple** `(loop, session, gs, audio)` where `audio` is `None` unless a `pool` is passed. New `build` keyword: `pool=None`. New CLI flags `--audio`, `--soundfont`, `--program`.
 
 **The shared-stream statement.** Both consumers must be fed from one place, so a
@@ -1638,6 +1699,7 @@ Add to the imports at the top of the file:
 
 ```python
 from control.audio import AudioBridge
+from control.breath import BREATH_CC, breath_cc
 ```
 
 - [ ] **Step 4: Run the build tests to verify they pass**
@@ -1696,7 +1758,7 @@ def main() -> None:
             # ONE stream, two consumers. This is the property the whole slice
             # exists to establish: light and sound read the same numbers in the
             # same tick, so they cannot drift.
-            for status, d1, d2 in ((0xB0, 74, cc), (0xB0, 11, breath)):
+            for status, d1, d2 in ((0xB0, 74, cc), (0xB0, BREATH_CC, breath)):
                 session.feed_midi(status, d1, d2)
                 if audio is not None:
                     audio.feed_midi("sim-dev", status, d1, d2)
@@ -1719,7 +1781,10 @@ def main() -> None:
             audio.shutdown()                 # frees the ugen id space
 ```
 
-Add `import os` to the imports and `breath_cc` is already module-local.
+Add `import os` to the imports. `breath_cc`/`BREATH_CC` come from
+`control.breath` (Task 7), NOT from this module: the generator lives in
+`control/` so every renderer of a level-declaring role can be fed the same
+breath, which is what Task 9 relies on.
 
 Update the module docstring's usage block to add:
 
@@ -1756,12 +1821,178 @@ Without --audio the demo is byte-identical to before and needs no Arco."
 
 ---
 
-### Task 9: Dependencies and documentation
+### Task 9: DeviceLink breathes too
+
+**Files:**
+- Modify: `devicelink/agent.py`
+- Test: `tests/test_devicelink_agent.py`
+
+**Interfaces:**
+- Consumes: `control.breath.breath_cc`, `BREATH_CC` (Task 7); TestBit's
+  `cc:11 -> level` light lane (Task 5).
+- Produces: nothing later tasks consume.
+
+**Why this task exists.** It was not in the original plan, and it is not
+optional polish. Declaring `level` on TestBit's `player` role opts `aurora` out
+of its private breathing clock for **every** consumer of that role, not just the
+demo the plan was written around. `devicelink/agent.py` only forwards MIDI a
+Bit's verb handler emits, and TestBit's `tilt` handler emits `cc:74` only, so
+nothing there originates `cc:11`. Without this task, a device connected over
+`harness/devicelink_smoke.py` renders a **static** aurora pinned at 0.55
+forever: a visible regression in a demo that works today. The spec deferred
+devicelink as out of scope; this turned out to be collateral damage rather than
+deferral, so it is in scope now.
+
+**Design notes for the implementer:**
+- Feed the breath **unconditionally** to every joined, non-closing device.
+  luxaeterna's `dispatch_midi` drops a cc with no matching lane, so a role that
+  does not bind `cc:11` simply ignores it. Do not try to inspect the role's
+  manifest to decide.
+- **Skip devices in `_closing`.** They are rendering their release fade, and
+  feeding the breath mid-fade would fight it.
+- **Only send on change.** `breath_cc` returns an int that changes a few times a
+  second; the tick loop runs at 44 Hz. Sending only when the value changes keeps
+  the render path quiet without any timing assumption.
+- Use the agent's existing `self._clock` seam. Do not call `time.monotonic()`
+  directly: the tests drive a fake clock through it.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `tests/test_devicelink_agent.py`. Match the file's existing fixture style
+for building an agent with a joined device rather than inventing a new one: read
+the top of the file first and reuse whatever helper the existing tests use.
+
+```python
+def test_joined_device_receives_the_breath_on_cc11():
+    # Declaring `level` opts aurora out of its own breathing clock, so Control
+    # has to drive it. Without this, a devicelink device renders a static
+    # surface: the regression this task exists to prevent.
+    gs, server, agent, dev = _agent_with_joined_device()
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+    agent.poll()
+    assert [m for m in seen if m[0] == 0xB0 and m[1] == BREATH_CC]
+
+
+def test_breath_is_only_sent_when_the_value_changes():
+    # 44 Hz tick, ~6 s envelope: resending an unchanged 7-bit value every frame
+    # is pure noise on the render path.
+    gs, server, agent, dev = _agent_with_joined_device()
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+    for _ in range(3):
+        agent.poll()                      # fake clock barely advances
+    breaths = [m for m in seen if m[1] == BREATH_CC]
+    assert len(breaths) == 1
+
+
+def test_a_closing_device_is_not_fed_the_breath():
+    # It is rendering its release fade; the breath would fight it.
+    gs, server, agent, dev = _agent_with_joined_device()
+    agent._closing[dev] = 0
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+    agent.poll()
+    assert not [m for m in seen if m[1] == BREATH_CC]
+```
+
+Add `from control.breath import BREATH_CC` to the file's imports.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `/Users/chris/projects/mm-terrarium/.venv/bin/python -m pytest tests/test_devicelink_agent.py -v`
+Expected: the three new tests FAIL (no breath is emitted at all, so the first
+asserts an empty list and the third passes trivially; confirm the first two fail
+and note whether the third was vacuous before the change).
+
+- [ ] **Step 3: Implement the breath feed**
+
+In `devicelink/agent.py`, add to the imports:
+
+```python
+from control.breath import BREATH_CC, breath_cc
+```
+
+In `__init__`, alongside the other per-device state:
+
+```python
+        # Control owns the breath now (control/breath.py): a role declaring
+        # aurora's `level` param no longer breathes on its own clock, so every
+        # renderer has to be fed cc:11 or it renders a static surface.
+        self._breath_origin = self._clock()
+        self._last_breath: dict[str, int] = {}
+```
+
+Add this method, and call `self._feed_breath()` from `poll()` immediately
+before `self._render_frames()`:
+
+```python
+    def _feed_breath(self) -> None:
+        """Drive every joined device's breath. Sent on change only, and never
+        to a device mid-release-fade."""
+        value = breath_cc(self._clock() - self._breath_origin)
+        for dev, bridge in list(self.bridges.items()):
+            if dev in self._closing or bridge.session is None:
+                continue
+            if self._last_breath.get(dev) == value:
+                continue
+            self._last_breath[dev] = value
+            try:
+                bridge.session.feed_midi(0xB0, BREATH_CC, value)
+            except Exception:
+                logger.exception("breath feed for %s failed", dev)
+```
+
+In `_finish_release`, alongside the other per-device cleanup pops, add:
+
+```python
+        self._last_breath.pop(dev, None)
+```
+
+and in `_on_join`, alongside `self._closing.pop(dev, None)`, add:
+
+```python
+        self._last_breath.pop(dev, None)
+```
+
+so a rejoining device is not starved of its first breath by a stale entry.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `/Users/chris/projects/mm-terrarium/.venv/bin/python -m pytest tests/test_devicelink_agent.py -v`
+Expected: all PASS, including every pre-existing test in the file.
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `/Users/chris/projects/mm-terrarium/.venv/bin/python -m pytest tests -q`
+Expected: all PASS with no Arco server.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add devicelink/agent.py tests/test_devicelink_agent.py && git commit -m "fix(devicelink): drive the breath, so a device does not render static
+
+Declaring aurora's level param opts it out of its own breathing clock for every
+consumer of that role, not just the demo this work was written around. Nothing
+in devicelink originates cc:11, so a connected device would have rendered a
+static surface pinned at 0.55.
+
+Sent on change only, and never to a device mid-release-fade, where it would
+fight the fade."
+```
+
+---
+### Task 10: Dependencies and documentation
 
 **Files:**
 - Modify: `requirements-dev.txt`
 - Modify: `docs/MM_TERRARIUM.md`
 - Modify: `docs/control-gameserver-design.md`
+
+**Two documentation items added mid-execution** (see the amendment in
+Self-Review): `control/breath.py` exists and is consumed by both `led_smoke` and
+`devicelink`, and `devicelink/agent.py` now drives the breath. Both belong in
+the deep-dive's write-up alongside the audio modules.
 
 **Interfaces:**
 - Consumes: everything above.
@@ -1921,7 +2152,7 @@ and that DeviceVoice is named so as not to answer it."
 
 ---
 
-### Task 10: Live acceptance
+### Task 11: Live acceptance
 
 **Files:** none. This task changes nothing; it verifies.
 
@@ -1991,22 +2222,31 @@ so with the output, rather than reporting completion.
 | Spec section | Task |
 |---|---|
 | 3 Two controllers, shared stream | 5 (declarations), 7 (breath), 8 (fan-out statement) |
-| 3.1 Preserving the current look | 7 (`breath_cc` reproduces `_AURORA_BREATHE`) |
+| 3.1 Preserving the current look | 7 (`breath_cc` reproduces `_AURORA_BREATHE`), 9 (devicelink keeps breathing) |
 | 4 luxaeterna `level` param | 1 |
 | 4.1 luxaeterna tests | 1 Step 1 |
 | 5 `control/audio.py` | 3, 4 |
 | 5 `harness/arco_synth.py` | 6 |
 | 5 `led_smoke.py` flags | 8 |
+| Collateral: devicelink must be fed the breath | 9 (added mid-execution, see below) |
 | 6 `ugen_manifest` v0 | 2 (schema + validation), 5 (declaration) |
 | 7 Welcome audio cue | 4 |
 | 8 Testing, offline suite green | 3, 4, 6 (import hygiene), 8 (shared-stream regression) |
 | 9.1 `Synth` not frozen | 3 (naming, docstring), 9 (design-doc note) |
 | 9.2 `ugen_manifest` not frozen | 2 (comment), 9 (deep-dive) |
-| 9.3 New dependency stated | 9 |
-| 10 Verification | 10 |
-| 12 Documentation | 9 |
+| 9.3 New dependency stated | 10 |
+| 10 Verification | 11 |
+| 12 Documentation | 10 |
 
-Spec section 11 (out of scope) needs no task by definition.
+**Amendment, 2026-08-06 (mid-execution).** Spec section 11 listed
+`harness/devicelink_smoke.py` as out of scope. That was wrong, and Task 5's
+implementer caught it: declaring `level` on TestBit's shared `player` role
+opts aurora out of its private breathing clock for **every** consumer of that
+role, and nothing in `devicelink/` originates `cc:11`. Leaving it alone would
+have shipped a working demo in a visibly worse state (a static surface pinned
+at 0.55). So the breath generator moved from `harness/led_smoke.py` into
+`control/breath.py` (Task 7) and `devicelink/agent.py` now ticks it (Task 9).
+The spec's section 11 was updated to match.
 
 **Type consistency check:** `DeviceVoice` methods (`note_on`, `note_off`,
 `control_change`, `program_change`, `all_off`) are identical in the protocol
