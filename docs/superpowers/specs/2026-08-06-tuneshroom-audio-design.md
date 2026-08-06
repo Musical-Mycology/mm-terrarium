@@ -92,6 +92,15 @@ Net effect: **the demo looks identical to today**. Same breath, same period, sam
 0.55 floor, same "never dark" property. The only change is that the number now
 originates in Control, which is what makes it shareable.
 
+**Amended 2026-08-06, mid-implementation.** That "only change" framing was too
+narrow, and the consequence is worth stating plainly: because the breath leaves
+the preset, **every** renderer of a level-declaring role must now be fed cc:11,
+or it renders a static surface. Not just the demo this spec was written around.
+So the generator lives in `control/breath.py`, not inside a demo's `main()`, and
+both `harness/led_smoke.py` and `devicelink/agent.py` tick it. A generator that
+lived in one demo would make the "one shared control stream" claim aspirational
+rather than true.
+
 ## 4. luxaeterna change: `level` as an additive param on `aurora`
 
 The 2026-07-23 aurora spec set the precedent "a new instrument, leaving `bloom`
@@ -217,6 +226,18 @@ luxaeterna is currently carried (dev/test-only, `requirements-dev.txt`,
 installed. It moves into `control/` once pyarco's source-of-truth is settled,
 which is bootstrap open question #1 and Roger Dannenberg's call. This spec does
 not pre-empt that decision.
+
+### `control/breath.py` (new, pure)
+
+Holds the breath envelope and `BREATH_CC = 11`. Deliberately **not** in
+`control/audio.py`: the breath is not audio, it is a control signal both media
+consume, and a name that says so is worth one small module. Both
+`harness/led_smoke.py` and `devicelink/agent.py` tick it.
+
+### `devicelink/agent.py` (modified)
+
+Drives the breath for every joined, non-closing device, on change only. See the
+amendment in section 11 for why this is in scope.
 
 ### `harness/led_smoke.py` (modified)
 
@@ -421,10 +442,18 @@ regardless.
 
 ## 11. Explicitly out of scope
 
-- `harness/devicelink_smoke.py`. The fan-out is built as a reusable
-  `control/audio.py`, so wiring `DeviceLinkAgent` to it is a small follow-on
-  slice, not part of this one. Deferred so the first audible run needs only the
-  Arco server, with no browser simulator driving tilt.
+- **Audio** over `harness/devicelink_smoke.py`. The fan-out is built as a
+  reusable `control/audio.py`, so wiring `DeviceLinkAgent` to it is a small
+  follow-on slice. Deferred so the first audible run needs only the Arco server,
+  with no browser simulator driving tilt.
+
+  **Amended 2026-08-06:** the *light* half of devicelink is NOT out of scope, and
+  claiming it was is the one real error this spec made. Declaring `level` opts
+  aurora out of its own breathing clock for every consumer of the role, and
+  nothing in `devicelink/` originates cc:11, so leaving it alone would have left
+  a connected device rendering a static surface pinned at 0.55. That is
+  collateral damage, not deferral. `devicelink/agent.py` therefore drives the
+  breath as part of this slice. Audio there remains deferred.
 - Real o2lite transport, an Arco-side `/ie<N>` path, and multi-device audio
   beyond what the 16-channel pool gives for free.
 - The audio-manifest v1 schema (section 9.2).
