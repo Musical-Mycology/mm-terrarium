@@ -48,6 +48,18 @@ def test_acquire_before_start_is_a_clear_error():
     assert "start()" in str(ei.value)
 
 
+def test_start_with_missing_soundfont_names_the_path_without_pyarco():
+    # The existence check runs before arco.initialize(), so this must raise
+    # with no pyarco installed and no Arco server running.
+    from harness.arco_synth import ArcoSynthPool
+
+    missing_path = "/nonexistent/definitely-not-a-soundfont.sf2"
+    pool = ArcoSynthPool(soundfont=missing_path)
+    with pytest.raises(FileNotFoundError) as ei:
+        pool.start()
+    assert missing_path in str(ei.value)
+
+
 @pytest.mark.skipif(not os.environ.get("MM_ARCO_LIVE"),
                     reason="needs a running Arco server; set MM_ARCO_LIVE=1")
 def test_live_pool_acquires_sends_and_releases():

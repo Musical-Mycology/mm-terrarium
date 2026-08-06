@@ -17,6 +17,8 @@ Run a client with:
 
 from __future__ import annotations
 
+import os
+
 # Must be a real General MIDI set: program numbers only mean what bits/test_bit.py
 # and control/audio.py's WELCOME_INSTRUMENTS assume (e.g. program 89 = Warm Pad,
 # program 9 = Glockenspiel) if the soundfont follows the GM map. VintageDreamsWaves
@@ -72,10 +74,20 @@ class ArcoSynthPool:
     def start(self) -> None:
         """Connect to the Arco server and build the shared Flsyn.
 
+        Validate first, connect second: a missing soundfont is the common
+        mistake on a fresh checkout (DEFAULT_SOUNDFONT is a 142 MB file that
+        git does not carry), so it is checked before anything opens a
+        connection, rather than surfacing as whatever Flsyn happens to raise.
+
         arco.initialize() BLOCKS until connected and reset, then poll() is all
         that is needed: we deliberately do not call sched.run(), because the
-        driver loop owns the loop.
+        driver loop owns the loop. If anything after that connects fails, the
+        connection must not be left dangling, so we shut it down and re-raise.
         """
+        if not os.path.isfile(self._soundfont):
+            raise FileNotFoundError(
+                f"soundfont not found: {self._soundfont}")
+
         from pyarco import sched                       # noqa: PLC0415 (lazy by design)
         from pyarco.arco_engine import arco            # noqa: PLC0415
         from pyarco.ugens.flsyn import Flsyn           # noqa: PLC0415
@@ -83,8 +95,12 @@ class ArcoSynthPool:
         arco.initialize(ensemble=self._ensemble)       # raises TimeoutError if no server
         self._sched = sched
         self._arco = arco
-        self._flsyn = Flsyn(self._soundfont)
-        self._flsyn.play()
+        try:
+            self._flsyn = Flsyn(self._soundfont)
+            self._flsyn.play()
+        except Exception:
+            self.shutdown()
+            raise
 
     def acquire(self) -> ArcoVoice:
         if self._flsyn is None:

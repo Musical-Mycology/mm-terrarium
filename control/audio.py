@@ -31,8 +31,11 @@ _CC_PREFIX = "cc:"
 # exactly the way light_manifest instrument names are opaque luxaeterna
 # registry names; this table is the audio-side equivalent of that registry.
 # (program, key, velocity). Numbers picked by listening on the venue soundfont.
+# These are General MIDI program numbers, and they only mean what they say if
+# the loaded soundfont actually follows the GM map (see harness/arco_synth.py's
+# DEFAULT_SOUNDFONT comment; a non-GM soundfont cost real debugging time here).
 WELCOME_INSTRUMENTS: dict[str, tuple[int, int, int]] = {
-    "chime": (9, 84, 88),        # 9 = Tubular Bells (General MIDI)
+    "chime": (9, 84, 88),        # 9 = Glockenspiel (General MIDI)
 }
 
 _DEFAULT_WELCOME_DURATION = 1.5
