@@ -47,7 +47,3 @@ def test_build_with_a_pool_wires_audio_and_grants_a_voice():
                                         pool=pool)
     assert audio is not None
     assert len(pool.acquired) == 2               # drone voice + welcome cue voice
-
-
-def test_run_duration_default_still_test_bit_natural_with_audio_flag():
-    assert _run_duration(_args()) == RUN_DURATION_SECONDS

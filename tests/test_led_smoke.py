@@ -106,7 +106,7 @@ def test_one_cc_stream_reaches_both_the_light_and_the_audio():
     """The property this whole slice exists to establish. If someone later
     splits the stream into two timelines, this fails loudly."""
     from control.audio import FakePool
-    from harness.led_smoke import build
+    from harness.led_smoke import build, feed_shared
 
     pool = FakePool()
     # A fake clock, like the test above it: build() threads it into both the
@@ -123,9 +123,7 @@ def test_one_cc_stream_reaches_both_the_light_and_the_audio():
             break
     assert session.state == "running"
 
-    for status, d1, d2 in ((0xB0, 74, 100), (0xB0, 11, 120)):
-        session.feed_midi(status, d1, d2)
-        audio.feed_midi("sim-dev", status, d1, d2)
+    feed_shared(session, audio, "sim-dev", ((0xB0, 74, 100), (0xB0, 11, 120)))
     loop._loop_once()                            # drain the light queue
 
     drone_voice = pool.acquired[0]

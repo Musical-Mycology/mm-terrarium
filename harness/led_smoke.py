@@ -72,6 +72,17 @@ def _run_duration(args) -> float:
     return RUN_DURATION_SECONDS if args.seconds is None else args.seconds
 
 
+def feed_shared(session, audio, dev, pairs):
+    """The one place light and sound are fed. Both consumers read the SAME
+    bytes in the same tick, which is the property this whole demo exists to
+    establish. main() and the regression test call this exact function, so a
+    future edit that splits the feeding into two paths breaks the test."""
+    for status, d1, d2 in pairs:
+        session.feed_midi(status, d1, d2)
+        if audio is not None:
+            audio.feed_midi(dev, status, d1, d2)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Watch (and hear) TestBit render on the Web LED simulator.")
@@ -115,13 +126,8 @@ def main() -> None:
         cc, step = 0, 2
         while gs.state == State.RUNNING:
             breath = breath_cc(time.monotonic() - started)
-            # ONE stream, two consumers. This is the property the whole slice
-            # exists to establish: light and sound read the same numbers in the
-            # same tick, so they cannot drift.
-            for status, d1, d2 in ((0xB0, 74, cc), (0xB0, BREATH_CC, breath)):
-                session.feed_midi(status, d1, d2)
-                if audio is not None:
-                    audio.feed_midi("sim-dev", status, d1, d2)
+            feed_shared(session, audio, "sim-dev",
+                        ((0xB0, 74, cc), (0xB0, BREATH_CC, breath)))
             if audio is not None:
                 audio.tick()
             cc += step
