@@ -59,19 +59,29 @@ def test_full_inprocess_stack_lights_and_fades():
 
     # (c) cc:74 drives the hue and it GLIDES (Smooth), not a snap. Drive toward red
     #     (cc 0); one frame later it is still green-dominant (mid-glide), and after
-    #     ~1.4 s it has become red-dominant. Brightness varies across the window
-    #     (the breathe). max(frame) == the breathe level (hsv value is always 1.0).
+    #     ~1.4 s it has become red-dominant. Declaring `level` opted aurora out of
+    #     its own private breathing clock, so the breath no longer happens on its
+    #     own -- Control now owns it and must drive cc:11 itself, the same way the
+    #     real demo's breath_cc will (Task 7/8). Ping-pong cc:11 across the window
+    #     so brightness genuinely moves; max(frame) tracks the driven level (hsv
+    #     value is always 1.0).
     session.feed_midi(0xB0, 74, 0)                     # target hue 0 (red)
     loop._loop_once()
     mid = backend.frames[-1]
     assert max(mid[0::3]) > max(mid[1::3])             # still green-dominant -> glided, not snapped
     maxes = []
+    breath, breath_step = 70, 4                        # ping-pong roughly 70..127
     for _ in range(60):
+        session.feed_midi(0xB0, 11, breath)
         loop._loop_once()
         maxes.append(max(backend.frames[-1]))
+        breath += breath_step
+        if breath >= 127 or breath <= 70:
+            breath = max(70, min(127, breath))
+            breath_step = -breath_step
     settled = backend.frames[-1]
     assert max(settled[1::3]) > max(settled[0::3])     # now red-dominant -> cc glided the hue
-    assert max(maxes) - min(maxes) > 0.02              # brightness breathes over the window
+    assert max(maxes) - min(maxes) > 0.02              # breath still reaches the surface, now from cc:11
     lit = max(maxes)                                    # a lit running frame for the fade check
 
     # (d) complete the Bit -> unload -> on_release -> session.clear() -> fade

@@ -29,12 +29,30 @@ class TestBit(Bit):
             # First real light-lane declaration: the act that freezes the
             # light-manifest v2 authored shape (see control/roles.py).
             # Instrument names are opaque to Control; these are luxaeterna
-            # registry names.
+            # registry names. Declaring `level` opts aurora out of its private
+            # breathing clock and onto cc:11, which is what lets the audio
+            # swell in step with the visible pulse rather than near it.
             light_manifest={
                 "instruments": [
                     {"instrument": "aurora", "target": "primary",
-                     "params": {"hue": 0.33},
-                     "lanes": [{"source": "cc:74", "dest": "hue"}]},
+                     "params": {"hue": 0.33, "level": 0.55},
+                     "lanes": [{"source": "cc:74", "dest": "hue"},
+                               {"source": "cc:11", "dest": "level"}]},
+                ],
+            },
+            # The audio half of the SAME two controllers. cc:74 is General
+            # MIDI Brightness (FluidSynth reads it as filter cutoff) and cc:11
+            # is Expression (a direct attenuation, so the swell is audible on
+            # any soundfont). Both lanes forward the controller unchanged; the
+            # lane exists so a role CAN remap a gesture, not because it must.
+            # v0 and provisional, not a frozen wire contract: see
+            # docs/superpowers/specs/2026-08-06-tuneshroom-audio-design.md.
+            ugen_manifest={
+                "instruments": [
+                    {"instrument": "flsyn", "program": 89,
+                     "drone": {"key": 45, "velocity": 90},
+                     "lanes": [{"source": "cc:74", "dest": "cc:74"},
+                               {"source": "cc:11", "dest": "cc:11"}]},
                 ],
             },
             welcome={

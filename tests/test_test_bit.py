@@ -11,10 +11,44 @@ def test_role_table_has_one_scored_and_one_jam_role():
     assert table.roles["jammer"].role_class == RoleClass.JAM
 
 
-def test_role_ugen_manifests_are_present_but_empty_placeholders():
-    bit = TestBit()
-    table = bit.role_table
+def test_jammer_keeps_empty_media_defaults():
+    # The no-light, no-audio path stays exercised.
+    table = TestBit().role_table
     assert table.roles["jammer"].ugen_manifest == {}
+    assert table.roles["jammer"].light_manifest == {}
+
+
+def test_player_declares_a_flsyn_instrument_with_a_drone():
+    decl = TestBit().role_table.roles["player"].ugen_manifest["instruments"][0]
+    assert decl["instrument"] == "flsyn"
+    assert decl["drone"]["key"] > 0 and decl["drone"]["velocity"] > 0
+
+
+def test_player_binds_the_same_two_controllers_in_light_and_audio():
+    # The property this whole slice exists to establish: one control stream,
+    # two consumers. If these ever diverge, the demo is two timelines again.
+    roles = TestBit().role_table.roles["player"]
+    light_sources = {lane["source"]
+                     for inst in roles.light_manifest["instruments"]
+                     for lane in inst["lanes"]}
+    audio_sources = {lane["source"]
+                     for inst in roles.ugen_manifest["instruments"]
+                     for lane in inst.get("lanes", [])}
+    assert light_sources == audio_sources == {"cc:74", "cc:11"}
+
+
+def test_player_light_declares_level_so_the_breath_is_externally_driven():
+    inst = TestBit().role_table.roles["player"].light_manifest["instruments"][0]
+    assert "level" in inst["params"]                # opts aurora into external drive
+    assert {"source": "cc:11", "dest": "level"} in inst["lanes"]
+
+
+def test_player_light_still_declares_no_note_lane():
+    # PR #9's strobe fix: aurora froze its colour at note-on, so sweeping the hue
+    # re-triggered constantly. The audio path adds a drone note-on; light must
+    # keep ignoring it.
+    inst = TestBit().role_table.roles["player"].light_manifest["instruments"][0]
+    assert not [lane for lane in inst["lanes"] if lane["source"] == "note"]
 
 
 def test_node_map_grants_each_role_from_its_own_node():
@@ -73,8 +107,9 @@ def test_player_role_declares_v2_light_manifest_and_welcome():
     assert player.light_manifest == {
         "instruments": [
             {"instrument": "aurora", "target": "primary",
-             "params": {"hue": 0.33},
-             "lanes": [{"source": "cc:74", "dest": "hue"}]},
+             "params": {"hue": 0.33, "level": 0.55},
+             "lanes": [{"source": "cc:74", "dest": "hue"},
+                       {"source": "cc:11", "dest": "level"}]},
         ],
     }
     assert player.welcome == {
