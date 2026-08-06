@@ -1910,6 +1910,16 @@ def test_a_closing_device_is_not_fed_the_breath():
 
 Add `from control.breath import BREATH_CC` to the file's imports.
 
+**Amended mid-execution.** The three test bodies above could not observe the
+feature and were rewritten during Task 9. `poll()` both finalises a device's
+join and sends that device's first breath, and real time between adjacent
+statements is far below `breath_cc`'s ~47 ms quantisation step, so the
+send-on-change rule suppressed everything a spy could see. The rewrite passes a
+hand-advanced `_Clock` through the existing `clock=` seam (the convention
+already used at `tests/test_devicelink_agent.py:202` and `:239`) and advances it
+explicitly. The closing-device test was additionally confirmed load-bearing by
+removing only the `_closing` guard and watching a breath appear.
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `/Users/chris/projects/mm-terrarium/.venv/bin/python -m pytest tests/test_devicelink_agent.py -v`
