@@ -19,6 +19,11 @@ from luxaeterna.synth.capability import shroom_capability
 from luxaeterna.universe import Universe
 
 
+def backend_frame(loop):
+    """The most recent frame the loop's backend recorded."""
+    return loop.backend.frames[-1]
+
+
 def test_full_inprocess_stack_lights_and_fades():
     gs = GameServer({"test_bit": TestBit})
     clk = iter([i * (1 / 44) for i in range(3000)]).__next__
@@ -95,3 +100,35 @@ def test_full_inprocess_stack_lights_and_fades():
         closing_maxes.append(max(backend.frames[-1]))
     assert session.state in ("closing", "idle")
     assert min(closing_maxes) < lit          # a real fade dip occurred
+
+
+def test_one_cc_stream_reaches_both_the_light_and_the_audio():
+    """The property this whole slice exists to establish. If someone later
+    splits the stream into two timelines, this fails loudly."""
+    from control.audio import FakePool
+    from harness.led_smoke import build
+
+    pool = FakePool()
+    # A fake clock, like the test above it: build() threads it into both the
+    # light bridge and the audio bridge, so the 1.5 s welcome plays out in
+    # hand-driven ticks rather than real seconds.
+    clk = iter([i * (1 / 44) for i in range(3000)]).__next__
+    loop, session, gs, audio = build(run_duration=float("inf"), serve=False,
+                                     clock=clk, pool=pool)
+    loop.backend.open()          # build() does not open it; loop.start() would
+    gs.run()
+    for _ in range(300):                         # let the welcome play out
+        loop._loop_once()
+        if session.state == "running":
+            break
+    assert session.state == "running"
+
+    for status, d1, d2 in ((0xB0, 74, 100), (0xB0, 11, 120)):
+        session.feed_midi(status, d1, d2)
+        audio.feed_midi("sim-dev", status, d1, d2)
+    loop._loop_once()                            # drain the light queue
+
+    drone_voice = pool.acquired[0]
+    assert ("cc", 74, 100) in drone_voice.sent   # audio saw both controllers
+    assert ("cc", 11, 120) in drone_voice.sent
+    assert max(backend_frame(loop)) > 0          # light is still rendering them
