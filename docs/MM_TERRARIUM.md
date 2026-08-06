@@ -191,6 +191,44 @@ device wire is Slice 2. `led_smoke.py` takes `--hold` (serve until Ctrl-C) /
 ~2 s one-shot. Regression: `tests/test_led_smoke.py` (headless) + CLI/`build()`
 unit tests in `tests/test_led_smoke_cli.py`.
 
+### `harness/` — venue-array and device tooling (pre-hardware)
+Four modules landed 2026-08-06 ahead of the hardware they drive, so the student
+hardware track starting 2026-08-24 inherits working code rather than writing it.
+**None of them has touched real hardware.** They are offline-tested tools, and
+every claim below is about code, not about a measured installation.
+
+- **`array_smoke.py`** — the venue-side sibling of `led_smoke.py`: a real strip
+  over Art-Net instead of a browser canvas, and a pixel count large enough to
+  span universes. The 6 m Terrarium array is 864 px × 4 ch = 3456 channels =
+  **7 Art-Net universes**, and both `ArtNet.send()` and `Universe` are
+  single-universe, so it builds on luxaeterna's new `PixelSpan` / `UniverseSet` /
+  `MultiUniverseOutputLoop`.
+  **Power limiting is not optional here.** 864 SK6812 RGBW pixels draw **21.6 A**
+  at full white against a **12.5 A** supply, so `build(max_amps=...)` installs a
+  `PowerLimiter` and `limited()` wraps the paint hook so every frame passes
+  through it. The CLI always passes `TERRARIUM_MAX_AMPS` and exposes no flag to
+  disable it.
+- **`render_bench.py`** — frame-timing statistics (mean, min, p95, worst frame).
+  See *Host platform* below for why the worst-frame figure is the one that
+  matters. `summarise()` and `measure()` take no luxaeterna dependency, so they
+  run in the core offline suite.
+- **`shroom_client.py`** — the Radxa Tuneshroom's `devicelink` participation.
+  Socket-free by design: `handle()` takes a decoded message and returns the
+  address it handled or `""` if it dropped the frame, so the whole protocol
+  surface is testable with no socket and no device. The transport half is
+  confined to `main()` because that is the part o2lite replaces.
+  `LED_CHANNELS = 36` matches the current wire (12 px × GRB) — see the RGBW
+  mismatch under *Not yet built* below.
+- **`local_sample.py`** — preloaded sample playback for the sub-20 ms tap path.
+  `last_latency_ms` measures **dispatch, not sound**; the real tap-to-sound
+  figure has to be read off a waveform and must not be quoted from this number.
+
+**Dependency gotcha:** `array_smoke` and `render_bench.main()` need luxaeterna's
+`pixelspan`, `universeset` and `power` modules, which landed on luxaeterna's
+`claude/venue-array-software` branch. Until that is on luxaeterna `main`, an
+editable install pointed at plain `main` will fail to import them.
+`tests/test_array_smoke.py` `importorskip`s luxaeterna accordingly.
+
 ### `devicelink/` — the device-facing websocket transport (Slice 2)
 Control's first device wire. The inbound sibling of `console/`, with the same
 split: `DeviceLinkServer` (socket-only, drain-based) plus `DeviceLinkAgent`
@@ -285,6 +323,14 @@ while feeding a 44 Hz render loop. The M1a-era "round trip under 50 ms" number
 does **not** carry over — it was measured with Control not in the path. See
 design doc § *Host Platform*.
 
+`harness/render_bench.py` is the tool for that measurement, and it deliberately
+reports **worst frame and p95 alongside the mean**: a loop that averages 44 Hz
+while stalling 200 ms once a second reads as healthy and is not. It drives the
+output loop synchronously rather than reading `MultiUniverseOutputLoop.fps`,
+because that property is a smoothed once-per-second average — exactly the
+averaging the tool exists to defeat. **No venue-box figures have been recorded
+yet**; the box does not exist.
+
 ## Relationships to other repos
 
 - **arco / o2** (rbdannenberg upstream, Musical-Mycology forks) — the synthesis
@@ -326,6 +372,20 @@ Kept explicit so the doc doesn't over-claim:
   o2lite transport that reads `JoinResult.config`, and the Arco cue path that
   plays the welcome audio half, are both unbuilt.)
 - **Real Bits beyond `TestBit`.** No production Bit exists.
+- **The Tuneshroom LED wire cannot reach the white die.** The hardware is
+  SK6812 Mini **RGBW** (4 channels, chosen for its dedicated white die and the
+  clean diffusion that buys), but `protocol.leds_event` ships **36 ints
+  (12 px × GRB)** and `shroom_capability` declares `color_order: "GRB"`. So the
+  white channel is unreachable today and any device-side driver has to hardcode
+  `w=0`. Widening the wire to 48 is the likely answer, but it is a coordinated
+  change across `devicelink/protocol.py`, `shroom_capability`, the WebSim
+  backend, and the Dart counterpart in `mm-tuneshroom/lib/link/envelope.dart`
+  (the protocol docstring says explicitly that the Dart side changes with it) —
+  and it crosses into simulator territory, so it is **an open decision, not a
+  bug to quietly fix.**
+- **No hardware exists.** Every module under *venue-array and device tooling*
+  above is written against hardware nobody has plugged in. Treat all of it as
+  unexercised until the student track's Gate 2 (2026-10-16) records otherwise.
 - **The mm-fairyring broker** (the uplink's other end) and its auth/identity /
   venue-ID scheme.
 - **Directories still unbuilt:** `arcoserver/` (Arco build config —
@@ -350,6 +410,12 @@ Kept explicit so the doc doesn't over-claim:
   [`.../2026-07-20-terrarium-uplink-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md).
 - Console:
   [`.../2026-07-21-terrarium-console-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-21-terrarium-console-design.md).
+- Student hardware track (the physical build feeding the 2026-12-04 show):
+  [`.../2026-08-06-student-hardware-track-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-06-student-hardware-track-design.md)
+  and its plan
+  [`.../plans/2026-08-06-student-hardware-track.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-06-student-hardware-track.md).
+  These are where the venue-box, LED-array and Tuneshroom builds, their gates,
+  and their acceptance criteria live.
 
 Game-design background (RenQuest integration, Bit scoring/loop rules, hardware)
 lives in MM-internal docs (`mm-documents/mm-shrooms-app/`) and is not required to
