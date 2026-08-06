@@ -27,6 +27,16 @@ from control.roles import Role
 
 _CC_PREFIX = "cc:"
 
+# Welcome-cue instrument names, provisional v0. Names are opaque to Control
+# exactly the way light_manifest instrument names are opaque luxaeterna
+# registry names; this table is the audio-side equivalent of that registry.
+# (program, key, velocity). Numbers picked by listening on the venue soundfont.
+WELCOME_INSTRUMENTS: dict[str, tuple[int, int, int]] = {
+    "chime": (9, 84, 88),        # 9 = Tubular Bells (General MIDI)
+}
+
+_DEFAULT_WELCOME_DURATION = 1.5
+
 
 class DeviceVoice(Protocol):
     """One device's slice of the room synth. No channel in this API."""
@@ -110,25 +120,66 @@ class AudioBridge:
     declared lanes. The light-side sibling is harness/device_bridge.py; both
     consume the SAME stream, which is the point (spec section 3)."""
 
-    def __init__(self, pool, clock=time.monotonic) -> None:
+    def __init__(self, pool, clock=time.monotonic, welcome_instruments=None) -> None:
         self._pool = pool
         self._clock = clock
+        self._welcome = (WELCOME_INSTRUMENTS if welcome_instruments is None
+                         else welcome_instruments)
         self._devices: dict[str, _DeviceAudio] = {}
+        # (due_time, voice, key) for welcome cues still sounding. A cue plays on
+        # its own transient voice so it never disturbs the sustained drone, and
+        # that voice is released the moment its declared duration expires.
+        self._pending_offs: list[tuple[float, object, int]] = []
 
     def on_grant(self, dev: str, role: Role) -> None:
-        """Role adopted: acquire a voice and wire its lanes. A role declaring
-        no instruments is silent and must not consume a voice."""
+        """Role adopted: acquire a voice, wire its lanes, sound the welcome.
+        A role declaring no instruments is silent and must not consume a voice,
+        but it may still have a welcome cue."""
         instruments = role.ugen_manifest.get("instruments", [])
-        if not instruments:
+        if instruments:
+            decl = instruments[0]        # v0: one instrument per role
+            voice = self._pool.acquire()
+            program = decl.get("program")
+            if program is not None:
+                voice.program_change(int(program))
+            lanes = {_cc_number(lane["source"]): _cc_number(lane["dest"])
+                     for lane in decl.get("lanes", [])}
+            self._devices[dev] = _DeviceAudio(voice, lanes, decl.get("drone"))
+        self._play_welcome(role)
+
+    def _play_welcome(self, role: Role) -> None:
+        """The audio half of the adoption ceremony. Declared alongside the light
+        half in Role.welcome since PR #5; this is its first consumer."""
+        decl = (role.welcome or {}).get("audio")
+        if not decl:
             return
-        decl = instruments[0]        # v0: one instrument per role
+        name = decl["instrument"]
+        if name not in self._welcome:
+            raise KeyError(
+                f"role {role.name!r} welcome audio: unknown instrument {name!r} "
+                f"(known: {sorted(self._welcome)})")
+        program, key, vel = self._welcome[name]
+        duration = float(decl.get("duration", _DEFAULT_WELCOME_DURATION))
         voice = self._pool.acquire()
-        program = decl.get("program")
-        if program is not None:
-            voice.program_change(int(program))
-        lanes = {_cc_number(lane["source"]): _cc_number(lane["dest"])
-                 for lane in decl.get("lanes", [])}
-        self._devices[dev] = _DeviceAudio(voice, lanes, decl.get("drone"))
+        voice.program_change(program)
+        voice.note_on(key, vel)
+        self._pending_offs.append((self._clock() + duration, voice, key))
+
+    def tick(self, now: float | None = None) -> None:
+        """Called once per driver-loop iteration: expire welcome cues, then let
+        the backend pump its transport. The single place the audio side ticks."""
+        if now is None:
+            now = self._clock()
+        still_sounding = []
+        for due, voice, key in self._pending_offs:
+            if now >= due:
+                voice.note_off(key)
+                voice.all_off()
+                self._pool.release(voice)
+            else:
+                still_sounding.append((due, voice, key))
+        self._pending_offs = still_sounding
+        self._pool.poll()
 
     def feed_midi(self, dev: str, status: int, d1: int, d2: int) -> None:
         """The one path from a MIDI byte to a synth call. An undeclared cc is
@@ -178,6 +229,11 @@ class AudioBridge:
     def shutdown(self) -> None:
         """Free every voice, then the pool. Boundary rule 1: owning the ugen id
         space means freeing it at Bit unload."""
+        for _due, voice, key in self._pending_offs:
+            voice.note_off(key)
+            voice.all_off()
+            self._pool.release(voice)
+        self._pending_offs = []
         for dev in list(self._devices):
             self.on_release(dev)
         self._pool.shutdown()

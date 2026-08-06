@@ -138,3 +138,69 @@ def test_shutdown_frees_every_voice_and_shuts_the_pool():
     br.shutdown()
     assert len(pool.released) == 2
     assert pool.shut is True
+
+
+WELCOME = {"light": {"instrument": "glow", "params": {"hue": 0.33},
+                     "duration": 1.5},
+           "audio": {"instrument": "chime", "duration": 1.5}}
+
+
+def _clock_from(values):
+    return iter(values).__next__
+
+
+def test_welcome_cue_plays_on_its_own_voice_not_the_drone_voice():
+    pool = FakePool()
+    br = AudioBridge(pool, clock=_clock_from([0.0] * 8))
+    br.on_grant("dev1", _role(ugens=PLAYER_UGENS, welcome=WELCOME))
+    assert len(pool.acquired) == 2                      # drone voice + cue voice
+    cue = pool.acquired[1]
+    assert [s for s in cue.sent if s[0] == "note_on"]   # the chime sounded
+    drone_voice = pool.acquired[0]
+    assert not [s for s in drone_voice.sent if s[0] == "note_on"]
+
+
+def test_welcome_cue_note_off_fires_after_its_duration_and_frees_the_voice():
+    pool = FakePool()
+    br = AudioBridge(pool, clock=_clock_from([0.0, 1.0, 2.0]))
+    br.on_grant("dev1", _role(ugens=PLAYER_UGENS, welcome=WELCOME))
+    cue = pool.acquired[1]
+    br.tick()                                            # now = 1.0, not due yet
+    assert not [s for s in cue.sent if s[0] == "note_off"]
+    assert cue not in pool.released
+    br.tick()                                            # now = 2.0, past 1.5
+    assert [s for s in cue.sent if s[0] == "note_off"]
+    assert cue in pool.released
+
+
+def test_tick_polls_the_pool():
+    pool = FakePool()
+    br = AudioBridge(pool, clock=_clock_from([0.0, 0.1, 0.2]))
+    br.tick()
+    br.tick()
+    assert pool.polls == 2
+
+
+def test_role_without_a_welcome_audio_half_plays_no_cue():
+    pool = FakePool()
+    br = AudioBridge(pool)
+    br.on_grant("dev1", _role(ugens=PLAYER_UGENS,
+                              welcome={"light": {"instrument": "glow"}}))
+    assert len(pool.acquired) == 1                       # drone voice only
+
+
+def test_unknown_welcome_instrument_raises_rather_than_playing_silence():
+    pool = FakePool()
+    br = AudioBridge(pool)
+    with pytest.raises(KeyError) as ei:
+        br.on_grant("dev1", _role(ugens=PLAYER_UGENS,
+                                  welcome={"audio": {"instrument": "gong"}}))
+    assert "gong" in str(ei.value)
+
+
+def test_shutdown_releases_a_still_sounding_welcome_voice():
+    pool = FakePool()
+    br = AudioBridge(pool, clock=_clock_from([0.0] * 8))
+    br.on_grant("dev1", _role(ugens=PLAYER_UGENS, welcome=WELCOME))
+    br.shutdown()
+    assert len(pool.released) == 2                       # drone voice and cue voice
