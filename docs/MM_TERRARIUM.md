@@ -26,12 +26,21 @@ See `MM_ARCHITECTURE.md` (MM-internal) → *Per-service summary* for the cross-r
 `MM_HARDWARE_DESIGN.md` (Tier 4 — Terrarium) for where the box sits in the
 hardware fleet.
 
-> **Status: early, offline/test-only.** Everything landed so far is pure Python
-> that runs and tests **fully offline** — no O2, Arco, pyarco, Lux Aeterna, or
-> fairyring dependency yet. The lifecycle engine, its remote uplink, and the
-> local admin console all exist and are exercised end-to-end against fakes; the
-> real-time audio/lighting outputs and real Bits do not exist yet. Keep this doc
-> honest about that line — see *Not yet built / deferred* below.
+> **Status: early, and the whole test suite still runs fully offline** against
+> fakes and localhost sockets, with **no O2 network, no Arco server and no
+> pyarco importable**. That property is load-bearing and is pinned by tests.
+>
+> What has since crossed the line into real: **Lux Aeterna** (a dev/test
+> dependency since Slice 1, driving the LED sim and per-device rendering) and,
+> as of the 2026-08-06 Tuneshroom audio slice, **pyarco** (dev/test-only,
+> reached by `PYTHONPATH`), which builds the first real ugen graph on a live
+> Arco server. `harness/led_smoke.py --audio` has been verified making sound on
+> hardware: a sustained drone whose loudness and timbre track the light off one
+> shared MIDI stream.
+>
+> Still absent: **O2/o2lite** (the device wire is a direct websocket to Control,
+> not o2lite through Arco), **fairyring**, real scoring, and any production Bit.
+> Keep this doc honest about that line: see *Not yet built / deferred* below.
 
 ## What it is, in one picture
 
