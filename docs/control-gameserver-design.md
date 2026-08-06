@@ -17,6 +17,31 @@ copy.**
 > below state the consequences explicitly. Downstream repos (luxaeterna,
 > mm-tuneshroom) already cite both by name.
 
+> **Implementation status (2026-08-05, revised 2026-08-06) — this document is
+> the TARGET, not the build.** Traced and run at `1a4c430`, re-checked at
+> `8c0670b`: there is **no o2lite anywhere in the running path**. `mm-terrarium`
+> has zero `import o2lite / o2litepy` statements and no `arcoserver/` directory.
+> Control talks to devices over a **plain JSON websocket**
+> (`devicelink/server.py`, `websockets.sync.server`); the Flutter sim uses
+> `jsonEncode` (`mm-tuneshroom/lib/link/websocket_link.dart:66`). Lux Aeterna is
+> **imported as a Python library into Control's own process** and driven by
+> direct `session.feed_midi(...)` / `render_into(...)` calls — see
+> `luxaeterna/docs/deployment.md` row 1. Every hop count in *Message Routing*
+> below is therefore designed and unmeasured.
+>
+> **What changed on 2026-08-06** (Tuneshroom audio, PR #15): there is now a real
+> **Arco server in the picture, but only on an opt-in path**. `pyarco` is
+> imported in exactly one place, lazily inside `ArcoSynthPool.start()`
+> (`harness/arco_synth.py`), so the default demo and the whole test suite still
+> run with no Arco and no pyarco importable. `harness/led_smoke.py --audio`
+> drives a live server and has been verified making sound. That is the first
+> real ugen graph this repo builds, and it is deliberately provisional.
+>
+> So the remaining Slice 2 work is narrower than this note first said, but not
+> smaller in the part that matters: **moving Control, the devices, and Lux
+> Aeterna onto o2lite is still entirely unstarted.** Audio reaching Arco over a
+> direct pyarco connection is not the same thing as the room speaking o2lite.
+
 It supersedes the earlier Musical Mycology direction of an embedded
 Arco engine on every device (mm-documents design, §4.5) and the M1a-era O2
 service conventions (`o2host` hub, `te`/`sh<pid>` services) used by the first
