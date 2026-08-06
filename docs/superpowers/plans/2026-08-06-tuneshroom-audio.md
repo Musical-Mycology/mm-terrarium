@@ -1609,9 +1609,21 @@ def test_build_with_a_pool_wires_audio_and_grants_a_voice():
     assert len(pool.acquired) == 2               # drone voice + welcome cue voice
 
 
-def test_run_duration_default_still_test_bit_natural_with_audio_flag():
-    assert _run_duration(_args()) == RUN_DURATION_SECONDS
 ```
+
+**Amended mid-execution.** An earlier draft of this step also added
+`test_run_duration_default_still_test_bit_natural_with_audio_flag`. It was
+byte-identical to `test_run_duration_default_is_test_bit_natural` and could not
+exercise `--audio` at all, because `_run_duration()` never reads `args.audio`.
+It was deleted in Task 8's fix round.
+
+**Also amended:** the shared-stream statement below was extracted into a public
+`feed_shared(session, audio, dev, pairs)` helper at module level in
+`harness/led_smoke.py`, which **both** `main()` and
+`test_one_cc_stream_reaches_both_the_light_and_the_audio` call. The original
+plan had the test reimplement the pairing in its own body, which meant it would
+have passed even if `main()` fed light and audio from two separate paths, and
+that is the one property this whole feature exists to establish.
 
 Add the shared-stream regression to `tests/test_led_smoke.py`:
 
