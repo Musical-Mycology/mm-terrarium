@@ -126,9 +126,29 @@ def test_validate_rejects_welcome_half_without_instrument(half):
         validate_role_declarations(make_table(role))
 
 
+def test_validate_rejects_unknown_welcome_audio_instrument():
+    # spec section 7: an unknown instrument name is a validation failure,
+    # never a silent no-sound discovered later at role-grant time.
+    role = make_role(welcome={"audio": {"instrument": "gong"}})
+    with pytest.raises(ValueError,
+                       match=r"role 'player' welcome 'audio': unknown "
+                             r"instrument 'gong' \(known: \['chime'\]\)"):
+        validate_role_declarations(make_table(role))
+
+
+def test_validate_accepts_known_welcome_audio_instrument():
+    # A welcome-audio instrument name light validation would leave alone
+    # (unlike light instrument names, which are opaque device-side names).
+    role = make_role(welcome={"audio": {"instrument": "chime"}})
+    validate_role_declarations(make_table(role))
+
+
 @pytest.mark.parametrize("half", ["light", "audio"])
 def test_validate_rejects_non_dict_welcome_params(half):
-    role = make_role(welcome={half: {"instrument": "bloom", "params": [1, 2]}})
+    # A known instrument name for each half, so the params check under test
+    # is what fires rather than the audio-half unknown-instrument check.
+    instrument = "chime" if half == "audio" else "bloom"
+    role = make_role(welcome={half: {"instrument": instrument, "params": [1, 2]}})
     with pytest.raises(ValueError,
                        match=rf"role 'player' welcome {half!r}: 'params' must be a dict"):
         validate_role_declarations(make_table(role))
@@ -290,4 +310,27 @@ def test_bad_ugen_manifest_fails_the_bit_at_load():
 
     gs = GameServer({"bad": BadBit})
     with pytest.raises(BitLoadError):
+        gs.load_bit("bad")
+
+
+def test_bad_welcome_audio_instrument_fails_the_bit_at_load():
+    # Same discipline as test_bad_ugen_manifest_fails_the_bit_at_load, but
+    # for the welcome-audio instrument name: a typo'd Bit fails as a
+    # BitLoadError, never a bare KeyError raised much later from
+    # AudioBridge._play_welcome at role-grant time.
+    from control.engine import BitLoadError, GameServer
+    from control.bit import Bit
+
+    class BadWelcomeBit(Bit):
+        version = "0.1"
+
+        @property
+        def role_table(self):
+            return RoleTable(
+                roles={"player": _role(
+                    welcome={"audio": {"instrument": "gong"}})},
+                node_map={"N": ["player"]})
+
+    gs = GameServer({"bad": BadWelcomeBit})
+    with pytest.raises(BitLoadError, match=r"unknown instrument 'gong'"):
         gs.load_bit("bad")

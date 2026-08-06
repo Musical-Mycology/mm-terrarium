@@ -6,10 +6,18 @@ protocol-module discipline. The wire contract is luxaeterna's light-manifest
 v2 (LightManifest.from_dict); validation here is deliberately shallow --
 instrument names and params belong to luxaeterna's installation-overridable
 registry, which Control cannot see.
+
+The welcome-audio half is the one exception: its instrument table
+(control.audio.WELCOME_INSTRUMENTS) is Control-owned, not a device-side
+registry, so this module can and does check names against it. That is the
+one point where this module imports a sibling leaf module rather than
+staying purely structural; control.audio imports control.roles only, never
+this module, so the edge does not close a cycle.
 """
 
 from copy import deepcopy
 
+from control.audio import WELCOME_INSTRUMENTS
 from control.roles import Role, RoleTable
 
 # Keys Control composes into the outgoing blob at adoption time; authoring
@@ -87,6 +95,10 @@ def _validate_welcome(role: Role) -> None:
         if "instrument" not in decl:
             raise ValueError(
                 f"{half_where}: missing required field 'instrument'")
+        if half == "audio" and decl["instrument"] not in WELCOME_INSTRUMENTS:
+            raise ValueError(
+                f"{half_where}: unknown instrument {decl['instrument']!r} "
+                f"(known: {sorted(WELCOME_INSTRUMENTS)})")
         params = decl.get("params", {})
         if not isinstance(params, dict):
             raise ValueError(f"{half_where}: 'params' must be a dict")
