@@ -22,7 +22,10 @@ def test_breath_cc_matches_auroras_own_envelope_at_the_knots():
 
 
 def test_breath_cc_interpolates_between_the_knots():
-    assert breath_cc(1.5) == 98          # round(0.775 * 127)
+    # Both halves, not just the rising one: a shape bug confined to the falling
+    # segment would otherwise slip past every ordering and floor test here.
+    assert breath_cc(1.5) == 98          # round(0.775 * 127), rising half
+    assert breath_cc(4.5) == 98          # symmetric point on the falling half
 
 
 def test_breath_cc_rises_monotonically_over_the_first_half():
