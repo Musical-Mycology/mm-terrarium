@@ -138,7 +138,7 @@ batch a rejectable error rather than an unlabelled mystery.
 ```jsonc
 // open
 {"capture_id": "shake-021", "label": "shake", "series": 3,
- "window_ms": 3000,
+ "window_ms": 3000, "t0": 12345.678,
  "source": { /* see section 7 */ }}
 
 // close
@@ -160,6 +160,12 @@ Ownership of the identifiers, so there is one answer rather than two:
 - **`window_ms` is configured in the client**, per label, and shipped on `open`
   so the trace records the window it was actually captured under rather than
   whatever the client's default happens to be later.
+- **`t0` is the client's own clock reading** at the moment the window opened.
+  It becomes the trace's `t0_device` (section 7), the anchor every batch's
+  `t_ms` offsets are relative to. Per Design Rule 4 (timestamps at the
+  source), this must come from the device on `open` — synthesizing it
+  server-side would leave every trace's offsets anchored to a meaningless
+  0.0 instead of a real moment.
 - **Rates, units and stream identity live only in `source`**, never duplicated at
   the top level of `open`. One place to read them, one place for them to be
   wrong.
