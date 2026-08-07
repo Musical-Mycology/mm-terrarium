@@ -2,8 +2,8 @@
 and a live DeviceLink, so a phone running the mm-tuneshroom capture client
 can join and stream labelled telemetry.
 
-    python -m harness.capture_smoke --hold --host 0.0.0.0
-    python -m harness.capture_smoke --hold --capture-dir /data/captures
+    python -m harness.capture_smoke --host 0.0.0.0
+    python -m harness.capture_smoke --capture-dir /data/captures
 
 Traces land under <capture-dir>/<session-id>/. Point the capture client at
 ws://<host>:<port>/ws and tap the CAPTURE_NODE registration node.
@@ -57,9 +57,6 @@ def build(host: str = HOST, port: int = PORT,
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Serve DeviceLink with the CaptureBit loaded.")
-    ap.add_argument("--hold", action="store_true",
-                    help="Serve until Ctrl-C. CaptureBit never self-completes, "
-                         "so this is the normal mode.")
     ap.add_argument("--seconds", type=float, default=None,
                     help="Abort the Bit after this long instead of serving "
                          "until Ctrl-C.")
