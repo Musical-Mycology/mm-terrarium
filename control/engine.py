@@ -11,6 +11,7 @@ abort() -- GameServer stays agnostic to who's watching or calling either.
 import logging
 
 from control.bit import Bit
+from control.cues import PlayCue
 from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
@@ -45,6 +46,9 @@ class GameServer:
         # rule 3 -- the Bit decides the light consequence, the transport
         # only delivers it to that device's renderer.
         self.on_light_cue = None
+        # Device-local sample cue, as on_play_cue(dev, name, params). Same
+        # boundary rule as on_light_cue: set by a transport, never by a Bit.
+        self.on_play_cue = None
         # Observers registered via add_observer(). Each may implement any of
         # on_state_change(old, new), on_registration_change(),
         # on_devices_change(); missing methods are skipped. Both the uplink
@@ -125,12 +129,17 @@ class GameServer:
         except Exception:
             logger.exception("Bit verb handler %r raised; ignoring", verb)
             return "handler error"
-        if cues and self.on_light_cue is not None:
-            for cue in cues:
-                try:
-                    self.on_light_cue(*cue)
-                except Exception:
-                    logger.exception("on_light_cue raised; continuing")
+        for cue in cues or ():
+            if isinstance(cue, PlayCue):
+                sink, args = self.on_play_cue, (cue.dev, cue.name, cue.params)
+            else:
+                sink, args = self.on_light_cue, tuple(cue)
+            if sink is None:
+                continue
+            try:
+                sink(*args)
+            except Exception:
+                logger.exception("cue sink raised; continuing")
         return None
 
     def tick(self, dt: float) -> None:
