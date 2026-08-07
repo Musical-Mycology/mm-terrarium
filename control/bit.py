@@ -60,5 +60,11 @@ class Bit(ABC):
     def verb_handlers(self) -> dict:
         """Extra /game/* verb handlers this Bit adds, beyond the fixed
         lifecycle verbs Control always handles. Empty by default.
+
+        A handler is called as handler(dev, args) and returns either a list
+        of (dev, status, data1, data2) light cues, or a str refusal reason
+        that Control surfaces to that device as /<dev>/error. Returning a
+        str is how a Bit rejects a well-formed call for its own reasons;
+        raising is for bugs and yields a generic "handler error".
         """
         return {}
