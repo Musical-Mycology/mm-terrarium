@@ -124,7 +124,7 @@ capture. **Mic permission denied is not a failed session.**
 captures/<session-id>/
   index.jsonl              one line per closed capture
   tap/001.json  001.wav
-  shake/021.json
+  shake/007.json
 ```
 
 Session id is `%Y-%m-%dT%H-%M-%SZ` plus a 4-hex-character suffix, so it is
