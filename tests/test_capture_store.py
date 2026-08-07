@@ -5,6 +5,7 @@ no luxaeterna, core offline suite."""
 import json
 import struct
 import wave
+from pathlib import Path
 
 import pytest
 
@@ -308,6 +309,29 @@ def test_a_failing_write_is_contained_and_counted(tmp_path, monkeypatch):
 
     monkeypatch.setattr("pathlib.Path.write_text", boom)
     monkeypatch.setattr("pathlib.Path.write_bytes", boom)
+
+    store.close_capture("ie1", close_cmd().meta)      # must not raise
+    assert store.failures == 1
+    assert store.open_ids() == {}                      # capture still released
+
+
+def test_an_index_append_failure_is_also_contained_and_counted(tmp_path, monkeypatch):
+    """The trace .json and .wav writes are guarded (see the test above), but
+    _append_index does a separate filesystem write of its own -- it must be
+    just as contained, or a read-only index.jsonl would wedge the tick loop
+    on the third of close_capture's three writes."""
+    store = make_store(tmp_path)
+    store.open_capture("ie1", open_cmd())
+    store.append("ie1", batch())
+
+    real_open = Path.open
+
+    def boom(self, *a, **kw):
+        if self.name == "index.jsonl":
+            raise OSError("read-only file system")
+        return real_open(self, *a, **kw)
+
+    monkeypatch.setattr("pathlib.Path.open", boom)
 
     store.close_capture("ie1", close_cmd().meta)      # must not raise
     assert store.failures == 1

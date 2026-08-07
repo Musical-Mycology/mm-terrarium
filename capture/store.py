@@ -196,5 +196,6 @@ class CaptureStore:
             with (self.session_dir / "index.jsonl").open("a") as fh:
                 fh.write(line + "\n")
         except Exception:
+            self.failures += 1
             logger.exception("index append for %s failed; continuing",
                              trace.capture_id)
