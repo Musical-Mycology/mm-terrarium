@@ -13,12 +13,20 @@ The wire, from devicelink/protocol.py and devicelink/agent.py:
 
     up    /game/hello    s    [dev]
     up    /game/join     ss   [dev, node]
-    up    /game/<verb>   sf   [dev, value]
+    up    /game/tilt     sf   [dev, gamma]
+    up    /game/tap      sffi [dev, peak_g, duration_ms, count]
+    up    /game/shake    sfff [dev, peak_g, duration_ms, sweep_deg]
     down  /<dev>/role    b    [config]
     down  /<dev>/deny    ss   [reason, hint]
     down  /<dev>/leds    b    [[36 ints]]
+    down  /<dev>/play    ss   [name, params]
     down  /<dev>/release ""   []
     down  /<dev>/error   ss   [context, message]
+
+The gesture and play rows are implemented by the Flutter simulator today;
+this client sends tilt only and ignores /<dev>/play. Design Rule 2 requires
+both clients to send byte-identical messages, so the shapes are recorded
+here before this client grows into them.
 
 Usage on the Radxa:
     python3 -m harness.shroom_client --server ws://10.44.0.10:8081 \
