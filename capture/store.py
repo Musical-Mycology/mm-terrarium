@@ -28,10 +28,15 @@ import time
 import wave
 from pathlib import Path
 
-from capture.trace import Trace
+from capture.trace import DEFAULT_AUDIO_RATE, Trace
 from devicelink.protocol import CaptureCommand, TelemetryBatch
 
 logger = logging.getLogger(__name__)
+
+# Grace beyond a capture's declared window before the server force-closes
+# it -- generous headroom for network jitter, not a tight deadline. Bounds
+# per-capture memory growth for a client that never sends `close`.
+_WINDOW_GRACE_MS = 5000.0
 
 
 class CaptureError(Exception):
@@ -89,9 +94,14 @@ class CaptureStore:
             raise CaptureError(
                 f"{dev} already open on {self._open[dev].capture_id}")
         meta = cmd.meta
+        label, series = meta["label"], meta["series"]
+        for other_dev, other in self._open.items():
+            if other.label == label and other.series == series:
+                raise CaptureError(
+                    f"{label}/{series} already open on {other_dev}")
         self._open[dev] = Trace(
             session=self.session_id, capture_id=cmd.capture_id,
-            label=meta["label"], series=meta["series"], dev=dev,
+            label=label, series=series, dev=dev,
             bit=self.bit, source=meta["source"],
             window_ms=meta["window_ms"], t0_device=float(meta["t0"]))
         self._last_seen[dev] = self._clock()
@@ -102,6 +112,12 @@ class CaptureStore:
             raise CaptureError(
                 f"batch is for {batch.capture_id}, {dev} has "
                 f"{trace.capture_id} open")
+        if batch.t_ms and batch.t_ms[-1] > trace.window_ms + _WINDOW_GRACE_MS:
+            self._truncate(
+                dev, f"exceeded window_ms ({trace.window_ms:g}ms + "
+                     f"{_WINDOW_GRACE_MS:g}ms grace)")
+            raise CaptureError(
+                f"capture window ({trace.window_ms:g}ms) exceeded; closed")
         try:
             trace.append(batch)
         except ValueError as exc:
@@ -165,14 +181,21 @@ class CaptureStore:
         write failure is logged and counted, never raised."""
         stem = f"{trace.series:03d}"
         audio_file = f"{stem}.wav" if trace.pcm else None
+        directory = self.session_dir / trace.label
+        if (directory / f"{stem}.json").exists():
+            self.failures += 1
+            logger.error(
+                "capture %s would overwrite existing %s/%s.json; skipping "
+                "write to avoid silent data loss", trace.capture_id,
+                trace.label, stem)
+            return
         try:
-            directory = self.session_dir / trace.label
             directory.mkdir(parents=True, exist_ok=True)
             body = json.dumps(trace.to_dict(audio_file), separators=(",", ":"))
             (directory / f"{stem}.json").write_text(body)
             self.bytes_written += len(body)
             if audio_file is not None:
-                rate = (trace.source.get("audio") or {}).get("rate", 16000)
+                rate = (trace.source.get("audio") or {}).get("rate", DEFAULT_AUDIO_RATE)
                 data = wav_bytes(bytes(trace.pcm), rate=rate)
                 (directory / audio_file).write_bytes(data)
                 self.bytes_written += len(data)

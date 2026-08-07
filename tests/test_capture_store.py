@@ -216,6 +216,34 @@ def test_a_stale_batch_is_refused_not_appended(tmp_path):
     assert "stale" in str(exc.value)
 
 
+def test_two_devices_opening_the_same_label_series_is_refused(tmp_path):
+    store = make_store(tmp_path)
+    store.open_capture("ie1", open_cmd("shake-021", "shake", 3))
+    with pytest.raises(CaptureError) as exc:
+        store.open_capture("ie2", open_cmd("shake-099", "shake", 3))
+    assert "shake" in str(exc.value) and "3" in str(exc.value)
+    assert "ie1" in str(exc.value)
+
+
+def test_a_second_write_to_the_same_label_series_does_not_clobber_the_first(
+        tmp_path):
+    store = make_store(tmp_path)
+    store.open_capture("ie1", open_cmd("shake-021", "shake", 3))
+    store.append("ie1", batch(capture_id="shake-021"))
+    store.close_capture("ie1", close_cmd("shake-021").meta)
+
+    original = (tmp_path / "SESSION" / "shake" / "003.json").read_text()
+
+    store.open_capture("ie2", open_cmd("shake-099", "shake", 3))
+    store.append("ie2", batch(capture_id="shake-099"))
+    store.close_capture("ie2", close_cmd("shake-099").meta)  # must not raise
+
+    assert store.failures == 1
+    on_disk = (tmp_path / "SESSION" / "shake" / "003.json").read_text()
+    assert on_disk == original
+    assert json.loads(on_disk)["capture_id"] == "shake-021"
+
+
 def test_two_devices_capture_independently(tmp_path):
     store = make_store(tmp_path)
     store.open_capture("ie1", open_cmd("shake-021", "shake", 21))
@@ -280,6 +308,40 @@ def test_truncate_all_closes_everything_still_open(tmp_path):
             (tmp_path / "SESSION" / label / f"{num}.json").read_text())
         assert body["truncated"] is True
         assert body["notes"] == "bit unloaded"
+
+
+# --- window enforcement ---------------------------------------------------
+
+def _open_cmd_with_window(window_ms):
+    return CaptureCommand(
+        action="open", capture_id="shake-021",
+        meta={"capture_id": "shake-021", "label": "shake", "series": 3,
+              "window_ms": window_ms, "t0": 12345.678, "source": SOURCE})
+
+
+def test_a_batch_past_window_plus_grace_is_refused_and_truncates(tmp_path):
+    store = make_store(tmp_path)
+    store.open_capture("ie1", _open_cmd_with_window(1000.0))
+    store.append("ie1", batch(seq=0, t_ms=[0.0, 10.0]))
+
+    with pytest.raises(CaptureError) as exc:
+        store.append("ie1", batch(seq=1, t_ms=[6001.0]))
+    assert "window" in str(exc.value)
+    assert "ie1" not in store.open_ids()
+
+    body = json.loads((tmp_path / "SESSION" / "shake" / "003.json").read_text())
+    assert body["truncated"] is True
+    assert body["n"] == 2
+
+
+def test_a_batch_within_window_plus_grace_is_accepted(tmp_path):
+    store = make_store(tmp_path)
+    store.open_capture("ie1", _open_cmd_with_window(1000.0))
+    store.append("ie1", batch(seq=0, t_ms=[0.0, 10.0]))
+
+    store.append("ie1", batch(seq=1, t_ms=[6000.0]))  # exactly window+grace
+
+    assert "ie1" in store.open_ids()
 
 
 # --- status read-out -----------------------------------------------------

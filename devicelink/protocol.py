@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from dataclasses import dataclass
 
 _GAME_PREFIX = "/game/"
@@ -121,6 +122,10 @@ REQUIRED_SOURCE_KEYS = frozenset({
     "motion_stream", "gravity_included", "requested_hz", "units",
 })
 
+# label becomes a filesystem directory component in capture/store.py -- must
+# never contain a path separator or traversal sequence.
+_LABEL_RE = re.compile(r"[A-Za-z0-9_-]+")
+
 
 @dataclass(frozen=True)
 class TelemetryBatch:
@@ -211,6 +216,9 @@ def _validate_open(meta: dict) -> None:
     label = meta.get("label")
     if not isinstance(label, str) or not label:
         raise ValueError("open needs a non-empty string label")
+    if not _LABEL_RE.fullmatch(label):
+        raise ValueError(
+            "label must contain only letters, digits, '_' or '-'")
     if isinstance(meta.get("series"), bool) or \
             not isinstance(meta.get("series"), int):
         raise ValueError("open needs an int series")
