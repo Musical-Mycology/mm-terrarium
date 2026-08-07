@@ -388,6 +388,8 @@ def test_granted_join_carries_composed_config_blob():
             "role": "greeter",
             "welcome": WELCOME_PAIR["light"],
         },
+        "uses": [],
+        "samples": [],
     }
 
 

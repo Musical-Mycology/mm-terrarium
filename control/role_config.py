@@ -35,6 +35,8 @@ def validate_role_declarations(role_table: RoleTable) -> None:
         _validate_light_manifest(role)
         _validate_welcome(role)
         validate_ugen_manifest(role)
+        _validate_string_list(role, "uses")
+        _validate_string_list(role, "samples")
 
 
 def _validate_light_manifest(role: Role) -> None:
@@ -104,6 +106,22 @@ def _validate_welcome(role: Role) -> None:
             raise ValueError(f"{half_where}: 'params' must be a dict")
 
 
+def _validate_string_list(role: Role, field_name: str) -> None:
+    """Shallow check for the flat string-list fields (uses, samples): a list
+    of non-empty strings. Deliberately does not check membership against a
+    vocabulary -- surface names belong to the device, exactly as instrument
+    names belong to luxaeterna's registry."""
+    where = f"role {role.name!r} {field_name}"
+    value = getattr(role, field_name)
+    if not isinstance(value, list):
+        raise ValueError(
+            f"{where}: must be a list, got {type(value).__name__}")
+    for idx, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry:
+            raise ValueError(
+                f"{where}[{idx}]: must be a non-empty string, got {entry!r}")
+
+
 def compose_role_config(bit_name: str, bit_version: str, role: Role) -> dict:
     """The per-role config blob shipped in /ie<N>/role at adoption time
     (docs/control-gameserver-design.md, player flow step 3). Deep-copied so
@@ -121,6 +139,8 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role) -> dict:
         "class": role.role_class.name,
         "scored": role.scored,
         "light_manifest": light,
+        "uses": list(role.uses),
+        "samples": list(role.samples),
     }
 
 
