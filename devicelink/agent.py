@@ -56,6 +56,7 @@ class DeviceLinkAgent:
         game_server.add_observer(self)
         game_server.on_release = self._on_release
         game_server.on_light_cue = self._on_light_cue
+        game_server.on_play_cue = self._on_play_cue
 
     def client_for(self, dev: str):
         return self._clients.get(dev)
@@ -246,6 +247,12 @@ class DeviceLinkAgent:
             bridge.session.feed_midi(status, data1, data2)
         except Exception:
             logger.exception("feed_midi for %s failed", dev)
+
+    def _on_play_cue(self, dev: str, name: str, params: str) -> None:
+        """Forward a Bit's local-sample cue to the device. Unlike the light
+        path there is no session to consult: the device owns its samples, and
+        Control only names one. An unknown name is the device's business."""
+        self._send(dev, protocol.play_event(dev, name, params))
 
     # --- outbound -----------------------------------------------------------
     def _send(self, dev: str, msg: dict) -> None:

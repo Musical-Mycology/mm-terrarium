@@ -345,3 +345,50 @@ def test_a_closing_device_is_not_fed_the_breath():
     clk.advance(1.0)
     agent.poll()
     assert not [m for m in seen if m[1] == BREATH_CC]
+
+
+def test_play_cue_is_sent_to_the_device():
+    """A Bit's PlayCue reaches the joined device as /ie<N>/play."""
+    from control.cues import PlayCue
+
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server)
+    gs.load_bit("test_bit")
+
+    client = object()
+    server.arrive(client)
+    server.inbound.append((client, {
+        "timestamp": 0.0, "address": "/game/hello",
+        "typespec": "sss", "args": ["ie1", "fake", "1"]}))
+    server.inbound.append((client, {
+        "timestamp": 0.0, "address": "/game/join",
+        "typespec": "ss", "args": ["ie1", "TEST_PLAYER_NODE"]}))
+    agent.poll()
+    # TEST_PLAYER_NODE maps to the scored "player" role, which
+    # RegistrationState.join() closes to new joins once RUNNING (see
+    # control/registration.py) -- run() must come after the join, same
+    # ordering as test_light_cue_reaches_the_devices_session above.
+    gs.run()
+
+    gs.bit.verb_handlers = lambda: {
+        "boop": lambda d, args: [PlayCue(d, "click", "hard")]}
+    gs.data("ie1", "boop", ["ie1"])
+
+    plays = [m for _c, m in server.sent if m["address"] == "/ie1/play"]
+    assert plays == [{"timestamp": 0.0, "address": "/ie1/play",
+                      "typespec": "ss", "args": ["click", "hard"]}]
+
+
+def test_play_cue_for_unknown_device_is_dropped():
+    """_send with no registered client must not raise."""
+    from control.cues import PlayCue
+
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server)
+    gs.load_bit("test_bit")
+    gs.run()
+
+    agent._on_play_cue("ie9", "click", "")
+    assert server.sent == []
