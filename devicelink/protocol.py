@@ -7,6 +7,10 @@ over real o2lite this becomes a serialized blob, per Design Rule 5).
 
 This module is the single source of truth for the wire shape. Its Dart
 counterpart is mm-tuneshroom lib/link/envelope.dart -- change both together.
+
+The telemetry-capture verbs at the foot of this file (/game/capture and
+/game/telemetry) are specified in docs/telemetry-trace-schema.md, which is
+also the contract mm-tuneshroom lib/capture/ implements against.
 """
 
 from __future__ import annotations
