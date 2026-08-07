@@ -353,7 +353,14 @@ each `on_release(dev)` call and `data()` wraps each `on_light_cue(...)` call, so
 a failing transport cannot strand the remaining devices or wedge Control in
 `UNLOADING`. That guarantee has its own engine-level regression test.
 
-Driver: `python -m harness.devicelink_smoke --hold`.
+Driver: `python -m harness.devicelink_smoke --hold`. **Trap:** `main()` calls
+`load_bit()` straight into `run()` with zero real-world gap, and
+`RegistrationState.join()` refuses a **scored** role (e.g. TestBit's
+`player`, node `TEST_PLAYER_NODE`) once `RUNNING` — a phone scanning a QR
+that instant was denied instantly, with no window to join. Pass
+`--setup-seconds N` (default `0`, unchanged behavior) to hold the Bit in
+`SETUP` — polling DeviceLink so joins land — for `N` seconds before `run()`
+closes it; only the unscored jam role stayed joinable without this.
 
 ### `capture/` + `bits/capture_bit.py` — labelled sensor telemetry capture (tool Bit)
 A **tool Bit**, not a production game Bit — it doesn't close the "no
