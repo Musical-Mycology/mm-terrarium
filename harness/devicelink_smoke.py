@@ -48,6 +48,21 @@ def _run_duration(args) -> float:
     return RUN_DURATION_SECONDS if args.seconds is None else args.seconds
 
 
+def _wait_in_setup(agent: DeviceLinkAgent, setup_seconds: float,
+                    clock=time.monotonic, sleep=time.sleep) -> None:
+    """Poll DeviceLink for setup_seconds while the Bit sits in SETUP, so a
+    device can join a scored role (registration.join() refuses those once
+    RUNNING) before run() closes the window. setup_seconds <= 0 -- the
+    default -- returns immediately, preserving the old load_bit()-straight-
+    into-run() behavior."""
+    if setup_seconds <= 0:
+        return
+    deadline = clock() + setup_seconds
+    while clock() < deadline:
+        agent.poll()
+        sleep(TICK)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Serve DeviceLink for the Tuneshroom simulator.")
@@ -55,6 +70,11 @@ def main() -> None:
                     help="How long the Bit stays RUNNING before completing.")
     ap.add_argument("--hold", action="store_true",
                     help="Never auto-complete; serve until Ctrl-C.")
+    ap.add_argument("--setup-seconds", type=float, default=0.0,
+                    help="Hold the Bit in SETUP for this long before calling "
+                         "run(), so a device can join a scored role (e.g. "
+                         "TEST_PLAYER_NODE) before registration closes for "
+                         "it. Default 0 keeps the old instant-run behavior.")
     ap.add_argument("--host", default=HOST,
                     help="Bind address. 0.0.0.0 exposes the device port to "
                          "the LAN -- explicit opt-in, no auth exists.")
@@ -65,6 +85,9 @@ def main() -> None:
     print(f"DeviceLink listening on ws://{args.host}:{server.port}/ws "
           f"(Ctrl-C to stop)")
     gs.load_bit("test_bit")
+    if args.setup_seconds > 0:
+        print(f"Holding in SETUP for {args.setup_seconds:g}s -- join now")
+    _wait_in_setup(agent, args.setup_seconds)
     gs.run()
     try:
         while True:
