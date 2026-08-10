@@ -110,8 +110,11 @@ class GameServer:
         """Route a /game/<verb> message to the loaded Bit's verb handler.
 
         Returns None when handled, else a refusal reason a transport can
-        surface as /<dev>/error. Never raises: a device must never be able
-        to wedge Control, exactly as a Bit must never be able to.
+        surface as /<dev>/error. The reason is either engine-level (no Bit
+        running, device not registered, unknown verb, handler raised) or
+        handler-declared: a handler returning a str is refusing. Never
+        raises: a device must never be able to wedge Control, exactly as a
+        Bit must never be able to.
         """
         if self.state not in (State.SETUP, State.RUNNING):
             return "no Bit running"
@@ -129,6 +132,12 @@ class GameServer:
         except Exception:
             logger.exception("Bit verb handler %r raised; ignoring", verb)
             return "handler error"
+        if isinstance(cues, str):
+            # A handler-declared refusal. Checked BEFORE the truthiness test
+            # below, which would otherwise iterate the string character by
+            # character and try to unpack each character as a cue tuple.
+            # `or` guards a blank reason so /<dev>/error is never empty.
+            return cues or "handler refused"
         for cue in cues or ():
             if isinstance(cue, PlayCue):
                 sink, args = self.on_play_cue, (cue.dev, cue.name, cue.params)

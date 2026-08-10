@@ -14,6 +14,7 @@ class VerbBit(Bit):
     def __init__(self):
         self.seen = []
         self.raise_next = False
+        self.refuse_next = None      # set to a str to exercise 4.0
 
     @property
     def role_table(self) -> RoleTable:
@@ -31,6 +32,8 @@ class VerbBit(Bit):
     def _on_tilt(self, dev, args):
         if self.raise_next:
             raise RuntimeError("boom")
+        if self.refuse_next is not None:
+            return self.refuse_next
         self.seen.append((dev, args))
         return [(dev, 0xB0, 74, 64)]
 
@@ -184,3 +187,34 @@ def test_raising_play_sink_does_not_propagate(running_server):
         "boop": lambda d, args: [PlayCue(d, "click", "")]}
 
     assert gs.data(dev, "boop", [dev]) is None
+
+
+def test_handler_returning_a_string_is_a_refusal():
+    gs = _loaded_server()
+    gs.join("ie1", "NODE_A")
+    cues = []
+    gs.on_light_cue = lambda *c: cues.append(c)
+    gs.bit.refuse_next = "no open capture for 'shake-021'"
+
+    assert gs.data("ie1", "tilt", ["ie1", 0.0]) == "no open capture for 'shake-021'"
+    # The refusal must NOT be walked character by character as cues.
+    assert cues == []
+    assert gs.state.name == "SETUP"
+
+
+def test_an_empty_refusal_still_carries_a_reason():
+    """A device must never receive /<dev>/error with a blank reason: an
+    empty string is a Bit bug, and a blank error frame hides it."""
+    gs = _loaded_server()
+    gs.join("ie1", "NODE_A")
+    gs.bit.refuse_next = ""
+    assert gs.data("ie1", "tilt", ["ie1", 0.0]) == "handler refused"
+
+
+def test_returning_cues_still_works():
+    gs = _loaded_server()
+    gs.join("ie1", "NODE_A")
+    cues = []
+    gs.on_light_cue = lambda *c: cues.append(c)
+    assert gs.data("ie1", "tilt", ["ie1", 30.0]) is None
+    assert cues == [("ie1", 0xB0, 74, 64)]

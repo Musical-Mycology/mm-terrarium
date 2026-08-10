@@ -102,7 +102,13 @@ return to a clean waiting state. Landed in the first-slice spec
   `on_run_start()`, `update(dt)`, `on_complete()`, `on_unload()`, plus optional
   `result()` (completion payload), `status()` (generic key/value read-out), and
   `verb_handlers()` — **routed as of Slice 2** via `GameServer.data()`; it was
-  declared but unreachable before then.
+  declared but unreachable before then. As of the telemetry-capture slice, a
+  verb handler's return value carries two meanings: a list of light cues (as
+  before) or a `str`, which `GameServer.data()` treats as a handler-declared
+  refusal surfaced to the device as `/<dev>/error` — checked *before* the cue
+  list's truthiness test, so a refusal string is never iterated
+  character-by-character as garbage cues. Raising is still reserved for bugs
+  and yields the generic `"handler error"`.
 - **Observer hooks:** a **multi-observer** list (`add_observer()` with
   notify-all) fires `on_state_change` / `on_registration_change` /
   `on_devices_change`, plus **two** transport-owned sinks: `on_release` (one
@@ -356,6 +362,66 @@ that instant was denied instantly, with no window to join. Pass
 `SETUP` — polling DeviceLink so joins land — for `N` seconds before `run()`
 closes it; only the unscored jam role stayed joinable without this.
 
+### `capture/` + `bits/capture_bit.py` — labelled sensor telemetry capture (tool Bit)
+A **tool Bit**, not a production game Bit — it doesn't close the "no
+production Bit exists" gap below. Built to answer a concrete measurement
+question: mm-tuneshroom's two gesture detectors (native `TapDetector` and
+browser `sensors.js`) both guess a tap/shake threshold and, on inspection,
+disagree with each other by roughly 3x despite a comment claiming they
+mirror one another. `CaptureBit` records what a real phone's accelerometer,
+gyroscope, and microphone actually emit during a labelled gesture, so a
+future slice can derive real thresholds instead of guessing.
+
+- **Wire:** two new verbs riding the *existing* generic `/game/<verb>` path
+  (`DeviceLinkAgent._on_verb` → `GameServer.data()` → `Bit.verb_handlers()`)
+  — `devicelink/agent.py` needed **no change**. `/game/capture "ssb" dev
+  action meta` (`open`/`close`/`abandon`; `open` declares the label and the
+  device's own clock reading, `t0`, before any sample arrives — Design Rule
+  4, timestamps at the source) and `/game/telemetry "sfb" dev t0 batch`
+  (~100 ms batches of structure-of-arrays accel/gyro samples plus optional
+  16 kHz mono PCM). Decoders live in `devicelink/protocol.py`, which remains
+  the single source of truth for the wire shape.
+- **`capture/trace.py`:** a pure, I/O-free `Trace` record — accumulates
+  batches, detects and records sequence gaps (a skipped `seq` is kept and
+  flagged; a stale/duplicate `seq` is refused, never silently corrupts
+  ordering), serializes to the on-disk trace shape.
+- **`capture/store.py`:** the *only* filesystem-touching code in the path.
+  One write per capture, at `close` (or idle-expiry/unload-truncation) —
+  never per batch, so filesystem contact stays off the hot path. Layout is
+  `captures/<session-id>/<label>/<series>.json` (+ a sidecar `.wav`, never
+  base64-in-JSON) plus an appended `index.jsonl`. `label` is restricted to
+  `[A-Za-z0-9_-]` at the decode boundary (it becomes a path component); a
+  same-`label`/`series` collision is refused at open (across devices) and
+  refused-not-overwritten at write (a `self.failures` counter, never a
+  silent clobber); a capture whose accumulated span exceeds its declared
+  `window_ms` plus a fixed grace is force-truncated rather than growing
+  memory unboundedly for a client that never sends `close`.
+- **`CaptureBit`:** deliberately thin — one unscored `shared` role
+  (`recorder`, node `CAPTURE_NODE`), empty light/audio manifests (the phone
+  is the whole instrument), `update(dt)` never self-completes (a capture
+  session ends only when the operator ends it from the console) but does
+  drive `store.expire()` each tick, `on_unload()` truncates anything still
+  open. `Bit.status()` surfaces live per-label counts and open captures, so
+  **the Terrarium Console is a live capture dashboard with zero console-side
+  changes**.
+- **`harness/capture_smoke.py`:** the driver, mirroring
+  `devicelink_smoke.py`'s `build()`/`main()` split; `python -m
+  harness.capture_smoke --hold --host 0.0.0.0` for a real phone (same
+  `127.0.0.1`-default / explicit-LAN-opt-in trust model as `devicelink/`).
+- **`tools/trace_stats.py`:** an offline CLI (not part of the runtime) that
+  reads a capture session directory and reports peak/deviation-from-rest
+  acceleration, time-above-threshold, spike/inter-spike intervals, peak
+  angular rate and integrated swept angle, and mic peak level/attack time —
+  per trace and per label. This is what turns "we have data" into "we have
+  definitions"; deriving the actual replacement thresholds is deferred, not
+  done here.
+- **`docs/telemetry-trace-schema.md`:** the cross-repo wire/on-disk contract
+  a future mm-tuneshroom capture client implements against — same pattern as
+  `devicelink/protocol.py` ↔ `lib/link/envelope.dart`.
+
+Nothing here is o2lite and nothing here touches Arco: same caveat as
+`devicelink/` throughout.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -431,7 +497,16 @@ yet**; the box does not exist.
   deploys into the Terrarium's `www/` as an artifact; it never contains
   Terrarium-side logic. (The legacy M1a / Sensor-Check harness stays in
   mm-tuneshroom as a working reference until this stack reproduces its behavior;
-  nothing was ported.)
+  nothing was ported.) As of the telemetry-capture slice the repos also share
+  a second wire contract, `docs/telemetry-trace-schema.md` — the
+  `/game/capture`/`/game/telemetry` shape and the on-disk trace format a
+  future mm-tuneshroom capture client implements against, same
+  keep-both-in-sync pattern as `devicelink/protocol.py` ↔
+  `lib/link/envelope.dart`. Only the server half (this repo) exists yet; the
+  phone-side capture client, the derived tap/shake threshold definitions, and
+  the simulator preset buttons that would consume a captured trace are
+  separate, later slices (design:
+  `docs/superpowers/specs/2026-08-07-sensor-telemetry-capture-design.md`).
 - **mm-fairyring** *(planned)* — the cloud broker for RenQuest integration. This
   repo's `uplink/` is the Terrarium-side half, implemented and tested now
   against a protocol contract a future fairyring can implement independently.
