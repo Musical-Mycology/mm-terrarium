@@ -488,11 +488,15 @@ yet**; the box does not exist.
   engine and O2 transport this server builds on. The Arco server *is* the room's
   O2 hub and sole synthesizer.
 - **pyarco**: the Python control layer Control+GameServer builds ugen graphs
-  through. Now a **dev/test-only dependency reached by `PYTHONPATH`**, following
+  through. A **dev/test-only dependency reached by `PYTHONPATH`**, following
   the luxaeterna precedent: nothing is vendored or submoduled, and
   `control/audio.py` never imports it, so the whole suite still runs offline.
-  Its source-of-truth (submodule vs. pinned sibling) remains Roger Dannenberg's
-  open decision.
+  Its source-of-truth is now settled (2026-08-10): the sibling `arco` checkout's
+  `pyarco/` subdirectory (`PYTHONPATH=/Users/chris/projects/arco`), maintained
+  upstream by Roger Dannenberg in `rbdannenberg/arco` and mirrored to the
+  `Musical-Mycology/arco` fork — not a submodule. The earlier standalone
+  `Musical-Mycology/pyarco` repo was an independent MM implementation that
+  predated this decision; it is now archived and superseded.
 - **mm-tuneshroom** — the instrument app and browser simulator. Its web build
   deploys into the Terrarium's `www/` as an artifact; it never contains
   Terrarium-side logic. (The legacy M1a / Sensor-Check harness stays in
@@ -556,9 +560,6 @@ Kept explicit so the doc doesn't over-claim:
 - **Directories still unbuilt:** `arcoserver/` (Arco build config —
   dspmanifest/prefs), `www/` (simulator web root), and `deploy/` (venue
   provisioning/networking) are in the README's planned layout but not created.
-- **pyarco source-of-truth** (submodule-vs-sibling; bootstrap open question #1)
-  is Roger Dannenberg's open decision — must be settled before any Bit does real
-  graph-building.
 - **Operator command interface beyond the console** (physical control, a
   Registration Node convention) remains a later decision; the console is the
   first concrete answer for a web panel.
