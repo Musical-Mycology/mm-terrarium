@@ -96,6 +96,25 @@ def error_event(dev: str, context: str, message: str) -> dict:
     return _event(f"/{dev}/error", "ss", [context, message])
 
 
+def play_event(dev: str, name: str, params: str = "") -> dict:
+    """Trigger a device-local sample by name.
+
+    The canonical design (docs/control-gameserver-design.md, player flow
+    step 4) writes this `/ie<N>/play "tis" time id params`. Two deviations,
+    both forced. There is no 't' in this transport's typespec vocabulary and
+    every envelope already carries `timestamp`, so the time argument is
+    dropped. And `id` becomes a name: harness/local_sample.py's SamplePlayer
+    keys samples by name, so an int index would oblige every client to keep
+    an ordered list in sync with Control -- an off-by-one there plays the
+    wrong sound instead of failing.
+
+    Nothing schedules this yet: DeviceLink has no shared clock, so the
+    device plays on arrival. `timestamp` is carried anyway so that adding
+    scheduling later is a device-side change, not a wire change.
+    """
+    return _event(f"/{dev}/play", "ss", [name, params])
+
+
 # --- telemetry capture (see docs/telemetry-trace-schema.md) ---------------
 #
 # Two research verbs used by the capture Bit. Both ride the generic

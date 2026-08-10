@@ -191,6 +191,8 @@ def test_compose_stamps_provenance_and_folds_welcome_light_half():
             "role": "player",
             "welcome": GOOD_WELCOME["light"],
         },
+        "uses": [],
+        "samples": [],
     }
 
 
@@ -202,6 +204,8 @@ def test_compose_with_empty_defaults_ships_bare_provenance():
         "scored": True,
         "light_manifest": {"bit_name": "test_bit", "bit_version": "",
                            "role": "player"},
+        "uses": [],
+        "samples": [],
     }
     # No welcome declared -> no welcome key; the device falls back to
     # sys:loaded (luxaeterna lifecycle spec section 5).
@@ -334,3 +338,64 @@ def test_bad_welcome_audio_instrument_fails_the_bit_at_load():
     gs = GameServer({"bad": BadWelcomeBit})
     with pytest.raises(BitLoadError, match=r"unknown instrument 'gong'"):
         gs.load_bit("bad")
+
+
+def _plain_role(**kw):
+    """A minimal valid Role; kw overrides the fields under test."""
+    from control.roles import Role, RoleClass
+    return Role(name="player", role_class=RoleClass.SHARED, capacity=None,
+                scored=True, **kw)
+
+
+def test_compose_includes_uses_and_samples():
+    from control.role_config import compose_role_config
+    role = _plain_role(uses=["tilt", "speaker"], samples=["click", "chime"])
+    blob = compose_role_config("test_bit", "0.1", role)
+    assert blob["uses"] == ["tilt", "speaker"]
+    assert blob["samples"] == ["click", "chime"]
+
+
+def test_compose_defaults_uses_and_samples_to_empty():
+    from control.role_config import compose_role_config
+    blob = compose_role_config("test_bit", "0.1", _plain_role())
+    assert blob["uses"] == []
+    assert blob["samples"] == []
+
+
+def test_compose_deep_copies_uses_and_samples():
+    """A Console or transport consumer must never alias the Bit's lists."""
+    from control.role_config import compose_role_config
+    role = _plain_role(uses=["tilt"], samples=["click"])
+    blob = compose_role_config("test_bit", "0.1", role)
+    blob["uses"].append("shake")
+    blob["samples"].append("boom")
+    assert role.uses == ["tilt"]
+    assert role.samples == ["click"]
+
+
+def test_validate_rejects_non_list_uses():
+    import pytest
+    from control.role_config import validate_role_declarations
+    from control.roles import RoleTable
+    table = RoleTable(roles={"player": _plain_role(uses="tilt")}, node_map={})
+    with pytest.raises(ValueError, match="uses"):
+        validate_role_declarations(table)
+
+
+def test_validate_rejects_non_string_sample():
+    import pytest
+    from control.role_config import validate_role_declarations
+    from control.roles import RoleTable
+    table = RoleTable(roles={"player": _plain_role(samples=["click", 7])},
+                      node_map={})
+    with pytest.raises(ValueError, match="samples"):
+        validate_role_declarations(table)
+
+
+def test_validate_rejects_empty_string_entry():
+    import pytest
+    from control.role_config import validate_role_declarations
+    from control.roles import RoleTable
+    table = RoleTable(roles={"player": _plain_role(uses=[""])}, node_map={})
+    with pytest.raises(ValueError, match="uses"):
+        validate_role_declarations(table)

@@ -5,6 +5,7 @@ section 4.
 """
 
 from control.bit import Bit
+from control.cues import PlayCue
 from control.roles import Role, RoleClass, RoleTable
 
 RUN_DURATION_SECONDS = 2.0
@@ -26,6 +27,11 @@ class TestBit(Bit):
         player = Role(
             name="player", role_class=RoleClass.SHARED, capacity=None,
             scored=True,
+            # What this role asks the device for. The simulator draws exactly
+            # these as active; jammer below deliberately asks for less, so
+            # switching nodes visibly changes the device's control panel.
+            uses=["tilt", "tap", "shake", "speaker"],
+            samples=["click", "chime"],
             # First real light-lane declaration: the act that freezes the
             # light-manifest v2 authored shape (see control/roles.py).
             # Instrument names are opaque to Control; these are luxaeterna
@@ -62,7 +68,7 @@ class TestBit(Bit):
             },
         )
         jammer = Role(name="jammer", role_class=RoleClass.JAM,
-                      capacity=None, scored=False)
+                      capacity=None, scored=False, uses=["tilt"])
         return RoleTable(
             roles={"player": player, "jammer": jammer},
             node_map={"TEST_PLAYER_NODE": ["player"],
@@ -93,13 +99,33 @@ class TestBit(Bit):
     def verb_handlers(self) -> dict:
         """Gameplay verbs beyond the fixed lifecycle set. `tilt` maps device
         tilt onto cc:74, which this Bit's `player` role binds to aurora's hue
-        lane -- so tilting a device glides its Shroom's colour. Boundary
-        rule 3: the Bit decides the light consequence, not the transport."""
-        return {"tilt": self._on_tilt}
+        lane -- so tilting a device glides its Shroom's colour. `tap` and
+        `shake` exercise the local-sample path and the same hue lane.
+        Boundary rule 3: the Bit decides the light consequence, not the
+        transport."""
+        return {"tilt": self._on_tilt,
+                "tap": self._on_tap,
+                "shake": self._on_shake}
 
     def _on_tilt(self, dev: str, args: list) -> list:
         """args: [dev, gamma]. gamma is degrees in [-90, 90]."""
         gamma = float(args[1]) if len(args) > 1 else 0.0
         gamma = max(-90.0, min(90.0, gamma))
         cc = int(round((gamma + 90.0) / 180.0 * 127.0))
+        return [(dev, 0xB0, 74, cc)]
+
+    def _on_tap(self, dev: str, args: list) -> list:
+        """args: [dev, peak_g, duration_ms, count]. A single tap clicks, a
+        double chimes; both flash the hue lane so the tap is visible as well
+        as audible."""
+        count = int(args[3]) if len(args) > 3 else 1
+        name = "chime" if count >= 2 else "click"
+        return [PlayCue(dev, name, ""), (dev, 0xB0, 74, 127)]
+
+    def _on_shake(self, dev: str, args: list) -> list:
+        """args: [dev, peak_g, duration_ms, sweep_deg]. Sweep drives the hue
+        lane: a wider sweep pushes the colour further."""
+        sweep = float(args[3]) if len(args) > 3 else 0.0
+        sweep = max(0.0, min(90.0, sweep))
+        cc = int(round(sweep / 90.0 * 127.0))
         return [(dev, 0xB0, 74, cc)]

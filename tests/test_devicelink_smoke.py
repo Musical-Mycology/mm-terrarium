@@ -34,7 +34,8 @@ pytest.importorskip("luxaeterna")
 
 from websockets.sync.client import connect
 
-from harness.devicelink_smoke import build
+from control.state import State
+from harness.devicelink_smoke import _wait_in_setup, build
 
 # Long enough for the ~65 render_into calls one _run_rig() call produces
 # (1 settle + 5 cc steps x 12-tick collects), with generous headroom.
@@ -142,3 +143,35 @@ def test_denied_join_reports_the_engine_reason(rig):
         msgs = _collect(client, agent, gs)
     denies = [m for m in msgs if m["address"] == "/ie9/deny"]
     assert denies[0]["args"][0] == "no such node"
+
+
+def test_scored_role_joins_during_the_setup_hold_survive_run():
+    """Reproduces the harness bug _wait_in_setup fixes: main() used to call
+    load_bit() straight into run() with no real-world gap, so a scored role
+    (TestBit's `player`, RegistrationState.join() refuses it once RUNNING)
+    was unjoinable by anything slower than a Python call stack -- confirmed
+    live against a real phone. Drive a real /game/join over the wire while
+    _wait_in_setup is holding the Bit in SETUP, then call run() and confirm
+    the join was granted and stays registered."""
+    gs, server, agent = build(host="127.0.0.1", port=0)
+    try:
+        gs.load_bit("test_bit")
+        assert gs.state == State.SETUP
+        with connect(f"ws://127.0.0.1:{server.port}/ws") as client:
+            _send(client, "/game/hello", "sss", ["ie1", "sim", "1"])
+            _send(client, "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+            _wait_in_setup(agent, 0.2)
+            msgs = []
+            try:
+                while True:
+                    msgs.append(json.loads(client.recv(timeout=0.05)))
+            except TimeoutError:
+                pass
+        roles = [m for m in msgs if m["address"] == "/ie1/role"]
+        assert len(roles) == 1
+        assert roles[0]["args"][0]["role"] == "player"
+        assert gs.state == State.SETUP  # run() not called yet -- still open
+        gs.run()
+        assert "ie1" in gs.registration.assignments
+    finally:
+        server.stop()

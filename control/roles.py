@@ -16,6 +16,17 @@ class Role:
     role_class: RoleClass
     capacity: int | None  # None = unlimited (shared/jam); positive int for unique
     scored: bool
+    # Device surfaces this role asks the device for, in either direction:
+    # gestures it will read ("tilt", "tap", "shake"), and outputs it will
+    # drive ("speaker", "mic"). One flat list, not inputs/outputs, because a
+    # speaker is an output and the device's capability display is a single
+    # convention across all of them. Composed into the /ie<N>/role blob;
+    # the device renders exactly these as active.
+    uses: list[str] = field(default_factory=list)
+    # Local sample names this role may trigger via /ie<N>/play. Names, not
+    # indices: harness/local_sample.py's SamplePlayer keys by name, and an
+    # index would oblige every client to keep an ordered list in sync.
+    samples: list[str] = field(default_factory=list)
     # This role's audio declaration, v0 and deliberately provisional (see
     # docs/superpowers/specs/2026-08-06-tuneshroom-audio-design.md section 9.2).
     # It is NOT the frozen wire contract light_manifest is, and it never ships

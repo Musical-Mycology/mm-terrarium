@@ -72,3 +72,23 @@ def test_release_and_error_events():
     assert protocol.release_event("ie1")["address"] == "/ie1/release"
     err = protocol.error_event("ie1", "join", "no such node")
     assert err["args"] == ["join", "no such node"]
+
+
+def test_play_event_shape():
+    from devicelink.protocol import play_event
+    msg = play_event("ie1", "click", "hard")
+    assert msg["address"] == "/ie1/play"
+    assert msg["typespec"] == "ss"
+    assert msg["args"] == ["click", "hard"]
+
+
+def test_play_event_params_default_empty():
+    from devicelink.protocol import play_event
+    assert play_event("ie3", "chime")["args"] == ["chime", ""]
+
+
+def test_play_event_typespec_matches_arg_count():
+    """The invariant decode() enforces on every inbound frame."""
+    from devicelink.protocol import play_event
+    msg = play_event("ie1", "click", "soft")
+    assert len(msg["typespec"]) == len(msg["args"])
