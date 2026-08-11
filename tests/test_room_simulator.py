@@ -1,4 +1,6 @@
-from harness.room_simulator import WebSimLeds
+import pytest
+
+from harness.room_simulator import WebSimLeds, build
 
 
 class FakeBackend:
@@ -25,3 +27,13 @@ def test_clear_sends_an_all_zero_frame():
     leds.clear()
 
     assert backend.sent == [bytes(36)]
+
+
+def test_build_wires_the_client_and_backend():
+    pytest.importorskip("luxaeterna.backends.websim")
+
+    client, backend = build("sim-room", serve=False)
+
+    assert client.dev == "sim-room"
+    assert client.leds is not None
+    assert backend.is_open is False  # build() doesn't open() -- main() does

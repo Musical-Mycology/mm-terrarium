@@ -21,6 +21,8 @@ Usage (normally spawned by harness/terrarium_boot.py, not run by hand):
 
 from __future__ import annotations
 
+from harness.shroom_client import LED_CHANNELS, ShroomClient
+
 
 class WebSimLeds:
     """Adapts ShroomClient's leds.show(bytes)/leds.clear() to
@@ -35,7 +37,25 @@ class WebSimLeds:
         self._backend.send(frame)
 
     def clear(self) -> None:
-        self._backend.send(bytes(36))
+        self._backend.send(bytes(LED_CHANNELS))
+
+
+def build(dev: str, sim_host: str = "127.0.0.1", sim_port: int = 0,
+          serve: bool = True):
+    """Construct the client + backend WITHOUT opening a socket or serving.
+
+    Returns ``(client, backend)``. ``serve=False`` gives a record-only
+    backend (no websockets, no port) for headless tests, matching
+    ``led_smoke.py``'s ``build()``/``main()`` split -- the caller is
+    responsible for ``backend.open()``/``.close()`` and the real
+    devicelink websocket loop."""
+    from luxaeterna.backends.websim import WebSimBackend
+    from luxaeterna.synth.capability import shroom_capability
+
+    backend = WebSimBackend(capability=shroom_capability(),
+                             host=sim_host, port=sim_port, serve=serve)
+    client = ShroomClient(dev, node="", leds=WebSimLeds(backend))
+    return client, backend
 
 
 def main() -> None:
@@ -44,10 +64,6 @@ def main() -> None:
     import json
 
     import websockets
-
-    from harness.shroom_client import ShroomClient
-    from luxaeterna.backends.websim import WebSimBackend
-    from luxaeterna.synth.capability import shroom_capability
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dev", required=True,
@@ -58,12 +74,9 @@ def main() -> None:
     parser.add_argument("--sim-port", type=int, default=0)
     args = parser.parse_args()
 
-    backend = WebSimBackend(capability=shroom_capability(),
-                            host=args.sim_host, port=args.sim_port)
+    client, backend = build(args.dev, args.sim_host, args.sim_port)
     backend.open()
     print(f"Watch the Room at http://{args.sim_host}:{backend.port}/")
-
-    client = ShroomClient(args.dev, node="", leds=WebSimLeds(backend))
 
     async def run() -> None:
         async with websockets.connect(args.server) as ws:
