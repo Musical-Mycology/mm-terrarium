@@ -42,8 +42,14 @@ hardware fleet.
 > not o2lite through Arco), **fairyring**, real scoring, and any production Bit.
 > As of 2026-08-10, **`Room`** exists as a boot-time concept and orchestration
 > (`control/boot.py` now spawns Arco itself, resolves a `RoomType`, and gates
-> Bit loading on it) — but with **no renderer**: nothing implements a Room's
-> light/audio sinks yet. Keep this doc honest about that line: see
+> Bit loading on it), and **TEST room now has a real renderer**: a devicelink-
+> connected simulator subprocess (browser-canvas LEDs) plus a real Arco voice,
+> both genuinely wired to `RoomBridge`. The one gap that survived to this line:
+> nothing in `TestBit`'s gameplay logic ever emits a cue *targeting* the Room,
+> so its light renders one static declared color and never animates during a
+> real run — the wiring is proven correct by tests, but nothing currently
+> drives it live. Audio is unaffected (the drone genuinely starts/stops on
+> RUNNING/UNLOADING). Keep this doc honest about that line: see
 > *Not yet built / deferred* below.
 
 ## What it is, in one picture
@@ -496,6 +502,57 @@ renderer** — the concrete simulator/hardware backend is deferred, see
   appears in the Console's device list — it said hello like any other device
   — just without revealing which role it holds).
 
+### `control/simulator_process.py`, `harness/room_simulator.py`, `harness/terrarium_boot.py` — the Terrarium Visualization Simulator (TEST room)
+The first concrete `Room` backend — closes the gap the Room-concept slice
+above deliberately left open (`RoomBridge` existed but rendered nothing).
+Design: [`.../2026-08-10-terrarium-visualization-simulator-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-terrarium-visualization-simulator-design.md).
+TEST room only; DEMO's simulated venue array is a deferred follow-up.
+
+- **`SimulatorProcess`** (`control/simulator_process.py`) — spawns/SIGTERM-
+  shuts-down the simulator subprocess, peer to `ArcoProcess` minus a
+  readiness probe (nothing blocks on the simulator's own devicelink connect).
+- **`harness/room_simulator.py`** — the simulator itself: an ordinary
+  devicelink client (reuses `harness/shroom_client.py`'s `ShroomClient`
+  unmodified), rendering into luxaeterna's `WebSimBackend` (browser canvas)
+  via a small `WebSimLeds` adapter. Sends only `/game/hello`, **never**
+  `/game/join` — Room binding is already recorded, by the Terrarium-assigned
+  dev id, before this process is even spawned; there is no Registration Node
+  to tap for this path.
+- **`devicelink/agent.py`'s Room wiring** — `DeviceLinkAgent` now builds a
+  real `LightSession` (via the loaded Bit's `room_role_name()`-declared
+  Role, the same `compose_role_config`/`LightManifest.from_dict`/
+  `build_session` pipeline every per-role device already uses) and a real
+  Arco voice (an injected `AudioBridge`, never constructed by this file — no
+  pyarco import here, keeping it offline-testable) at construction time,
+  renders the Room each tick via a new `_render_room()` step, and starts/
+  stops the Room's Arco drone on Bit `RUNNING`/`UNLOADING`. **Deliberate
+  deviation from the design spec's prose:** cue routing (a Room-bound dev's
+  cue → `RoomBridge.feed_midi(...)`) lives in `DeviceLinkAgent._on_light_cue`
+  — a transport-owned sink — rather than in `GameServer`'s cue dispatch as
+  the spec described; same approved behavior, zero `control/engine.py`
+  changes, and matches boundary rule 3 ("the transport only delivers it to
+  that device's renderer") more literally than the original prose did.
+- **`harness/terrarium_boot.py`** — the real, runnable end-to-end driver.
+  Constructs `DeviceLinkServer` and starts it **before** calling `boot()`,
+  deliberately: `boot()`'s `simulator_factory` spawns the simulator
+  subprocess, which connects immediately, so the server must already be
+  listening or the connection races server construction. Tears down in
+  order: Bit/Room (via `control.boot.shutdown()`, which frees the Room's
+  Arco voice and shuts Arco down last) → simulator subprocess → the
+  devicelink server itself.
+- **The gap that survived this slice.** Every seam above is real and tested
+  — but nothing in `TestBit`'s gameplay logic ever emits a cue *targeting*
+  `gs.room.bound_dev`: `Bit.update(dt)` has no cue-emission mechanism at all
+  (only a completion bool), and `TestBit`'s verb handlers always address the
+  calling player device, never the Room. Practical effect: during a real
+  run, the Room's declared `aurora` light glides to its static hue once and
+  holds there for the whole run — no animation, no fade on completion.
+  Audio is unaffected (the drone genuinely starts/stops). Documented at the
+  call site (`bits/test_bit.py`, near the Room declaration) and in
+  `devicelink/agent.py`'s `_setup_room()`; closing it for real means
+  extending the `Bit` interface to let `update()` (or something like it)
+  emit cues, which is out of scope here — see *Not yet built* below.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -637,10 +694,21 @@ Kept explicit so the doc doesn't over-claim:
 - **Operator command interface beyond the console** (physical control, a
   Registration Node convention) remains a later decision; the console is the
   first concrete answer for a web panel.
-- **No Room backend/renderer exists.** `RoomBridge`'s light/audio sinks are
-  never populated with anything but `None` by `boot()` today — the concrete
-  simulated (and, later, real-hardware) backend is the follow-up Terrarium
-  Visualization Simulator spec, not yet written.
+- **`RoomType.DEMO`'s backend.** Only TEST room has a simulator; the venue
+  array's simulated (and, later, real-hardware) backend is a deferred
+  follow-up spec, not yet written.
+- **A real-hardware Room backend.** TEST room's only backend today is the
+  browser simulator (`harness/room_simulator.py`); nothing implements the
+  same seam against actual Tuneshroom/array hardware yet.
+- **Nothing drives the Room's light during a live run.** The rendering
+  pipeline is real and tested, but `Bit.update(dt)` has no mechanism to emit
+  a cue at all (only a completion bool), and `TestBit`'s verb handlers only
+  ever address the calling player device — so the Room's light reaches its
+  declared static hue once and never animates. Audio is unaffected (the
+  drone genuinely starts/stops on Bit state changes). Closing this means
+  extending the `Bit` interface to let it emit ambient, self-driven cues —
+  a real interface change, deliberately not attempted in the slice that
+  found this gap.
 - **`RoomBindingRegistry.save()`/`.load()` are implemented and tested but not
   called from `boot()`.** A restarted Terrarium does not yet reconnect a
   previously-bound physical Room device automatically; every restart
@@ -671,6 +739,10 @@ Kept explicit so the doc doesn't over-claim:
   [`.../2026-08-10-room-concept-and-load-sequence-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md)
   and its plan
   [`.../plans/2026-08-10-room-concept-and-load-sequence.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-10-room-concept-and-load-sequence.md).
+- Terrarium Visualization Simulator (spec 2 of 2, TEST room):
+  [`.../2026-08-10-terrarium-visualization-simulator-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-terrarium-visualization-simulator-design.md)
+  and its plan
+  [`.../plans/2026-08-10-terrarium-visualization-simulator.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-10-terrarium-visualization-simulator.md).
 
 
 Game-design background (RenQuest integration, Bit scoring/loop rules, hardware)
