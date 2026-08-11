@@ -186,6 +186,13 @@ This is exactly the mechanism that lets an extra Tuneshroom stand in as a
 TEST room: an admin arms the window, taps that Tuneshroom instead of a player
 node, and it becomes the Room's backend rather than a player's device.
 
+(As implemented, `RoomBindingRegistry.save()`/`.load()` exist and are
+tested, but `control/boot.py`'s `boot()` does not yet call either of them:
+the on-disk record is written and readable, but nothing wires reconnect-on-
+restart into the boot sequence itself. That wiring is deferred to the
+follow-up Terrarium Visualization Simulator spec, per the implementation
+plan's Post-Implementation Notes.)
+
 ## 5. Load Sequence
 
 1. **Read boot config**: target `RoomType`, target `bit_name`, Arco launch
@@ -277,3 +284,6 @@ binary.
   depends on hardware not yet specified elsewhere.
 - Whether `RoomType` grows further values (`TYPE1`/`TYPE2`, discussed as a
   future direction) and what their recipes would require.
+- Reconnect-on-restart (§4) is not yet wired into `boot()`: `save()`/`load()`
+  exist and are tested, but nothing calls them yet. Left for the follow-up
+  Terrarium Visualization Simulator spec.
