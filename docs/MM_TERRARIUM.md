@@ -40,7 +40,11 @@ hardware fleet.
 >
 > Still absent: **O2/o2lite** (the device wire is a direct websocket to Control,
 > not o2lite through Arco), **fairyring**, real scoring, and any production Bit.
-> Keep this doc honest about that line: see *Not yet built / deferred* below.
+> As of 2026-08-10, **`Room`** exists as a boot-time concept and orchestration
+> (`control/boot.py` now spawns Arco itself, resolves a `RoomType`, and gates
+> Bit loading on it) — but with **no renderer**: nothing implements a Room's
+> light/audio sinks yet. Keep this doc honest about that line: see
+> *Not yet built / deferred* below.
 
 ## What it is, in one picture
 
@@ -422,6 +426,76 @@ future slice can derive real thresholds instead of guessing.
 Nothing here is o2lite and nothing here touches Arco: same caveat as
 `devicelink/` throughout.
 
+### `control/rooms.py`, `control/room_binding.py`, `control/room_bridge.py`, `control/boot_config.py`, `control/arco_process.py`, `control/boot.py` — the Room concept and load sequence
+**Room**: a first-class, boot-time concept representing the physical (or
+simulated) LED/mic/speaker hardware a Terrarium installation offers, analogous
+in shape to how a `Bit` already declares per-player devices via `RoleTable`.
+Landed as spec 1 of 2 toward a Terrarium Visualization Simulator (design:
+[`.../2026-08-10-room-concept-and-load-sequence-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md)).
+This slice defines the shape a Room backend must fill; it builds **no
+renderer** — the concrete simulator/hardware backend is deferred, see
+*Not yet built* below.
+
+- **`RoomType`** (`control/rooms.py`) — an enum (`TEST`, `DEMO`), each with a
+  code-defined **recipe**: which backend *capabilities* (not live device
+  counts) must be available for Terrarium to resolve as that type. `TEST`
+  needs only devicelink capability; `DEMO` additionally needs an array output
+  backend configured. `resolve_room_type()` is boot-time, deterministic, and
+  **fails hard** — there is no silent downgrade to a lesser type.
+- **`RoleClass.ROOM`** (`control/roles.py`) — a fourth role class (capacity 1)
+  reusing the existing Registration Node/role machinery unchanged: a Bit
+  merges a `room_role()`-built `Role` (its `light_manifest`/`ugen_manifest`
+  fields carry the Room's declared instruments, validated for free by the
+  existing `control/role_config.py`) directly into its own `role_table`. A
+  device joining that node doesn't get a normal player grant — `GameServer`
+  binds it as the resolved Room's rendering backend instead. The node is
+  **never surfaced** on the Console or uplink (see below) and is normally
+  closed: it only accepts a join while an admin has explicitly armed a
+  short-lived registration window (`RoomBindingRegistry.arm()`), which is
+  stronger than plain unlisted-node obscurity.
+- **`RoomBindingRegistry`** (`control/room_binding.py`) — Control-global,
+  survives Bit load/unload cycles like `DevicePool` does. Tracks which device
+  is bound per `RoomType`, the admin-armed window, and persists just the
+  bound device ID to disk (`save()`/`load()`) — **not yet wired into `boot()`**,
+  see *Not yet built*.
+- **`RoomBridge`** (`control/room_bridge.py`) — the Room-scoped sibling of
+  `harness/device_bridge.py`/`control/audio.py`'s `AudioBridge`: backend-
+  agnostic by construction (never imports luxaeterna or pyarco), `Protocol`-
+  typed light/audio sinks with fakes only. Fans a Room's MIDI stream to
+  whatever sinks are bound, mirroring `led_smoke.py`'s light-and-sound-read-
+  the-same-bytes pattern. Cue *routing* into it (a Bit targeting `gs.room.
+  bound_dev`) is deliberately left as future harness glue — `on_light_cue` is
+  already dev-generic, so no new engine sink was built ahead of a real
+  consumer.
+- **`ArcoProcess`** (`control/arco_process.py`) — spawns and owns the Arco
+  server subprocess (previously always hand-started); polls for readiness via
+  a lazy pyarco import (mirroring `harness/arco_synth.py`). Arco has **no
+  message-based quit** (only a console keypress, per its own `doc/server.md`),
+  so shutdown is **SIGTERM**, matching `led_smoke.py`'s own signal handling of
+  itself.
+- **`boot()`** (`control/boot.py`) — the orchestrated load sequence: config →
+  spawn/wait for Arco → resolve Room → bind Room (a Terrarium-spawned
+  simulator or a reconnect to a previously recorded device, else
+  `wait_for_room_binding()` holds in `SETUP` for a fresh admin-armed tap,
+  reusing the `--setup-seconds` hold pattern `devicelink_smoke` already
+  established) → gate the Bit on `bit_cls.room_types` (read off the class,
+  before instantiation) → `load_bit`. **Structural shutdown guarantee:**
+  every failure after Arco actually starts funnels through one
+  `try/except` that calls `arco.shutdown()` exactly once, so a future
+  failure mode added to this section can't accidentally orphan the
+  subprocess by forgetting a call site — this replaced an earlier,
+  enumerated-call-site version that a review round caught leaking the
+  subprocess on an `ArcoReadyTimeout`.
+- **Console and uplink filtering.** Because a `ROOM`-class role lives in a
+  Bit's normal `role_table`, the pre-existing `ConsoleAgent.snapshot()`/
+  `on_registration_change()`/`_devices_view()` and `UplinkAgent`'s
+  `_send_resync()`/`on_registration_change()` would otherwise leak the
+  Room's role name and live occupancy to both the local admin panel and the
+  outbound fairyring-bound uplink. Both are now filtered through a shared
+  `control.rooms.non_room_counts()` helper (a device bound as the Room still
+  appears in the Console's device list — it said hello like any other device
+  — just without revealing which role it holds).
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -563,6 +637,14 @@ Kept explicit so the doc doesn't over-claim:
 - **Operator command interface beyond the console** (physical control, a
   Registration Node convention) remains a later decision; the console is the
   first concrete answer for a web panel.
+- **No Room backend/renderer exists.** `RoomBridge`'s light/audio sinks are
+  never populated with anything but `None` by `boot()` today — the concrete
+  simulated (and, later, real-hardware) backend is the follow-up Terrarium
+  Visualization Simulator spec, not yet written.
+- **`RoomBindingRegistry.save()`/`.load()` are implemented and tested but not
+  called from `boot()`.** A restarted Terrarium does not yet reconnect a
+  previously-bound physical Room device automatically; every restart
+  currently requires a fresh admin-armed tap.
 
 ## Design docs (in-repo, authoritative)
 
@@ -584,6 +666,11 @@ Kept explicit so the doc doesn't over-claim:
   [`.../plans/2026-08-06-student-hardware-track.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-06-student-hardware-track.md).
   These are where the venue-box, LED-array and Tuneshroom builds, their gates,
   and their acceptance criteria live.
+- Room concept and load sequence (spec 1 of 2 toward the Terrarium
+  Visualization Simulator):
+  [`.../2026-08-10-room-concept-and-load-sequence-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md)
+  and its plan
+  [`.../plans/2026-08-10-room-concept-and-load-sequence.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-10-room-concept-and-load-sequence.md).
 
 
 Game-design background (RenQuest integration, Bit scoring/loop rules, hardware)
