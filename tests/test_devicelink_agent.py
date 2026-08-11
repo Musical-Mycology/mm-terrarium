@@ -10,6 +10,7 @@ import pytest
 pytest.importorskip("luxaeterna")
 
 from bits.test_bit import TestBit
+from control.audio import AudioBridge, FakePool
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
@@ -483,3 +484,65 @@ def test_no_room_configured_leaves_room_wiring_inert():
 
     assert agent._room_light is None
     agent._render_room()   # must not raise
+
+
+# --- Room audio wiring: room_audio (a real AudioBridge) exercised for the
+# first time, plus DeviceLinkAgent.on_state_change() starting/stopping the
+# Room's Arco drone as the Bit transitions RUNNING/UNLOADING -------------
+
+def test_room_audio_bridge_gets_on_grant_at_setup():
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+
+    assert len(pool.acquired) == 1   # TestBit's room_test role has one instrument
+
+
+def test_room_dev_cue_reaches_audio_bridge_too():
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    room_bridge = RoomBridge()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            room_audio=room_audio)
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 90)
+
+    voice = pool.acquired[0]
+    assert ("cc", 74, 90) in voice.sent
+
+
+def test_on_state_change_running_starts_the_drone():
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+
+    agent.on_state_change(State.SETUP, State.RUNNING)
+
+    voice = pool.acquired[0]
+    assert any(call[0] == "note_on" for call in voice.sent)
+
+
+def test_on_state_change_unloading_stops_the_drone():
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+    agent.on_state_change(State.SETUP, State.RUNNING)
+
+    agent.on_state_change(State.RUNNING, State.UNLOADING)
+
+    voice = pool.acquired[0]
+    assert voice.sent[-1][0] in ("note_off", "all_off")
+
+
+def test_no_room_audio_injected_state_change_is_a_noop():
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    agent.on_state_change(State.SETUP, State.RUNNING)   # must not raise

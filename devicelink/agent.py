@@ -18,6 +18,7 @@ from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
 from control.role_config import compose_role_config
 from control.rooms import room_role_name
+from control.state import State
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
 from luxaeterna.synth.capability import shroom_capability
@@ -296,6 +297,18 @@ class DeviceLinkAgent:
             self._send(dev, protocol.error_event(dev, verb, reason))
 
     # --- engine-owned sinks -------------------------------------------------
+    def on_state_change(self, old_state: State, new_state: State) -> None:
+        """FluidSynth is silent without a note (see control/audio.py), so
+        the Room's declared drone has to start once the Bit is actually
+        RUNNING and stop once it's UNLOADING -- mirrors harness/led_smoke.py's
+        own start_drone/on_release-adjacent handling for a player role."""
+        if self._room_audio is None or self._room_dev is None:
+            return
+        if new_state == State.RUNNING:
+            self._room_audio.start_drone(self._room_dev)
+        elif new_state == State.UNLOADING:
+            self._room_audio.stop_drone(self._room_dev)
+
     def _on_release(self, dev: str) -> None:
         """Engine released dev. Kick off the closing fade -- but keep the
         device in the render maps (see _render_frames) so its bridge/session
