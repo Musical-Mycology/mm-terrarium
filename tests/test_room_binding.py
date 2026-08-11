@@ -60,3 +60,34 @@ def test_bind_disarms_the_window():
     registry.arm(RoomType.TEST, window_seconds=10.0)
     registry.bind(RoomType.TEST, "ie7")
     assert registry.is_armed(RoomType.TEST) is False
+
+
+def test_save_then_load_restores_bindings_into_a_fresh_registry(tmp_path):
+    path = str(tmp_path / "room_binding.json")
+    original = RoomBindingRegistry()
+    original.bind(RoomType.TEST, "ie7")
+    original.bind(RoomType.DEMO, "array-1")
+    original.save(path)
+
+    restored = RoomBindingRegistry()
+    restored.load(path)
+    assert restored.bound_device(RoomType.TEST) == "ie7"
+    assert restored.bound_device(RoomType.DEMO) == "array-1"
+
+
+def test_load_missing_file_is_a_noop(tmp_path):
+    path = str(tmp_path / "does_not_exist.json")
+    registry = RoomBindingRegistry()
+    registry.load(path)  # must not raise
+    assert registry.bound_device(RoomType.TEST) is None
+
+
+def test_save_does_not_persist_armed_state(tmp_path):
+    path = str(tmp_path / "room_binding.json")
+    original = RoomBindingRegistry()
+    original.arm(RoomType.TEST, window_seconds=10.0)
+    original.save(path)
+
+    restored = RoomBindingRegistry()
+    restored.load(path)
+    assert restored.is_armed(RoomType.TEST) is False
