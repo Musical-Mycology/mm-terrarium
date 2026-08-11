@@ -5,8 +5,22 @@ import pytest
 from bits.test_bit import TestBit
 from control.bit import Bit
 from control.engine import BitLoadError, GameServer, InvalidTransition
+from control.room_binding import RoomBindingRegistry
 from control.roles import Role, RoleClass, RoleTable
+from control.rooms import Room, RoomType, room_role
 from control.state import State
+
+
+class RoomCapableBit(TestBit):
+    room_types = {RoomType.TEST}
+
+    @property
+    def role_table(self) -> RoleTable:
+        table = super().role_table
+        name, role, node = room_role(RoomType.TEST)
+        table.roles[name] = role
+        table.node_map[node] = [name]
+        return table
 
 
 def test_add_observer_notifies_multiple_observers_of_state_changes():
@@ -420,3 +434,51 @@ def test_join_with_no_bit_loaded_carries_no_config():
     result = server.join("ie1", "NODE_GREET")
     assert result.granted is False
     assert result.config is None
+
+
+def test_room_node_join_denied_while_unarmed():
+    server = GameServer({"RoomCapableBit": RoomCapableBit},
+                        room_binding=RoomBindingRegistry())
+    server.room = Room(room_type=RoomType.TEST)
+    server.load_bit("RoomCapableBit")
+    result = server.join("ie9", "ROOM_TEST_NODE")
+    assert result.granted is False
+    assert result.reason == "no such node"
+
+
+def test_room_node_join_binds_device_once_armed():
+    binding = RoomBindingRegistry()
+    server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
+    server.room = Room(room_type=RoomType.TEST)
+    server.load_bit("RoomCapableBit")
+    binding.arm(RoomType.TEST, window_seconds=10.0)
+
+    result = server.join("ie9", "ROOM_TEST_NODE")
+
+    assert result.granted is True
+    assert result.role_class == RoleClass.ROOM
+    assert result.config is None
+    assert server.room.bound_dev == "ie9"
+    assert binding.bound_device(RoomType.TEST) == "ie9"
+
+
+def test_room_join_does_not_disturb_player_joins():
+    binding = RoomBindingRegistry()
+    server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
+    server.room = Room(room_type=RoomType.TEST)
+    server.load_bit("RoomCapableBit")
+
+    result = server.join("ie1", "TEST_PLAYER_NODE")
+
+    assert result.granted is True
+    assert result.role_class == RoleClass.SHARED
+    assert result.config is not None    # normal player composition, unchanged
+
+
+def test_join_without_room_configured_ignores_room_gating():
+    # A GameServer with no room_binding/room set (the pre-Room-concept
+    # construction path) must keep working exactly as before.
+    server = GameServer({"TestBit": TestBit})
+    server.load_bit("TestBit")
+    result = server.join("ie1", "TEST_PLAYER_NODE")
+    assert result.granted is True
