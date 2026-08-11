@@ -88,6 +88,30 @@ def test_boot_shuts_down_arco_on_any_failure_after_start():
     assert fake_popen.signals   # Arco was told to stop, not orphaned
 
 
+def test_boot_shuts_down_arco_when_wait_ready_times_out():
+    from control.arco_process import ArcoProcess
+
+    fake_popen = FakePopen()
+    now = [0.0]
+
+    def clock():
+        return now[0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit",
+                        arco_ready_timeout=1.0)
+    with pytest.raises(BootFailure, match="Arco failed to start"):
+        boot(config, make_registry(), arco_command=["arco-server"],
+             room_binding=RoomBindingRegistry(),
+             arco_process_cls=lambda cmd: ArcoProcess(
+                 cmd, popen=fake_popen, probe=lambda: False,
+                 clock=clock, sleep=sleep),
+             simulator_factory=lambda: "sim-room-dev")
+    assert fake_popen.signals   # Arco was told to stop, not orphaned
+
+
 def _ready_arco(command, popen=None):
     from control.arco_process import ArcoProcess
     return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda: True)

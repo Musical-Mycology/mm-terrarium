@@ -32,7 +32,13 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
     arco_process) once the Bit is loaded and either the Room is already
     bound (fast path) or a fresh tap has bound it (see wait_for_room_binding
     in this module, added by the next task). Raises BootFailure on any
-    stage failure."""
+    stage failure. Once Arco has actually started, EVERY failure -- wait_ready
+    timing out, an unknown/unsupported Bit, a Bit load error, or anything
+    unanticipated -- shuts Arco down before propagating. That's a structural
+    guarantee (one try/except around the whole post-start section) rather
+    than an arco.shutdown() call enumerated at each failure site, so a
+    future failure mode added to this section can't accidentally orphan the
+    subprocess by forgetting one."""
     try:
         room_type = resolve_room_type(
             config.room_type,
@@ -44,33 +50,42 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
     arco = arco_process_cls(arco_command)
     try:
         arco.start()
-        arco.wait_ready(config.arco_ready_timeout)
     except Exception as exc:
+        # Nothing was actually spawned, so there's nothing to shut down.
         raise BootFailure(f"Arco failed to start: {exc}") from exc
 
-    _bind_room_fast_path(room, room_binding, simulator_factory,
-                         known_device_connected)
-
-    bit_cls = bit_registry.get(config.bit_name)
-    if bit_cls is None:
-        arco.shutdown()
-        raise BootFailure(f"unknown Bit {config.bit_name!r}")
-    if room.room_type not in bit_cls.room_types:
-        arco.shutdown()
-        raise BootFailure(
-            f"Bit {config.bit_name!r} does not support {room.room_type.name}")
-
-    gs = GameServer(bit_registry, room_binding=room_binding)
-    gs.room = room
     try:
-        gs.load_bit(config.bit_name)
-    except BitLoadError as exc:
-        arco.shutdown()
-        raise BootFailure(f"Bit load failed: {exc}") from exc
+        try:
+            arco.wait_ready(config.arco_ready_timeout)
+        except Exception as exc:
+            raise BootFailure(f"Arco failed to start: {exc}") from exc
 
-    room_bridge = RoomBridge()
-    if room.bound_dev is not None:
-        room_bridge.bind(room.bound_dev)
+        _bind_room_fast_path(room, room_binding, simulator_factory,
+                             known_device_connected)
+
+        bit_cls = bit_registry.get(config.bit_name)
+        if bit_cls is None:
+            raise BootFailure(f"unknown Bit {config.bit_name!r}")
+        if room.room_type not in bit_cls.room_types:
+            raise BootFailure(
+                f"Bit {config.bit_name!r} does not support {room.room_type.name}")
+
+        gs = GameServer(bit_registry, room_binding=room_binding)
+        gs.room = room
+        try:
+            gs.load_bit(config.bit_name)
+        except BitLoadError as exc:
+            raise BootFailure(f"Bit load failed: {exc}") from exc
+
+        room_bridge = RoomBridge()
+        if room.bound_dev is not None:
+            room_bridge.bind(room.bound_dev)
+    except Exception:
+        # Arco is a live subprocess by this point -- any failure below here
+        # must not orphan it. Re-raise unchanged: the inner handlers above
+        # already produced a well-labeled BootFailure for every stage.
+        arco.shutdown()
+        raise
 
     return gs, room_bridge, arco
 
