@@ -112,7 +112,15 @@ class DeviceLinkAgent:
         injected, wire its Arco voice) from the loaded Bit's own Room
         declaration -- the same declare-then-compose pattern every per-role
         device already uses, just without a JoinResult (there is no join
-        for this path; see design spec section 4)."""
+        for this path; see design spec section 4).
+
+        Construction happens eagerly here, at agent-construction time --
+        not deferred until the Room device's hello arrives, as design spec
+        section 5's wording ("when a connecting dev equals gs.room.bound_dev")
+        might suggest. There is nothing to wait for: room.bound_dev is
+        already known synchronously by the time this agent is constructed,
+        so an arrival-triggered build would just add an extra state to
+        track for no benefit."""
         gs = self.game_server
         room = gs.room
         if room is None or room.bound_dev is None or gs.bit is None:

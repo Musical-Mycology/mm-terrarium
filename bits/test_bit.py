@@ -70,6 +70,17 @@ class TestBit(Bit):
         )
         jammer = Role(name="jammer", role_class=RoleClass.JAM,
                       capacity=None, scored=False, uses=["tilt"])
+        # NOTE: nothing in the current Bit interface can actually emit an
+        # ambient cue targeting the Room during a run -- Bit.update(dt) only
+        # returns a completion bool, and verb_handlers() below only ever
+        # addresses cues back to the calling device (see _on_tilt/_on_tap/
+        # _on_shake). So aurora here renders its declared static hue once
+        # and then holds it, unanimated, for the whole run; session.clear()
+        # is never reached either, since nothing drives that. That's fine
+        # for what this Bit proves (RoomBridge/LightSession wiring), but a
+        # future slice extending Bit.update() (or an equivalent hook) to
+        # also emit Room-targeted cues is needed before the Room's light can
+        # actually animate during gameplay.
         room_name, room, room_node = room_role(
             RoomType.TEST,
             # A field-rate gesture, like player's aurora -- no note lane,

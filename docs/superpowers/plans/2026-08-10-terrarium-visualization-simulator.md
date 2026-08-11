@@ -1122,9 +1122,18 @@ PYTHONPATH=/Users/chris/projects/arco python3 -m harness.terrarium_boot
 ```
 
 Confirm: the process starts Arco, resolves TEST, spawns the simulator, and
-prints a URL. Open it — the canvas should render `aurora`'s hue and, once
-`TestBit`'s natural ~2s run completes, fade out. Confirm sound plays from the
-host machine's audio output during the run.
+prints a URL. Open it — the canvas should render `aurora`'s declared static
+hue once and then hold it there for the rest of the run: no animation, no
+fade on completion. This is current expected behavior, not a bug — nothing
+in this plan drives an ambient cue at the Room during a run (`Bit.update(dt)`
+only returns a completion bool, and `TestBit`'s verb handlers address their
+cues back to the calling device, never to the Room), so `session.clear()` is
+never called and the Room's light never leaves its declared starting state.
+Room-driven light animation is a known, deliberately deferred follow-up (see
+the comment near `TestBit`'s `room_role(RoomType.TEST, ...)` declaration in
+`bits/test_bit.py`). Audio is unaffected by this gap: confirm the drone
+genuinely starts when the run begins and stops when it ends, audible from
+the host machine's audio output.
 
 - [ ] **Step 7: Commit**
 
