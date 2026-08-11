@@ -31,7 +31,7 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
     """Run the full load sequence. Returns (game_server, room_bridge,
     arco_process) once the Bit is loaded and either the Room is already
     bound (fast path) or a fresh tap has bound it (see wait_for_room_binding
-    in this module, added by the next task). Raises BootFailure on any
+    below). Raises BootFailure on any
     stage failure. Once Arco has actually started, EVERY failure -- wait_ready
     timing out, an unknown/unsupported Bit, a Bit load error, or anything
     unanticipated -- shuts Arco down before propagating. That's a structural
@@ -77,6 +77,15 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
         except BitLoadError as exc:
             raise BootFailure(f"Bit load failed: {exc}") from exc
 
+        if room.bound_dev is None:
+            try:
+                wait_for_room_binding(
+                    gs, room_binding, config.room_setup_timeout,
+                    tick=tick or (lambda: gs.tick(0.05)))
+            except RoomBindingTimeout as exc:
+                gs.abort()
+                raise BootFailure(str(exc)) from exc
+
         room_bridge = RoomBridge()
         if room.bound_dev is not None:
             room_bridge.bind(room.bound_dev)
@@ -94,9 +103,9 @@ def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
                          simulator_factory, known_device_connected) -> None:
     """Attempt the no-tap-needed path: a Terrarium-spawned simulator, or a
     reconnect to a previously recorded physical device. Leaves the Room
-    unbound (room.bound_dev stays None) if neither applies -- the next
-    task's wait_for_room_binding is what holds for a fresh admin-armed tap,
-    not this function's job."""
+    unbound (room.bound_dev stays None) if neither applies -- wait_for_room_
+    binding below is what holds for a fresh admin-armed tap, not this
+    function's job."""
     if simulator_factory is not None:
         dev = simulator_factory()
         room.bound_dev = dev
@@ -105,3 +114,43 @@ def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
     recorded = room_binding.bound_device(room.room_type)
     if recorded is not None and known_device_connected(recorded):
         room.bound_dev = recorded
+
+
+class RoomBindingTimeout(Exception):
+    """Raised when no device joins as the Room within the configured
+    setup window."""
+
+
+def wait_for_room_binding(gs: GameServer, room_binding: RoomBindingRegistry,
+                          timeout: float, *, tick, clock=time.monotonic,
+                          sleep=time.sleep) -> None:
+    """Hold until the Room is bound (a fresh admin-armed tap grants the
+    ROOM-class role) or timeout elapses. `tick` is called once per
+    iteration -- driving whatever transport/tick loop might deliver that
+    join -- so this function has no transport opinion of its own. Mirrors
+    harness/devicelink_smoke.py's _wait_in_setup poll-loop shape."""
+    if gs.room.bound_dev is not None:
+        return
+    room_binding.arm(gs.room.room_type, timeout)
+    deadline = clock() + timeout
+    while clock() < deadline:
+        tick()
+        if gs.room.bound_dev is not None:
+            room_binding.disarm(gs.room.room_type)
+            return
+        sleep(0.05)
+    room_binding.disarm(gs.room.room_type)
+    raise RoomBindingTimeout(
+        f"no device joined as {gs.room.room_type.name} Room within {timeout}s")
+
+
+def shutdown(gs: GameServer, room_bridge: RoomBridge, arco: ArcoProcess) -> None:
+    """Tear down in the order design spec section 5 step 9 requires: the
+    running Bit first (mirroring AudioBridge.shutdown()'s "free everything
+    before the pool goes away"), then the Room bridge, then Arco last since
+    everything else may still want to address it during teardown."""
+    from control.state import State
+    if gs.state != State.IDLE:
+        gs.abort()
+    room_bridge.shutdown()
+    arco.shutdown()

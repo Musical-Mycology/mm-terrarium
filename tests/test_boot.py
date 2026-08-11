@@ -1,10 +1,13 @@
 import pytest
 
-from control.arco_process import FakePopen
-from control.boot import BootFailure, boot
+from control.arco_process import ArcoProcess, FakePopen
+from control.boot import (BootFailure, RoomBindingTimeout, boot, shutdown,
+                          wait_for_room_binding)
 from control.boot_config import BootConfig
+from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.rooms import RoomType
+from control.room_bridge import RoomBridge
+from control.rooms import Room, RoomType
 from control.state import State
 from tests.test_engine import RoomCapableBit
 
@@ -110,6 +113,89 @@ def test_boot_shuts_down_arco_when_wait_ready_times_out():
                  clock=clock, sleep=sleep),
              simulator_factory=lambda: "sim-room-dev")
     assert fake_popen.signals   # Arco was told to stop, not orphaned
+
+
+def test_wait_for_room_binding_returns_immediately_if_already_bound():
+    gs, room_binding = _setup_loaded_room_bit()
+    gs.room.bound_dev = "ie7"
+    calls = []
+    wait_for_room_binding(gs, room_binding, timeout=5.0,
+                          tick=lambda: calls.append(1))
+    assert calls == []
+
+
+def test_wait_for_room_binding_arms_and_detects_a_late_join():
+    gs, room_binding = _setup_loaded_room_bit()
+    ticks = [0]
+
+    def tick():
+        ticks[0] += 1
+        if ticks[0] == 3:
+            gs.join("ie9", "ROOM_TEST_NODE")
+
+    clock, sleep = _fake_clock()
+    wait_for_room_binding(gs, room_binding, timeout=5.0, tick=tick,
+                          clock=clock, sleep=sleep)
+
+    assert gs.room.bound_dev == "ie9"
+    assert room_binding.is_armed(gs.room.room_type) is False   # disarmed on success
+
+
+def test_wait_for_room_binding_times_out_and_disarms():
+    gs, room_binding = _setup_loaded_room_bit()
+    clock, sleep = _fake_clock()
+
+    with pytest.raises(RoomBindingTimeout):
+        wait_for_room_binding(gs, room_binding, timeout=1.0, tick=lambda: None,
+                              clock=clock, sleep=sleep)
+
+    assert room_binding.is_armed(gs.room.room_type) is False
+
+
+def test_shutdown_aborts_a_running_bit_then_tears_down():
+    gs, room_binding = _setup_loaded_room_bit()
+    gs.run()
+    room_bridge = RoomBridge()
+    room_bridge.bind("ie7")
+    fake_popen = FakePopen()
+    arco = ArcoProcess(["arco-server"], popen=fake_popen)
+    arco.start()
+
+    shutdown(gs, room_bridge, arco)
+
+    assert gs.state == State.IDLE
+    assert room_bridge.dev is None
+    assert fake_popen.signals
+
+
+def test_shutdown_on_already_idle_server_does_not_raise():
+    gs = GameServer({"RoomCapableBit": RoomCapableBit})
+    room_bridge = RoomBridge()
+    fake_popen = FakePopen()
+    arco = ArcoProcess(["arco-server"], popen=fake_popen)
+    arco.start()
+    shutdown(gs, room_bridge, arco)   # must not raise
+    assert fake_popen.signals
+
+
+def _setup_loaded_room_bit():
+    room_binding = RoomBindingRegistry()
+    gs = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=room_binding)
+    gs.room = Room(room_type=RoomType.TEST)
+    gs.load_bit("RoomCapableBit")
+    return gs, room_binding
+
+
+def _fake_clock():
+    now = [0.0]
+
+    def clock():
+        return now[0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    return clock, sleep
 
 
 def _ready_arco(command, popen=None):
