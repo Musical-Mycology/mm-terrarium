@@ -6,6 +6,7 @@ import logging
 import time
 
 from control.engine import BitLoadError, GameServer, InvalidTransition
+from control.rooms import non_room_counts
 from control.state import State
 from uplink import protocol
 
@@ -49,7 +50,7 @@ class UplinkAgent:
     def _send_resync(self) -> None:
         self._send(protocol.state_changed_event(self.game_server.state.name))
         if self.game_server.registration is not None:
-            counts = self.game_server.registration.counts()
+            counts = non_room_counts(self.game_server.registration)
             self._send(protocol.registration_changed_event(counts))
 
     def poll(self) -> None:
@@ -100,7 +101,7 @@ class UplinkAgent:
             self._send(protocol.bit_completed_event(result))
 
     def on_registration_change(self) -> None:
-        counts = self.game_server.registration.counts()
+        counts = non_room_counts(self.game_server.registration)
         self._send(protocol.registration_changed_event(counts))
 
     def _send(self, msg: dict) -> None:

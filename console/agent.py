@@ -10,7 +10,7 @@ import logging
 from console import protocol
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.roles import RoleClass
-from control.rooms import RoomType
+from control.rooms import RoomType, non_room_counts
 from control.state import State
 
 logger = logging.getLogger(__name__)
@@ -99,14 +99,10 @@ class ConsoleAgent:
         )
 
     def _non_room_counts(self):
-        """RegistrationState.counts() has no role_class in its tuples, so
-        the ROOM-class filter has to cross-reference role_table.roles by
-        name. Never surface the Room's occupancy on any Console view --
-        design spec section 7."""
-        gs = self.game_server
-        room_names = {r.name for r in gs.registration.role_table.roles.values()
-                     if r.role_class == RoleClass.ROOM}
-        return [c for c in gs.registration.counts() if c[0] not in room_names]
+        """Never surface the Room's occupancy on any Console view -- design
+        spec section 7. Thin wrapper around the shared filter in
+        control/rooms.py, also used by uplink/link.py."""
+        return non_room_counts(self.game_server.registration)
 
     def _loaded_bit_name(self) -> str | None:
         return self.game_server.bit_name

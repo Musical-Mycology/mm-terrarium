@@ -8,8 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import TYPE_CHECKING
 
 from control.roles import Role, RoleClass
+
+if TYPE_CHECKING:
+    from control.registration import RegistrationState
 
 
 class RoomType(Enum):
@@ -80,3 +84,14 @@ def room_role(room_type: RoomType, *, ugen_manifest: dict | None = None,
         light_manifest=light_manifest or {},
     )
     return name, role, ROOM_NODE_IDS[room_type]
+
+
+def non_room_counts(
+        registration: "RegistrationState") -> list[tuple[str, int, int | None]]:
+    """RegistrationState.counts() has no role_class in its tuples, so
+    filtering ROOM-class roles out requires cross-referencing role_table.
+    Shared by console/agent.py and uplink/link.py -- neither surface may
+    reveal the Room's occupancy. See design spec section 7."""
+    room_names = {r.name for r in registration.role_table.roles.values()
+                 if r.role_class == RoleClass.ROOM}
+    return [c for c in registration.counts() if c[0] not in room_names]

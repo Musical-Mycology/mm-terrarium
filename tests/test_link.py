@@ -1,5 +1,8 @@
 from bits.test_bit import TestBit
 from control.engine import GameServer
+from control.room_binding import RoomBindingRegistry
+from control.rooms import Room, RoomType
+from tests.test_engine import RoomCapableBit
 from uplink.link import UplinkAgent
 from uplink.transport import FakeTransport
 
@@ -232,6 +235,58 @@ def test_resync_omits_registration_snapshot_when_no_bit_loaded():
     agent.maintain_connection()
 
     assert transport.sent == [{"event": "state_changed", "state": "IDLE"}]
+
+
+def test_resync_never_sends_the_room_role():
+    server = GameServer(bit_registry={"room_bit": RoomCapableBit},
+                         room_binding=RoomBindingRegistry())
+    server.room = Room(room_type=RoomType.TEST)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport)
+    transport.connect()
+
+    server.load_bit("room_bit")
+    server.hello("ie9", "Shroom Nine", "1")
+    server.room_binding.arm(RoomType.TEST, window_seconds=10.0)
+    server.join("ie9", "ROOM_TEST_NODE")
+
+    transport.disconnect()
+    transport.sent.clear()
+
+    agent.maintain_connection()  # reconnect -> _send_resync()
+
+    reg_event = next(m for m in transport.sent
+                      if m["event"] == "registration_changed")
+    role_names = {r["role"] for r in reg_event["roles"]}
+    assert "room_test" not in role_names
+    # the ordinary roles from the Bit's own role_table are untouched
+    assert "player" in role_names and "jammer" in role_names
+
+
+def test_on_registration_change_never_sends_the_room_role():
+    server = GameServer(bit_registry={"room_bit": RoomCapableBit},
+                         room_binding=RoomBindingRegistry())
+    server.room = Room(room_type=RoomType.TEST)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport)
+    transport.connect()
+
+    server.load_bit("room_bit")
+    server.hello("ie9", "Shroom Nine", "1")
+    server.room_binding.arm(RoomType.TEST, window_seconds=10.0)
+    server.join("ie9", "ROOM_TEST_NODE")  # a Room join alone doesn't fire
+                                           # on_registration_change
+
+    transport.sent.clear()
+
+    server.hello("ie1", "Shroom One", "1")
+    server.join("ie1", "TEST_PLAYER_NODE")  # an ordinary join does
+
+    reg_events = [m for m in transport.sent if m["event"] == "registration_changed"]
+    assert len(reg_events) == 1
+    role_names = {r["role"] for r in reg_events[0]["roles"]}
+    assert "room_test" not in role_names
+    assert "player" in role_names
 
 
 def test_failed_connect_backs_off_before_retrying():
