@@ -5,6 +5,8 @@ events shared with the uplink are re-used from uplink.protocol so there is a
 single source of truth.
 """
 
+from dataclasses import dataclass
+
 from uplink.protocol import (  # re-exported: single source of truth
     AbortCommand,
     LoadBitCommand,
@@ -21,6 +23,7 @@ __all__ = [
     "bit_completed_event", "error_event", "registration_changed_event",
     "state_changed_event", "role_view", "device_view", "snapshot_event",
     "devices_changed_event", "bit_status_event", "log_event",
+    "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
 ]
 
 
@@ -64,3 +67,34 @@ def bit_status_event(status) -> dict:
 
 def log_event(level: str, message: str) -> dict:
     return {"event": "log", "level": level, "message": message}
+
+
+@dataclass
+class ArmRoomCommand:
+    room_type: str
+    window_seconds: float = 30.0
+
+
+@dataclass
+class ReleaseRoomCommand:
+    room_type: str
+
+
+def parse_admin_command(msg: dict):
+    """Console-only admin commands -- never sent by the uplink's remote
+    broker. Kept separate from uplink.protocol.parse_command: Room
+    registration is a local, trusted-operator action (design spec section
+    7), not something a remote fairyring peer should ever request."""
+    command = msg.get("command")
+    if command == "arm_room":
+        room_type = msg.get("room_type")
+        if not isinstance(room_type, str):
+            raise ValueError("arm_room requires a string 'room_type'")
+        window = msg.get("window_seconds", 30.0)
+        return ArmRoomCommand(room_type=room_type, window_seconds=float(window))
+    if command == "release_room":
+        room_type = msg.get("room_type")
+        if not isinstance(room_type, str):
+            raise ValueError("release_room requires a string 'room_type'")
+        return ReleaseRoomCommand(room_type=room_type)
+    raise ValueError(f"unrecognized admin command: {command!r}")

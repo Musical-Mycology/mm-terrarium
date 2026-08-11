@@ -9,6 +9,8 @@ import logging
 
 from console import protocol
 from control.engine import BitLoadError, GameServer, InvalidTransition
+from control.roles import RoleClass
+from control.rooms import RoomType
 from control.state import State
 
 logger = logging.getLogger(__name__)
@@ -33,12 +35,14 @@ class ConsoleAgent:
 
     # --- inbound command dispatch ------------------------------------------
     def _handle_command(self, msg: dict) -> dict | None:
+        name = msg.get("command")
+        if name in ("arm_room", "release_room"):
+            return self._handle_admin_command(msg)
         try:
             command = protocol.parse_command(msg)
         except ValueError as exc:
             logger.warning("dropping unparseable console message: %s", exc)
             return None
-        name = msg.get("command")
         try:
             if isinstance(command, protocol.LoadBitCommand):
                 self.game_server.load_bit(command.name)
@@ -50,6 +54,27 @@ class ConsoleAgent:
             return protocol.error_event(name, str(exc))
         return None
 
+    def _handle_admin_command(self, msg: dict) -> dict | None:
+        name = msg.get("command")
+        try:
+            command = protocol.parse_admin_command(msg)
+        except ValueError as exc:
+            return protocol.error_event(name, str(exc))
+        try:
+            room_type = RoomType[command.room_type]
+        except KeyError:
+            return protocol.error_event(
+                name, f"unknown room_type {command.room_type!r}")
+        gs = self.game_server
+        if gs.room_binding is None or gs.room is None or gs.room.room_type != room_type:
+            return protocol.error_event(
+                name, f"no {command.room_type} Room configured")
+        if isinstance(command, protocol.ArmRoomCommand):
+            gs.room_binding.arm(room_type, command.window_seconds)
+        elif isinstance(command, protocol.ReleaseRoomCommand):
+            gs.room_binding.release(room_type)
+        return None
+
     # --- snapshot (connect-time full read model) ---------------------------
     def snapshot(self) -> dict:
         gs = self.game_server
@@ -59,9 +84,10 @@ class ConsoleAgent:
         if gs.registration is not None:
             loaded_bit = self._loaded_bit_name()
             roles = [protocol.role_view(r)
-                     for r in gs.registration.role_table.roles.values()]
+                     for r in gs.registration.role_table.roles.values()
+                     if r.role_class != RoleClass.ROOM]
             registration = protocol.registration_changed_event(
-                gs.registration.counts())["roles"]
+                self._non_room_counts())["roles"]
         return protocol.snapshot_event(
             state=gs.state.name,
             installed_bits=list(gs.bit_registry.keys()),
@@ -72,6 +98,16 @@ class ConsoleAgent:
             bit_status=self._current_status(),
         )
 
+    def _non_room_counts(self):
+        """RegistrationState.counts() has no role_class in its tuples, so
+        the ROOM-class filter has to cross-reference role_table.roles by
+        name. Never surface the Room's occupancy on any Console view --
+        design spec section 7."""
+        gs = self.game_server
+        room_names = {r.name for r in gs.registration.role_table.roles.values()
+                     if r.role_class == RoleClass.ROOM}
+        return [c for c in gs.registration.counts() if c[0] not in room_names]
+
     def _loaded_bit_name(self) -> str | None:
         return self.game_server.bit_name
 
@@ -81,7 +117,9 @@ class ConsoleAgent:
         out = []
         for info in gs.devices.all():
             assigned = assignments.get(info.dev)
-            role_name = assigned[1] if assigned else None
+            role_name = None
+            if assigned is not None and assigned[2] != RoleClass.ROOM:
+                role_name = assigned[1]
             out.append(protocol.device_view(info, role_name))
         return out
 
@@ -108,8 +146,8 @@ class ConsoleAgent:
             self._broadcast_bit_completed()
 
     def on_registration_change(self) -> None:
-        counts = self.game_server.registration.counts()
-        self.server.broadcast(protocol.registration_changed_event(counts))
+        self.server.broadcast(
+            protocol.registration_changed_event(self._non_room_counts()))
 
     def on_devices_change(self) -> None:
         self.server.broadcast(protocol.devices_changed_event(
