@@ -16,9 +16,15 @@ import time
 
 from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
+from control.role_config import compose_role_config
+from control.rooms import room_role_name
+from control.state import State
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
+from luxaeterna.synth.capability import shroom_capability
 from luxaeterna.synth.director import CLOSING
+from luxaeterna.synth.manifest import LightManifest
+from luxaeterna.synth.session import build_session
 from luxaeterna.universe import Universe
 
 logger = logging.getLogger(__name__)
@@ -32,9 +38,42 @@ logger = logging.getLogger(__name__)
 _MAX_CLOSING_FRAMES = 200
 
 
+class _RoomLightSink:
+    """Satisfies control.room_bridge.RoomLightSink. `universe`/`session` are
+    extra, used only by DeviceLinkAgent._render_room() -- RoomBridge itself
+    only ever calls feed_midi()/clear()."""
+
+    def __init__(self, session, universe: Universe) -> None:
+        self.session = session
+        self.universe = universe
+
+    def feed_midi(self, status: int, d1: int, d2: int) -> None:
+        self.session.feed_midi(status, d1, d2)
+
+    def clear(self) -> None:
+        self.session.clear()
+
+
+class _RoomAudioSink:
+    """Satisfies control.room_bridge.RoomAudioSink by adapting
+    AudioBridge.feed_midi(dev, status, d1, d2)'s dev-keyed signature down to
+    the Protocol's dev-less one -- this sink is already scoped to one dev."""
+
+    def __init__(self, audio_bridge, dev: str) -> None:
+        self._audio = audio_bridge
+        self._dev = dev
+
+    def feed_midi(self, status: int, d1: int, d2: int) -> None:
+        self._audio.feed_midi(self._dev, status, d1, d2)
+
+    def shutdown(self) -> None:
+        self._audio.shutdown()
+
+
 class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
-                 capability=None, clock=time.monotonic):
+                 capability=None, clock=time.monotonic,
+                 room_bridge=None, room_audio=None):
         self.game_server = game_server
         self.server = server
         self._capability = capability
@@ -53,10 +92,55 @@ class DeviceLinkAgent:
         # renderer has to be fed cc:11 or it renders a static surface.
         self._breath_origin = self._clock()
         self._last_breath: dict[str, int] = {}
+        # Room wiring (see design spec section 5). None of this exists
+        # unless a Room is both configured and already bound -- a
+        # GameServer built the pre-Room way (no room_binding/room) leaves
+        # every attribute below at its default and every Room-aware method
+        # below a no-op.
+        self._room_bridge = room_bridge
+        self._room_audio = room_audio
+        self._room_dev: str | None = None
+        self._room_light = None
+        self._setup_room()
         game_server.add_observer(self)
         game_server.on_release = self._on_release
         game_server.on_light_cue = self._on_light_cue
         game_server.on_play_cue = self._on_play_cue
+
+    def _setup_room(self) -> None:
+        """Build the Room's real LightSession (and, if room_audio was
+        injected, wire its Arco voice) from the loaded Bit's own Room
+        declaration -- the same declare-then-compose pattern every per-role
+        device already uses, just without a JoinResult (there is no join
+        for this path; see design spec section 4).
+
+        Construction happens eagerly here, at agent-construction time --
+        not deferred until the Room device's hello arrives, as design spec
+        section 5's wording ("when a connecting dev equals gs.room.bound_dev")
+        might suggest. There is nothing to wait for: room.bound_dev is
+        already known synchronously by the time this agent is constructed,
+        so an arrival-triggered build would just add an extra state to
+        track for no benefit."""
+        gs = self.game_server
+        room = gs.room
+        if room is None or room.bound_dev is None or gs.bit is None:
+            return
+        role = gs.bit.role_table.roles.get(room_role_name(room.room_type))
+        if role is None:
+            return
+        self._room_dev = room.bound_dev
+        blob = compose_role_config(gs.bit_name, gs.bit.version, role)
+        manifest = LightManifest.from_dict(blob["light_manifest"])
+        cap = self._capability or shroom_capability()
+        session = build_session(manifest, cap, clock=self._clock)
+        self._room_light = _RoomLightSink(session, Universe())
+        audio_sink = None
+        if self._room_audio is not None:
+            self._room_audio.on_grant(self._room_dev, role)
+            audio_sink = _RoomAudioSink(self._room_audio, self._room_dev)
+        if self._room_bridge is not None:
+            self._room_bridge.bind(self._room_dev, light=self._room_light,
+                                   audio=audio_sink)
 
     def client_for(self, dev: str):
         return self._clients.get(dev)
@@ -72,6 +156,25 @@ class DeviceLinkAgent:
                                  "dropping frame")
         self._feed_breath()
         self._render_frames()
+        self._render_room()
+
+    def _render_room(self) -> None:
+        if self._room_light is None or self._room_dev is None:
+            return
+        universe = self._room_light.universe
+        try:
+            self._room_light.session.render_into(universe)
+        except Exception:
+            logger.exception("Room render failed; skipping frame")
+            return
+        frame = bytes(universe.get_frame()[:36])
+        if frame != self._last_frames.get(self._room_dev):
+            self._last_frames[self._room_dev] = frame
+            try:
+                self._send(self._room_dev,
+                          protocol.leds_event(self._room_dev, frame))
+            except Exception:
+                logger.exception("Room leds send failed")
 
     def _feed_breath(self) -> None:
         """Drive every joined device's breath. Sent on change only, and never
@@ -202,6 +305,18 @@ class DeviceLinkAgent:
             self._send(dev, protocol.error_event(dev, verb, reason))
 
     # --- engine-owned sinks -------------------------------------------------
+    def on_state_change(self, old_state: State, new_state: State) -> None:
+        """FluidSynth is silent without a note (see control/audio.py), so
+        the Room's declared drone has to start once the Bit is actually
+        RUNNING and stop once it's UNLOADING -- mirrors harness/led_smoke.py's
+        own start_drone/on_release-adjacent handling for a player role."""
+        if self._room_audio is None or self._room_dev is None:
+            return
+        if new_state == State.RUNNING:
+            self._room_audio.start_drone(self._room_dev)
+        elif new_state == State.UNLOADING:
+            self._room_audio.stop_drone(self._room_dev)
+
     def _on_release(self, dev: str) -> None:
         """Engine released dev. Kick off the closing fade -- but keep the
         device in the render maps (see _render_frames) so its bridge/session
@@ -240,6 +355,12 @@ class DeviceLinkAgent:
 
     def _on_light_cue(self, dev: str, status: int,
                       data1: int, data2: int) -> None:
+        if dev == self._room_dev and self._room_bridge is not None:
+            try:
+                self._room_bridge.feed_midi(status, data1, data2)
+            except Exception:
+                logger.exception("Room feed_midi failed")
+            return
         bridge = self.bridges.get(dev)
         if bridge is None or bridge.session is None:
             return

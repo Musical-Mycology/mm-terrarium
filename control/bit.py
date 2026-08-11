@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 
 from control.roles import RoleTable
+from control.rooms import RoomType
 
 
 class Bit(ABC):
@@ -16,6 +17,14 @@ class Bit(ABC):
     # The bit *name* is the registry key GameServer loaded it under -- not
     # an attribute here, so there is nothing for an author to keep in sync.
     version: str = ""
+
+    # Which RoomTypes this Bit can run in. Every Bit supports at least
+    # RoomType.TEST (the universal baseline); a Bit declares more by
+    # overriding this class attribute. Read off the class (not an instance)
+    # by control/boot.py's Bit-gating check, before the Bit is constructed.
+    # Treat as override-only -- do not mutate this set in place, since it is
+    # shared across every instance of a Bit that doesn't override it.
+    room_types: set[RoomType] = {RoomType.TEST}
 
     @property
     @abstractmethod

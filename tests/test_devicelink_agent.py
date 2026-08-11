@@ -10,8 +10,12 @@ import pytest
 pytest.importorskip("luxaeterna")
 
 from bits.test_bit import TestBit
+from control.audio import AudioBridge, FakePool
 from control.breath import BREATH_CC
 from control.engine import GameServer
+from control.room_binding import RoomBindingRegistry
+from control.room_bridge import RoomBridge
+from control.rooms import Room, RoomType
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
 
@@ -392,3 +396,153 @@ def test_play_cue_for_unknown_device_is_dropped():
 
     agent._on_play_cue("ie9", "click", "")
     assert server.sent == []
+
+
+# --- Room light wiring (devicelink/agent.py's own routing, see design spec
+# section 5's approved behavior plus this task's brief for why the check
+# lives here rather than in control/engine.py's cue dispatch) -------------
+
+def _room_ready_game_server():
+    """A GameServer with TestBit loaded and its Room already bound to
+    'sim-room' -- the state DeviceLinkAgent sees once harness/terrarium_boot.py
+    (Task 6) has already called boot()."""
+    binding = RoomBindingRegistry()
+    gs = GameServer({"TestBit": TestBit}, room_binding=binding)
+    gs.room = Room(room_type=RoomType.TEST)
+    gs.load_bit("TestBit")
+    gs.room.bound_dev = "sim-room"
+    binding.bind(RoomType.TEST, "sim-room")
+    return gs
+
+
+def test_room_light_session_built_from_bit_declaration():
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    server = FakeServer()
+
+    agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge)
+
+    assert room_bridge.dev == "sim-room"
+    assert agent._room_light is not None
+
+
+def test_room_dev_cue_routes_to_room_bridge_not_normal_bridges():
+    """Real wall-clock time (the DeviceLinkAgent default) can't advance the
+    session past its ~1.5s sys:loaded signature within a synchronous test
+    body -- same fake-clock idiom as tests/test_devicelink_frames.py's
+    CLOCK_SCHEDULE. Settle the session into RUNNING (and let aurora's level
+    glide converge, luxaeterna's synth/presets.py _AURORA_LEVEL_GLIDE_TAU)
+    before taking the baseline frame, so the room's aurora is not still
+    breathing/fading on its own -- the room role declares `level` with no
+    cc:11 lane, so once settled the frame is otherwise static, and any
+    change after feeding cc:74 can only come from the cue actually reaching
+    the session (not a tautological "frames differ" from an unrelated
+    transition)."""
+    clk = _Clock()
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge, clock=clk)
+    session = agent._room_light.session
+    universe = agent._room_light.universe
+
+    for _ in range(5):
+        clk.advance(2.0)
+        session.render_into(universe)
+    assert session.state == "running"
+    baseline = bytes(universe.get_frame()[:36])
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 100)
+    clk.advance(2.0)
+    session.render_into(universe)
+    after = bytes(universe.get_frame()[:36])
+
+    assert "sim-room" not in agent.bridges   # never treated as a player device
+    assert after != baseline   # the fed cc:74 actually changed aurora's hue
+
+
+def test_render_room_sends_leds_event_when_frame_changes():
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge)
+    client = object()
+    agent._clients["sim-room"] = client   # simulate the hello handshake
+
+    agent._render_room()
+
+    sent = server.addressed("/sim-room/leds")
+    assert sent
+
+
+def test_no_room_configured_leaves_room_wiring_inert():
+    gs = GameServer({"TestBit": TestBit})   # no room_binding, no room
+    gs.load_bit("TestBit")
+    server = FakeServer()
+
+    agent = DeviceLinkAgent(gs, server)   # room_bridge defaults to None
+
+    assert agent._room_light is None
+    agent._render_room()   # must not raise
+
+
+# --- Room audio wiring: room_audio (a real AudioBridge) exercised for the
+# first time, plus DeviceLinkAgent.on_state_change() starting/stopping the
+# Room's Arco drone as the Bit transitions RUNNING/UNLOADING -------------
+
+def test_room_audio_bridge_gets_on_grant_at_setup():
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+
+    assert len(pool.acquired) == 1   # TestBit's room_test role has one instrument
+
+
+def test_room_dev_cue_reaches_audio_bridge_too():
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    room_bridge = RoomBridge()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            room_audio=room_audio)
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 90)
+
+    voice = pool.acquired[0]
+    assert ("cc", 74, 90) in voice.sent
+
+
+def test_on_state_change_running_starts_the_drone():
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+
+    agent.on_state_change(State.SETUP, State.RUNNING)
+
+    voice = pool.acquired[0]
+    assert any(call[0] == "note_on" for call in voice.sent)
+
+
+def test_on_state_change_unloading_stops_the_drone():
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+    agent.on_state_change(State.SETUP, State.RUNNING)
+
+    agent.on_state_change(State.RUNNING, State.UNLOADING)
+
+    voice = pool.acquired[0]
+    assert voice.sent[-1][0] in ("note_off", "all_off")
+
+
+def test_no_room_audio_injected_state_change_is_a_noop():
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    agent.on_state_change(State.SETUP, State.RUNNING)   # must not raise

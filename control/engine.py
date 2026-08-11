@@ -15,6 +15,7 @@ from control.cues import PlayCue
 from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
+from control.roles import RoleClass
 from control.state import State
 
 logger = logging.getLogger(__name__)
@@ -29,10 +30,16 @@ class BitLoadError(Exception):
 
 
 class GameServer:
-    def __init__(self, bit_registry: dict):
+    def __init__(self, bit_registry: dict, room_binding=None):
         self.bit_registry = bit_registry
         self.state = State.IDLE
         self.devices = DevicePool()
+        # Control-global Room state (see control/rooms.py, control/
+        # room_binding.py). Both may be None for a GameServer that predates
+        # the Room concept -- join() below treats that exactly as "no Room
+        # node exists," leaving normal player joins untouched.
+        self.room_binding = room_binding
+        self.room = None
         self.bit: Bit | None = None
         # Registry key of the loaded Bit; provenance for /ie<N>/role blobs
         # and the Console. Set in load_bit, cleared in _unload.
@@ -94,7 +101,12 @@ class GameServer:
         if self.state not in (State.SETUP, State.RUNNING):
             return JoinResult(granted=False,
                                reason="no Bit accepting registrations")
+        if self._is_room_node(node) and not self._room_armed():
+            return JoinResult(granted=False, reason="no such node")
         result = self.registration.join(dev, node, self.state)
+        if result.granted and result.role_class == RoleClass.ROOM:
+            self._bind_room(dev)
+            return result
         if result.granted:
             # Compose from the registration's role-table snapshot -- Bits
             # build role_table per property access, so a fresh call could
@@ -105,6 +117,25 @@ class GameServer:
             self._notify("on_registration_change")
             self._notify("on_devices_change")
         return result
+
+    def _is_room_node(self, node: str) -> bool:
+        for role_name in self.registration.role_table.node_map.get(node, ()):
+            role = self.registration.role_table.roles.get(role_name)
+            if role is not None and role.role_class == RoleClass.ROOM:
+                return True
+        return False
+
+    def _room_armed(self) -> bool:
+        if self.room_binding is None or self.room is None:
+            return False
+        return self.room_binding.is_armed(self.room.room_type)
+
+    def _bind_room(self, dev: str) -> None:
+        if self.room_binding is not None and self.room is not None:
+            self.room_binding.bind(self.room.room_type, dev)
+        if self.room is not None:
+            self.room.bound_dev = dev
+        self._notify("on_devices_change")
 
     def data(self, dev: str, verb: str, args: list) -> str | None:
         """Route a /game/<verb> message to the loaded Bit's verb handler.

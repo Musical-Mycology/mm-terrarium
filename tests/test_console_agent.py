@@ -1,6 +1,9 @@
 from bits.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.engine import GameServer
+from control.room_binding import RoomBindingRegistry
+from control.rooms import Room, RoomType
+from tests.test_engine import RoomCapableBit
 
 
 class FakeConsoleServer:
@@ -137,3 +140,87 @@ def test_bit_completed_is_broadcast_on_unload():
     # TestBit.result() default is None, so no bit_completed; assert state only.
     assert any(m.get("event") == "state_changed" and m["state"] == "UNLOADING"
                for m in srv.broadcasts)
+
+
+def test_arm_room_arms_the_configured_room_binding():
+    gs = GameServer({"TestBit": TestBit}, room_binding=RoomBindingRegistry())
+    gs.room = Room(room_type=RoomType.TEST)
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+
+    error = agent._handle_command({"command": "arm_room", "room_type": "TEST"})
+
+    assert error is None
+    assert gs.room_binding.is_armed(RoomType.TEST) is True
+
+
+def test_release_room_clears_the_binding():
+    binding = RoomBindingRegistry()
+    binding.bind(RoomType.TEST, "ie7")
+    gs = GameServer({"TestBit": TestBit}, room_binding=binding)
+    gs.room = Room(room_type=RoomType.TEST)
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+
+    error = agent._handle_command({"command": "release_room", "room_type": "TEST"})
+
+    assert error is None
+    assert binding.bound_device(RoomType.TEST) is None
+
+
+def test_arm_room_errors_when_no_room_configured():
+    gs = GameServer({"TestBit": TestBit})   # no room_binding, no room
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+
+    error = agent._handle_command({"command": "arm_room", "room_type": "TEST"})
+
+    assert error is not None
+    assert error["event"] == "error"
+
+
+def test_arm_room_errors_for_mismatched_room_type():
+    gs = GameServer({"TestBit": TestBit}, room_binding=RoomBindingRegistry())
+    gs.room = Room(room_type=RoomType.TEST)
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+
+    error = agent._handle_command({"command": "arm_room", "room_type": "DEMO"})
+
+    assert error is not None
+
+
+def test_snapshot_never_lists_the_room_role():
+    gs = GameServer({"RoomCapableBit": RoomCapableBit},
+                     room_binding=RoomBindingRegistry())
+    gs.room = Room(room_type=RoomType.TEST)
+    gs.load_bit("RoomCapableBit")
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+
+    snapshot = agent.snapshot()
+
+    role_names = {r["role"] for r in snapshot["roles"]}
+    assert "room_test" not in role_names
+    registration_names = {r["role"] for r in snapshot["registration"]}
+    assert "room_test" not in registration_names
+    # the ordinary player/jam roles from TestBit's own role_table are
+    # untouched by the filter
+    assert "player" in role_names and "jammer" in role_names
+
+
+def test_devices_view_hides_the_room_assignment():
+    binding = RoomBindingRegistry()
+    gs = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
+    gs.room = Room(room_type=RoomType.TEST)
+    gs.load_bit("RoomCapableBit")
+    gs.hello("ie9", "Shroom Nine", "1")
+    binding.arm(RoomType.TEST, window_seconds=10.0)
+    gs.join("ie9", "ROOM_TEST_NODE")
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+
+    devices = agent._devices_view()
+
+    ie9 = next(d for d in devices if d["dev"] == "ie9")
+    assert ie9["role"] is None    # device is listed, but not as "room_test"

@@ -1,4 +1,7 @@
+import pytest
+
 from console import protocol
+from console.protocol import ArmRoomCommand, ReleaseRoomCommand, parse_admin_command
 from control.roles import Role, RoleClass
 
 
@@ -59,3 +62,29 @@ def test_command_parsing_is_reused_from_uplink():
     from uplink.protocol import LoadBitCommand
     assert protocol.parse_command(
         {"command": "load_bit", "name": "TestBit"}) == LoadBitCommand("TestBit")
+
+
+def test_parse_admin_command_arm_room_with_default_window():
+    command = parse_admin_command({"command": "arm_room", "room_type": "TEST"})
+    assert command == ArmRoomCommand(room_type="TEST", window_seconds=30.0)
+
+
+def test_parse_admin_command_arm_room_with_explicit_window():
+    command = parse_admin_command(
+        {"command": "arm_room", "room_type": "DEMO", "window_seconds": 45.0})
+    assert command == ArmRoomCommand(room_type="DEMO", window_seconds=45.0)
+
+
+def test_parse_admin_command_release_room():
+    command = parse_admin_command({"command": "release_room", "room_type": "TEST"})
+    assert command == ReleaseRoomCommand(room_type="TEST")
+
+
+def test_parse_admin_command_rejects_missing_room_type():
+    with pytest.raises(ValueError):
+        parse_admin_command({"command": "arm_room"})
+
+
+def test_parse_admin_command_rejects_unrecognized_command():
+    with pytest.raises(ValueError):
+        parse_admin_command({"command": "not_a_real_command"})

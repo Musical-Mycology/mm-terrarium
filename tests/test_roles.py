@@ -51,3 +51,10 @@ def test_roles_do_not_share_light_manifest_instances():
     a = Role(name="a", role_class=RoleClass.SHARED, capacity=None, scored=True)
     b = Role(name="b", role_class=RoleClass.SHARED, capacity=None, scored=True)
     assert a.light_manifest is not b.light_manifest
+
+
+def test_role_class_room_is_distinct_from_player_classes():
+    assert RoleClass.ROOM not in (RoleClass.UNIQUE, RoleClass.SHARED, RoleClass.JAM)
+    room = Role(name="room_test", role_class=RoleClass.ROOM, capacity=1,
+                scored=False)
+    assert room.role_class == RoleClass.ROOM

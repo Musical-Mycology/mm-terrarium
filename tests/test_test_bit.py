@@ -1,5 +1,6 @@
 from bits.test_bit import TestBit
 from control.roles import RoleClass
+from control.rooms import room_role_name, RoomType
 
 
 def test_role_table_has_one_scored_and_one_jam_role():
@@ -178,3 +179,19 @@ def test_gesture_handlers_tolerate_short_args():
     bit = TestBit()
     assert bit.verb_handlers()["tap"]("ie1", ["ie1"]) is not None
     assert bit.verb_handlers()["shake"]("ie1", ["ie1"]) is not None
+
+
+def test_test_bit_declares_a_room_test_role():
+    bit = TestBit()
+    name = room_role_name(RoomType.TEST)
+    role = bit.role_table.roles[name]
+    assert role.role_class == RoleClass.ROOM
+    assert role.light_manifest["instruments"]
+    assert role.ugen_manifest["instruments"]
+
+
+def test_test_bit_room_node_is_registered():
+    from control.rooms import ROOM_NODE_IDS
+    bit = TestBit()
+    node = ROOM_NODE_IDS[RoomType.TEST]
+    assert room_role_name(RoomType.TEST) in bit.role_table.node_map[node]
