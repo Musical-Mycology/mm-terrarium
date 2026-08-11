@@ -88,17 +88,24 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
 
 def shutdown(gs, agent: DeviceLinkAgent, arco: ArcoProcess,
             simulator: SimulatorProcess) -> None:
-    """Tear down in order: the Bit/Room (via control.boot.shutdown, which
-    also frees the Room's Arco voice through room_bridge.shutdown()), then
-    the simulator subprocess, then Arco itself."""
+    """Tear down in order: the Bit/Room first (via control.boot.shutdown,
+    which also frees the Room's Arco voice through room_bridge.shutdown()
+    and shuts Arco itself down as its last step), then the simulator
+    subprocess, then the devicelink server (agent.server -- no new plumbing
+    needed, DeviceLinkAgent already holds the reference it was built
+    with)."""
     _boot_shutdown(gs, agent._room_bridge or _NullRoomBridge(), arco)
     simulator.shutdown()
+    agent.server.stop()
 
 
 class _NullRoomBridge:
     """control.boot.shutdown() always calls room_bridge.shutdown() -- if
     this driver somehow ran with no Room configured at all, hand it
-    something inert rather than special-casing shutdown()'s signature."""
+    something inert rather than special-casing shutdown()'s signature.
+    Unreachable via this module's own build(): control.boot.boot() always
+    returns a real RoomBridge(), never None. Kept for a DeviceLinkAgent
+    built some other way, with room_bridge=None passed explicitly."""
 
     def shutdown(self) -> None:
         pass
