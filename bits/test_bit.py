@@ -7,6 +7,7 @@ section 4.
 from control.bit import Bit
 from control.cues import PlayCue
 from control.roles import Role, RoleClass, RoleTable
+from control.rooms import RoomType, room_role
 
 RUN_DURATION_SECONDS = 2.0
 
@@ -69,10 +70,34 @@ class TestBit(Bit):
         )
         jammer = Role(name="jammer", role_class=RoleClass.JAM,
                       capacity=None, scored=False, uses=["tilt"])
+        room_name, room, room_node = room_role(
+            RoomType.TEST,
+            # A field-rate gesture, like player's aurora -- no note lane,
+            # so it renders continuously under cc:74 without the note-
+            # triggered strobe TestBit's own docstring already explains.
+            # Deliberately no cc:11/level lane (unlike player): breath-
+            # feeding the Room is a real, separable enhancement, not
+            # needed to prove RoomBridge renders at all.
+            light_manifest={
+                "instruments": [
+                    {"instrument": "aurora", "target": "primary",
+                     "params": {"hue": 0.6, "level": 0.55},
+                     "lanes": [{"source": "cc:74", "dest": "hue"}]},
+                ],
+            },
+            ugen_manifest={
+                "instruments": [
+                    {"instrument": "flsyn", "program": 89,
+                     "drone": {"key": 50, "velocity": 80},
+                     "lanes": [{"source": "cc:74", "dest": "cc:74"}]},
+                ],
+            },
+        )
         return RoleTable(
-            roles={"player": player, "jammer": jammer},
+            roles={"player": player, "jammer": jammer, room_name: room},
             node_map={"TEST_PLAYER_NODE": ["player"],
-                      "TEST_JAM_NODE": ["jammer"]},
+                      "TEST_JAM_NODE": ["jammer"],
+                      room_node: [room_name]},
         )
 
     def on_setup_enter(self) -> None:

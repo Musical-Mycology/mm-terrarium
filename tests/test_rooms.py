@@ -8,6 +8,7 @@ from control.rooms import (
     RoomType,
     resolve_room_type,
     room_role,
+    room_role_name,
 )
 
 
@@ -47,3 +48,13 @@ def test_room_role_carries_declared_manifests():
 def test_room_defaults_to_unbound():
     room = Room(room_type=RoomType.TEST)
     assert room.bound_dev is None
+
+
+def test_room_role_name_matches_room_role_helper():
+    name, role, node = room_role(RoomType.DEMO)
+    assert name == room_role_name(RoomType.DEMO)
+
+
+def test_room_role_name_is_deterministic_per_type():
+    assert room_role_name(RoomType.TEST) == "room_test"
+    assert room_role_name(RoomType.DEMO) == "room_demo"

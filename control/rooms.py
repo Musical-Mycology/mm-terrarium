@@ -68,13 +68,22 @@ class Room:
     bound_dev: str | None = None
 
 
+def room_role_name(room_type: RoomType) -> str:
+    """The deterministic role name every Bit supporting room_type must use
+    for its ROOM-class role, so any compatible Bit's declaration is found
+    the same way -- see control/rooms.py:room_role and
+    devicelink/agent.py's Room-wiring, which looks this up off a loaded
+    Bit's role_table."""
+    return f"room_{room_type.name.lower()}"
+
+
 def room_role(room_type: RoomType, *, ugen_manifest: dict | None = None,
              light_manifest: dict | None = None) -> tuple[str, Role, str]:
     """Build a ROOM-class Role for room_type plus its canonical node id, so a
     Bit can merge them into its own RoleTable.roles / node_map. The role name
     is deterministic per RoomType so two Bits supporting the same RoomType
     declare identical role names -- see design spec section 3."""
-    name = f"room_{room_type.name.lower()}"
+    name = room_role_name(room_type)
     role = Role(
         name=name,
         role_class=RoleClass.ROOM,
