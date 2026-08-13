@@ -354,7 +354,8 @@ class DeviceLinkAgent:
             logger.exception("release notify for %s failed", dev)
 
     def _on_light_cue(self, dev: str, status: int,
-                      data1: int, data2: int) -> None:
+                      data1: int, data2: int,
+                      when: float | None = None) -> None:
         if dev == self._room_dev and self._room_bridge is not None:
             try:
                 self._room_bridge.feed_midi(status, data1, data2)

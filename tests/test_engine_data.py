@@ -3,6 +3,7 @@
 import pytest
 
 from bits.test_bit import TestBit
+from control.cues import LightCue
 from control.engine import GameServer
 from control.roles import Role, RoleClass, RoleTable
 from control.bit import Bit
@@ -29,12 +30,16 @@ class VerbBit(Bit):
     def verb_handlers(self) -> dict:
         return {"tilt": self._on_tilt}
 
+    next_cue = None            # set by a test to override the default cue
+
     def _on_tilt(self, dev, args):
         if self.raise_next:
             raise RuntimeError("boom")
         if self.refuse_next is not None:
             return self.refuse_next
         self.seen.append((dev, args))
+        if self.next_cue is not None:
+            return [self.next_cue]
         return [(dev, 0xB0, 74, 64)]
 
 
@@ -62,6 +67,31 @@ def _loaded_server():
     return gs
 
 
+def test_plain_tuple_cue_carries_no_time():
+    """A Bit returning the historic 4-tuple still works, and the sink sees
+    when=None rather than a fabricated time."""
+    gs = _loaded_server()
+    gs.join("ie1", "NODE_A")
+    cues = []
+    gs.on_light_cue = lambda *c: cues.append(c)
+
+    assert gs.data("ie1", "tilt", ["ie1", 30.0]) is None
+    assert cues == [("ie1", 0xB0, 74, 64, None)]
+
+
+def test_light_cue_carries_its_time():
+    """A Bit opting into timing returns LightCue, and `when` reaches the
+    sink unchanged."""
+    gs = _loaded_server()
+    gs.join("ie1", "NODE_A")
+    cues = []
+    gs.on_light_cue = lambda *c: cues.append(c)
+    gs.bit.next_cue = LightCue("ie1", 0xB0, 74, 99, when=1234.5)
+
+    assert gs.data("ie1", "tilt", ["ie1", 0.0]) is None
+    assert cues == [("ie1", 0xB0, 74, 99, 1234.5)]
+
+
 def test_data_routes_to_handler_and_emits_cue():
     gs = _loaded_server()
     gs.join("ie1", "NODE_A")
@@ -70,7 +100,7 @@ def test_data_routes_to_handler_and_emits_cue():
 
     assert gs.data("ie1", "tilt", ["ie1", 30.0]) is None
     assert gs.bit.seen == [("ie1", ["ie1", 30.0])]
-    assert cues == [("ie1", 0xB0, 74, 64)]
+    assert cues == [("ie1", 0xB0, 74, 64, None)]
 
 
 def test_unregistered_device_is_refused():
@@ -148,7 +178,7 @@ def test_mixed_cues_are_partitioned(running_server):
         "boop": lambda d, args: [(d, 0xB0, 74, 64), PlayCue(d, "chime", "")]}
 
     gs.data(dev, "boop", [dev])
-    assert lights == [(dev, 0xB0, 74, 64)]
+    assert lights == [(dev, 0xB0, 74, 64, None)]
     assert plays == [(dev, "chime", "")]
 
 
@@ -161,7 +191,7 @@ def test_tuple_only_handler_is_unchanged(running_server):
         "boop": lambda d, args: [(d, 0xB0, 11, 20), (d, 0xB0, 11, 30)]}
 
     gs.data(dev, "boop", [dev])
-    assert lights == [(dev, 0xB0, 11, 20), (dev, 0xB0, 11, 30)]
+    assert lights == [(dev, 0xB0, 11, 20, None), (dev, 0xB0, 11, 30, None)]
 
 
 def test_play_cue_with_no_sink_is_dropped(running_server):
@@ -217,4 +247,4 @@ def test_returning_cues_still_works():
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
     assert gs.data("ie1", "tilt", ["ie1", 30.0]) is None
-    assert cues == [("ie1", 0xB0, 74, 64)]
+    assert cues == [("ie1", 0xB0, 74, 64, None)]
