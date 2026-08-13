@@ -686,12 +686,23 @@ In `devicelink/agent.py`:
 
 - Wherever `_handle` currently records `self._clients[dev] = client` on hello, call `self.server.bind_dev(dev, client)` instead. Wherever it removes a dev from `_clients` on release or disconnect, call `self.server.drop_dev(dev)`.
 
-- [ ] **Step 5: Run the full suite**
+- [ ] **Step 5: Repoint the one test that writes to `_clients`**
+
+`tests/test_devicelink_agent.py:470` does `agent._clients["sim-room"] = client`
+to simulate the hello handshake. That attribute no longer exists, and
+`client_for` is a getter, so it cannot replace a write. Change it to:
+
+```python
+    agent.server.bind_dev("sim-room", client)   # simulate the hello handshake
+```
+
+- [ ] **Step 6: Run the full suite**
 
 Run: `python -m pytest tests -v`
-Expected: PASS. If a test fails referencing `agent._clients` directly, update it to `agent.client_for(dev)`.
+Expected: PASS. Any other failure referencing `agent._clients` is a read, and
+becomes `agent.client_for(dev)`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add devicelink/server.py devicelink/agent.py tests/test_devicelink_server.py
