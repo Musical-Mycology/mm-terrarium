@@ -15,7 +15,17 @@
 Every task's requirements implicitly include this section.
 
 - **No module under `control/` may import `o2litepy` or `pyarco`**, at module level or anywhere else. This is the rule that keeps the suite offline; `control/audio.py` is the existing exemplar.
-- **The full test suite must pass with no Arco server, no pyarco checkout, and no O2 network.** Run it with `python -m pytest tests -v`.
+- **Use the project virtualenv for every Python command.** There is no bare
+  `python` on this box, and the sibling `luxaeterna` dev dependency is
+  installed **only** in the venv. Set it once per shell:
+
+  ```bash
+  PY=/Users/chris/projects/mm-terrarium/.venv/bin/python
+  ```
+
+  Running `python3 -m pytest` instead collects an import error in
+  `tests/test_terrarium_boot.py` that looks like a real failure and is not.
+- **The full test suite must pass with no Arco server, no pyarco checkout, and no O2 network.** Run it with `$PY -m pytest tests -v`. The expected clean baseline is **544 passed, 1 skipped**.
 - **Exactly one full-O2 process exists: the Arco server.** Everything else is an o2lite client. Nothing in this plan adds a second.
 - **Control and pyarco share ONE o2lite connection and ONE services string.** `o2litepy`'s `set_services` does `self.services = services` (replace, not append), so the string is always `"actl,game"` written in full.
 - **A dev id must be a valid O2 service name:** non-empty and at most 31 characters (o2litepy refuses longer).
@@ -135,7 +145,7 @@ Keep whatever `refuse_next` logic already exists; only the `next_cue` branch is 
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `python -m pytest tests/test_engine_data.py -v -k "carries"`
+Run: `$PY -m pytest tests/test_engine_data.py -v -k "carries"`
 Expected: FAIL. `test_plain_tuple_cue_carries_no_time` fails on a 4-tuple where a 5-tuple was expected; `test_light_cue_carries_its_time` fails with `ImportError: cannot import name 'LightCue'`.
 
 - [ ] **Step 3: Add `LightCue`**
@@ -208,7 +218,7 @@ to:
 
 - [ ] **Step 7: Run the full suite**
 
-Run: `python -m pytest tests -v`
+Run: `$PY -m pytest tests -v`
 Expected: PASS, all tests.
 
 - [ ] **Step 8: Commit**
@@ -298,7 +308,7 @@ def test_payloads_need_not_be_comparable():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `python -m pytest tests/test_timed_queue.py -v`
+Run: `$PY -m pytest tests/test_timed_queue.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'control.timed_queue'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -368,7 +378,7 @@ class TimedQueue:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `python -m pytest tests/test_timed_queue.py -v`
+Run: `$PY -m pytest tests/test_timed_queue.py -v`
 Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Commit**
@@ -439,7 +449,7 @@ def _role_with_cc74():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `python -m pytest tests/test_audio.py -v -k "feed_midi_with_a_time or feed_midi_without_a_time"`
+Run: `$PY -m pytest tests/test_audio.py -v -k "feed_midi_with_a_time or feed_midi_without_a_time"`
 Expected: FAIL with `AttributeError: 'FakePool' object has no attribute 'scheduled'`.
 
 - [ ] **Step 3: Extend the Protocol and the fake**
@@ -494,7 +504,7 @@ Rename the current body of `feed_midi` to `_apply_midi(self, dev, status, d1, d2
 
 - [ ] **Step 5: Run the audio tests**
 
-Run: `python -m pytest tests/test_audio.py -v`
+Run: `$PY -m pytest tests/test_audio.py -v`
 Expected: PASS, including the two new tests and every pre-existing one.
 
 - [ ] **Step 6: Write the failing test for the real pool**
@@ -531,7 +541,7 @@ def test_schedule_at_delegates_to_the_pyarco_scheduler():
 
 - [ ] **Step 7: Run it to verify it fails**
 
-Run: `python -m pytest tests/test_arco_synth.py -v -k schedule_at`
+Run: `$PY -m pytest tests/test_arco_synth.py -v -k schedule_at`
 Expected: FAIL with `AttributeError: 'ArcoSynthPool' object has no attribute 'schedule_at'`.
 
 - [ ] **Step 8: Implement `schedule_at` on the real pool**
@@ -559,7 +569,7 @@ Add to `ArcoSynthPool` in `harness/arco_synth.py`:
 
 - [ ] **Step 9: Run the tests**
 
-Run: `python -m pytest tests/test_arco_synth.py tests/test_audio.py -v`
+Run: `$PY -m pytest tests/test_arco_synth.py tests/test_audio.py -v`
 Expected: PASS.
 
 - [ ] **Step 10: Commit**
@@ -634,7 +644,7 @@ def test_drop_dev_unbinds():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `python -m pytest tests/test_devicelink_server.py -v -k "addresses_a_dev or unbound_dev or drop_dev"`
+Run: `$PY -m pytest tests/test_devicelink_server.py -v -k "addresses_a_dev or unbound_dev or drop_dev"`
 Expected: FAIL with `AttributeError: 'DeviceLinkServer' object has no attribute 'bind_dev'`.
 
 - [ ] **Step 3: Implement the mapping in the server**
@@ -698,7 +708,7 @@ to simulate the hello handshake. That attribute no longer exists, and
 
 - [ ] **Step 6: Run the full suite**
 
-Run: `python -m pytest tests -v`
+Run: `$PY -m pytest tests -v`
 Expected: PASS. Any other failure referencing `agent._clients` is a read, and
 becomes `agent.client_for(dev)`.
 
@@ -890,7 +900,7 @@ def test_an_empty_dev_id_is_refused():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `python -m pytest tests/test_o2_transport.py -v`
+Run: `$PY -m pytest tests/test_o2_transport.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'devicelink.o2_transport'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -1183,7 +1193,7 @@ class O2LiteTransport:
 
 - [ ] **Step 4: Run the tests**
 
-Run: `python -m pytest tests/test_o2_transport.py -v`
+Run: `$PY -m pytest tests/test_o2_transport.py -v`
 Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Commit**
@@ -1225,7 +1235,7 @@ def test_cue_horizon_has_a_conservative_default():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `python -m pytest tests/test_boot_config.py -v -k cue_horizon`
+Run: `$PY -m pytest tests/test_boot_config.py -v -k cue_horizon`
 Expected: FAIL with `AttributeError: 'BootConfig' object has no attribute 'cue_horizon'`.
 
 - [ ] **Step 3: Add the fields**
@@ -1286,7 +1296,7 @@ Reuse whichever helper `tests/test_devicelink_agent.py` already uses to build an
 
 - [ ] **Step 5: Run to verify it fails**
 
-Run: `python -m pytest tests/test_devicelink_agent.py -v -k "timed_room_cue or clamped"`
+Run: `$PY -m pytest tests/test_devicelink_agent.py -v -k "timed_room_cue or clamped"`
 Expected: FAIL. The cue is fed immediately, so `bridge.fed` is non-empty on the first poll.
 
 - [ ] **Step 6: Implement**
@@ -1347,7 +1357,7 @@ Add the counter as a property:
 
 - [ ] **Step 7: Run the full suite**
 
-Run: `python -m pytest tests -v`
+Run: `$PY -m pytest tests -v`
 Expected: PASS.
 
 - [ ] **Step 8: Commit**
@@ -1392,7 +1402,7 @@ def test_leds_event_defaults_to_no_declared_time():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `python -m pytest tests/test_devicelink_protocol.py -v -k leds_event_carries`
+Run: `$PY -m pytest tests/test_devicelink_protocol.py -v -k leds_event_carries`
 Expected: FAIL with `TypeError: leds_event() got an unexpected keyword argument 'when'`.
 
 - [ ] **Step 3: Implement**
@@ -1500,7 +1510,7 @@ def test_release_still_clears_immediately():
 
 - [ ] **Step 6: Run to verify it fails**
 
-Run: `python -m pytest tests/test_shroom_client.py -v`
+Run: `$PY -m pytest tests/test_shroom_client.py -v`
 Expected: FAIL with `AttributeError: 'ShroomClient' object has no attribute 'tick'`.
 
 - [ ] **Step 7: Implement in the client**
@@ -1570,7 +1580,7 @@ Change `_on_leds` (line 120) to queue instead of showing, and add `tick`:
 
 - [ ] **Step 8: Run the full suite**
 
-Run: `python -m pytest tests -v`
+Run: `$PY -m pytest tests -v`
 Expected: PASS. `tests/test_devicelink_frames.py` may assert on frame contents rather than timing; if a test there breaks because frames are now held, drive `client.tick(now)` in it rather than weakening the assertion.
 
 - [ ] **Step 9: Commit**
@@ -1631,7 +1641,7 @@ def test_tilt_sweep_is_periodic():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `python -m pytest tests/test_o2_shroom.py -v`
+Run: `$PY -m pytest tests/test_o2_shroom.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'harness.o2_shroom'`.
 
 - [ ] **Step 3: Write the module**
@@ -1792,7 +1802,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run the tests**
 
-Run: `python -m pytest tests/test_o2_shroom.py -v`
+Run: `$PY -m pytest tests/test_o2_shroom.py -v`
 Expected: PASS, 3 tests.
 
 - [ ] **Step 5: Verify the module imports with no o2litepy**
@@ -1855,7 +1865,7 @@ def test_summarise_of_nothing_is_empty_not_an_error():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `python -m pytest tests/test_sync_bench.py -v`
+Run: `$PY -m pytest tests/test_sync_bench.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'harness.sync_bench'`.
 
 - [ ] **Step 3: Write the bench**
@@ -1904,7 +1914,7 @@ def summarise(deltas: list[float]) -> dict:
 
 - [ ] **Step 4: Run the tests**
 
-Run: `python -m pytest tests/test_sync_bench.py -v`
+Run: `$PY -m pytest tests/test_sync_bench.py -v`
 Expected: PASS, 3 tests.
 
 - [ ] **Step 5: Write the failing boot-wiring test**
@@ -1928,7 +1938,7 @@ Use whichever fake-injecting helper `tests/test_terrarium_boot.py` already has f
 
 - [ ] **Step 6: Run to verify it fails**
 
-Run: `python -m pytest tests/test_terrarium_boot.py -v -k horizon`
+Run: `$PY -m pytest tests/test_terrarium_boot.py -v -k horizon`
 Expected: FAIL with `AttributeError` or an assertion mismatch, since `build()` does not pass a horizon.
 
 - [ ] **Step 7: Wire it**
@@ -1960,7 +1970,7 @@ and apply it when building the config:
 
 - [ ] **Step 8: Run the suite**
 
-Run: `python -m pytest tests -v`
+Run: `$PY -m pytest tests -v`
 Expected: PASS.
 
 - [ ] **Step 9: Commit**
@@ -2016,7 +2026,7 @@ Extend `_build_with_fakes` to forward a `transport=` keyword to `build()`.
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `python -m pytest tests/test_terrarium_boot.py -v -k o2lite_transport`
+Run: `$PY -m pytest tests/test_terrarium_boot.py -v -k o2lite_transport`
 Expected: FAIL with `TypeError: build() got an unexpected keyword argument 'transport'`.
 
 - [ ] **Step 3: Accept an injected transport in `build()`**
@@ -2146,7 +2156,7 @@ file's existing tests show the convention.
 
 - [ ] **Step 6: Run the full suite**
 
-Run: `python -m pytest tests -v`
+Run: `$PY -m pytest tests -v`
 Expected: PASS, every test.
 
 - [ ] **Step 7: Verify the offline guarantee still holds**
