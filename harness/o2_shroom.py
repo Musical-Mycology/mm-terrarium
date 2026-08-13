@@ -45,6 +45,28 @@ def tilt_sweep(elapsed: float) -> float:
     return SWEEP_DEGREES * (triangle - 1.0)
 
 
+def _gestures_ready(client) -> bool:
+    """True once Control's granted-role reply has actually reached this
+    client, i.e. once ShroomClient._on_role() has set client.config (see
+    harness/shroom_client.py) -- and therefore once the join it responds to
+    has been processed by GameServer.join().
+
+    Why this matters: main() sends the join over TCP (o2lite.send_cmd) but
+    gestures over UDP (o2lite.send, the default), and UDP can overtake TCP.
+    Without gating, the first tilt can reach Control before the join has
+    been handled, and GameServer.data() correctly refuses it as "device not
+    registered" -- a spurious error on every run, not a real fault. Gating
+    gesture emission on this instead of on 'join sent' closes that race:
+    there is nothing to overtake once the reply has already arrived.
+
+    --no-join callers (the Room simulator) never send a join and so never
+    get a role -- this would return False for them forever. That is
+    correct, but it must not be the ONLY thing stopping their gestures:
+    main() also short-circuits on args.no_join first, exactly as it did
+    before this gate existed, so a --no-join run never even calls this."""
+    return client.config is not None
+
+
 def build(dev: str, node: str = "TEST_PLAYER_NODE",
           sim_host: str = "127.0.0.1", sim_port: int = 0,
           serve: bool = True):
@@ -132,7 +154,12 @@ def main() -> None:
 
     start = o2lite.time_get()
     interval = 1.0 / args.tilt_hz
-    next_tilt = start
+    # Deferred rather than started at `start`: gestures are held off until
+    # _gestures_ready(client) -- see that function's docstring for why --
+    # so the first tilt should be scheduled for the moment the role
+    # actually arrives, not backdated to loop start (which would fire a
+    # burst of "overdue" tilts back-to-back the instant the gate opens).
+    next_tilt = None
     # The join reply is asynchronous -- it only arrives once the loop below
     # polls it in -- so noticing a deny/error has to happen inside the loop,
     # not right after send_cmd. Printed once each: without this, a refused
@@ -148,16 +175,24 @@ def main() -> None:
                 reason, hint = client.last_deny
                 print(f"JOIN DENIED: {reason} ({hint})")
                 deny_printed = True
+                # A denied join never gets a role, so _gestures_ready(client)
+                # can never become true and there is nothing left for this
+                # loop to do -- stop instead of silently polling forever
+                # with no gestures and no further explanation.
+                break
             if not error_printed and client.last_error is not None:
                 context, message = client.last_error
                 print(f"ERROR from Control: {context}: {message}")
                 error_printed = True
-            if not args.no_join and now >= next_tilt:
-                gamma = tilt_sweep(now - start)
-                # Timestamps at the source (Design Rule 4): the device's own
-                # synced clock reading, not Control's receipt time.
-                o2lite.send("/game/tilt", now, "sf", args.dev, gamma)
-                next_tilt += interval
+            if not args.no_join and _gestures_ready(client):
+                if next_tilt is None:
+                    next_tilt = now       # first tilt fires now the role is in
+                if now >= next_tilt:
+                    gamma = tilt_sweep(now - start)
+                    # Timestamps at the source (Design Rule 4): the device's
+                    # own synced clock reading, not Control's receipt time.
+                    o2lite.send("/game/tilt", now, "sf", args.dev, gamma)
+                    next_tilt += interval
             client.tick(now)
             time.sleep(0.005)
     except KeyboardInterrupt:
