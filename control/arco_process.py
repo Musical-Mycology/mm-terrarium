@@ -76,6 +76,10 @@ class ArcoProcess:
         raise ArcoReadyTimeout(
             f"Arco did not report ready within {timeout}s")
 
+    def poll(self):
+        """None while the server is still running, else its exit code."""
+        return None if self._process is None else self._process.poll()
+
     def shutdown(self) -> None:
         if self._process is None:
             return

@@ -17,7 +17,7 @@ def _fake_room_audio():
     return AudioBridge(FakePool())
 
 
-def _build_with_fakes(config):
+def _build_with_fakes(config, *, transport=None):
     """Shared fake-injecting build() call for tests that don't need to
     inspect a specific fake's recorded calls afterward (contrast the tests
     below, which construct their own FakePopen so they can assert on it
@@ -26,7 +26,8 @@ def _build_with_fakes(config):
         config, {"TestBit": TestBit},
         arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
         host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
-        simulator_popen=FakePopen(), room_audio=_fake_room_audio())
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
+        transport=transport)
 
 
 def test_build_wires_devicelink_room_bridge_and_simulator():
@@ -86,5 +87,25 @@ def test_build_passes_the_configured_horizon_to_the_agent():
     gs, server, agent, arco, sim = _build_with_fakes(config)
     try:
         assert agent._horizon == 0.075
+    finally:
+        shutdown(gs, agent, arco, sim)
+
+
+def test_build_can_run_the_agent_on_the_o2lite_transport():
+    """The whole point of the slice: device traffic crosses the Arco hub.
+    A FakeO2Lite stands in for the connection pyarco owns, so this asserts
+    the wiring with no Arco and no o2litepy."""
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+
+    fake = FakeO2Lite()
+    transport = O2LiteTransport()
+    transport.start(fake)
+
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, sim = _build_with_fakes(config,
+                                                     transport=transport)
+    try:
+        assert agent.server is transport
+        assert fake.services == "actl,game"
     finally:
         shutdown(gs, agent, arco, sim)
