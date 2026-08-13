@@ -19,3 +19,7 @@ dist/
 # Local session state
 .claude/
 captures/
+
+# Agent/SDD scratch: reports, ledgers, review packages. Never project docs
+# (those live in docs/superpowers/). The SDD skill assumes this is ignored.
+.superpowers/
