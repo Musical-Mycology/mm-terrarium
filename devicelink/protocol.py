@@ -68,8 +68,9 @@ def parse_game_address(address: str) -> str | None:
     return verb or None
 
 
-def _event(address: str, typespec: str, args: list) -> dict:
-    return encode(Envelope(timestamp=0.0, address=address,
+def _event(address: str, typespec: str, args: list,
+           timestamp: float = 0.0) -> dict:
+    return encode(Envelope(timestamp=timestamp, address=address,
                            typespec=typespec, args=args))
 
 
@@ -83,9 +84,16 @@ def deny_event(dev: str, reason: str | None, hint: str | None) -> dict:
     return _event(f"/{dev}/deny", "ss", [reason or "", hint or ""])
 
 
-def leds_event(dev: str, channels) -> dict:
-    """channels: a flat sequence of 36 ints (12 pixels x GRB)."""
-    return _event(f"/{dev}/leds", "b", [list(channels)])
+def leds_event(dev: str, channels, when: float = 0.0) -> dict:
+    """channels: a flat sequence of 36 ints (12 pixels x GRB).
+
+    `when` is an absolute O2 time at which the device should display this
+    frame. 0.0 means no declared time: display on arrival, the pre-timing
+    behavior. Control renders every joined device's light and ships finished
+    frames, so the device schedules a FRAME, not MIDI -- see the design
+    spec section 5.3.
+    """
+    return _event(f"/{dev}/leds", "b", [list(channels)], timestamp=when)
 
 
 def release_event(dev: str) -> dict:

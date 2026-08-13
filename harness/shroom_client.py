@@ -35,9 +35,13 @@ Usage on the Radxa:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+from collections import deque
 from typing import Callable
 
+from control.timed_queue import TimedQueue
 from devicelink import protocol
 
 logger = logging.getLogger(__name__)
@@ -46,6 +50,21 @@ logger = logging.getLogger(__name__)
 # white die is currently unreachable over this wire; see the plan's Task B7,
 # which is a pending decision rather than a bug to fix here.
 LED_CHANNELS = 36
+
+# Bound on frames buffered in _pending between ticks. Under normal operation
+# (tick() driven at the render rate -- see _TICK_INTERVAL) this never comes
+# close: _pending is fully drained every tick. It exists only to stop
+# unbounded growth if a caller drives handle() without ever calling tick(),
+# mirroring devicelink/agent.py's _MAX_CLOSING_FRAMES (also 200, ~1s at
+# 44Hz) as the bound on an analogous unrendered backlog.
+_MAX_PENDING_FRAMES = 200
+
+# The engine's own render/tick rate (see harness/terrarium_boot.py's
+# `gs.tick(1.0 / 44.0)` and harness/devicelink_smoke.py's TICK). Frames are
+# rendered at this rate, so ticking a client faster than this buys nothing;
+# ticking much slower would blur "held until its time" into "held until
+# roughly its time".
+_TICK_INTERVAL = 1.0 / 44.0
 
 
 class ShroomClient:
@@ -61,6 +80,22 @@ class ShroomClient:
         self.released = False
         self.last_deny: tuple[str, str] | None = None
         self.last_error: tuple[str, str] | None = None
+        # Frames wait here until their declared display time. Control
+        # renders; this client only decides WHEN to light up.
+        self._frames = TimedQueue()
+        # Frames handled between ticks, not yet pushed into _frames. This
+        # client is deliberately clock-free (see tick() below), so handle()
+        # cannot itself judge whether a frame's declared time has already
+        # passed -- the only trustworthy "now" is the one a tick() call
+        # supplies, and pushing eagerly with a stale or absent reading would
+        # misjudge lateness. Buffering here and pushing at the next tick
+        # keeps handle() clock-free while still comparing each frame's
+        # `when` against a real "now". Bounded: if a caller drives handle()
+        # without ever calling tick() (see _MAX_PENDING_FRAMES above), this
+        # deque drops the oldest frame per new arrival rather than growing
+        # without bound.
+        self._pending: deque[tuple[float | None, bytes]] = deque(
+            maxlen=_MAX_PENDING_FRAMES)
 
     # --- outbound ---
 
@@ -125,9 +160,37 @@ class ShroomClient:
         if len(channels) != LED_CHANNELS:
             logger.debug("dropping /leds with %d channels", len(channels))
             return ""
-        if self.leds is not None:
-            self.leds.show(bytes(int(v) & 0xFF for v in channels))
+        frame = bytes(int(v) & 0xFF for v in channels)
+        # timestamp 0.0 means "no declared time"; None is what TimedQueue
+        # reads as that, and it must NOT count as a clamp. Buffered rather
+        # than pushed here -- see _pending's docstring in __init__.
+        when = env.timestamp if env.timestamp else None
+        if len(self._pending) == self._pending.maxlen:
+            logger.debug("pending-frame backlog at %d; dropping oldest "
+                         "frame -- is tick() being called?",
+                         self._pending.maxlen)
+        self._pending.append((when, frame))
         return env.address
+
+    def tick(self, now: float) -> None:
+        """Light up any frame whose time has arrived. Driven by the client's
+        own loop; on a synced device `now` is o2lite.time_get().
+
+        Frames buffered by _on_leds since the last tick are pushed into the
+        TimedQueue first, against this call's `now` -- the only real clock
+        reading this socket-free client ever gets -- so a frame whose
+        declared time has already passed is correctly counted as clamped.
+        """
+        for when, frame in self._pending:
+            self._frames.push(when, frame, now=now)
+        self._pending.clear()
+        for frame in self._frames.due(now):
+            if self.leds is not None:
+                self.leds.show(frame)
+
+    @property
+    def clamped(self) -> int:
+        return self._frames.clamped
 
     def _on_release(self, env) -> str:
         self.released = True
@@ -136,10 +199,37 @@ class ShroomClient:
         return env.address
 
 
+async def pump_tick(client, interval: float = _TICK_INTERVAL) -> None:
+    """Drive ``client.tick()`` at the render rate until the client releases.
+
+    Shared by every asyncio-based devicelink client loop (this module's own
+    ``main()`` and ``harness/room_simulator.py``); ``harness/o2_shroom.py``
+    is deliberately NOT one of them -- its loop is synchronous o2lite
+    polling, a different shape, not a copy of this one.
+
+    Has to run concurrently with a client's inbound pump, not just once per
+    inbound frame: a frame timed for the future needs ticks to keep landing
+    while the inbound pump sits blocked waiting on the next message.
+
+    Uses time.monotonic(), matching DeviceLinkAgent's default clock
+    (devicelink/agent.py: clock=time.monotonic). Whether that agrees with
+    the sender's own `now` depends on who is driving `client`: true by
+    construction when the caller is a locally-spawned subprocess (e.g.
+    harness/room_simulator.py, always spawned by harness/terrarium_boot.py
+    on Control's own machine), NOT true for a real over-network device
+    (e.g. this module's own Radxa deployment) -- two machines' monotonic()
+    clocks share no epoch. That mismatch is real and unresolved here on
+    purpose; the design spec's o2lite clock is what actually fixes it.
+    This helper just keeps local/simulated runs working in the meantime.
+    """
+    while not client.released:
+        client.tick(time.monotonic())
+        await asyncio.sleep(interval)
+
+
 def main() -> None:
     """Connect to a DeviceLinkServer and run the sensor-up / LED-down loop."""
     import argparse
-    import asyncio
     import json
 
     import websockets
@@ -173,7 +263,7 @@ def main() -> None:
                     await ws.send(json.dumps(client.tilt(x / 9.81)))
                     await asyncio.sleep(interval)
 
-            await asyncio.gather(pump_down(), pump_up())
+            await asyncio.gather(pump_down(), pump_up(), pump_tick(client))
 
     asyncio.run(run())
 

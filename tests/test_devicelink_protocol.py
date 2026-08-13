@@ -68,6 +68,18 @@ def test_leds_event_shape():
     assert msg["args"] == [list(range(36))]
 
 
+def test_leds_event_carries_a_display_time():
+    event = protocol.leds_event("ie1", [0] * 36, when=42.5)
+    assert event["timestamp"] == 42.5
+    assert event["address"] == "/ie1/leds"
+
+
+def test_leds_event_defaults_to_no_declared_time():
+    """Zero keeps the pre-timing behavior: display on arrival."""
+    event = protocol.leds_event("ie1", [0] * 36)
+    assert event["timestamp"] == 0.0
+
+
 def test_release_and_error_events():
     assert protocol.release_event("ie1")["address"] == "/ie1/release"
     err = protocol.error_event("ie1", "join", "no such node")

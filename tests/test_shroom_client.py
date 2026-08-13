@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from devicelink import protocol
-from harness.shroom_client import LED_CHANNELS, ShroomClient
+from harness.shroom_client import LED_CHANNELS, ShroomClient, pump_tick
 
 DEV = "ie1"
 NODE = "node-a"
@@ -98,8 +100,11 @@ def test_role_fires_the_on_role_callback():
 
 
 def test_leds_are_forwarded_to_the_strip():
+    """An untimed frame (the default) displays on arrival -- which, for this
+    clock-free client, means at the next tick() of its own render loop."""
     c = client()
     c.handle(protocol.leds_event(DEV, list(range(LED_CHANNELS))))
+    c.tick(now=0.0)
     assert c.leds.shown[-1] == bytes(range(LED_CHANNELS))
 
 
@@ -187,6 +192,7 @@ def test_a_leds_frame_with_a_non_list_payload_is_dropped():
 def test_led_channel_values_are_masked_to_a_byte():
     c = client()
     c.handle(protocol.leds_event(DEV, [300] * LED_CHANNELS))
+    c.tick(now=0.0)
     assert all(v == 300 & 0xFF for v in c.leds.shown[-1])
 
 
@@ -195,3 +201,105 @@ def test_a_rejoin_clears_the_released_flag():
     c.handle(protocol.release_event(DEV))
     c.join()
     assert c.released is False
+
+
+# --- timed frames: a device lights up at its declared time, not on arrival ---
+
+def test_a_timestamped_frame_is_held_until_its_time():
+    c = client()
+
+    c.handle(protocol.leds_event(DEV, [7] * LED_CHANNELS, when=10.0))
+    c.tick(now=9.9)
+    assert c.leds.shown == []
+
+    c.tick(now=10.0)
+    assert len(c.leds.shown) == 1
+
+
+def test_an_unstamped_frame_shows_on_the_next_tick():
+    """timestamp 0.0 means no declared time, and must not be treated as a
+    time far in the past that trips the clamp counter."""
+    c = client()
+
+    c.handle(protocol.leds_event(DEV, [7] * LED_CHANNELS))
+    c.tick(now=500.0)
+    assert len(c.leds.shown) == 1
+    assert c.clamped == 0
+
+
+def test_a_frame_whose_time_has_passed_shows_immediately_and_clamps():
+    c = client()
+
+    c.handle(protocol.leds_event(DEV, [7] * LED_CHANNELS, when=5.0))
+    c.tick(now=9.0)
+    assert len(c.leds.shown) == 1
+    assert c.clamped == 1
+
+
+def test_release_still_clears_immediately():
+    """A release must not sit in the queue behind a pending frame: the
+    device is being torn down."""
+    c = client()
+    c.handle(protocol.release_event(DEV))
+    assert c.leds.cleared == 1
+    assert c.released is True
+
+
+def test_pending_frames_are_bounded_when_tick_is_never_called():
+    """A caller that drives handle() without ever calling tick() -- the gap
+    the Task 7 review found in harness/room_simulator.py and this module's
+    own main(), both fixed to call tick() now -- must not grow _pending
+    without bound. The oldest unrendered frame is dropped instead, mirroring
+    devicelink/agent.py's _MAX_CLOSING_FRAMES bound on an analogous
+    unrendered backlog."""
+    from harness.shroom_client import _MAX_PENDING_FRAMES
+
+    c = client()
+    for i in range(_MAX_PENDING_FRAMES + 5):
+        c.handle(protocol.leds_event(DEV, [0] * LED_CHANNELS, when=float(i + 1)))
+
+    assert len(c._pending) == _MAX_PENDING_FRAMES
+    # the 5 oldest (when 1.0..5.0) were dropped; the oldest survivor is 6.0
+    assert c._pending[0][0] == 6.0
+
+
+# --- pump_tick: the shared asyncio tick-loop, used by main() and
+# room_simulator.py -- now a module-level function and therefore testable
+# on its own, rather than a closure buried inside main() ---
+
+class _FakeTickClient:
+    """Fakes just enough of ShroomClient for pump_tick: a released flag and
+    a tick() call. Flips released on its own after a set number of ticks,
+    the way a real client's tick() never does -- release only ever comes
+    from the server via _on_release -- so the test can assert pump_tick
+    notices the flag changing underneath it and stops."""
+
+    def __init__(self, release_after: int) -> None:
+        self.released = False
+        self.ticks: list[float] = []
+        self._release_after = release_after
+
+    def tick(self, now: float) -> None:
+        self.ticks.append(now)
+        if len(self.ticks) >= self._release_after:
+            self.released = True
+
+
+def test_pump_tick_ticks_the_client_at_the_given_interval():
+    client = _FakeTickClient(release_after=3)
+
+    asyncio.run(asyncio.wait_for(pump_tick(client, interval=0.0), timeout=1.0))
+
+    assert len(client.ticks) == 3
+
+
+def test_pump_tick_exits_once_released_flips_true():
+    """No sentinel needed: exiting is exactly what lets asyncio.run above
+    return instead of asyncio.wait_for's timeout firing. This test pins the
+    other half -- that it stops AT release, not one tick early or late."""
+    client = _FakeTickClient(release_after=1)
+
+    asyncio.run(asyncio.wait_for(pump_tick(client, interval=0.0), timeout=1.0))
+
+    assert client.released is True
+    assert len(client.ticks) == 1

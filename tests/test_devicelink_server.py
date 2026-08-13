@@ -69,4 +69,45 @@ def test_send_to_a_dead_client_does_not_raise(server):
     with connect(f"ws://127.0.0.1:{server.port}/ws"):
         client = _wait_for(server.drain_new_clients)[0]
     time.sleep(0.1)
-    server.send(client, {"address": "/ie1/role"})   # must not raise
+    server.bind_dev("ie1", client)
+    server.send("ie1", {"address": "/ie1/role"})   # must not raise
+
+
+def test_send_addresses_a_dev_not_a_connection():
+    """The agent must not need a connection object to reach a device: o2lite
+    has none. The server owns the mapping."""
+    server = DeviceLinkServer(host="127.0.0.1", port=0)
+    sent = []
+
+    class FakeConn:
+        def send(self, raw):
+            sent.append(raw)
+
+    conn = FakeConn()
+    server.bind_dev("ie1", conn)
+    server.send("ie1", {"address": "/ie1/leds", "typespec": "b",
+                        "args": [[0] * 36], "timestamp": 0.0})
+    assert len(sent) == 1
+
+
+def test_send_to_an_unbound_dev_is_a_silent_no_op():
+    """A cue for a device that has gone away must not raise into the tick
+    (boundary rule 2)."""
+    server = DeviceLinkServer(host="127.0.0.1", port=0)
+    server.send("nobody", {"address": "/nobody/leds", "typespec": "b",
+                           "args": [[0] * 36], "timestamp": 0.0})
+
+
+def test_drop_dev_unbinds():
+    server = DeviceLinkServer(host="127.0.0.1", port=0)
+    sent = []
+
+    class FakeConn:
+        def send(self, raw):
+            sent.append(raw)
+
+    server.bind_dev("ie1", FakeConn())
+    server.drop_dev("ie1")
+    server.send("ie1", {"address": "/ie1/leds", "typespec": "b",
+                        "args": [[0] * 36], "timestamp": 0.0})
+    assert sent == []

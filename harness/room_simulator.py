@@ -21,7 +21,7 @@ Usage (normally spawned by harness/terrarium_boot.py, not run by hand):
 
 from __future__ import annotations
 
-from harness.shroom_client import LED_CHANNELS, ShroomClient
+from harness.shroom_client import LED_CHANNELS, ShroomClient, pump_tick
 
 
 class WebSimLeds:
@@ -81,8 +81,12 @@ def main() -> None:
     async def run() -> None:
         async with websockets.connect(args.server) as ws:
             await ws.send(json.dumps(client.hello()))
-            async for raw in ws:
-                client.handle(json.loads(raw))
+
+            async def pump_down() -> None:
+                async for raw in ws:
+                    client.handle(json.loads(raw))
+
+            await asyncio.gather(pump_down(), pump_tick(client))
 
     try:
         asyncio.run(run())

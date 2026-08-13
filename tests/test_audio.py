@@ -79,6 +79,31 @@ def test_midi_for_an_ungranted_device_is_ignored():
     AudioBridge(pool).feed_midi("nobody", 0xB0, 74, 100)   # must not raise
 
 
+def test_feed_midi_without_a_time_applies_immediately():
+    """The pre-timing behavior is the default and must not regress."""
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("dev1", _role(ugens=PLAYER_UGENS))
+    bridge.feed_midi("dev1", 0xB0, 74, 100)
+    assert ("cc", 74, 100) in pool.acquired[0].sent
+    assert pool.scheduled == []
+
+
+def test_feed_midi_with_a_time_schedules_instead_of_applying():
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("dev1", _role(ugens=PLAYER_UGENS))
+    bridge.feed_midi("dev1", 0xB0, 74, 100, when=1234.5)
+
+    assert not [s for s in pool.acquired[0].sent if s[0] == "cc"]  # not applied yet
+    assert len(pool.scheduled) == 1
+    when, fn = pool.scheduled[0]
+    assert when == 1234.5
+
+    fn()                                      # the scheduler fires it
+    assert ("cc", 74, 100) in pool.acquired[0].sent
+
+
 def test_start_and_stop_drone_use_the_declared_note():
     pool = FakePool()
     br = AudioBridge(pool)

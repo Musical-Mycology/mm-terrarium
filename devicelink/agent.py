@@ -19,6 +19,7 @@ from control.engine import GameServer
 from control.role_config import compose_role_config
 from control.rooms import room_role_name
 from control.state import State
+from control.timed_queue import TimedQueue
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
 from luxaeterna.synth.capability import shroom_capability
@@ -73,15 +74,21 @@ class _RoomAudioSink:
 class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
                  capability=None, clock=time.monotonic,
-                 room_bridge=None, room_audio=None):
+                 room_bridge=None, room_audio=None, horizon: float = 0.0):
         self.game_server = game_server
         self.server = server
         self._capability = capability
         self._clock = clock
+        # BootConfig.cue_horizon, passed down by whatever builds this agent
+        # (harness/terrarium_boot.py). Not consulted here -- the `when` on
+        # each cue already has it baked in by whoever scheduled the gesture;
+        # this agent only waits for `when` to arrive. Held for Task 9's
+        # driver, which needs the configured value to reach here at all.
+        self._horizon = horizon
+        self._room_cues = TimedQueue()
         self.bridges: dict[str, DeviceBridge] = {}
         self._universes: dict[str, Universe] = {}
         self._last_frames: dict[str, bytes] = {}
-        self._clients: dict[str, object] = {}     # dev -> client
         # dev -> render-attempt count, for devices released but still being
         # driven through their closing fade. Presence in this dict, not in
         # self.bridges, is the source of truth for "closing" (a device can
@@ -142,8 +149,20 @@ class DeviceLinkAgent:
             self._room_bridge.bind(self._room_dev, light=self._room_light,
                                    audio=audio_sink)
 
-    def client_for(self, dev: str):
-        return self._clients.get(dev)
+    @property
+    def clamped(self) -> int:
+        """Room cues that arrived already late. A rising count means
+        BootConfig.cue_horizon is too small."""
+        return self._room_cues.clamped
+
+    @property
+    def closing(self) -> int:
+        """Devices currently draining their release fade (see _on_release
+        and _finish_release). A driver's serve loop should keep polling
+        while this is nonzero -- release is asynchronous, so a device isn't
+        actually gone until its closing fade finishes and /<dev>/release
+        goes out."""
+        return len(self._closing)
 
     # --- driven once per tick-loop iteration -------------------------------
     def poll(self) -> None:
@@ -161,6 +180,15 @@ class DeviceLinkAgent:
     def _render_room(self) -> None:
         if self._room_light is None or self._room_dev is None:
             return
+        # Drain before rendering: a cue released this tick must be reflected
+        # in the frame rendered this tick, not the next one -- draining
+        # after the render would delay every cue by one frame, exactly the
+        # class of error this slice exists to remove.
+        for (status, d1, d2) in self._room_cues.due(self._clock()):
+            try:
+                self._room_bridge.feed_midi(status, d1, d2)
+            except Exception:
+                logger.exception("Room feed_midi failed")
         universe = self._room_light.universe
         try:
             self._room_light.session.render_into(universe)
@@ -221,7 +249,8 @@ class DeviceLinkAgent:
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame
                 try:
-                    self._send(dev, protocol.leds_event(dev, frame))
+                    self._send(dev, protocol.leds_event(
+                        dev, frame, when=self._clock() + self._horizon))
                 except Exception:
                     logger.exception("leds send for %s failed", dev)
             if closing:
@@ -270,14 +299,14 @@ class DeviceLinkAgent:
     def _on_hello(self, client, dev: str, args: list) -> None:
         name = args[1] if len(args) > 1 else ""
         protoversion = args[2] if len(args) > 2 else ""
-        self._clients[dev] = client
+        self.server.bind_dev(dev, client)
         self.game_server.hello(dev, name, protoversion)
 
     def _on_join(self, client, dev: str, args: list) -> None:
         if len(args) < 2:
             self._send(dev, protocol.error_event(dev, "join", "missing node"))
             return
-        self._clients[dev] = client
+        self.server.bind_dev(dev, client)
         result = self.game_server.join(dev, args[1])
         if not result.granted:
             self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
@@ -354,12 +383,17 @@ class DeviceLinkAgent:
             logger.exception("release notify for %s failed", dev)
 
     def _on_light_cue(self, dev: str, status: int,
-                      data1: int, data2: int) -> None:
+                      data1: int, data2: int,
+                      when: float | None = None) -> None:
         if dev == self._room_dev and self._room_bridge is not None:
-            try:
-                self._room_bridge.feed_midi(status, data1, data2)
-            except Exception:
-                logger.exception("Room feed_midi failed")
+            # Queue rather than feed: the Room's light must wait for its
+            # declared time, not fire the instant the cue happens to
+            # arrive. Drained in _render_room(), which makes a single
+            # synchronous RoomBridge.feed_midi(status, d1, d2) call --
+            # there is no independently-scheduled audio call at `when` to
+            # land alongside; audio and light share this one dispatch.
+            self._room_cues.push(when, (status, data1, data2),
+                                 now=self._clock())
             return
         bridge = self.bridges.get(dev)
         if bridge is None or bridge.session is None:
@@ -377,7 +411,4 @@ class DeviceLinkAgent:
 
     # --- outbound -----------------------------------------------------------
     def _send(self, dev: str, msg: dict) -> None:
-        client = self._clients.get(dev)
-        if client is None:
-            return
-        self.server.send(client, msg)
+        self.server.send(dev, msg)

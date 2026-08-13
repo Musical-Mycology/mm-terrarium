@@ -20,3 +20,21 @@ class PlayCue:
     dev: str
     name: str
     params: str = ""
+
+
+@dataclass(frozen=True)
+class LightCue:
+    """A light cue carrying an explicit target time on the O2 clock.
+
+    Plain 4-tuples (dev, status, data1, data2) remain valid and mean
+    when=None, "apply on arrival" -- every Bit written before this type
+    existed keeps working unchanged. A Bit opts into timing by returning
+    LightCue instead. Distinct type rather than a 5-tuple for the same
+    reason PlayCue is a distinct type: GameServer.data() tells cue kinds
+    apart by identity, never by guessing at tuple arity.
+    """
+    dev: str
+    status: int
+    data1: int
+    data2: int
+    when: float | None = None

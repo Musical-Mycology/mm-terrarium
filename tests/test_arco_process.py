@@ -71,3 +71,18 @@ def test_shutdown_twice_only_signals_once():
     process.shutdown()
     process.shutdown()
     assert popen.signals == [signal.SIGTERM]
+
+
+def test_poll_reports_a_dead_subprocess():
+    class DeadPopen:
+        def poll(self):
+            return 1
+
+    proc = ArcoProcess(["fake"], popen=lambda *a, **k: DeadPopen())
+    proc.start()
+    assert proc.poll() == 1
+
+
+def test_poll_reports_none_before_start():
+    process = ArcoProcess(["arco-server"], popen=FakePopen())
+    assert process.poll() is None

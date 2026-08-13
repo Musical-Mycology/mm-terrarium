@@ -14,7 +14,7 @@ from control.audio import AudioBridge, FakePool
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.room_bridge import RoomBridge
+from control.room_bridge import FakeRoomLightSink, RoomBridge
 from control.rooms import Room, RoomType
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
@@ -26,8 +26,9 @@ class FakeServer:
     def __init__(self):
         self.new_clients = []
         self.inbound = []
-        self.sent = []          # (client, msg)
+        self.sent = []          # (dev, msg)
         self.broadcasts = []
+        self._devs = {}         # dev -> client
 
     def drain_new_clients(self):
         out, self.new_clients = self.new_clients, []
@@ -37,8 +38,18 @@ class FakeServer:
         out, self.inbound = self.inbound, []
         return out
 
-    def send(self, client, msg):
-        self.sent.append((client, msg))
+    def bind_dev(self, dev, client):
+        self._devs[dev] = client
+
+    def drop_dev(self, dev):
+        self._devs.pop(dev, None)
+
+    def send(self, dev, msg):
+        # Mirrors DeviceLinkServer.send: an unbound dev is a silent no-op
+        # (boundary rule 2), not a recorded send.
+        if dev not in self._devs:
+            return
+        self.sent.append((dev, msg))
 
     def broadcast(self, msg):
         self.broadcasts.append(msg)
@@ -61,7 +72,7 @@ class RaisingSendServer(FakeServer):
     guarantee that a transport failure notifying one device can never
     strand another device's bridge or wedge the engine in UNLOADING."""
 
-    def send(self, client, msg):
+    def send(self, dev, msg):
         raise RuntimeError("transport exploded")
 
 
@@ -415,6 +426,23 @@ def _room_ready_game_server():
     return gs
 
 
+def _agent_with_bound_room():
+    """An agent with its Room bound to 'sim-room', light routed through a
+    bare FakeRoomLightSink rather than a real luxaeterna session -- for
+    tests about cue routing/timing, where what matters is which MIDI tuple
+    reached the sink and when, not the rendered frame. (Tests that need the
+    real session -- e.g. that a fed cue actually changes the rendered
+    hue -- build their own agent against the real _room_light instead; see
+    test_room_dev_cue_routes_to_room_bridge_not_normal_bridges.)"""
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge)
+    bridge = FakeRoomLightSink()
+    room_bridge.bind(gs.room.bound_dev, light=bridge)
+    return gs, agent, bridge
+
+
 def test_room_light_session_built_from_bit_declaration():
     gs = _room_ready_game_server()
     room_bridge = RoomBridge()
@@ -453,6 +481,9 @@ def test_room_dev_cue_routes_to_room_bridge_not_normal_bridges():
     baseline = bytes(universe.get_frame()[:36])
 
     gs.on_light_cue("sim-room", 0xB0, 74, 100)
+    agent._render_room()   # drains the Room's timed queue (Task 6) so the
+                            # untimed cue above -- due at once -- reaches
+                            # the session before the render below
     clk.advance(2.0)
     session.render_into(universe)
     after = bytes(universe.get_frame()[:36])
@@ -467,7 +498,7 @@ def test_render_room_sends_leds_event_when_frame_changes():
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge)
     client = object()
-    agent._clients["sim-room"] = client   # simulate the hello handshake
+    agent.server.bind_dev("sim-room", client)   # simulate the hello handshake
 
     agent._render_room()
 
@@ -484,6 +515,44 @@ def test_no_room_configured_leaves_room_wiring_inert():
 
     assert agent._room_light is None
     agent._render_room()   # must not raise
+
+
+# --- Room cue timing: the Room branch of _on_light_cue queues on
+# self._room_cues (a TimedQueue) instead of feeding immediately, so the
+# Room's light waits for its declared time the same way Task 7's per-device
+# path (a different mechanism -- a held frame, not held MIDI) will. Only
+# _render_room's drain, at the top of the existing render step, actually
+# feeds the bridge. ---------------------------------------------------------
+
+def test_a_timed_room_cue_is_withheld_until_its_time():
+    """The Room's light must not jump ahead to its declared time before
+    that time arrives."""
+    gs, agent, bridge = _agent_with_bound_room()      # existing helper
+    agent._clock = lambda: 100.0
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 100, 100.5)
+    agent.poll()
+    assert bridge.fed == []
+
+    agent._clock = lambda: 100.5
+    agent.poll()
+    assert bridge.fed == [(0xB0, 74, 100)]
+
+
+def test_an_untimed_room_cue_still_applies_on_arrival():
+    gs, agent, bridge = _agent_with_bound_room()
+    gs.on_light_cue("sim-room", 0xB0, 74, 100)
+    agent.poll()
+    assert bridge.fed == [(0xB0, 74, 100)]
+
+
+def test_a_late_room_cue_applies_and_counts_as_clamped():
+    gs, agent, bridge = _agent_with_bound_room()
+    agent._clock = lambda: 100.0
+    gs.on_light_cue("sim-room", 0xB0, 74, 100, 99.0)
+    agent.poll()
+    assert bridge.fed == [(0xB0, 74, 100)]
+    assert agent.clamped == 1
 
 
 # --- Room audio wiring: room_audio (a real AudioBridge) exercised for the
@@ -509,6 +578,8 @@ def test_room_dev_cue_reaches_audio_bridge_too():
                             room_audio=room_audio)
 
     gs.on_light_cue("sim-room", 0xB0, 74, 90)
+    agent._render_room()   # drains the Room's timed queue (Task 6); the
+                            # untimed cue above is due at once
 
     voice = pool.acquired[0]
     assert ("cc", 74, 90) in voice.sent

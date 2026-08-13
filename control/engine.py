@@ -11,7 +11,7 @@ abort() -- GameServer stays agnostic to who's watching or calling either.
 import logging
 
 from control.bit import Bit
-from control.cues import PlayCue
+from control.cues import LightCue, PlayCue
 from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
@@ -49,9 +49,9 @@ class GameServer:
         # UNLOADING, so it can send that device's /ie<N>/release message.
         self.on_release = None
         # Set by a transport layer: called when a Bit's verb handler emits a
-        # light cue, as on_light_cue(dev, status, data1, data2). Boundary
-        # rule 3 -- the Bit decides the light consequence, the transport
-        # only delivers it to that device's renderer.
+        # light cue, as on_light_cue(dev, status, data1, data2, when).
+        # Boundary rule 3 -- the Bit decides the light consequence, the
+        # transport only delivers it to that device's renderer.
         self.on_light_cue = None
         # Device-local sample cue, as on_play_cue(dev, name, params). Same
         # boundary rule as on_light_cue: set by a transport, never by a Bit.
@@ -170,16 +170,31 @@ class GameServer:
             # `or` guards a blank reason so /<dev>/error is never empty.
             return cues or "handler refused"
         for cue in cues or ():
-            if isinstance(cue, PlayCue):
-                sink, args = self.on_play_cue, (cue.dev, cue.name, cue.params)
-            else:
-                sink, args = self.on_light_cue, tuple(cue)
-            if sink is None:
-                continue
+            # The whole per-cue block is guarded, not just the sink call.
+            # The old code was `sink, args = self.on_light_cue, tuple(cue)`,
+            # which is total: it never raised for any-length iterable. The
+            # 4-tuple unpack below is partial, so an arity-wrong cue from a
+            # buggy Bit would otherwise raise straight out of data() and
+            # break its documented "never raises" contract -- and
+            # devicelink/agent.py's _on_verb has no handler around the call.
             try:
+                if isinstance(cue, PlayCue):
+                    sink, args = self.on_play_cue, (cue.dev, cue.name,
+                                                    cue.params)
+                elif isinstance(cue, LightCue):
+                    sink, args = self.on_light_cue, (cue.dev, cue.status,
+                                                     cue.data1, cue.data2,
+                                                     cue.when)
+                else:
+                    # The historic plain 4-tuple: no declared time.
+                    dev_, status, d1, d2 = cue
+                    sink, args = self.on_light_cue, (dev_, status, d1, d2,
+                                                     None)
+                if sink is None:
+                    continue
                 sink(*args)
             except Exception:
-                logger.exception("cue sink raised; continuing")
+                logger.exception("cue dispatch failed; continuing")
         return None
 
     def tick(self, dt: float) -> None:
