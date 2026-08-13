@@ -1,4 +1,6 @@
-from harness.o2_shroom import tilt_sweep
+import pytest
+
+from harness.o2_shroom import build, tilt_sweep
 
 
 def test_tilt_sweep_stays_in_range():
@@ -26,3 +28,18 @@ def test_tilt_sweep_is_periodic():
 
     assert tilt_sweep(0.0) == tilt_sweep(SWEEP_PERIOD)
     assert tilt_sweep(1.25) == tilt_sweep(1.25 + SWEEP_PERIOD)
+
+
+def test_build_wires_the_client_and_backend():
+    """Mirrors tests/test_room_simulator.py's test_build_wires_the_client_
+    and_backend for the same socket-free build() seam: dev id and node
+    reach the client, an LED adapter is wired, and serve=False means no
+    socket was opened."""
+    pytest.importorskip("luxaeterna.backends.websim")
+
+    client, backend = build("ie1", "TEST_PLAYER_NODE", serve=False)
+
+    assert client.dev == "ie1"
+    assert client.node == "TEST_PLAYER_NODE"
+    assert client.leds is not None
+    assert backend.is_open is False

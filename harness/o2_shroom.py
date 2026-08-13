@@ -106,6 +106,13 @@ def main() -> None:
         try:
             values = pull_args(o2lite, typespec or "")
         except Exception:
+            # Mirrors devicelink/o2_transport.py's _on_message diagnostic,
+            # but print rather than logging: this module has no logging
+            # setup, and every other operator-facing line here (the watch
+            # URL, the clock-synced line, the frames-displayed-late count)
+            # is already print, so that is what a person running this tool
+            # will actually see.
+            print(f"dropping /{address}: unreadable arguments")
             return                          # drop the frame, never raise
         client.handle({"timestamp": o2lite.msg_timestamp,
                        "address": f"/{address}",
