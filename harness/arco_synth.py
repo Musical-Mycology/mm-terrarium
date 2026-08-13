@@ -119,6 +119,23 @@ class ArcoSynthPool:
         if self._sched is not None:
             self._sched.poll()                 # pumps o2lite via its poll functions
 
+    def schedule_at(self, when: float, fn) -> None:
+        """Run `fn` at absolute O2 time `when`.
+
+        pyarco's scheduler is already on O2 time (arco_engine.py sets
+        sched.time_get = o2lite_time_get and syncs rtsched to it), so an
+        absolute O2 second is exactly what cause() wants. sched.py's header
+        is explicit that this accumulates logical time without drift or
+        polling quantization, which is the whole reason the horizon can be
+        a single constant.
+        """
+        if self._sched is None:
+            raise RuntimeError("ArcoSynthPool.schedule_at before start()")
+        self._sched.cause(self._sched.absolute(when), self, "_run_scheduled", fn)
+
+    def _run_scheduled(self, fn) -> None:
+        fn()
+
     def shutdown(self) -> None:
         """Silence every channel, then drop the Flsyn so pyarco's destructor
         frees the Arco ugen id. Boundary rule 1: Control owns the id space,

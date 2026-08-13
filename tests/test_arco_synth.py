@@ -60,6 +60,33 @@ def test_start_with_missing_soundfont_names_the_path_without_pyarco():
     assert missing_path in str(ei.value)
 
 
+def test_schedule_at_delegates_to_the_pyarco_scheduler():
+    """ArcoSynthPool must schedule through pyarco's sched, which already
+    runs on O2 time (pyarco/arco_engine.py sets sched.time_get =
+    o2lite_time_get). No pyarco import happens here: a fake sched is
+    injected, exactly as the pool's other tests inject a fake flsyn."""
+    from harness.arco_synth import ArcoSynthPool
+
+    calls = []
+
+    class FakeSched:
+        def cause(self, when, obj, meth, *args):
+            calls.append((when, obj, meth, args))
+
+        def absolute(self, t):
+            return ("absolute", t)
+
+    pool = ArcoSynthPool()
+    pool._sched = FakeSched()
+
+    marker = lambda: None
+    pool.schedule_at(99.5, marker)
+
+    assert len(calls) == 1
+    when, obj, meth, args = calls[0]
+    assert when == ("absolute", 99.5)
+
+
 @pytest.mark.skipif(not os.environ.get("MM_ARCO_LIVE"),
                     reason="needs a running Arco server; set MM_ARCO_LIVE=1")
 def test_live_pool_acquires_sends_and_releases():
