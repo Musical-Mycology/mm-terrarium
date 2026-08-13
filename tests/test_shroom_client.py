@@ -98,8 +98,11 @@ def test_role_fires_the_on_role_callback():
 
 
 def test_leds_are_forwarded_to_the_strip():
+    """An untimed frame (the default) displays on arrival -- which, for this
+    clock-free client, means at the next tick() of its own render loop."""
     c = client()
     c.handle(protocol.leds_event(DEV, list(range(LED_CHANNELS))))
+    c.tick(now=0.0)
     assert c.leds.shown[-1] == bytes(range(LED_CHANNELS))
 
 
@@ -187,6 +190,7 @@ def test_a_leds_frame_with_a_non_list_payload_is_dropped():
 def test_led_channel_values_are_masked_to_a_byte():
     c = client()
     c.handle(protocol.leds_event(DEV, [300] * LED_CHANNELS))
+    c.tick(now=0.0)
     assert all(v == 300 & 0xFF for v in c.leds.shown[-1])
 
 
@@ -195,3 +199,45 @@ def test_a_rejoin_clears_the_released_flag():
     c.handle(protocol.release_event(DEV))
     c.join()
     assert c.released is False
+
+
+# --- timed frames: a device lights up at its declared time, not on arrival ---
+
+def test_a_timestamped_frame_is_held_until_its_time():
+    c = client()
+
+    c.handle(protocol.leds_event(DEV, [7] * LED_CHANNELS, when=10.0))
+    c.tick(now=9.9)
+    assert c.leds.shown == []
+
+    c.tick(now=10.0)
+    assert len(c.leds.shown) == 1
+
+
+def test_an_unstamped_frame_shows_on_the_next_tick():
+    """timestamp 0.0 means no declared time, and must not be treated as a
+    time far in the past that trips the clamp counter."""
+    c = client()
+
+    c.handle(protocol.leds_event(DEV, [7] * LED_CHANNELS))
+    c.tick(now=500.0)
+    assert len(c.leds.shown) == 1
+    assert c.clamped == 0
+
+
+def test_a_frame_whose_time_has_passed_shows_immediately_and_clamps():
+    c = client()
+
+    c.handle(protocol.leds_event(DEV, [7] * LED_CHANNELS, when=5.0))
+    c.tick(now=9.0)
+    assert len(c.leds.shown) == 1
+    assert c.clamped == 1
+
+
+def test_release_still_clears_immediately():
+    """A release must not sit in the queue behind a pending frame: the
+    device is being torn down."""
+    c = client()
+    c.handle(protocol.release_event(DEV))
+    assert c.leds.cleared == 1
+    assert c.released is True

@@ -243,7 +243,8 @@ class DeviceLinkAgent:
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame
                 try:
-                    self._send(dev, protocol.leds_event(dev, frame))
+                    self._send(dev, protocol.leds_event(
+                        dev, frame, when=self._clock() + self._horizon))
                 except Exception:
                     logger.exception("leds send for %s failed", dev)
             if closing:

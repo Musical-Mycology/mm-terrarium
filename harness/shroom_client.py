@@ -38,6 +38,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
+from control.timed_queue import TimedQueue
 from devicelink import protocol
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,18 @@ class ShroomClient:
         self.released = False
         self.last_deny: tuple[str, str] | None = None
         self.last_error: tuple[str, str] | None = None
+        # Frames wait here until their declared display time. Control
+        # renders; this client only decides WHEN to light up.
+        self._frames = TimedQueue()
+        # Frames handled between ticks, not yet pushed into _frames. This
+        # client is deliberately clock-free (see tick() below), so handle()
+        # cannot itself judge whether a frame's declared time has already
+        # passed -- the only trustworthy "now" is the one a tick() call
+        # supplies, and pushing eagerly with a stale or absent reading would
+        # misjudge lateness. Buffering here and pushing at the next tick
+        # keeps handle() clock-free while still comparing each frame's
+        # `when` against a real "now".
+        self._pending: list[tuple[float | None, bytes]] = []
 
     # --- outbound ---
 
@@ -125,9 +138,33 @@ class ShroomClient:
         if len(channels) != LED_CHANNELS:
             logger.debug("dropping /leds with %d channels", len(channels))
             return ""
-        if self.leds is not None:
-            self.leds.show(bytes(int(v) & 0xFF for v in channels))
+        frame = bytes(int(v) & 0xFF for v in channels)
+        # timestamp 0.0 means "no declared time"; None is what TimedQueue
+        # reads as that, and it must NOT count as a clamp. Buffered rather
+        # than pushed here -- see _pending's docstring in __init__.
+        when = env.timestamp if env.timestamp else None
+        self._pending.append((when, frame))
         return env.address
+
+    def tick(self, now: float) -> None:
+        """Light up any frame whose time has arrived. Driven by the client's
+        own loop; on a synced device `now` is o2lite.time_get().
+
+        Frames buffered by _on_leds since the last tick are pushed into the
+        TimedQueue first, against this call's `now` -- the only real clock
+        reading this socket-free client ever gets -- so a frame whose
+        declared time has already passed is correctly counted as clamped.
+        """
+        for when, frame in self._pending:
+            self._frames.push(when, frame, now=now)
+        self._pending.clear()
+        for frame in self._frames.due(now):
+            if self.leds is not None:
+                self.leds.show(frame)
+
+    @property
+    def clamped(self) -> int:
+        return self._frames.clamped
 
     def _on_release(self, env) -> str:
         self.released = True
