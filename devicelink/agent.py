@@ -19,6 +19,7 @@ from control.engine import GameServer
 from control.role_config import compose_role_config
 from control.rooms import room_role_name
 from control.state import State
+from control.timed_queue import TimedQueue
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
 from luxaeterna.synth.capability import shroom_capability
@@ -73,11 +74,18 @@ class _RoomAudioSink:
 class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
                  capability=None, clock=time.monotonic,
-                 room_bridge=None, room_audio=None):
+                 room_bridge=None, room_audio=None, horizon: float = 0.0):
         self.game_server = game_server
         self.server = server
         self._capability = capability
         self._clock = clock
+        # BootConfig.cue_horizon, passed down by whatever builds this agent
+        # (harness/terrarium_boot.py). Not consulted here -- the `when` on
+        # each cue already has it baked in by whoever scheduled the gesture;
+        # this agent only waits for `when` to arrive. Held for Task 9's
+        # driver, which needs the configured value to reach here at all.
+        self._horizon = horizon
+        self._room_cues = TimedQueue()
         self.bridges: dict[str, DeviceBridge] = {}
         self._universes: dict[str, Universe] = {}
         self._last_frames: dict[str, bytes] = {}
@@ -144,6 +152,12 @@ class DeviceLinkAgent:
     def client_for(self, dev: str):
         return self.server._devs.get(dev)
 
+    @property
+    def clamped(self) -> int:
+        """Room cues that arrived already late. A rising count means
+        BootConfig.cue_horizon is too small."""
+        return self._room_cues.clamped
+
     # --- driven once per tick-loop iteration -------------------------------
     def poll(self) -> None:
         self.server.drain_new_clients()      # devices are anonymous until hello
@@ -160,6 +174,15 @@ class DeviceLinkAgent:
     def _render_room(self) -> None:
         if self._room_light is None or self._room_dev is None:
             return
+        # Drain before rendering: a cue released this tick must be reflected
+        # in the frame rendered this tick, not the next one -- draining
+        # after the render would delay every cue by one frame, exactly the
+        # class of error this slice exists to remove.
+        for (status, d1, d2) in self._room_cues.due(self._clock()):
+            try:
+                self._room_bridge.feed_midi(status, d1, d2)
+            except Exception:
+                logger.exception("Room feed_midi failed")
         universe = self._room_light.universe
         try:
             self._room_light.session.render_into(universe)
@@ -356,10 +379,11 @@ class DeviceLinkAgent:
                       data1: int, data2: int,
                       when: float | None = None) -> None:
         if dev == self._room_dev and self._room_bridge is not None:
-            try:
-                self._room_bridge.feed_midi(status, data1, data2)
-            except Exception:
-                logger.exception("Room feed_midi failed")
+            # Queue rather than feed: the Room's light must land on the same
+            # frame as the audio scheduled for the same `when`, not the
+            # instant the cue happens to arrive. Drained in _render_room().
+            self._room_cues.push(when, (status, data1, data2),
+                                 now=self._clock())
             return
         bridge = self.bridges.get(dev)
         if bridge is None or bridge.session is None:
