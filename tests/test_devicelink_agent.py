@@ -525,8 +525,8 @@ def test_no_room_configured_leaves_room_wiring_inert():
 # feeds the bridge. ---------------------------------------------------------
 
 def test_a_timed_room_cue_is_withheld_until_its_time():
-    """The Room's light must not jump ahead of the audio scheduled for the
-    same instant."""
+    """The Room's light must not jump ahead to its declared time before
+    that time arrives."""
     gs, agent, bridge = _agent_with_bound_room()      # existing helper
     agent._clock = lambda: 100.0
 

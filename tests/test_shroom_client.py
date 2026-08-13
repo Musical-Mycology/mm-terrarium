@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from devicelink import protocol
-from harness.shroom_client import LED_CHANNELS, ShroomClient
+from harness.shroom_client import LED_CHANNELS, ShroomClient, pump_tick
 
 DEV = "ie1"
 NODE = "node-a"
@@ -259,3 +261,45 @@ def test_pending_frames_are_bounded_when_tick_is_never_called():
     assert len(c._pending) == _MAX_PENDING_FRAMES
     # the 5 oldest (when 1.0..5.0) were dropped; the oldest survivor is 6.0
     assert c._pending[0][0] == 6.0
+
+
+# --- pump_tick: the shared asyncio tick-loop, used by main() and
+# room_simulator.py -- now a module-level function and therefore testable
+# on its own, rather than a closure buried inside main() ---
+
+class _FakeTickClient:
+    """Fakes just enough of ShroomClient for pump_tick: a released flag and
+    a tick() call. Flips released on its own after a set number of ticks,
+    the way a real client's tick() never does -- release only ever comes
+    from the server via _on_release -- so the test can assert pump_tick
+    notices the flag changing underneath it and stops."""
+
+    def __init__(self, release_after: int) -> None:
+        self.released = False
+        self.ticks: list[float] = []
+        self._release_after = release_after
+
+    def tick(self, now: float) -> None:
+        self.ticks.append(now)
+        if len(self.ticks) >= self._release_after:
+            self.released = True
+
+
+def test_pump_tick_ticks_the_client_at_the_given_interval():
+    client = _FakeTickClient(release_after=3)
+
+    asyncio.run(asyncio.wait_for(pump_tick(client, interval=0.0), timeout=1.0))
+
+    assert len(client.ticks) == 3
+
+
+def test_pump_tick_exits_once_released_flips_true():
+    """No sentinel needed: exiting is exactly what lets asyncio.run above
+    return instead of asyncio.wait_for's timeout firing. This test pins the
+    other half -- that it stops AT release, not one tick early or late."""
+    client = _FakeTickClient(release_after=1)
+
+    asyncio.run(asyncio.wait_for(pump_tick(client, interval=0.0), timeout=1.0))
+
+    assert client.released is True
+    assert len(client.ticks) == 1

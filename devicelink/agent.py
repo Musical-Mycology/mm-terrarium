@@ -149,9 +149,6 @@ class DeviceLinkAgent:
             self._room_bridge.bind(self._room_dev, light=self._room_light,
                                    audio=audio_sink)
 
-    def client_for(self, dev: str):
-        return self.server._devs.get(dev)
-
     @property
     def clamped(self) -> int:
         """Room cues that arrived already late. A rising count means
@@ -389,9 +386,12 @@ class DeviceLinkAgent:
                       data1: int, data2: int,
                       when: float | None = None) -> None:
         if dev == self._room_dev and self._room_bridge is not None:
-            # Queue rather than feed: the Room's light must land on the same
-            # frame as the audio scheduled for the same `when`, not the
-            # instant the cue happens to arrive. Drained in _render_room().
+            # Queue rather than feed: the Room's light must wait for its
+            # declared time, not fire the instant the cue happens to
+            # arrive. Drained in _render_room(), which makes a single
+            # synchronous RoomBridge.feed_midi(status, d1, d2) call --
+            # there is no independently-scheduled audio call at `when` to
+            # land alongside; audio and light share this one dispatch.
             self._room_cues.push(when, (status, data1, data2),
                                  now=self._clock())
             return

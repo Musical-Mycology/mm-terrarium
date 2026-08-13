@@ -35,7 +35,9 @@ Usage on the Radxa:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from collections import deque
 from typing import Callable
 
@@ -197,12 +199,38 @@ class ShroomClient:
         return env.address
 
 
+async def pump_tick(client, interval: float = _TICK_INTERVAL) -> None:
+    """Drive ``client.tick()`` at the render rate until the client releases.
+
+    Shared by every asyncio-based devicelink client loop (this module's own
+    ``main()`` and ``harness/room_simulator.py``); ``harness/o2_shroom.py``
+    is deliberately NOT one of them -- its loop is synchronous o2lite
+    polling, a different shape, not a copy of this one.
+
+    Has to run concurrently with a client's inbound pump, not just once per
+    inbound frame: a frame timed for the future needs ticks to keep landing
+    while the inbound pump sits blocked waiting on the next message.
+
+    Uses time.monotonic(), matching DeviceLinkAgent's default clock
+    (devicelink/agent.py: clock=time.monotonic). Whether that agrees with
+    the sender's own `now` depends on who is driving `client`: true by
+    construction when the caller is a locally-spawned subprocess (e.g.
+    harness/room_simulator.py, always spawned by harness/terrarium_boot.py
+    on Control's own machine), NOT true for a real over-network device
+    (e.g. this module's own Radxa deployment) -- two machines' monotonic()
+    clocks share no epoch. That mismatch is real and unresolved here on
+    purpose; the design spec's o2lite clock is what actually fixes it.
+    This helper just keeps local/simulated runs working in the meantime.
+    """
+    while not client.released:
+        client.tick(time.monotonic())
+        await asyncio.sleep(interval)
+
+
 def main() -> None:
     """Connect to a DeviceLinkServer and run the sensor-up / LED-down loop."""
     import argparse
-    import asyncio
     import json
-    import time
 
     import websockets
 
@@ -235,32 +263,7 @@ def main() -> None:
                     await ws.send(json.dumps(client.tilt(x / 9.81)))
                     await asyncio.sleep(interval)
 
-            async def pump_tick() -> None:
-                """Drive client.tick() at the render rate.
-
-                Has to run concurrently with pump_down, not just once per
-                inbound frame: a frame timed for the future needs ticks to
-                keep landing while pump_down sits blocked waiting on the
-                next message.
-                """
-                while not client.released:
-                    # time.monotonic() is what DeviceLinkAgent uses by
-                    # default (devicelink/agent.py: clock=time.monotonic),
-                    # so `when` on an incoming frame and this client's
-                    # `now` only agree when Control and this client happen
-                    # to share one machine's clock -- true for this
-                    # transport run locally (e.g. the devicelink smoke
-                    # tests), but NOT true for the real over-network Radxa
-                    # deployment this module's own docstring describes: two
-                    # machines' monotonic() clocks have no relationship to
-                    # each other. That mismatch is real and unresolved here
-                    # on purpose -- see the design spec's o2lite clock,
-                    # which is what actually fixes it; this stand-in just
-                    # keeps local/simulated runs working in the meantime.
-                    client.tick(time.monotonic())
-                    await asyncio.sleep(_TICK_INTERVAL)
-
-            await asyncio.gather(pump_down(), pump_up(), pump_tick())
+            await asyncio.gather(pump_down(), pump_up(), pump_tick(client))
 
     asyncio.run(run())
 
