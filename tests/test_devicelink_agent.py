@@ -26,8 +26,9 @@ class FakeServer:
     def __init__(self):
         self.new_clients = []
         self.inbound = []
-        self.sent = []          # (client, msg)
+        self.sent = []          # (dev, msg)
         self.broadcasts = []
+        self._devs = {}         # dev -> client
 
     def drain_new_clients(self):
         out, self.new_clients = self.new_clients, []
@@ -37,8 +38,18 @@ class FakeServer:
         out, self.inbound = self.inbound, []
         return out
 
-    def send(self, client, msg):
-        self.sent.append((client, msg))
+    def bind_dev(self, dev, client):
+        self._devs[dev] = client
+
+    def drop_dev(self, dev):
+        self._devs.pop(dev, None)
+
+    def send(self, dev, msg):
+        # Mirrors DeviceLinkServer.send: an unbound dev is a silent no-op
+        # (boundary rule 2), not a recorded send.
+        if dev not in self._devs:
+            return
+        self.sent.append((dev, msg))
 
     def broadcast(self, msg):
         self.broadcasts.append(msg)
@@ -61,7 +72,7 @@ class RaisingSendServer(FakeServer):
     guarantee that a transport failure notifying one device can never
     strand another device's bridge or wedge the engine in UNLOADING."""
 
-    def send(self, client, msg):
+    def send(self, dev, msg):
         raise RuntimeError("transport exploded")
 
 
@@ -467,7 +478,7 @@ def test_render_room_sends_leds_event_when_frame_changes():
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge)
     client = object()
-    agent._clients["sim-room"] = client   # simulate the hello handshake
+    agent.server.bind_dev("sim-room", client)   # simulate the hello handshake
 
     agent._render_room()
 

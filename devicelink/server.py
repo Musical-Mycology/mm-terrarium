@@ -26,6 +26,7 @@ class DeviceLinkServer:
         self._clients: set = set()
         self._new_clients: deque = deque()
         self._inbound: deque = deque()
+        self._devs: dict[str, object] = {}
 
     # --- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -78,7 +79,20 @@ class DeviceLinkServer:
             self._inbound.clear()
         return out
 
-    def send(self, client, msg: dict) -> None:
+    def bind_dev(self, dev: str, client) -> None:
+        """Associate a dev id with its connection. Called by the agent once
+        /game/hello names an otherwise anonymous client."""
+        self._devs[dev] = client
+
+    def drop_dev(self, dev: str) -> None:
+        self._devs.pop(dev, None)
+
+    def send(self, dev: str, msg: dict) -> None:
+        """Send to a dev id. Unknown dev is a silent no-op: a cue for a
+        device that has gone away must never raise into the engine tick."""
+        client = self._devs.get(dev)
+        if client is None:
+            return
         try:
             client.send(json.dumps(msg))
         except Exception:

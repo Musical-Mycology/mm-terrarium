@@ -81,7 +81,6 @@ class DeviceLinkAgent:
         self.bridges: dict[str, DeviceBridge] = {}
         self._universes: dict[str, Universe] = {}
         self._last_frames: dict[str, bytes] = {}
-        self._clients: dict[str, object] = {}     # dev -> client
         # dev -> render-attempt count, for devices released but still being
         # driven through their closing fade. Presence in this dict, not in
         # self.bridges, is the source of truth for "closing" (a device can
@@ -143,7 +142,7 @@ class DeviceLinkAgent:
                                    audio=audio_sink)
 
     def client_for(self, dev: str):
-        return self._clients.get(dev)
+        return self.server._devs.get(dev)
 
     # --- driven once per tick-loop iteration -------------------------------
     def poll(self) -> None:
@@ -270,14 +269,14 @@ class DeviceLinkAgent:
     def _on_hello(self, client, dev: str, args: list) -> None:
         name = args[1] if len(args) > 1 else ""
         protoversion = args[2] if len(args) > 2 else ""
-        self._clients[dev] = client
+        self.server.bind_dev(dev, client)
         self.game_server.hello(dev, name, protoversion)
 
     def _on_join(self, client, dev: str, args: list) -> None:
         if len(args) < 2:
             self._send(dev, protocol.error_event(dev, "join", "missing node"))
             return
-        self._clients[dev] = client
+        self.server.bind_dev(dev, client)
         result = self.game_server.join(dev, args[1])
         if not result.granted:
             self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
@@ -378,7 +377,4 @@ class DeviceLinkAgent:
 
     # --- outbound -----------------------------------------------------------
     def _send(self, dev: str, msg: dict) -> None:
-        client = self._clients.get(dev)
-        if client is None:
-            return
-        self.server.send(client, msg)
+        self.server.send(dev, msg)
