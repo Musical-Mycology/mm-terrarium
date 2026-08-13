@@ -2229,3 +2229,274 @@ Carried from the spec's section 8, and worth restating so nobody reads a green s
 - **The horizon default of 0.060 s is a placeholder, not a measurement.** `sync_bench` produces the real figure for this box, and even that does not carry to the venue box.
 - **Arco is clock master only once its audio is up** (`arco.cpp:1295`). The `start()` assertion in Task 5 makes the failure visible rather than silent, but the coupling is upstream.
 - **Nothing yet drives the Room's light during a live run.** Task 6 makes Room cues arrive on time; no Bit emits one. `TestBit`'s handlers still address only the calling device, and `Bit.update(dt)` still has no cue-emission mechanism at all.
+
+---
+
+### Task 11: A bounded, self-terminating demo run
+
+Added after Task 10, when the controller found the manual acceptance run
+could not actually demonstrate anything. `harness/terrarium_boot.py:206`
+calls `gs.run()` immediately, and `control/registration.py:41-42` refuses a
+**scored** role once RUNNING (`"registration closed for scored roles"`,
+:55). `TestBit`'s `player` is scored, so `harness/o2_shroom.py` joining
+`TEST_PLAYER_NODE` is denied every time. Joining the jam node instead does
+not help: `TestBit`'s `jammer` declares no `light_manifest`, so there would
+be nothing to see.
+
+The driver also loops `while True` forever, so it keeps ticking an unloaded
+Bit after completion until Ctrl-C.
+
+**Files:**
+- Modify: `harness/terrarium_boot.py` (`main`)
+- Test: `tests/test_terrarium_boot.py`
+
+**Interfaces:**
+- Consumes: everything from Tasks 1-10.
+- Produces: `_wait_in_setup(agent, setup_seconds, clock=time.monotonic, sleep=time.sleep)`, `_serve_until_done(gs, agent, arco, clock=time.monotonic, sleep=time.sleep) -> str`, and a `--setup-seconds` flag. Nothing later depends on these; this is the last task.
+
+- [ ] **Step 1: Write the failing SETUP-hold test**
+
+Add to `tests/test_terrarium_boot.py`:
+
+```python
+def test_wait_in_setup_polls_for_the_requested_window():
+    """A scored role is refused once RUNNING, so a device needs a window to
+    join before run() closes it."""
+    from harness.terrarium_boot import _wait_in_setup
+
+    polls = []
+
+    class FakeAgent:
+        def poll(self):
+            polls.append(1)
+
+    ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
+    _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                   sleep=lambda _s: None)
+    assert len(polls) >= 3
+
+
+def test_wait_in_setup_returns_immediately_when_not_requested():
+    """Default 0 preserves the existing load-straight-into-run behavior."""
+    from harness.terrarium_boot import _wait_in_setup
+
+    polls = []
+
+    class FakeAgent:
+        def poll(self):
+            polls.append(1)
+
+    _wait_in_setup(FakeAgent(), 0.0, clock=lambda: 0.0,
+                   sleep=lambda _s: None)
+    assert polls == []
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `$PY -m pytest tests/test_terrarium_boot.py -v -k wait_in_setup`
+Expected: FAIL with `ImportError: cannot import name '_wait_in_setup'`.
+
+- [ ] **Step 3: Implement the SETUP hold**
+
+Mirror `harness/devicelink_smoke.py:51-63`, which solves exactly this
+problem for the sibling driver. Add to `harness/terrarium_boot.py`:
+
+```python
+def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
+                   sleep=time.sleep) -> None:
+    """Poll the transport for setup_seconds while the Bit sits in SETUP, so
+    a device can join a scored role before run() closes the window.
+    registration.join() refuses scored roles once RUNNING
+    (control/registration.py:41-42), and TestBit's `player` is scored, so
+    without this window harness/o2_shroom.py is denied every time.
+    setup_seconds <= 0 -- the default -- returns immediately, preserving the
+    existing load-straight-into-run behavior. Same shape as
+    harness/devicelink_smoke.py's _wait_in_setup.
+    """
+    if setup_seconds <= 0:
+        return
+    deadline = clock() + setup_seconds
+    while clock() < deadline:
+        agent.poll()
+        sleep(1.0 / 44.0)
+```
+
+`import time` at module level if it is not already there — note `main()`
+currently imports `time` inside the function body; hoist it rather than
+importing twice.
+
+- [ ] **Step 4: Write the failing completion-exit test**
+
+```python
+def test_serve_until_done_stops_when_the_bit_completes():
+    """The Bit declares itself finished via update(); the driver must
+    notice and tear down rather than ticking an unloaded Bit forever."""
+    from control.state import State
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        def __init__(self):
+            self.state = State.RUNNING
+            self.ticks = 0
+
+        def tick(self, dt):
+            self.ticks += 1
+            if self.ticks >= 3:
+                self.state = State.IDLE
+
+    class FakeAgent:
+        closing = 0
+
+        def poll(self):
+            pass
+
+    class FakeArco:
+        def poll(self):
+            return None
+
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+                               sleep=lambda _s: None)
+    assert reason == "completed"
+
+
+def test_serve_until_done_stops_when_arco_dies():
+    """Fail loud: silent degradation in a venue is worse than a stop."""
+    from control.state import State
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        state = State.RUNNING
+
+        def tick(self, dt):
+            pass
+
+    class FakeAgent:
+        closing = 0
+
+        def poll(self):
+            pass
+
+    class FakeArco:
+        def poll(self):
+            return 1                      # exited
+
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+                               sleep=lambda _s: None)
+    assert reason == "arco-exited"
+
+
+def test_serve_until_done_lets_closing_devices_finish_their_fade():
+    """Release is asynchronous: /<dev>/release is only sent after the
+    closing fade renders. Exiting the instant state hits IDLE would freeze
+    every device on its last frame."""
+    from control.state import State
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        state = State.IDLE
+
+        def tick(self, dt):
+            pass
+
+    class FakeAgent:
+        def __init__(self):
+            self.closing = 2
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            if self.polls >= 4:
+                self.closing = 0
+
+    class FakeArco:
+        def poll(self):
+            return None
+
+    agent = FakeAgent()
+    _serve_until_done(FakeGS(), agent, FakeArco(), sleep=lambda _s: None)
+    assert agent.closing == 0
+    assert agent.polls >= 4
+```
+
+- [ ] **Step 5: Run to verify it fails**
+
+Run: `$PY -m pytest tests/test_terrarium_boot.py -v -k serve_until_done`
+Expected: FAIL with `ImportError: cannot import name '_serve_until_done'`.
+
+- [ ] **Step 6: Implement the serve loop**
+
+```python
+def _serve_until_done(gs, agent, arco, clock=time.monotonic,
+                      sleep=time.sleep) -> str:
+    """Tick until the Bit finishes or Arco dies. Returns the reason.
+
+    Two exit conditions, both deliberate:
+
+    "completed" -- the Bit signalled done from update(dt), so the engine
+    ran COMPLETING/UNLOADING synchronously and state is back to IDLE. The
+    loop then keeps polling until the transport has no devices still
+    closing, because release is ASYNCHRONOUS: a released device renders its
+    closing fade over several ticks and only then receives /<dev>/release.
+    Exiting the instant state hit IDLE would freeze every device on its
+    last frame.
+
+    "arco-exited" -- the Arco subprocess is gone. Fail loud: silent
+    degradation in a venue is worse than a visible stop.
+    """
+    while True:
+        if arco.poll() is not None:
+            return "arco-exited"
+        agent.poll()
+        gs.tick(1.0 / 44.0)
+        if gs.state == State.IDLE and not getattr(agent, "closing", 0):
+            return "completed"
+        sleep(1.0 / 44.0)
+```
+
+Import `State` from `control.state` at module level.
+
+`DeviceLinkAgent` tracks in-flight closing devices in its `_closing` dict.
+Add a public read-only `closing` property beside the existing `clamped`
+property, returning `len(self._closing)`, so this loop does not reach into
+a private attribute. Mirror `clamped`'s shape and docstring style.
+
+- [ ] **Step 7: Wire both into `main()`**
+
+Add the flag:
+
+```python
+    ap.add_argument("--setup-seconds", type=float, default=0.0,
+                    help="Hold the Bit in SETUP for this long before "
+                         "run(), so a device can join a scored role (e.g. "
+                         "TEST_PLAYER_NODE) before registration closes for "
+                         "it. Default 0 keeps the instant-run behavior.")
+```
+
+Then in `main()`, replace the inline `gs.run()` / `while True:` block with:
+
+```python
+        if args.setup_seconds > 0:
+            print(f"Holding in SETUP for {args.setup_seconds:g}s -- join now")
+        _wait_in_setup(agent, args.setup_seconds)
+        gs.run()
+        reason = _serve_until_done(gs, agent, arco)
+        if reason == "arco-exited":
+            print("Arco exited; tearing down", file=sys.stderr)
+        else:
+            print("Bit completed; tearing down")
+```
+
+Keep this inside the existing `try:` so `finally: shutdown(...)` still runs
+on every path. Do not reintroduce the `import time` inside `main()`.
+
+- [ ] **Step 8: Run the full suite**
+
+Run: `$PY -m pytest tests -v`
+Expected: PASS, zero failures and zero errors.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add harness/terrarium_boot.py devicelink/agent.py tests/test_terrarium_boot.py
+git commit -m "feat(terrarium): bounded, self-terminating demo run"
+```
