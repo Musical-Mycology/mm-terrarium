@@ -73,6 +73,47 @@ def test_draining_twice_does_not_repeat_a_message():
     assert transport.drain_inbound() == []
 
 
+def test_a_delivered_message_is_only_seen_after_a_pump():
+    """Regression for the live failure: on the real device, Control never
+    received anything, because nothing in its tick loop ever called
+    o2lite.poll(). FakeO2Lite.deliver() now only QUEUES a message --
+    matching real o2litepy, which dispatches to a handler solely from
+    inside poll() -- so this can only pass if drain_inbound() itself pumps
+    before it drains. Fails against a transport whose drain_inbound() is
+    just `drained, self._inbound = self._inbound, []` with no poll() call."""
+    transport, fake = _started()
+    fake.deliver("/game/hello", "s", ("ie1",))
+    # Before any pump, the message is queued at the fake but has not
+    # reached a handler yet -- the fake's handlers dict was populated by
+    # start(), but nothing has dispatched into it.
+    assert fake._queue, "expected deliver() to queue rather than dispatch"
+    drained = transport.drain_inbound()
+    assert len(drained) == 1
+    _client, msg = drained[0]
+    assert msg["address"] == "/game/hello"
+    assert msg["args"] == ["ie1"]
+
+
+def test_a_raising_poll_does_not_escape_drain_inbound():
+    """Boundary rule 2 applies to poll() exactly as it does to send(): a hub
+    that has gone away must never propagate an exception into the engine
+    tick."""
+    transport, fake = _started()
+
+    def _raise():
+        raise RuntimeError("o2lite hub is gone")
+
+    fake.poll = _raise
+    assert transport.drain_inbound() == []
+
+
+def test_drain_inbound_before_start_does_not_raise():
+    """self._o2 is None until start() runs; draining before then must be a
+    quiet no-op, not an AttributeError on None.poll()."""
+    transport = O2LiteTransport()
+    assert transport.drain_inbound() == []
+
+
 def test_drain_new_clients_is_a_noop():
     """o2lite has no connection to accept: a device is anonymous until it
     says /game/hello. agent.py already tolerates an empty list here."""

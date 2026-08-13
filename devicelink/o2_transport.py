@@ -123,6 +123,9 @@ class FakeO2Lite:
         self.handlers: dict[str, object] = {}
         self.msg_timestamp = 0.0
         self._pull: list = []
+        # Messages deliver() has queued but poll() has not yet dispatched --
+        # see poll()'s docstring for why this queue exists at all.
+        self._queue: list[tuple[str, str, tuple, float]] = []
 
     def time_get(self) -> float:
         return self._now
@@ -144,17 +147,30 @@ class FakeO2Lite:
         self.send(addr, timestamp, *args)
 
     def poll(self) -> None:
-        pass
+        """Dispatch every message deliver() has queued since the last poll.
+
+        This is the one behavior real o2litepy is strict about and the old
+        fake was not: o2lite only calls a registered handler from inside
+        poll(). A caller that never pumps o2lite never sees a message, no
+        matter how many were delivered to the hub -- which is exactly the
+        live bug this fake used to hide by dispatching from deliver()
+        directly.
+        """
+        queue, self._queue = self._queue, []
+        for address, typespec, args, timestamp in queue:
+            handler = self.handlers.get(address)
+            if handler is None:
+                continue
+            self.msg_timestamp = timestamp
+            self._pull = list(args)
+            handler(address[1:], typespec, None)   # leading '/' stripped
 
     def deliver(self, address: str, typespec: str, args: tuple,
                 timestamp: float = 0.0) -> None:
-        """Simulate an inbound message arriving from the hub."""
-        handler = self.handlers.get(address)
-        if handler is None:
-            return
-        self.msg_timestamp = timestamp
-        self._pull = list(args)
-        handler(address[1:], typespec, None)      # leading '/' stripped
+        """Simulate an inbound message arriving at the hub. Queues only --
+        poll() is what actually dispatches to a registered handler, matching
+        real o2litepy."""
+        self._queue.append((address, typespec, tuple(args), timestamp))
 
     # --- the pull-style getters ------------------------------------------
 
@@ -245,6 +261,20 @@ class O2LiteTransport:
         return []
 
     def drain_inbound(self) -> list:
+        """Pump o2lite, then return everything that arrived.
+
+        o2litepy only dispatches inbound messages to registered handlers
+        from inside o2lite.poll() -- nothing else in Control's tick loop
+        pumps it, so this is the one place that must. Guarded for
+        self._o2 is None (nothing to pump before start()), and a raising
+        poll() is swallowed rather than let escape into the engine tick --
+        boundary rule 2, same as send() below.
+        """
+        if self._o2 is not None:
+            try:
+                self._o2.poll()
+            except Exception:
+                logger.exception("o2lite poll failed")
         drained, self._inbound = self._inbound, []
         return drained
 

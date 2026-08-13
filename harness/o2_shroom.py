@@ -133,10 +133,25 @@ def main() -> None:
     start = o2lite.time_get()
     interval = 1.0 / args.tilt_hz
     next_tilt = start
+    # The join reply is asynchronous -- it only arrives once the loop below
+    # polls it in -- so noticing a deny/error has to happen inside the loop,
+    # not right after send_cmd. Printed once each: without this, a refused
+    # join looks identical to a working one that simply has no frames yet
+    # -- a blank browser and no explanation.
+    deny_printed = False
+    error_printed = False
     try:
         while not client.released:
             o2lite.poll()
             now = o2lite.time_get()
+            if not deny_printed and client.last_deny is not None:
+                reason, hint = client.last_deny
+                print(f"JOIN DENIED: {reason} ({hint})")
+                deny_printed = True
+            if not error_printed and client.last_error is not None:
+                context, message = client.last_error
+                print(f"ERROR from Control: {context}: {message}")
+                error_printed = True
             if not args.no_join and now >= next_tilt:
                 gamma = tilt_sweep(now - start)
                 # Timestamps at the source (Design Rule 4): the device's own
