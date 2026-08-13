@@ -176,6 +176,31 @@ class DeviceLinkAgent:
         self._feed_breath()
         self._render_frames()
         self._render_room()
+        self._tick_audio()
+
+    def _tick_audio(self) -> None:
+        """Drive AudioBridge.tick() once per poll(): the only place the
+        audio side ticks (control/audio.py's tick() docstring). Left
+        uncalled, welcome-cue voices are acquired and never released
+        (leaking the pool), and a real ArcoSynthPool.poll() -- which drives
+        pyarco's scheduler -- never runs either.
+
+        now=self._clock(), not AudioBridge's own default clock: this
+        agent's clock is whatever harness/terrarium_boot.py's driver loop
+        ticks on (time.monotonic for websocket mode, o2lite.time_get for
+        o2lite), and that is the time base every other per-tick concern
+        here (_feed_breath, _render_frames, _render_room) already reads.
+        Passing it explicitly keeps a welcome cue's expiry check on that
+        same time base regardless of which clock room_audio itself
+        happened to be constructed with -- the frame-timing bug this
+        mirrors (see harness/terrarium_boot.py's build() clock= docstring)
+        was exactly two clocks disagreeing on what 'now' means."""
+        if self._room_audio is None:
+            return
+        try:
+            self._room_audio.tick(now=self._clock())
+        except Exception:
+            logger.exception("room audio tick failed")
 
     def _render_room(self) -> None:
         if self._room_light is None or self._room_dev is None:

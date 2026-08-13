@@ -104,7 +104,13 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     live-demo bug this parameter fixes. This function still never imports
     o2litepy itself; the caller (main(), only in the --transport o2lite
     branch) resolves o2lite.time_get and hands it in as a plain callable,
-    the same way it already hands in the started transport."""
+    the same way it already hands in the started transport. Also threaded
+    into the default (room_audio=None) AudioBridge below, for the same
+    reason: DeviceLinkAgent._tick_audio() ticks room_audio against this
+    same clock (agent.py), so a welcome cue's due time (set at on_grant,
+    against AudioBridge's own clock) and its expiry check (at tick, against
+    the agent's) have to agree -- harness/led_smoke.py's own
+    AudioBridge(pool, clock=clock) is the existing precedent for this."""
     if transport is None:
         server = DeviceLinkServer(host=host, port=port)
         server.start()
@@ -131,7 +137,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         pool = ArcoSynthPool() if config.arco_soundfont is None \
             else ArcoSynthPool(soundfont=config.arco_soundfont)
         pool.start()
-        room_audio = AudioBridge(pool)
+        room_audio = AudioBridge(pool, clock=clock)
 
     agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
                             room_audio=room_audio,

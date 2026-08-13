@@ -617,3 +617,86 @@ def test_no_room_audio_injected_state_change_is_a_noop():
     agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
 
     agent.on_state_change(State.SETUP, State.RUNNING)   # must not raise
+
+
+# --- Audio bridge tick: poll() is the driver-loop step, so it is what has
+# to drive AudioBridge.tick() -- nothing else in the stack ever calls it
+# (see control/audio.py's tick() docstring: "Called once per driver-loop
+# iteration"). Left uncalled, welcome-cue voices are acquired and never
+# released (leaking the pool), and a real ArcoSynthPool's poll() -- which
+# drives pyarco's scheduler -- never runs either. -------------------------
+
+def test_poll_ticks_the_room_audio_bridge():
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+    assert pool.polls == 0   # nothing ticks at construction time
+
+    agent.poll()
+
+    assert pool.polls == 1
+
+
+def test_poll_with_no_room_audio_injected_does_not_raise():
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    agent.poll()   # room_audio defaults to None -- must not raise
+
+
+def test_poll_releases_a_pending_welcome_cue_after_elapsed_time():
+    """Pins the leak: a welcome-cue voice acquired by AudioBridge.on_grant()
+    must actually come back to the pool once its declared duration has
+    elapsed and poll() has ticked. TestBit's room role (see bits/test_bit.py)
+    declares no welcome, so the pending cue here is granted directly against
+    the SAME AudioBridge the agent already has wired -- the same shape a
+    real player join's welcome chime would take, without threading a whole
+    join through DeviceLinkAgent for a case control/audio.py's own
+    test_welcome_cue_note_off_fires_after_its_duration_and_frees_the_voice
+    already covers at the unit level. clock=clk is shared by both the
+    AudioBridge and the agent, matching the fixed construction in
+    harness/terrarium_boot.py -- see this task's report for why that
+    matters."""
+    clk = _Clock()
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool, clock=clk)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio, clock=clk)
+    player_role = gs.bit.role_table.roles["player"]   # declares welcome.audio
+    room_audio.on_grant("extra-dev", player_role)
+    cue_voice = pool.acquired[-1]                     # welcome voice, acquired last
+    assert cue_voice not in pool.released
+
+    clk.advance(1.0)
+    agent.poll()                # welcome duration is 1.5s -- not due yet
+    assert cue_voice not in pool.released
+
+    clk.advance(1.0)
+    agent.poll()                # now 2.0s elapsed: past due
+    assert cue_voice in pool.released
+
+
+class _RaisingAudioBridge:
+    """A room_audio double whose tick() always raises -- exercises the
+    boundary guarantee that an audio failure cannot escape into the engine
+    tick (boundary rule 2), the same guarantee RaisingSendServer above
+    exercises for transport failures. on_grant() is a no-op rather than
+    raising too: _setup_room() calls it at construction time, before poll()
+    is ever reached, and only the tick() failure is under test here."""
+
+    def on_grant(self, dev, role) -> None:
+        pass
+
+    def tick(self, now=None) -> None:
+        raise RuntimeError("audio tick exploded")
+
+
+def test_poll_survives_a_raising_audio_tick():
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=_RaisingAudioBridge())
+
+    agent.poll()   # must not raise; must not wedge the engine tick
