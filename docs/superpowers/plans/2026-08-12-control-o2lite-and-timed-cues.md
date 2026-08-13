@@ -1618,10 +1618,15 @@ def test_tilt_sweep_reverses_rather_than_jumping():
     assert biggest_step < 20.0
 
 
-def test_tilt_sweep_is_deterministic():
-    """Deterministic so the sweep is assertable; a random walk would make
-    every acceptance run a judgement call."""
-    assert tilt_sweep(1.25) == tilt_sweep(1.25)
+def test_tilt_sweep_is_periodic():
+    """One full period returns to where it started, so the sweep closes its
+    loop cleanly rather than drifting. Also pins it as a deterministic
+    function of elapsed time: a random walk would make every acceptance run
+    a judgement call."""
+    from harness.o2_shroom import SWEEP_PERIOD
+
+    assert tilt_sweep(0.0) == tilt_sweep(SWEEP_PERIOD)
+    assert tilt_sweep(1.25) == tilt_sweep(1.25 + SWEEP_PERIOD)
 ```
 
 - [ ] **Step 2: Run to verify it fails**
