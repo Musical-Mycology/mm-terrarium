@@ -754,13 +754,17 @@ Kept explicit so the doc doesn't over-claim:
   needs the `Bit` interface to grow a way to receive gesture time and the
   horizon, which is the same interface change the Room-cue gap has been
   waiting on.
-- **Device frame timing is only correct on one machine.** Control stamps
-  frames with `time.monotonic() + horizon` and the device compares against its
-  own `time.monotonic()`. Those share an epoch only because the room simulator
-  is spawned as a local subprocess. Over the network to a real Radxa they do
-  **not**, so device frame timing is wrong there until the o2lite clock drives
-  it instead. This is a second, independent reason the shared-clock property
-  does not yet fully hold; do not conflate it with the plumbing gap above.
+- **Device frame timing depends on which transport is in use.** On the
+  o2lite transport, Control and the device now share one clock by
+  construction: `DeviceLinkAgent` stamps frames off `o2lite.time_get()`
+  (`harness/terrarium_boot.py`'s `main()` wires this in, since o2litepy is
+  a module-level singleton both processes are already guests on), and
+  `harness/o2_shroom.py` ticks the device against that same O2 clock. That
+  holds over a real network, not just on one machine -- it is the real fix,
+  not a workaround. The websocket transport still relies on both processes
+  sharing a `time.monotonic` epoch, and that only holds because
+  `harness/room_simulator.py` is always spawned as a local subprocess of
+  Control; it would not hold for an over-network websocket device.
 - **A stale device entry survives an ungraceful disconnect**, and this
   architecture cannot fix it as-is. Control is an o2lite **client**, not the O2
   host, so devices connect to Arco and Control never holds a socket to one.

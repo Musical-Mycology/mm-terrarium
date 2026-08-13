@@ -74,7 +74,8 @@ class _O2SimulatorFactory:
 def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
          room_binding: RoomBindingRegistry, host: str = "127.0.0.1",
          port: int = 0, arco_process_cls=ArcoProcess,
-         simulator_popen=subprocess.Popen, room_audio=None, transport=None):
+         simulator_popen=subprocess.Popen, room_audio=None, transport=None,
+         clock=time.monotonic):
     """Construct the whole stack. Returns (game_server, devicelink_server,
     devicelink_agent, arco_process, simulator_process).
 
@@ -92,7 +93,18 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     DeviceLinkServer. o2lite mode has no socket to listen on -- the
     connection is pyarco's, already clock-synced by arco.initialize() and
     started by the caller before this transport was handed in here -- so
-    this function never constructs or starts an O2LiteTransport itself."""
+    this function never constructs or starts an O2LiteTransport itself.
+
+    clock: threaded straight through to DeviceLinkAgent, whose default is
+    the same time.monotonic -- so omitting this argument changes nothing.
+    It exists so o2lite mode can hand in o2lite.time_get instead: Control
+    stamps every frame's `when` off this clock (agent.py:253), and
+    harness/o2_shroom.py ticks its device off the O2 clock, so the two
+    must read the same clock or `when` is never reachable -- exactly the
+    live-demo bug this parameter fixes. This function still never imports
+    o2litepy itself; the caller (main(), only in the --transport o2lite
+    branch) resolves o2lite.time_get and hands it in as a plain callable,
+    the same way it already hands in the started transport."""
     if transport is None:
         server = DeviceLinkServer(host=host, port=port)
         server.start()
@@ -123,7 +135,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
 
     agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
                             room_audio=room_audio,
-                            horizon=config.cue_horizon)
+                            horizon=config.cue_horizon, clock=clock)
     return gs, server, agent, arco, factory.process
 
 
@@ -260,6 +272,7 @@ def main() -> None:
     args = ap.parse_args()
 
     transport = None
+    clock = time.monotonic
     if args.transport == "o2lite":
         from o2litepy import o2lite            # lazy: websocket mode needs no o2litepy
 
@@ -269,6 +282,14 @@ def main() -> None:
         # while constructing room_audio, so the transport is started after
         # build() returns rather than before it.
         transport = O2LiteTransport()
+        # Control must stamp frames on the same clock the device ticks
+        # against (harness/o2_shroom.py: client.tick(o2lite.time_get())),
+        # or a frame's `when` is never reachable -- see build()'s clock=
+        # docstring. o2litepy is a module-level singleton (design spec
+        # 2026-08-12 section 5.2), so this is the very same clock
+        # arco.initialize() already synced by the time build() constructs
+        # the agent below.
+        clock = o2lite.time_get
 
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
     if args.horizon is not None:
@@ -278,7 +299,7 @@ def main() -> None:
         config, {"TestBit": _timed_test_bit_cls(_run_duration(args))},
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
-        transport=transport)
+        transport=transport, clock=clock)
 
     # Once build() has returned, Arco and the simulator are live
     # subprocesses and room_audio's ArcoSynthPool is running -- everything

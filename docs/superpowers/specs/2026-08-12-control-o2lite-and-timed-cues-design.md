@@ -161,19 +161,26 @@ guarantee they land on the same rendered instant. Finishing the wiring is
 therefore a real design decision, how to keep two schedulers from
 drifting apart, not a mechanical connect-the-dots exercise.
 
-**A second, separate gap: the shared clock does not hold over a real
-network.** Even once a Bit can emit a `T`, `harness/shroom_client.py`'s
-tick loop reads `time.monotonic()` as `now`, matching `DeviceLinkAgent`'s
-default clock. Two machines' `monotonic()` clocks share no epoch, so a
-device's frame timing is only correct when the device and Control happen
-to share one clock. That is true by construction for the locally-spawned
-room simulator (`harness/terrarium_boot.py` always spawns it as a
-subprocess of Control) and false for a real over-network Radxa
-Tuneshroom. Fixing it is what this design's own o2lite clock is for
-(section 1's "already true" list). It is a second, independent reason "one
-shared time" does not fully hold yet, not the same gap as the missing Bit
-wiring described above; a reader should take away two open problems, not
-one.
+**A second, separate gap, now closed for o2lite: the shared clock.**
+`DeviceLinkAgent` now stamps every frame off `o2lite.time_get()` on the
+o2lite transport -- `harness/terrarium_boot.py`'s `main()` hands that
+clock to `build()`, which threads it into the agent's already-injectable
+`clock=` parameter, once the agent is constructed (after
+`arco.initialize()` has connected and synced it). `harness/o2_shroom.py`'s
+tick loop reads the same `o2lite.time_get()` as `now`. Because o2litepy is
+a module-level singleton (section 5.2), both processes are reading the
+same clock, and that holds over a real network, not just on one machine --
+it is the actual fix, not a same-machine coincidence. The websocket
+transport is a different story: `harness/shroom_client.py`'s tick loop
+still reads `time.monotonic()`, matching `DeviceLinkAgent`'s default
+clock, and two machines' `monotonic()` clocks share no epoch. That still
+only works by construction for the locally-spawned room simulator
+(`harness/terrarium_boot.py` always spawns it as a subprocess of Control)
+and would not hold for a real over-network websocket device. This was a
+second, independent reason "one shared time" did not fully hold, not the
+same gap as the missing Bit wiring described above; a reader should take
+away that the o2lite half is now closed while the Bit-wiring gap above
+remains open.
 
 ## 3. Non-goals
 

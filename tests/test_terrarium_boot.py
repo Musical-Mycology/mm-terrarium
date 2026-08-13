@@ -1,4 +1,5 @@
 import argparse
+import time
 
 from bits.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.arco_process import FakePopen
@@ -19,17 +20,18 @@ def _fake_room_audio():
     return AudioBridge(FakePool())
 
 
-def _build_with_fakes(config, *, transport=None):
+def _build_with_fakes(config, *, transport=None, clock=time.monotonic):
     """Shared fake-injecting build() call for tests that don't need to
     inspect a specific fake's recorded calls afterward (contrast the tests
     below, which construct their own FakePopen so they can assert on it
-    post-shutdown)."""
+    post-shutdown). clock defaults to build()'s own default, so existing
+    callers that don't pass one see no change in behavior."""
     return build(
         config, {"TestBit": TestBit},
         arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
         host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
         simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
-        transport=transport)
+        transport=transport, clock=clock)
 
 
 def test_build_wires_devicelink_room_bridge_and_simulator():
@@ -109,6 +111,116 @@ def test_build_can_run_the_agent_on_the_o2lite_transport():
     try:
         assert agent.server is transport
         assert fake.services == "actl,game"
+    finally:
+        shutdown(gs, agent, arco, sim)
+
+
+def test_build_passes_the_supplied_clock_to_the_agent():
+    """main()'s o2lite branch hands build() o2lite.time_get so Control
+    stamps frames on the same clock the device ticks against -- see
+    build()'s clock= docstring. This is the wiring seam that fix depends
+    on; assert it directly rather than only through end-to-end behavior."""
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    fake_clock = lambda: 45.0
+    gs, server, agent, arco, sim = _build_with_fakes(config, clock=fake_clock)
+    try:
+        assert agent._clock is fake_clock
+    finally:
+        shutdown(gs, agent, arco, sim)
+
+
+def test_build_omitting_clock_keeps_the_existing_default():
+    """The websocket path (and every existing caller) must see no change:
+    omitting clock= leaves build() -- and therefore the agent -- on
+    time.monotonic, exactly as before this parameter existed."""
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, sim = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
+        room_audio=_fake_room_audio())
+    try:
+        assert agent._clock is time.monotonic
+    finally:
+        shutdown(gs, agent, arco, sim)
+
+
+def test_o2lite_frame_is_released_across_the_shared_clock():
+    """Regression for a live-demo bug: on the o2lite transport, a device
+    never displayed any LED frame, ever. Cause was a clock-base mismatch --
+    devicelink/agent.py stamps `when = self._clock() + self._horizon`
+    (agent.py:253); pre-fix, build() always defaulted DeviceLinkAgent's
+    clock to time.monotonic (hundreds of thousands of seconds on a
+    long-uptime machine) regardless of transport, while
+    harness/o2_shroom.py ticks the device with the O2 clock
+    (o2lite.time_get(), which starts near zero when Arco boots).
+    control/timed_queue.py held every frame forever because the two ends
+    disagreed about what time meant -- the device and TimedQueue were both
+    correct, only the inputs disagreed.
+
+    No existing test could catch this: every one either injects a single
+    clock for both "ends", or only inspects the agent's outbound message
+    without ever feeding it to a client actually ticked from a different
+    clock. FakeO2Lite stands in for the one O2 clock a real device and
+    Control genuinely share (o2litepy is a module-level singleton -- design
+    spec 2026-08-12 section 5.2); ShroomClient.tick() is the exact client
+    code harness/o2_shroom.py drives with o2lite.time_get()."""
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, from_o2_arg
+    from harness.shroom_client import ShroomClient
+
+    fake_o2 = FakeO2Lite(now=45.0)          # O2 clock starts near zero
+    transport = O2LiteTransport()
+    transport.start(fake_o2)
+
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, sim = _build_with_fakes(
+        config, transport=transport, clock=fake_o2.time_get)
+    try:
+        fake_o2.deliver("/game/hello", "s", ("ie1",))
+        agent.poll()
+        fake_o2.deliver("/game/join", "ss", ("ie1", "TEST_PLAYER_NODE"))
+        agent.poll()
+        gs.run()
+
+        class _FakeLEDs:
+            def __init__(self):
+                self.shown = []
+
+            def show(self, channels):
+                self.shown.append(bytes(channels))
+
+            def clear(self):
+                pass
+
+        leds = _FakeLEDs()
+        client = ShroomClient("ie1", "TEST_PLAYER_NODE", leds=leds)
+
+        # The join poll above already rendered and sent one frame (aurora
+        # breathes continuously with no cue needed, same as
+        # tests/test_devicelink_frames.py's test_emits_a_36_channel_frame).
+        # This loop's job is to advance the shared clock far enough past
+        # that frame's `when = clock() + horizon` for the device's own
+        # tick(now) to actually reach it.
+        for _ in range(10):
+            fake_o2.set_time(fake_o2.time_get() + 0.02)
+            agent.poll()
+
+        led_sends = [entry for entry in fake_o2.sent if entry[0] == "/ie1/leds"]
+        assert led_sends, "expected the agent to emit at least one /ie1/leds frame"
+
+        for addr, ts, typespec, args in led_sends:
+            decoded = [from_o2_arg(a) if t == "b" else a
+                      for t, a in zip(typespec, args)]
+            client.handle({"timestamp": ts, "address": addr,
+                           "typespec": typespec, "args": decoded})
+        client.tick(fake_o2.time_get())
+
+        assert leds.shown, (
+            "a frame the agent stamped off the shared O2 clock must be "
+            "released once the device's own tick(now), reading that same "
+            "clock, reaches its `when` -- pre-fix this stays empty forever, "
+            "because the agent's default clock (time.monotonic) never "
+            "comes near the O2 clock's small values")
     finally:
         shutdown(gs, agent, arco, sim)
 
