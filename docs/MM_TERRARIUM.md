@@ -38,8 +38,17 @@ hardware fleet.
 > hardware: a sustained drone whose loudness and timbre track the light off one
 > shared MIDI stream.
 >
-> Still absent: **O2/o2lite** (the device wire is a direct websocket to Control,
-> not o2lite through Arco), **fairyring**, real scoring, and any production Bit.
+> **O2/o2lite is no longer absent, and the old blanket "no O2" line was always
+> imprecise.** It described the *device wire*. The Arco connection was a
+> different story all along: pyarco talks to Arco over `o2litepy`
+> (`pyarco/arco_engine.py:12`) and `arco.initialize()` blocks until clock sync
+> completes, so mm-terrarium has been a **clock-synced o2lite client of Arco**
+> whenever the Room's audio is up. As of the 2026-08-12 slice Control also
+> **offers `game` over that same connection** (`devicelink/o2_transport.py`),
+> so device registration can cross a real O2 hub. The websocket transport
+> remains and is still the default; o2lite is opt-in per run.
+>
+> Still absent: **fairyring**, real scoring, and any production Bit.
 > As of 2026-08-10, **`Room`** exists as a boot-time concept and orchestration
 > (`control/boot.py` now spawns Arco itself, resolves a `RoomType`, and gates
 > Bit loading on it), and **TEST room now has a real renderer**: a devicelink-
@@ -553,6 +562,72 @@ TEST room only; DEMO's simulated venue array is a deferred follow-up.
   extending the `Bit` interface to let `update()` (or something like it)
   emit cues, which is out of scope here — see *Not yet built* below.
 
+### `devicelink/o2_transport.py`, `control/timed_queue.py`, `harness/o2_shroom.py` — Control on o2lite, and timed cues
+Control becomes a real O2 participant, and a cue gains a time. Design:
+[`.../2026-08-12-control-o2lite-and-timed-cues-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-12-control-o2lite-and-timed-cues-design.md).
+
+- **`O2LiteTransport`** (`devicelink/o2_transport.py`) — Control's `game`
+  service on the Arco hub. It satisfies the same small interface
+  `DeviceLinkServer` does (`drain_new_clients` / `drain_inbound` / `send` /
+  `bind_dev` / `drop_dev`), so `DeviceLinkAgent` was unchanged by the swap:
+  Slice 2's server/agent split paid off exactly as intended. It **never
+  imports o2litepy**, at module level or anywhere; the caller passes an
+  already-connected object into `start()`, and a local `Blob` class
+  duck-types `O2blob` (`_add_blob` reads only `.size`/`.data`) so the module
+  imports fine with no o2litepy present.
+  Four o2litepy facts are encoded here because each one breaks the transport
+  at runtime otherwise: a handler takes **three** parameters
+  `(address, types, info)` with arguments **pulled** off the o2lite object in
+  typespec order, not handed over as a list; the delivered address has its
+  leading `/` **already stripped** (`O2lite_handler.__init__` does
+  `address[1:]`), so the transport re-prefixes it; blobs must be objects with
+  `.size`/`.data`, so a bare 36-int LED list raises `AttributeError` on the
+  wire; and `set_services` **replaces rather than appends**, over a
+  comma-separated string. That last one is why Control writes the whole
+  `"actl,game"` string: pyarco already claimed `actl` on the shared
+  connection, and writing just `"game"` would silently drop it and stop
+  Arco's control replies. **Control is a guest on pyarco's connection**, not
+  the owner of its own.
+- **`TimedQueue`** (`control/timed_queue.py`) — holds `(when, payload)` and
+  releases at the tick covering `when`. Payload-generic on purpose, because
+  the two consumers hold different things: Control holds `(when, midi)` and
+  feeds a `LightSession`, while a device holds `(when, frame)` and lights its
+  LEDs. `when=None` means "no time declared", releases next drain, and
+  deliberately does **not** count as a clamp; a `when` already past does.
+  Sequence-numbered so `sort()` can never fall through to comparing two
+  payloads, which are unorderable on one side.
+- **`LightCue`** (`control/cues.py`) — a cue carrying an absolute O2 time,
+  sibling to `PlayCue`. Plain 4-tuples still work and mean "apply on
+  arrival", so every Bit written before it keeps running unchanged.
+- **`harness/o2_shroom.py`** — a simulated Tuneshroom over real o2lite,
+  rendering to a browser canvas. `--no-join` makes it serve as the Room
+  simulator too (hello, never join), which is why `terrarium_boot`'s o2lite
+  mode spawns this one file rather than a second near-copy.
+- **`harness/sync_bench.py`** — reduces measured audio-vs-light deltas to
+  mean, p95 and worst, using absolute values so an early frame cannot cancel
+  a late one into a flattering zero. Every figure it produces is a **dev-box
+  figure**; see *Host platform*.
+- **`harness/terrarium_boot.py --transport o2lite`** — opt-in, because it
+  needs a running Arco. `--setup-seconds` holds the Bit in SETUP so a device
+  can join a **scored** role before `run()` closes registration for it
+  (`control/registration.py:41-42`); without it a Tuneshroom joining
+  `TEST_PLAYER_NODE` is denied every time. The driver now exits when the Bit
+  declares itself done, but keeps polling until released devices finish
+  their closing fade, because release is asynchronous and exiting at IDLE
+  would freeze every device on its last frame.
+
+**The gap that survived this slice, and it is the important one.** All of the
+above is built and unit-tested, and **nothing drives it end to end**. No Bit
+can compute the design's own `T = gesture_time + horizon`: verb handlers are
+called `handler(dev, args)`, the inbound envelope's timestamp is discarded
+before reaching them, and `BootConfig.cue_horizon` is never injected into a
+Bit. No Bit returns a `LightCue`. The non-Room branch of `_on_light_cue`
+accepts `when` and never reads it. Room audio never sees `when` at all, so
+`AudioBridge.feed_midi(when=...)` and `ArcoSynthPool.schedule_at` have **zero
+production callers**. The single production use of a real `when` stamps
+Control's own render clock, not any gesture's time. Treat "one gesture, one
+shared `T`" as designed and plumbed, not achieved. See *Not yet built* below.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -628,6 +703,13 @@ yet**; the box does not exist.
   `Musical-Mycology/arco` fork — not a submodule. The earlier standalone
   `Musical-Mycology/pyarco` repo was an independent MM implementation that
   predated this decision; it is now archived and superseded.
+- **o2litepy** (`arco/o2litepy/`, same checkout as pyarco) — the Python o2lite
+  implementation pyarco connects through, and now the one `O2LiteTransport`
+  rides. Reached by the same `PYTHONPATH`, never vendored. **No module under
+  `control/` may import it**, and `devicelink/o2_transport.py` does not either
+  (the caller injects an already-connected object), which is what keeps the
+  whole suite runnable with no Arco, no pyarco and no O2. That rule is the
+  same one `control/audio.py` has always followed for pyarco.
 - **mm-tuneshroom** — the instrument app and browser simulator. Its web build
   deploys into the Terrarium's `www/` as an artifact; it never contains
   Terrarium-side logic. (The legacy M1a / Sensor-Check harness stays in
@@ -658,10 +740,36 @@ yet**; the box does not exist.
 
 Kept explicit so the doc doesn't over-claim:
 
-- **Real O2lite/pyarco transport wiring.** A device wire now exists
-  (`devicelink/`, Slice 2) but it is a **direct websocket to Control, not
-  o2lite through Arco** — no live O2 network, no Arco server, no clock sync.
-  The whole suite still runs against fakes and localhost sockets.
+- **Timed cues are plumbed but not load-bearing.** The machinery exists and is
+  unit-tested at every layer, and nothing drives it: no Bit can compute a `T`,
+  no Bit emits a `LightCue`, per-device cues silently drop `when`, and the
+  Room's audio never receives it. The design spec's success criteria 3 and 4
+  are recorded as **unmet**, with the evidence, in its own
+  *What is built but not yet load-bearing* section. Finishing this is a
+  **design decision, not mechanical work**: Room audio and light are currently
+  coupled through one synchronous `RoomBridge.feed_midi` call and therefore
+  cannot drift from each other, whereas splitting them into `TimedQueue` for
+  light plus pyarco's scheduler for audio could introduce drift *between*
+  them, which is the exact failure the timing work exists to prevent. It also
+  needs the `Bit` interface to grow a way to receive gesture time and the
+  horizon, which is the same interface change the Room-cue gap has been
+  waiting on.
+- **Device frame timing is only correct on one machine.** Control stamps
+  frames with `time.monotonic() + horizon` and the device compares against its
+  own `time.monotonic()`. Those share an epoch only because the room simulator
+  is spawned as a local subprocess. Over the network to a real Radxa they do
+  **not**, so device frame timing is wrong there until the o2lite clock drives
+  it instead. This is a second, independent reason the shared-clock property
+  does not yet fully hold; do not conflate it with the plumbing gap above.
+- **A stale device entry survives an ungraceful disconnect**, and this
+  architecture cannot fix it as-is. Control is an o2lite **client**, not the O2
+  host, so devices connect to Arco and Control never holds a socket to one.
+  o2litepy exposes no per-peer liveness at all: its API is `set_services`,
+  `bridge_id` (Control's own link to the host) and `tcp_close`. Closing this
+  needs an application heartbeat or a registration expiry, which is a design
+  question rather than a bug fix.
+- **The websocket device wire is still the default.** `--transport o2lite` is
+  opt-in because it requires a running Arco. Both transports are maintained.
 - **Real ugen graph-building on Arco** has a first, provisional slice: the
   Tuneshroom audio demo builds one `Flsyn` and up to 16 voices, driven by a
   role's `ugen_manifest` v0. Still unbuilt: per-role synthesis beyond
@@ -743,6 +851,12 @@ Kept explicit so the doc doesn't over-claim:
   [`.../2026-08-10-terrarium-visualization-simulator-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-terrarium-visualization-simulator-design.md)
   and its plan
   [`.../plans/2026-08-10-terrarium-visualization-simulator.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-10-terrarium-visualization-simulator.md).
+- Control on o2lite, and timed cues:
+  [`.../2026-08-12-control-o2lite-and-timed-cues-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-12-control-o2lite-and-timed-cues-design.md)
+  and its plan
+  [`.../plans/2026-08-12-control-o2lite-and-timed-cues.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-12-control-o2lite-and-timed-cues.md).
+  Read the spec's *What is built but not yet load-bearing* section before
+  extending anything that touches cue timing.
 
 
 Game-design background (RenQuest integration, Bit scoring/loop rules, hardware)
