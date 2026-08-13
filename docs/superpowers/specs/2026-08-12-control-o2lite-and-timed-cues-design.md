@@ -80,13 +80,100 @@ Success is met when:
 3. **A cue carries a time, and every path honors it.** One gesture produces one
    target time `T`. The audio path schedules against `T` through pyarco's
    scheduler; the Room's light feeds its `LightSession` at `T`; a joined device
-   displays its frame at `T` rather than on arrival.
+   displays its frame at `T` rather than on arrival. **Not met.** See "What is
+   built but not yet load-bearing" below.
 4. **The equality is tested offline.** A test asserts that a single cue yields
    the same `T` on the audio and light paths, with no Arco, no pyarco, and no O2.
+   **Not met**, for the same reason as criterion 3: see below.
 5. **The offline suite still runs fully offline.** No module under `control/`
    imports o2litepy, exactly as none imports pyarco today.
 6. `harness/sync_bench.py` reports a measured dev-box delta between the audio
    call and the LED frame, labelled as a dev-box figure.
+
+### What is built but not yet load-bearing
+
+Criteria 3 and 4 are not met as this slice stands. Every piece of machinery
+they describe is built and each piece is honestly unit-tested in isolation:
+`control/timed_queue.py`'s `TimedQueue`, `control/cues.py`'s `LightCue`,
+`AudioBridge.feed_midi(when=...)` and `ArcoSynthPool.schedule_at`
+(`control/audio.py`), and the `when` argument threaded through
+`_on_light_cue` and `/<dev>/leds`. But nothing in the tree drives any of it
+end to end, so "one gesture, one shared `T`, on both audio and light" does
+not currently happen anywhere outside a test file. Specifically:
+
+- **No Bit can compute `T`.** Section 5.3's formula is
+  `T = gesture_time + horizon`, but `Bit.verb_handlers()` handlers are called
+  as `handler(dev, args)` (`control/bit.py:73`, `control/engine.py:162`),
+  which hands a Bit neither the inbound envelope's timestamp nor the
+  horizon. The timestamp is decoded off the envelope and then discarded
+  before it reaches a handler (`devicelink/agent.py:280` decodes it;
+  `_on_verb`, which eventually calls the handler, never receives it).
+  `BootConfig.cue_horizon` reaches `DeviceLinkAgent`
+  (`harness/terrarium_boot.py:126`) but is never injected into a Bit
+  either. A Bit has no way to name a `T`, even one that wanted to.
+- **No Bit returns a `LightCue`.** `bits/test_bit.py`, the only Bit in the
+  tree, returns plain `(dev, status, data1, data2)` 4-tuples from every
+  handler. Those decode as `when=None`, "apply on arrival", the
+  pre-existing behavior `LightCue` was designed to sit alongside without
+  breaking.
+- **A per-device timed cue would be silently ignored if a Bit tried
+  anyway.** The non-Room branch of `_on_light_cue`
+  (`devicelink/agent.py:398-402`) takes `when` as a parameter and never
+  reads it: `bridge.session.feed_midi(status, data1, data2)` drops it on
+  the floor.
+- **Room audio never receives `when` at all.** `RoomBridge.feed_midi` and
+  both its `RoomLightSink`/`RoomAudioSink` protocols (`control/room_bridge.py`)
+  take `(status, d1, d2)`, no time. `AudioBridge.feed_midi(when=...)` and
+  `ArcoSynthPool.schedule_at` therefore have zero production callers; the
+  only code that exercises the timed branch is their own unit tests
+  (`tests/test_audio.py`, `tests/test_arco_synth.py`).
+- **The one production use of a real `when` stamps Control's own clock, not
+  the gesture's.** `_render_frames` (`devicelink/agent.py:253`) stamps
+  every changed device frame with `self._clock() + self._horizon`,
+  Control's render-time clock read at render time, not a time carried from
+  the originating gesture. It is real timing, but it is not the `T`
+  section 5.3 describes.
+
+**Why this happened.** Section 3's own non-goal, "No new Bit", is
+incompatible with criteria 3 and 4. With `TestBit` as the only Bit in the
+tree and no Bit emitting a `LightCue` or reading a horizon, nothing can
+exercise the `T = gesture_time + horizon` path end to end. That
+contradiction should have been caught at spec-review time, not discovered
+after 11 tasks of implementation. It is not a coding mistake: every task
+did what it said it would, and each piece is honestly tested where it
+sits. The spec asked for a fully wired path while also ruling out the one
+kind of change, a Bit, that could wire it.
+
+**The architectural decision this leaves for whoever finishes the
+wiring.** Room audio and light are currently coupled through a single
+synchronous call, `RoomBridge.feed_midi` (`control/room_bridge.py`),
+invoked once per cue from `_render_room`'s drain of `self._room_cues`
+(`devicelink/agent.py:180-189`). Because it is one call feeding both
+sinks, audio and light cannot drift apart: whichever tick releases the
+cue, both receive it in that same call. Finishing criteria 3 and 4 for the
+Room means giving light and audio independently-scheduled delivery,
+`TimedQueue` for light (already built) and pyarco's
+`sched.cause(absolute(T), ...)` for audio (also already built), two
+different scheduling mechanisms with no shared release point. That
+reintroduces exactly the risk this design exists to remove: audio and
+light computing the same `T` but firing on it separately, with no
+guarantee they land on the same rendered instant. Finishing the wiring is
+therefore a real design decision, how to keep two schedulers from
+drifting apart, not a mechanical connect-the-dots exercise.
+
+**A second, separate gap: the shared clock does not hold over a real
+network.** Even once a Bit can emit a `T`, `harness/shroom_client.py`'s
+tick loop reads `time.monotonic()` as `now`, matching `DeviceLinkAgent`'s
+default clock. Two machines' `monotonic()` clocks share no epoch, so a
+device's frame timing is only correct when the device and Control happen
+to share one clock. That is true by construction for the locally-spawned
+room simulator (`harness/terrarium_boot.py` always spawns it as a
+subprocess of Control) and false for a real over-network Radxa
+Tuneshroom. Fixing it is what this design's own o2lite clock is for
+(section 1's "already true" list). It is a second, independent reason "one
+shared time" does not fully hold yet, not the same gap as the missing Bit
+wiring described above; a reader should take away two open problems, not
+one.
 
 ## 3. Non-goals
 
