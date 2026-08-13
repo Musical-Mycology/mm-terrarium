@@ -17,13 +17,21 @@ def _fake_room_audio():
     return AudioBridge(FakePool())
 
 
-def test_build_wires_devicelink_room_bridge_and_simulator():
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, simulator = build(
+def _build_with_fakes(config):
+    """Shared fake-injecting build() call for tests that don't need to
+    inspect a specific fake's recorded calls afterward (contrast the tests
+    below, which construct their own FakePopen so they can assert on it
+    post-shutdown)."""
+    return build(
         config, {"TestBit": TestBit},
         arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
         host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
         simulator_popen=FakePopen(), room_audio=_fake_room_audio())
+
+
+def test_build_wires_devicelink_room_bridge_and_simulator():
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, simulator = _build_with_fakes(config)
 
     assert gs.room.bound_dev == "sim-room"
     assert agent._room_light is not None
@@ -68,3 +76,15 @@ def test_shutdown_tears_down_arco_and_simulator():
     assert gs.state == State.IDLE
     assert fake_arco_popen.signals
     assert sim_popen.signals
+
+
+def test_build_passes_the_configured_horizon_to_the_agent():
+    """The horizon lives in one place. An agent built with its own default
+    would silently disagree with the audio path's scheduling."""
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit",
+                        cue_horizon=0.075)
+    gs, server, agent, arco, sim = _build_with_fakes(config)
+    try:
+        assert agent._horizon == 0.075
+    finally:
+        shutdown(gs, agent, arco, sim)

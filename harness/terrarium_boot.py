@@ -82,7 +82,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         room_audio = AudioBridge(pool)
 
     agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
-                            room_audio=room_audio)
+                            room_audio=room_audio,
+                            horizon=config.cue_horizon)
     return gs, server, agent, arco, factory.process
 
 
@@ -120,9 +121,15 @@ def main() -> None:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8771)
     ap.add_argument("--arco-command", default="/Users/chris/projects/arco/apps/pytest/server")
+    ap.add_argument("--horizon", type=float, default=None,
+                    help="Cue scheduling horizon in seconds. Default: "
+                         "BootConfig.cue_horizon. Measure with "
+                         "python -m harness.sync_bench.")
     args = ap.parse_args()
 
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    if args.horizon is not None:
+        config.cue_horizon = args.horizon
     room_binding = RoomBindingRegistry()
     gs, server, agent, arco, simulator = build(
         config, {"TestBit": TestBit}, arco_command=[args.arco_command],
