@@ -241,3 +241,21 @@ def test_release_still_clears_immediately():
     c.handle(protocol.release_event(DEV))
     assert c.leds.cleared == 1
     assert c.released is True
+
+
+def test_pending_frames_are_bounded_when_tick_is_never_called():
+    """A caller that drives handle() without ever calling tick() -- the gap
+    the Task 7 review found in harness/room_simulator.py and this module's
+    own main(), both fixed to call tick() now -- must not grow _pending
+    without bound. The oldest unrendered frame is dropped instead, mirroring
+    devicelink/agent.py's _MAX_CLOSING_FRAMES bound on an analogous
+    unrendered backlog."""
+    from harness.shroom_client import _MAX_PENDING_FRAMES
+
+    c = client()
+    for i in range(_MAX_PENDING_FRAMES + 5):
+        c.handle(protocol.leds_event(DEV, [0] * LED_CHANNELS, when=float(i + 1)))
+
+    assert len(c._pending) == _MAX_PENDING_FRAMES
+    # the 5 oldest (when 1.0..5.0) were dropped; the oldest survivor is 6.0
+    assert c._pending[0][0] == 6.0

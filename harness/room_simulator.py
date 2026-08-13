@@ -23,6 +23,12 @@ from __future__ import annotations
 
 from harness.shroom_client import LED_CHANNELS, ShroomClient
 
+# The engine's own render/tick rate -- see harness/terrarium_boot.py's
+# `gs.tick(1.0 / 44.0)`. Ticking this client faster buys nothing (frames
+# are only ever rendered this often); ticking much slower would blur
+# "held until its time" into "held until roughly its time".
+_TICK_INTERVAL = 1.0 / 44.0
+
 
 class WebSimLeds:
     """Adapts ShroomClient's leds.show(bytes)/leds.clear() to
@@ -62,6 +68,7 @@ def main() -> None:
     import argparse
     import asyncio
     import json
+    import time
 
     import websockets
 
@@ -81,8 +88,35 @@ def main() -> None:
     async def run() -> None:
         async with websockets.connect(args.server) as ws:
             await ws.send(json.dumps(client.hello()))
-            async for raw in ws:
-                client.handle(json.loads(raw))
+
+            async def pump_down() -> None:
+                async for raw in ws:
+                    client.handle(json.loads(raw))
+
+            async def pump_tick() -> None:
+                """Drive client.tick() at the render rate.
+
+                Has to run concurrently with pump_down, not just once per
+                inbound frame: a frame timed for the future needs ticks to
+                keep landing while pump_down sits blocked waiting on the
+                next message.
+                """
+                while not client.released:
+                    # time.monotonic() is what DeviceLinkAgent uses by
+                    # default (devicelink/agent.py: clock=time.monotonic).
+                    # Unlike harness/shroom_client.py's real Radxa-over-
+                    # network deployment, this genuinely is the same
+                    # machine's clock: harness/terrarium_boot.py always
+                    # spawns this simulator as a local subprocess of
+                    # Control, so the two monotonic() readings share an
+                    # epoch by construction, not by luck. That still won't
+                    # hold once a Room's LEDs are driven by real hardware
+                    # over the network -- this stand-in goes away when the
+                    # o2lite clock lands.
+                    client.tick(time.monotonic())
+                    await asyncio.sleep(_TICK_INTERVAL)
+
+            await asyncio.gather(pump_down(), pump_tick())
 
     try:
         asyncio.run(run())

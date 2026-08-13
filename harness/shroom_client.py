@@ -36,6 +36,7 @@ Usage on the Radxa:
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Callable
 
 from control.timed_queue import TimedQueue
@@ -47,6 +48,21 @@ logger = logging.getLogger(__name__)
 # white die is currently unreachable over this wire; see the plan's Task B7,
 # which is a pending decision rather than a bug to fix here.
 LED_CHANNELS = 36
+
+# Bound on frames buffered in _pending between ticks. Under normal operation
+# (tick() driven at the render rate -- see _TICK_INTERVAL) this never comes
+# close: _pending is fully drained every tick. It exists only to stop
+# unbounded growth if a caller drives handle() without ever calling tick(),
+# mirroring devicelink/agent.py's _MAX_CLOSING_FRAMES (also 200, ~1s at
+# 44Hz) as the bound on an analogous unrendered backlog.
+_MAX_PENDING_FRAMES = 200
+
+# The engine's own render/tick rate (see harness/terrarium_boot.py's
+# `gs.tick(1.0 / 44.0)` and harness/devicelink_smoke.py's TICK). Frames are
+# rendered at this rate, so ticking a client faster than this buys nothing;
+# ticking much slower would blur "held until its time" into "held until
+# roughly its time".
+_TICK_INTERVAL = 1.0 / 44.0
 
 
 class ShroomClient:
@@ -72,8 +88,12 @@ class ShroomClient:
         # supplies, and pushing eagerly with a stale or absent reading would
         # misjudge lateness. Buffering here and pushing at the next tick
         # keeps handle() clock-free while still comparing each frame's
-        # `when` against a real "now".
-        self._pending: list[tuple[float | None, bytes]] = []
+        # `when` against a real "now". Bounded: if a caller drives handle()
+        # without ever calling tick() (see _MAX_PENDING_FRAMES above), this
+        # deque drops the oldest frame per new arrival rather than growing
+        # without bound.
+        self._pending: deque[tuple[float | None, bytes]] = deque(
+            maxlen=_MAX_PENDING_FRAMES)
 
     # --- outbound ---
 
@@ -143,6 +163,10 @@ class ShroomClient:
         # reads as that, and it must NOT count as a clamp. Buffered rather
         # than pushed here -- see _pending's docstring in __init__.
         when = env.timestamp if env.timestamp else None
+        if len(self._pending) == self._pending.maxlen:
+            logger.debug("pending-frame backlog at %d; dropping oldest "
+                         "frame -- is tick() being called?",
+                         self._pending.maxlen)
         self._pending.append((when, frame))
         return env.address
 
@@ -178,6 +202,7 @@ def main() -> None:
     import argparse
     import asyncio
     import json
+    import time
 
     import websockets
 
@@ -210,7 +235,32 @@ def main() -> None:
                     await ws.send(json.dumps(client.tilt(x / 9.81)))
                     await asyncio.sleep(interval)
 
-            await asyncio.gather(pump_down(), pump_up())
+            async def pump_tick() -> None:
+                """Drive client.tick() at the render rate.
+
+                Has to run concurrently with pump_down, not just once per
+                inbound frame: a frame timed for the future needs ticks to
+                keep landing while pump_down sits blocked waiting on the
+                next message.
+                """
+                while not client.released:
+                    # time.monotonic() is what DeviceLinkAgent uses by
+                    # default (devicelink/agent.py: clock=time.monotonic),
+                    # so `when` on an incoming frame and this client's
+                    # `now` only agree when Control and this client happen
+                    # to share one machine's clock -- true for this
+                    # transport run locally (e.g. the devicelink smoke
+                    # tests), but NOT true for the real over-network Radxa
+                    # deployment this module's own docstring describes: two
+                    # machines' monotonic() clocks have no relationship to
+                    # each other. That mismatch is real and unresolved here
+                    # on purpose -- see the design spec's o2lite clock,
+                    # which is what actually fixes it; this stand-in just
+                    # keeps local/simulated runs working in the meantime.
+                    client.tick(time.monotonic())
+                    await asyncio.sleep(_TICK_INTERVAL)
+
+            await asyncio.gather(pump_down(), pump_up(), pump_tick())
 
     asyncio.run(run())
 
