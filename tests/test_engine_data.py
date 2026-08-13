@@ -31,6 +31,7 @@ class VerbBit(Bit):
         return {"tilt": self._on_tilt}
 
     next_cue = None            # set by a test to override the default cue
+    next_cues = None           # set by a test to return a whole cue list
 
     def _on_tilt(self, dev, args):
         if self.raise_next:
@@ -38,6 +39,8 @@ class VerbBit(Bit):
         if self.refuse_next is not None:
             return self.refuse_next
         self.seen.append((dev, args))
+        if self.next_cues is not None:
+            return self.next_cues
         if self.next_cue is not None:
             return [self.next_cue]
         return [(dev, 0xB0, 74, 64)]
@@ -90,6 +93,33 @@ def test_light_cue_carries_its_time():
 
     assert gs.data("ie1", "tilt", ["ie1", 0.0]) is None
     assert cues == [("ie1", 0xB0, 74, 99, 1234.5)]
+
+
+def test_a_malformed_cue_does_not_escape_data():
+    """data() promises it never raises: a Bit must not be able to wedge
+    Control. A 3-element cue is a Bit bug, and it must be contained the
+    same way a raising sink already is."""
+    gs = _loaded_server()
+    gs.join("ie1", "NODE_A")
+    cues = []
+    gs.on_light_cue = lambda *c: cues.append(c)
+    gs.bit.next_cue = ("ie1", 0xB0, 74)        # 3 elements, not 4
+
+    assert gs.data("ie1", "tilt", ["ie1", 0.0]) is None
+    assert cues == []
+
+
+def test_one_malformed_cue_does_not_stop_the_others():
+    """Containment is per-cue, not per-batch: a later good cue in the same
+    list must still reach its sink."""
+    gs = _loaded_server()
+    gs.join("ie1", "NODE_A")
+    cues = []
+    gs.on_light_cue = lambda *c: cues.append(c)
+    gs.bit.next_cues = [("ie1", 0xB0, 74), ("ie1", 0xB0, 74, 99)]
+
+    assert gs.data("ie1", "tilt", ["ie1", 0.0]) is None
+    assert cues == [("ie1", 0xB0, 74, 99, None)]
 
 
 def test_data_routes_to_handler_and_emits_cue():

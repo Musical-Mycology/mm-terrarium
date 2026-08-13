@@ -170,21 +170,31 @@ class GameServer:
             # `or` guards a blank reason so /<dev>/error is never empty.
             return cues or "handler refused"
         for cue in cues or ():
-            if isinstance(cue, PlayCue):
-                sink, args = self.on_play_cue, (cue.dev, cue.name, cue.params)
-            elif isinstance(cue, LightCue):
-                sink, args = self.on_light_cue, (cue.dev, cue.status,
-                                                 cue.data1, cue.data2, cue.when)
-            else:
-                # The historic plain 4-tuple: no declared time.
-                dev_, status, d1, d2 = cue
-                sink, args = self.on_light_cue, (dev_, status, d1, d2, None)
-            if sink is None:
-                continue
+            # The whole per-cue block is guarded, not just the sink call.
+            # The old code was `sink, args = self.on_light_cue, tuple(cue)`,
+            # which is total: it never raised for any-length iterable. The
+            # 4-tuple unpack below is partial, so an arity-wrong cue from a
+            # buggy Bit would otherwise raise straight out of data() and
+            # break its documented "never raises" contract -- and
+            # devicelink/agent.py's _on_verb has no handler around the call.
             try:
+                if isinstance(cue, PlayCue):
+                    sink, args = self.on_play_cue, (cue.dev, cue.name,
+                                                    cue.params)
+                elif isinstance(cue, LightCue):
+                    sink, args = self.on_light_cue, (cue.dev, cue.status,
+                                                     cue.data1, cue.data2,
+                                                     cue.when)
+                else:
+                    # The historic plain 4-tuple: no declared time.
+                    dev_, status, d1, d2 = cue
+                    sink, args = self.on_light_cue, (dev_, status, d1, d2,
+                                                     None)
+                if sink is None:
+                    continue
                 sink(*args)
             except Exception:
-                logger.exception("cue sink raised; continuing")
+                logger.exception("cue dispatch failed; continuing")
         return None
 
     def tick(self, dt: float) -> None:
