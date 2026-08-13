@@ -48,6 +48,17 @@ hardware fleet.
 > so device registration can cross a real O2 hub. The websocket transport
 > remains and is still the default; o2lite is opt-in per run.
 >
+> **The o2lite path has been run against a live Arco and observed working**
+> (2026-08-13), which is the first time anything in this repo's device path
+> has been confirmed on a real O2 network rather than against fakes. What was
+> measured: a simulated Tuneshroom joined `TEST_PLAYER_NODE` and received its
+> composed role blob over the hub; Control and the device agreed on time to
+> **7 ms**; **820** LED frames were delivered and rendered with visible
+> gesture-driven hue motion; the Room drone sounded from Arco on RUNNING.
+> Read that as: the transport, the shared clock and the rendering work.
+> **Timing is not yet honored** and the cue machinery is still not
+> load-bearing, see *Not yet built* below.
+>
 > Still absent: **fairyring**, real scoring, and any production Bit.
 > As of 2026-08-10, **`Room`** exists as a boot-time concept and orchestration
 > (`control/boot.py` now spawns Arco itself, resolves a `RoomType`, and gates
@@ -616,6 +627,35 @@ Control becomes a real O2 participant, and a cue gains a time. Design:
   their closing fade, because release is asynchronous and exiting at IDLE
   would freeze every device on its last frame.
 
+**Two bugs that only a live run could find, both now fixed.** Neither was
+visible to 611 passing tests, an eleven-task review chain, or a whole-branch
+review, and both left the path completely dark rather than degraded:
+
+1. **Two different clock bases.** Control stamped frames with
+   `time.monotonic` while the device ticked on the O2 clock. On one machine
+   those read roughly 518,000 and 45, so every frame was queued for a time
+   half a million seconds out and none ever displayed. Fixed by threading
+   `o2lite.time_get` into `DeviceLinkAgent` on the o2lite path
+   (`harness/terrarium_boot.py`'s `main()`), so both ends measure the same
+   thing. The websocket path keeps `time.monotonic`, which is correct there
+   because both processes are local.
+2. **Nothing pumped o2lite.** o2litepy dispatches inbound messages to
+   handlers **only** from inside `o2lite.poll()`, and `O2LiteTransport`
+   never called it, so `drain_inbound()` faithfully returned an empty list
+   forever and Control never saw a single `/game/*` message. Fixed by
+   pumping in `drain_inbound()`.
+
+**Why the tests could not catch either, and the rule that follows.** The
+second one is the instructive case: `FakeO2Lite.deliver()` invoked the
+handler directly and its `poll()` was a no-op, so every test dispatched
+messages the real library would only dispatch on a pump. The fake and the
+tests agreed with each other and both disagreed with o2litepy. The fake now
+enqueues and dispatches only on `poll()`, so a transport that forgets to
+pump cannot pass its own tests. Treat that as a general rule when writing
+any double in this repo: **a test double must never be more permissive than
+the library it stands for**, because the dimension nobody thought to check
+is exactly where the real thing will differ.
+
 **The gap that survived this slice, and it is the important one.** All of the
 above is built and unit-tested, and **nothing drives it end to end**. No Bit
 can compute the design's own `T = gesture_time + horizon`: verb handlers are
@@ -663,6 +703,19 @@ honor them in any new work:
    preserving: `game` and `actl` are **inbound-only** today (devices → `game`,
    Arco → `actl`), so Control never messages itself and there is no round trip
    to eliminate. Keep it that way. See design doc § *Message Routing*.
+5. **A test double must never be more permissive than the library it stands
+   for.** Earned the hard way on 2026-08-13: `FakeO2Lite.deliver()` called
+   handlers directly while real o2litepy dispatches only from inside
+   `poll()`, so 611 passing tests and a full review chain all agreed the
+   o2lite transport worked while it had never delivered a single message.
+   The fake and the tests were consistent with each other, and both were
+   wrong about the library. When a double stands in for something outside
+   this repo, encode the *strictness* as well as the shape: what the real
+   thing refuses, when it dispatches, and what it requires you to call. The
+   dimension nobody thinks to check is the one reality will differ on.
+   (Appended as rule 5 rather than inserted: rules are referenced by number
+   from code comments, tests and other repos' docs, so renumbering an
+   existing one silently repoints every reference to it.)
 
 ## Host platform (gotcha)
 
@@ -772,6 +825,33 @@ Kept explicit so the doc doesn't over-claim:
   `bridge_id` (Control's own link to the host) and `tcp_close`. Closing this
   needs an application heartbeat or a registration expiry, which is a design
   question rather than a bug fix.
+- **`cue_horizon`'s default is measurably too small, and now there is a
+  number.** The live 2026-08-13 run clamped **762 of 820** frames: they
+  arrived already past their deadline, so the queue released them on arrival
+  and the scheduling was bypassed on 93% of frames. End-to-end delivery
+  through Arco measured **~67 ms** against the 60 ms default. The light still
+  moves, because a clamped frame displays immediately, but *honored timing*
+  is not what you are watching. `harness/sync_bench.py` is the tool to pin a
+  real value; the clamp counter (`DeviceLinkAgent.clamped`,
+  `ShroomClient.clamped`) is what reports when the configured horizon is
+  wrong in production. Every figure here is a **dev-box figure**: the venue
+  box does not exist.
+- **Arco rejects the Room simulator's service announcement.** Its log carries
+  `dropping message because /_o2/*/sv not from service provider ... by TCP
+  "sim-room"`. A player device (`ie1`) registers and receives frames fine, so
+  this is specific to the Terrarium-spawned Room simulator, and it may mean
+  the Room simulator has never received a frame on the o2lite path at all.
+  Unresolved, and an O2-layer question rather than an mm-terrarium one. Note
+  this is a *separate* cause from the documented `TestBit` cue gap below;
+  either alone would leave the Room's surface dark, so do not assume fixing
+  one explains the other.
+- **`ArcoProcess` cannot spawn Arco without a controlling TTY.** Arco's
+  curses init opens `/dev/tty` and fails with `Could not open /dev/tty.
+  Initialization Failed!` otherwise, after which `wait_ready` times out into
+  a clean `BootFailure`. So `harness/terrarium_boot.py` runs only from an
+  interactive terminal. That is fine for a venue box and fatal for anything
+  headless: CI, cron, or an agent-driven run cannot boot this stack. `script`
+  does not rescue it from a process whose stdio is a socket.
 - **The websocket device wire is still the default.** `--transport o2lite` is
   opt-in because it requires a running Arco. Both transports are maintained.
 - **Real ugen graph-building on Arco** has a first, provisional slice: the
