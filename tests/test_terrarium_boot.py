@@ -1,11 +1,13 @@
-from bits.test_bit import TestBit
+import argparse
+
+from bits.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.arco_process import FakePopen
 from control.audio import AudioBridge, FakePool
 from control.boot_config import BootConfig
 from control.room_binding import RoomBindingRegistry
 from control.rooms import RoomType
 from control.state import State
-from harness.terrarium_boot import build, shutdown
+from harness.terrarium_boot import _run_duration, _timed_test_bit_cls, build, shutdown
 
 
 def _fake_arco(command, popen=None):
@@ -231,3 +233,42 @@ def test_serve_until_done_lets_closing_devices_finish_their_fade():
     _serve_until_done(FakeGS(), agent, FakeArco(), sleep=lambda _s: None)
     assert agent.closing == 0
     assert agent.polls >= 4
+
+
+def _args(seconds=None, hold=False):
+    return argparse.Namespace(seconds=seconds, hold=hold)
+
+
+def test_run_duration_default_is_test_bit_natural():
+    """No flags at all -- the demo run length must stay exactly what it
+    is today."""
+    assert _run_duration(_args()) == RUN_DURATION_SECONDS
+
+
+def test_run_duration_seconds_overrides():
+    assert _run_duration(_args(seconds=12.0)) == 12.0
+
+
+def test_run_duration_hold_is_infinite():
+    assert _run_duration(_args(hold=True)) == float("inf")
+
+
+def test_run_duration_hold_beats_seconds():
+    """--hold and --seconds together: --hold wins, matching
+    harness/devicelink_smoke.py's _run_duration."""
+    assert _run_duration(_args(seconds=5.0, hold=True)) == float("inf")
+
+
+def test_timed_test_bit_cls_carries_duration_and_exposes_room_types():
+    """This is the part most likely to break silently: control/boot.py's
+    boot() reads bit_cls.room_types off the registry entry BEFORE
+    instantiating it, and control/engine.py's GameServer.load_bit() then
+    calls bit_cls() with no arguments. Whatever gets registered must
+    satisfy both."""
+    bit_cls = _timed_test_bit_cls(12.0)
+
+    assert bit_cls.room_types == TestBit.room_types
+
+    bit = bit_cls()
+    assert isinstance(bit, TestBit)
+    assert bit._run_duration == 12.0

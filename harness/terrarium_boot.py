@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-from bits.test_bit import TestBit
+from bits.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.arco_process import ArcoProcess
 from control.boot import boot as _boot
 from control.boot import shutdown as _boot_shutdown
@@ -198,6 +198,38 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
         sleep(1.0 / 44.0)
 
 
+def _run_duration(args) -> float:
+    """Same shape as harness/devicelink_smoke.py's _run_duration: --hold
+    wins over --seconds, and no flags at all preserves the exact default
+    (RUN_DURATION_SECONDS) that a bare `python -m harness.terrarium_boot`
+    has always used."""
+    if args.hold:
+        return float("inf")
+    return RUN_DURATION_SECONDS if args.seconds is None else args.seconds
+
+
+def _timed_test_bit_cls(run_duration: float) -> type:
+    """Wrap TestBit in a zero-arg subclass carrying the resolved duration.
+
+    control/boot.py's boot() reads `bit_cls.room_types` straight off the
+    registry entry -- before ever instantiating it -- to gate the Bit
+    against the Room type (`if room.room_type not in bit_cls.room_types`).
+    control/engine.py's GameServer.load_bit() then calls `bit_cls()` with no
+    arguments. A functools.partial(TestBit, run_duration=...) would satisfy
+    the second half but not the first: a partial object has no `room_types`
+    of its own, only what TestBit would have if called. A small subclass
+    satisfies both -- room_types is inherited normally through the MRO
+    (TestBit doesn't override it, so it resolves to control.bit.Bit's
+    `{RoomType.TEST}`), and __init__ takes no arguments while closing over
+    the resolved duration.
+    """
+    class _TimedTestBit(TestBit):
+        def __init__(self) -> None:
+            super().__init__(run_duration=run_duration)
+
+    return _TimedTestBit
+
+
 def main() -> None:
     import argparse
 
@@ -206,6 +238,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8771)
+    ap.add_argument("--seconds", type=float, default=None,
+                    help="How long the Bit stays RUNNING before completing.")
+    ap.add_argument("--hold", action="store_true",
+                    help="Never auto-complete; run until Ctrl-C.")
     ap.add_argument("--arco-command", default="/Users/chris/projects/arco/apps/pytest/server")
     ap.add_argument("--horizon", type=float, default=None,
                     help="Cue scheduling horizon in seconds. Default: "
@@ -239,7 +275,8 @@ def main() -> None:
         config.cue_horizon = args.horizon
     room_binding = RoomBindingRegistry()
     gs, server, agent, arco, simulator = build(
-        config, {"TestBit": TestBit}, arco_command=[args.arco_command],
+        config, {"TestBit": _timed_test_bit_cls(_run_duration(args))},
+        arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
         transport=transport)
 
