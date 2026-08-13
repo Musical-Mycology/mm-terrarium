@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 
 from bits.test_bit import TestBit
 from control.arco_process import ArcoProcess
@@ -22,6 +23,7 @@ from control.boot import shutdown as _boot_shutdown
 from control.boot_config import BootConfig
 from control.room_binding import RoomBindingRegistry
 from control.simulator_process import SimulatorProcess
+from control.state import State
 from devicelink.agent import DeviceLinkAgent
 from devicelink.server import DeviceLinkServer
 
@@ -150,6 +152,52 @@ class _NullRoomBridge:
         pass
 
 
+def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
+                   sleep=time.sleep) -> None:
+    """Poll the transport for setup_seconds while the Bit sits in SETUP, so
+    a device can join a scored role before run() closes the window.
+    registration.join() refuses scored roles once RUNNING
+    (control/registration.py:41-42), and TestBit's `player` is scored, so
+    without this window harness/o2_shroom.py is denied every time.
+    setup_seconds <= 0 -- the default -- returns immediately, preserving the
+    existing load-straight-into-run behavior. Same shape as
+    harness/devicelink_smoke.py's _wait_in_setup.
+    """
+    if setup_seconds <= 0:
+        return
+    deadline = clock() + setup_seconds
+    while clock() < deadline:
+        agent.poll()
+        sleep(1.0 / 44.0)
+
+
+def _serve_until_done(gs, agent, arco, clock=time.monotonic,
+                      sleep=time.sleep) -> str:
+    """Tick until the Bit finishes or Arco dies. Returns the reason.
+
+    Two exit conditions, both deliberate:
+
+    "completed" -- the Bit signalled done from update(dt), so the engine
+    ran COMPLETING/UNLOADING synchronously and state is back to IDLE. The
+    loop then keeps polling until the transport has no devices still
+    closing, because release is ASYNCHRONOUS: a released device renders its
+    closing fade over several ticks and only then receives /<dev>/release.
+    Exiting the instant state hit IDLE would freeze every device on its
+    last frame.
+
+    "arco-exited" -- the Arco subprocess is gone. Fail loud: silent
+    degradation in a venue is worse than a visible stop.
+    """
+    while True:
+        if arco.poll() is not None:
+            return "arco-exited"
+        agent.poll()
+        gs.tick(1.0 / 44.0)
+        if gs.state == State.IDLE and not getattr(agent, "closing", 0):
+            return "completed"
+        sleep(1.0 / 44.0)
+
+
 def main() -> None:
     import argparse
 
@@ -168,6 +216,11 @@ def main() -> None:
                     help="websocket: the JSON devicelink shim, no Arco in "
                          "the device path. o2lite: real O2 through the Arco "
                          "hub, which requires a running Arco server.")
+    ap.add_argument("--setup-seconds", type=float, default=0.0,
+                    help="Hold the Bit in SETUP for this long before "
+                         "run(), so a device can join a scored role (e.g. "
+                         "TEST_PLAYER_NODE) before registration closes for "
+                         "it. Default 0 keeps the instant-run behavior.")
     args = ap.parse_args()
 
     transport = None
@@ -203,15 +256,15 @@ def main() -> None:
         else:
             print(f"DeviceLink listening on ws://{args.host}:{server.port}/ws "
                   f"(Ctrl-C to stop)")
+        if args.setup_seconds > 0:
+            print(f"Holding in SETUP for {args.setup_seconds:g}s -- join now")
+        _wait_in_setup(agent, args.setup_seconds)
         gs.run()
-        import time
-        while True:
-            if arco.poll() is not None:       # subprocess exited
-                print("Arco exited; aborting the Bit", file=sys.stderr)
-                break
-            agent.poll()
-            gs.tick(1.0 / 44.0)
-            time.sleep(1.0 / 44.0)
+        reason = _serve_until_done(gs, agent, arco)
+        if reason == "arco-exited":
+            print("Arco exited; tearing down", file=sys.stderr)
+        else:
+            print("Bit completed; tearing down")
     except KeyboardInterrupt:
         pass
     finally:

@@ -109,3 +109,125 @@ def test_build_can_run_the_agent_on_the_o2lite_transport():
         assert fake.services == "actl,game"
     finally:
         shutdown(gs, agent, arco, sim)
+
+
+def test_wait_in_setup_polls_for_the_requested_window():
+    """A scored role is refused once RUNNING, so a device needs a window to
+    join before run() closes it."""
+    from harness.terrarium_boot import _wait_in_setup
+
+    polls = []
+
+    class FakeAgent:
+        def poll(self):
+            polls.append(1)
+
+    ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
+    _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                   sleep=lambda _s: None)
+    assert len(polls) >= 3
+
+
+def test_wait_in_setup_returns_immediately_when_not_requested():
+    """Default 0 preserves the existing load-straight-into-run behavior."""
+    from harness.terrarium_boot import _wait_in_setup
+
+    polls = []
+
+    class FakeAgent:
+        def poll(self):
+            polls.append(1)
+
+    _wait_in_setup(FakeAgent(), 0.0, clock=lambda: 0.0,
+                   sleep=lambda _s: None)
+    assert polls == []
+
+
+def test_serve_until_done_stops_when_the_bit_completes():
+    """The Bit declares itself finished via update(); the driver must
+    notice and tear down rather than ticking an unloaded Bit forever."""
+    from control.state import State
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        def __init__(self):
+            self.state = State.RUNNING
+            self.ticks = 0
+
+        def tick(self, dt):
+            self.ticks += 1
+            if self.ticks >= 3:
+                self.state = State.IDLE
+
+    class FakeAgent:
+        closing = 0
+
+        def poll(self):
+            pass
+
+    class FakeArco:
+        def poll(self):
+            return None
+
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+                               sleep=lambda _s: None)
+    assert reason == "completed"
+
+
+def test_serve_until_done_stops_when_arco_dies():
+    """Fail loud: silent degradation in a venue is worse than a stop."""
+    from control.state import State
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        state = State.RUNNING
+
+        def tick(self, dt):
+            pass
+
+    class FakeAgent:
+        closing = 0
+
+        def poll(self):
+            pass
+
+    class FakeArco:
+        def poll(self):
+            return 1                      # exited
+
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+                               sleep=lambda _s: None)
+    assert reason == "arco-exited"
+
+
+def test_serve_until_done_lets_closing_devices_finish_their_fade():
+    """Release is asynchronous: /<dev>/release is only sent after the
+    closing fade renders. Exiting the instant state hits IDLE would freeze
+    every device on its last frame."""
+    from control.state import State
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        state = State.IDLE
+
+        def tick(self, dt):
+            pass
+
+    class FakeAgent:
+        def __init__(self):
+            self.closing = 2
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            if self.polls >= 4:
+                self.closing = 0
+
+    class FakeArco:
+        def poll(self):
+            return None
+
+    agent = FakeAgent()
+    _serve_until_done(FakeGS(), agent, FakeArco(), sleep=lambda _s: None)
+    assert agent.closing == 0
+    assert agent.polls >= 4

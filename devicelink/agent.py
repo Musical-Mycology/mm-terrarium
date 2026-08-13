@@ -158,6 +158,15 @@ class DeviceLinkAgent:
         BootConfig.cue_horizon is too small."""
         return self._room_cues.clamped
 
+    @property
+    def closing(self) -> int:
+        """Devices currently draining their release fade (see _on_release
+        and _finish_release). A driver's serve loop should keep polling
+        while this is nonzero -- release is asynchronous, so a device isn't
+        actually gone until its closing fade finishes and /<dev>/release
+        goes out."""
+        return len(self._closing)
+
     # --- driven once per tick-loop iteration -------------------------------
     def poll(self) -> None:
         self.server.drain_new_clients()      # devices are anonymous until hello
