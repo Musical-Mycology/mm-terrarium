@@ -25,7 +25,7 @@ Every task's requirements implicitly include this section.
 
   Running `python3 -m pytest` instead collects an import error in
   `tests/test_terrarium_boot.py` that looks like a real failure and is not.
-- **The full test suite must pass with no Arco server, no pyarco checkout, and no O2 network.** Run it with `$PY -m pytest tests -v`. The expected clean baseline is **544 passed, 1 skipped**.
+- **The full test suite must pass with no Arco server, no pyarco checkout, and no O2 network.** Run it with `$PY -m pytest tests -v`. The suite must be green with **zero failures and zero errors**; the passing count rises as each task adds tests (it was 544 passed, 1 skipped after Task 1), so treat the count as a moving number and the failure count as the gate.
 - **Exactly one full-O2 process exists: the Arco server.** Everything else is an o2lite client. Nothing in this plan adds a second.
 - **Control and pyarco share ONE o2lite connection and ONE services string.** `o2litepy`'s `set_services` does `self.services = services` (replace, not append), so the string is always `"actl,game"` written in full.
 - **A dev id must be a valid O2 service name:** non-empty and at most 31 characters (o2litepy refuses longer).
@@ -177,16 +177,37 @@ In `control/engine.py`, change the import to include `LightCue`, then replace th
 
 ```python
         for cue in cues or ():
-            if isinstance(cue, PlayCue):
-                sink, args = self.on_play_cue, (cue.dev, cue.name, cue.params)
-            elif isinstance(cue, LightCue):
-                sink, args = self.on_light_cue, (cue.dev, cue.status,
-                                                 cue.data1, cue.data2, cue.when)
-            else:
-                # The historic plain 4-tuple: no declared time.
-                dev_, status, d1, d2 = cue
-                sink, args = self.on_light_cue, (dev_, status, d1, d2, None)
+            # The whole per-cue block is guarded, not just the sink call.
+            # The old code was `sink, args = self.on_light_cue, tuple(cue)`,
+            # which is total: it never raised for any-length iterable. The
+            # 4-tuple unpack below is partial, so an arity-wrong cue from a
+            # buggy Bit would otherwise raise straight out of data() and
+            # break its documented "never raises" contract (engine.py's own
+            # docstring) -- and devicelink/agent.py's _on_verb has no
+            # handler around the call.
+            try:
+                if isinstance(cue, PlayCue):
+                    sink, args = self.on_play_cue, (cue.dev, cue.name,
+                                                    cue.params)
+                elif isinstance(cue, LightCue):
+                    sink, args = self.on_light_cue, (cue.dev, cue.status,
+                                                     cue.data1, cue.data2,
+                                                     cue.when)
+                else:
+                    # The historic plain 4-tuple: no declared time.
+                    dev_, status, d1, d2 = cue
+                    sink, args = self.on_light_cue, (dev_, status, d1, d2,
+                                                     None)
+                if sink is None:
+                    continue
+                sink(*args)
+            except Exception:
+                logger.exception("cue dispatch failed; continuing")
 ```
+
+This replaces the existing `if sink is None: continue` / `try: sink(*args)`
+block below it rather than sitting above one, so there is exactly one
+`try` per cue.
 
 Update the sink docstring at `control/engine.py:52` to read `on_light_cue(dev, status, data1, data2, when)`.
 
