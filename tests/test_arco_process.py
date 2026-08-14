@@ -48,7 +48,7 @@ def test_wait_ready_raises_when_probe_never_succeeds():
         process.wait_ready(timeout=1.0)
 
 
-def test_shutdown_sends_sigterm_and_waits():
+def test_shutdown_sends_sigterm_and_reaps():
     popen = FakePopen()
     process = ArcoProcess(["arco-server"], popen=popen)
     process.start()
@@ -56,7 +56,7 @@ def test_shutdown_sends_sigterm_and_waits():
     process.shutdown()
 
     assert popen.signals == [signal.SIGTERM]
-    assert popen.waited is True
+    assert popen.returncode is not None      # signalled AND reaped
 
 
 def test_shutdown_before_start_is_a_noop():

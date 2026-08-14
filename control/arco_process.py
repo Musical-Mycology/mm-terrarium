@@ -15,6 +15,8 @@ import signal
 import subprocess
 import time
 
+from control.process import stop_process
+
 
 class ArcoReadyTimeout(Exception):
     """Raised when Arco doesn't report ready within the configured timeout."""
@@ -135,7 +137,7 @@ def pty_popen(command: list[str]):
 
 class _PtyProcess:
     """The three-method slice of subprocess.Popen that ArcoProcess actually
-    uses (poll / send_signal / wait), over a pty.fork()ed child.
+    uses (poll / send_signal / wait / close), over a pty.fork()ed child.
 
     Drains the master fd on poll() and wait(): Arco is a curses app
     redrawing continuously, so an undrained pty buffer fills and blocks the
@@ -152,6 +154,8 @@ class _PtyProcess:
     def _drain(self) -> None:
         import os
         import select
+        if self._fd is None:
+            return
         while True:
             ready, _, _ = select.select([self._fd], [], [], 0)
             if not ready:
@@ -200,31 +204,36 @@ class _PtyProcess:
         if self.returncode is None:
             os.write(self._fd, keys.encode())
 
-    def wait(self, timeout: float = 5.0):
+    def close(self) -> None:
+        """Close the pty master fd.
+
+        Separate from wait() because control/process.py's stop_process owns
+        the signal/escalate/reap cycle now and deliberately does not touch
+        fds: a plain subprocess.Popen has none of its own, so the owner
+        closes what it owns. Idempotent.
+        """
         import os
+        if self._fd is None:
+            return
+        try:
+            os.close(self._fd)
+        except OSError:
+            pass
+        self._fd = None
+
+    def wait(self, timeout: float = 5.0):
+        """Bounded wait, then close. Kept for the Popen-compatible surface
+        and for tests that just want a child reaped; ESCALATION MOVED OUT to
+        control/process.py's stop_process, which is what ArcoProcess.
+        shutdown() and SimulatorProcess.shutdown() both use now. Returns the
+        exit code, or None if the child outlived the timeout."""
         import time as _time
         deadline = _time.monotonic() + timeout
         while _time.monotonic() < deadline:
             if self.poll() is not None:
                 break
             _time.sleep(0.05)
-        else:
-            # SIGTERM was ignored or the app hung on its way out. A venue box
-            # rebooting into a still-running Arco would fail to bind its
-            # ports, so escalate rather than return with the child alive.
-            self.send_signal(9)
-            # SIGKILL is delivered asynchronously: polling immediately can
-            # still see the child unreaped and would return None, i.e. claim
-            # "still running" for a process that is already dying.
-            kill_deadline = _time.monotonic() + 5.0
-            while _time.monotonic() < kill_deadline:
-                if self.poll() is not None:
-                    break
-                _time.sleep(0.02)
-        try:
-            os.close(self._fd)
-        except OSError:
-            pass
+        self.close()
         return self.returncode
 
 
@@ -256,8 +265,19 @@ class ArcoProcess:
         return None if self._process is None else self._process.poll()
 
     def shutdown(self) -> None:
+        """SIGTERM, then SIGKILL if that is ignored, then reap.
+
+        Arco has no message-based quit (arco/doc/server.md documents only a
+        console keypress), so a signal is the only lever. Bounded via
+        control/process.py: an unbounded wait() here used to mean one
+        wedged server hung the whole teardown.
+        """
         if self._process is None:
             return
-        self._process.send_signal(signal.SIGTERM)
-        self._process.wait()
-        self._process = None
+        process, self._process = self._process, None
+        try:
+            stop_process(process)
+        finally:
+            close = getattr(process, "close", None)
+            if close is not None:
+                close()          # _PtyProcess owns a pty master; Popen does not
