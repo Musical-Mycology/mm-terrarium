@@ -6,10 +6,12 @@ import io
 import signal
 import time
 
+import pytest
+
 from control.arco_process import FakePopen
 from harness import markers
-from harness.run_stack import (StackConfig, control_command, device_command,
-                               run)
+from harness.run_stack import (StackConfig, _failed_marker, control_command,
+                               device_command, run)
 
 
 class ScriptedPopen(FakePopen):
@@ -229,6 +231,49 @@ def test_a_service_conflict_fails_immediately(tmp_path):
 
     assert result.ok is False
     assert result.stage == "device-join"
+
+
+def test_a_marker_added_to_failure_markers_without_a_remedy_fails_loud(
+        monkeypatch):
+    """_failed_marker used to hand-check markers.DEVICE_JOIN_DENIED and
+    markers.DEVICE_SERVICE_CONFLICT by value. A third marker landing in
+    markers.FAILURE_MARKERS -- the dict that exists to be the single
+    source of truth -- would have silently done nothing, regressing every
+    device-join wait back to the full cfg.join_timeout: the exact bug
+    class _wait_for_marker was already fixed for once on this branch, one
+    level up.
+
+    Now _failed_marker iterates markers.FAILURE_MARKERS itself, so a new
+    entry with no matching message in _FAILURE_REMEDIES fails LOUD
+    (KeyError) the moment a tee reports seeing it, instead of quietly
+    falling through to None. monkeypatch.setitem mutates the real dict in
+    place and restores it after the test, so this exercises the exact
+    object _failed_marker reads."""
+    monkeypatch.setitem(markers.FAILURE_MARKERS, "DEVICE_NEW_FAILURE",
+                        "SOMETHING NEW WENT WRONG:")
+
+    class _FakeTee:
+        name = "ie1"
+
+        def seen(self, marker):
+            return marker == "SOMETHING NEW WENT WRONG:"
+
+    with pytest.raises(KeyError):
+        _failed_marker(_FakeTee())
+
+
+def test_device_watch_list_includes_every_failure_marker():
+    """The other half of the same fix: a marker only reaches
+    _failed_marker's tee.seen() check at all if the device's ProcTee was
+    told to watch for it at spawn time. Deriving the watch list from
+    markers.FAILURE_MARKERS (see _watch_list) closes that, rather than
+    leaving a second hand-maintained list that could drift from the
+    first."""
+    from harness.run_stack import _watch_list
+
+    watch = _watch_list("DEVICE_")
+    for marker in markers.FAILURE_MARKERS.values():
+        assert marker in watch
 
 
 def test_teardown_still_runs_when_a_stage_fails(tmp_path):

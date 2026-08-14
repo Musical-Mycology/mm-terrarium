@@ -141,8 +141,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
 
     try:
         control = spawn("control", control_command(cfg),
-                        [markers.CONTROL_TRANSPORT_READY,
-                         markers.CONTROL_SETUP_HOLD])
+                        _watch_list("CONTROL_"))
 
         for stage, marker, detail in (
             ("control-ready", markers.CONTROL_TRANSPORT_READY,
@@ -158,8 +157,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         for index in range(1, cfg.devices + 1):
             devices.append(spawn(
                 f"ie{index}", device_command(cfg, index, getpid()),
-                [markers.DEVICE_CLOCK_SYNCED, markers.DEVICE_ROLE_GRANTED,
-                 markers.DEVICE_JOIN_DENIED, markers.DEVICE_SERVICE_CONFLICT]))
+                _watch_list("DEVICE_")))
 
         for tee in devices:
             ok, failed = _wait_for_marker(tee, markers.DEVICE_CLOCK_SYNCED,
@@ -204,18 +202,62 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
             print(f"teardown step {name!r} failed: {exc!r}", file=sys.stderr)
 
 
+def _watch_list(prefix: str) -> list[str]:
+    """The markers a spawned child's ProcTee should track.
+
+    Derived from markers.READY_MARKERS and markers.FAILURE_MARKERS rather
+    than hand-listed, so a marker added to either dict is automatically
+    watched. Without this, a third failure marker landing in
+    FAILURE_MARKERS but not in a device's watch list would make
+    tee.seen(marker) raise KeyError the moment _failed_marker asked about
+    it (ProcTee only creates an Event for markers it was told to watch) --
+    the same desynchronisation bug _failed_marker itself used to have, one
+    layer up.
+
+    `prefix` picks the role: "CONTROL_" or "DEVICE_", matching
+    markers.py's naming convention. FAILURE_MARKERS is device-only today
+    (every failure marker Control's own log is watched for is instead a
+    ready/unready timeout, not a diagnosed failure), so it is folded into
+    the device watch list only.
+    """
+    watch = [v for k, v in markers.READY_MARKERS.items()
+             if k.startswith(prefix)]
+    if prefix == "DEVICE_":
+        watch += list(markers.FAILURE_MARKERS.values())
+    return watch
+
+
+_FAILURE_REMEDIES = {
+    "DEVICE_JOIN_DENIED": lambda tee: (
+        f"{tee.name}: Control refused the join. See "
+        f"{tee.name}.log for the reason and hint."),
+    "DEVICE_SERVICE_CONFLICT": lambda tee: (
+        f"{tee.name}: the hub refused this device's service "
+        f"announcement because another process already offers that "
+        f"name. Look for a stale `python -m harness.o2_shroom "
+        f"--dev {tee.name}` and kill it."),
+}
+
+
 def _failed_marker(tee: ProcTee) -> str | None:
-    """Both of these are conditions the child has already diagnosed
-    precisely, and neither ever recovers, so waiting out the timeout is
-    pure lost time."""
-    if tee.seen(markers.DEVICE_JOIN_DENIED):
-        return (f"{tee.name}: Control refused the join. See "
-                f"{tee.name}.log for the reason and hint.")
-    if tee.seen(markers.DEVICE_SERVICE_CONFLICT):
-        return (f"{tee.name}: the hub refused this device's service "
-                f"announcement because another process already offers that "
-                f"name. Look for a stale `python -m harness.o2_shroom "
-                f"--dev {tee.name}` and kill it.")
+    """Both of the failure markers today are conditions the child has
+    already diagnosed precisely, and neither ever recovers, so waiting out
+    the timeout is pure lost time.
+
+    Iterates markers.FAILURE_MARKERS -- the single source of truth for
+    what counts as a failure -- instead of hand-checking each name by
+    value. A marker added to that dict without a matching entry in
+    _FAILURE_REMEDIES now fails LOUD (KeyError) rather than silently
+    doing nothing and regressing to the full-timeout behaviour
+    tests/test_run_stack.py's test_a_denied_join_fails_immediately and
+    test_a_service_conflict_fails_immediately exist to catch -- the same
+    bug class run()'s device-join loop was already fixed for once on this
+    branch (see _wait_for_marker's docstring), now closed at this level
+    too.
+    """
+    for name, marker in markers.FAILURE_MARKERS.items():
+        if tee.seen(marker):
+            return _FAILURE_REMEDIES[name](tee)
     return None
 
 
