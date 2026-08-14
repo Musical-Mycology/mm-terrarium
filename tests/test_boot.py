@@ -206,3 +206,125 @@ def _ready_arco(command, popen=None):
 def _never_ready_arco(command):
     from control.arco_process import ArcoProcess
     return ArcoProcess(command, popen=FakePopen(), probe=lambda: False)
+
+
+class _SpyProcess:
+    """Stands in for control/simulator_process.py's SimulatorProcess:
+    boot() only ever calls shutdown() on it."""
+
+    def __init__(self):
+        self.shutdowns = 0
+
+    def shutdown(self):
+        self.shutdowns += 1
+
+
+class _SpyFactory:
+    """A simulator_factory that SPAWNS. The contract is still a bare
+    Callable[[], str]; a factory that spawns a process additionally
+    exposes the handle as .process with a shutdown(), which is what
+    harness/terrarium_boot.py's real factories already do and what its
+    build() already reads back off the same object."""
+
+    def __init__(self):
+        self.process = None
+
+    def __call__(self):
+        self.process = _SpyProcess()
+        return "sim-room-dev"
+
+
+def test_boot_shuts_down_the_simulator_on_a_failure_after_it_spawned():
+    """boot()'s structural guarantee covered Arco and never the simulator
+    the same function spawns, three lines earlier. An orphaned Room
+    simulator never exits on its own, reconnects to the NEXT Arco and
+    claims sim-room there, so that run's own simulator is refused by O2
+    (o2/src/bridge.cpp:231-237) and renders nothing."""
+    factory = _SpyFactory()
+    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+
+    with pytest.raises(BootFailure, match="unknown Bit"):
+        boot(config, make_registry(), arco_command=["arco-server"],
+             room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
+             simulator_factory=factory)
+
+    assert factory.process.shutdowns == 1
+
+
+def test_boot_shuts_down_the_simulator_when_the_bit_fails_to_load():
+    class _BrokenBit(RoomCapableBit):
+        def __init__(self):
+            raise ValueError("bad Bit")
+
+    factory = _SpyFactory()
+    config = BootConfig(room_type=RoomType.TEST, bit_name="BrokenBit")
+
+    with pytest.raises(BootFailure, match="Bit load failed"):
+        boot(config, {"BrokenBit": _BrokenBit}, arco_command=["arco-server"],
+             room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
+             simulator_factory=factory)
+
+    assert factory.process.shutdowns == 1
+
+
+def test_boot_shuts_both_down_on_a_keyboard_interrupt():
+    """`except Exception` does not catch KeyboardInterrupt, so a Ctrl-C
+    during boot leaked Arco AND the simulator. GameServer.load_bit's own
+    handler is also `except Exception` (control/engine.py:80), so a
+    KeyboardInterrupt raised while instantiating a Bit propagates straight
+    out to boot()."""
+    class _InterruptingBit(RoomCapableBit):
+        def __init__(self):
+            raise KeyboardInterrupt
+
+    factory = _SpyFactory()
+    fake_popen = FakePopen()
+    config = BootConfig(room_type=RoomType.TEST, bit_name="InterruptingBit")
+
+    with pytest.raises(KeyboardInterrupt):
+        boot(config, {"InterruptingBit": _InterruptingBit},
+             arco_command=["arco-server"],
+             room_binding=RoomBindingRegistry(),
+             arco_process_cls=lambda cmd: _ready_arco(cmd, popen=fake_popen),
+             simulator_factory=factory)
+
+    assert factory.process.shutdowns == 1
+    assert fake_popen.signals      # and Arco was told to stop too
+
+
+def test_boot_still_accepts_a_factory_that_spawns_nothing():
+    """Every other test in this file passes `lambda: "sim-room-dev"`, which
+    has no .process at all. That must stay a no-op, not an AttributeError."""
+    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+
+    with pytest.raises(BootFailure, match="unknown Bit"):
+        boot(config, make_registry(), arco_command=["arco-server"],
+             room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
+             simulator_factory=lambda: "sim-room-dev")
+
+
+def test_boot_shuts_arco_down_even_if_the_simulator_shutdown_raises():
+    """Cleanup must not mask the failure that triggered it, and must not
+    let one leaked subprocess cause a second."""
+    class _RaisingProcess:
+        def shutdown(self):
+            raise OSError("no such process")
+
+    class _RaisingFactory:
+        def __init__(self):
+            self.process = None
+
+        def __call__(self):
+            self.process = _RaisingProcess()
+            return "sim-room-dev"
+
+    fake_popen = FakePopen()
+    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+
+    with pytest.raises(BootFailure, match="unknown Bit"):
+        boot(config, make_registry(), arco_command=["arco-server"],
+             room_binding=RoomBindingRegistry(),
+             arco_process_cls=lambda cmd: _ready_arco(cmd, popen=fake_popen),
+             simulator_factory=_RaisingFactory())
+
+    assert fake_popen.signals

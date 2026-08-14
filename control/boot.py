@@ -31,14 +31,17 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
     """Run the full load sequence. Returns (game_server, room_bridge,
     arco_process) once the Bit is loaded and either the Room is already
     bound (fast path) or a fresh tap has bound it (see wait_for_room_binding
-    below). Raises BootFailure on any
-    stage failure. Once Arco has actually started, EVERY failure -- wait_ready
-    timing out, an unknown/unsupported Bit, a Bit load error, or anything
-    unanticipated -- shuts Arco down before propagating. That's a structural
-    guarantee (one try/except around the whole post-start section) rather
-    than an arco.shutdown() call enumerated at each failure site, so a
-    future failure mode added to this section can't accidentally orphan the
-    subprocess by forgetting one."""
+    below).
+
+    Raises BootFailure on any stage failure. Once Arco has actually
+    started, EVERY failure -- wait_ready timing out, an unknown/unsupported
+    Bit, a Bit load error, a Ctrl-C, or anything unanticipated -- shuts
+    down both Arco AND any simulator subprocess the factory spawned,
+    before propagating. That's a structural guarantee (one try/except
+    around the whole post-start section) rather than a shutdown call
+    enumerated at each failure site, so a future failure mode added to
+    this section can't accidentally orphan either subprocess by forgetting
+    one."""
     try:
         room_type = resolve_room_type(
             config.room_type,
@@ -89,10 +92,21 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
         room_bridge = RoomBridge()
         if room.bound_dev is not None:
             room_bridge.bind(room.bound_dev)
-    except Exception:
-        # Arco is a live subprocess by this point -- any failure below here
-        # must not orphan it. Re-raise unchanged: the inner handlers above
-        # already produced a well-labeled BootFailure for every stage.
+    except BaseException:
+        # Arco is a live subprocess by this point, and _bind_room_fast_path
+        # may have spawned a simulator subprocess too -- any failure below
+        # here must orphan neither. An orphaned Room simulator never exits
+        # on its own, reconnects to the NEXT Arco and re-claims its dev
+        # name there, so that run's own simulator is refused by O2
+        # (o2/src/bridge.cpp:231-237) and renders nothing, silently. See
+        # docs/superpowers/specs/
+        # 2026-08-14-room-simulator-service-collision-design.md.
+        #
+        # BaseException, not Exception: a Ctrl-C during boot used to leak
+        # both subprocesses, since KeyboardInterrupt is not an Exception.
+        # Re-raise unchanged: the inner handlers above already produced a
+        # well-labeled BootFailure for every stage.
+        _shutdown_simulator(simulator_factory)
         arco.shutdown()
         raise
 
@@ -114,6 +128,29 @@ def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
     recorded = room_binding.bound_device(room.room_type)
     if recorded is not None and known_device_connected(recorded):
         room.bound_dev = recorded
+
+
+def _shutdown_simulator(simulator_factory) -> None:
+    """Shut down a simulator subprocess the factory spawned, if any.
+
+    A simulator_factory is a bare Callable[[], str] by contract, but one
+    that SPAWNS a process exposes the handle as `.process` with a
+    shutdown() -- harness/terrarium_boot.py's factories already do exactly
+    that, and its build() already reads the attribute back off the same
+    object. A factory that spawns nothing has no such attribute and this
+    is a no-op.
+
+    Swallows a failing shutdown deliberately: this runs on the way out of
+    a boot that is already failing, and neither masking that failure nor
+    skipping arco.shutdown() below it is acceptable.
+    """
+    process = getattr(simulator_factory, "process", None)
+    if process is None:
+        return
+    try:
+        process.shutdown()
+    except Exception:
+        pass
 
 
 class RoomBindingTimeout(Exception):
