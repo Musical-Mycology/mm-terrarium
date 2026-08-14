@@ -14,7 +14,7 @@ from control.audio import AudioBridge, FakePool
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.room_bridge import FakeRoomLightSink, RoomBridge
+from control.room_bridge import FakeRoomAudioSink, FakeRoomLightSink, RoomBridge
 from control.rooms import Room, RoomType
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
@@ -579,34 +579,6 @@ def test_room_audio_bridge_gets_on_grant_at_setup():
     assert len(pool.acquired) == 1   # TestBit's room_test role has one instrument
 
 
-@pytest.mark.skip(reason=(
-    "RoomBridge.feed_midi's fan-out was removed by Task 5 of "
-    "docs/superpowers/plans/2026-08-14-load-bearing-timed-cues.md "
-    "(control/room_bridge.py now has separate feed_light/feed_audio, since "
-    "the two halves of a Room cue are meant to release at different times). "
-    "_render_room only calls feed_light until Task 8 of that plan rewrites "
-    "it to release audio through feed_audio at the cue's own time. This "
-    "test asserts same-tick fan-out, which no longer happens by design; "
-    "superseded by that task's "
-    "test_room_audio_waits_for_its_moment_and_light_does_not. Un-skip or "
-    "delete once that task lands."
-))
-def test_room_dev_cue_reaches_audio_bridge_too():
-    gs = _room_ready_game_server()
-    pool = FakePool()
-    room_audio = AudioBridge(pool)
-    room_bridge = RoomBridge()
-    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
-                            room_audio=room_audio)
-
-    gs.on_light_cue("sim-room", 0xB0, 74, 90)
-    agent._render_room()   # drains the Room's timed queue (Task 6); the
-                            # untimed cue above is due at once
-
-    voice = pool.acquired[0]
-    assert ("cc", 74, 90) in voice.sent
-
-
 def test_on_state_change_running_starts_the_drone():
     gs = _room_ready_game_server()
     pool = FakePool()
@@ -746,3 +718,62 @@ def test_unstamped_gesture_reaches_the_engine_as_zero():
     server.deliver("c1", "/game/tilt", "sf", [dev, 12.0])
     agent.poll()
     assert seen == [0.0]
+
+
+def test_room_audio_waits_for_its_moment_and_light_does_not():
+    """One anchor, two releases. Light is fed immediately because its frame
+    still has to cross the wire; audio waits until `at` because it reaches
+    Arco from Control with no wire in between."""
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    light, audio = FakeRoomLightSink(), FakeRoomAudioSink()
+    now = [1000.0]
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            horizon=0.060, clock=lambda: now[0])
+    room_bridge.bind("sim-room", light=light, audio=audio)
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 100, 1000.05)
+    assert light.fed == [(0xB0, 74, 100)]     # fed on arrival
+    agent._render_room()
+    assert audio.fed == []                    # not yet: at is 1000.05
+
+    now[0] = 1000.06
+    agent._render_room()
+    assert audio.fed == [(0xB0, 74, 100)]
+
+
+def test_room_frame_carries_a_time():
+    """Room frames carried NO when at all before this: _render_room called
+    leds_event with no timestamp, so they bypassed the device's queue and its
+    clamp counter entirely while every per-device frame was scheduled."""
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    now = [1000.0]
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
+                            horizon=0.060, clock=lambda: now[0])
+    server.bind_dev("sim-room", "c-room")
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 100, 1000.05)
+    agent._render_room()
+
+    leds = [m for d, m in server.sent if m["address"] == "/sim-room/leds"]
+    assert leds
+    assert leds[-1]["timestamp"] == pytest.approx(1000.05)
+
+
+def test_a_room_audio_cue_already_past_clamps_and_counts():
+    """The horizon being too small must be VISIBLE, not silent. This counter
+    is what the separate horizon-measurement task consumes."""
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    audio = FakeRoomAudioSink()
+    now = [1000.0]
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            horizon=0.060, clock=lambda: now[0])
+    room_bridge.bind("sim-room", light=FakeRoomLightSink(), audio=audio)
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 100, 999.0)   # already past
+    agent._render_room()
+    assert audio.fed == [(0xB0, 74, 100)]               # released anyway
+    assert agent.clamped == 1

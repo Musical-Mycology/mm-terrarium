@@ -163,8 +163,14 @@ class DeviceLinkAgent:
 
     @property
     def clamped(self) -> int:
-        """Room cues that arrived already late. A rising count means
-        BootConfig.cue_horizon is too small."""
+        """Room AUDIO cues that arrived already past their target time.
+
+        A rising count means BootConfig.cue_horizon is smaller than the
+        upstream delivery time (gesture to Control). The downstream half is
+        reported by the device's own counter, harness/shroom_client.py's
+        ShroomClient.clamped, which rises when the horizon is smaller than
+        the whole round trip. Both are dev-box figures.
+        """
         return self._room_cues.clamped
 
     @property
@@ -222,12 +228,18 @@ class DeviceLinkAgent:
     def _render_room(self) -> None:
         if self._room_light is None or self._room_dev is None:
             return
-        # Room light is now fed upstream, in _on_light_cue (or
-        # _drain_light_cues) -- see that method's docstring. This function no
-        # longer drains _room_cues for light. _room_cues keeps accumulating
-        # the Room's audio-release entries here, unconsumed until Task 8 of
-        # docs/superpowers/plans/2026-08-14-load-bearing-timed-cues.md adds
-        # the feed_audio drain.
+        # Room AUDIO waits here for its moment. Room LIGHT was already fed in
+        # _on_light_cue (or _drain_light_cues), because the frame it renders
+        # still has to cross the wire to reach the simulator by `at`. One
+        # anchor, two releases -- see the 2026-08-14 spec section 2.
+        for (status, d1, d2) in self._room_cues.due(self._clock()):
+            try:
+                self._room_bridge.feed_audio(status, d1, d2)
+            except Exception:
+                logger.exception("Room feed_audio failed")
+        # Popped unconditionally, for the same reason _render_frames does it:
+        # a cue that changes no frame must not leave a stale time behind.
+        at = self._pending_at.pop(self._room_dev, None)
         universe = self._room_light.universe
         try:
             self._room_light.session.render_into(universe)
@@ -237,9 +249,11 @@ class DeviceLinkAgent:
         frame = bytes(universe.get_frame()[:36])
         if frame != self._last_frames.get(self._room_dev):
             self._last_frames[self._room_dev] = frame
+            when = at if at is not None else self._clock() + self._horizon
             try:
                 self._send(self._room_dev,
-                          protocol.leds_event(self._room_dev, frame))
+                           protocol.leds_event(self._room_dev, frame,
+                                               when=when))
             except Exception:
                 logger.exception("Room leds send failed")
 
