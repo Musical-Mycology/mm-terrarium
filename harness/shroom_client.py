@@ -192,6 +192,21 @@ class ShroomClient:
     def clamped(self) -> int:
         return self._frames.clamped
 
+    @property
+    def lateness(self) -> list[float]:
+        """Signed (tick time - declared time), one entry per frame that
+        carried a declared time. Negative means the frame arrived with room
+        to spare.
+
+        The magnitude behind `clamped`: that counter says the horizon is
+        wrong, this says by how much. On the o2lite path both ends read the
+        same O2 clock, so these are directly comparable and are what
+        BootConfig.cue_horizon is measured from -- see
+        docs/superpowers/specs/2026-08-14-cue-horizon-measurement-design.md.
+        Bounded by TimedQueue; a long run keeps the most recent samples.
+        """
+        return list(self._frames.lateness)
+
     def _on_release(self, env) -> str:
         self.released = True
         if self.leds is not None:
