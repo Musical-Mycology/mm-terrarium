@@ -387,7 +387,7 @@ def test_play_cue_is_sent_to_the_device():
     gs.run()
 
     gs.bit.verb_handlers = lambda: {
-        "boop": lambda d, args: [PlayCue(d, "click", "hard")]}
+        "boop": lambda d, args, at: [PlayCue(d, "click", "hard")]}
     gs.data("ie1", "boop", ["ie1"])
 
     plays = [m for _c, m in server.sent if m["address"] == "/ie1/play"]

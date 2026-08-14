@@ -149,7 +149,7 @@ def test_jammer_declares_only_tilt():
 def test_tap_yields_a_play_cue_and_a_light_cue():
     from bits.test_bit import TestBit
     from control.cues import PlayCue
-    cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 1])
+    cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 1], 0.0)
     assert PlayCue("ie1", "click", "") in cues
     assert any(isinstance(c, tuple) and c[0] == "ie1" for c in cues)
 
@@ -157,19 +157,19 @@ def test_tap_yields_a_play_cue_and_a_light_cue():
 def test_double_tap_plays_chime():
     from bits.test_bit import TestBit
     from control.cues import PlayCue
-    cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 2])
+    cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 2], 0.0)
     assert PlayCue("ie1", "chime", "") in cues
 
 
 def test_shake_maps_sweep_to_a_light_cue():
     from bits.test_bit import TestBit
-    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 90.0])
+    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 90.0], 0.0)
     assert cues == [("ie1", 0xB0, 74, 127)]
 
 
 def test_shake_clamps_out_of_range_sweep():
     from bits.test_bit import TestBit
-    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 999.0])
+    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 999.0], 0.0)
     assert cues == [("ie1", 0xB0, 74, 127)]
 
 
@@ -177,8 +177,8 @@ def test_gesture_handlers_tolerate_short_args():
     """A device must never be able to wedge Control with a truncated frame."""
     from bits.test_bit import TestBit
     bit = TestBit()
-    assert bit.verb_handlers()["tap"]("ie1", ["ie1"]) is not None
-    assert bit.verb_handlers()["shake"]("ie1", ["ie1"]) is not None
+    assert bit.verb_handlers()["tap"]("ie1", ["ie1"], 0.0) is not None
+    assert bit.verb_handlers()["shake"]("ie1", ["ie1"], 0.0) is not None
 
 
 def test_test_bit_declares_a_room_test_role():

@@ -14,6 +14,7 @@ class VerbBit(Bit):
 
     def __init__(self):
         self.seen = []
+        self.seen_at = []
         self.raise_next = False
         self.refuse_next = None      # set to a str to exercise 4.0
 
@@ -33,12 +34,13 @@ class VerbBit(Bit):
     next_cue = None            # set by a test to override the default cue
     next_cues = None           # set by a test to return a whole cue list
 
-    def _on_tilt(self, dev, args):
+    def _on_tilt(self, dev, args, at):
         if self.raise_next:
             raise RuntimeError("boom")
         if self.refuse_next is not None:
             return self.refuse_next
         self.seen.append((dev, args))
+        self.seen_at.append(at)
         if self.next_cues is not None:
             return self.next_cues
         if self.next_cue is not None:
@@ -191,7 +193,7 @@ def test_play_cue_reaches_on_play_cue(running_server):
     gs.on_play_cue = lambda *a: plays.append(a)
     gs.on_light_cue = lambda *a: lights.append(a)
     gs.bit.verb_handlers = lambda: {
-        "boop": lambda d, args: [PlayCue(d, "click", "hard")]}
+        "boop": lambda d, args, at: [PlayCue(d, "click", "hard")]}
 
     assert gs.data(dev, "boop", [dev]) is None
     assert plays == [(dev, "click", "hard")]
@@ -205,7 +207,7 @@ def test_mixed_cues_are_partitioned(running_server):
     gs.on_play_cue = lambda *a: plays.append(a)
     gs.on_light_cue = lambda *a: lights.append(a)
     gs.bit.verb_handlers = lambda: {
-        "boop": lambda d, args: [(d, 0xB0, 74, 64), PlayCue(d, "chime", "")]}
+        "boop": lambda d, args, at: [(d, 0xB0, 74, 64), PlayCue(d, "chime", "")]}
 
     gs.data(dev, "boop", [dev])
     assert lights == [(dev, 0xB0, 74, 64, None)]
@@ -218,7 +220,7 @@ def test_tuple_only_handler_is_unchanged(running_server):
     lights = []
     gs.on_light_cue = lambda *a: lights.append(a)
     gs.bit.verb_handlers = lambda: {
-        "boop": lambda d, args: [(d, 0xB0, 11, 20), (d, 0xB0, 11, 30)]}
+        "boop": lambda d, args, at: [(d, 0xB0, 11, 20), (d, 0xB0, 11, 30)]}
 
     gs.data(dev, "boop", [dev])
     assert lights == [(dev, 0xB0, 11, 20, None), (dev, 0xB0, 11, 30, None)]
@@ -230,7 +232,7 @@ def test_play_cue_with_no_sink_is_dropped(running_server):
     gs, dev = running_server
     gs.on_play_cue = None
     gs.bit.verb_handlers = lambda: {
-        "boop": lambda d, args: [PlayCue(d, "click", "")]}
+        "boop": lambda d, args, at: [PlayCue(d, "click", "")]}
 
     assert gs.data(dev, "boop", [dev]) is None
 
@@ -244,7 +246,7 @@ def test_raising_play_sink_does_not_propagate(running_server):
 
     gs.on_play_cue = boom
     gs.bit.verb_handlers = lambda: {
-        "boop": lambda d, args: [PlayCue(d, "click", "")]}
+        "boop": lambda d, args, at: [PlayCue(d, "click", "")]}
 
     assert gs.data(dev, "boop", [dev]) is None
 
@@ -278,3 +280,57 @@ def test_returning_cues_still_works():
     gs.on_light_cue = lambda *c: cues.append(c)
     assert gs.data("ie1", "tilt", ["ie1", 30.0]) is None
     assert cues == [("ie1", 0xB0, 74, 64, None)]
+
+
+def _joined(bit, cue_horizon=0.06, clock=lambda: 1000.0):
+    gs = GameServer({"vb": lambda: bit}, cue_horizon=cue_horizon, clock=clock)
+    gs.load_bit("vb")
+    gs.join("ie1", "NODE_A")
+    return gs
+
+
+def test_handler_receives_at_computed_from_the_device_stamp():
+    """T = gesture_time + cue_horizon, and the DEVICE's reading of the clock
+    is the origin -- Design Rule 4, timestamps at the source. Jitter on the
+    way up must not become jitter in the output."""
+    bit = VerbBit()
+    gs = _joined(bit)
+    gs.data("ie1", "tilt", ["ie1", 10.0], gesture_time=999.5)
+    assert bit.seen_at == [pytest.approx(999.56)]
+
+
+def test_unstamped_gesture_falls_back_to_controls_clock():
+    """The websocket transport never stamps: devicelink/protocol.py's _event
+    defaults timestamp=0.0. That path must still produce a usable `at`."""
+    bit = VerbBit()
+    gs = _joined(bit)
+    gs.data("ie1", "tilt", ["ie1", 10.0], gesture_time=0.0)
+    assert bit.seen_at == [pytest.approx(1000.06)]
+
+
+def test_negative_stamp_falls_back_to_controls_clock():
+    """o2lite.time_get() returns -1 before clock sync. A cue scheduled
+    against -1 is garbage."""
+    bit = VerbBit()
+    gs = _joined(bit)
+    gs.data("ie1", "tilt", ["ie1", 10.0], gesture_time=-1.0)
+    assert bit.seen_at == [pytest.approx(1000.06)]
+
+
+def test_implausibly_future_stamp_is_refused_and_counted():
+    """A device whose clock is wrong could otherwise park a cue hours out and
+    hold a queue entry through teardown."""
+    bit = VerbBit()
+    gs = _joined(bit)
+    gs.data("ie1", "tilt", ["ie1", 10.0], gesture_time=99999.0)
+    assert bit.seen_at == [pytest.approx(1000.06)]
+    assert gs.rejected_stamps == 1
+
+
+def test_no_gesture_time_argument_still_works():
+    """Callers that predate timing (harness drivers, console-driven calls)
+    must keep working; they get Control's clock as the origin."""
+    bit = VerbBit()
+    gs = _joined(bit)
+    gs.data("ie1", "tilt", ["ie1", 10.0])
+    assert bit.seen_at == [pytest.approx(1000.06)]

@@ -143,14 +143,14 @@ class TestBit(Bit):
                 "tap": self._on_tap,
                 "shake": self._on_shake}
 
-    def _on_tilt(self, dev: str, args: list) -> list:
+    def _on_tilt(self, dev: str, args: list, at: float) -> list:
         """args: [dev, gamma]. gamma is degrees in [-90, 90]."""
         gamma = float(args[1]) if len(args) > 1 else 0.0
         gamma = max(-90.0, min(90.0, gamma))
         cc = int(round((gamma + 90.0) / 180.0 * 127.0))
         return [(dev, 0xB0, 74, cc)]
 
-    def _on_tap(self, dev: str, args: list) -> list:
+    def _on_tap(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, count]. A single tap clicks, a
         double chimes; both flash the hue lane so the tap is visible as well
         as audible."""
@@ -158,7 +158,7 @@ class TestBit(Bit):
         name = "chime" if count >= 2 else "click"
         return [PlayCue(dev, name, ""), (dev, 0xB0, 74, 127)]
 
-    def _on_shake(self, dev: str, args: list) -> list:
+    def _on_shake(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, sweep_deg]. Sweep drives the hue
         lane: a wider sweep pushes the colour further."""
         sweep = float(args[3]) if len(args) > 3 else 0.0

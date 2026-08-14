@@ -9,6 +9,7 @@ abort() -- GameServer stays agnostic to who's watching or calling either.
 """
 
 import logging
+import time
 
 from control.bit import Bit
 from control.cues import LightCue, PlayCue
@@ -20,6 +21,13 @@ from control.state import State
 
 logger = logging.getLogger(__name__)
 
+# How far ahead of Control's own clock a device-supplied gesture timestamp may
+# be before it is refused. A device whose clock is wrong could otherwise park a
+# cue hours into the future and hold a TimedQueue entry through teardown.
+# Refused stamps fall back to Control's clock and are counted -- see
+# GameServer.rejected_stamps.
+_MAX_GESTURE_LEAD = 5.0
+
 
 class InvalidTransition(Exception):
     """Raised when a trigger is called from a state that doesn't allow it."""
@@ -30,7 +38,8 @@ class BitLoadError(Exception):
 
 
 class GameServer:
-    def __init__(self, bit_registry: dict, room_binding=None):
+    def __init__(self, bit_registry: dict, room_binding=None,
+                 cue_horizon: float = 0.0, clock=time.monotonic):
         self.bit_registry = bit_registry
         self.state = State.IDLE
         self.devices = DevicePool()
@@ -61,6 +70,20 @@ class GameServer:
         # on_devices_change(); missing methods are skipped. Both the uplink
         # and the Terrarium Console attach here and run simultaneously.
         self._observers: list = []
+        # BootConfig.cue_horizon. ONE installation-wide constant: every cue's
+        # target time is origin + horizon, computed here and nowhere else, so
+        # a Bit receives a finished time rather than the ingredients. A
+        # per-cue horizon would let two cues from one gesture land on
+        # different frames and would make the clamp counters uninterpretable.
+        self._horizon = cue_horizon
+        # MUST be the same callable DeviceLinkAgent was built with. Two clock
+        # bases is the bug that made the 2026-08-13 live run dark: Control
+        # stamped frames off time.monotonic (~518,000) while the device
+        # ticked on the O2 clock (~45). See harness/terrarium_boot.py build().
+        self._clock = clock
+        # Gesture stamps refused for being implausibly far ahead (see
+        # _MAX_GESTURE_LEAD). A rising count means a device's clock is wrong.
+        self.rejected_stamps = 0
 
     def hello(self, dev: str, name: str, protoversion: str) -> None:
         self.devices.hello(dev, name, protoversion)
@@ -137,7 +160,28 @@ class GameServer:
             self.room.bound_dev = dev
         self._notify("on_devices_change")
 
-    def data(self, dev: str, verb: str, args: list) -> str | None:
+    def _origin(self, gesture_time: float | None) -> float:
+        """Resolve a cue's origin time: the device's own stamp when it is
+        usable, else Control's clock.
+
+        Three ways a stamp is unusable, all real. The websocket transport
+        never stamps at all (devicelink/protocol.py's _event defaults
+        timestamp=0.0). o2lite returns -1 until clock sync completes. And a
+        device with a broken clock can send something implausible.
+        """
+        now = self._clock()
+        if gesture_time is None or gesture_time <= 0:
+            return now
+        if gesture_time > now + _MAX_GESTURE_LEAD:
+            self.rejected_stamps += 1
+            logger.warning("refusing gesture stamp %.3f: more than %.1fs "
+                           "ahead of %.3f", gesture_time, _MAX_GESTURE_LEAD,
+                           now)
+            return now
+        return gesture_time
+
+    def data(self, dev: str, verb: str, args: list,
+             gesture_time: float | None = None) -> str | None:
         """Route a /game/<verb> message to the loaded Bit's verb handler.
 
         Returns None when handled, else a refusal reason a transport can
@@ -146,6 +190,11 @@ class GameServer:
         handler-declared: a handler returning a str is refusing. Never
         raises: a device must never be able to wedge Control, exactly as a
         Bit must never be able to.
+
+        `gesture_time` is the inbound envelope's timestamp: the device's own
+        reading of the O2 clock at the instant of the gesture. Control adds
+        the installation's cue_horizon to it to get `at`, the time the
+        consequence should be PRESENTED, and hands that to the handler.
         """
         if self.state not in (State.SETUP, State.RUNNING):
             return "no Bit running"
@@ -158,8 +207,9 @@ class GameServer:
             return "handler error"
         if handler is None:
             return f"unknown verb {verb!r}"
+        at = self._origin(gesture_time) + self._horizon
         try:
-            cues = handler(dev, args)
+            cues = handler(dev, args, at)
         except Exception:
             logger.exception("Bit verb handler %r raised; ignoring", verb)
             return "handler error"
