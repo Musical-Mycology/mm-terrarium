@@ -569,6 +569,18 @@ def test_room_audio_bridge_gets_on_grant_at_setup():
     assert len(pool.acquired) == 1   # TestBit's room_test role has one instrument
 
 
+@pytest.mark.skip(reason=(
+    "RoomBridge.feed_midi's fan-out was removed by Task 5 of "
+    "docs/superpowers/plans/2026-08-14-load-bearing-timed-cues.md "
+    "(control/room_bridge.py now has separate feed_light/feed_audio, since "
+    "the two halves of a Room cue are meant to release at different times). "
+    "_render_room only calls feed_light until Task 8 of that plan rewrites "
+    "it to release audio through feed_audio at the cue's own time. This "
+    "test asserts same-tick fan-out, which no longer happens by design; "
+    "superseded by that task's "
+    "test_room_audio_waits_for_its_moment_and_light_does_not. Un-skip or "
+    "delete once that task lands."
+))
 def test_room_dev_cue_reaches_audio_bridge_too():
     gs = _room_ready_game_server()
     pool = FakePool()

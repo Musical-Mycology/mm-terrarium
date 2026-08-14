@@ -48,9 +48,13 @@ class FakeRoomAudioSink:
 
 
 class RoomBridge:
-    """Owns whichever light/audio sinks are currently bound to the Room and
-    forwards the same MIDI bytes to both, mirroring harness/led_smoke.py's
-    feed_shared() -- light and sound reading the same stream is the point."""
+    """Owns whichever light/audio sinks are currently bound to the Room.
+
+    Light and sound read the same stream, which is the point (mirroring
+    harness/led_smoke.py's feed_shared()), but they are fed through separate
+    calls because they are released at different times against one shared
+    cue time -- see feed_light.
+    """
 
     def __init__(self) -> None:
         self.dev: str | None = None
@@ -63,9 +67,22 @@ class RoomBridge:
         self._light = light
         self._audio = audio
 
-    def feed_midi(self, status: int, d1: int, d2: int) -> None:
+    def feed_light(self, status: int, d1: int, d2: int) -> None:
+        """Feed the light sink only.
+
+        Separate from feed_audio because the two halves of a Room cue are
+        released at different times against ONE shared `at`: light is fed as
+        early as possible, since the frame it renders still has to cross the
+        wire to reach the device by `at`, while audio waits until `at`
+        because it reaches Arco from Control with no wire in between. See
+        docs/superpowers/specs/
+        2026-08-14-load-bearing-timed-cues-design.md section 2.
+        """
         if self._light is not None:
             self._light.feed_midi(status, d1, d2)
+
+    def feed_audio(self, status: int, d1: int, d2: int) -> None:
+        """Feed the audio sink only. See feed_light for why they are split."""
         if self._audio is not None:
             self._audio.feed_midi(status, d1, d2)
 

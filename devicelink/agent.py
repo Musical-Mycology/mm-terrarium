@@ -211,9 +211,9 @@ class DeviceLinkAgent:
         # class of error this slice exists to remove.
         for (status, d1, d2) in self._room_cues.due(self._clock()):
             try:
-                self._room_bridge.feed_midi(status, d1, d2)
+                self._room_bridge.feed_light(status, d1, d2)
             except Exception:
-                logger.exception("Room feed_midi failed")
+                logger.exception("Room feed_light failed")
         universe = self._room_light.universe
         try:
             self._room_light.session.render_into(universe)
