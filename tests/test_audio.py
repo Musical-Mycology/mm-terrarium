@@ -79,29 +79,34 @@ def test_midi_for_an_ungranted_device_is_ignored():
     AudioBridge(pool).feed_midi("nobody", 0xB0, 74, 100)   # must not raise
 
 
-def test_feed_midi_without_a_time_applies_immediately():
+def test_feed_midi_applies_immediately():
     """The pre-timing behavior is the default and must not regress."""
     pool = FakePool()
     bridge = AudioBridge(pool)
     bridge.on_grant("dev1", _role(ugens=PLAYER_UGENS))
     bridge.feed_midi("dev1", 0xB0, 74, 100)
     assert ("cc", 74, 100) in pool.acquired[0].sent
-    assert pool.scheduled == []
 
 
-def test_feed_midi_with_a_time_schedules_instead_of_applying():
-    pool = FakePool()
-    bridge = AudioBridge(pool)
-    bridge.on_grant("dev1", _role(ugens=PLAYER_UGENS))
-    bridge.feed_midi("dev1", 0xB0, 74, 100, when=1234.5)
+def test_no_scheduling_api_survives_on_the_audio_path():
+    """Cue timing is Control's, never the synth backend's.
 
-    assert not [s for s in pool.acquired[0].sent if s[0] == "cc"]  # not applied yet
-    assert len(pool.scheduled) == 1
-    when, fn = pool.scheduled[0]
-    assert when == 1234.5
+    pyarco's sched dispatches ONLY from sched.poll(), which ArcoSynthPool
+    drives once per 44 Hz agent tick -- the same granularity
+    control/timed_queue.py's TimedQueue already has, so scheduling here
+    bought no accuracy. Worse, pyarco's Scheduler.cause RAISES RuntimeError
+    on a negative offset (pyarco/sched.py:385, module global
+    allow_late=False) where TimedQueue clamps and counts. Two opposite
+    past-time policies on one cue. See findings F2/F3 in
+    docs/superpowers/specs/2026-08-14-load-bearing-timed-cues-design.md.
+    """
+    import inspect
 
-    fn()                                      # the scheduler fires it
-    assert ("cc", 74, 100) in pool.acquired[0].sent
+    from harness.arco_synth import ArcoSynthPool
+
+    assert not hasattr(FakePool(), "schedule_at")
+    assert not hasattr(ArcoSynthPool, "schedule_at")
+    assert "when" not in inspect.signature(AudioBridge.feed_midi).parameters
 
 
 def test_start_and_stop_drone_use_the_declared_note():
