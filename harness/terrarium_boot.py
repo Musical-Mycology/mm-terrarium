@@ -12,6 +12,7 @@ and expects to connect immediately. See design spec section 6.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -67,9 +68,16 @@ class _O2SimulatorFactory:
         self.process: SimulatorProcess | None = None
 
     def __call__(self) -> str:
+        # --exit-with-parent is what stops this subprocess outliving the
+        # Terrarium. An orphan keeps its browser canvas open, reconnects to
+        # the next Arco (o2litepy reconnects on its own) and claims sim-room
+        # there, so the NEXT run's simulator is refused by O2 and renders
+        # nothing. Passing our own pid covers the case teardown cannot: an
+        # external SIGKILL of this process.
         self.process = SimulatorProcess(
             [sys.executable, "-m", "harness.o2_shroom",
-             "--dev", SIM_DEV, "--ensemble", self._ensemble, "--no-join"],
+             "--dev", SIM_DEV, "--ensemble", self._ensemble, "--no-join",
+             "--exit-with-parent", str(os.getpid())],
             popen=self._popen)
         self.process.start()
         return SIM_DEV
@@ -115,6 +123,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     against AudioBridge's own clock) and its expiry check (at tick, against
     the agent's) have to agree -- harness/led_smoke.py's own
     AudioBridge(pool, clock=clock) is the existing precedent for this."""
+    owns_server = transport is None
     if transport is None:
         server = DeviceLinkServer(host=host, port=port)
         server.start()
@@ -136,17 +145,44 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         room_binding=room_binding, arco_process_cls=arco_process_cls,
         simulator_factory=factory)
 
-    if room_audio is None:
-        from control.audio import AudioBridge
-        from harness.arco_synth import ArcoSynthPool
-        pool = ArcoSynthPool() if config.arco_soundfont is None \
-            else ArcoSynthPool(soundfont=config.arco_soundfont)
-        pool.start()
-        room_audio = AudioBridge(pool, clock=clock)
+    try:
+        if room_audio is None:
+            from control.audio import AudioBridge
+            from harness.arco_synth import ArcoSynthPool
+            pool = ArcoSynthPool() if config.arco_soundfont is None \
+                else ArcoSynthPool(soundfont=config.arco_soundfont)
+            pool.start()
+            room_audio = AudioBridge(pool, clock=clock)
 
-    agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
-                            room_audio=room_audio,
-                            horizon=config.cue_horizon, clock=clock)
+        agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
+                                room_audio=room_audio,
+                                horizon=config.cue_horizon, clock=clock)
+    except BaseException:
+        # _boot() has already spawned Arco AND the simulator by this point,
+        # and main() cannot clean either up: build() never returns, so its
+        # `finally: shutdown(...)` has no handles at all. An orphaned
+        # simulator re-claims sim-room on the NEXT run's Arco, where O2
+        # refuses that run's own simulator (o2/src/bridge.cpp:231-237) and
+        # it renders nothing, silently. BaseException so a Ctrl-C during
+        # the ArcoSynthPool connect -- which blocks for up to 30s -- is
+        # covered too. See docs/superpowers/specs/
+        # 2026-08-14-room-simulator-service-collision-design.md.
+        if factory.process is not None:
+            try:
+                factory.process.shutdown()
+            except Exception:
+                pass        # never let cleanup mask the real failure
+        try:
+            arco.shutdown()
+        except Exception:
+            pass            # same reason
+        if owns_server:
+            try:
+                server.stop()   # an injected transport belongs to the caller
+            except Exception:
+                pass            # same reason
+        raise
+
     return gs, server, agent, arco, factory.process
 
 

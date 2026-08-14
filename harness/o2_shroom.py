@@ -21,6 +21,7 @@ Usage (needs a running Arco and PYTHONPATH=/Users/chris/projects/arco):
 from __future__ import annotations
 
 import math
+import os
 
 from harness.shroom_client import ShroomClient
 
@@ -43,6 +44,60 @@ def tilt_sweep(elapsed: float) -> float:
     phase = (elapsed % SWEEP_PERIOD) / SWEEP_PERIOD
     triangle = 2.0 * abs(2.0 * (phase - math.floor(phase + 0.5)))
     return SWEEP_DEGREES * (triangle - 1.0)
+
+
+def parent_is_gone(expected_ppid, getppid=os.getppid) -> bool:
+    """True once this process's parent is no longer the one that spawned it.
+
+    The Room simulator is spawned by harness/terrarium_boot.py and, with
+    --no-join, never exits on its own: main()'s loop below waits for a
+    /release that only a live Control sends. So a Terrarium that dies
+    without running its shutdown leaves this process running forever, and
+    o2litepy reconnects it to the NEXT Arco that starts (o2lite.py:912
+    connects whenever _tcp_socket is None, and _id_handler at :601
+    re-announces every service on connect). There it claims this same dev
+    name, and O2 refuses the new run's own simulator with "not from service
+    provider" (o2/src/bridge.cpp:231-237) -- silently, since /_o2/*/sv is
+    fire-and-forget. See docs/superpowers/specs/
+    2026-08-14-room-simulator-service-collision-design.md.
+
+    Compares against the pid the parent stamped in rather than watching
+    getppid() for a change: if the parent died before this process read its
+    argv, getppid() is ALREADY 1 and a change detector would wait forever.
+    Comparison against a recorded value is correct in either order.
+
+    expected_ppid None means the caller did not ask for this guard -- the
+    default for a hand-run device -- and it never fires.
+    """
+    return expected_ppid is not None and getppid() != expected_ppid
+
+
+def service_conflict(o2lite, dev: str, *, verify=None):
+    """Return a diagnostic string if `dev` is not ours, else None.
+
+    Pure apart from the injected `verify`, so the message this prints is
+    testable without an O2 hub. `verify` defaults to
+    devicelink.o2_transport.verify_service_ownership, imported lazily
+    because that module resolves its own o2litepy-free contract and this
+    one must stay importable with no o2litepy present.
+
+    Why this exists: a device whose service announcement O2 refused is
+    indistinguishable from a healthy one. Both clock-sync, both print a
+    watch URL, and Control sees no error because the hub routes its frames
+    successfully -- to whoever won the service. See docs/superpowers/specs/
+    2026-08-14-room-simulator-service-collision-design.md.
+    """
+    if verify is None:
+        from devicelink.o2_transport import verify_service_ownership
+        verify = verify_service_ownership
+    if verify(o2lite, dev):
+        return None
+    return (f"FATAL: service {dev!r} is not routed back to this process. "
+            f"Another process on the Arco hub already offers it, and O2 "
+            f"refuses a second claimant silently "
+            f"(o2/src/bridge.cpp:231-237). Nothing addressed to "
+            f"/{dev}/* will ever arrive here. Look for a stale "
+            f"'python -m harness.o2_shroom --dev {dev}' and kill it.")
 
 
 def _gestures_ready(client) -> bool:
@@ -89,6 +144,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
 
 def main() -> None:
     import argparse
+    import sys
     import time
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -128,6 +184,13 @@ def main() -> None:
                              "this dev as the bound Room before the process "
                              "is spawned, so there is no node to tap "
                              "(harness/room_simulator.py's rule, reused).")
+    parser.add_argument("--exit-with-parent", type=int, default=None,
+                        metavar="PID",
+                        help="Exit as soon as this process's parent is no "
+                             "longer PID. harness/terrarium_boot.py passes "
+                             "its own pid so a Room simulator cannot outlive "
+                             "the Terrarium that spawned it and steal its dev "
+                             "name from the next run.")
     args = parser.parse_args()
 
     # Lazy, exactly like harness/arco_synth.py: this module must import with
@@ -167,9 +230,22 @@ def main() -> None:
         o2lite.method_new(f"/{args.dev}/{kind}", None, True, on_down, None)
 
     while o2lite.time_get() < 0:           # block until clock sync
+        if parent_is_gone(args.exit_with_parent):
+            print("parent is gone; exiting before clock sync")
+            backend.close()
+            return
         o2lite.poll()
         time.sleep(0.01)
     print(f"clock synced at {o2lite.time_get():.3f}")
+
+    # The service announcement went out at set_services time and was never
+    # acknowledged. Check it actually took before serving a canvas that
+    # would otherwise stay dark for the whole run with no explanation.
+    problem = service_conflict(o2lite, args.dev)
+    if problem is not None:
+        print(problem, file=sys.stderr)
+        backend.close()
+        raise SystemExit(1)
 
     o2lite.send_cmd("/game/hello", 0, "s", args.dev)
     if not args.no_join:
@@ -197,6 +273,9 @@ def main() -> None:
     joins_sent = 1
     try:
         while not client.released:
+            if parent_is_gone(args.exit_with_parent):
+                print("parent is gone; exiting")
+                break
             o2lite.poll()
             now = o2lite.time_get()
             if next_join is not None and now >= next_join:

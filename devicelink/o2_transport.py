@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,58 @@ def from_o2_arg(blob):
         return list(raw)
 
 
+# The nonce verify_service_ownership round-trips. Fixed rather than random:
+# the check is one request and one response with no concurrency, and a
+# constant keeps the test deterministic.
+_OWNERSHIP_NONCE = 0x5643484B          # "VCHK"
+
+# How often the ownership check pumps o2lite while waiting for its own
+# message to come back.
+_OWNERSHIP_POLL_INTERVAL = 0.005
+
+
+def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
+                             clock=time.monotonic, sleep=time.sleep) -> bool:
+    """Does `service` actually route back to THIS o2lite connection?
+
+    o2lite's /_o2/*/sv is fire-and-forget. O2 refuses a second claimant
+    with "not from service provider" (o2/src/bridge.cpp:231-237) and logs
+    it on the HUB, never telling the client. A client that lost that race
+    clock-syncs and is indistinguishable from a healthy one, while nothing
+    addressed to it ever arrives -- it is delivered to whoever won.
+
+    Boundary rule 4 is what makes this measurable: o2lite send() has no
+    local short circuit, so a message addressed to our own service leaves
+    for the hub and comes back only if the hub really routes that service
+    to us. Rule 4 also asks that Control never message itself; this is a
+    deliberate, documented exception -- ONE message, before the tick loop
+    starts, as a startup assertion rather than a steady-state path.
+
+    Sent over TCP (send_cmd), because a dropped UDP datagram would be
+    indistinguishable from a lost service. Returns a bool and raises
+    nothing: each caller decides what a failed check means. `clock` and
+    `sleep` are injected so a test can exhaust the timeout without
+    spending real time, the same way control/boot.py's
+    wait_for_room_binding already does.
+    """
+    received = []
+
+    def _on_check(address, typespec, info) -> None:
+        received.append(o2lite.get_int32())
+
+    o2lite.method_new(f"/{service}/_svcheck", "i", True, _on_check, None)
+    o2lite.send_cmd(f"/{service}/_svcheck", 0, "i", _OWNERSHIP_NONCE)
+
+    deadline = clock() + timeout
+    while True:
+        o2lite.poll()
+        if _OWNERSHIP_NONCE in received:
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(_OWNERSHIP_POLL_INTERVAL)
+
+
 class FakeO2Lite:
     """In-process double, sibling of control/audio.py's FakePool. Records
     what was sent and lets a test deliver inbound messages with no hub.
@@ -126,6 +179,13 @@ class FakeO2Lite:
         # Messages deliver() has queued but poll() has not yet dispatched --
         # see poll()'s docstring for why this queue exists at all.
         self._queue: list[tuple[str, str, tuple, float]] = []
+        # Services the hub has REFUSED to register to this connection. A
+        # message addressed to one of these never routes back, exactly as
+        # O2 behaves when a second claimant loses the race
+        # (o2/src/bridge.cpp:231-237). Boundary rule 5: the double has to
+        # encode the strictness, not only the shape -- a fake that looped
+        # every send back would hide precisely the bug this models.
+        self.refused_services: set[str] = set()
 
     def time_get(self) -> float:
         return self._now
@@ -136,12 +196,29 @@ class FakeO2Lite:
     def set_services(self, services: str) -> None:
         self.services = services
 
+    def refuse(self, service: str) -> None:
+        """Model the hub refusing this connection's claim on `service`."""
+        self.refused_services.add(service)
+
+    def _owns(self, address: str) -> bool:
+        """Does the hub route `address` back to this connection?"""
+        service = address.lstrip("!/").split("/")[0]
+        claimed = [name for name in self.services.split(",") if name]
+        return service in claimed and service not in self.refused_services
+
     def method_new(self, path, typespec, full, handler, info) -> None:
         self.handlers[path] = handler
 
     def send(self, addr, timestamp, *args) -> None:
         typespec = args[0] if len(args) > 1 else ""
-        self.sent.append((addr, timestamp, typespec, tuple(args[1:])))
+        rest = tuple(args[1:])
+        self.sent.append((addr, timestamp, typespec, rest))
+        # The hub has no local short circuit either (boundary rule 4): a
+        # message addressed to a service THIS connection owns goes out and
+        # comes back around to our own handler. That round trip is what
+        # verify_service_ownership reads, so the fake has to reproduce it.
+        if self._owns(addr):
+            self._queue.append((addr, typespec, rest, timestamp))
 
     def send_cmd(self, addr, timestamp, *args) -> None:
         self.send(addr, timestamp, *args)
@@ -211,11 +288,19 @@ class O2LiteTransport:
         self._inbound: list[tuple[object, dict]] = []
         self._devs: dict[str, object] = {}
 
-    def start(self, o2lite) -> None:
+    def start(self, o2lite, *, ownership_timeout: float = 2.0,
+              clock=time.monotonic, sleep=time.sleep) -> None:
         """Adopt an already-connected o2lite object and claim `game` on it.
 
         Raises RuntimeError if the clock is not synced: time_get() returns
         -1 before sync, and a cue scheduled against -1 is meaningless.
+
+        Also raises RuntimeError if the hub does not route `game` back
+        here. set_services is fire-and-forget and O2 refuses a second
+        claimant silently, so without this check an orphaned Terrarium
+        holding `game` would make every device unreachable with no error
+        anywhere. See verify_service_ownership on why the round trip is a
+        deliberate, one-shot exception to boundary rule 4.
         """
         now = o2lite.time_get()
         if now < 0:
@@ -229,6 +314,16 @@ class O2LiteTransport:
             # business, and GameServer.data already validates it.
             o2lite.method_new(f"/game/{verb}", None, True,
                               self._on_message, None)
+        if not verify_service_ownership(o2lite, "game",
+                                        timeout=ownership_timeout,
+                                        clock=clock, sleep=sleep):
+            self._o2 = None
+            raise RuntimeError(
+                "the `game` service is not routed back to this connection: "
+                "another process on the Arco hub already offers it. O2 "
+                "refuses a second claimant silently "
+                "(o2/src/bridge.cpp:231-237). Look for an orphaned "
+                "Terrarium or a stale harness/o2_shroom.py holding it.")
 
     def _on_message(self, address, typespec, info) -> None:
         """o2lite handler.
