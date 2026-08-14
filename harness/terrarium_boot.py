@@ -27,6 +27,7 @@ from control.state import State
 from control.teardown import TeardownStack
 from devicelink.agent import DeviceLinkAgent
 from devicelink.server import DeviceLinkServer
+from harness.signals import sigterm_as_keyboard_interrupt
 
 SIM_DEV = "sim-room"
 
@@ -350,6 +351,10 @@ def main() -> None:
                          "TEST_PLAYER_NODE) before registration closes for "
                          "it. Default 0 keeps the instant-run behavior.")
     args = ap.parse_args()
+
+    # harness/run_stack.py stops this process with SIGTERM, and the whole
+    # ordered teardown below lives in a finally that a bare SIGTERM skips.
+    sigterm_as_keyboard_interrupt()
 
     transport = None
     clock = time.monotonic

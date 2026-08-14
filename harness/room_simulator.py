@@ -22,6 +22,7 @@ Usage (normally spawned by harness/terrarium_boot.py, not run by hand):
 from __future__ import annotations
 
 from harness.shroom_client import LED_CHANNELS, ShroomClient, pump_tick
+from harness.signals import sigterm_as_keyboard_interrupt
 
 
 class WebSimLeds:
@@ -58,19 +59,10 @@ def build(dev: str, sim_host: str = "127.0.0.1", sim_port: int = 0,
     return client, backend
 
 
-def _sigterm_as_keyboard_interrupt(signum, frame) -> None:
-    """Same reason as harness/led_smoke.py's: finally blocks do not run on a
-    bare SIGTERM, only on KeyboardInterrupt. control/simulator_process.py
-    shuts this process down with SIGTERM, so without this the exit latency
-    report below is never reached."""
-    raise KeyboardInterrupt
-
-
 def main() -> None:
     import argparse
     import asyncio
     import json
-    import signal
 
     import websockets
 
@@ -90,7 +82,7 @@ def main() -> None:
                              "JSON, for python -m harness.sync_bench.")
     args = parser.parse_args()
 
-    signal.signal(signal.SIGTERM, _sigterm_as_keyboard_interrupt)
+    sigterm_as_keyboard_interrupt()
 
     client, backend = build(args.dev, args.sim_host, args.sim_port)
     backend.open()

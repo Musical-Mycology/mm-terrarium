@@ -24,6 +24,7 @@ import math
 import os
 
 from harness.shroom_client import ShroomClient
+from harness.signals import sigterm_as_keyboard_interrupt
 
 # Degrees. TestBit._on_tilt clamps gamma to [-90, 90] and maps it onto
 # cc:74, which `player` binds to aurora's hue lane.
@@ -192,6 +193,12 @@ def main() -> None:
                              "the Terrarium that spawned it and steal its dev "
                              "name from the next run.")
     args = parser.parse_args()
+
+    # control/simulator_process.py shuts this process down with SIGTERM when
+    # it is playing the Room simulator, and finally blocks do not run on a
+    # bare SIGTERM -- so without this the exit lateness report and
+    # backend.close() below are simply lost.
+    sigterm_as_keyboard_interrupt()
 
     # Lazy, exactly like harness/arco_synth.py: this module must import with
     # no o2litepy on the path.
