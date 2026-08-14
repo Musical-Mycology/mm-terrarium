@@ -20,11 +20,11 @@ import time
 from bits.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.arco_process import ArcoProcess
 from control.boot import boot as _boot
-from control.boot import shutdown as _boot_shutdown
 from control.boot_config import BootConfig
 from control.room_binding import RoomBindingRegistry
 from control.simulator_process import SimulatorProcess
 from control.state import State
+from control.teardown import TeardownStack
 from devicelink.agent import DeviceLinkAgent
 from devicelink.server import DeviceLinkServer
 
@@ -32,10 +32,10 @@ SIM_DEV = "sim-room"
 
 
 class _SimulatorFactory:
-    """boot()'s simulator_factory contract is a bare Callable[[], str] --
-    this closure captures the SimulatorProcess handle in an attribute so the
-    caller can retrieve it once boot() returns, without changing boot()'s
-    signature (see design spec section 8's open question, resolved here)."""
+    """boot()'s simulator_factory contract is Callable[[TeardownStack], str]:
+    the factory registers whatever it spawns on the stack it is handed, so
+    an orphaned simulator is impossible by construction. `self.process` is
+    kept only so tests can inspect the handle."""
 
     def __init__(self, server_url: str, *, popen=subprocess.Popen,
                  horizon: float | None = None) -> None:
@@ -44,7 +44,7 @@ class _SimulatorFactory:
         self._horizon = horizon
         self.process: SimulatorProcess | None = None
 
-    def __call__(self) -> str:
+    def __call__(self, teardown) -> str:
         command = [sys.executable, "-u", "-m", "harness.room_simulator",
                    "--dev", SIM_DEV, "--server", self._server_url]
         if self._horizon is not None:
@@ -52,6 +52,7 @@ class _SimulatorFactory:
             command += ["--control-horizon", str(self._horizon)]
         self.process = SimulatorProcess(command, popen=self._popen)
         self.process.start()
+        teardown.push("simulator", self.process.shutdown)
         return SIM_DEV
 
 
@@ -67,7 +68,12 @@ class _O2SimulatorFactory:
         self._popen = popen
         self.process: SimulatorProcess | None = None
 
-    def __call__(self) -> str:
+    def __call__(self, teardown) -> str:
+        # -u for the same reason _SimulatorFactory passes it: without it
+        # this child's stdout is block-buffered, so its exit report is lost
+        # on an ungraceful exit and harness/run_stack.py cannot watch it for
+        # readiness markers.
+        #
         # --exit-with-parent is what stops this subprocess outliving the
         # Terrarium. An orphan keeps its browser canvas open, reconnects to
         # the next Arco (o2litepy reconnects on its own) and claims sim-room
@@ -75,11 +81,12 @@ class _O2SimulatorFactory:
         # nothing. Passing our own pid covers the case teardown cannot: an
         # external SIGKILL of this process.
         self.process = SimulatorProcess(
-            [sys.executable, "-m", "harness.o2_shroom",
+            [sys.executable, "-u", "-m", "harness.o2_shroom",
              "--dev", SIM_DEV, "--ensemble", self._ensemble, "--no-join",
              "--exit-with-parent", str(os.getpid())],
             popen=self._popen)
         self.process.start()
+        teardown.push("simulator", self.process.shutdown)
         return SIM_DEV
 
 
@@ -89,7 +96,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
          simulator_popen=subprocess.Popen, room_audio=None, transport=None,
          clock=time.monotonic):
     """Construct the whole stack. Returns (game_server, devicelink_server,
-    devicelink_agent, arco_process, simulator_process).
+    devicelink_agent, arco_process, teardown).
 
     room_audio: an already-constructed AudioBridge. Default None builds a
     real one backed by ArcoSynthPool -- lazily imported, exactly like
@@ -123,14 +130,20 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     against AudioBridge's own clock) and its expiry check (at tick, against
     the agent's) have to agree -- harness/led_smoke.py's own
     AudioBridge(pool, clock=clock) is the existing precedent for this."""
-    owns_server = transport is None
+    teardown = TeardownStack()
     if transport is None:
         server = DeviceLinkServer(host=host, port=port)
         server.start()
+        # Pushed BEFORE boot() so it is torn down LAST. The Room simulator
+        # is a client of this server, and boot() spawns it, so registration
+        # order is what keeps client-before-server true here.
+        teardown.push("devicelink-server", lambda: server.stop())
     else:
         # o2lite mode: there is no socket to listen on. The connection is
         # pyarco's, already clock-synced by arco.initialize(), and the
-        # caller started the transport on it.
+        # caller started the transport on it -- and therefore the caller
+        # registers its teardown, after this function returns, so it stops
+        # before everything registered here.
         server = transport
 
     if transport is None:
@@ -140,10 +153,10 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     else:
         factory = _O2SimulatorFactory(config.o2_ensemble,
                                       popen=simulator_popen)
-    gs, room_bridge, arco = _boot(
+    gs, room_bridge, arco, teardown = _boot(
         config, bit_registry, arco_command=arco_command,
         room_binding=room_binding, arco_process_cls=arco_process_cls,
-        simulator_factory=factory)
+        simulator_factory=factory, teardown=teardown)
 
     try:
         if room_audio is None:
@@ -160,55 +173,31 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     except BaseException:
         # _boot() has already spawned Arco AND the simulator by this point,
         # and main() cannot clean either up: build() never returns, so its
-        # `finally: shutdown(...)` has no handles at all. An orphaned
-        # simulator re-claims sim-room on the NEXT run's Arco, where O2
-        # refuses that run's own simulator (o2/src/bridge.cpp:231-237) and
-        # it renders nothing, silently. BaseException so a Ctrl-C during
-        # the ArcoSynthPool connect -- which blocks for up to 30s -- is
-        # covered too. See docs/superpowers/specs/
-        # 2026-08-14-room-simulator-service-collision-design.md.
-        if factory.process is not None:
-            try:
-                factory.process.shutdown()
-            except Exception:
-                pass        # never let cleanup mask the real failure
-        try:
-            arco.shutdown()
-        except Exception:
-            pass            # same reason
-        if owns_server:
-            try:
-                server.stop()   # an injected transport belongs to the caller
-            except Exception:
-                pass            # same reason
+        # `finally: shutdown(...)` has no handle at all. Closing the stack
+        # unwinds everything registered so far, in order, each step guarded
+        # so cleanup cannot mask this failure. BaseException so a Ctrl-C
+        # during the ArcoSynthPool connect -- which blocks for up to 30s --
+        # is covered too.
+        teardown.close()
         raise
 
-    return gs, server, agent, arco, factory.process
+    return gs, server, agent, arco, teardown
 
 
-def shutdown(gs, agent: DeviceLinkAgent, arco: ArcoProcess,
-            simulator: SimulatorProcess) -> None:
-    """Tear down in order: the Bit/Room first (via control.boot.shutdown,
-    which also frees the Room's Arco voice through room_bridge.shutdown()
-    and shuts Arco itself down as its last step), then the simulator
-    subprocess, then the devicelink server (agent.server -- no new plumbing
-    needed, DeviceLinkAgent already holds the reference it was built
-    with)."""
-    _boot_shutdown(gs, agent._room_bridge or _NullRoomBridge(), arco)
-    simulator.shutdown()
-    agent.server.stop()
+def shutdown(teardown) -> None:
+    """Unwind everything, in reverse registration order, and report.
 
+    Every step is registered at the point the thing it owns starts, so the
+    order here is not a list anyone maintains: o2lite transport, then the
+    Bit, then the Room bridge (which frees the Room's Arco voice), then the
+    Room simulator subprocess, then Arco, then the devicelink server.
 
-class _NullRoomBridge:
-    """control.boot.shutdown() always calls room_bridge.shutdown() -- if
-    this driver somehow ran with no Room configured at all, hand it
-    something inert rather than special-casing shutdown()'s signature.
-    Unreachable via this module's own build(): control.boot.boot() always
-    returns a real RoomBridge(), never None. Kept for a DeviceLinkAgent
-    built some other way, with room_bridge=None passed explicitly."""
-
-    def shutdown(self) -> None:
-        pass
+    Client before hub is the property that matters and the one that was
+    broken: this function used to call control.boot.shutdown() first, which
+    ends by killing Arco, and only then stop the simulator that talks to it.
+    """
+    for name, exc in teardown.close():
+        print(f"teardown step {name!r} failed: {exc!r}", file=sys.stderr)
 
 
 def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
@@ -414,7 +403,7 @@ def main() -> None:
         proc.start = start_then_settle
         return proc
 
-    gs, server, agent, arco, simulator = build(
+    gs, server, agent, arco, teardown = build(
         config, {"TestBit": _timed_test_bit_cls(_run_duration(args))},
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
@@ -429,6 +418,11 @@ def main() -> None:
     try:
         if transport is not None:
             transport.start(o2lite)            # raises if the clock is unsynced
+            # Registered AFTER everything build() registered, so it stops
+            # BEFORE them -- including before Arco, whose hub this transport
+            # is a guest on. Stopping it after Arco died was the same
+            # client-after-hub bug as the simulator's, one layer up.
+            teardown.push("o2lite-transport", transport.stop)
             print(f"DeviceLink running on o2lite ensemble "
                   f"{config.o2_ensemble!r} (Ctrl-C to stop)")
         else:
@@ -457,7 +451,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        shutdown(gs, agent, arco, simulator)
+        shutdown(teardown)
 
 
 if __name__ == "__main__":

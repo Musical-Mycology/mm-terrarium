@@ -10,6 +10,7 @@ from control.boot_config import BootConfig
 from control.room_binding import RoomBindingRegistry
 from control.rooms import RoomType
 from control.state import State
+from control.teardown import TeardownStack
 from harness.terrarium_boot import _run_duration, _timed_test_bit_cls, build, shutdown
 
 
@@ -38,13 +39,13 @@ def _build_with_fakes(config, *, transport=None, clock=time.monotonic):
 
 def test_build_wires_devicelink_room_bridge_and_simulator():
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, simulator = _build_with_fakes(config)
+    gs, server, agent, arco, teardown = _build_with_fakes(config)
 
     assert gs.room.bound_dev == "sim-room"
     assert agent._room_light is not None
     assert server.port != 0   # devicelink server actually bound before boot() ran
 
-    shutdown(gs, agent, arco, simulator)
+    shutdown(teardown)
 
 
 def test_devicelink_server_starts_before_boot_spawns_the_simulator():
@@ -55,7 +56,7 @@ def test_devicelink_server_starts_before_boot_spawns_the_simulator():
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
     sim_popen = FakePopen()
 
-    gs, server, agent, arco, simulator = build(
+    gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
         room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
         arco_process_cls=_fake_arco, simulator_popen=sim_popen,
@@ -63,7 +64,7 @@ def test_devicelink_server_starts_before_boot_spawns_the_simulator():
 
     launched_command = sim_popen.commands[0]
     assert f"ws://127.0.0.1:{server.port}/ws" in launched_command
-    shutdown(gs, agent, arco, simulator)
+    shutdown(teardown)
 
 
 def test_shutdown_tears_down_arco_and_simulator():
@@ -71,18 +72,83 @@ def test_shutdown_tears_down_arco_and_simulator():
     fake_arco_popen = FakePopen()
     sim_popen = FakePopen()
 
-    gs, server, agent, arco, simulator = build(
+    gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
         room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=fake_arco_popen),
         simulator_popen=sim_popen, room_audio=_fake_room_audio())
     gs.run()
 
-    shutdown(gs, agent, arco, simulator)
+    shutdown(teardown)
 
     assert gs.state == State.IDLE
     assert fake_arco_popen.signals
     assert sim_popen.signals
+
+
+def test_shutdown_stops_the_simulator_before_arco():
+    """THE bug this slice exists for. shutdown() called control.boot's
+    shutdown() first, which ended with arco.shutdown(), so the O2 hub died
+    before the Room simulator was asked to stop and the simulator spent its
+    last moments on a dead socket. PR #24 corrected both FAILURE paths and
+    left this success path wrong, which is why the order is now a
+    consequence of registration rather than a list."""
+    order = []
+
+    class _RecordingPopen(FakePopen):
+        def __init__(self, label):
+            super().__init__()
+            self._label = label
+
+        def send_signal(self, sig):
+            if self.returncode is None:
+                order.append(self._label)
+            super().send_signal(sig)
+
+    arco_popen = _RecordingPopen("arco")
+    sim_popen = _RecordingPopen("simulator")
+
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, teardown = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
+        simulator_popen=sim_popen, room_audio=_fake_room_audio())
+
+    shutdown(teardown)
+
+    assert order == ["simulator", "arco"]
+
+
+def test_shutdown_stops_the_devicelink_server_last():
+    """The Room simulator is a CLIENT of that server, and the server is
+    started before boot() precisely so the simulator has something to
+    connect to. Started first, therefore stopped last."""
+    stopped = []
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, teardown = _build_with_fakes(config)
+    server.stop = lambda: stopped.append("server")
+
+    shutdown(teardown)
+
+    assert stopped == ["server"]
+
+
+def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
+    """A guarded stack: one broken teardown step must not orphan Arco."""
+    arco_popen = FakePopen()
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, teardown = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio())
+
+    teardown.push("broken", _boom)
+
+    shutdown(teardown)
+
+    assert arco_popen.signals            # Arco still stopped
 
 
 def test_build_passes_the_configured_horizon_to_the_agent():
@@ -90,11 +156,11 @@ def test_build_passes_the_configured_horizon_to_the_agent():
     would silently disagree with the audio path's scheduling."""
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit",
                         cue_horizon=0.075)
-    gs, server, agent, arco, sim = _build_with_fakes(config)
+    gs, server, agent, arco, teardown = _build_with_fakes(config)
     try:
         assert agent._horizon == 0.075
     finally:
-        shutdown(gs, agent, arco, sim)
+        shutdown(teardown)
 
 
 def test_build_can_run_the_agent_on_the_o2lite_transport():
@@ -108,13 +174,13 @@ def test_build_can_run_the_agent_on_the_o2lite_transport():
     transport.start(fake)
 
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, sim = _build_with_fakes(config,
+    gs, server, agent, arco, teardown = _build_with_fakes(config,
                                                      transport=transport)
     try:
         assert agent.server is transport
         assert fake.services == "actl,game"
     finally:
-        shutdown(gs, agent, arco, sim)
+        shutdown(teardown)
 
 
 def test_build_passes_the_supplied_clock_to_the_agent():
@@ -124,11 +190,11 @@ def test_build_passes_the_supplied_clock_to_the_agent():
     on; assert it directly rather than only through end-to-end behavior."""
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
     fake_clock = lambda: 45.0
-    gs, server, agent, arco, sim = _build_with_fakes(config, clock=fake_clock)
+    gs, server, agent, arco, teardown = _build_with_fakes(config, clock=fake_clock)
     try:
         assert agent._clock is fake_clock
     finally:
-        shutdown(gs, agent, arco, sim)
+        shutdown(teardown)
 
 
 def test_build_omitting_clock_keeps_the_existing_default():
@@ -136,7 +202,7 @@ def test_build_omitting_clock_keeps_the_existing_default():
     omitting clock= leaves build() -- and therefore the agent -- on
     time.monotonic, exactly as before this parameter existed."""
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, sim = build(
+    gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
         room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
         arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
@@ -144,7 +210,7 @@ def test_build_omitting_clock_keeps_the_existing_default():
     try:
         assert agent._clock is time.monotonic
     finally:
-        shutdown(gs, agent, arco, sim)
+        shutdown(teardown)
 
 
 def test_build_threads_its_clock_into_the_default_room_audio(monkeypatch):
@@ -180,7 +246,7 @@ def test_build_threads_its_clock_into_the_default_room_audio(monkeypatch):
     fake_clock = lambda: 45.0
 
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, sim = build(
+    gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
         room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
         arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
@@ -188,7 +254,7 @@ def test_build_threads_its_clock_into_the_default_room_audio(monkeypatch):
     try:
         assert captured["clock"] is fake_clock
     finally:
-        shutdown(gs, agent, arco, sim)
+        shutdown(teardown)
 
 
 def test_o2lite_frame_is_released_across_the_shared_clock():
@@ -219,7 +285,7 @@ def test_o2lite_frame_is_released_across_the_shared_clock():
     transport.start(fake_o2)
 
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, sim = _build_with_fakes(
+    gs, server, agent, arco, teardown = _build_with_fakes(
         config, transport=transport, clock=fake_o2.time_get)
     try:
         fake_o2.deliver("/game/hello", "s", ("ie1",))
@@ -268,7 +334,7 @@ def test_o2lite_frame_is_released_across_the_shared_clock():
             "because the agent's default clock (time.monotonic) never "
             "comes near the O2 clock's small values")
     finally:
-        shutdown(gs, agent, arco, sim)
+        shutdown(teardown)
 
 
 def test_wait_in_setup_polls_for_the_requested_window():
@@ -444,7 +510,7 @@ def test_o2_simulator_factory_ties_the_simulator_to_this_process():
     popen = FakePopen()
     factory = _O2SimulatorFactory("arco", popen=popen)
 
-    assert factory() == "sim-room"
+    assert factory(TeardownStack()) == "sim-room"
     command = popen.commands[0]
     assert "--exit-with-parent" in command
     assert command[command.index("--exit-with-parent") + 1] == str(os.getpid())
@@ -485,3 +551,7 @@ def test_build_tears_down_both_subprocesses_if_room_audio_fails(monkeypatch):
 
     assert sim_popen.signals    # simulator was told to stop, not orphaned
     assert arco_popen.signals   # and so was Arco
+
+
+def _boom():
+    raise OSError("no such process")
