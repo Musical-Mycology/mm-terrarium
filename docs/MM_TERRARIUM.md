@@ -827,9 +827,11 @@ prevented the ordering from disagreeing with itself again, and it had.
   one loses it the instant a supervisor signals it rather than asking. This
   lived as an identical six-line copy in `harness/led_smoke.py` and
   `harness/room_simulator.py`; `harness/o2_shroom.py` (SIGTERM'd by
-  `SimulatorProcess`) and `harness/terrarium_boot.py` (SIGTERM'd by
-  `run_stack`) now install it too, so there is one home for the gotcha
-  instead of four copies that could each drift independently.
+  `SimulatorProcess`), `harness/terrarium_boot.py` (SIGTERM'd by
+  `run_stack`), and `run_stack.py` itself (guarding its own
+  `finally: teardown.close()` against a bare `kill <pid>` or a CI job's
+  timeout) now install it too, so there is one home for the gotcha
+  instead of five copies that could each drift independently.
 
 **Suite baseline as of this slice: 721 passed, 1 skipped** (662 at this
 branch's start).
