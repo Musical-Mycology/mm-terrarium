@@ -104,3 +104,47 @@ def test_parent_is_gone_never_fires_without_an_expected_pid():
     from harness.o2_shroom import parent_is_gone
 
     assert parent_is_gone(None, getppid=lambda: 1) is False
+
+
+# --- The service the device just announced may have been refused. O2
+# drops a second claimant's /_o2/*/sv with "not from service provider"
+# (o2/src/bridge.cpp:231-237) and logs it on the HUB. Measured side by
+# side, a refused simulator and an accepted player print the same two
+# lines: a watch URL and "clock synced". This gate is what makes them
+# distinguishable. -------------------------------------------------------
+
+def test_service_conflict_is_silent_when_the_dev_is_ours():
+    from harness.o2_shroom import service_conflict
+
+    assert service_conflict(object(), "sim-room",
+                            verify=lambda o2lite, dev: True) is None
+
+
+def test_service_conflict_names_the_dev_and_the_remedy():
+    """The whole cost of this bug was that it was invisible: the refused
+    client printed its watch URL and clock-synced exactly like a healthy
+    one, and Control saw no error either because the hub routed its frames
+    successfully, to the wrong process. The message has to end the
+    investigation on the spot."""
+    from harness.o2_shroom import service_conflict
+
+    message = service_conflict(object(), "sim-room",
+                               verify=lambda o2lite, dev: False)
+
+    assert message is not None
+    assert "sim-room" in message
+    assert "harness.o2_shroom" in message
+
+
+def test_service_conflict_asks_about_the_dev_it_was_given():
+    """A typo here would check the wrong service and always pass."""
+    from harness.o2_shroom import service_conflict
+
+    asked = []
+
+    def _verify(o2lite, dev):
+        asked.append(dev)
+        return True
+
+    service_conflict(object(), "ie1", verify=_verify)
+    assert asked == ["ie1"]

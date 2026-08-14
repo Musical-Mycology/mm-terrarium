@@ -72,6 +72,34 @@ def parent_is_gone(expected_ppid, getppid=os.getppid) -> bool:
     return expected_ppid is not None and getppid() != expected_ppid
 
 
+def service_conflict(o2lite, dev: str, *, verify=None):
+    """Return a diagnostic string if `dev` is not ours, else None.
+
+    Pure apart from the injected `verify`, so the message this prints is
+    testable without an O2 hub. `verify` defaults to
+    devicelink.o2_transport.verify_service_ownership, imported lazily
+    because that module resolves its own o2litepy-free contract and this
+    one must stay importable with no o2litepy present.
+
+    Why this exists: a device whose service announcement O2 refused is
+    indistinguishable from a healthy one. Both clock-sync, both print a
+    watch URL, and Control sees no error because the hub routes its frames
+    successfully -- to whoever won the service. See docs/superpowers/specs/
+    2026-08-14-room-simulator-service-collision-design.md.
+    """
+    if verify is None:
+        from devicelink.o2_transport import verify_service_ownership
+        verify = verify_service_ownership
+    if verify(o2lite, dev):
+        return None
+    return (f"FATAL: service {dev!r} is not routed back to this process. "
+            f"Another process on the Arco hub already offers it, and O2 "
+            f"refuses a second claimant silently "
+            f"(o2/src/bridge.cpp:231-237). Nothing addressed to "
+            f"/{dev}/* will ever arrive here. Look for a stale "
+            f"'python -m harness.o2_shroom --dev {dev}' and kill it.")
+
+
 def _gestures_ready(client) -> bool:
     """True once Control's granted-role reply has actually reached this
     client, i.e. once ShroomClient._on_role() has set client.config (see
@@ -116,6 +144,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
 
 def main() -> None:
     import argparse
+    import sys
     import time
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -185,6 +214,15 @@ def main() -> None:
         o2lite.poll()
         time.sleep(0.01)
     print(f"clock synced at {o2lite.time_get():.3f}")
+
+    # The service announcement went out at set_services time and was never
+    # acknowledged. Check it actually took before serving a canvas that
+    # would otherwise stay dark for the whole run with no explanation.
+    problem = service_conflict(o2lite, args.dev)
+    if problem is not None:
+        print(problem, file=sys.stderr)
+        backend.close()
+        raise SystemExit(1)
 
     o2lite.send_cmd("/game/hello", 0, "s", args.dev)
     if not args.no_join:
