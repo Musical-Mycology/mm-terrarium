@@ -27,9 +27,23 @@ class BootConfig:
     # two cues from one gesture land on different frames and would make the
     # clamp counter meaningless. It must clear the 44 Hz frame quantization
     # (22.7 ms) plus Arco's block and buffer latency plus network time.
-    # This default is a placeholder to be replaced by a measured figure from
-    # harness/sync_bench.py; no venue-box measurement exists, and none of
-    # these numbers carry from a dev box to the venue box.
+    # STILL A PLACEHOLDER, and known too small: the live 2026-08-13 o2lite
+    # run clamped 762 of 820 frames, so scheduling was bypassed on 93% of
+    # them, and single-frame arithmetic put end-to-end delivery through Arco
+    # at ~67 ms against this 60 ms. One frame is not a distribution, which is
+    # why this has not simply been raised to 67 ms.
+    #
+    # The tooling to replace it properly landed 2026-08-14 and is not yet
+    # run: TimedQueue now records the lateness behind every clamp, and
+    # harness/sync_bench.py reduces it to mean/p95/p99/worst. Measure with a
+    # deliberately oversized --horizon so nothing clamps and the sample is
+    # not censored, then take p99 (see the design spec for why p99 and not
+    # worst-case: this is fixed added latency on EVERY cue). A live run is
+    # currently blocked on an upstream O2 clock-sync problem -- see
+    # docs/MM_TERRARIUM.md's "Not yet built / deferred".
+    #
+    # Whatever number comes out is a DEV-BOX figure. No venue-box measurement
+    # exists, and none of these numbers carry from a dev box to the venue box.
     cue_horizon: float = 0.060
 
     @property
