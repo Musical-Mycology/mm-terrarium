@@ -115,7 +115,7 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
         room_bridge = RoomBridge()
         if room.bound_dev is not None:
             room_bridge.bind(room.bound_dev)
-        teardown.push("room-bridge", lambda: room_bridge.shutdown())
+        teardown.push("room-bridge", room_bridge.shutdown)
         teardown.push("bit", lambda: _abort_if_running(gs))
     except BaseException:
         # Arco is a live subprocess by this point, and _bind_room_fast_path

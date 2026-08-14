@@ -280,10 +280,22 @@ def test_teardown_stops_the_simulator_before_arco():
     assert order == ["simulator", "arco"]
 
 
-def test_teardown_aborts_the_bit_before_the_room_bridge():
+def test_teardown_aborts_the_bit_before_the_room_bridge(monkeypatch):
     """Deliberate push order, not creation order: the Bit's on_unload may
-    still cue into the room bridge, so the bridge must not die first."""
+    still cue into the room bridge, so the bridge must not die first.
+
+    Patched at the class, before boot() runs: boot() pushes the room
+    bridge's BOUND method (teardown.push("room-bridge", room_bridge.
+    shutdown)), captured at push time, so an instance-attribute
+    monkeypatch applied after boot() returns would land on the instance
+    and never be seen by that already-captured reference. Same pattern as
+    test_build_threads_its_clock_into_the_default_room_audio in
+    tests/test_terrarium_boot.py, which patches ArcoSynthPool/AudioBridge
+    at their defining module before the call that reads them."""
     order = []
+    monkeypatch.setattr(RoomBridge, "shutdown",
+                        lambda self: order.append("room-bridge"))
+
     config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit")
     gs, room_bridge, arco, teardown = boot(
         config, make_registry(), arco_command=["arco-server"],
@@ -292,7 +304,6 @@ def test_teardown_aborts_the_bit_before_the_room_bridge():
 
     gs.run()
     gs.abort = lambda: order.append("bit")
-    room_bridge.shutdown = lambda: order.append("room-bridge")
 
     teardown.close()
 

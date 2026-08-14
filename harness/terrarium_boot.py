@@ -137,7 +137,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         # Pushed BEFORE boot() so it is torn down LAST. The Room simulator
         # is a client of this server, and boot() spawns it, so registration
         # order is what keeps client-before-server true here.
-        teardown.push("devicelink-server", lambda: server.stop())
+        teardown.push("devicelink-server", server.stop)
     else:
         # o2lite mode: there is no socket to listen on. The connection is
         # pyarco's, already clock-synced by arco.initialize(), and the

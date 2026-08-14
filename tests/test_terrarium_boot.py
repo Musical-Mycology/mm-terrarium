@@ -11,6 +11,7 @@ from control.room_binding import RoomBindingRegistry
 from control.rooms import RoomType
 from control.state import State
 from control.teardown import TeardownStack
+from devicelink.server import DeviceLinkServer
 from harness.terrarium_boot import _run_duration, _timed_test_bit_cls, build, shutdown
 
 
@@ -120,18 +121,49 @@ def test_shutdown_stops_the_simulator_before_arco():
     assert order == ["simulator", "arco"]
 
 
-def test_shutdown_stops_the_devicelink_server_last():
+def test_shutdown_stops_the_devicelink_server_last(monkeypatch):
     """The Room simulator is a CLIENT of that server, and the server is
     started before boot() precisely so the simulator has something to
-    connect to. Started first, therefore stopped last."""
-    stopped = []
+    connect to. Started first, therefore stopped last.
+
+    Patched at the class, before build() runs: build() pushes the BOUND
+    method (teardown.push("devicelink-server", server.stop)), captured at
+    push time, so an instance-attribute monkeypatch applied after build()
+    returns would land on the instance and never be seen by that
+    already-captured reference -- same reason
+    test_teardown_aborts_the_bit_before_the_room_bridge in
+    tests/test_boot.py patches RoomBridge at the class, and the same
+    pattern test_build_threads_its_clock_into_the_default_room_audio below
+    already uses for ArcoSynthPool/AudioBridge.
+
+    Records BOTH the server AND Arco's stop into one shared `order` list,
+    mirroring test_shutdown_stops_the_simulator_before_arco above: a lone
+    `assert stopped == ["server"]` would keep passing even if the
+    devicelink-server step were popped FIRST instead of last, since
+    nothing else would touch that list either way. Arco is registered
+    second -- right after the devicelink server, inside _boot() -- so
+    checking it lands before "server" here is what actually pins down
+    "stopped last", not just "stopped once"."""
+    order = []
+    monkeypatch.setattr(DeviceLinkServer, "stop",
+                        lambda self: order.append("server"))
+
+    class _RecordingPopen(FakePopen):
+        def send_signal(self, sig):
+            if self.returncode is None:
+                order.append("arco")
+            super().send_signal(sig)
+
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = _build_with_fakes(config)
-    server.stop = lambda: stopped.append("server")
+    gs, server, agent, arco, teardown = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        arco_process_cls=lambda cmd: _fake_arco(cmd, popen=_RecordingPopen()),
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio())
 
     shutdown(teardown)
 
-    assert stopped == ["server"]
+    assert order == ["arco", "server"]
 
 
 def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
