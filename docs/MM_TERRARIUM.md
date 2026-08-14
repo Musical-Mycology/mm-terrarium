@@ -96,8 +96,21 @@ specified in the in-repo design doc — this deep-dive does not restate it.
 
 ## Landed subsystems
 
-All Python, all offline-tested. Run the suite with
-`python -m pip install -r requirements-dev.txt && python -m pytest tests -v`.
+All Python, all offline-tested. **Run the suite through the project venv**, not
+a bare interpreter:
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests -v
+```
+
+There is no bare `python` on the dev boxes, and the sibling **luxaeterna**
+dev dependency is installed **only** in `.venv`. Invoking `python3` instead
+collects an import error in `tests/test_terrarium_boot.py` that looks exactly
+like a real failure and is not. That trap has already cost one debugging
+detour: a contributor chased the phantom error, concluded the suite was
+broken, and filed a follow-up task for it before the environment was
+identified as the cause.
 
 ### `control/` — the Control+GameServer lifecycle engine
 The game-launching engine: load a Bit, open registration, run it, score it,
