@@ -67,3 +67,40 @@ def test_gestures_not_ready_before_the_role_arrives():
 
 def test_gestures_ready_once_the_role_arrives():
     assert _gestures_ready(_FakeClient(config={"bit_name": "TestBit"})) is True
+
+
+# --- Parent-death guard. The Room simulator is spawned by
+# harness/terrarium_boot.py and, with --no-join, never exits on its own:
+# main()'s loop waits for a /release that only a live Control sends. An
+# orphan therefore runs forever, and o2litepy reconnects it to the NEXT
+# Arco (o2lite.py:912 connects whenever _tcp_socket is None; _id_handler
+# at :601 re-announces services on connect), where it claims the same dev
+# name. O2 then refuses the new run's own simulator with "not from service
+# provider" (o2/src/bridge.cpp:231-237). See docs/superpowers/specs/
+# 2026-08-14-room-simulator-service-collision-design.md. ------------------
+
+def test_parent_is_gone_is_false_while_the_parent_still_owns_us():
+    from harness.o2_shroom import parent_is_gone
+
+    assert parent_is_gone(4242, getppid=lambda: 4242) is False
+
+
+def test_parent_is_gone_is_true_once_we_have_been_reparented():
+    """A dead parent's children are reparented to init/launchd (pid 1).
+
+    This is also why the check compares against a RECORDED pid rather than
+    watching getppid() for a change: if the parent died before this process
+    read its argv, getppid() already reads 1 at startup and a change
+    detector would wait forever. Comparison catches both orderings with the
+    same expression, which is why there is only one case to test here."""
+    from harness.o2_shroom import parent_is_gone
+
+    assert parent_is_gone(4242, getppid=lambda: 1) is True
+
+
+def test_parent_is_gone_never_fires_without_an_expected_pid():
+    """--exit-with-parent is opt-in. A hand-run device passes nothing and
+    must never exit because of this guard."""
+    from harness.o2_shroom import parent_is_gone
+
+    assert parent_is_gone(None, getppid=lambda: 1) is False

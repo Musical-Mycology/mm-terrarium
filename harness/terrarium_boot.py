@@ -12,6 +12,7 @@ and expects to connect immediately. See design spec section 6.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -63,9 +64,16 @@ class _O2SimulatorFactory:
         self.process: SimulatorProcess | None = None
 
     def __call__(self) -> str:
+        # --exit-with-parent is what stops this subprocess outliving the
+        # Terrarium. An orphan keeps its browser canvas open, reconnects to
+        # the next Arco (o2litepy reconnects on its own) and claims sim-room
+        # there, so the NEXT run's simulator is refused by O2 and renders
+        # nothing. Passing our own pid covers the case teardown cannot: an
+        # external SIGKILL of this process.
         self.process = SimulatorProcess(
             [sys.executable, "-m", "harness.o2_shroom",
-             "--dev", SIM_DEV, "--ensemble", self._ensemble, "--no-join"],
+             "--dev", SIM_DEV, "--ensemble", self._ensemble, "--no-join",
+             "--exit-with-parent", str(os.getpid())],
             popen=self._popen)
         self.process.start()
         return SIM_DEV

@@ -428,3 +428,21 @@ def test_timed_test_bit_cls_carries_duration_and_exposes_room_types():
     bit = bit_cls()
     assert isinstance(bit, TestBit)
     assert bit._run_duration == 12.0
+
+
+def test_o2_simulator_factory_ties_the_simulator_to_this_process():
+    """The only guard that survives an external kill of the parent, which
+    is how agent-driven runs are actually terminated and which no teardown
+    path can catch. An orphaned Room simulator reconnects to the NEXT Arco
+    and claims sim-room before that run's own simulator is even spawned."""
+    import os
+
+    from harness.terrarium_boot import _O2SimulatorFactory
+
+    popen = FakePopen()
+    factory = _O2SimulatorFactory("arco", popen=popen)
+
+    assert factory() == "sim-room"
+    command = popen.commands[0]
+    assert "--exit-with-parent" in command
+    assert command[command.index("--exit-with-parent") + 1] == str(os.getpid())

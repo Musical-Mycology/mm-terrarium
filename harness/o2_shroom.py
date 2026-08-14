@@ -21,6 +21,7 @@ Usage (needs a running Arco and PYTHONPATH=/Users/chris/projects/arco):
 from __future__ import annotations
 
 import math
+import os
 
 from harness.shroom_client import ShroomClient
 
@@ -43,6 +44,32 @@ def tilt_sweep(elapsed: float) -> float:
     phase = (elapsed % SWEEP_PERIOD) / SWEEP_PERIOD
     triangle = 2.0 * abs(2.0 * (phase - math.floor(phase + 0.5)))
     return SWEEP_DEGREES * (triangle - 1.0)
+
+
+def parent_is_gone(expected_ppid, getppid=os.getppid) -> bool:
+    """True once this process's parent is no longer the one that spawned it.
+
+    The Room simulator is spawned by harness/terrarium_boot.py and, with
+    --no-join, never exits on its own: main()'s loop below waits for a
+    /release that only a live Control sends. So a Terrarium that dies
+    without running its shutdown leaves this process running forever, and
+    o2litepy reconnects it to the NEXT Arco that starts (o2lite.py:912
+    connects whenever _tcp_socket is None, and _id_handler at :601
+    re-announces every service on connect). There it claims this same dev
+    name, and O2 refuses the new run's own simulator with "not from service
+    provider" (o2/src/bridge.cpp:231-237) -- silently, since /_o2/*/sv is
+    fire-and-forget. See docs/superpowers/specs/
+    2026-08-14-room-simulator-service-collision-design.md.
+
+    Compares against the pid the parent stamped in rather than watching
+    getppid() for a change: if the parent died before this process read its
+    argv, getppid() is ALREADY 1 and a change detector would wait forever.
+    Comparison against a recorded value is correct in either order.
+
+    expected_ppid None means the caller did not ask for this guard -- the
+    default for a hand-run device -- and it never fires.
+    """
+    return expected_ppid is not None and getppid() != expected_ppid
 
 
 def _gestures_ready(client) -> bool:
@@ -105,6 +132,13 @@ def main() -> None:
                              "this dev as the bound Room before the process "
                              "is spawned, so there is no node to tap "
                              "(harness/room_simulator.py's rule, reused).")
+    parser.add_argument("--exit-with-parent", type=int, default=None,
+                        metavar="PID",
+                        help="Exit as soon as this process's parent is no "
+                             "longer PID. harness/terrarium_boot.py passes "
+                             "its own pid so a Room simulator cannot outlive "
+                             "the Terrarium that spawned it and steal its dev "
+                             "name from the next run.")
     args = parser.parse_args()
 
     # Lazy, exactly like harness/arco_synth.py: this module must import with
@@ -144,6 +178,10 @@ def main() -> None:
         o2lite.method_new(f"/{args.dev}/{kind}", None, True, on_down, None)
 
     while o2lite.time_get() < 0:           # block until clock sync
+        if parent_is_gone(args.exit_with_parent):
+            print("parent is gone; exiting before clock sync")
+            backend.close()
+            return
         o2lite.poll()
         time.sleep(0.01)
     print(f"clock synced at {o2lite.time_get():.3f}")
@@ -169,6 +207,9 @@ def main() -> None:
     error_printed = False
     try:
         while not client.released:
+            if parent_is_gone(args.exit_with_parent):
+                print("parent is gone; exiting")
+                break
             o2lite.poll()
             now = o2lite.time_get()
             if not deny_printed and client.last_deny is not None:
