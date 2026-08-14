@@ -675,10 +675,12 @@ guards now close this: `harness/o2_shroom.py --exit-with-parent`
 (`harness/o2_shroom.py:210,248`) checks the parent pid recorded at launch
 inside both blocking loops, so a killed parent is detected without ever
 needing `/release`; `control/boot.py`'s post-spawn section
-(`control/boot.py:95-111`) and `harness/terrarium_boot.py`'s `build()`
-(`harness/terrarium_boot.py:155-173`) now shut the simulator down on any
+(`control/boot.py:95-121`) and `harness/terrarium_boot.py`'s `build()`
+(`harness/terrarium_boot.py:155-179`) now shut the simulator down on any
 failure, `KeyboardInterrupt` included (`except BaseException`, not
-`except Exception`); and `verify_service_ownership`
+`except Exception`), with every cleanup call itself guarded against
+`Exception` so a failing `arco.shutdown()` or `server.stop()` cannot mask
+the original failure that triggered teardown; and `verify_service_ownership`
 (`devicelink/o2_transport.py:119`) sends a self-addressed round trip before
 the tick loop starts, so a refused announcement fails loud instead of
 silently. Design:
