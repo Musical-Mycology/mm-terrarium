@@ -521,8 +521,9 @@ renderer** — the concrete simulator/hardware backend is deferred, see
   server subprocess (previously always hand-started); polls for readiness via
   a lazy pyarco import (mirroring `harness/arco_synth.py`). Arco has **no
   message-based quit** (only a console keypress, per its own `doc/server.md`),
-  so shutdown is **SIGTERM**, matching `led_smoke.py`'s own signal handling of
-  itself.
+  so shutdown is **SIGTERM** -- the same signal `harness/signals.py`'s
+  `sigterm_as_keyboard_interrupt` teaches this repo's own Python processes to
+  handle, so the choice is consistent rather than arbitrary.
 - **`boot()`** (`control/boot.py`) — the orchestrated load sequence: config →
   spawn/wait for Arco → resolve Room → bind Room (a Terrarium-spawned
   simulator or a reconnect to a previously recorded device, else

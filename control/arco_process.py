@@ -3,8 +3,10 @@ Terrarium load sequence. Real pyarco imports stay lazy (inside
 _default_probe, never at module level) so the offline suite runs with
 neither Arco nor pyarco present. Arco has no message-based quit
 (arco/doc/server.md: the only documented shutdown is a console keypress),
-so shutdown() sends SIGTERM, mirroring harness/led_smoke.py's own
-_sigterm_as_keyboard_interrupt handling of itself. See
+so shutdown() sends SIGTERM -- the same signal this repo's own Python
+processes are written to handle via harness/signals.py's
+sigterm_as_keyboard_interrupt, so the choice is consistent rather than
+arbitrary. See
 docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md
 section 5.
 """
