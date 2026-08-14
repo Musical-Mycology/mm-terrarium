@@ -293,6 +293,23 @@ class GameServer:
             return
         if self.bit.update(dt):
             self._complete()
+            return
+        self._dispatch_bit_cues()
+
+    def _dispatch_bit_cues(self) -> None:
+        """Drain Bit.cues() once per RUNNING tick. A self-driven cue has no
+        gesture behind it, so its origin is Control's own clock.
+
+        Guarded exactly like every other Bit hook: a raising cues() must not
+        stop this Bit reaching COMPLETING.
+        """
+        at = self._clock() + self._horizon
+        try:
+            cues = self.bit.cues(at)
+        except Exception:
+            logger.exception("Bit.cues raised; ignoring this tick")
+            return
+        self._dispatch_cues(cues, at)
 
     def abort(self) -> None:
         """Force an early end to the current Bit from any non-IDLE state.
