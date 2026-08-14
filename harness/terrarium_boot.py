@@ -305,6 +305,24 @@ def _timed_test_bit_cls(run_duration: float) -> type:
     return _TimedTestBit
 
 
+def _register_o2lite_transport(teardown, transport) -> None:
+    """Push the o2lite transport's teardown -- exactly where main() calls
+    this, right after transport.start(o2lite) has actually adopted the
+    connection, and after build() has already registered arco, the
+    simulator, the room bridge and the Bit.
+
+    Pushed LAST of the steps this run registers, so it tears down FIRST:
+    stopping the transport before Arco, whose hub it is a guest on, is the
+    client-before-hub property one layer up from build()'s own -- see
+    shutdown()'s docstring for the full order.
+
+    Extracted so tests/test_terrarium_boot.py can assert this step's
+    position without driving the whole of main(), which needs argparse, a
+    live Arco, and o2litepy.
+    """
+    teardown.push("o2lite-transport", transport.stop)
+
+
 def main() -> None:
     import argparse
 
@@ -472,11 +490,7 @@ def main() -> None:
     try:
         if transport is not None:
             transport.start(o2lite)            # raises if the clock is unsynced
-            # Registered AFTER everything build() registered, so it stops
-            # BEFORE them -- including before Arco, whose hub this transport
-            # is a guest on. Stopping it after Arco died was the same
-            # client-after-hub bug as the simulator's, one layer up.
-            teardown.push("o2lite-transport", transport.stop)
+            _register_o2lite_transport(teardown, transport)
             print(f"{markers.CONTROL_TRANSPORT_READY} "
                   f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)
         else:

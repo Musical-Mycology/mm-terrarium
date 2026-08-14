@@ -166,6 +166,76 @@ def test_shutdown_stops_the_devicelink_server_last(monkeypatch):
     assert order == ["arco", "server"]
 
 
+def test_full_o2lite_unwind_order_through_main(monkeypatch):
+    """The ordering this whole branch exists to fix, traced end to end
+    through the actual --transport o2lite path harness/run_stack.py
+    drives -- previously verified only by a throwaway script.
+
+    main() cannot be driven directly here (argparse, a live Arco,
+    o2litepy), so this calls build() for real with an adopted
+    O2LiteTransport (covering the four build()-level o2lite steps: arco,
+    simulator, room-bridge, bit) and then _register_o2lite_transport --
+    the exact function main() calls, at the exact point main() calls it:
+    after build() returns and after transport.start(). That is the one
+    step build()-level tests could not reach on their own.
+
+    NOTE ON "SIX STAGES": the final review's finding described this as a
+    six-stage unwind ending in devicelink-server. Checked directly (see
+    final-fix-report.md): build() only pushes "devicelink-server" when
+    transport is None (websocket mode); in o2lite mode server = transport
+    and that step is never pushed at all (confirmed by inspecting
+    teardown._steps after a real build(transport=...) call). o2lite-
+    transport and devicelink-server are mutually exclusive within one
+    run -- one is o2lite mode's own teardown step, the other is what it
+    replaces. This test asserts the five steps that actually coexist
+    under --transport o2lite, which is the only mode run_stack.py ever
+    drives and the one this whole branch is about."""
+    from control.engine import GameServer
+    from control.room_bridge import RoomBridge
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+    from harness.terrarium_boot import _register_o2lite_transport
+
+    order = []
+    monkeypatch.setattr(RoomBridge, "shutdown",
+                        lambda self: order.append("room-bridge"))
+    monkeypatch.setattr(GameServer, "abort",
+                        lambda self: order.append("bit"))
+    monkeypatch.setattr(O2LiteTransport, "stop",
+                        lambda self: order.append("o2lite-transport"))
+
+    class _RecordingPopen(FakePopen):
+        def __init__(self, label):
+            super().__init__()
+            self._label = label
+
+        def send_signal(self, sig):
+            if self.returncode is None:
+                order.append(self._label)
+            super().send_signal(sig)
+
+    arco_popen = _RecordingPopen("arco")
+    sim_popen = _RecordingPopen("simulator")
+
+    fake_o2 = FakeO2Lite()
+    transport = O2LiteTransport()
+    transport.start(fake_o2)
+
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, teardown = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
+        simulator_popen=sim_popen, room_audio=_fake_room_audio(),
+        transport=transport)
+
+    _register_o2lite_transport(teardown, transport)
+
+    shutdown(teardown)
+
+    assert order == ["o2lite-transport", "bit", "room-bridge", "simulator",
+                     "arco"]
+
+
 def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
     """A guarded stack: one broken teardown step must not orphan Arco."""
     arco_popen = FakePopen()
