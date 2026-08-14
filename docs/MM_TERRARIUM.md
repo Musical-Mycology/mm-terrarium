@@ -656,6 +656,34 @@ any double in this repo: **a test double must never be more permissive than
 the library it stands for**, because the dimension nobody thought to check
 is exactly where the real thing will differ.
 
+**A third bug, found in a later investigation (2026-08-14): an orphaned Room
+simulator steals the next run's `sim-room` service, and O2's refusal is
+invisible to the client.** `harness/o2_shroom.py --dev sim-room --no-join`
+never exits on its own -- it loops `while not client.released`
+(`harness/o2_shroom.py:247`) and only a live Control ever sends `/release` --
+so a `Popen` child that outlives a killed parent (a `SIGKILL` on
+`terrarium_boot`, say) becomes a permanent orphan. o2litepy reconnects it
+automatically to whatever Arco starts next and re-announces every service on
+that connect, re-claiming `sim-room` before the new run's own simulator is
+even spawned. O2 then refuses the new simulator's announcement
+(`o2/src/bridge.cpp:231-237`: a bridge cannot coopt an existing local
+service), and because `/_o2/*/sv` is fire-and-forget the refusal is a log
+line on the **hub** only -- the refused simulator clock-syncs and looks
+exactly as healthy as the one that won, while every frame the new run
+addresses to `/sim-room/leds` is delivered to the zombie instead. Three
+guards now close this: `harness/o2_shroom.py --exit-with-parent`
+(`harness/o2_shroom.py:210,248`) checks the parent pid recorded at launch
+inside both blocking loops, so a killed parent is detected without ever
+needing `/release`; `control/boot.py`'s post-spawn section
+(`control/boot.py:95-111`) and `harness/terrarium_boot.py`'s `build()`
+(`harness/terrarium_boot.py:155-173`) now shut the simulator down on any
+failure, `KeyboardInterrupt` included (`except BaseException`, not
+`except Exception`); and `verify_service_ownership`
+(`devicelink/o2_transport.py:119`) sends a self-addressed round trip before
+the tick loop starts, so a refused announcement fails loud instead of
+silently. Design:
+`docs/superpowers/specs/2026-08-14-room-simulator-service-collision-design.md`.
+
 **The gap that survived this slice, and it is the important one.** All of the
 above is built and unit-tested, and **nothing drives it end to end**. No Bit
 can compute the design's own `T = gesture_time + horizon`: verb handlers are
@@ -703,6 +731,15 @@ honor them in any new work:
    preserving: `game` and `actl` are **inbound-only** today (devices → `game`,
    Arco → `actl`), so Control never messages itself and there is no round trip
    to eliminate. Keep it that way. See design doc § *Message Routing*.
+   **One deliberate exception:** `verify_service_ownership`
+   (`devicelink/o2_transport.py:119`) sends Control's own `game` service one
+   self-addressed message at startup. It is not a steady-state message path;
+   it is an assertion that *uses* the no-local-short-circuit property this
+   rule documents as a cost -- a message addressed to a service the process
+   itself offers only comes back if the hub really routed it there, which is
+   exactly the measurement a refused announcement (see *Not yet built*)
+   needs. Run once before the tick loop begins, never again after. `game`
+   and `actl` remain inbound-only in steady state.
 5. **A test double must never be more permissive than the library it stands
    for.** Earned the hard way on 2026-08-13: `FakeO2Lite.deliver()` called
    handlers directly while real o2litepy dispatches only from inside
@@ -836,15 +873,26 @@ Kept explicit so the doc doesn't over-claim:
   `ShroomClient.clamped`) is what reports when the configured horizon is
   wrong in production. Every figure here is a **dev-box figure**: the venue
   box does not exist.
-- **Arco rejects the Room simulator's service announcement.** Its log carries
-  `dropping message because /_o2/*/sv not from service provider ... by TCP
-  "sim-room"`. A player device (`ie1`) registers and receives frames fine, so
-  this is specific to the Terrarium-spawned Room simulator, and it may mean
-  the Room simulator has never received a frame on the o2lite path at all.
-  Unresolved, and an O2-layer question rather than an mm-terrarium one. Note
-  this is a *separate* cause from the documented `TestBit` cue gap below;
-  either alone would leave the Room's surface dark, so do not assume fixing
-  one explains the other.
+- **A refused o2lite service announcement is unobservable from the
+  client.** `/_o2/*/sv` is fire-and-forget: O2 refuses a second claimant
+  (`o2/src/bridge.cpp:231-237`), logs the drop on the **hub**, and offers
+  the client no acknowledgement, no error callback and no way to query
+  whether a registration took. A client that loses a service race
+  clock-syncs and is indistinguishable from a healthy one while everything
+  addressed to it is delivered to whoever won.
+  `devicelink/o2_transport.py`'s `verify_service_ownership` works around
+  this with a self-addressed round trip; it does not fix it. Upstream in
+  O2.
+- **o2litepy's discovery has no ensemble filter at all.**
+  `o2litepy/o2lite_disc.py:24` takes `ensemble` as a constructor argument
+  and never stores it, and `py3discovery.py:74` browses
+  `_o2proc._tcp.local.` and appends every host it resolves. So an o2lite
+  client joins whatever O2 host mDNS offers first: any ensemble, any
+  machine on the LAN. Reproduced 2026-08-14, an `--ensemble arco` client
+  registering its service on a host whose ensemble was something else
+  entirely. Venue consequence: two Terrariums on one network would
+  cross-connect today, which the "one Terrarium per room" model assumes
+  they do not. Deserves an upstream report to Roger.
 - **`ArcoProcess` cannot spawn Arco without a controlling TTY.** Arco's
   curses init opens `/dev/tty` and fails with `Could not open /dev/tty.
   Initialization Failed!` otherwise, after which `wait_ready` times out into
