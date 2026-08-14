@@ -145,6 +145,50 @@ def test_build_omitting_clock_keeps_the_existing_default():
         shutdown(gs, agent, arco, sim)
 
 
+def test_build_threads_its_clock_into_the_default_room_audio(monkeypatch):
+    """room_audio=None's real-pool branch built a plain AudioBridge(pool),
+    silently defaulting to AudioBridge's own time.monotonic regardless of
+    what clock= build() was given. DeviceLinkAgent._tick_audio() ticks
+    room_audio against the agent's own clock (devicelink/agent.py), and a
+    welcome cue's due time is set (at on_grant) against room_audio's own
+    clock -- those two have to agree, or a cue's expiry check runs against
+    the wrong clock the same way frame stamping did before build() grew
+    clock= at all. FakeArcoSynthPool substitutes for the real one (see
+    harness/arco_synth.py) so this never touches pyarco or a live Arco
+    server; only AudioBridge's clock= is under test here."""
+    class _FakeArcoSynthPool:
+        def __init__(self, soundfont=None):
+            pass
+
+        def start(self) -> None:
+            pass
+
+    captured = {}
+
+    def _capturing_audio_bridge(pool, clock=time.monotonic, **kwargs):
+        captured["clock"] = clock
+        return AudioBridge(FakePool(), clock=clock)
+
+    # Both patched at their defining module: build()'s `from X import Y`
+    # inside the function body resolves against X's namespace at call time
+    # (it is a lazy import, run fresh on every build() call -- see the
+    # module's own docstring on why), not against harness.terrarium_boot's.
+    monkeypatch.setattr("harness.arco_synth.ArcoSynthPool", _FakeArcoSynthPool)
+    monkeypatch.setattr("control.audio.AudioBridge", _capturing_audio_bridge)
+    fake_clock = lambda: 45.0
+
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, sim = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
+        clock=fake_clock)   # room_audio omitted: exercises the default branch
+    try:
+        assert captured["clock"] is fake_clock
+    finally:
+        shutdown(gs, agent, arco, sim)
+
+
 def test_o2lite_frame_is_released_across_the_shared_clock():
     """Regression for a live-demo bug: on the o2lite transport, a device
     never displayed any LED frame, ever. Cause was a clock-base mismatch --

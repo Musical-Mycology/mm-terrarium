@@ -1,7 +1,13 @@
 # Control on o2lite, and timed cues
 
 **Date:** 2026-08-12
-**Status:** Design approved (brainstorm), pending spec review then implementation plan
+**Status:** Implemented and **verified against a live Arco on 2026-08-13**. The
+transport, the shared clock and the rendering work; timing is not yet honored
+and criteria 3 and 4 remain unmet (see section 2). Two bugs that no test caught
+were found only by running it: Control and the device measuring time on
+different bases, and nothing ever pumping o2lite. This document is a
+point-in-time design record, not a living doc: for current behavior, constraints
+and known issues read `docs/MM_TERRARIUM.md`.
 **Repos touched:** `mm-terrarium` (the device transport, the cue type, the harness client). No luxaeterna change. No mm-tuneshroom change.
 
 ---

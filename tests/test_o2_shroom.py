@@ -1,6 +1,6 @@
 import pytest
 
-from harness.o2_shroom import build, tilt_sweep
+from harness.o2_shroom import _gestures_ready, build, tilt_sweep
 
 
 def test_tilt_sweep_stays_in_range():
@@ -43,3 +43,27 @@ def test_build_wires_the_client_and_backend():
     assert client.node == "TEST_PLAYER_NODE"
     assert client.leds is not None
     assert backend.is_open is False
+
+
+# --- Gating gestures on the role: harness/shroom_client.py's ShroomClient
+# sets .config in _on_role(), only once Control's granted-role reply has
+# actually arrived. main()'s join is sent over TCP (o2lite.send_cmd) but
+# gestures go out over UDP (o2lite.send), so without this gate the first
+# tilt can overtake the join and reach Control before it is registered --
+# "tilt: device not registered". A fake client (no socket, no o2lite)
+# is enough to drive _gestures_ready() in isolation. ------------------------
+
+class _FakeClient:
+    """Stands in for ShroomClient: _gestures_ready() only ever reads
+    .config, so nothing else about the real client is needed here."""
+
+    def __init__(self, config=None):
+        self.config = config
+
+
+def test_gestures_not_ready_before_the_role_arrives():
+    assert _gestures_ready(_FakeClient(config=None)) is False
+
+
+def test_gestures_ready_once_the_role_arrives():
+    assert _gestures_ready(_FakeClient(config={"bit_name": "TestBit"})) is True
