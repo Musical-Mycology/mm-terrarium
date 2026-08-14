@@ -32,14 +32,23 @@ that nothing addressed to it ever arrives. It clock-syncs normally, serves its
 UI normally, and receives nothing, forever. Nothing in the client-side API
 distinguishes it from a client that won.
 
-We reproduced this directly: two `harness/o2_shroom.py --dev sim-room`
-processes claiming the same service name against one hub (a headless O2 host
-standing in for Arco, since Arco requires a controlling TTY and would not
-start in our reproduction harness). The drop line above is byte-identical to
-the one from our original live-demo log. Both the winning and losing client
-printed their watch URL and reported a synced clock at essentially the same
-time; only the winner's canvas ever received a frame. There was no way, short
-of comparing rendered output, to tell which was which from the client side.
+We reproduced the refusal directly: two `harness/o2_shroom.py --dev
+sim-room` processes claimed the same service name against one hub (a
+headless O2 host standing in for Arco, since Arco requires a controlling TTY
+and would not start in our reproduction harness). The first registered at
+t=2.959; the second's announcement was refused at t=10.276, and the drop
+line above is byte-identical to the one from our original live-demo log.
+
+Nothing distinguishes a refused client from an accepted one from the
+outside. We confirmed that side by side with a refused simulator and an
+accepted player (`ie1`): both printed a watch URL and reported a synced
+clock, with nothing in either log to mark the difference. And a refused
+claim does not drop the messages addressed to it, it reroutes them: in the
+original live-demo run, Control's frames to `/sim-room/leds` reached the
+earlier, orphaned claimant every time, while the run's own simulator, whose
+announcement had been refused, rendered nothing, ever. There was no way,
+short of comparing rendered output, to tell a refused client from an
+accepted one from the client side.
 
 **What we did about it (workaround, not a fix):**
 `devicelink/o2_transport.py`'s `verify_service_ownership` (line 119) makes the
@@ -81,13 +90,13 @@ For the bug we were chasing, defect 2 is what turns a same-machine mistake
 into a network-wide one: it widens an orphaned client's reach from "the Arco
 process that spawned it" to "any O2 host mDNS can find on the LAN." But it
 stands on its own as a venue-scale hazard independent of that bug. Our
-deployment model is one Terrarium install per room, each an independent O2
-ensemble. Two Terrariums running on the same physical network today would
-cross-connect -- any device or simulator on one could be picked up by the
-other's hub, or vice versa, purely on the basis of which one mDNS answers
-first -- and there is nothing in o2litepy's discovery path that would stop
-it. That is the part we think deserves your attention even if defect 1, on
-its own, is judged acceptable behavior for O2's service model.
+deployment model is one Terrarium install per room. Two Terrariums running on
+the same physical network today would cross-connect -- any device or
+simulator on one could be picked up by the other's hub, or vice versa, purely
+on the basis of which one mDNS answers first -- and there is nothing in
+o2litepy's discovery path that would stop it. That is the part we think
+deserves your attention even if defect 1, on its own, is judged acceptable
+behavior for O2's service model.
 
 ## 4. What we did about it
 
