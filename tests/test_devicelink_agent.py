@@ -58,10 +58,19 @@ class FakeServer:
     def arrive(self, client):
         self.new_clients.append(client)
 
-    def deliver(self, client, address, typespec="", args=None):
+    def deliver(self, client, address, typespec="", args=None,
+                timestamp=0.0):
+        # `timestamp` is not optional decoration. The real o2lite transport
+        # puts o2lite's msg_timestamp here (devicelink/o2_transport.py's
+        # _to_msg), and the real websocket transport leaves it 0.0
+        # (devicelink/protocol.py's _event default). A double that could
+        # only ever produce one of those would hide half the design --
+        # boundary rule 5 covers what a double omits as much as what it
+        # permits.
         self.inbound.append((client, {"address": address,
                                       "typespec": typespec,
-                                      "args": args or []}))
+                                      "args": args or [],
+                                      "timestamp": timestamp}))
 
     def addressed(self, address):
         return [m for _, m in self.sent if m["address"] == address]
@@ -712,3 +721,27 @@ def test_poll_survives_a_raising_audio_tick():
                             room_audio=_RaisingAudioBridge())
 
     agent.poll()   # must not raise; must not wedge the engine tick
+
+
+def test_gesture_stamp_reaches_the_engine():
+    """The stamp is already on the envelope and already decoded; only
+    _on_verb dropped it. Design Rule 4, timestamps at the source: jitter on
+    the way up must not become jitter in the output."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    gs.data = lambda d, v, a, gesture_time=None: seen.append(gesture_time)
+    server.deliver("c1", "/game/tilt", "sf", [dev, 12.0], timestamp=987.5)
+    agent.poll()
+    assert seen == [987.5]
+
+
+def test_unstamped_gesture_reaches_the_engine_as_zero():
+    """The websocket transport never stamps. GameServer falls back to its
+    own clock there, and it can only do that if it is told 0.0 rather than
+    something invented by the transport."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    gs.data = lambda d, v, a, gesture_time=None: seen.append(gesture_time)
+    server.deliver("c1", "/game/tilt", "sf", [dev, 12.0])
+    agent.poll()
+    assert seen == [0.0]

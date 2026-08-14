@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import math
 import re
 from dataclasses import dataclass
 
@@ -56,6 +57,8 @@ def decode(msg: dict) -> Envelope:
     timestamp = msg.get("timestamp", 0.0)
     if not isinstance(timestamp, (int, float)):
         raise ValueError("timestamp must be a number")
+    if not math.isfinite(timestamp):
+        raise ValueError("timestamp must be finite")
     return Envelope(timestamp=float(timestamp), address=address,
                     typespec=typespec, args=args)
 

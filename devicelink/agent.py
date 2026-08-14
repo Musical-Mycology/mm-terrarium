@@ -319,7 +319,7 @@ class DeviceLinkAgent:
         elif verb == "join":
             self._on_join(client, dev, env.args)
         else:
-            self._on_verb(dev, verb, env.args)
+            self._on_verb(dev, verb, env.args, env.timestamp)
 
     def _on_hello(self, client, dev: str, args: list) -> None:
         name = args[1] if len(args) > 1 else ""
@@ -353,8 +353,17 @@ class DeviceLinkAgent:
         self._last_breath.pop(dev, None)
         self._send(dev, protocol.role_event(dev, result.config))
 
-    def _on_verb(self, dev: str, verb: str, args: list) -> None:
-        reason = self.game_server.data(dev, verb, args)
+    def _on_verb(self, dev: str, verb: str, args: list,
+                 gesture_time: float = 0.0) -> None:
+        """`gesture_time` is the inbound envelope's timestamp: the device's
+        own reading of the O2 clock at the instant of the gesture (Design
+        Rule 4, timestamps at the source). It is 0.0 on the websocket
+        transport, which never stamps, and GameServer falls back to its own
+        clock in that case -- so the transport must pass 0.0 through rather
+        than invent anything.
+        """
+        reason = self.game_server.data(dev, verb, args,
+                                       gesture_time=gesture_time)
         if reason is not None:
             self._send(dev, protocol.error_event(dev, verb, reason))
 
