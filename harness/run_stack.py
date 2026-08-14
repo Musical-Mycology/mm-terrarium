@@ -51,6 +51,7 @@ from control.process import stop_process
 from control.teardown import TeardownStack
 from harness import markers
 from harness.proc_tee import ProcTee
+from harness.signals import sigterm_as_keyboard_interrupt
 
 DEFAULT_ARCO_COMMAND = "/Users/chris/projects/arco/apps/pytest/server"
 PLAYER_NODE = "TEST_PLAYER_NODE"
@@ -259,3 +260,124 @@ def _stop(process, tee) -> None:
     stop_process(process)
     if tee is not None:
         tee.join(timeout=2.0)
+
+
+CI_DEFAULT_SECONDS = 45.0
+
+
+def parse_args(argv=None):
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="Run the whole Arco stack from one command.",
+        epilog="Needs PYTHONPATH=/Users/chris/projects/arco for pyarco and "
+               "o2litepy. CI mode is BEST-EFFORT: the headless clock-sync "
+               "defect documented in docs/MM_TERRARIUM.md is upstream and "
+               "unfixed, and this runner bounds and names it rather than "
+               "fixing it.")
+    ap.add_argument("--ci", action="store_true",
+                    help="Non-interactive: no terminal echo, a bounded run, "
+                         "and a non-zero exit on any failure.")
+    ap.add_argument("--devices", type=int, default=1,
+                    help="How many simulated player devices to join.")
+    ap.add_argument("--seconds", type=float, default=None,
+                    help="How long to hold the stack up. Default: forever "
+                         "(Ctrl-C to stop), or 45s under --ci.")
+    ap.add_argument("--log-dir", default=None,
+                    help="Where per-process logs and sample files go. "
+                         "Default: runs/<timestamp>/.")
+    ap.add_argument("--ensemble", default="arco")
+    ap.add_argument("--arco-command", default=DEFAULT_ARCO_COMMAND)
+    ap.add_argument("--setup-seconds", type=float, default=20.0,
+                    help="How long Control holds registration open. A "
+                         "device must join a SCORED role inside this "
+                         "window or be refused.")
+    ap.add_argument("--horizon", type=float, default=0.060,
+                    help="Cue scheduling horizon, passed to both Control "
+                         "and the devices so their reports agree.")
+    return ap.parse_args(argv)
+
+
+def config_from_args(args) -> StackConfig:
+    log_dir = args.log_dir or os.path.join(
+        "runs", time.strftime("%Y%m%d-%H%M%S"))
+    seconds = args.seconds
+    if seconds is None and args.ci:
+        seconds = CI_DEFAULT_SECONDS      # an unbounded CI run is a hung job
+    return StackConfig(
+        log_dir=log_dir, arco_command=args.arco_command,
+        devices=args.devices, ensemble=args.ensemble,
+        setup_seconds=args.setup_seconds, seconds=seconds,
+        horizon=args.horizon, echo=not args.ci)
+
+
+def _failing_log_key(result: RunResult) -> str | None:
+    """Which of result.logs the failure is actually about.
+
+    Deriving this from the stage name alone only works for the two control
+    stages: "control-ready" and "control-setup" both reduce to "control",
+    and "control" IS a real log key. It does not work for the device
+    stages -- "device-sync" and "device-join" both reduce to "device", and
+    no log is ever keyed "device"; devices are keyed "ie1", "ie2", and so
+    on. run() writes every device-stage detail as f"{tee.name} ..." (or
+    f"{tee.name}: ..." for the two _failed_marker cases), so the failing
+    device's own name is always the detail's first word. Parsing that is
+    what actually finds the right log; guessing from the stage prefix
+    does not.
+    """
+    if result.stage.startswith("control"):
+        return "control"
+    if not result.detail:
+        return None
+    first_word = result.detail.split(None, 1)[0].rstrip(":")
+    return first_word if first_word in result.logs else None
+
+
+def format_failure(result: RunResult, tail_lines: int = 20) -> str:
+    lines = [
+        "",
+        "=" * 70,
+        f"STACK RUN FAILED at stage {result.stage!r}",
+        result.detail,
+        "",
+    ]
+    for name, path in result.logs.items():
+        lines.append(f"  {name}: {path}")
+    lines.append("")
+    failing = result.logs.get(_failing_log_key(result)) or \
+        next(iter(reversed(list(result.logs.values()))), None)
+    if failing:
+        lines.append(f"last {tail_lines} lines of {failing}:")
+        try:
+            with open(failing, encoding="utf-8") as handle:
+                for line in handle.read().splitlines()[-tail_lines:]:
+                    lines.append(f"  | {line}")
+        except OSError as exc:
+            lines.append(f"  (could not read: {exc})")
+    lines.append("=" * 70)
+    return "\n".join(lines)
+
+
+def main() -> None:
+    sigterm_as_keyboard_interrupt()
+    args = parse_args()
+    cfg = config_from_args(args)
+
+    try:
+        from o2litepy import o2lite      # noqa: F401 (import is the check)
+    except ImportError:
+        print("run_stack needs o2litepy on the path. Re-run with "
+              "PYTHONPATH=/Users/chris/projects/arco", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    print(f"logs: {cfg.log_dir}")
+    result = run(cfg)
+    if result.ok:
+        print(f"stack run {result.stage}; logs in {cfg.log_dir}")
+        return
+    print(format_failure(result), file=sys.stderr)
+    raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

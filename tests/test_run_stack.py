@@ -219,3 +219,84 @@ def test_more_than_one_device_gets_distinct_dev_names(tmp_path):
 
     assert "ie1" in popen.commands[1]
     assert "ie2" in popen.commands[2]
+
+
+def test_ci_mode_turns_echo_off_and_bounds_the_run():
+    """One code path, two configurations: CI is the same machinery with the
+    terminal echo off and a duration that ends the run."""
+    from harness.run_stack import config_from_args, parse_args
+
+    cfg = config_from_args(parse_args(["--ci", "--seconds", "30"]))
+
+    assert cfg.echo is False
+    assert cfg.seconds == 30.0
+
+
+def test_interactive_mode_echoes_and_holds_by_default():
+    from harness.run_stack import config_from_args, parse_args
+
+    cfg = config_from_args(parse_args([]))
+
+    assert cfg.echo is True
+    assert cfg.seconds is None
+
+
+def test_ci_mode_requires_a_duration():
+    """An unbounded CI run is a hung CI job."""
+    from harness.run_stack import config_from_args, parse_args
+
+    cfg = config_from_args(parse_args(["--ci"]))
+
+    assert cfg.seconds is not None
+
+
+def test_the_failure_summary_names_the_stage_and_points_at_a_log(tmp_path):
+    from harness.run_stack import RunResult, format_failure
+
+    log = tmp_path / "ie1.log"
+    log.write_text("first\nsecond\nthird\n")
+    result = RunResult(False, "device-sync", "never synced",
+                       {"ie1": str(log)})
+
+    summary = format_failure(result)
+
+    assert "device-sync" in summary
+    assert "never synced" in summary
+    assert str(log) in summary
+    assert "third" in summary       # the tail is quoted, not just referenced
+
+
+def test_the_failure_summary_survives_a_missing_log(tmp_path):
+    """A stage can fail before its log has any content, and the summary
+    must still be the thing that explains the run."""
+    from harness.run_stack import RunResult, format_failure
+
+    result = RunResult(False, "control-ready", "never came up",
+                       {"control": str(tmp_path / "absent.log")})
+
+    assert "control-ready" in format_failure(result)
+
+
+def test_the_failure_summary_points_at_the_failing_device_not_the_last_one(
+        tmp_path):
+    """Both devices are spawned (and so both logged) before either is
+    waited on, so by the time ie1 fails to sync, result.logs already
+    holds ie2's path too, inserted after ie1's. The summary has to name
+    ie1's log -- the one that actually failed -- not whichever log
+    happens to have been inserted last."""
+    from harness.run_stack import RunResult, format_failure
+
+    ie1_log = tmp_path / "ie1.log"
+    ie1_log.write_text("ie1 line\n")
+    ie2_log = tmp_path / "ie2.log"
+    ie2_log.write_text("ie2 line\n")
+    result = RunResult(False, "device-sync", "ie1 never clock-synced.",
+                       {"control": str(tmp_path / "control.log"),
+                        "ie1": str(ie1_log), "ie2": str(ie2_log)})
+
+    summary = format_failure(result)
+
+    # Both paths are listed (every log is), but only ie1's CONTENT -- the
+    # quoted tail -- may appear, because ie1 is the one that failed.
+    assert "ie1 line" in summary
+    assert "ie2 line" not in summary
