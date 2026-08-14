@@ -167,9 +167,15 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
                 factory.process.shutdown()
             except Exception:
                 pass        # never let cleanup mask the real failure
-        arco.shutdown()
+        try:
+            arco.shutdown()
+        except Exception:
+            pass            # same reason
         if owns_server:
-            server.stop()   # an injected transport belongs to the caller
+            try:
+                server.stop()   # an injected transport belongs to the caller
+            except Exception:
+                pass            # same reason
         raise
 
     return gs, server, agent, arco, factory.process
