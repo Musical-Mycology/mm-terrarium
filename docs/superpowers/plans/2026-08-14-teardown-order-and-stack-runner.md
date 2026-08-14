@@ -346,30 +346,20 @@ class FakePopen:
 
 `subprocess` is already imported at `control/arco_process.py:15`.
 
-- [ ] **Step 5: Update the two tests that assert on the old `wait()` behavior**
-
-`stop_process` polls rather than calling `wait()`, so `popen.waited` is no longer set by a shutdown. In `tests/test_arco_process.py`, replace the `assert popen.waited is True` on line 59 with:
-
-```python
-    assert popen.returncode is not None      # signalled AND reaped
-```
-
-Make the identical replacement in `tests/test_simulator_process.py` line 22. Rename both tests from `test_shutdown_sends_sigterm_and_waits` to `test_shutdown_sends_sigterm_and_reaps`.
-
-These two do not pass yet: `ArcoProcess.shutdown()` and `SimulatorProcess.shutdown()` still call `wait()`. Task 3 makes them pass. Leave them failing at the end of this task and say so in the commit.
-
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 5: Run the whole suite**
 
 ```bash
-PYTHONPATH=/Users/chris/projects/arco .venv/bin/python -m pytest tests/test_process.py tests/test_arco_process.py tests/test_simulator_process.py -q
+PYTHONPATH=/Users/chris/projects/arco .venv/bin/python -m pytest tests -q
 ```
 
-Expected: `tests/test_process.py` all PASS; the two renamed shutdown tests FAIL on `popen.returncode is not None` (Task 3 fixes them). Everything else PASS.
+Expected: PASS, no fewer than 662 passed.
 
-- [ ] **Step 7: Commit**
+Note that `tests/test_arco_process.py`'s and `tests/test_simulator_process.py`'s existing `test_shutdown_sends_sigterm_and_waits` still pass **unchanged** here, and must. `shutdown()` still calls `wait()` at this point, and the new `send_signal` sets `returncode` before it, so `wait()` returns cleanly and `popen.waited` is still `True`. Those two tests change in Task 3, which is where `shutdown()` stops calling `wait()`. Do not touch them in this task.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add control/process.py tests/test_process.py control/arco_process.py tests/test_arco_process.py tests/test_simulator_process.py
+git add control/process.py tests/test_process.py control/arco_process.py tests/test_arco_process.py
 git commit -m "feat(terrarium): bounded stop_process, and a FakePopen that can refuse to die
 
 Teardown could hang forever: ArcoProcess.shutdown() and
@@ -387,8 +377,8 @@ this code exists for. It now models poll(), TimeoutExpired, the no-op
 send_signal after exit, and -- the point -- a child that ignores a signal,
 without which the escalation branch has no coverage.
 
-The two renamed shutdown tests fail until the next commit wires the
-callers over."
+No caller changes yet, so the suite stays green: shutdown() still calls
+wait(), and send_signal sets returncode before it."
 ```
 
 ---
@@ -641,7 +631,17 @@ boot failure path and the caller's normal teardown can both close it."
 - Consumes: `control.process.stop_process` (Task 1).
 - Produces: `_PtyProcess.close() -> None`; `ArcoProcess.shutdown()` and `SimulatorProcess.shutdown()` unchanged in signature, now bounded.
 
-- [ ] **Step 1: Move the real-pty escalation test onto `stop_process`**
+- [ ] **Step 1: Update the two tests that assert on the old `wait()` behavior**
+
+`stop_process` polls rather than calling `wait()`, so `popen.waited` is no longer set by a shutdown. In `tests/test_arco_process.py`, replace the `assert popen.waited is True` on line 59 with:
+
+```python
+    assert popen.returncode is not None      # signalled AND reaped
+```
+
+Make the identical replacement in `tests/test_simulator_process.py` line 22. Rename both tests from `test_shutdown_sends_sigterm_and_waits` to `test_shutdown_sends_sigterm_and_reaps`.
+
+- [ ] **Step 2: Move the real-pty escalation test onto `stop_process`**
 
 In `tests/test_arco_pty.py`, replace `test_wait_escalates_to_sigkill_when_sigterm_is_ignored` (lines 60-67) with:
 
@@ -662,7 +662,7 @@ def test_stop_process_escalates_to_sigkill_on_a_real_pty_child():
     proc.close()
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [ ] **Step 3: Run it to verify it fails**
 
 ```bash
 PYTHONPATH=/Users/chris/projects/arco .venv/bin/python -m pytest tests/test_arco_pty.py -q
@@ -670,7 +670,7 @@ PYTHONPATH=/Users/chris/projects/arco .venv/bin/python -m pytest tests/test_arco
 
 Expected: FAIL, `AttributeError: '_PtyProcess' object has no attribute 'close'`.
 
-- [ ] **Step 3: Give `_PtyProcess` a `close()` and take the escalation out of `wait()`**
+- [ ] **Step 4: Give `_PtyProcess` a `close()` and take the escalation out of `wait()`**
 
 Replace `control/arco_process.py`'s `_PtyProcess.wait` (lines 167-192) with:
 
@@ -721,7 +721,7 @@ Also guard `_drain` and `send_signal` against the closed fd. In `_drain`, change
 
 And update the class docstring's first line from `(poll / send_signal / wait)` to `(poll / send_signal / wait / close)`.
 
-- [ ] **Step 4: Point `ArcoProcess.shutdown()` at `stop_process`**
+- [ ] **Step 5: Point `ArcoProcess.shutdown()` at `stop_process`**
 
 Replace `control/arco_process.py:222-227`:
 
@@ -751,7 +751,7 @@ Add the import at the top of `control/arco_process.py`, next to the existing `im
 from control.process import stop_process
 ```
 
-- [ ] **Step 5: Point `SimulatorProcess.shutdown()` at `stop_process`**
+- [ ] **Step 6: Point `SimulatorProcess.shutdown()` at `stop_process`**
 
 Replace `control/simulator_process.py:24-29`:
 
@@ -778,7 +778,7 @@ from control.process import stop_process
 
 `signal` is no longer referenced in `control/simulator_process.py`; remove `import signal`.
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 7: Run the tests**
 
 ```bash
 PYTHONPATH=/Users/chris/projects/arco .venv/bin/python -m pytest tests/test_arco_pty.py tests/test_arco_process.py tests/test_simulator_process.py tests/test_process.py -q
@@ -786,7 +786,7 @@ PYTHONPATH=/Users/chris/projects/arco .venv/bin/python -m pytest tests/test_arco
 
 Expected: all PASS, including the two renamed `test_shutdown_sends_sigterm_and_reaps` tests left failing by Task 1.
 
-- [ ] **Step 7: Run the whole suite**
+- [ ] **Step 8: Run the whole suite**
 
 ```bash
 PYTHONPATH=/Users/chris/projects/arco .venv/bin/python -m pytest tests -q
@@ -794,10 +794,10 @@ PYTHONPATH=/Users/chris/projects/arco .venv/bin/python -m pytest tests -q
 
 Expected: PASS, no fewer than 662 passed.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add control/arco_process.py control/simulator_process.py tests/test_arco_pty.py
+git add control/arco_process.py control/simulator_process.py tests/test_arco_pty.py tests/test_arco_process.py tests/test_simulator_process.py
 git commit -m "fix(terrarium): teardown cannot hang on a child that ignores SIGTERM
 
 ArcoProcess.shutdown() and SimulatorProcess.shutdown() both sent SIGTERM
