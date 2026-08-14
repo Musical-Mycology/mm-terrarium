@@ -107,7 +107,17 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
         # Re-raise unchanged: the inner handlers above already produced a
         # well-labeled BootFailure for every stage.
         _shutdown_simulator(simulator_factory)
-        arco.shutdown()
+        try:
+            arco.shutdown()
+        except Exception:
+            pass            # never let cleanup mask the real failure -- same
+                            # reason _shutdown_simulator (above) and
+                            # harness/terrarium_boot.py's build() (whose
+                            # equivalent guard this one mirrors) do. Concretely:
+                            # ArcoProcess.shutdown() calls Popen.wait(), and a
+                            # second Ctrl-C landing inside that wait() would
+                            # otherwise replace this well-labeled BootFailure
+                            # with a bare KeyboardInterrupt.
         raise
 
     return gs, room_bridge, arco

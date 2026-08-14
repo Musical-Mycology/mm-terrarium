@@ -328,3 +328,24 @@ def test_boot_shuts_arco_down_even_if_the_simulator_shutdown_raises():
              simulator_factory=_RaisingFactory())
 
     assert fake_popen.signals
+
+
+def test_boot_raises_the_original_failure_even_if_arco_shutdown_raises():
+    """Sibling of test_boot_shuts_arco_down_even_if_the_simulator_shutdown_
+    raises above, but for arco.shutdown() itself raising. This is the real
+    race the whole-branch review flagged: ArcoProcess.shutdown() calls
+    Popen.wait(), and a second Ctrl-C landing inside that wait() re-raises
+    as KeyboardInterrupt -- which, unguarded, would replace this
+    well-labeled BootFailure with a bare, undiagnosable KeyboardInterrupt."""
+    class _RaisingArco(ArcoProcess):
+        def shutdown(self):
+            raise OSError("no such process")
+
+    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+
+    with pytest.raises(BootFailure, match="unknown Bit"):
+        boot(config, make_registry(), arco_command=["arco-server"],
+             room_binding=RoomBindingRegistry(),
+             arco_process_cls=lambda cmd: _RaisingArco(
+                 cmd, popen=FakePopen(), probe=lambda: True),
+             simulator_factory=lambda: "sim-room-dev")
