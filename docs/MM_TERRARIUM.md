@@ -530,13 +530,21 @@ renderer** — the concrete simulator/hardware backend is deferred, see
   `wait_for_room_binding()` holds in `SETUP` for a fresh admin-armed tap,
   reusing the `--setup-seconds` hold pattern `devicelink_smoke` already
   established) → gate the Bit on `bit_cls.room_types` (read off the class,
-  before instantiation) → `load_bit`. **Structural shutdown guarantee:**
-  every failure after Arco actually starts funnels through one
-  `try/except` that calls `arco.shutdown()` exactly once, so a future
-  failure mode added to this section can't accidentally orphan the
-  subprocess by forgetting a call site — this replaced an earlier,
-  enumerated-call-site version that a review round caught leaking the
-  subprocess on an `ArcoReadyTimeout`.
+  before instantiation) → `load_bit`. **Structural shutdown guarantee,
+  twice now.** The first version funnelled every failure after Arco starts
+  through one `try/except` that called `arco.shutdown()` exactly once, so a
+  future failure mode added to this section couldn't accidentally orphan
+  the subprocess by forgetting a call site -- replacing an earlier,
+  enumerated-call-site version that a review round caught leaking Arco on
+  an `ArcoReadyTimeout`. That guarantee covered Arco and nothing else this
+  function spawns, which is why the Room simulator needed its own
+  separate, hand-written guard bolted on by PR #24 rather than being
+  covered by the same mechanism. **As of this branch, the same
+  `try/except` closes a `TeardownStack` instead**, covering Arco, any
+  simulator the factory registered, the room bridge and the Bit's abort
+  together, so nothing this function starts can be left out by omission
+  again. See the teardown-order section below for the mechanism and the
+  three-separately-maintained-orderings history behind it.
 - **Console and uplink filtering.** Because a `ROOM`-class role lives in a
   Bit's normal `role_table`, the pre-existing `ConsoleAgent.snapshot()`/
   `on_registration_change()`/`_devices_view()` and `UplinkAgent`'s
