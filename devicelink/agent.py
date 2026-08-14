@@ -79,13 +79,25 @@ class DeviceLinkAgent:
         self.server = server
         self._capability = capability
         self._clock = clock
-        # BootConfig.cue_horizon, passed down by whatever builds this agent
-        # (harness/terrarium_boot.py). Not consulted here -- the `when` on
-        # each cue already has it baked in by whoever scheduled the gesture;
-        # this agent only waits for `when` to arrive. Held for Task 9's
-        # driver, which needs the configured value to reach here at all.
+        # BootConfig.cue_horizon. Used two ways here. A frame with no cue
+        # behind it (breath only) is a STREAM frame whose origin is this
+        # tick, so it is stamped clock() + horizon. And a cue's session feed
+        # is deferred to at - horizon when that is still in the future, so a
+        # far-future state cannot leak into an intervening breath frame.
         self._horizon = horizon
         self._room_cues = TimedQueue()
+        # Deferred light-session feeds: (dev, status, d1, d2, at). ONLY a
+        # Bit-declared cue further out than one horizon lands here. A gesture
+        # cue's feed time (at - horizon) is the gesture time itself, already
+        # past by the time Control sees it, so it is applied directly in
+        # _on_light_cue and never queued -- queueing it would count a clamp on
+        # every single gesture and destroy the counter's meaning.
+        self._light_cues = TimedQueue()
+        # dev -> the time the NEXT frame emitted for that dev must be
+        # displayed, set when a cue is actually applied to its session. See
+        # _feed_light_now for the earliest-wins rule and _render_frames for
+        # why it is popped on every render attempt.
+        self._pending_at: dict[str, float] = {}
         self.bridges: dict[str, DeviceBridge] = {}
         self._universes: dict[str, Universe] = {}
         self._last_frames: dict[str, bytes] = {}
@@ -174,6 +186,11 @@ class DeviceLinkAgent:
                 logger.exception("devicelink inbound handling failed; "
                                  "dropping frame")
         self._feed_breath()
+        # Before both renders: a feed released this tick must be reflected in
+        # the frame rendered this tick, not the next one. Draining after would
+        # delay every cue by one frame, exactly the class of error this
+        # design exists to remove.
+        self._drain_light_cues()
         self._render_frames()
         self._render_room()
         self._tick_audio()
@@ -205,15 +222,12 @@ class DeviceLinkAgent:
     def _render_room(self) -> None:
         if self._room_light is None or self._room_dev is None:
             return
-        # Drain before rendering: a cue released this tick must be reflected
-        # in the frame rendered this tick, not the next one -- draining
-        # after the render would delay every cue by one frame, exactly the
-        # class of error this slice exists to remove.
-        for (status, d1, d2) in self._room_cues.due(self._clock()):
-            try:
-                self._room_bridge.feed_light(status, d1, d2)
-            except Exception:
-                logger.exception("Room feed_light failed")
+        # Room light is now fed upstream, in _on_light_cue (or
+        # _drain_light_cues) -- see that method's docstring. This function no
+        # longer drains _room_cues for light. _room_cues keeps accumulating
+        # the Room's audio-release entries here, unconsumed until Task 8 of
+        # docs/superpowers/plans/2026-08-14-load-bearing-timed-cues.md adds
+        # the feed_audio drain.
         universe = self._room_light.universe
         try:
             self._room_light.session.render_into(universe)
@@ -260,6 +274,14 @@ class DeviceLinkAgent:
             session = bridge.session
             if universe is None or session is None:
                 continue
+            # Popped on EVERY render attempt for this dev, changed frame or
+            # not. A cue can feed a session without changing the frame; if
+            # the entry survived, a stale `at` would attach to some later
+            # frame and manufacture a spurious clamp on the device, which
+            # would corrupt the one counter the horizon measurement depends
+            # on. Popping before render_into also means a raised render drops
+            # the time rather than mis-stamping a future frame.
+            at = self._pending_at.pop(dev, None)
             closing = dev in self._closing
             if closing:
                 self._closing[dev] += 1
@@ -273,9 +295,12 @@ class DeviceLinkAgent:
             frame = bytes(universe.get_frame()[:36])
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame
+                # The cue's own time when a cue produced this frame, else
+                # this stream frame's own origin. Explicit `is not None`,
+                # never truthiness: 0.0 is a legal O2 time.
+                when = at if at is not None else self._clock() + self._horizon
                 try:
-                    self._send(dev, protocol.leds_event(
-                        dev, frame, when=self._clock() + self._horizon))
+                    self._send(dev, protocol.leds_event(dev, frame, when=when))
                 except Exception:
                     logger.exception("leds send for %s failed", dev)
             if closing:
@@ -416,26 +441,65 @@ class DeviceLinkAgent:
         except Exception:
             logger.exception("release notify for %s failed", dev)
 
+    def _feed_light_now(self, dev: str, status: int, d1: int, d2: int,
+                        at: float | None) -> None:
+        """Apply a light cue to its session and record when the frame it
+        produces must be displayed.
+
+        Earliest wins: one frame carries every cue applied in a tick, so it
+        must not be late for the soonest deadline among them.
+        """
+        if dev == self._room_dev and self._room_bridge is not None:
+            try:
+                self._room_bridge.feed_light(status, d1, d2)
+            except Exception:
+                logger.exception("Room feed_light failed")
+                return
+        else:
+            bridge = self.bridges.get(dev)
+            if bridge is None or bridge.session is None:
+                return
+            try:
+                bridge.session.feed_midi(status, d1, d2)
+            except Exception:
+                logger.exception("feed_midi for %s failed", dev)
+                return
+        if at is None:
+            return
+        pending = self._pending_at.get(dev)
+        if pending is None or at < pending:
+            self._pending_at[dev] = at
+
+    def _drain_light_cues(self) -> None:
+        """Release deferred light-session feeds whose moment has come."""
+        for (dev, status, d1, d2, at) in self._light_cues.due(self._clock()):
+            self._feed_light_now(dev, status, d1, d2, at)
+
     def _on_light_cue(self, dev: str, status: int,
                       data1: int, data2: int,
                       when: float | None = None) -> None:
+        """`when` is the cue's PRESENTATION time: GameServer computed it as
+        origin + cue_horizon, once, for whatever produced this cue.
+
+        Two halves, one anchor. Light is fed as early as possible, because
+        the frame it renders still has to cross the wire to reach the device
+        by `when`; that frame is stamped `when` and the device holds it.
+        Room audio waits until `when` on _room_cues, because it reaches Arco
+        from here with no wire in between. See docs/superpowers/specs/
+        2026-08-14-load-bearing-timed-cues-design.md section 2.
+        """
+        now = self._clock()
         if dev == self._room_dev and self._room_bridge is not None:
-            # Queue rather than feed: the Room's light must wait for its
-            # declared time, not fire the instant the cue happens to
-            # arrive. Drained in _render_room(), which makes a single
-            # synchronous RoomBridge.feed_midi(status, d1, d2) call --
-            # there is no independently-scheduled audio call at `when` to
-            # land alongside; audio and light share this one dispatch.
-            self._room_cues.push(when, (status, data1, data2),
-                                 now=self._clock())
+            self._room_cues.push(when, (status, data1, data2), now=now)
+        feed_at = None if when is None else when - self._horizon
+        if feed_at is not None and feed_at > now:
+            # A Bit-declared cue further out than one horizon. Hold the
+            # session feed too, or the future state leaks into whatever
+            # breath frame renders in between.
+            self._light_cues.push(feed_at, (dev, status, data1, data2, when),
+                                  now=now)
             return
-        bridge = self.bridges.get(dev)
-        if bridge is None or bridge.session is None:
-            return
-        try:
-            bridge.session.feed_midi(status, data1, data2)
-        except Exception:
-            logger.exception("feed_midi for %s failed", dev)
+        self._feed_light_now(dev, status, data1, data2, when)
 
     def _on_play_cue(self, dev: str, name: str, params: str) -> None:
         """Forward a Bit's local-sample cue to the device. Unlike the light

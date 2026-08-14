@@ -490,9 +490,10 @@ def test_room_dev_cue_routes_to_room_bridge_not_normal_bridges():
     baseline = bytes(universe.get_frame()[:36])
 
     gs.on_light_cue("sim-room", 0xB0, 74, 100)
-    agent._render_room()   # drains the Room's timed queue (Task 6) so the
-                            # untimed cue above -- due at once -- reaches
-                            # the session before the render below
+    agent._render_room()   # the untimed cue above already reached the
+                            # session synchronously inside on_light_cue; this
+                            # call renders+sends the resulting frame, it
+                            # does not feed anything
     clk.advance(2.0)
     session.render_into(universe)
     after = bytes(universe.get_frame()[:36])
