@@ -1,3 +1,5 @@
+import pytest
+
 from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
 
 
@@ -5,6 +7,11 @@ def _started():
     fake = FakeO2Lite()
     transport = O2LiteTransport()
     transport.start(fake)
+    # start() now round-trips a /game/_svcheck handshake through send() to
+    # verify ownership (see verify_service_ownership); that handshake is an
+    # implementation detail of start() itself, not something the tests that
+    # reuse this fixture to assert on device-directed sends care about.
+    fake.sent.clear()
     return transport, fake
 
 
@@ -199,3 +206,96 @@ def test_an_empty_dev_id_is_refused():
         pass
     else:
         raise AssertionError("expected ValueError on an empty dev id")
+
+
+def _fake_clock():
+    """A clock that only advances when sleep() is called, so a timeout can
+    be exhausted without spending real time. Same shape as the helper in
+    tests/test_boot.py."""
+    now = [0.0]
+
+    def clock():
+        return now[0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    return clock, sleep
+
+
+def test_a_self_addressed_message_comes_back_when_the_service_is_ours():
+    """Boundary rule 4: o2lite send() has NO local short circuit, so a
+    message addressed to our own service leaves for the hub and returns
+    only if the hub really routes that service to us. That is what makes
+    ownership measurable at all."""
+    from devicelink.o2_transport import verify_service_ownership
+
+    fake = FakeO2Lite()
+    fake.set_services("actl,game")
+
+    assert verify_service_ownership(fake, "game") is True
+
+
+def test_a_refused_service_never_routes_back():
+    """O2 refuses a second claimant with "not from service provider"
+    (o2/src/bridge.cpp:231-237) and logs it on the HUB, never telling the
+    client. The refused client stays connected and clock-synced and looks
+    perfectly healthy, so this round trip is the only thing that can tell
+    the two apart."""
+    from devicelink.o2_transport import verify_service_ownership
+
+    fake = FakeO2Lite()
+    fake.set_services("actl,game")
+    fake.refuse("game")
+    clock, sleep = _fake_clock()
+
+    assert verify_service_ownership(fake, "game", timeout=2.0,
+                                    clock=clock, sleep=sleep) is False
+
+
+def test_the_fake_withholds_the_loopback_only_for_a_refused_service():
+    """Boundary rule 5: a double must never be more permissive than the
+    library it stands for. A fake that looped every send back would make
+    the ownership check pass in every test while failing live -- the exact
+    trap that rule was added for, on this same transport."""
+    fake = FakeO2Lite()
+    fake.set_services("actl,game")
+    fake.refuse("game")
+    seen = []
+    fake.method_new("/game/_svcheck", "i", True,
+                    lambda address, types, info: seen.append(fake.get_int32()),
+                    None)
+
+    fake.send_cmd("/game/_svcheck", 0, "i", 7)
+    fake.poll()
+
+    assert seen == []
+
+
+def test_a_send_to_a_service_we_do_not_offer_never_loops_back():
+    """Sending to a DEVICE's service must not come back to us. Without
+    this the fake would loop every outbound LED frame into Control's own
+    inbound queue."""
+    fake = FakeO2Lite()
+    fake.set_services("actl,game")
+    seen = []
+    fake.method_new("/ie1/leds", "b", True,
+                    lambda address, types, info: seen.append(1), None)
+
+    fake.send("/ie1/leds", 0, "b", [1, 2, 3])
+    fake.poll()
+
+    assert seen == []
+
+
+def test_start_refuses_when_game_is_held_by_another_process():
+    """Control's own `game` service has exactly the same exposure as a
+    device's: an orphaned Terrarium holding it would make every device
+    silently unreachable."""
+    fake = FakeO2Lite()
+    fake.refuse("game")
+    transport = O2LiteTransport()
+    clock, sleep = _fake_clock()
+
+    with pytest.raises(RuntimeError, match="game"):
+        transport.start(fake, ownership_timeout=1.0, clock=clock, sleep=sleep)
