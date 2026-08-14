@@ -62,7 +62,7 @@ class FakeServer:
                 timestamp=0.0):
         # `timestamp` is not optional decoration. The real o2lite transport
         # puts o2lite's msg_timestamp here (devicelink/o2_transport.py's
-        # _to_msg), and the real websocket transport leaves it 0.0
+        # _on_message), and the real websocket transport leaves it 0.0
         # (devicelink/protocol.py's _event default). A double that could
         # only ever produce one of those would hide half the design --
         # boundary rule 5 covers what a double omits as much as what it

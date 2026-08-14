@@ -40,11 +40,13 @@ def test_decode_defaults_missing_timestamp_to_zero():
 def test_decode_rejects_a_non_finite_timestamp(timestamp):
     """Python's json module accepts the literal tokens NaN, Infinity, and
     -Infinity as valid floats by default, so a malformed device payload
-    could otherwise pass decode()'s isinstance check here. A non-finite
-    gesture timestamp that slipped through would reach
-    GameServer._origin() (control/engine.py) and produce a garbage
-    presentation time that a TimedQueue would then hold forever, since
-    `NaN <= now` and `inf <= now` are never true."""
+    could otherwise pass decode()'s isinstance check here. Of the three,
+    only NaN actually slips past GameServer._origin() (control/engine.py)
+    unguarded -- +inf is caught by its too-far-future check and -inf by its
+    <=0 fallback, both falling back to Control's clock. A NaN timestamp
+    would produce a garbage presentation time that a TimedQueue would then
+    hold forever, since `NaN <= now` is never true. Rejecting all three
+    here, at the wire boundary, is still correct defense in depth."""
     with pytest.raises(ValueError):
         protocol.decode({"address": "/game/hello", "typespec": "",
                          "args": [], "timestamp": timestamp})
