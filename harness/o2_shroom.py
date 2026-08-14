@@ -98,6 +98,29 @@ def main() -> None:
     parser.add_argument("--sim-host", default="127.0.0.1")
     parser.add_argument("--sim-port", type=int, default=0)
     parser.add_argument("--tilt-hz", type=float, default=20.0)
+    parser.add_argument("--join-retry", type=float, default=0.0,
+                        help="Re-send /game/join every N seconds until a "
+                             "role, deny or error comes back. 0 (default) "
+                             "keeps the original send-once behavior. A join "
+                             "sent before Control is listening is simply "
+                             "lost -- there is no queue behind it -- so "
+                             "without this a device that powers on first "
+                             "sits silent forever. Also what lets a device "
+                             "sync its clock BEFORE Control resets Arco, "
+                             "which is the only reliable ordering while the "
+                             "upstream /host/clear defect stands (see "
+                             "terrarium_boot's --arco-start-audio).")
+    parser.add_argument("--control-horizon", type=float, default=None,
+                        help="The horizon Control was run with (its "
+                             "--horizon). Used ONLY to turn this device's "
+                             "observed lateness into absolute end-to-end "
+                             "latency in the exit summary -- the device "
+                             "gains no scheduling opinion from it. Omit to "
+                             "report signed lateness instead.")
+    parser.add_argument("--samples-out", default=None,
+                        help="Write the raw per-frame lateness samples to "
+                             "this path as JSON, for python -m "
+                             "harness.sync_bench.")
     parser.add_argument("--no-join", action="store_true",
                         help="Send /game/hello but never /game/join, and "
                              "emit no gestures. This is what the Room "
@@ -167,10 +190,33 @@ def main() -> None:
     # -- a blank browser and no explanation.
     deny_printed = False
     error_printed = False
+    # Only ever set when --join-retry is on, so the default path still sends
+    # exactly one join.
+    next_join = (o2lite.time_get() + args.join_retry
+                 if args.join_retry > 0 and not args.no_join else None)
+    joins_sent = 1
     try:
         while not client.released:
             o2lite.poll()
             now = o2lite.time_get()
+            if next_join is not None and now >= next_join:
+                if client.config is not None or client.last_deny is not None \
+                        or client.last_error is not None:
+                    next_join = None       # Control answered; stop retrying
+                else:
+                    # hello as well as join, every time. Both were sent
+                    # before Control existed and BOTH were dropped by Arco
+                    # ("service was not found"), and /game/hello is what puts
+                    # this device in the DevicePool -- a join from a device
+                    # Control has never heard of goes nowhere. Retrying only
+                    # the join reconnects nothing.
+                    o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+                    o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
+                    joins_sent += 1
+                    next_join = now + args.join_retry
+                    if joins_sent % 5 == 0:
+                        print(f"still waiting on a role after {joins_sent} "
+                              f"joins -- is Control up and in SETUP?")
             if not deny_printed and client.last_deny is not None:
                 reason, hint = client.last_deny
                 print(f"JOIN DENIED: {reason} ({hint})")
@@ -187,6 +233,11 @@ def main() -> None:
             if not args.no_join and _gestures_ready(client):
                 if next_tilt is None:
                     next_tilt = now       # first tilt fires now the role is in
+                    # Say so explicitly. Until this line appears, a silent
+                    # browser is indistinguishable from a role that never
+                    # arrived, and the two want completely different fixes.
+                    print(f"role granted after {joins_sent} join(s); "
+                          f"gestures starting at {now:.3f}", flush=True)
                 if now >= next_tilt:
                     gamma = tilt_sweep(now - start)
                     # Timestamps at the source (Design Rule 4): the device's
@@ -199,7 +250,49 @@ def main() -> None:
         pass
     finally:
         print(f"frames displayed late: {client.clamped}")
+        _report_latency(client, args.control_horizon, args.samples_out)
         backend.close()
+
+
+def _report_latency(client, control_horizon, samples_out) -> None:
+    """Print the measured distribution, not just the clamp count.
+
+    The clamp count alone cannot size a horizon: 762-of-820 clamped says the
+    60 ms default is too small and nothing about what would be big enough.
+    """
+    import json
+
+    from harness.sync_bench import format_report, summarise
+
+    samples = client.lateness
+    if not samples:
+        print("no timed frames observed -- nothing to summarise")
+        return
+
+    if samples_out:
+        with open(samples_out, "w", encoding="utf-8") as handle:
+            json.dump(samples, handle)
+        print(f"wrote {len(samples)} lateness samples to {samples_out}")
+
+    if control_horizon is None:
+        # Signed lateness through summarise() would call a frame arriving
+        # early "error", so say plainly that this is the raw spread and that
+        # --control-horizon is what turns it into latency.
+        print(f"lateness spread (no --control-horizon given): "
+              f"{min(samples) * 1000.0:.1f} .. {max(samples) * 1000.0:.1f} ms")
+        return
+
+    # Absolute end-to-end latency: Control stamped `when = t + horizon`, so
+    # adding the horizon back to (now - when) recovers (now - t).
+    latencies = [control_horizon + s for s in samples]
+    print(format_report(summarise(latencies),
+                        label=f"end-to-end cue latency "
+                              f"(horizon {control_horizon * 1000:.0f} ms):"))
+    if client.clamped:
+        print(f"  WARNING: {client.clamped} frame(s) clamped, so this sample "
+              f"is CENSORED at {control_horizon * 1000:.0f} ms -- the real "
+              f"tail is longer than 'worst' reports. Re-run with a larger "
+              f"--horizon on Control.")
 
 
 if __name__ == "__main__":

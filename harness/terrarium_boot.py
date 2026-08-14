@@ -36,16 +36,20 @@ class _SimulatorFactory:
     caller can retrieve it once boot() returns, without changing boot()'s
     signature (see design spec section 8's open question, resolved here)."""
 
-    def __init__(self, server_url: str, *, popen=subprocess.Popen) -> None:
+    def __init__(self, server_url: str, *, popen=subprocess.Popen,
+                 horizon: float | None = None) -> None:
         self._server_url = server_url
         self._popen = popen
+        self._horizon = horizon
         self.process: SimulatorProcess | None = None
 
     def __call__(self) -> str:
-        self.process = SimulatorProcess(
-            [sys.executable, "-m", "harness.room_simulator",
-             "--dev", SIM_DEV, "--server", self._server_url],
-            popen=self._popen)
+        command = [sys.executable, "-u", "-m", "harness.room_simulator",
+                   "--dev", SIM_DEV, "--server", self._server_url]
+        if self._horizon is not None:
+            # So the Room reports frame latency in absolute terms on exit.
+            command += ["--control-horizon", str(self._horizon)]
+        self.process = SimulatorProcess(command, popen=self._popen)
         self.process.start()
         return SIM_DEV
 
@@ -122,7 +126,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
 
     if transport is None:
         factory = _SimulatorFactory(f"ws://{host}:{server.port}/ws",
-                                    popen=simulator_popen)
+                                    popen=simulator_popen,
+                                    horizon=config.cue_horizon)
     else:
         factory = _O2SimulatorFactory(config.o2_ensemble,
                                       popen=simulator_popen)
@@ -261,6 +266,50 @@ def main() -> None:
     ap.add_argument("--hold", action="store_true",
                     help="Never auto-complete; run until Ctrl-C.")
     ap.add_argument("--arco-command", default="/Users/chris/projects/arco/apps/pytest/server")
+    ap.add_argument("--arco-start-audio", action="store_true",
+                    help="After boot, press Arco's (S)tart key to re-open "
+                         "its audio devices. Needs --arco-pty (that is what "
+                         "owns Arco's console). Works around an UPSTREAM "
+                         "defect measured 2026-08-14: pyarco's "
+                         "arco.initialize() sends /host/clear, which tears "
+                         "down Arco's audio stream, and Arco then stops "
+                         "serving O2 clock sync to any client connecting "
+                         "AFTERWARD -- a device hangs forever in o2_shroom's "
+                         "'while o2lite.time_get() < 0' loop while Control, "
+                         "already synced, looks perfectly healthy. Pressing "
+                         "(S)tart re-opens audio and sync works again. OFF "
+                         "by default because (S)tart/Stop is a toggle Arco "
+                         "gives no way to read, so pressing it on a healthy "
+                         "server STOPS audio instead.")
+    ap.add_argument("--arco-settle-seconds", type=float, default=0.0,
+                    help="Pause between spawning Arco and first probing it. "
+                         "The readiness probe is DESTRUCTIVE: pyarco's "
+                         "arco.initialize() unconditionally calls reset(), "
+                         "which sends /host/clear and tears down the "
+                         "server's audio stream. One probe is survivable; a "
+                         "probe that FAILS and retries adds another reset, "
+                         "and the extra teardown can leave arco.output None "
+                         "-- ArcoSynthPool.start() then dies with "
+                         "\"'NoneType' object has no attribute 'ins'\". "
+                         "Settling first makes probe #1 succeed, so only one "
+                         "reset ever happens. Default 0 keeps existing "
+                         "behavior.")
+    ap.add_argument("--arco-ready-timeout", type=float, default=None,
+                    help="Override BootConfig.arco_ready_timeout (15 s). "
+                         "The FIRST readiness probe against a cold Arco can "
+                         "take ~18 s -- it connects, then pyarco's reset() "
+                         "times out after 5 s ('Could not reset Arco server "
+                         "within 5 seconds') -- while the second attempt "
+                         "succeeds instantly. When that happens the 15 s "
+                         "budget expires inside probe #1 and boot fails with "
+                         "ArcoReadyTimeout even though Arco is up and fine. "
+                         "Raise this if you see that.")
+    ap.add_argument("--arco-pty", action="store_true",
+                    help="Spawn Arco on a pty with its own controlling "
+                         "terminal, so its curses init can open /dev/tty "
+                         "from a non-interactive context (CI, cron, an "
+                         "agent-driven measurement run). Off by default: an "
+                         "interactive terminal already provides one.")
     ap.add_argument("--horizon", type=float, default=None,
                     help="Cue scheduling horizon in seconds. Default: "
                          "BootConfig.cue_horizon. Measure with "
@@ -300,12 +349,41 @@ def main() -> None:
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
     if args.horizon is not None:
         config.cue_horizon = args.horizon
+    if args.arco_ready_timeout is not None:
+        config.arco_ready_timeout = args.arco_ready_timeout
     room_binding = RoomBindingRegistry()
+
+    # boot() constructs the process with a single positional argument, so
+    # both options below are one-argument factories rather than subclasses.
+    # The settle pause lives in start() because boot() calls start() and
+    # wait_ready() back to back with no seam between them -- putting it here
+    # keeps control/boot.py free of a harness-only concern.
+    arco_popen = subprocess.Popen
+    if args.arco_pty:
+        from control.arco_process import pty_popen
+        arco_popen = pty_popen
+
+    settle = args.arco_settle_seconds
+
+    def arco_process_cls(command):
+        proc = ArcoProcess(command, popen=arco_popen)
+        if settle <= 0:
+            return proc
+        started = proc.start
+
+        def start_then_settle():
+            started()
+            time.sleep(settle)
+
+        proc.start = start_then_settle
+        return proc
+
     gs, server, agent, arco, simulator = build(
         config, {"TestBit": _timed_test_bit_cls(_run_duration(args))},
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
-        transport=transport, clock=clock)
+        transport=transport, clock=clock,
+        arco_process_cls=arco_process_cls)
 
     # Once build() has returned, Arco and the simulator are live
     # subprocesses and room_audio's ArcoSynthPool is running -- everything
@@ -320,6 +398,17 @@ def main() -> None:
         else:
             print(f"DeviceLink listening on ws://{args.host}:{server.port}/ws "
                   f"(Ctrl-C to stop)")
+        if args.arco_start_audio:
+            # After Control's own clock sync, so this cannot disturb it.
+            console = getattr(arco, "_process", None)
+            if hasattr(console, "write_console"):
+                console.write_console("S")
+                time.sleep(3.0)              # let the audio devices re-open
+                print("pressed Arco's (S)tart key: audio re-opened, so Arco "
+                      "serves clock sync to devices again")
+            else:
+                print("--arco-start-audio needs --arco-pty; ignoring",
+                      file=sys.stderr)
         if args.setup_seconds > 0:
             print(f"Holding in SETUP for {args.setup_seconds:g}s -- join now")
         _wait_in_setup(agent, args.setup_seconds)
