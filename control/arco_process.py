@@ -163,8 +163,13 @@ class _PtyProcess:
         self._fd = fd
         self.returncode = None
         self.output = bytearray()
-        # Line-buffered append: the operator tails this while Arco is
-        # coming up, and a crashed run must leave the reason behind.
+        # Unbuffered binary append (buffering=0). Binary mode has no
+        # line-buffering option at all -- 0 is the only way to make each
+        # write() land on disk immediately instead of sitting in a
+        # userspace buffer. That is what lets an operator tail this file
+        # live while Arco is coming up, and it is what a crashed run
+        # needs: a write still sitting in this process's buffer vanishes
+        # along with a killed or crashed process and never reaches disk.
         self._log = open(log_path, "ab", buffering=0) if log_path else None
 
     def _drain(self) -> None:
