@@ -12,7 +12,7 @@ import logging
 import time
 
 from control.bit import Bit
-from control.cues import LightCue, PlayCue
+from control.cues import ROOM, LightCue, PlayCue
 from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
@@ -84,6 +84,7 @@ class GameServer:
         # Gesture stamps refused for being implausibly far ahead (see
         # _MAX_GESTURE_LEAD). A rising count means a device's clock is wrong.
         self.rejected_stamps = 0
+        self._warned_no_room = False     # once-per-Bit-load ROOM drop warning
 
     def hello(self, dev: str, name: str, protoversion: str) -> None:
         self.devices.hello(dev, name, protoversion)
@@ -104,6 +105,7 @@ class GameServer:
             self._set_state(State.IDLE)
             raise BitLoadError(f"failed to load Bit {name!r}: {exc}") from exc
         self.bit = bit
+        self._warned_no_room = False
         self.bit_name = name
         self.registration = registration
         self._set_state(State.LOADED)
@@ -219,33 +221,72 @@ class GameServer:
             # character and try to unpack each character as a cue tuple.
             # `or` guards a blank reason so /<dev>/error is never empty.
             return cues or "handler refused"
+        self._dispatch_cues(cues, at)
+        return None
+
+    def _resolve_dev(self, dev: str) -> str | None:
+        """cues.ROOM -> the Room's bound dev; anything else passes through.
+
+        Returns None when a ROOM cue has no Room to go to, which the caller
+        treats as a drop, never a raise. Warned once per Bit load rather than
+        once per cue: a 20 Hz gesture stream would otherwise flood the log.
+        """
+        if dev != ROOM:
+            return dev
+        if self.room is None or self.room.bound_dev is None:
+            if not self._warned_no_room:
+                self._warned_no_room = True
+                logger.warning("Bit emitted a ROOM cue with no Room bound; "
+                               "dropping (logged once per Bit load)")
+            return None
+        return self.room.bound_dev
+
+    def _dispatch_cues(self, cues, at: float | None) -> None:
+        """Route a Bit's cues to the transport-owned sinks.
+
+        Two things happen to every cue on the way out. A cue addressed to
+        cues.ROOM is resolved to the Room's bound dev. And a cue that
+        declares no time of its own gets `at`, the presentation time Control
+        computed for whatever produced it -- which is what makes "one
+        gesture, one T" hold without every Bit having to remember to say so.
+        A Bit that DID name a time keeps it, because that is a deliberate
+        derived offset (an echo at at+0.5), not an omission.
+
+        Never raises. The whole per-cue block is guarded, not just the sink
+        call: the 4-tuple unpack below is partial, so an arity-wrong cue from
+        a buggy Bit would otherwise break data()'s documented "never raises"
+        contract, and devicelink/agent.py's _on_verb has no handler around
+        the call.
+        """
         for cue in cues or ():
-            # The whole per-cue block is guarded, not just the sink call.
-            # The old code was `sink, args = self.on_light_cue, tuple(cue)`,
-            # which is total: it never raised for any-length iterable. The
-            # 4-tuple unpack below is partial, so an arity-wrong cue from a
-            # buggy Bit would otherwise raise straight out of data() and
-            # break its documented "never raises" contract -- and
-            # devicelink/agent.py's _on_verb has no handler around the call.
             try:
                 if isinstance(cue, PlayCue):
-                    sink, args = self.on_play_cue, (cue.dev, cue.name,
-                                                    cue.params)
+                    dev = self._resolve_dev(cue.dev)
+                    if dev is None:
+                        continue
+                    sink, args = self.on_play_cue, (dev, cue.name, cue.params)
                 elif isinstance(cue, LightCue):
-                    sink, args = self.on_light_cue, (cue.dev, cue.status,
+                    dev = self._resolve_dev(cue.dev)
+                    if dev is None:
+                        continue
+                    when = at if cue.when is None else cue.when
+                    sink, args = self.on_light_cue, (dev, cue.status,
                                                      cue.data1, cue.data2,
-                                                     cue.when)
+                                                     when)
                 else:
-                    # The historic plain 4-tuple: no declared time.
+                    # The historic plain 4-tuple. It used to mean "apply on
+                    # arrival"; it now means "apply at the time Control
+                    # computed for this cue's origin".
                     dev_, status, d1, d2 = cue
-                    sink, args = self.on_light_cue, (dev_, status, d1, d2,
-                                                     None)
+                    dev = self._resolve_dev(dev_)
+                    if dev is None:
+                        continue
+                    sink, args = self.on_light_cue, (dev, status, d1, d2, at)
                 if sink is None:
                     continue
                 sink(*args)
             except Exception:
                 logger.exception("cue dispatch failed; continuing")
-        return None
 
     def tick(self, dt: float) -> None:
         if self.state != State.RUNNING:

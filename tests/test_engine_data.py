@@ -1,5 +1,7 @@
 """GameServer.data: routing /game/<verb> to a Bit's verb_handlers."""
 
+import time
+
 import pytest
 
 from bits.test_bit import TestBit
@@ -7,6 +9,15 @@ from control.cues import LightCue
 from control.engine import GameServer
 from control.roles import Role, RoleClass, RoleTable
 from control.bit import Bit
+
+
+def _is_recent_monotonic(t: float) -> bool:
+    """True when `t` looks like a value GameServer's default clock (real
+    time.monotonic, unlike the fixed clocks _loaded_server/_joined's peers
+    use) would have just produced. `at` is no longer None for an untimed
+    cue -- see test_untimed_cue_is_stamped_with_at for the fixed-clock,
+    exact-value version of this same assertion."""
+    return isinstance(t, float) and abs(t - time.monotonic()) < 5.0
 
 
 class VerbBit(Bit):
@@ -73,15 +84,18 @@ def _loaded_server():
 
 
 def test_plain_tuple_cue_carries_no_time():
-    """A Bit returning the historic 4-tuple still works, and the sink sees
-    when=None rather than a fabricated time."""
+    """A Bit returning the historic 4-tuple still works. It used to mean
+    when=None, "apply on arrival"; it now means "apply at the computed at",
+    so the sink sees a real timestamp rather than None."""
     gs = _loaded_server()
     gs.join("ie1", "NODE_A")
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
 
     assert gs.data("ie1", "tilt", ["ie1", 30.0]) is None
-    assert cues == [("ie1", 0xB0, 74, 64, None)]
+    assert len(cues) == 1
+    assert cues[0][:4] == ("ie1", 0xB0, 74, 64)
+    assert _is_recent_monotonic(cues[0][4])
 
 
 def test_light_cue_carries_its_time():
@@ -121,7 +135,9 @@ def test_one_malformed_cue_does_not_stop_the_others():
     gs.bit.next_cues = [("ie1", 0xB0, 74), ("ie1", 0xB0, 74, 99)]
 
     assert gs.data("ie1", "tilt", ["ie1", 0.0]) is None
-    assert cues == [("ie1", 0xB0, 74, 99, None)]
+    assert len(cues) == 1
+    assert cues[0][:4] == ("ie1", 0xB0, 74, 99)
+    assert _is_recent_monotonic(cues[0][4])
 
 
 def test_data_routes_to_handler_and_emits_cue():
@@ -132,7 +148,9 @@ def test_data_routes_to_handler_and_emits_cue():
 
     assert gs.data("ie1", "tilt", ["ie1", 30.0]) is None
     assert gs.bit.seen == [("ie1", ["ie1", 30.0])]
-    assert cues == [("ie1", 0xB0, 74, 64, None)]
+    assert len(cues) == 1
+    assert cues[0][:4] == ("ie1", 0xB0, 74, 64)
+    assert _is_recent_monotonic(cues[0][4])
 
 
 def test_unregistered_device_is_refused():
@@ -210,7 +228,9 @@ def test_mixed_cues_are_partitioned(running_server):
         "boop": lambda d, args, at: [(d, 0xB0, 74, 64), PlayCue(d, "chime", "")]}
 
     gs.data(dev, "boop", [dev])
-    assert lights == [(dev, 0xB0, 74, 64, None)]
+    assert len(lights) == 1
+    assert lights[0][:4] == (dev, 0xB0, 74, 64)
+    assert _is_recent_monotonic(lights[0][4])
     assert plays == [(dev, "chime", "")]
 
 
@@ -223,7 +243,11 @@ def test_tuple_only_handler_is_unchanged(running_server):
         "boop": lambda d, args, at: [(d, 0xB0, 11, 20), (d, 0xB0, 11, 30)]}
 
     gs.data(dev, "boop", [dev])
-    assert lights == [(dev, 0xB0, 11, 20, None), (dev, 0xB0, 11, 30, None)]
+    assert len(lights) == 2
+    assert lights[0][:4] == (dev, 0xB0, 11, 20)
+    assert lights[1][:4] == (dev, 0xB0, 11, 30)
+    assert _is_recent_monotonic(lights[0][4])
+    assert _is_recent_monotonic(lights[1][4])
 
 
 def test_play_cue_with_no_sink_is_dropped(running_server):
@@ -279,7 +303,9 @@ def test_returning_cues_still_works():
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
     assert gs.data("ie1", "tilt", ["ie1", 30.0]) is None
-    assert cues == [("ie1", 0xB0, 74, 64, None)]
+    assert len(cues) == 1
+    assert cues[0][:4] == ("ie1", 0xB0, 74, 64)
+    assert _is_recent_monotonic(cues[0][4])
 
 
 def _joined(bit, cue_horizon=0.06, clock=lambda: 1000.0):
@@ -334,3 +360,73 @@ def test_no_gesture_time_argument_still_works():
     gs = _joined(bit)
     gs.data("ie1", "tilt", ["ie1", 10.0])
     assert bit.seen_at == [pytest.approx(1000.06)]
+
+
+def _room_bound(bit, cue_horizon=0.06, clock=lambda: 1000.0, bound="sim-room"):
+    from control.rooms import Room, RoomType
+    gs = GameServer({"vb": lambda: bit}, cue_horizon=cue_horizon, clock=clock)
+    gs.room = Room(room_type=RoomType.TEST)
+    gs.room.bound_dev = bound
+    gs.load_bit("vb")
+    gs.join("ie1", "NODE_A")
+    return gs
+
+
+def test_room_target_resolves_to_the_bound_dev():
+    """A Bit names the Room by a constant, never by the runtime id an
+    admin-armed tap happened to bind -- that is what keeps a Bit
+    offline-testable while still being able to drive the Room."""
+    from control.cues import ROOM
+    bit = VerbBit()
+    bit.next_cues = [(ROOM, 0xB0, 74, 99)]
+    gs = _room_bound(bit)
+    seen = []
+    gs.on_light_cue = lambda *a: seen.append(a)
+    gs.data("ie1", "tilt", ["ie1", 0.0], gesture_time=999.5)
+    assert seen == [("sim-room", 0xB0, 74, 99, pytest.approx(999.56))]
+
+
+def test_room_target_with_no_room_bound_is_dropped_not_raised():
+    from control.cues import ROOM
+    bit = VerbBit()
+    bit.next_cues = [(ROOM, 0xB0, 74, 99)]
+    gs = _joined(bit)                      # no gs.room at all
+    seen = []
+    gs.on_light_cue = lambda *a: seen.append(a)
+    assert gs.data("ie1", "tilt", ["ie1", 0.0]) is None
+    assert seen == []
+
+
+def test_untimed_cue_is_stamped_with_at():
+    """A plain 4-tuple used to mean 'apply on arrival'. It now means 'apply
+    at the time Control computed for this gesture', which is what makes one
+    gesture produce one shared T without every Bit remembering to say so."""
+    bit = VerbBit()
+    gs = _joined(bit)
+    seen = []
+    gs.on_light_cue = lambda *a: seen.append(a)
+    gs.data("ie1", "tilt", ["ie1", 0.0], gesture_time=999.5)
+    assert seen == [("ie1", 0xB0, 74, 64, pytest.approx(999.56))]
+
+
+def test_explicit_light_cue_time_wins_over_at():
+    """A Bit that names its own time is expressing a derived offset (an echo
+    at at+0.5); Control must not overwrite it."""
+    bit = VerbBit()
+    bit.next_cues = [LightCue("ie1", 0xB0, 74, 5, when=12345.0)]
+    gs = _joined(bit)
+    seen = []
+    gs.on_light_cue = lambda *a: seen.append(a)
+    gs.data("ie1", "tilt", ["ie1", 0.0], gesture_time=999.5)
+    assert seen == [("ie1", 0xB0, 74, 5, 12345.0)]
+
+
+def test_play_cue_can_target_the_room_too():
+    from control.cues import PlayCue, ROOM
+    bit = VerbBit()
+    bit.next_cues = [PlayCue(ROOM, "click", "")]
+    gs = _room_bound(bit)
+    seen = []
+    gs.on_play_cue = lambda *a: seen.append(a)
+    gs.data("ie1", "tilt", ["ie1", 0.0])
+    assert seen == [("sim-room", "click", "")]
