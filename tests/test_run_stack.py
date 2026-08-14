@@ -168,6 +168,18 @@ def test_a_device_carries_exit_with_parent(tmp_path):
     assert "4242" in popen.commands[1]
 
 
+def test_control_carries_exit_with_parent(tmp_path):
+    """Symmetric with the device flag above, and for the same reason one
+    layer up: terrarium_boot -- and through it Arco and the Room
+    simulator -- must not outlive a SIGKILLed or OOM-killed run_stack
+    un-signalled in their own session. See F5 in the final review."""
+    popen = ScriptedPopen([_CONTROL_OK, _DEVICE_OK])
+    run(_cfg(tmp_path), popen=popen, sleep=lambda _s: None, getpid=lambda: 4242)
+
+    assert "--exit-with-parent" in popen.commands[0]
+    assert "4242" in popen.commands[0]
+
+
 def test_control_never_becoming_ready_fails_bounded(tmp_path):
     popen = ScriptedPopen(["nothing useful\n"])
     ticks = iter([0.0] + [1000.0] * 20)
@@ -290,7 +302,7 @@ def test_control_command_carries_the_flags_a_headless_run_needs(tmp_path):
     --arco-settle-seconds and --arco-ready-timeout because the FIRST probe
     against a cold Arco can take ~18s and a failed probe sends a SECOND
     /host/clear that can leave arco.output None."""
-    command = control_command(_cfg(tmp_path))
+    command = control_command(_cfg(tmp_path), 99)
 
     assert "--transport" in command and "o2lite" in command
     assert "--arco-pty" in command

@@ -81,7 +81,7 @@ class RunResult:
     logs: dict = field(default_factory=dict)
 
 
-def control_command(cfg: StackConfig) -> list[str]:
+def control_command(cfg: StackConfig, ppid: int) -> list[str]:
     return [
         sys.executable, "-u", "-m", "harness.terrarium_boot",
         "--transport", "o2lite",
@@ -93,6 +93,12 @@ def control_command(cfg: StackConfig) -> list[str]:
         "--setup-seconds", str(cfg.setup_seconds),
         "--horizon", str(cfg.horizon),
         "--hold",
+        # Symmetric with the devices' own --exit-with-parent below: a
+        # SIGKILLed or OOM-killed run_stack cannot signal this process
+        # either, and without this flag terrarium_boot -- and through it
+        # Arco and the Room simulator -- would keep running un-signalled
+        # in their own session. See F5 in the final review.
+        "--exit-with-parent", str(ppid),
     ]
 
 
@@ -140,7 +146,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         return tee
 
     try:
-        control = spawn("control", control_command(cfg),
+        control = spawn("control", control_command(cfg, getpid()),
                         _watch_list("CONTROL_"))
 
         for stage, marker, detail in (

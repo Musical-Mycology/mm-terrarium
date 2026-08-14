@@ -28,6 +28,7 @@ from control.teardown import TeardownStack
 from devicelink.agent import DeviceLinkAgent
 from devicelink.server import DeviceLinkServer
 from harness import markers
+from harness.o2_shroom import parent_is_gone
 from harness.signals import sigterm_as_keyboard_interrupt
 
 SIM_DEV = "sim-room"
@@ -203,7 +204,7 @@ def shutdown(teardown) -> None:
 
 
 def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
-                   sleep=time.sleep) -> None:
+                   sleep=time.sleep, parent_pid: int | None = None) -> bool:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
@@ -212,20 +213,32 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     setup_seconds <= 0 -- the default -- returns immediately, preserving the
     existing load-straight-into-run behavior. Same shape as
     harness/devicelink_smoke.py's _wait_in_setup.
+
+    parent_pid, when given, is checked every tick via
+    harness/o2_shroom.py's parent_is_gone -- see F5 in the final review
+    for why this reuses that predicate rather than a second one. A
+    SIGKILLed or OOM-killed run_stack cannot signal this process, so the
+    only way to notice is to keep asking. Returns True if that fired, so
+    main() can skip straight to shutdown() instead of calling gs.run()
+    into a stack whose supervisor is already gone.
     """
     if setup_seconds <= 0:
-        return
+        return False
     deadline = clock() + setup_seconds
     while clock() < deadline:
+        if parent_is_gone(parent_pid):
+            return True
         agent.poll()
         sleep(1.0 / 44.0)
+    return False
 
 
 def _serve_until_done(gs, agent, arco, clock=time.monotonic,
-                      sleep=time.sleep) -> str:
-    """Tick until the Bit finishes or Arco dies. Returns the reason.
+                      sleep=time.sleep, parent_pid: int | None = None) -> str:
+    """Tick until the Bit finishes, Arco dies, or the parent is gone.
+    Returns the reason.
 
-    Two exit conditions, both deliberate:
+    Three exit conditions, all deliberate:
 
     "completed" -- the Bit signalled done from update(dt), so the engine
     ran COMPLETING/UNLOADING synchronously and state is back to IDLE. The
@@ -237,8 +250,20 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
 
     "arco-exited" -- the Arco subprocess is gone. Fail loud: silent
     degradation in a venue is worse than a visible stop.
+
+    "parent-gone" -- run_stack, which passes --exit-with-parent, is no
+    longer this process's parent (SIGKILLed or OOM-killed). Checked here,
+    not left to fall out of some other symptom, so the exit runs through
+    this function's caller's `finally: shutdown(teardown)` instead of
+    leaving Arco and the Room simulator running un-signalled in their own
+    session -- the orphan class docs/upstream/2026-08-14-o2-service-and-
+    discovery-report.md names as a venue-scale hazard. See
+    harness/o2_shroom.py's parent_is_gone for why this compares against a
+    recorded pid rather than watching getppid() for a change.
     """
     while True:
+        if parent_is_gone(parent_pid):
+            return "parent-gone"
         if arco.poll() is not None:
             return "arco-exited"
         agent.poll()
@@ -357,6 +382,18 @@ def main() -> None:
                          "run(), so a device can join a scored role (e.g. "
                          "TEST_PLAYER_NODE) before registration closes for "
                          "it. Default 0 keeps the instant-run behavior.")
+    ap.add_argument("--exit-with-parent", type=int, default=None,
+                    metavar="PID",
+                    help="Exit through the normal shutdown() teardown path "
+                         "as soon as this process's parent is no longer "
+                         "PID. harness/run_stack.py passes its own pid: "
+                         "without this, a SIGKILLed or OOM-killed run_stack "
+                         "leaves this process running, and with it Arco "
+                         "and the Room simulator, un-signalled in their own "
+                         "session -- this process has always been started "
+                         "by a human before, so it had no equivalent of "
+                         "o2_shroom's --exit-with-parent. Off by default: "
+                         "a hand-run terrarium_boot is unchanged.")
     args = ap.parse_args()
 
     # harness/run_stack.py stops this process with SIGTERM, and the whole
@@ -459,13 +496,19 @@ def main() -> None:
         if args.setup_seconds > 0:
             print(f"{markers.CONTROL_SETUP_HOLD} for {args.setup_seconds:g}s "
                   f"-- join now", flush=True)
-        _wait_in_setup(agent, args.setup_seconds)
-        gs.run()
-        reason = _serve_until_done(gs, agent, arco)
-        if reason == "arco-exited":
-            print("Arco exited; tearing down", file=sys.stderr)
+        if _wait_in_setup(agent, args.setup_seconds,
+                          parent_pid=args.exit_with_parent):
+            print("parent is gone; tearing down", file=sys.stderr)
         else:
-            print("Bit completed; tearing down")
+            gs.run()
+            reason = _serve_until_done(gs, agent, arco,
+                                       parent_pid=args.exit_with_parent)
+            if reason == "arco-exited":
+                print("Arco exited; tearing down", file=sys.stderr)
+            elif reason == "parent-gone":
+                print("parent is gone; tearing down", file=sys.stderr)
+            else:
+                print("Bit completed; tearing down")
     except KeyboardInterrupt:
         pass
     finally:

@@ -401,6 +401,52 @@ def test_wait_in_setup_returns_immediately_when_not_requested():
     assert polls == []
 
 
+def test_wait_in_setup_exits_early_when_the_parent_is_gone(monkeypatch):
+    """F5: a SIGKILLed or OOM-killed run_stack cannot signal this process,
+    so a device joining during SETUP is not the only thing this loop must
+    notice -- it must also notice its own supervisor is gone, and say so
+    by returning True rather than silently finishing the window.
+
+    Patched at harness.terrarium_boot.parent_is_gone (the name this
+    module imported) rather than injecting a fake getppid: same seam
+    tests/test_o2_shroom.py's own parent_is_gone tests use directly, one
+    level up."""
+    from harness.terrarium_boot import _wait_in_setup
+
+    monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
+                        lambda pid: True)
+    polls = []
+
+    class FakeAgent:
+        def poll(self):
+            polls.append(1)
+
+    ticks = iter([0.0, 0.1, 0.2, 5.0])
+    parent_gone = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                                 sleep=lambda _s: None, parent_pid=111)
+    assert parent_gone is True
+    assert polls == []          # returned before ever polling the agent
+
+
+def test_wait_in_setup_ignores_a_live_parent():
+    """The default shape (no --exit-with-parent) must keep polling for the
+    full window -- parent_pid=None is documented on parent_is_gone as
+    'the caller did not ask for this guard', and it must never fire."""
+    from harness.terrarium_boot import _wait_in_setup
+
+    polls = []
+
+    class FakeAgent:
+        def poll(self):
+            polls.append(1)
+
+    ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
+    parent_gone = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                                 sleep=lambda _s: None)
+    assert parent_gone is False
+    assert len(polls) >= 3
+
+
 def test_serve_until_done_stops_when_the_bit_completes():
     """The Bit declares itself finished via update(); the driver must
     notice and tear down rather than ticking an unloaded Bit forever."""
@@ -456,6 +502,40 @@ def test_serve_until_done_stops_when_arco_dies():
     reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
                                sleep=lambda _s: None)
     assert reason == "arco-exited"
+
+
+def test_serve_until_done_stops_when_the_parent_is_gone(monkeypatch):
+    """F5, the other half: run_stack's own children (devices) already had
+    --exit-with-parent; Control -- and through it Arco and the Room
+    simulator -- did not, so a SIGKILLed run_stack left the whole rest of
+    the stack running un-signalled in its own session. Checked first in
+    the loop, same as arco.poll(), so a dead parent is noticed before
+    another full tick runs."""
+    from control.state import State
+    from harness.terrarium_boot import _serve_until_done
+
+    monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
+                        lambda pid: True)
+
+    class FakeGS:
+        state = State.RUNNING
+
+        def tick(self, dt):
+            raise AssertionError("must not tick once the parent is gone")
+
+    class FakeAgent:
+        closing = 0
+
+        def poll(self):
+            raise AssertionError("must not poll once the parent is gone")
+
+    class FakeArco:
+        def poll(self):
+            return None
+
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+                               sleep=lambda _s: None, parent_pid=111)
+    assert reason == "parent-gone"
 
 
 def test_serve_until_done_lets_closing_devices_finish_their_fade():
