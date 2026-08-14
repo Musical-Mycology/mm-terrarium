@@ -591,12 +591,15 @@ TEST room only; DEMO's simulated venue array is a deferred follow-up.
   subprocess, which connects immediately, so the server must already be
   listening or the connection races server construction. **Teardown is a
   `TeardownStack`, not `control.boot.shutdown()`** (that function was
-  deleted -- see the teardown-order section below for why). The real
-  unwind, reverse of registration order: the o2lite transport (o2lite mode
-  only), then the Bit, then the Room bridge (which frees the Room's Arco
-  voice), then the Room simulator subprocess, then Arco, then the
-  devicelink server itself -- corrected here in both mechanism and order
-  from what this line used to say.
+  deleted -- see the teardown-order section below for why). The real unwind
+  is reverse of registration order, and the devicelink server and the
+  o2lite transport never appear in the same run, so the order differs by
+  mode. Websocket mode: the Bit, then the Room bridge (which frees the
+  Room's Arco voice), then the Room simulator subprocess, then Arco, then
+  the devicelink server itself. O2lite mode has no devicelink server to
+  unwind; in its place, the o2lite transport unwinds first, then the same
+  Bit, Room bridge, Room simulator, Arco order -- corrected here in both
+  mechanism and order from what this line used to say.
 - **The gap that survived this slice.** Every seam above is real and tested
   — but nothing in `TestBit`'s gameplay logic ever emits a cue *targeting*
   `gs.room.bound_dev`: `Bit.update(dt)` has no cue-emission mechanism at all
@@ -755,10 +758,15 @@ composed into was still wrong on the path that matters most. Design:
   stack of named teardown steps. The invariant, stated plainly because it is
   the whole point: **anything registered later is torn down earlier**.
   Client-before-hub stops being an ordering someone maintains and becomes a
-  consequence of *when* things start -- the devicelink server (or, on the
-  o2lite path, the transport) is pushed before `boot()` runs and therefore
-  stops last; Arco is pushed at spawn; the Room simulator is pushed after
-  Arco and therefore stops before it. Each step is guarded (`close()` catches
+  consequence of *when* things start -- the devicelink server is pushed
+  before `boot()` runs and therefore stops last; Arco is pushed at spawn;
+  the Room simulator is pushed after Arco and therefore stops before it.
+  The o2lite transport (only present on the o2lite path, where there is no
+  devicelink server at all) is the cleanest illustration of the same
+  invariant working the other way: `main()` pushes it after `build()`
+  returns, which is after Arco, the simulator, the Room bridge and the Bit
+  are already registered, so it is registered last and **stops first** --
+  before the Arco hub it is a guest on. Each step is guarded (`close()` catches
   `BaseException`, not `Exception` -- a second Ctrl-C landing inside a
   subprocess wait must not abandon the remaining steps) and `close()` is
   idempotent, so a failure path and the caller's normal teardown can both

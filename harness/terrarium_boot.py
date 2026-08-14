@@ -191,9 +191,12 @@ def shutdown(teardown) -> None:
     """Unwind everything, in reverse registration order, and report.
 
     Every step is registered at the point the thing it owns starts, so the
-    order here is not a list anyone maintains: o2lite transport, then the
-    Bit, then the Room bridge (which frees the Room's Arco voice), then the
-    Room simulator subprocess, then Arco, then the devicelink server.
+    order here is not a list anyone maintains -- and it is two orders, not
+    one, since the devicelink server and the o2lite transport never both
+    exist in the same run. Websocket mode: the Bit, then the Room bridge
+    (which frees the Room's Arco voice), then the Room simulator subprocess,
+    then Arco, then the devicelink server. O2lite mode: the o2lite
+    transport, then that same Bit/Room bridge/simulator/Arco order.
 
     Client before hub is the property that matters and the one that was
     broken: this function used to call control.boot.shutdown() first, which
