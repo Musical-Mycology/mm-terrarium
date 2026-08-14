@@ -122,12 +122,14 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
     os.makedirs(cfg.log_dir, exist_ok=True)
     teardown = TeardownStack()
     tees: dict[str, ProcTee] = {}
+    processes: dict[str, object] = {}
     logs = {}
 
     def spawn(name: str, command: list[str], watch) -> ProcTee:
         process = popen(command, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True,
                         start_new_session=True)
+        processes[name] = process
         teardown.push(name, lambda: _stop(process, tees.get(name)))
         log_path = os.path.join(cfg.log_dir, f"{name}.log")
         logs[name] = log_path
@@ -186,7 +188,14 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                     f"Control still in SETUP? `player` is a scored role "
                     f"and is refused once RUNNING.", logs)
 
-        _hold(cfg, control, clock, sleep)
+        dead = _hold(cfg, processes, clock, sleep)
+        if dead is not None:
+            name, code = dead
+            return RunResult(
+                False, "child-exited",
+                f"{name} exited (code {code!r}) during the hold, before "
+                f"the run ended on its own. Check {name}.log for what "
+                f"happened.", logs)
         return RunResult(True, "complete", "", logs)
     except KeyboardInterrupt:
         return RunResult(True, "interrupted", "stopped by Ctrl-C", logs)
@@ -240,14 +249,44 @@ def _wait_for_marker(tee: ProcTee, target: str, timeout: float, clock,
         sleep(0.05)
 
 
-def _hold(cfg: StackConfig, control: ProcTee, clock, sleep) -> None:
-    """Run for --seconds, or until Ctrl-C when no duration was asked for."""
+def _hold(cfg: StackConfig, children: dict[str, object], clock,
+         sleep) -> tuple[str, int] | None:
+    """Run for --seconds, or until Ctrl-C when no duration was asked for.
+
+    Polls every spawned child on each tick and returns as soon as one has
+    exited, instead of only watching the clock. Design spec section 3.4
+    promises --ci "exits non-zero on any unmet marker or non-zero child
+    exit"; before this, nothing here read process exit status at all, so a
+    `--ci` run with a `control` child marked exited still returned
+    ok=True, stage="complete" -- verified live by the final review.
+    Mirrors harness/terrarium_boot.py's _serve_until_done, which polls
+    Arco (`arco.poll() is not None`) on every tick of its own loop for the
+    same reason: a dead child is news the instant it happens, not news
+    worth waiting out the rest of the hold for.
+    """
     if cfg.seconds is None:
         while True:
+            dead = _dead_child(children)
+            if dead is not None:
+                return dead
             sleep(0.5)
     deadline = clock() + cfg.seconds
     while clock() < deadline:
+        dead = _dead_child(children)
+        if dead is not None:
+            return dead
         sleep(0.1)
+    return None
+
+
+def _dead_child(children: dict[str, object]) -> tuple[str, int] | None:
+    """The first child (in spawn order: control, then ie1, ie2, ...)
+    whose process has already exited, paired with its exit code."""
+    for name, process in children.items():
+        code = process.poll()
+        if code is not None:
+            return name, code
+    return None
 
 
 def _stop(process, tee) -> None:

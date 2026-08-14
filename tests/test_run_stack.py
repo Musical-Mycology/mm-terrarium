@@ -53,6 +53,61 @@ def test_a_clean_run_reports_success(tmp_path):
     assert result.stage == "complete"
 
 
+class _CrashingControlPopen(ScriptedPopen):
+    """Models a Control that has already exited (crashed, or reaped dead)
+    by the time the runner's hold loop looks at it -- the exact scenario
+    the final review verified live: with a fake `control` child marked
+    exited, run() still returned ok=True, stage="complete". Marking the
+    child dead at construction time, rather than trying to time a crash
+    mid-hold, keeps this deterministic: readiness still passes off the
+    scripted stdout (readiness never inspects process state), so this only
+    exercises the hold's own polling."""
+
+    def __call__(self, command, **kwargs):
+        child = super().__call__(command, **kwargs)
+        if "harness.terrarium_boot" in command:
+            child.returncode = 1
+        return child
+
+
+def test_a_crashed_child_fails_the_hold_instead_of_reporting_success(
+        tmp_path):
+    """Design spec section 3.4 promises --ci "exits non-zero on any unmet
+    marker or non-zero child exit". Before this fix, _hold took a
+    `control` ProcTee parameter and never read it, and nothing else polled
+    any child's exit status during the hold, so this stayed ok=True,
+    stage="complete" even with Control already dead.
+
+    A finite, growing tick list rather than a constant clock: the old,
+    unfixed _hold only ever watched clock() against the deadline, so a
+    constant clock combined with a no-op sleep spun forever with this
+    test's crashed-but-never-detected child -- confirmed by hand, and
+    exactly the failure mode a committed regression test must not itself
+    be vulnerable to. This list is generous enough that the FIXED code
+    (which returns on the very first _dead_child check, before the
+    deadline is even relevant) never comes close to exhausting it, while
+    an unfixed _hold still terminates once the clock outruns cfg.seconds.
+
+    Real time.sleep, not a no-op: this run has to win FOUR readiness
+    races (control-ready, control-setup, device-sync, device-join) before
+    it ever reaches _hold, and test_a_device_that_never_syncs_fails_
+    bounded_and_names_the_defect (above) already measured that a no-op
+    sleep never yields the GIL, needing a median ~170,000 busy-loop
+    iterations for the reader thread to be scheduled at all -- no fixed
+    tick list survives that. A real time.sleep yields every time.
+    """
+    popen = _CrashingControlPopen([_CONTROL_OK, _DEVICE_OK])
+    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                      echo=False, seconds=5.0)
+    ticks = iter([0.0] * 20 + [1_000_000.0 * (i + 1) for i in range(30)])
+    result = run(cfg, popen=popen, clock=lambda: next(ticks),
+                 sleep=time.sleep)
+
+    assert result.ok is False
+    assert result.stage == "child-exited"
+    assert "control" in result.detail
+
+
 def test_control_is_spawned_before_any_device(tmp_path):
     """A device that joins before registration opens is refused outright:
     TestBit's `player` is a SCORED role and RegistrationState.join()
