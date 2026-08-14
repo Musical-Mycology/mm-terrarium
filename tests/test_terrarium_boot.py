@@ -1,3 +1,5 @@
+import pytest
+
 import argparse
 import time
 
@@ -446,3 +448,40 @@ def test_o2_simulator_factory_ties_the_simulator_to_this_process():
     command = popen.commands[0]
     assert "--exit-with-parent" in command
     assert command[command.index("--exit-with-parent") + 1] == str(os.getpid())
+
+
+def test_build_tears_down_both_subprocesses_if_room_audio_fails(monkeypatch):
+    """_boot() has already spawned Arco AND the simulator by the time
+    build() constructs room_audio. If that raises, build() never returns,
+    so main() never binds `simulator` and its `finally: shutdown(...)` has
+    no handles to work with: both subprocesses outlive the run, and the
+    orphaned simulator re-claims sim-room on the next run's Arco.
+
+    ArcoSynthPool.start() raising is not hypothetical -- it is
+    arco.initialize(), which raises TimeoutError, and the documented
+    macOS /host/clear trap makes a second run on one Arco start fragile by
+    design. Patched at its defining module for the same reason
+    test_build_threads_its_clock_into_the_default_room_audio does: build()
+    imports it lazily inside the function body."""
+    class _ExplodingArcoSynthPool:
+        def __init__(self, soundfont=None):
+            pass
+
+        def start(self) -> None:
+            raise TimeoutError("Could not connect to Arco server")
+
+    monkeypatch.setattr("harness.arco_synth.ArcoSynthPool",
+                        _ExplodingArcoSynthPool)
+
+    arco_popen = FakePopen()
+    sim_popen = FakePopen()
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+
+    with pytest.raises(TimeoutError):
+        build(config, {"TestBit": TestBit}, arco_command=["arco-server"],
+              room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+              arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
+              simulator_popen=sim_popen)   # room_audio omitted: real branch
+
+    assert sim_popen.signals    # simulator was told to stop, not orphaned
+    assert arco_popen.signals   # and so was Arco

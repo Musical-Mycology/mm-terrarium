@@ -119,6 +119,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     against AudioBridge's own clock) and its expiry check (at tick, against
     the agent's) have to agree -- harness/led_smoke.py's own
     AudioBridge(pool, clock=clock) is the existing precedent for this."""
+    owns_server = transport is None
     if transport is None:
         server = DeviceLinkServer(host=host, port=port)
         server.start()
@@ -139,17 +140,38 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         room_binding=room_binding, arco_process_cls=arco_process_cls,
         simulator_factory=factory)
 
-    if room_audio is None:
-        from control.audio import AudioBridge
-        from harness.arco_synth import ArcoSynthPool
-        pool = ArcoSynthPool() if config.arco_soundfont is None \
-            else ArcoSynthPool(soundfont=config.arco_soundfont)
-        pool.start()
-        room_audio = AudioBridge(pool, clock=clock)
+    try:
+        if room_audio is None:
+            from control.audio import AudioBridge
+            from harness.arco_synth import ArcoSynthPool
+            pool = ArcoSynthPool() if config.arco_soundfont is None \
+                else ArcoSynthPool(soundfont=config.arco_soundfont)
+            pool.start()
+            room_audio = AudioBridge(pool, clock=clock)
 
-    agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
-                            room_audio=room_audio,
-                            horizon=config.cue_horizon, clock=clock)
+        agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
+                                room_audio=room_audio,
+                                horizon=config.cue_horizon, clock=clock)
+    except BaseException:
+        # _boot() has already spawned Arco AND the simulator by this point,
+        # and main() cannot clean either up: build() never returns, so its
+        # `finally: shutdown(...)` has no handles at all. An orphaned
+        # simulator re-claims sim-room on the NEXT run's Arco, where O2
+        # refuses that run's own simulator (o2/src/bridge.cpp:231-237) and
+        # it renders nothing, silently. BaseException so a Ctrl-C during
+        # the ArcoSynthPool connect -- which blocks for up to 30s -- is
+        # covered too. See docs/superpowers/specs/
+        # 2026-08-14-room-simulator-service-collision-design.md.
+        if factory.process is not None:
+            try:
+                factory.process.shutdown()
+            except Exception:
+                pass        # never let cleanup mask the real failure
+        arco.shutdown()
+        if owns_server:
+            server.stop()   # an injected transport belongs to the caller
+        raise
+
     return gs, server, agent, arco, factory.process
 
 
