@@ -27,7 +27,7 @@ class BootFailure(Exception):
 def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
          room_binding: RoomBindingRegistry, arco_process_cls=ArcoProcess,
          simulator_factory=None, known_device_connected=lambda dev: False,
-         tick=None):
+         tick=None, clock=time.monotonic):
     """Run the full load sequence. Returns (game_server, room_bridge,
     arco_process) once the Bit is loaded and either the Room is already
     bound (fast path) or a fresh tap has bound it (see wait_for_room_binding
@@ -38,7 +38,11 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
     guarantee (one try/except around the whole post-start section) rather
     than an arco.shutdown() call enumerated at each failure site, so a
     future failure mode added to this section can't accidentally orphan the
-    subprocess by forgetting one."""
+    subprocess by forgetting one.
+
+    `clock` is threaded into GameServer and must be the same callable the
+    caller hands DeviceLinkAgent (harness/terrarium_boot.py's build() does
+    exactly that). On the o2lite transport it is o2lite.time_get."""
     try:
         room_type = resolve_room_type(
             config.room_type,
@@ -70,7 +74,13 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
             raise BootFailure(
                 f"Bit {config.bit_name!r} does not support {room.room_type.name}")
 
-        gs = GameServer(bit_registry, room_binding=room_binding)
+        # cue_horizon and clock go in together and MUST match the ones
+        # DeviceLinkAgent is built with: GameServer computes every cue's
+        # target time (origin + horizon) and reads this clock for a
+        # self-driven cue's origin and for the no-stamp fallback. Two clock
+        # bases is the 2026-08-13 live-run bug.
+        gs = GameServer(bit_registry, room_binding=room_binding,
+                        cue_horizon=config.cue_horizon, clock=clock)
         gs.room = room
         try:
             gs.load_bit(config.bit_name)
