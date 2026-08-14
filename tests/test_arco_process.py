@@ -86,3 +86,50 @@ def test_poll_reports_a_dead_subprocess():
 def test_poll_reports_none_before_start():
     process = ArcoProcess(["arco-server"], popen=FakePopen())
     assert process.poll() is None
+
+
+def test_fake_popen_poll_is_none_until_the_child_exits():
+    """Boundary rule 5: Popen.poll() returns None while the child runs and
+    its exit code after. A double whose poll() always returned a code would
+    let stop_process's wait loop terminate instantly in every test, so the
+    bounded-wait path would never actually be exercised."""
+    popen = FakePopen()
+    process = popen(["cmd"])
+
+    assert process.poll() is None
+    process.send_signal(signal.SIGTERM)
+    assert process.poll() is not None
+
+
+def test_fake_popen_wait_raises_timeout_expired_while_the_child_lives():
+    """Popen.wait(timeout=...) raises TimeoutExpired rather than returning.
+    A double that returned instead would let a caller believe it had reaped
+    a process that never died."""
+    import subprocess
+
+    popen = FakePopen()
+    process = popen(["cmd"])
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        process.wait(timeout=0.01)
+
+
+def test_fake_popen_send_signal_after_exit_is_a_no_op():
+    """Popen.send_signal checks returncode first and does nothing if the
+    child is gone."""
+    popen = FakePopen()
+    process = popen(["cmd"])
+    process.send_signal(signal.SIGTERM)
+    popen.signals.clear()
+
+    process.send_signal(signal.SIGTERM)
+    assert popen.signals == []
+
+
+def test_fake_popen_records_the_keyword_arguments_it_was_given():
+    """harness/run_stack.py spawns with stdout=, stderr= and
+    start_new_session=True, and the ordering tests assert on them."""
+    popen = FakePopen()
+    popen(["cmd"], start_new_session=True)
+
+    assert popen.kwargs["start_new_session"] is True

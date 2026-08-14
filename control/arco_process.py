@@ -35,22 +35,58 @@ def _default_probe() -> bool:
 
 class FakePopen:
     """In-process test double for subprocess.Popen, sibling of
-    control/audio.py's FakeVoice/FakePool."""
+    control/audio.py's FakeVoice/FakePool.
 
-    def __init__(self) -> None:
+    BOUNDARY RULE 5 applies here with force: this must never be more
+    permissive than Popen, because control/process.py's stop_process exists
+    precisely to handle the case where a child does NOT do as it is told.
+    What that means concretely:
+
+      * poll() returns None while the child runs and its exit code after.
+        A double whose poll() always answered would let stop_process's wait
+        loop terminate instantly in every test, so the bounded-wait path
+        would never be exercised at all.
+      * wait(timeout=...) RAISES subprocess.TimeoutExpired while the child
+        is alive, exactly as Popen does. A double that returned instead
+        would let a caller believe it had reaped a process that never died.
+      * send_signal on an exited child is a no-op, as Popen.send_signal is
+        (it checks returncode first).
+      * `ignores` models a child that does not die on a signal. Without it,
+        the SIGKILL escalation has no coverage and this double would agree
+        with a test that never runs the real risk. SIGKILL may be listed
+        too: that models a child in uninterruptible sleep, the one real way
+        SIGKILL fails to take effect promptly.
+    """
+
+    def __init__(self, *, ignores=()) -> None:
         self.commands: list[list[str]] = []
+        self.kwargs: dict = {}
         self.signals: list[int] = []
         self.waited = False
+        self.returncode = None
+        self._ignores = set(ignores)
 
-    def __call__(self, command: list[str]):
+    def __call__(self, command: list[str], **kwargs):
         self.commands.append(command)
+        self.kwargs = kwargs
         return self
 
-    def send_signal(self, sig: int) -> None:
-        self.signals.append(sig)
+    def poll(self):
+        return self.returncode
 
-    def wait(self) -> None:
+    def send_signal(self, sig: int) -> None:
+        if self.returncode is not None:
+            return                       # Popen.send_signal no-ops after exit
+        self.signals.append(sig)
+        if sig not in self._ignores:
+            self.returncode = -sig
+
+    def wait(self, timeout=None):
         self.waited = True
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired(
+                self.commands[-1] if self.commands else "fake", timeout)
+        return self.returncode
 
 
 def pty_popen(command: list[str]):
