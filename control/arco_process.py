@@ -13,11 +13,16 @@ section 5.
 
 from __future__ import annotations
 
-import signal
 import subprocess
 import time
 
 from control.process import stop_process
+
+# How much of Arco's console output to keep in memory. It is a curses app
+# redrawing continuously, so an uncapped buffer grows without bound over a
+# long --hold run. This is a diagnostic tail; the full stream goes to
+# log_path when one is given.
+_OUTPUT_TAIL_BYTES = 65536
 
 
 class ArcoReadyTimeout(Exception):
@@ -93,7 +98,7 @@ class FakePopen:
         return self.returncode
 
 
-def pty_popen(command: list[str]):
+def pty_popen(command: list[str], log_path: str | None = None):
     """A subprocess.Popen work-alike that gives the child a real CONTROLLING
     TERMINAL, so Arco's curses init can open /dev/tty.
 
@@ -119,6 +124,12 @@ def pty_popen(command: list[str]):
 
     Opt-in. ArcoProcess still defaults to subprocess.Popen, so an
     interactive venue run is completely unaffected.
+
+    log_path, when given, tees the child's console output to that file as
+    it is drained, in addition to the bounded in-memory tail kept on
+    proc.output. That is what lets an operator (or a later supervisor) read
+    back why Arco never came up, since the pty is owned by this process and
+    the operator is not looking at it.
     """
     import fcntl                             # noqa: PLC0415 (lazy: POSIX-only)
     import os
@@ -134,11 +145,11 @@ def pty_popen(command: list[str]):
         except Exception:                    # noqa: BLE001 (about to _exit)
             os._exit(127)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-    return _PtyProcess(pid, fd)
+    return _PtyProcess(pid, fd, log_path=log_path)
 
 
 class _PtyProcess:
-    """The three-method slice of subprocess.Popen that ArcoProcess actually
+    """The four-method slice of subprocess.Popen that ArcoProcess actually
     uses (poll / send_signal / wait / close), over a pty.fork()ed child.
 
     Drains the master fd on poll() and wait(): Arco is a curses app
@@ -147,11 +158,14 @@ class _PtyProcess:
     here -- it is what keeps the process alive.
     """
 
-    def __init__(self, pid: int, fd: int) -> None:
+    def __init__(self, pid: int, fd: int, *, log_path: str | None = None) -> None:
         self.pid = pid
         self._fd = fd
         self.returncode = None
         self.output = bytearray()
+        # Line-buffered append: the operator tails this while Arco is
+        # coming up, and a crashed run must leave the reason behind.
+        self._log = open(log_path, "ab", buffering=0) if log_path else None
 
     def _drain(self) -> None:
         import os
@@ -168,7 +182,11 @@ class _PtyProcess:
                 return
             if not chunk:
                 return
+            if self._log is not None:
+                self._log.write(chunk)
             self.output += chunk
+            if len(self.output) > _OUTPUT_TAIL_BYTES:
+                del self.output[:-_OUTPUT_TAIL_BYTES]
 
     def poll(self):
         import os
@@ -207,7 +225,7 @@ class _PtyProcess:
             os.write(self._fd, keys.encode())
 
     def close(self) -> None:
-        """Close the pty master fd.
+        """Close the pty master fd, and the log file if one was opened.
 
         Separate from wait() because control/process.py's stop_process owns
         the signal/escalate/reap cycle now and deliberately does not touch
@@ -222,6 +240,12 @@ class _PtyProcess:
         except OSError:
             pass
         self._fd = None
+        if self._log is not None:
+            try:
+                self._log.close()
+            except OSError:
+                pass
+            self._log = None
 
     def wait(self, timeout: float = 5.0):
         """Bounded wait, then close. Kept for the Popen-compatible surface

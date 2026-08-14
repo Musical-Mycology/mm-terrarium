@@ -336,6 +336,12 @@ def main() -> None:
                          "from a non-interactive context (CI, cron, an "
                          "agent-driven measurement run). Off by default: an "
                          "interactive terminal already provides one.")
+    ap.add_argument("--arco-log", default=None, metavar="PATH",
+                    help="Tee Arco's console output to this file. Needs "
+                         "--arco-pty (that is what owns Arco's stdio). "
+                         "Without it Arco's output is drained into memory "
+                         "and discarded, which makes 'Arco never came up' "
+                         "the least diagnosable failure in the stack.")
     ap.add_argument("--horizon", type=float, default=None,
                     help="Cue scheduling horizon in seconds. Default: "
                          "BootConfig.cue_horizon. Measure with "
@@ -391,7 +397,12 @@ def main() -> None:
     arco_popen = subprocess.Popen
     if args.arco_pty:
         from control.arco_process import pty_popen
-        arco_popen = pty_popen
+        log_path = args.arco_log
+
+        def arco_popen(command):
+            return pty_popen(command, log_path=log_path)
+    elif args.arco_log:
+        print("--arco-log needs --arco-pty; ignoring", file=sys.stderr)
 
     settle = args.arco_settle_seconds
 

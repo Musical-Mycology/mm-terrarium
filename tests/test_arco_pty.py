@@ -83,3 +83,29 @@ def test_arco_process_accepts_pty_popen_through_its_existing_popen_seam():
         time.sleep(0.02)
     assert proc.poll() == 0
     proc.shutdown()
+
+
+def test_the_child_output_is_teed_to_a_log_file(tmp_path):
+    """Arco's output was drained into an in-memory bytearray that nothing
+    ever wrote anywhere, so 'Arco never came up' was the least diagnosable
+    failure in the stack: the runner is a separate process and could not
+    reach the buffer even in principle."""
+    log = tmp_path / "arco.log"
+    proc = pty_popen(["/bin/echo", "sentinel"], log_path=str(log))
+    _wait_for_exit(proc)
+    proc.wait()
+
+    assert b"sentinel" in log.read_bytes()
+
+
+def test_the_in_memory_buffer_is_bounded(monkeypatch):
+    """A curses app redrawing continuously for a long --hold run grew this
+    without bound. Keep a tail for diagnostics, not the whole run."""
+    from control import arco_process
+
+    monkeypatch.setattr(arco_process, "_OUTPUT_TAIL_BYTES", 64)
+    proc = pty_popen(["/bin/sh", "-c", "for i in $(seq 1 500); do echo aaaaaaaaaa; done"])
+    _wait_for_exit(proc)
+    proc.wait()
+
+    assert len(proc.output) <= 64
