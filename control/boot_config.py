@@ -27,22 +27,32 @@ class BootConfig:
     # two cues from one gesture land on different frames and would make the
     # clamp counter meaningless. It must clear the 44 Hz frame quantization
     # (22.7 ms) plus Arco's block and buffer latency plus network time.
-    # STILL A PLACEHOLDER, and known too small: the live 2026-08-13 o2lite
-    # run clamped 762 of 820 frames, so scheduling was bypassed on 93% of
-    # them, and single-frame arithmetic put end-to-end delivery through Arco
-    # at ~67 ms against this 60 ms. One frame is not a distribution, which is
-    # why this has not simply been raised to 67 ms.
+    # MEASURED 2026-08-14, and 60 ms is kept because the measurement says it
+    # is right -- this is no longer a placeholder. Live o2lite run against a
+    # real Arco, 2418 frames, using --horizon 0 so nothing could be held back
+    # and the figure is genuine one-way delivery:
     #
-    # The tooling to replace it properly landed 2026-08-14 and is not yet
-    # run: TimedQueue now records the lateness behind every clamp, and
-    # harness/sync_bench.py reduces it to mean/p95/p99/worst. Measure with a
-    # deliberately oversized --horizon so nothing clamps and the sample is
-    # not censored, then take p99 (see the design spec for why p99 and not
-    # worst-case: this is fixed added latency on EVERY cue). A live run is
-    # currently blocked on an upstream O2 clock-sync problem -- see
+    #     p50 4.5 ms | p95 9.3 ms | p99 11.8 ms | p99.9 38.6 ms | worst 80.2
+    #
+    # The horizon has to cover the whole gesture-to-display chain, not just
+    # that transport hop: Control's 44 Hz render tick (22.7 ms of
+    # quantization) + delivery (11.8 ms at p99) + the device's own tick
+    # (~5 ms) ~= 40 ms. 60 ms covers it with ~20 ms of headroom for the
+    # jitter tail, and p99 rather than worst-case is deliberate -- this is
+    # fixed added latency on EVERY cue, so sizing it to the worst frame ever
+    # seen taxes every gesture in the room for one hiccup.
+    #
+    # DO NOT "fix" this by reading a clamp count. The earlier belief that
+    # 60 ms was far too small came from a 93%-clamped run and a ~67 ms
+    # end-to-end estimate; both were artifacts. O2 honors the timestamp and
+    # delivers the frame AT `when`, so a device-side queue that re-checks the
+    # deadline on arrival always finds it a few ms past due, at ANY horizon.
+    # Measured: 93.3% clamped at a 150 ms horizon and 95.6% at 300 ms, with
+    # lateness pinned near +3 ms both times. The old "~67 ms" was just
+    # 60 ms of horizon plus ~6 ms of that overhead. See
     # docs/MM_TERRARIUM.md's "Not yet built / deferred".
     #
-    # Whatever number comes out is a DEV-BOX figure. No venue-box measurement
+    # Every figure above is a DEV-BOX figure. No venue-box measurement
     # exists, and none of these numbers carry from a dev box to the venue box.
     cue_horizon: float = 0.060
 

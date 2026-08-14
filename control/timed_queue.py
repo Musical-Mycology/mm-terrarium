@@ -28,8 +28,20 @@ class TimedQueue:
     def __init__(self) -> None:
         self._items: list[tuple[float, int, object]] = []
         # Payloads released late because their time had already passed.
-        # A rising count is the signal that BootConfig.cue_horizon is too
-        # small -- see the design spec section 6.
+        #
+        # The design spec calls a rising count the signal that
+        # BootConfig.cue_horizon is too small. MEASURED 2026-08-14: that is
+        # NOT true on the o2lite path. O2 honors the timestamp and delivers
+        # the payload AT `when`, so re-checking the deadline on arrival
+        # always finds it a few ms past due no matter how generous the
+        # horizon is -- 93.3% clamped at a 150 ms horizon, 95.6% at 300 ms,
+        # lateness pinned near +3 ms both times. The counter saturates and
+        # carries no information about the horizon there.
+        #
+        # It still means what the spec says wherever nothing else schedules
+        # delivery (the websocket transport, and Control's own room cues).
+        # Read `lateness` below rather than this counter when the question is
+        # "is the horizon right?".
         self.clamped = 0
         # The MAGNITUDE behind that counter, which push() otherwise computes
         # and throws away. `clamped` answers "is the horizon wrong?"; this

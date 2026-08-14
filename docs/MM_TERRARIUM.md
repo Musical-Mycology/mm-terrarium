@@ -52,12 +52,23 @@ hardware fleet.
 > (2026-08-13), which is the first time anything in this repo's device path
 > has been confirmed on a real O2 network rather than against fakes. What was
 > measured: a simulated Tuneshroom joined `TEST_PLAYER_NODE` and received its
-> composed role blob over the hub; Control and the device agreed on time to
-> **7 ms**; **820** LED frames were delivered and rendered with visible
-> gesture-driven hue motion; the Room drone sounded from Arco on RUNNING.
-> Read that as: the transport, the shared clock and the rendering work.
-> **Timing is not yet honored** and the cue machinery is still not
-> load-bearing, see *Not yet built* below.
+> composed role blob over the hub; **820** LED frames were delivered and
+> rendered with visible gesture-driven hue motion; the Room drone sounded
+> from Arco on RUNNING. Reproduced on **2026-08-14** with 2418 more frames.
+>
+> Two claims from that first run have since been **corrected by measurement**
+> (2026-08-14), both in the same direction — the path is healthier than it
+> looked. The clocks agree to **well under a millisecond**, not 7 ms; the 7 ms
+> was read off a single frame that also carried delivery time. And **timing
+> IS honored** — O2 delivers each frame at its declared `when`, and end-to-end
+> delivery measures 4.5 ms at p50 and 11.8 ms at p99. The "762 of 820 frames
+> clamped" that read as *timing not honored* was an artifact of re-checking a
+> deadline on a frame that O2 had already delivered on time. See
+> *Not yet built* below, which carries the numbers and the method.
+>
+> What remains true: no Bit can compute a `T`, and no Bit emits a `LightCue`,
+> so the cue machinery is still **not load-bearing** — that gap is about the
+> `Bit` interface, not about the transport's timing.
 >
 > Still absent: **fairyring**, real scoring, and any production Bit.
 > As of 2026-08-10, **`Room`** exists as a boot-time concept and orchestration
@@ -835,38 +846,77 @@ Kept explicit so the doc doesn't over-claim:
   `bridge_id` (Control's own link to the host) and `tcp_close`. Closing this
   needs an application heartbeat or a registration expiry, which is a design
   question rather than a bug fix.
-- **`cue_horizon`'s default is measurably too small. The instrumentation to
-  fix it now exists; the measurement itself is still unmade.** The live
-  2026-08-13 run clamped **762 of 820** frames: they arrived already past
-  their deadline, so the queue released them on arrival and the scheduling
-  was bypassed on 93% of frames. End-to-end delivery through Arco measured
-  **~67 ms** against the 60 ms default. The light still moves, because a
-  clamped frame displays immediately, but *honored timing* is not what you
-  are watching.
+- **`cue_horizon` is measured as of 2026-08-14, and 60 ms turned out to be
+  right. The belief that it was far too small was an artifact.** This
+  supersedes the earlier claim here that the live 2026-08-13 run proved the
+  default too small.
 
-  That ~67 ms is **arithmetic on a single frame**, and it is still the only
-  figure anyone has. As of 2026-08-14 the tooling to replace it with a
-  distribution is built and tested: `TimedQueue` records the signed
-  `now - when` behind every clamp (bounded, so a Radxa cannot leak),
-  `ShroomClient.lateness` exposes it, `harness/sync_bench.py` reduces it to
-  mean/p95/p99/worst and finally has the `main()` that
-  `harness/terrarium_boot.py --horizon` has always told you to run, and both
-  `harness/o2_shroom.py` and `harness/room_simulator.py` print the summary on
-  exit given `--control-horizon`. Method: run Control at a deliberately
-  oversized `--horizon` so almost nothing clamps and the sample is not
-  censored at the clamp boundary, then read the distribution off the device.
-  The tools warn when a clamp did occur, because a censored tail reported as
-  `worst` understates the horizon needed.
+  Live o2lite run against a real Arco, **2418 frames**, taken with
+  `--horizon 0` so nothing could be held back and the number is genuine
+  one-way delivery:
 
-  **`cue_horizon` is deliberately still `0.060`.** Repeated attempts to
-  complete a live o2lite run on the dev box on 2026-08-14 failed at device
-  clock sync (see the next entry), so no distribution was obtained, and a
-  number invented without one is exactly what the placeholder already is.
-  Run it and the default can be set in minutes. Every figure here is and
-  will remain a **dev-box figure**: the venue box does not exist.
-- **A device cannot clock-sync to Arco after Control has connected, and this
-  is the blocker on measuring anything end to end.** Measured repeatedly on
-  2026-08-14. pyarco's `arco.initialize()` unconditionally calls `reset()`,
+  | p50 | p95 | p99 | p99.9 | worst |
+  |-----|-----|-----|-------|-------|
+  | 4.5 ms | 9.3 ms | **11.8 ms** | 38.6 ms | 80.2 ms |
+
+  42 of those samples came back very slightly negative, which is the two
+  clocks agreeing to well under a millisecond rather than a systematic
+  offset. The path is roughly **5 ms typical, 12 ms at p99** — not the ~67 ms
+  previously recorded.
+
+  The horizon covers the whole gesture-to-display chain, not just that hop:
+  Control's 44 Hz render tick (22.7 ms of quantization) + delivery (11.8 ms
+  at p99) + the device's own tick (~5 ms) ≈ **40 ms**, so the existing 60 ms
+  covers it with ~20 ms of headroom for the jitter tail. p99 rather than
+  worst-case is deliberate: the horizon is fixed added latency on *every*
+  cue, so sizing it to the worst frame ever seen taxes every gesture in the
+  room for one hiccup.
+
+  **Why the old numbers were wrong, because the trap is still live.** O2
+  honors the timestamp and delivers each frame **at** `when`. A device-side
+  queue that re-checks the deadline on arrival therefore always finds it a
+  few ms past due, *at any horizon*. Measured directly: **93.3% clamped at a
+  150 ms horizon and 95.6% at 300 ms**, with lateness pinned near +3 ms and a
+  floor near −2 ms in both runs. Doubling the horizon doubled the apparent
+  "latency" (154 ms → 304 ms) and did not reduce clamping, which also rules
+  out a clock offset — an offset would shrink as the horizon grew. The 2026-
+  08-13 "~67 ms" was simply 60 ms of horizon plus ~6 ms of that overhead, and
+  the 762-of-820 clamp rate was the same artifact.
+
+  Method for anyone re-running this: **measure at `--horizon 0`**, which is
+  the only setting where nothing is held and lateness is real delivery.
+  Measuring at a generous horizon looks safe and is exactly what produced the
+  wrong answer. The tooling is `TimedQueue.lateness` (bounded, so a Radxa
+  cannot leak) → `ShroomClient.lateness` → `harness/sync_bench.py`
+  (mean/p95/p99/worst, and it finally has the `main()` that
+  `terrarium_boot --horizon` has always told you to run), with
+  `harness/o2_shroom.py --control-horizon --samples-out` and the same flags
+  on `harness/room_simulator.py`.
+
+  Every figure here is a **dev-box figure**: the venue box does not exist.
+- **The clamp counter does not report a wrong horizon on the o2lite path.**
+  The timed-cue design spec, and this doc until 2026-08-14, treated a rising
+  `DeviceLinkAgent.clamped` / `ShroomClient.clamped` as the production signal
+  that `cue_horizon` is too small. Because O2 delivers at `when` (above), the
+  counter **saturates at 93–96% regardless of the horizon** and carries no
+  information about it there. It still means what the spec says wherever
+  nothing else schedules delivery: the websocket transport, and Control's own
+  room cues. Read the `lateness` distribution instead when the question is
+  whether the horizon is right.
+
+  This also raises a real design question, deliberately not answered here:
+  if O2 already schedules delivery, the device-side `TimedQueue` is largely
+  redundant on that path, and "one gesture, one shared `T`" may be enforced a
+  layer lower than the design assumed.
+- **A device cannot clock-sync to Arco after Control has connected — in a
+  headless run.** Measured repeatedly on 2026-08-14 from a non-interactive
+  context. **It does not reproduce from an interactive terminal**: the same
+  commands run by hand joined, held a role and delivered thousands of frames
+  the same afternoon, which is how the figures above were obtained. So this
+  is a real and reproducible barrier to automating the measurement, not a
+  fault in the o2lite path itself, and the cause of the interactive/headless
+  difference is unknown. pyarco's `arco.initialize()` unconditionally calls
+  `reset()`,
   which sends `/host/clear`; from that moment a **new** o2lite client hangs
   in `o2_shroom`'s `while o2lite.time_get() < 0` loop. Isolated: a lone
   client syncs against a bare Arco in **0.6 s**, and against the same Arco
