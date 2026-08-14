@@ -96,21 +96,34 @@ specified in the in-repo design doc — this deep-dive does not restate it.
 
 ## Landed subsystems
 
-All Python, all offline-tested. **Run the suite through the project venv**, not
-a bare interpreter:
+All Python, all offline-tested. **Run the suite through the project venv, from
+the repo root**, not a bare interpreter:
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest tests -v
 ```
 
-There is no bare `python` on the dev boxes, and the sibling **luxaeterna**
-dev dependency is installed **only** in `.venv`. Invoking `python3` instead
-collects an import error in `tests/test_terrarium_boot.py` that looks exactly
-like a real failure and is not. That trap has already cost one debugging
-detour: a contributor chased the phantom error, concluded the suite was
-broken, and filed a follow-up task for it before the environment was
-identified as the cause.
+Two traps here, and both fail in the same nasty way: they run a *different*
+Python that exists, so you get a plausible-looking error instead of a clear
+"not found".
+
+1. **Bare `python`/`python3`.** There is no bare `python` on the dev boxes,
+   and the sibling **luxaeterna** dev dependency is installed **only** in this
+   repo's `.venv`. `python3 -m pytest tests` collects an import error in
+   `tests/test_terrarium_boot.py` that reads exactly like a broken test suite.
+2. **`.venv/bin/python` from the wrong directory.** That path is *relative*.
+   Run it from anywhere but the repo root and it resolves to whatever other
+   venv happens to be there. A `~/.venv`, for instance, will run fine and then
+   report `No module named pytest` plus `Could not open requirements file`,
+   which looks like a broken checkout rather than a wrong cwd. Hence the `cd`
+   above.
+
+Trap 1 has already cost one debugging detour: a contributor chased the phantom
+collection error, concluded the suite was broken, and filed a follow-up task
+before the environment was identified as the cause. Trap 2 was hit immediately
+after this section was first written, by the fix for trap 1.
 
 ### `control/` — the Control+GameServer lifecycle engine
 The game-launching engine: load a Bit, open registration, run it, score it,
