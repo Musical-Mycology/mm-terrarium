@@ -27,6 +27,7 @@ from control.state import State
 from control.teardown import TeardownStack
 from devicelink.agent import DeviceLinkAgent
 from devicelink.server import DeviceLinkServer
+from harness import markers
 from harness.signals import sigterm_as_keyboard_interrupt
 
 SIM_DEV = "sim-room"
@@ -439,8 +440,8 @@ def main() -> None:
             # is a guest on. Stopping it after Arco died was the same
             # client-after-hub bug as the simulator's, one layer up.
             teardown.push("o2lite-transport", transport.stop)
-            print(f"DeviceLink running on o2lite ensemble "
-                  f"{config.o2_ensemble!r} (Ctrl-C to stop)")
+            print(f"{markers.CONTROL_TRANSPORT_READY} "
+                  f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)
         else:
             print(f"DeviceLink listening on ws://{args.host}:{server.port}/ws "
                   f"(Ctrl-C to stop)")
@@ -456,7 +457,8 @@ def main() -> None:
                 print("--arco-start-audio needs --arco-pty; ignoring",
                       file=sys.stderr)
         if args.setup_seconds > 0:
-            print(f"Holding in SETUP for {args.setup_seconds:g}s -- join now")
+            print(f"{markers.CONTROL_SETUP_HOLD} for {args.setup_seconds:g}s "
+                  f"-- join now", flush=True)
         _wait_in_setup(agent, args.setup_seconds)
         gs.run()
         reason = _serve_until_done(gs, agent, arco)
