@@ -817,6 +817,15 @@ FakePopen coverage is not a substitute for a child that genuinely refuses."
 
 ## Task 4: `control/boot.py` on the stack
 
+> **Tasks 4 and 5 must land as ONE task, in one commit.** Task 4 deletes
+> `control.boot.shutdown()`, and `harness/terrarium_boot.py:23` imports that
+> function unguarded at module level, so the deletion turns all 21 tests in
+> `tests/test_terrarium_boot.py` into collection errors until Task 5's rewrite
+> lands. They are one atomic API change: `boot()`'s signature and its only
+> caller adapting to it. Discovered during execution, 2026-08-14, when a Task 4
+> implementer checked the dependency before writing code and stopped.
+
+
 **Files:**
 - Modify: `control/boot.py` (whole file)
 - Modify: `tests/test_boot.py` (every `boot(...)` call site, plus the two `shutdown` tests, plus PR #24's six cases)
@@ -1130,6 +1139,15 @@ success-path ordering now has the regression test it never had."
 ---
 
 ## Task 5: `harness/terrarium_boot.py` on the stack
+
+> **Tasks 4 and 5 must land as ONE task, in one commit.** Task 4 deletes
+> `control.boot.shutdown()`, and `harness/terrarium_boot.py:23` imports that
+> function unguarded at module level, so the deletion turns all 21 tests in
+> `tests/test_terrarium_boot.py` into collection errors until Task 5's rewrite
+> lands. They are one atomic API change: `boot()`'s signature and its only
+> caller adapting to it. Discovered during execution, 2026-08-14, when a Task 4
+> implementer checked the dependency before writing code and stopped.
+
 
 **Files:**
 - Modify: `harness/terrarium_boot.py:33-76` (factories), `:86-186` (`build`), `:189-211` (`shutdown`, `_NullRoomBridge`), `main()`
