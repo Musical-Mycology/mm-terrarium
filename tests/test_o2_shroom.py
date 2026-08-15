@@ -149,3 +149,27 @@ def test_service_conflict_asks_about_the_dev_it_was_given():
 
     service_conflict(object(), "ie1", verify=_verify)
     assert asked == ["ie1"]
+
+
+def test_main_has_exactly_one_backend_close():
+    """main() used to close the backend by hand at each exit path -- the
+    parent-gone return, the service-conflict SystemExit, and the tick loop's
+    finally -- with SIGTERM as a forgotten fourth. A KeyboardInterrupt raised
+    anywhere between backend.open() and the tick loop's try: therefore left
+    the WebSim backend open and printed an unhandled traceback, which is
+    exactly what a live run produced on 2026-08-14.
+
+    Asserted by source inspection rather than by running main(), because
+    main() imports o2litepy, which is absent from this offline suite by
+    design. The same technique and the same reason as tests/test_signals.py.
+
+    One close call means one cleanup path. A second appearing is the
+    regression this guards."""
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    assert source.count("backend.close()") == 1, (
+        "harness/o2_shroom.py must close its backend in exactly one place. "
+        "Per-exit-path cleanup is how the SIGTERM path got missed.")

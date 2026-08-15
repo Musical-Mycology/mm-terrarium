@@ -198,8 +198,8 @@ def main() -> None:
 
     # control/simulator_process.py shuts this process down with SIGTERM when
     # it is playing the Room simulator, and finally blocks do not run on a
-    # bare SIGTERM -- so without this the exit lateness report and
-    # backend.close() below are simply lost.
+    # bare SIGTERM -- so without this the exit lateness report and the
+    # backend shutdown below are simply lost.
     sigterm_as_keyboard_interrupt()
 
     # Lazy, exactly like harness/arco_synth.py: this module must import with
@@ -213,74 +213,92 @@ def main() -> None:
     backend.open()
     print(f"Watch the Shroom at http://{args.sim_host}:{backend.port}/")
 
-    o2lite.initialize(args.ensemble)
-    o2lite.set_services(args.dev)          # the device offers its own ie<N>
-
-    def on_down(address, typespec, info):
-        """o2litepy handler: THREE parameters, and `address` has already had
-        its leading '/' stripped. Arguments are pulled in typespec order,
-        not handed over as a list."""
-        try:
-            values = pull_args(o2lite, typespec or "")
-        except Exception:
-            # Mirrors devicelink/o2_transport.py's _on_message diagnostic,
-            # but print rather than logging: this module has no logging
-            # setup, and every other operator-facing line here (the watch
-            # URL, the clock-synced line, the frames-displayed-late count)
-            # is already print, so that is what a person running this tool
-            # will actually see.
-            print(f"dropping /{address}: unreadable arguments")
-            return                          # drop the frame, never raise
-        client.handle({"timestamp": o2lite.msg_timestamp,
-                       "address": f"/{address}",
-                       "typespec": typespec or "", "args": values})
-
-    for kind in ("role", "leds", "release", "deny", "error"):
-        o2lite.method_new(f"/{args.dev}/{kind}", None, True, on_down, None)
-
-    while o2lite.time_get() < 0:           # block until clock sync
-        if parent_is_gone(args.exit_with_parent):
-            print("parent is gone; exiting before clock sync")
-            backend.close()
-            return
-        o2lite.poll()
-        time.sleep(0.01)
-    print(f"{markers.DEVICE_CLOCK_SYNCED} {o2lite.time_get():.3f}", flush=True)
-
-    # The service announcement went out at set_services time and was never
-    # acknowledged. Check it actually took before serving a canvas that
-    # would otherwise stay dark for the whole run with no explanation.
-    problem = service_conflict(o2lite, args.dev)
-    if problem is not None:
-        print(problem, file=sys.stderr)
-        backend.close()
-        raise SystemExit(1)
-
-    o2lite.send_cmd("/game/hello", 0, "s", args.dev)
-    if not args.no_join:
-        o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
-
-    start = o2lite.time_get()
-    interval = 1.0 / args.tilt_hz
-    # Deferred rather than started at `start`: gestures are held off until
-    # _gestures_ready(client) -- see that function's docstring for why --
-    # so the first tilt should be scheduled for the moment the role
-    # actually arrives, not backdated to loop start (which would fire a
-    # burst of "overdue" tilts back-to-back the instant the gate opens).
-    next_tilt = None
-    # The join reply is asynchronous -- it only arrives once the loop below
-    # polls it in -- so noticing a deny/error has to happen inside the loop,
-    # not right after send_cmd. Printed once each: without this, a refused
-    # join looks identical to a working one that simply has no frames yet
-    # -- a blank browser and no explanation.
-    deny_printed = False
-    error_printed = False
-    # Only ever set when --join-retry is on, so the default path still sends
-    # exactly one join.
-    next_join = (o2lite.time_get() + args.join_retry
-                 if args.join_retry > 0 and not args.no_join else None)
-    joins_sent = 1
+    # ONE cleanup path, covering everything after backend.open(). The guard
+    # starts here and not at the tick loop because every step between is
+    # interruptible: o2lite.initialize() blocks on mDNS discovery,
+    # set_services() rides the same socket, the clock-sync wait below spins
+    # until the hub answers, and service_conflict() polls a self-addressed
+    # nonce against a timeout. A SIGTERM in any of them used to raise
+    # KeyboardInterrupt with no handler in scope, printing a traceback and
+    # leaving the WebSim backend open.
+    #
+    # That is not a hypothetical. The clock-sync wait is exactly where a
+    # device sits when the upstream /host/clear defect bites (see
+    # docs/MM_TERRARIUM.md, "A device cannot clock-sync to Arco after
+    # Control has connected"), so it is the likeliest place in this program
+    # to be signalled -- and it was the one path the SIGTERM handler did not
+    # protect. Measured live on 2026-08-14.
     try:
+        o2lite.initialize(args.ensemble)
+        o2lite.set_services(args.dev)      # the device offers its own ie<N>
+
+        def on_down(address, typespec, info):
+            """o2litepy handler: THREE parameters, and `address` has already
+            had its leading '/' stripped. Arguments are pulled in typespec
+            order, not handed over as a list."""
+            try:
+                values = pull_args(o2lite, typespec or "")
+            except Exception:
+                # Mirrors devicelink/o2_transport.py's _on_message
+                # diagnostic, but print rather than logging: this module has
+                # no logging setup, and every other operator-facing line here
+                # (the watch URL, the clock-synced line, the frames-displayed-
+                # late count) is already print, so that is what a person
+                # running this tool will actually see.
+                print(f"dropping /{address}: unreadable arguments")
+                return                      # drop the frame, never raise
+            client.handle({"timestamp": o2lite.msg_timestamp,
+                           "address": f"/{address}",
+                           "typespec": typespec or "", "args": values})
+
+        for kind in ("role", "leds", "release", "deny", "error"):
+            o2lite.method_new(f"/{args.dev}/{kind}", None, True, on_down, None)
+
+        while o2lite.time_get() < 0:       # block until clock sync
+            if parent_is_gone(args.exit_with_parent):
+                print("parent is gone; exiting before clock sync")
+                return                     # the finally below still runs
+            o2lite.poll()
+            time.sleep(0.01)
+        print(f"{markers.DEVICE_CLOCK_SYNCED} {o2lite.time_get():.3f}",
+              flush=True)
+
+        # The service announcement went out at set_services time and was
+        # never acknowledged. Check it actually took before serving a canvas
+        # that would otherwise stay dark for the whole run with no
+        # explanation.
+        problem = service_conflict(o2lite, args.dev)
+        if problem is not None:
+            print(problem, file=sys.stderr)
+            # SystemExit is a BaseException, so it passes through the
+            # except below untouched and still exits 1 -- it just gets its
+            # cleanup from the finally now instead of by hand.
+            raise SystemExit(1)
+
+        o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+        if not args.no_join:
+            o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
+
+        start = o2lite.time_get()
+        interval = 1.0 / args.tilt_hz
+        # Deferred rather than started at `start`: gestures are held off until
+        # _gestures_ready(client) -- see that function's docstring for why --
+        # so the first tilt should be scheduled for the moment the role
+        # actually arrives, not backdated to loop start (which would fire a
+        # burst of "overdue" tilts back-to-back the instant the gate opens).
+        next_tilt = None
+        # The join reply is asynchronous -- it only arrives once the loop below
+        # polls it in -- so noticing a deny/error has to happen inside the loop,
+        # not right after send_cmd. Printed once each: without this, a refused
+        # join looks identical to a working one that simply has no frames yet
+        # -- a blank browser and no explanation.
+        deny_printed = False
+        error_printed = False
+        # Only ever set when --join-retry is on, so the default path still sends
+        # exactly one join.
+        next_join = (o2lite.time_get() + args.join_retry
+                     if args.join_retry > 0 and not args.no_join else None)
+        joins_sent = 1
         while not client.released:
             if parent_is_gone(args.exit_with_parent):
                 print("parent is gone; exiting")
