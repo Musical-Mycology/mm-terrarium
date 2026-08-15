@@ -521,21 +521,30 @@ renderer** — the concrete simulator/hardware backend is deferred, see
   server subprocess (previously always hand-started); polls for readiness via
   a lazy pyarco import (mirroring `harness/arco_synth.py`). Arco has **no
   message-based quit** (only a console keypress, per its own `doc/server.md`),
-  so shutdown is **SIGTERM**, matching `led_smoke.py`'s own signal handling of
-  itself.
+  so shutdown is **SIGTERM** -- the same signal `harness/signals.py`'s
+  `sigterm_as_keyboard_interrupt` teaches this repo's own Python processes to
+  handle, so the choice is consistent rather than arbitrary.
 - **`boot()`** (`control/boot.py`) — the orchestrated load sequence: config →
   spawn/wait for Arco → resolve Room → bind Room (a Terrarium-spawned
   simulator or a reconnect to a previously recorded device, else
   `wait_for_room_binding()` holds in `SETUP` for a fresh admin-armed tap,
   reusing the `--setup-seconds` hold pattern `devicelink_smoke` already
   established) → gate the Bit on `bit_cls.room_types` (read off the class,
-  before instantiation) → `load_bit`. **Structural shutdown guarantee:**
-  every failure after Arco actually starts funnels through one
-  `try/except` that calls `arco.shutdown()` exactly once, so a future
-  failure mode added to this section can't accidentally orphan the
-  subprocess by forgetting a call site — this replaced an earlier,
-  enumerated-call-site version that a review round caught leaking the
-  subprocess on an `ArcoReadyTimeout`.
+  before instantiation) → `load_bit`. **Structural shutdown guarantee,
+  twice now.** The first version funnelled every failure after Arco starts
+  through one `try/except` that called `arco.shutdown()` exactly once, so a
+  future failure mode added to this section couldn't accidentally orphan
+  the subprocess by forgetting a call site -- replacing an earlier,
+  enumerated-call-site version that a review round caught leaking Arco on
+  an `ArcoReadyTimeout`. That guarantee covered Arco and nothing else this
+  function spawns, which is why the Room simulator needed its own
+  separate, hand-written guard bolted on by PR #24 rather than being
+  covered by the same mechanism. **As of this branch, the same
+  `try/except` closes a `TeardownStack` instead**, covering Arco, any
+  simulator the factory registered, the room bridge and the Bit's abort
+  together, so nothing this function starts can be left out by omission
+  again. See the teardown-order section below for the mechanism and the
+  three-separately-maintained-orderings history behind it.
 - **Console and uplink filtering.** Because a `ROOM`-class role lives in a
   Bit's normal `role_table`, the pre-existing `ConsoleAgent.snapshot()`/
   `on_registration_change()`/`_devices_view()` and `UplinkAgent`'s
@@ -580,10 +589,17 @@ TEST room only; DEMO's simulated venue array is a deferred follow-up.
   Constructs `DeviceLinkServer` and starts it **before** calling `boot()`,
   deliberately: `boot()`'s `simulator_factory` spawns the simulator
   subprocess, which connects immediately, so the server must already be
-  listening or the connection races server construction. Tears down in
-  order: Bit/Room (via `control.boot.shutdown()`, which frees the Room's
-  Arco voice and shuts Arco down last) → simulator subprocess → the
-  devicelink server itself.
+  listening or the connection races server construction. **Teardown is a
+  `TeardownStack`, not `control.boot.shutdown()`** (that function was
+  deleted -- see the teardown-order section below for why). The real unwind
+  is reverse of registration order, and the devicelink server and the
+  o2lite transport never appear in the same run, so the order differs by
+  mode. Websocket mode: the Bit, then the Room bridge (which frees the
+  Room's Arco voice), then the Room simulator subprocess, then Arco, then
+  the devicelink server itself. O2lite mode has no devicelink server to
+  unwind; in its place, the o2lite transport unwinds first, then the same
+  Bit, Room bridge, Room simulator, Arco order -- corrected here in both
+  mechanism and order from what this line used to say.
 - **The gap that survived this slice.** Every seam above is real and tested
   — but nothing in `TestBit`'s gameplay logic ever emits a cue *targeting*
   `gs.room.bound_dev`: `Bit.update(dt)` has no cue-emission mechanism at all
@@ -694,7 +710,7 @@ is exactly where the real thing will differ.
 simulator steals the next run's `sim-room` service, and O2's refusal is
 invisible to the client.** `harness/o2_shroom.py --dev sim-room --no-join`
 never exits on its own -- it loops `while not client.released`
-(`harness/o2_shroom.py:247`) and only a live Control ever sends `/release` --
+(`harness/o2_shroom.py:283`) and only a live Control ever sends `/release` --
 so a `Popen` child that outlives a killed parent (a `SIGKILL` on
 `terrarium_boot`, say) becomes a permanent orphan. o2litepy reconnects it
 automatically to whatever Arco starts next and re-announces every service on
@@ -706,18 +722,18 @@ line on the **hub** only -- the refused simulator clock-syncs and looks
 exactly as healthy as the one that won, while every frame the new run
 addresses to `/sim-room/leds` is delivered to the zombie instead. Three
 guards now close this: `harness/o2_shroom.py --exit-with-parent`
-(`harness/o2_shroom.py:210,248`) checks the parent pid recorded at launch
+(`harness/o2_shroom.py:241,284`) checks the parent pid recorded at launch
 inside both blocking loops, so a killed parent is detected without ever
-needing `/release`; `control/boot.py`'s post-spawn section
-(`control/boot.py:95-121`) and `harness/terrarium_boot.py`'s `build()`
-(`harness/terrarium_boot.py:155-179`) now shut the simulator down on any
-failure, `KeyboardInterrupt` included (`except BaseException`, not
-`except Exception`), with every cleanup call itself guarded against
-`Exception` so a failing `arco.shutdown()` or `server.stop()` cannot mask
-the original failure that triggered teardown; and `verify_service_ownership`
-(`devicelink/o2_transport.py:119`) sends a self-addressed round trip before
-the tick loop starts, so a refused announcement fails loud instead of
-silently. Design:
+needing `/release` -- `harness/run_stack.py` now passes the identical flag
+to every player device it spawns, not just the Room simulator; `control/boot.py`'s
+`boot()` and `harness/terrarium_boot.py`'s `build()` now shut the simulator
+(and everything else spawned so far) down on any failure,
+`KeyboardInterrupt` included, via the guarded `TeardownStack` described
+below -- which replaced the four hand-written `except Exception: pass`
+guards this paragraph used to describe one by one; and
+`verify_service_ownership` (`devicelink/o2_transport.py:119`) sends a
+self-addressed round trip before the tick loop starts, so a refused
+announcement fails loud instead of silently. Design:
 `docs/superpowers/specs/2026-08-14-room-simulator-service-collision-design.md`.
 
 **The gap that survived this slice, and it is the important one.** All of the
@@ -731,6 +747,102 @@ accepts `when` and never reads it. Room audio never sees `when` at all, so
 production callers**. The single production use of a real `when` stamps
 Control's own render clock, not any gesture's time. Treat "one gesture, one
 shared `T`" as designed and plumbed, not achieved. See *Not yet built* below.
+
+### `control/teardown.py`, `control/process.py`, `harness/signals.py`, `harness/markers.py`, `harness/run_stack.py` -- teardown order, structurally, and a one-command Arco stack runner
+Closes the ordering gap the previous section's "third bug" investigation
+left open: every individual guard there was correct and the ordering they
+composed into was still wrong on the path that matters most. Design:
+[`.../2026-08-14-teardown-order-and-stack-runner-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-teardown-order-and-stack-runner-design.md).
+
+- **`TeardownStack`** (`control/teardown.py`) -- a guarded, idempotent, LIFO
+  stack of named teardown steps. The invariant, stated plainly because it is
+  the whole point: **anything registered later is torn down earlier**.
+  Client-before-hub stops being an ordering someone maintains and becomes a
+  consequence of *when* things start -- the devicelink server is pushed
+  before `boot()` runs and therefore stops last; Arco is pushed at spawn;
+  the Room simulator is pushed after Arco and therefore stops before it.
+  The o2lite transport (only present on the o2lite path, where there is no
+  devicelink server at all) is the cleanest illustration of the same
+  invariant working the other way: `main()` pushes it after `build()`
+  returns, which is after Arco, the simulator, the Room bridge and the Bit
+  are already registered, so it is registered last and **stops first** --
+  before the Arco hub it is a guest on. Each step is guarded (`close()` catches
+  `BaseException`, not `Exception` -- a second Ctrl-C landing inside a
+  subprocess wait must not abandon the remaining steps) and `close()` is
+  idempotent, so a failure path and the caller's normal teardown can both
+  call it without coordinating.
+- **`control.boot.shutdown()` was deleted, not reordered.** Its docstring
+  said Arco goes last "since everything else may still want to address it
+  during teardown," which was correct *within `boot.py`'s own scope* --
+  and wrong composed with `harness/terrarium_boot.py`, which owns o2lite
+  **client** subprocesses (the Room simulator, and on the o2lite path the
+  transport itself) that talk to that same hub. `boot()` now returns the
+  stack instead of a fixed shutdown order, and also *accepts* one, so a
+  caller that starts something before `boot()` -- the devicelink server --
+  registers it first and gets it torn down last. Reverse-of-registration is
+  correct in both scopes without either module knowing about the other.
+- **`stop_process`** (`control/process.py`) -- the bounded signal/escalate/
+  reap cycle every spawned subprocess in this repo now shares: SIGTERM, poll
+  to a timeout, escalate to SIGKILL, poll again, reap. Before this,
+  `ArcoProcess.shutdown()` and `SimulatorProcess.shutdown()` both called
+  `Popen.wait()` with no timeout, and the Room simulator is always a plain
+  `Popen`, so a client that ignored or was slow to handle its stop signal
+  hung teardown indefinitely. It polls rather than calling
+  `Popen.wait(timeout=)` because `_PtyProcess.poll()` drains the pty, and an
+  undrained pty blocks Arco's curses app on its own screen writes.
+
+**The hard-won fact this exists to fix.** mm-terrarium had **three
+separately-maintained teardown orderings**: `control/boot.py`'s failure
+handler, `harness/terrarium_boot.py`'s `build()` failure handler, and
+`harness/terrarium_boot.py`'s success-path `shutdown()`. PR #24 corrected the
+first two -- both failure paths -- and did not notice the third. So on
+**every successful run**, the one that matters most, the O2 hub was being
+killed before the o2lite clients still talking to it, and the Room simulator
+spent its last moments writing to a dead socket. That is the argument for
+making this structural rather than fixing it a third time by hand: nothing
+prevented the ordering from disagreeing with itself again, and it had.
+
+- **`harness/run_stack.py`** -- `python -m harness.run_stack` brings up the
+  whole Arco stack (Arco, Control, the Room simulator, and N player devices)
+  from one command, replacing a two-terminal, right-order-or-lose-your-output
+  workflow. It waits on real readiness markers rather than sleeping, tees
+  each child's stdout to its own log under `runs/<timestamp>/` (`.gitignore`d
+  alongside `captures/` and `o2debug.log`), and tears down device-first:
+  every process is registered on the same `TeardownStack` at the moment it
+  is spawned, so the ordering guarantee above extends to it for free.
+  `--ci` mode bounds the run with `--seconds` (default 45s) and turns off
+  echo; either mode exits non-zero on any unmet marker, and a failure prints
+  the stage that failed, the process, its log path, and the log's tail.
+
+  **CI mode is honestly best-effort.** The headless clock-sync defect (see
+  *Not yet built / deferred* below, "A device cannot clock-sync to Arco
+  after Control has connected — in a headless run") is upstream and
+  unfixed. `run_stack` does not fix it and does not pretend to -- its
+  `--help` says so in the same words as here. What it contributes is that
+  the failure is bounded and named: a `device-sync` stage failure pointing
+  at the device's own log and at `o2debug.log`, rather than a hang.
+- **`harness/markers.py`** -- the readiness contract `run_stack` watches
+  for: named constants emitted by `terrarium_boot`/`o2_shroom` and matched
+  on both sides by `tests/test_markers.py`. Matching on incidental print
+  wording would make a future reworded line a silent hang instead of a
+  broken test; promoting the strings to constants is what makes
+  stdout-watching honest. Failure markers (`JOIN DENIED:`, `FATAL: service`)
+  are matched too, so a failure the child has already diagnosed ends the run
+  immediately rather than sitting out the full timeout.
+- **`harness/signals.py`** -- one copy of the SIGTERM-skips-`finally`
+  gotcha: Python's `finally` blocks do not run on a bare SIGTERM, so a
+  process whose cleanup (an exit report, a `WebSimBackend.close()`) lives in
+  one loses it the instant a supervisor signals it rather than asking. This
+  lived as an identical six-line copy in `harness/led_smoke.py` and
+  `harness/room_simulator.py`; `harness/o2_shroom.py` (SIGTERM'd by
+  `SimulatorProcess`), `harness/terrarium_boot.py` (SIGTERM'd by
+  `run_stack`), and `run_stack.py` itself (guarding its own
+  `finally: teardown.close()` against a bare `kill <pid>` or a CI job's
+  timeout) now install it too, so there is one home for the gotcha
+  instead of five copies that could each drift independently.
+
+**Suite baseline as of this slice: 721 passed, 1 skipped** (662 at this
+branch's start).
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -818,7 +930,13 @@ yet**; the box does not exist.
 
 - **arco / o2** (rbdannenberg upstream, Musical-Mycology forks) — the synthesis
   engine and O2 transport this server builds on. The Arco server *is* the room's
-  O2 hub and sole synthesizer.
+  O2 hub and sole synthesizer. Two O2/o2litepy defects found while
+  investigating the Room-simulator service collision (a refused service
+  announcement is silent on the client; o2litepy's discovery has no ensemble
+  filter) are written up for Roger at
+  [`docs/upstream/2026-08-14-o2-service-and-discovery-report.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/upstream/2026-08-14-o2-service-and-discovery-report.md)
+  -- reports, not proposals; see *Not yet built / deferred* below for the
+  standing descriptions of both.
 - **pyarco**: the Python control layer Control+GameServer builds ugen graphs
   through. A **dev/test-only dependency reached by `PYTHONPATH`**, following
   the luxaeterna precedent: nothing is vendored or submoduled, and
@@ -1140,6 +1258,10 @@ Kept explicit so the doc doesn't over-claim:
   [`.../plans/2026-08-12-control-o2lite-and-timed-cues.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-12-control-o2lite-and-timed-cues.md).
   Read the spec's *What is built but not yet load-bearing* section before
   extending anything that touches cue timing.
+- Teardown order, and a one-command Arco stack runner:
+  [`.../2026-08-14-teardown-order-and-stack-runner-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-teardown-order-and-stack-runner-design.md)
+  and its plan
+  [`.../plans/2026-08-14-teardown-order-and-stack-runner.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-14-teardown-order-and-stack-runner.md).
 
 
 Game-design background (RenQuest integration, Bit scoring/loop rules, hardware)

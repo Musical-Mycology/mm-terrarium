@@ -20,6 +20,10 @@ dist/
 .claude/
 captures/
 
+# harness/run_stack.py writes one directory per run: per-process logs plus
+# each device's raw lateness samples.
+runs/
+
 # Agent/SDD scratch: reports, ledgers, review packages. Never project docs
 # (those live in docs/superpowers/). The SDD skill assumes this is ignored.
 .superpowers/

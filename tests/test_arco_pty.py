@@ -57,14 +57,20 @@ def test_send_signal_on_an_already_dead_child_does_not_raise():
     proc.send_signal(signal.SIGTERM)          # must be a no-op
 
 
-def test_wait_escalates_to_sigkill_when_sigterm_is_ignored():
-    """A venue box restarting into a still-running Arco cannot bind its
-    ports, so wait() must not return with the child alive."""
+def test_stop_process_escalates_to_sigkill_on_a_real_pty_child():
+    """Escalation now lives in control/process.py, but it is worth keeping
+    one test of it against a REAL child that really ignores SIGTERM rather
+    than only against FakePopen. A venue box restarting into a still-running
+    Arco cannot bind its ports, so teardown must not return with the child
+    alive."""
+    from control.process import stop_process
+
     proc = pty_popen(["/bin/sh", "-c", "trap '' TERM; sleep 30"])
     time.sleep(0.3)
-    proc.send_signal(signal.SIGTERM)
-    assert proc.wait(timeout=1.0) is not None
+
+    assert stop_process(proc, timeout=1.0, kill_timeout=5.0) is not None
     assert proc.poll() is not None
+    proc.close()
 
 
 def test_arco_process_accepts_pty_popen_through_its_existing_popen_seam():
@@ -77,3 +83,29 @@ def test_arco_process_accepts_pty_popen_through_its_existing_popen_seam():
         time.sleep(0.02)
     assert proc.poll() == 0
     proc.shutdown()
+
+
+def test_the_child_output_is_teed_to_a_log_file(tmp_path):
+    """Arco's output was drained into an in-memory bytearray that nothing
+    ever wrote anywhere, so 'Arco never came up' was the least diagnosable
+    failure in the stack: the runner is a separate process and could not
+    reach the buffer even in principle."""
+    log = tmp_path / "arco.log"
+    proc = pty_popen(["/bin/echo", "sentinel"], log_path=str(log))
+    _wait_for_exit(proc)
+    proc.wait()
+
+    assert b"sentinel" in log.read_bytes()
+
+
+def test_the_in_memory_buffer_is_bounded(monkeypatch):
+    """A curses app redrawing continuously for a long --hold run grew this
+    without bound. Keep a tail for diagnostics, not the whole run."""
+    from control import arco_process
+
+    monkeypatch.setattr(arco_process, "_OUTPUT_TAIL_BYTES", 64)
+    proc = pty_popen(["/bin/sh", "-c", "for i in $(seq 1 500); do echo aaaaaaaaaa; done"])
+    _wait_for_exit(proc)
+    proc.wait()
+
+    assert len(proc.output) <= 64

@@ -23,7 +23,9 @@ from __future__ import annotations
 import math
 import os
 
+from harness import markers
 from harness.shroom_client import ShroomClient
+from harness.signals import sigterm_as_keyboard_interrupt
 
 # Degrees. TestBit._on_tilt clamps gamma to [-90, 90] and maps it onto
 # cc:74, which `player` binds to aurora's hue lane.
@@ -92,9 +94,9 @@ def service_conflict(o2lite, dev: str, *, verify=None):
         verify = verify_service_ownership
     if verify(o2lite, dev):
         return None
-    return (f"FATAL: service {dev!r} is not routed back to this process. "
-            f"Another process on the Arco hub already offers it, and O2 "
-            f"refuses a second claimant silently "
+    return (f"{markers.DEVICE_SERVICE_CONFLICT} {dev!r} is not routed back "
+            f"to this process. Another process on the Arco hub already "
+            f"offers it, and O2 refuses a second claimant silently "
             f"(o2/src/bridge.cpp:231-237). Nothing addressed to "
             f"/{dev}/* will ever arrive here. Look for a stale "
             f"'python -m harness.o2_shroom --dev {dev}' and kill it.")
@@ -193,6 +195,12 @@ def main() -> None:
                              "name from the next run.")
     args = parser.parse_args()
 
+    # control/simulator_process.py shuts this process down with SIGTERM when
+    # it is playing the Room simulator, and finally blocks do not run on a
+    # bare SIGTERM -- so without this the exit lateness report and
+    # backend.close() below are simply lost.
+    sigterm_as_keyboard_interrupt()
+
     # Lazy, exactly like harness/arco_synth.py: this module must import with
     # no o2litepy on the path.
     from o2litepy import o2lite
@@ -236,7 +244,7 @@ def main() -> None:
             return
         o2lite.poll()
         time.sleep(0.01)
-    print(f"clock synced at {o2lite.time_get():.3f}")
+    print(f"{markers.DEVICE_CLOCK_SYNCED} {o2lite.time_get():.3f}", flush=True)
 
     # The service announcement went out at set_services time and was never
     # acknowledged. Check it actually took before serving a canvas that
@@ -298,7 +306,8 @@ def main() -> None:
                               f"joins -- is Control up and in SETUP?")
             if not deny_printed and client.last_deny is not None:
                 reason, hint = client.last_deny
-                print(f"JOIN DENIED: {reason} ({hint})")
+                print(f"{markers.DEVICE_JOIN_DENIED} {reason} ({hint})",
+                      flush=True)
                 deny_printed = True
                 # A denied join never gets a role, so _gestures_ready(client)
                 # can never become true and there is nothing left for this
@@ -315,8 +324,8 @@ def main() -> None:
                     # Say so explicitly. Until this line appears, a silent
                     # browser is indistinguishable from a role that never
                     # arrived, and the two want completely different fixes.
-                    print(f"role granted after {joins_sent} join(s); "
-                          f"gestures starting at {now:.3f}", flush=True)
+                    print(f"{markers.DEVICE_ROLE_GRANTED} {joins_sent} "
+                          f"join(s); gestures starting at {now:.3f}", flush=True)
                 if now >= next_tilt:
                     gamma = tilt_sweep(now - start)
                     # Timestamps at the source (Design Rule 4): the device's

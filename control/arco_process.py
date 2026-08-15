@@ -3,17 +3,26 @@ Terrarium load sequence. Real pyarco imports stay lazy (inside
 _default_probe, never at module level) so the offline suite runs with
 neither Arco nor pyarco present. Arco has no message-based quit
 (arco/doc/server.md: the only documented shutdown is a console keypress),
-so shutdown() sends SIGTERM, mirroring harness/led_smoke.py's own
-_sigterm_as_keyboard_interrupt handling of itself. See
+so shutdown() sends SIGTERM -- the same signal this repo's own Python
+processes are written to handle via harness/signals.py's
+sigterm_as_keyboard_interrupt, so the choice is consistent rather than
+arbitrary. See
 docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md
 section 5.
 """
 
 from __future__ import annotations
 
-import signal
 import subprocess
 import time
+
+from control.process import stop_process
+
+# How much of Arco's console output to keep in memory. It is a curses app
+# redrawing continuously, so an uncapped buffer grows without bound over a
+# long --hold run. This is a diagnostic tail; the full stream goes to
+# log_path when one is given.
+_OUTPUT_TAIL_BYTES = 65536
 
 
 class ArcoReadyTimeout(Exception):
@@ -35,25 +44,61 @@ def _default_probe() -> bool:
 
 class FakePopen:
     """In-process test double for subprocess.Popen, sibling of
-    control/audio.py's FakeVoice/FakePool."""
+    control/audio.py's FakeVoice/FakePool.
 
-    def __init__(self) -> None:
+    BOUNDARY RULE 5 applies here with force: this must never be more
+    permissive than Popen, because control/process.py's stop_process exists
+    precisely to handle the case where a child does NOT do as it is told.
+    What that means concretely:
+
+      * poll() returns None while the child runs and its exit code after.
+        A double whose poll() always answered would let stop_process's wait
+        loop terminate instantly in every test, so the bounded-wait path
+        would never be exercised at all.
+      * wait(timeout=...) RAISES subprocess.TimeoutExpired while the child
+        is alive, exactly as Popen does. A double that returned instead
+        would let a caller believe it had reaped a process that never died.
+      * send_signal on an exited child is a no-op, as Popen.send_signal is
+        (it checks returncode first).
+      * `ignores` models a child that does not die on a signal. Without it,
+        the SIGKILL escalation has no coverage and this double would agree
+        with a test that never runs the real risk. SIGKILL may be listed
+        too: that models a child in uninterruptible sleep, the one real way
+        SIGKILL fails to take effect promptly.
+    """
+
+    def __init__(self, *, ignores=()) -> None:
         self.commands: list[list[str]] = []
+        self.kwargs: dict = {}
         self.signals: list[int] = []
         self.waited = False
+        self.returncode = None
+        self._ignores = set(ignores)
 
-    def __call__(self, command: list[str]):
+    def __call__(self, command: list[str], **kwargs):
         self.commands.append(command)
+        self.kwargs = kwargs
         return self
 
+    def poll(self):
+        return self.returncode
+
     def send_signal(self, sig: int) -> None:
+        if self.returncode is not None:
+            return                       # Popen.send_signal no-ops after exit
         self.signals.append(sig)
+        if sig not in self._ignores:
+            self.returncode = -sig
 
-    def wait(self) -> None:
+    def wait(self, timeout=None):
         self.waited = True
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired(
+                self.commands[-1] if self.commands else "fake", timeout)
+        return self.returncode
 
 
-def pty_popen(command: list[str]):
+def pty_popen(command: list[str], log_path: str | None = None):
     """A subprocess.Popen work-alike that gives the child a real CONTROLLING
     TERMINAL, so Arco's curses init can open /dev/tty.
 
@@ -79,6 +124,12 @@ def pty_popen(command: list[str]):
 
     Opt-in. ArcoProcess still defaults to subprocess.Popen, so an
     interactive venue run is completely unaffected.
+
+    log_path, when given, tees the child's console output to that file as
+    it is drained, in addition to the bounded in-memory tail kept on
+    proc.output. That is what lets an operator (or a later supervisor) read
+    back why Arco never came up, since the pty is owned by this process and
+    the operator is not looking at it.
     """
     import fcntl                             # noqa: PLC0415 (lazy: POSIX-only)
     import os
@@ -94,12 +145,12 @@ def pty_popen(command: list[str]):
         except Exception:                    # noqa: BLE001 (about to _exit)
             os._exit(127)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-    return _PtyProcess(pid, fd)
+    return _PtyProcess(pid, fd, log_path=log_path)
 
 
 class _PtyProcess:
-    """The three-method slice of subprocess.Popen that ArcoProcess actually
-    uses (poll / send_signal / wait), over a pty.fork()ed child.
+    """The four-method slice of subprocess.Popen that ArcoProcess actually
+    uses (poll / send_signal / wait / close), over a pty.fork()ed child.
 
     Drains the master fd on poll() and wait(): Arco is a curses app
     redrawing continuously, so an undrained pty buffer fills and blocks the
@@ -107,15 +158,25 @@ class _PtyProcess:
     here -- it is what keeps the process alive.
     """
 
-    def __init__(self, pid: int, fd: int) -> None:
+    def __init__(self, pid: int, fd: int, *, log_path: str | None = None) -> None:
         self.pid = pid
         self._fd = fd
         self.returncode = None
         self.output = bytearray()
+        # Unbuffered binary append (buffering=0). Binary mode has no
+        # line-buffering option at all -- 0 is the only way to make each
+        # write() land on disk immediately instead of sitting in a
+        # userspace buffer. That is what lets an operator tail this file
+        # live while Arco is coming up, and it is what a crashed run
+        # needs: a write still sitting in this process's buffer vanishes
+        # along with a killed or crashed process and never reaches disk.
+        self._log = open(log_path, "ab", buffering=0) if log_path else None
 
     def _drain(self) -> None:
         import os
         import select
+        if self._fd is None:
+            return
         while True:
             ready, _, _ = select.select([self._fd], [], [], 0)
             if not ready:
@@ -126,7 +187,11 @@ class _PtyProcess:
                 return
             if not chunk:
                 return
+            if self._log is not None:
+                self._log.write(chunk)
             self.output += chunk
+            if len(self.output) > _OUTPUT_TAIL_BYTES:
+                del self.output[:-_OUTPUT_TAIL_BYTES]
 
     def poll(self):
         import os
@@ -164,31 +229,42 @@ class _PtyProcess:
         if self.returncode is None:
             os.write(self._fd, keys.encode())
 
-    def wait(self, timeout: float = 5.0):
+    def close(self) -> None:
+        """Close the pty master fd, and the log file if one was opened.
+
+        Separate from wait() because control/process.py's stop_process owns
+        the signal/escalate/reap cycle now and deliberately does not touch
+        fds: a plain subprocess.Popen has none of its own, so the owner
+        closes what it owns. Idempotent.
+        """
         import os
+        if self._fd is None:
+            return
+        try:
+            os.close(self._fd)
+        except OSError:
+            pass
+        self._fd = None
+        if self._log is not None:
+            try:
+                self._log.close()
+            except OSError:
+                pass
+            self._log = None
+
+    def wait(self, timeout: float = 5.0):
+        """Bounded wait, then close. Kept for the Popen-compatible surface
+        and for tests that just want a child reaped; ESCALATION MOVED OUT to
+        control/process.py's stop_process, which is what ArcoProcess.
+        shutdown() and SimulatorProcess.shutdown() both use now. Returns the
+        exit code, or None if the child outlived the timeout."""
         import time as _time
         deadline = _time.monotonic() + timeout
         while _time.monotonic() < deadline:
             if self.poll() is not None:
                 break
             _time.sleep(0.05)
-        else:
-            # SIGTERM was ignored or the app hung on its way out. A venue box
-            # rebooting into a still-running Arco would fail to bind its
-            # ports, so escalate rather than return with the child alive.
-            self.send_signal(9)
-            # SIGKILL is delivered asynchronously: polling immediately can
-            # still see the child unreaped and would return None, i.e. claim
-            # "still running" for a process that is already dying.
-            kill_deadline = _time.monotonic() + 5.0
-            while _time.monotonic() < kill_deadline:
-                if self.poll() is not None:
-                    break
-                _time.sleep(0.02)
-        try:
-            os.close(self._fd)
-        except OSError:
-            pass
+        self.close()
         return self.returncode
 
 
@@ -220,8 +296,19 @@ class ArcoProcess:
         return None if self._process is None else self._process.poll()
 
     def shutdown(self) -> None:
+        """SIGTERM, then SIGKILL if that is ignored, then reap.
+
+        Arco has no message-based quit (arco/doc/server.md documents only a
+        console keypress), so a signal is the only lever. Bounded via
+        control/process.py: an unbounded wait() here used to mean one
+        wedged server hung the whole teardown.
+        """
         if self._process is None:
             return
-        self._process.send_signal(signal.SIGTERM)
-        self._process.wait()
-        self._process = None
+        process, self._process = self._process, None
+        try:
+            stop_process(process)
+        finally:
+            close = getattr(process, "close", None)
+            if close is not None:
+                close()          # _PtyProcess owns a pty master; Popen does not
