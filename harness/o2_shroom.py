@@ -222,6 +222,12 @@ def main() -> None:
     # KeyboardInterrupt with no handler in scope, printing a traceback and
     # leaving the WebSim backend open.
     #
+    # build() and backend.open() above are deliberately left uncovered:
+    # WebSimBackend.open() only binds a local socket and starts a
+    # daemon=True thread, so a signal landing there is self-cleaning on
+    # process exit rather than a real leak -- unlike the multi-second
+    # o2lite.initialize() and clock-sync window this guard does cover.
+    #
     # That is not a hypothetical. The clock-sync wait is exactly where a
     # device sits when the upstream /host/clear defect bites (see
     # docs/MM_TERRARIUM.md, "A device cannot clock-sync to Arco after

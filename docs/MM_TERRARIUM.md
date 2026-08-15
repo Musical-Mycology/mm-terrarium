@@ -1162,7 +1162,8 @@ Kept explicit so the doc doesn't over-claim:
   The **defect** is unchanged; its **observability** is not -- do not read
   this as fixed. So there is no ordering that reliably works from a cold
   start: connect first and the socket is killed (now diagnosable, not
-  fixed), connect after and the clock never syncs.
+  fixed), connect after and sync is unreliable -- 1 of 3 in the measurement
+  above, so 2 of 3 still fail.
 
   Pressing Arco's `(S)tart` key after the reset **does** restore sync
   immediately (`/host/run received. Starting audio devices.`, then 0.6 s),
