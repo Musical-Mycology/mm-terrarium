@@ -123,6 +123,16 @@ detour: a contributor chased the phantom error, concluded the suite was
 broken, and filed a follow-up task for it before the environment was
 identified as the cause.
 
+**A fresh git worktree has no `.venv` at all**, so that trap is one step
+away every time one is created: the suite command above fails outright,
+and the obvious recovery is to reach for `python3` and land straight in
+the paragraph above. Symlink it instead:
+`ln -s /Users/chris/projects/mm-terrarium/.venv .venv` from the worktree
+root. `.gitignore` matches `.venv` without a trailing slash specifically
+so that symlink is ignored -- a directory-only pattern does not match a
+symlink, and every worktree used to show a spurious untracked `.venv`
+because of it.
+
 ### `control/` — the Control+GameServer lifecycle engine
 The game-launching engine: load a Bit, open registration, run it, score it,
 return to a clean waiting state. Landed in the first-slice spec
