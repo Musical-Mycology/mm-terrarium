@@ -17,6 +17,7 @@ from control.engine import BitLoadError, GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_bridge import RoomBridge
 from control.rooms import Room, RoomResolutionError, resolve_room_type
+from control.teardown import TeardownStack
 
 
 class BootFailure(Exception):
@@ -27,22 +28,46 @@ class BootFailure(Exception):
 def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
          room_binding: RoomBindingRegistry, arco_process_cls=ArcoProcess,
          simulator_factory=None, known_device_connected=lambda dev: False,
-         tick=None, clock=time.monotonic):
+         tick=None, teardown=None, clock=time.monotonic):
     """Run the full load sequence. Returns (game_server, room_bridge,
-    arco_process) once the Bit is loaded and either the Room is already
-    bound (fast path) or a fresh tap has bound it (see wait_for_room_binding
-    below). Raises BootFailure on any
-    stage failure. Once Arco has actually started, EVERY failure -- wait_ready
-    timing out, an unknown/unsupported Bit, a Bit load error, or anything
-    unanticipated -- shuts Arco down before propagating. That's a structural
-    guarantee (one try/except around the whole post-start section) rather
-    than an arco.shutdown() call enumerated at each failure site, so a
-    future failure mode added to this section can't accidentally orphan the
-    subprocess by forgetting one.
+    arco_process, teardown) once the Bit is loaded and either the Room is
+    already bound (fast path) or a fresh tap has bound it.
+
+    TEARDOWN IS THE RETURNED STACK. There is no boot.shutdown() any more:
+    the caller closes the stack, and every step this function registered
+    unwinds in reverse. That deleted function's docstring used to say "Arco
+    last since everything else may still want to address it during
+    teardown", which was true within this module's scope and wrong composed
+    with harness/terrarium_boot.py, which owns o2lite CLIENT subprocesses
+    that talk to that hub. Reverse-of-registration gets it right in both
+    scopes without either having to know about the other.
+
+    Push order here is deliberate, and unwinds as: the Bit, then the Room
+    bridge (which frees the Room's Arco voice), then any simulator
+    subprocess, then Arco. The Bit goes before the bridge because its
+    on_unload may still cue into it.
+
+    `teardown` lets a caller that started something BEFORE boot() register
+    it first and have it torn down last. harness/terrarium_boot.py starts
+    its DeviceLinkServer before calling boot(), deliberately, because the
+    simulator this function spawns connects immediately.
+
+    `simulator_factory` is Callable[[TeardownStack], str]: a factory that
+    spawns a process registers its own teardown on the stack it is handed.
 
     `clock` is threaded into GameServer and must be the same callable the
     caller hands DeviceLinkAgent (harness/terrarium_boot.py's build() does
-    exactly that). On the o2lite transport it is o2lite.time_get."""
+    exactly that). On the o2lite transport it is o2lite.time_get.
+
+    Raises BootFailure on any stage failure. Once Arco has actually
+    started, EVERY failure -- wait_ready timing out, an unknown or
+    unsupported Bit, a Bit load error, a Ctrl-C, or anything unanticipated
+    -- closes the stack before propagating, so nothing this function
+    started is orphaned and no cleanup exception masks the real one.
+    """
+    if teardown is None:
+        teardown = TeardownStack()
+
     try:
         room_type = resolve_room_type(
             config.room_type,
@@ -57,6 +82,7 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
     except Exception as exc:
         # Nothing was actually spawned, so there's nothing to shut down.
         raise BootFailure(f"Arco failed to start: {exc}") from exc
+    teardown.push("arco", arco.shutdown)
 
     try:
         try:
@@ -65,7 +91,7 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
             raise BootFailure(f"Arco failed to start: {exc}") from exc
 
         _bind_room_fast_path(room, room_binding, simulator_factory,
-                             known_device_connected)
+                             known_device_connected, teardown)
 
         bit_cls = bit_registry.get(config.bit_name)
         if bit_cls is None:
@@ -99,25 +125,48 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
         room_bridge = RoomBridge()
         if room.bound_dev is not None:
             room_bridge.bind(room.bound_dev)
-    except Exception:
-        # Arco is a live subprocess by this point -- any failure below here
-        # must not orphan it. Re-raise unchanged: the inner handlers above
-        # already produced a well-labeled BootFailure for every stage.
-        arco.shutdown()
+        teardown.push("room-bridge", room_bridge.shutdown)
+        teardown.push("bit", lambda: _abort_if_running(gs))
+    except BaseException:
+        # Arco is a live subprocess by this point, and _bind_room_fast_path
+        # may have spawned a simulator subprocess too. Closing the stack
+        # unwinds whatever got as far as being registered, in the right
+        # order, with each step guarded so cleanup cannot mask this
+        # failure. Re-raise unchanged: the inner handlers above already
+        # produced a well-labeled BootFailure for every stage.
+        teardown.close()
         raise
 
-    return gs, room_bridge, arco
+    return gs, room_bridge, arco, teardown
+
+
+def _abort_if_running(gs) -> None:
+    """The Bit teardown step. Guarded on state because the driver may have
+    already run the Bit to completion, and abort() on an IDLE server is not
+    meaningful."""
+    from control.state import State
+    if gs.state != State.IDLE:
+        gs.abort()
 
 
 def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
-                         simulator_factory, known_device_connected) -> None:
+                         simulator_factory, known_device_connected,
+                         teardown) -> None:
     """Attempt the no-tap-needed path: a Terrarium-spawned simulator, or a
     reconnect to a previously recorded physical device. Leaves the Room
     unbound (room.bound_dev stays None) if neither applies -- wait_for_room_
     binding below is what holds for a fresh admin-armed tap, not this
-    function's job."""
+    function's job.
+
+    The factory is handed the teardown stack and registers whatever it
+    spawns, so an orphaned Room simulator is impossible by construction
+    rather than by a getattr convention. An orphan matters: it never exits
+    on its own, reconnects to the NEXT Arco and re-claims its dev name
+    there, so that run's own simulator is refused by O2
+    (o2/src/bridge.cpp:231-237) and renders nothing, silently.
+    """
     if simulator_factory is not None:
-        dev = simulator_factory()
+        dev = simulator_factory(teardown)
         room.bound_dev = dev
         room_binding.bind(room.room_type, dev)
         return
@@ -152,15 +201,3 @@ def wait_for_room_binding(gs: GameServer, room_binding: RoomBindingRegistry,
     room_binding.disarm(gs.room.room_type)
     raise RoomBindingTimeout(
         f"no device joined as {gs.room.room_type.name} Room within {timeout}s")
-
-
-def shutdown(gs: GameServer, room_bridge: RoomBridge, arco: ArcoProcess) -> None:
-    """Tear down in the order design spec section 5 step 9 requires: the
-    running Bit first (mirroring AudioBridge.shutdown()'s "free everything
-    before the pool goes away"), then the Room bridge, then Arco last since
-    everything else may still want to address it during teardown."""
-    from control.state import State
-    if gs.state != State.IDLE:
-        gs.abort()
-    room_bridge.shutdown()
-    arco.shutdown()

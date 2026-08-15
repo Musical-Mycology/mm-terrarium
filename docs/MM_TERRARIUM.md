@@ -52,24 +52,33 @@ hardware fleet.
 > (2026-08-13), which is the first time anything in this repo's device path
 > has been confirmed on a real O2 network rather than against fakes. What was
 > measured: a simulated Tuneshroom joined `TEST_PLAYER_NODE` and received its
-> composed role blob over the hub; Control and the device agreed on time to
-> **7 ms**; **820** LED frames were delivered and rendered with visible
-> gesture-driven hue motion; the Room drone sounded from Arco on RUNNING.
-> Read that as: the transport, the shared clock and the rendering work.
+> composed role blob over the hub; **820** LED frames were delivered and
+> rendered with visible gesture-driven hue motion; the Room drone sounded
+> from Arco on RUNNING. Reproduced on **2026-08-14** with 2418 more frames.
 >
-> **As of 2026-08-14, the cue machinery is load-bearing and has been
-> live-verified.** `TestBit`'s `tilt` handler now emits a Room-targeted cue
-> alongside the calling device's own, and a new `Bit.cues(at)` hook drives the
-> Room's hue on its own with nobody joined. Both were confirmed against a real
-> Arco: a tilt visibly moved the calling device's light, the Room's light, and
-> the Room's drone timbre together, from one shared computed time; the Room
-> animated with no device joined. The one caveat, already known before this
-> slice and unchanged by it: `BootConfig.cue_horizon`'s default remains
-> measurably too small for the real round trip, so most frames arrive already
-> past their declared time and display immediately rather than exactly on it
-> — the device-side clamp counter read 1405, then 1081, on two runs that
-> session. See *`cue_horizon`'s default is measurably too small* below; that
-> is a separate, still-open task.
+> Two claims from that first run have since been **corrected by measurement**
+> (2026-08-14), both in the same direction — the path is healthier than it
+> looked. The clocks agree to **well under a millisecond**, not 7 ms; the 7 ms
+> was read off a single frame that also carried delivery time. And **timing
+> IS honored** — O2 delivers each frame at its declared `when`, and end-to-end
+> delivery measures 4.5 ms at p50 and 11.8 ms at p99. The "762 of 820 frames
+> clamped" that read as *timing not honored* was an artifact of re-checking a
+> deadline on a frame that O2 had already delivered on time. See
+> *`cue_horizon` is measured as of 2026-08-14* under *Not yet built* below,
+> which carries the numbers and the method.
+>
+> **As of 2026-08-14, the cue machinery is also load-bearing.** The earlier
+> gap here -- no Bit could compute a `T`, no Bit emitted a `LightCue` -- was
+> closed the same day by a separate slice: `TestBit`'s `tilt` handler now
+> emits a Room-targeted cue alongside the calling device's own, and a new
+> `Bit.cues(at)` hook drives the Room's hue on its own with nobody joined.
+> Both were confirmed against a real Arco: a tilt visibly moved the calling
+> device's light, the Room's light, and the Room's drone timbre together,
+> from one shared computed time; the Room animated with no device joined.
+> That confirmation used the default 60 ms horizon and read a device-side
+> clamp count of 1405, then 1081, across two runs -- read against the
+> measurement above, that is the same saturation artifact, not a sign the
+> horizon is wrong.
 >
 > Still absent: **fairyring**, real scoring, and any production Bit.
 > As of 2026-08-10, **`Room`** exists as a boot-time concept and orchestration
@@ -102,8 +111,31 @@ specified in the in-repo design doc — this deep-dive does not restate it.
 
 ## Landed subsystems
 
-All Python, all offline-tested. Run the suite with
-`python -m pip install -r requirements-dev.txt && python -m pytest tests -v`.
+All Python, all offline-tested. **Run the suite through the project venv**, not
+a bare interpreter:
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests -v
+```
+
+There is no bare `python` on the dev boxes, and the sibling **luxaeterna**
+dev dependency is installed **only** in `.venv`. Invoking `python3` instead
+collects an import error in `tests/test_terrarium_boot.py` that looks exactly
+like a real failure and is not. That trap has already cost one debugging
+detour: a contributor chased the phantom error, concluded the suite was
+broken, and filed a follow-up task for it before the environment was
+identified as the cause.
+
+**A fresh git worktree has no `.venv` at all**, so that trap is one step
+away every time one is created: the suite command above fails outright,
+and the obvious recovery is to reach for `python3` and land straight in
+the paragraph above. Symlink it instead:
+`ln -s /Users/chris/projects/mm-terrarium/.venv .venv` from the worktree
+root. `.gitignore` matches `.venv` without a trailing slash specifically
+so that symlink is ignored -- a directory-only pattern does not match a
+symlink, and every worktree used to show a spurious untracked `.venv`
+because of it.
 
 ### `control/` — the Control+GameServer lifecycle engine
 The game-launching engine: load a Bit, open registration, run it, score it,
@@ -510,21 +542,30 @@ renderer** — the concrete simulator/hardware backend is deferred, see
   server subprocess (previously always hand-started); polls for readiness via
   a lazy pyarco import (mirroring `harness/arco_synth.py`). Arco has **no
   message-based quit** (only a console keypress, per its own `doc/server.md`),
-  so shutdown is **SIGTERM**, matching `led_smoke.py`'s own signal handling of
-  itself.
+  so shutdown is **SIGTERM** -- the same signal `harness/signals.py`'s
+  `sigterm_as_keyboard_interrupt` teaches this repo's own Python processes to
+  handle, so the choice is consistent rather than arbitrary.
 - **`boot()`** (`control/boot.py`) — the orchestrated load sequence: config →
   spawn/wait for Arco → resolve Room → bind Room (a Terrarium-spawned
   simulator or a reconnect to a previously recorded device, else
   `wait_for_room_binding()` holds in `SETUP` for a fresh admin-armed tap,
   reusing the `--setup-seconds` hold pattern `devicelink_smoke` already
   established) → gate the Bit on `bit_cls.room_types` (read off the class,
-  before instantiation) → `load_bit`. **Structural shutdown guarantee:**
-  every failure after Arco actually starts funnels through one
-  `try/except` that calls `arco.shutdown()` exactly once, so a future
-  failure mode added to this section can't accidentally orphan the
-  subprocess by forgetting a call site — this replaced an earlier,
-  enumerated-call-site version that a review round caught leaking the
-  subprocess on an `ArcoReadyTimeout`.
+  before instantiation) → `load_bit`. **Structural shutdown guarantee,
+  twice now.** The first version funnelled every failure after Arco starts
+  through one `try/except` that called `arco.shutdown()` exactly once, so a
+  future failure mode added to this section couldn't accidentally orphan
+  the subprocess by forgetting a call site -- replacing an earlier,
+  enumerated-call-site version that a review round caught leaking Arco on
+  an `ArcoReadyTimeout`. That guarantee covered Arco and nothing else this
+  function spawns, which is why the Room simulator needed its own
+  separate, hand-written guard bolted on by PR #24 rather than being
+  covered by the same mechanism. **As of this branch, the same
+  `try/except` closes a `TeardownStack` instead**, covering Arco, any
+  simulator the factory registered, the room bridge and the Bit's abort
+  together, so nothing this function starts can be left out by omission
+  again. See the teardown-order section below for the mechanism and the
+  three-separately-maintained-orderings history behind it.
 - **Console and uplink filtering.** Because a `ROOM`-class role lives in a
   Bit's normal `role_table`, the pre-existing `ConsoleAgent.snapshot()`/
   `on_registration_change()`/`_devices_view()` and `UplinkAgent`'s
@@ -550,7 +591,12 @@ TEST room only; DEMO's simulated venue array is a deferred follow-up.
   via a small `WebSimLeds` adapter. Sends only `/game/hello`, **never**
   `/game/join` — Room binding is already recorded, by the Terrarium-assigned
   dev id, before this process is even spawned; there is no Registration Node
-  to tap for this path.
+  to tap for this path. As of the 2026-08-14 label slice, `build()` passes
+  its own `dev` (always `sim-room` here) as `WebSimBackend`'s new `label`
+  (landed in luxaeterna, `label` appended to the served page's `<title>`),
+  so this canvas's browser tab reads distinctly from a player device's own —
+  previously both were the identical generic title with no way to tell them
+  apart at a glance.
 - **`devicelink/agent.py`'s Room wiring** — `DeviceLinkAgent` now builds a
   real `LightSession` (via the loaded Bit's `room_role_name()`-declared
   Role, the same `compose_role_config`/`LightManifest.from_dict`/
@@ -569,10 +615,17 @@ TEST room only; DEMO's simulated venue array is a deferred follow-up.
   Constructs `DeviceLinkServer` and starts it **before** calling `boot()`,
   deliberately: `boot()`'s `simulator_factory` spawns the simulator
   subprocess, which connects immediately, so the server must already be
-  listening or the connection races server construction. Tears down in
-  order: Bit/Room (via `control.boot.shutdown()`, which frees the Room's
-  Arco voice and shuts Arco down last) → simulator subprocess → the
-  devicelink server itself.
+  listening or the connection races server construction. **Teardown is a
+  `TeardownStack`, not `control.boot.shutdown()`** (that function was
+  deleted -- see the teardown-order section below for why). The real unwind
+  is reverse of registration order, and the devicelink server and the
+  o2lite transport never appear in the same run, so the order differs by
+  mode. Websocket mode: the Bit, then the Room bridge (which frees the
+  Room's Arco voice), then the Room simulator subprocess, then Arco, then
+  the devicelink server itself. O2lite mode has no devicelink server to
+  unwind; in its place, the o2lite transport unwinds first, then the same
+  Bit, Room bridge, Room simulator, Arco order -- corrected here in both
+  mechanism and order from what this line used to say.
 - **The gap that survived this slice.** Every seam above is real and tested
   — but nothing in `TestBit`'s gameplay logic ever emits a cue *targeting*
   `gs.room.bound_dev`: `Bit.update(dt)` has no cue-emission mechanism at all
@@ -626,11 +679,26 @@ Control becomes a real O2 participant, and a cue gains a time. Design:
 - **`harness/o2_shroom.py`** — a simulated Tuneshroom over real o2lite,
   rendering to a browser canvas. `--no-join` makes it serve as the Room
   simulator too (hello, never join), which is why `terrarium_boot`'s o2lite
-  mode spawns this one file rather than a second near-copy.
-- **`harness/sync_bench.py`** — reduces measured audio-vs-light deltas to
-  mean, p95 and worst, using absolute values so an early frame cannot cancel
-  a late one into a flattering zero. Every figure it produces is a **dev-box
-  figure**; see *Host platform*.
+  mode spawns this one file rather than a second near-copy. Same label slice
+  as `room_simulator.py`: `build()` passes its own `dev` through unconditionally
+  as `WebSimBackend`'s `label`, so the same one line covers both roles this file
+  plays — the Room path (`dev="sim-room"`, `--no-join`) and a real player
+  device's own canvas (`dev` is that device's id) — with no `--no-join`
+  branching needed, since `dev` already differs between them.
+- **`harness/sync_bench.py`** — reduces measured deltas to mean, p95, **p99**
+  and worst, using absolute values so an early frame cannot cancel a late one
+  into a flattering zero. p99 is the design point for `cue_horizon`
+  specifically: the horizon is fixed added latency on *every* cue, so sizing
+  it to the worst frame ever seen makes every gesture in the room pay for one
+  hiccup, while the clamp counter reports the ~1-in-100 it does not cover.
+  It has a `main()` as of 2026-08-14 (`python -m harness.sync_bench
+  SAMPLES.json --offset <horizon>`); before that, following
+  `terrarium_boot --horizon`'s own advice to run it simply failed.
+  **Callers measuring one-directional latency must convert to absolute
+  latency before calling `summarise()`** — it absolutises, which is right for
+  a two-sided agreement error and wrong for latency, where it would report a
+  frame arriving a healthy 80 ms early as 80 ms of error. Every figure it
+  produces is a **dev-box figure**; see *Host platform*.
 - **`harness/terrarium_boot.py --transport o2lite`** — opt-in, because it
   needs a running Arco. `--setup-seconds` holds the Bit in SETUP so a device
   can join a **scored** role before `run()` closes registration for it
@@ -669,6 +737,46 @@ any double in this repo: **a test double must never be more permissive than
 the library it stands for**, because the dimension nobody thought to check
 is exactly where the real thing will differ.
 
+**A third bug, found in a later investigation (2026-08-14): an orphaned Room
+simulator steals the next run's `sim-room` service, and O2's refusal is
+invisible to the client.** `harness/o2_shroom.py --dev sim-room --no-join`
+never exits on its own -- it loops `while not client.released`
+(`harness/o2_shroom.py:283`) and only a live Control ever sends `/release` --
+so a `Popen` child that outlives a killed parent (a `SIGKILL` on
+`terrarium_boot`, say) becomes a permanent orphan. o2litepy reconnects it
+automatically to whatever Arco starts next and re-announces every service on
+that connect, re-claiming `sim-room` before the new run's own simulator is
+even spawned. O2 then refuses the new simulator's announcement
+(`o2/src/bridge.cpp:231-237`: a bridge cannot coopt an existing local
+service), and because `/_o2/*/sv` is fire-and-forget the refusal is a log
+line on the **hub** only -- the refused simulator clock-syncs and looks
+exactly as healthy as the one that won, while every frame the new run
+addresses to `/sim-room/leds` is delivered to the zombie instead. Three
+guards now close this: `harness/o2_shroom.py --exit-with-parent`
+(`harness/o2_shroom.py:241,284`) checks the parent pid recorded at launch
+inside both blocking loops, so a killed parent is detected without ever
+needing `/release` -- `harness/run_stack.py` now passes the identical flag
+to every player device it spawns, not just the Room simulator, **and
+`harness/terrarium_boot.py` carries the same flag now too**, reusing
+`o2_shroom`'s `parent_is_gone` predicate rather than a second copy and
+checking it in both `_wait_in_setup` and `_serve_until_done` so the exit
+runs the normal `finally: shutdown(teardown)` path. That last one closes
+the orphan path the other two cannot: `run_stack` SIGTERMs and Ctrl-Cs are
+already handled, but a **SIGKILLed or OOM-killed `run_stack`** would
+otherwise leave `terrarium_boot` alive and, with it, Arco and the Room
+simulator, un-signalled because they sit in their own session
+(`start_new_session=True`). Default off, so a hand-run `terrarium_boot` is
+unchanged; `control/boot.py`'s
+`boot()` and `harness/terrarium_boot.py`'s `build()` now shut the simulator
+(and everything else spawned so far) down on any failure,
+`KeyboardInterrupt` included, via the guarded `TeardownStack` described
+below -- which replaced the four hand-written `except Exception: pass`
+guards this paragraph used to describe one by one; and
+`verify_service_ownership` (`devicelink/o2_transport.py:119`) sends a
+self-addressed round trip before the tick loop starts, so a refused
+announcement fails loud instead of silently. Design:
+`docs/superpowers/specs/2026-08-14-room-simulator-service-collision-design.md`.
+
 **The gap that survived this slice was closed 2026-08-14.** All of the above
 was built and unit-tested with nothing driving it end to end; a follow-up
 slice (design:
@@ -686,10 +794,117 @@ given the horizon figure below. `TestBit`'s `tilt` now emits a cue for the
 calling device and a `ROOM`-targeted one from a single gesture, and its
 `cues(at)` drifts the Room's hue on its own. Live-verified against a real
 Arco 2026-08-14: gesture-driven Room light+drone confirmed, ambient drift
-with nobody joined confirmed, ~1000-frame-scale clamp counts on two runs
-consistent with the already-known too-small horizon. See the *Control on
-o2lite, and timed cues* status callout above and *`cue_horizon`'s default is
-measurably too small* below.
+with nobody joined confirmed. This run's ~1000-frame-scale device clamp
+counts are the same clamp-counter saturation artifact a separate, same-day
+measurement identified on the o2lite path -- see *`cue_horizon` is measured
+as of 2026-08-14* under *Not yet built* -- not evidence the horizon needs
+retuning. See the *Control on o2lite, and timed cues* status callout above.
+
+### `control/teardown.py`, `control/process.py`, `harness/signals.py`, `harness/markers.py`, `harness/run_stack.py` -- teardown order, structurally, and a one-command Arco stack runner
+Closes the ordering gap the previous section's "third bug" investigation
+left open: every individual guard there was correct and the ordering they
+composed into was still wrong on the path that matters most. Design:
+[`.../2026-08-14-teardown-order-and-stack-runner-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-teardown-order-and-stack-runner-design.md).
+
+- **`TeardownStack`** (`control/teardown.py`) -- a guarded, idempotent, LIFO
+  stack of named teardown steps. The invariant, stated plainly because it is
+  the whole point: **anything registered later is torn down earlier**.
+  Client-before-hub stops being an ordering someone maintains and becomes a
+  consequence of *when* things start -- the devicelink server is pushed
+  before `boot()` runs and therefore stops last; Arco is pushed at spawn;
+  the Room simulator is pushed after Arco and therefore stops before it.
+  The o2lite transport (only present on the o2lite path, where there is no
+  devicelink server at all) is the cleanest illustration of the same
+  invariant working the other way: `main()` pushes it after `build()`
+  returns, which is after Arco, the simulator, the Room bridge and the Bit
+  are already registered, so it is registered last and **stops first** --
+  before the Arco hub it is a guest on. Each step is guarded (`close()` catches
+  `BaseException`, not `Exception` -- a second Ctrl-C landing inside a
+  subprocess wait must not abandon the remaining steps) and `close()` is
+  idempotent, so a failure path and the caller's normal teardown can both
+  call it without coordinating.
+- **`control.boot.shutdown()` was deleted, not reordered.** Its docstring
+  said Arco goes last "since everything else may still want to address it
+  during teardown," which was correct *within `boot.py`'s own scope* --
+  and wrong composed with `harness/terrarium_boot.py`, which owns o2lite
+  **client** subprocesses (the Room simulator, and on the o2lite path the
+  transport itself) that talk to that same hub. `boot()` now returns the
+  stack instead of a fixed shutdown order, and also *accepts* one, so a
+  caller that starts something before `boot()` -- the devicelink server --
+  registers it first and gets it torn down last. Reverse-of-registration is
+  correct in both scopes without either module knowing about the other.
+- **`stop_process`** (`control/process.py`) -- the bounded signal/escalate/
+  reap cycle every spawned subprocess in this repo now shares: SIGTERM, poll
+  to a timeout, escalate to SIGKILL, poll again, reap. Before this,
+  `ArcoProcess.shutdown()` and `SimulatorProcess.shutdown()` both called
+  `Popen.wait()` with no timeout, and the Room simulator is always a plain
+  `Popen`, so a client that ignored or was slow to handle its stop signal
+  hung teardown indefinitely. It polls rather than calling
+  `Popen.wait(timeout=)` because `_PtyProcess.poll()` drains the pty, and an
+  undrained pty blocks Arco's curses app on its own screen writes.
+
+**The hard-won fact this exists to fix.** mm-terrarium had **three
+separately-maintained teardown orderings**: `control/boot.py`'s failure
+handler, `harness/terrarium_boot.py`'s `build()` failure handler, and
+`harness/terrarium_boot.py`'s success-path `shutdown()`. PR #24 corrected the
+first two -- both failure paths -- and did not notice the third. So on
+**every successful run**, the one that matters most, the O2 hub was being
+killed before the o2lite clients still talking to it, and the Room simulator
+spent its last moments writing to a dead socket. That is the argument for
+making this structural rather than fixing it a third time by hand: nothing
+prevented the ordering from disagreeing with itself again, and it had.
+
+- **`harness/run_stack.py`** -- `python -m harness.run_stack` brings up the
+  whole Arco stack (Arco, Control, the Room simulator, and N player devices)
+  from one command, replacing a two-terminal, right-order-or-lose-your-output
+  workflow. It waits on real readiness markers rather than sleeping, tees
+  each child's stdout to its own log under `runs/<timestamp>/` (`.gitignore`d
+  alongside `captures/` and `o2debug.log`), and tears down device-first:
+  every process is registered on the same `TeardownStack` at the moment it
+  is spawned, so the ordering guarantee above extends to it for free.
+  `--ci` mode bounds the run with `--seconds` (default 45s) and turns off
+  echo; either mode exits non-zero on any unmet marker **or on a child that
+  exits during the hold**, and a failure prints the stage that failed, the
+  process, its log path, and the log's tail.
+
+  That second condition is worth stating separately because its absence was
+  the one real correctness gap the whole-branch review found. `_hold()`
+  originally took the Control tee and never read it, and nothing polled any
+  child's exit status, so an unattended `--ci` run in which Control (and
+  therefore Arco and every device under it) died seconds into a 45 s hold
+  still exited **0**. It now polls every child each tick, mirroring
+  `terrarium_boot`'s own `arco.poll() is not None` pattern, and reports a
+  `child-exited` stage naming which child died and its code.
+
+  **CI mode is honestly best-effort.** The headless clock-sync defect (see
+  *Not yet built / deferred* below, "A device cannot clock-sync to Arco
+  after Control has connected — in a headless run") is upstream and
+  unfixed. `run_stack` does not fix it and does not pretend to -- its
+  `--help` says so in the same words as here. What it contributes is that
+  the failure is bounded and named: a `device-sync` stage failure pointing
+  at the device's own log and at `o2debug.log`, rather than a hang.
+- **`harness/markers.py`** -- the readiness contract `run_stack` watches
+  for: named constants emitted by `terrarium_boot`/`o2_shroom` and matched
+  on both sides by `tests/test_markers.py`. Matching on incidental print
+  wording would make a future reworded line a silent hang instead of a
+  broken test; promoting the strings to constants is what makes
+  stdout-watching honest. Failure markers (`JOIN DENIED:`, `FATAL: service`)
+  are matched too, so a failure the child has already diagnosed ends the run
+  immediately rather than sitting out the full timeout.
+- **`harness/signals.py`** -- one copy of the SIGTERM-skips-`finally`
+  gotcha: Python's `finally` blocks do not run on a bare SIGTERM, so a
+  process whose cleanup (an exit report, a `WebSimBackend.close()`) lives in
+  one loses it the instant a supervisor signals it rather than asking. This
+  lived as an identical six-line copy in `harness/led_smoke.py` and
+  `harness/room_simulator.py`; `harness/o2_shroom.py` (SIGTERM'd by
+  `SimulatorProcess`), `harness/terrarium_boot.py` (SIGTERM'd by
+  `run_stack`), and `run_stack.py` itself (guarding its own
+  `finally: teardown.close()` against a bare `kill <pid>` or a CI job's
+  timeout) now install it too, so there is one home for the gotcha
+  instead of five copies that could each drift independently.
+
+**Suite baseline as of this slice: 721 passed, 1 skipped** (662 at this
+branch's start).
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -726,6 +941,15 @@ honor them in any new work:
    preserving: `game` and `actl` are **inbound-only** today (devices → `game`,
    Arco → `actl`), so Control never messages itself and there is no round trip
    to eliminate. Keep it that way. See design doc § *Message Routing*.
+   **One deliberate exception:** `verify_service_ownership`
+   (`devicelink/o2_transport.py:119`) sends Control's own `game` service one
+   self-addressed message at startup. It is not a steady-state message path;
+   it is an assertion that *uses* the no-local-short-circuit property this
+   rule documents as a cost -- a message addressed to a service the process
+   itself offers only comes back if the hub really routed it there, which is
+   exactly the measurement a refused announcement (see *Not yet built*)
+   needs. Run once before the tick loop begins, never again after. `game`
+   and `actl` remain inbound-only in steady state.
 5. **A test double must never be more permissive than the library it stands
    for.** Earned the hard way on 2026-08-13: `FakeO2Lite.deliver()` called
    handlers directly while real o2litepy dispatches only from inside
@@ -768,7 +992,13 @@ yet**; the box does not exist.
 
 - **arco / o2** (rbdannenberg upstream, Musical-Mycology forks) — the synthesis
   engine and O2 transport this server builds on. The Arco server *is* the room's
-  O2 hub and sole synthesizer.
+  O2 hub and sole synthesizer. Two O2/o2litepy defects found while
+  investigating the Room-simulator service collision (a refused service
+  announcement is silent on the client; o2litepy's discovery has no ensemble
+  filter) are written up for Roger at
+  [`docs/upstream/2026-08-14-o2-service-and-discovery-report.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/upstream/2026-08-14-o2-service-and-discovery-report.md)
+  -- reports, not proposals; see *Not yet built / deferred* below for the
+  standing descriptions of both.
 - **pyarco**: the Python control layer Control+GameServer builds ugen graphs
   through. A **dev/test-only dependency reached by `PYTHONPATH`**, following
   the luxaeterna precedent: nothing is vendored or submoduled, and
@@ -839,38 +1069,165 @@ Kept explicit so the doc doesn't over-claim:
   `bridge_id` (Control's own link to the host) and `tcp_close`. Closing this
   needs an application heartbeat or a registration expiry, which is a design
   question rather than a bug fix.
-- **`cue_horizon`'s default is measurably too small, and now there is a
-  number.** The live 2026-08-13 run clamped **762 of 820** frames: they
-  arrived already past their deadline, so the queue released them on arrival
-  and the scheduling was bypassed on 93% of frames. End-to-end delivery
-  through Arco measured **~67 ms** against the 60 ms default. The light still
-  moves, because a clamped frame displays immediately, but *honored timing*
-  is not what you are watching. Reproduced 2026-08-14 on the now-load-bearing
-  path: the device-side clamp counter (`ShroomClient.clamped`) read **1405**,
-  then **1081**, on two separate runs (total frame counts not captured, so no
-  percentage this time) — the counter is doing exactly the job the
-  2026-08-14 slice built it to do, consistently flagging the same
-  already-known problem rather than a new one. `harness/sync_bench.py` is the
-  tool to pin a real value; the clamp counter (`DeviceLinkAgent.clamped`,
-  `ShroomClient.clamped`) is what reports when the configured horizon is
-  wrong in production. Every figure here is a **dev-box figure**: the venue
-  box does not exist.
-- **Arco rejects the Room simulator's service announcement.** Its log carries
-  `dropping message because /_o2/*/sv not from service provider ... by TCP
-  "sim-room"`. A player device (`ie1`) registers and receives frames fine, so
-  this is specific to the Terrarium-spawned Room simulator, and it may mean
-  the Room simulator has never received a frame on the o2lite path at all.
-  Unresolved, and an O2-layer question rather than an mm-terrarium one. Note
-  this is a *separate* cause from the documented `TestBit` cue gap below;
-  either alone would leave the Room's surface dark, so do not assume fixing
-  one explains the other.
-- **`ArcoProcess` cannot spawn Arco without a controlling TTY.** Arco's
-  curses init opens `/dev/tty` and fails with `Could not open /dev/tty.
-  Initialization Failed!` otherwise, after which `wait_ready` times out into
-  a clean `BootFailure`. So `harness/terrarium_boot.py` runs only from an
-  interactive terminal. That is fine for a venue box and fatal for anything
-  headless: CI, cron, or an agent-driven run cannot boot this stack. `script`
-  does not rescue it from a process whose stdio is a socket.
+- **`cue_horizon` is measured as of 2026-08-14, and 60 ms turned out to be
+  right. The belief that it was far too small was an artifact.** This
+  supersedes the earlier claim here that the live 2026-08-13 run proved the
+  default too small.
+
+  Live o2lite run against a real Arco, **2418 frames**, taken with
+  `--horizon 0` so nothing could be held back and the number is genuine
+  one-way delivery:
+
+  | p50 | p95 | p99 | p99.9 | worst |
+  |-----|-----|-----|-------|-------|
+  | 4.5 ms | 9.3 ms | **11.8 ms** | 38.6 ms | 80.2 ms |
+
+  42 of those samples came back very slightly negative, which is the two
+  clocks agreeing to well under a millisecond rather than a systematic
+  offset. The path is roughly **5 ms typical, 12 ms at p99** — not the ~67 ms
+  previously recorded.
+
+  The horizon covers the whole gesture-to-display chain, not just that hop:
+  Control's 44 Hz render tick (22.7 ms of quantization) + delivery (11.8 ms
+  at p99) + the device's own tick (~5 ms) ≈ **40 ms**, so the existing 60 ms
+  covers it with ~20 ms of headroom for the jitter tail. p99 rather than
+  worst-case is deliberate: the horizon is fixed added latency on *every*
+  cue, so sizing it to the worst frame ever seen taxes every gesture in the
+  room for one hiccup.
+
+  **Why the old numbers were wrong, because the trap is still live.** O2
+  honors the timestamp and delivers each frame **at** `when`. A device-side
+  queue that re-checks the deadline on arrival therefore always finds it a
+  few ms past due, *at any horizon*. Measured directly: **93.3% clamped at a
+  150 ms horizon and 95.6% at 300 ms**, with lateness pinned near +3 ms and a
+  floor near −2 ms in both runs. Doubling the horizon doubled the apparent
+  "latency" (154 ms → 304 ms) and did not reduce clamping, which also rules
+  out a clock offset — an offset would shrink as the horizon grew. The 2026-
+  08-13 "~67 ms" was simply 60 ms of horizon plus ~6 ms of that overhead, and
+  the 762-of-820 clamp rate was the same artifact.
+
+  Method for anyone re-running this: **measure at `--horizon 0`**, which is
+  the only setting where nothing is held and lateness is real delivery.
+  Measuring at a generous horizon looks safe and is exactly what produced the
+  wrong answer. The tooling is `TimedQueue.lateness` (bounded, so a Radxa
+  cannot leak) → `ShroomClient.lateness` → `harness/sync_bench.py`
+  (mean/p95/p99/worst, and it finally has the `main()` that
+  `terrarium_boot --horizon` has always told you to run), with
+  `harness/o2_shroom.py --control-horizon --samples-out` and the same flags
+  on `harness/room_simulator.py`.
+
+  Every figure here is a **dev-box figure**: the venue box does not exist.
+- **The clamp counter does not report a wrong horizon on the o2lite path.**
+  The timed-cue design spec, and this doc until 2026-08-14, treated a rising
+  `DeviceLinkAgent.clamped` / `ShroomClient.clamped` as the production signal
+  that `cue_horizon` is too small. Because O2 delivers at `when` (above), the
+  counter **saturates at 93–96% regardless of the horizon** and carries no
+  information about it there. It still means what the spec says wherever
+  nothing else schedules delivery: the websocket transport, and Control's own
+  room cues. Read the `lateness` distribution instead when the question is
+  whether the horizon is right.
+
+  This also raises a real design question, deliberately not answered here:
+  if O2 already schedules delivery, the device-side `TimedQueue` is largely
+  redundant on that path, and "one gesture, one shared `T`" may be enforced a
+  layer lower than the design assumed.
+
+  A separate, same-day gesture-driven live verification of the
+  load-bearing-timed-cues slice (default 60 ms horizon, not `--horizon 0`, so
+  not a clean latency measurement) read a device-side clamp count of **1405**,
+  then **1081**, across two runs. Read against the finding above, that is the
+  same saturation artifact, not independent evidence the horizon is wrong.
+- **A device cannot clock-sync to Arco after Control has connected — in a
+  headless run.** Measured repeatedly on 2026-08-14 from a non-interactive
+  context. **It does not reproduce from an interactive terminal**: the same
+  commands run by hand joined, held a role and delivered thousands of frames
+  the same afternoon, which is how the figures above were obtained. So this
+  is a real and reproducible barrier to automating the measurement, not a
+  fault in the o2lite path itself, and the cause of the interactive/headless
+  difference is unknown. pyarco's `arco.initialize()` unconditionally calls
+  `reset()`,
+  which sends `/host/clear`; from that moment a **new** o2lite client hangs
+  in `o2_shroom`'s `while o2lite.time_get() < 0` loop. Isolated: a lone
+  client syncs against a bare Arco in **0.6 s**, and against the same Arco
+  after one pyarco `initialize()` it does not sync at all. Two or three plain
+  o2lite clients coexist fine, so it is neither a client-count limit nor
+  contention -- it is the reset specifically.
+
+  The other half is worse, because it is silent: a client that synced
+  **before** the reset keeps reporting a valid `time_get()` while its socket
+  is dead, so it sends into the void and never notices. Measured: such a
+  device sent **120 joins over 240 s** and Control received none of them,
+  with nothing in Arco's `o2debug.log` after the point Control came up. So
+  there is no ordering that reliably works from a cold start: connect first
+  and the socket is silently killed, connect after and the clock never syncs.
+
+  Pressing Arco's `(S)tart` key after the reset **does** restore sync
+  immediately (`/host/run received. Starting audio devices.`, then 0.6 s),
+  which is why `--arco-start-audio` exists. It is off by default and is not
+  a general fix: `(S)tart/Stop` is a toggle Arco gives no way to read, so on
+  a boot where audio has already come back up it *stops* audio instead. This
+  is an upstream Arco/pyarco question, the same family as the documented
+  "only the first client after an Arco server start gets working audio"
+  trap, and it is not something this repo can fix.
+
+  Why 2026-08-13 worked and 2026-08-14 did not is unresolved. Treat a
+  successful live o2lite run as **currently unreliable rather than routine**,
+  and check `o2debug.log` first -- `dropping message because service was not
+  found` means Control was not up yet, and silence means the socket is dead.
+- **A refused o2lite service announcement is unobservable from the
+  client.** `/_o2/*/sv` is fire-and-forget: O2 refuses a second claimant
+  (`o2/src/bridge.cpp:231-237`), logs the drop on the **hub**, and offers
+  the client no acknowledgement, no error callback and no way to query
+  whether a registration took. A client that loses a service race
+  clock-syncs and is indistinguishable from a healthy one while everything
+  addressed to it is delivered to whoever won.
+  `devicelink/o2_transport.py`'s `verify_service_ownership` works around
+  this with a self-addressed round trip; it does not fix it. Upstream in
+  O2. (This is the O2-layer mechanism behind the Room-simulator service
+  collision described above -- see the third bug in the o2lite section --
+  which `--exit-with-parent` and the extended shutdown guarantees close on
+  the mm-terrarium side, but the underlying silence at the O2 layer stays
+  open.)
+- **o2litepy's discovery has no ensemble filter at all.**
+  `o2litepy/o2lite_disc.py:24` takes `ensemble` as a constructor argument
+  and never stores it, and `py3discovery.py:74` browses
+  `_o2proc._tcp.local.` and appends every host it resolves. So an o2lite
+  client joins whatever O2 host mDNS offers first: any ensemble, any
+  machine on the LAN. Reproduced 2026-08-14, an `--ensemble arco` client
+  registering its service on a host whose ensemble was something else
+  entirely. Venue consequence: two Terrariums on one network would
+  cross-connect today, which the "one Terrarium per room" model assumes
+  they do not. Deserves an upstream report to Roger.
+- **`ArcoProcess` cannot spawn Arco without a controlling TTY — solved, as
+  an opt-in.** Arco's curses init opens `/dev/tty` and fails with `Could not
+  open /dev/tty. Initialization Failed!` under a plain `Popen` whose stdio is
+  a pipe or socket, after which `wait_ready` times out into a clean
+  `BootFailure`. `script` does not rescue it.
+
+  `control/arco_process.py`'s `pty_popen` does: `pty.fork()` makes the child
+  call `setsid()` and adopt the pty slave as its **controlling terminal**,
+  which is what makes `/dev/tty` resolvable at all. It rides `ArcoProcess`'s
+  existing `popen=` seam, so the default path is untouched, and
+  `harness/terrarium_boot.py --arco-pty` turns it on. Two details each cost a
+  **silent** failure -- curses exits with no diagnostic, so it reads as a
+  hard incompatibility: `TERM` must be set, and the pty needs a non-zero
+  window size via `TIOCSWINSZ` (a fresh pty is 0×0). Owning the pty master
+  also makes Arco's console keys reachable (`_PtyProcess.write_console`),
+  which is its only control surface -- its own `doc/server.md` documents no
+  message-based equivalent, which is why `shutdown()` resorts to SIGTERM.
+
+  Two further things bite a cold headless boot, both now flagged:
+  `--arco-ready-timeout` exists because the **first** readiness probe against
+  a cold Arco can take ~18 s (it connects, then pyarco's `reset()` times out
+  after 5 s) while the second succeeds instantly, so the 15 s default expires
+  inside probe #1 and boot fails with Arco perfectly healthy. And
+  `--arco-settle-seconds` exists because that failed probe adds a **second**
+  `/host/clear`; the extra teardown can leave `arco.output` None, and
+  `ArcoSynthPool.start()` then dies with `'NoneType' object has no attribute
+  'ins'`. Settling first makes probe #1 succeed so only one reset happens.
+
+  Startup is therefore no longer the blocker on a headless run. Device clock
+  sync is — see the entry above.
 - **The websocket device wire is still the default.** `--transport o2lite` is
   opt-in because it requires a running Arco. Both transports are maintained.
 - **Real ugen graph-building on Arco** has a first, provisional slice: the
@@ -961,6 +1318,10 @@ Kept explicit so the doc doesn't over-claim:
   [`.../plans/2026-08-14-load-bearing-timed-cues.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-14-load-bearing-timed-cues.md).
   Live-verified against a real Arco 2026-08-14; read its section 2 (the
   timing model) before touching cue timing anywhere in this repo.
+- Teardown order, and a one-command Arco stack runner:
+  [`.../2026-08-14-teardown-order-and-stack-runner-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-teardown-order-and-stack-runner-design.md)
+  and its plan
+  [`.../plans/2026-08-14-teardown-order-and-stack-runner.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-14-teardown-order-and-stack-runner.md).
 
 
 Game-design background (RenQuest integration, Bit scoring/loop rules, hardware)

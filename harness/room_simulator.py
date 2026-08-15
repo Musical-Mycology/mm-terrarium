@@ -22,6 +22,7 @@ Usage (normally spawned by harness/terrarium_boot.py, not run by hand):
 from __future__ import annotations
 
 from harness.shroom_client import LED_CHANNELS, ShroomClient, pump_tick
+from harness.signals import sigterm_as_keyboard_interrupt
 
 
 class WebSimLeds:
@@ -53,7 +54,8 @@ def build(dev: str, sim_host: str = "127.0.0.1", sim_port: int = 0,
     from luxaeterna.synth.capability import shroom_capability
 
     backend = WebSimBackend(capability=shroom_capability(),
-                             host=sim_host, port=sim_port, serve=serve)
+                             host=sim_host, port=sim_port, serve=serve,
+                             label=dev)
     client = ShroomClient(dev, node="", leds=WebSimLeds(backend))
     return client, backend
 
@@ -72,11 +74,20 @@ def main() -> None:
                         help="Control's devicelink URL, e.g. ws://host:port/ws")
     parser.add_argument("--sim-host", default="127.0.0.1")
     parser.add_argument("--sim-port", type=int, default=0)
+    parser.add_argument("--control-horizon", type=float, default=None,
+                        help="The horizon Control was run with, used only to "
+                             "report absolute frame latency on exit. Same "
+                             "flag and same meaning as harness/o2_shroom.py's.")
+    parser.add_argument("--samples-out", default=None,
+                        help="Write raw per-frame lateness samples here as "
+                             "JSON, for python -m harness.sync_bench.")
     args = parser.parse_args()
+
+    sigterm_as_keyboard_interrupt()
 
     client, backend = build(args.dev, args.sim_host, args.sim_port)
     backend.open()
-    print(f"Watch the Room at http://{args.sim_host}:{backend.port}/")
+    print(f"Watch the Room at http://{args.sim_host}:{backend.port}/", flush=True)
 
     async def run() -> None:
         async with websockets.connect(args.server) as ws:
@@ -90,7 +101,17 @@ def main() -> None:
 
     try:
         asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
     finally:
+        # Same exit report as harness/o2_shroom.py. This path carries NO Arco
+        # hop -- Control and this process talk over a local websocket -- so
+        # what it measures is Control's own render-to-emit latency plus a
+        # loopback socket, NOT the o2lite cue path. Useful as a floor and for
+        # checking the instrumentation; never quote it as a cue latency.
+        from harness.o2_shroom import _report_latency
+        print(f"frames displayed late: {client.clamped}")
+        _report_latency(client, args.control_horizon, args.samples_out)
         backend.close()
 
 

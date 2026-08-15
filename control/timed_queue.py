@@ -13,14 +13,42 @@ Pure and stdlib-only: it runs in the offline suite and on a Radxa alike.
 
 from __future__ import annotations
 
+from collections import deque
+
+# Bound on retained lateness samples. This class runs on a Radxa in a
+# long-lived installation, so an unbounded list of floats is a leak: at the
+# 44 Hz render rate it would grow without limit for as long as the room is
+# up. 20000 is ~7.5 minutes of frames -- far more than any measurement run
+# needs, and small enough to ignore. Same reasoning as
+# harness/shroom_client.py's _MAX_PENDING_FRAMES.
+_MAX_LATENESS_SAMPLES = 20000
+
 
 class TimedQueue:
     def __init__(self) -> None:
         self._items: list[tuple[float, int, object]] = []
         # Payloads released late because their time had already passed.
-        # A rising count is the signal that BootConfig.cue_horizon is too
-        # small -- see the design spec section 6.
+        #
+        # The design spec calls a rising count the signal that
+        # BootConfig.cue_horizon is too small. MEASURED 2026-08-14: that is
+        # NOT true on the o2lite path. O2 honors the timestamp and delivers
+        # the payload AT `when`, so re-checking the deadline on arrival
+        # always finds it a few ms past due no matter how generous the
+        # horizon is -- 93.3% clamped at a 150 ms horizon, 95.6% at 300 ms,
+        # lateness pinned near +3 ms both times. The counter saturates and
+        # carries no information about the horizon there.
+        #
+        # It still means what the spec says wherever nothing else schedules
+        # delivery (the websocket transport, and Control's own room cues).
+        # Read `lateness` below rather than this counter when the question is
+        # "is the horizon right?".
         self.clamped = 0
+        # The MAGNITUDE behind that counter, which push() otherwise computes
+        # and throws away. `clamped` answers "is the horizon wrong?"; this
+        # answers "by how much, and how often?" -- which is what picking a
+        # horizon actually needs. See
+        # docs/superpowers/specs/2026-08-14-cue-horizon-measurement-design.md.
+        self.lateness: deque[float] = deque(maxlen=_MAX_LATENESS_SAMPLES)
         self._seq = 0
 
     def push(self, when: float | None, payload, now: float) -> None:
@@ -31,12 +59,22 @@ class TimedQueue:
         clamp: it releases at the next drain and increments the counter.
         """
         if when is None:
-            due_at = now
-        elif when < now:
-            self.clamped += 1
+            # No declared time means there is no deadline to be late for, so
+            # this contributes no lateness sample either -- consistent with
+            # it not counting as a clamp.
             due_at = now
         else:
-            due_at = when
+            # SIGNED, deliberately: negative means the payload arrived before
+            # its deadline, which is the healthy case and has to stay
+            # distinguishable from an equally-sized overshoot. Recorded for
+            # every timed payload, not just clamped ones -- sampling only the
+            # late ones would measure the tail and call it the distribution.
+            self.lateness.append(now - when)
+            if when < now:
+                self.clamped += 1
+                due_at = now
+            else:
+                due_at = when
         # The sequence number keeps equal times in insertion order and, more
         # importantly, stops sort() from ever comparing two payloads -- they
         # are MIDI tuples on one side and dicts/frames on the other.

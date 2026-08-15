@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import signal
 import time
 
 from bits.test_bit import RUN_DURATION_SECONDS, TestBit
@@ -30,6 +29,7 @@ from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
 from control.state import State
 from harness.device_bridge import DeviceBridge
+from harness.signals import sigterm_as_keyboard_interrupt
 from luxaeterna.backends.websim import WebSimBackend
 from luxaeterna.output import OutputLoop
 from luxaeterna.synth.capability import shroom_capability
@@ -84,13 +84,6 @@ def feed_shared(session, audio, dev, pairs):
             audio.feed_midi(dev, status, d1, d2)
 
 
-def _sigterm_as_keyboard_interrupt(signum, frame) -> None:
-    """Python's finally blocks do not run on a bare SIGTERM, only on
-    KeyboardInterrupt (SIGINT). Make `kill <pid>` clean up the same way
-    Ctrl-C already does, instead of orphaning the Arco connection."""
-    raise KeyboardInterrupt
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Watch (and hear) TestBit render on the Web LED simulator.")
@@ -110,7 +103,7 @@ def main() -> None:
     ap.add_argument("--program", type=int, default=None,
                     help="Override the General MIDI program TestBit declares.")
     args = ap.parse_args()
-    signal.signal(signal.SIGTERM, _sigterm_as_keyboard_interrupt)
+    sigterm_as_keyboard_interrupt()
 
     pool = None
     if args.audio:

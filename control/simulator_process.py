@@ -8,8 +8,9 @@ simulator-design.md section 3), not something boot() blocks on.
 
 from __future__ import annotations
 
-import signal
 import subprocess
+
+from control.process import stop_process
 
 
 class SimulatorProcess:
@@ -22,8 +23,14 @@ class SimulatorProcess:
         self._process = self._popen(self._command)
 
     def shutdown(self) -> None:
+        """SIGTERM, then SIGKILL if that is ignored, then reap.
+
+        Bounded via control/process.py. The simulator is ALWAYS a plain
+        subprocess.Popen, whose wait() has no timeout, so before this the
+        one client most likely to be slow on its way out could hang teardown
+        forever.
+        """
         if self._process is None:
             return
-        self._process.send_signal(signal.SIGTERM)
-        self._process.wait()
-        self._process = None
+        process, self._process = self._process, None
+        stop_process(process)
