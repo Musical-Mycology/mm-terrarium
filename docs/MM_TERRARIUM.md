@@ -861,6 +861,21 @@ prevented the ordering from disagreeing with itself again, and it had.
   `--help` says so in the same words as here. What it contributes is that
   the failure is bounded and named: a `device-sync` stage failure pointing
   at the device's own log and at `o2debug.log`, rather than a hang.
+
+  **Exercised against a live Arco for the first time on 2026-08-14.** Three
+  runs, one device each, via `--ci --seconds N --devices 1`. No run reached
+  a granted role: one SETUP-window `JOIN DENIED` (fixed on this branch) and
+  two clock-sync failures (upstream, not fixed). This does not make the
+  runner work end to end -- it has not produced a green run. What did hold,
+  none of it previously exercised outside fakes: teardown reaped every
+  process, all three times, zero orphans, including on the two failing runs
+  -- the primary claim of the teardown work. Arco spawned on a pty and came
+  up with audio (`Audio open completed successfully`, `Audio latency = 10
+  ms`); `--arco-log` captured its curses output, which is what made the
+  failures diagnosable at all. `o2debug.log` recorded zero dropped messages
+  and zero service-provider refusals across all three runs. CI mode bounded
+  and named both failure modes and exited non-zero rather than hanging, as
+  designed.
 - **`harness/markers.py`** -- the readiness contract `run_stack` watches
   for: named constants emitted by `terrarium_boot`/`o2_shroom` and matched
   on both sides by `tests/test_markers.py`. Matching on incidental print
@@ -1129,18 +1144,25 @@ Kept explicit so the doc doesn't over-claim:
   `reset()`,
   which sends `/host/clear`; from that moment a **new** o2lite client hangs
   in `o2_shroom`'s `while o2lite.time_get() < 0` loop. Isolated: a lone
-  client syncs against a bare Arco in **0.6 s**, and against the same Arco
-  after one pyarco `initialize()` it does not sync at all. Two or three plain
-  o2lite clients coexist fine, so it is neither a client-count limit nor
-  contention -- it is the reset specifically.
+  client syncs against a bare Arco in **0.6 s**. Against the same Arco after
+  one pyarco `initialize()`, sync is intermittent, not deterministic:
+  measured via `harness/run_stack.py` on 2026-08-14, **1 of 3 runs synced**,
+  at O2time 30.04. Two or three plain o2lite clients coexist fine, so it is
+  neither a client-count limit nor contention -- it is the reset
+  specifically.
 
-  The other half is worse, because it is silent: a client that synced
-  **before** the reset keeps reporting a valid `time_get()` while its socket
-  is dead, so it sends into the void and never notices. Measured: such a
-  device sent **120 joins over 240 s** and Control received none of them,
-  with nothing in Arco's `o2debug.log` after the point Control came up. So
-  there is no ordering that reliably works from a cold start: connect first
-  and the socket is silently killed, connect after and the clock never syncs.
+  The other half: a client that synced **before** the reset keeps reporting
+  a valid `time_get()` while its socket is dead, so it sends into the void.
+  Measured: such a device sent **120 joins over 240 s** and Control received
+  none of them, with nothing in Arco's `o2debug.log` after the point Control
+  came up. When this entry was written that was silent and unnoticeable; it
+  no longer is. `verify_service_ownership` (`devicelink/o2_transport.py`)
+  landed in PR #24, after this entry was written, and a dead socket now
+  fails loud with `FATAL: service ... is not routed back to this process`.
+  The **defect** is unchanged; its **observability** is not -- do not read
+  this as fixed. So there is no ordering that reliably works from a cold
+  start: connect first and the socket is killed (now diagnosable, not
+  fixed), connect after and the clock never syncs.
 
   Pressing Arco's `(S)tart` key after the reset **does** restore sync
   immediately (`/host/run received. Starting audio devices.`, then 0.6 s),
