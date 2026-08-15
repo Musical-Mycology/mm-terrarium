@@ -725,7 +725,17 @@ guards now close this: `harness/o2_shroom.py --exit-with-parent`
 (`harness/o2_shroom.py:241,284`) checks the parent pid recorded at launch
 inside both blocking loops, so a killed parent is detected without ever
 needing `/release` -- `harness/run_stack.py` now passes the identical flag
-to every player device it spawns, not just the Room simulator; `control/boot.py`'s
+to every player device it spawns, not just the Room simulator, **and
+`harness/terrarium_boot.py` carries the same flag now too**, reusing
+`o2_shroom`'s `parent_is_gone` predicate rather than a second copy and
+checking it in both `_wait_in_setup` and `_serve_until_done` so the exit
+runs the normal `finally: shutdown(teardown)` path. That last one closes
+the orphan path the other two cannot: `run_stack` SIGTERMs and Ctrl-Cs are
+already handled, but a **SIGKILLed or OOM-killed `run_stack`** would
+otherwise leave `terrarium_boot` alive and, with it, Arco and the Room
+simulator, un-signalled because they sit in their own session
+(`start_new_session=True`). Default off, so a hand-run `terrarium_boot` is
+unchanged; `control/boot.py`'s
 `boot()` and `harness/terrarium_boot.py`'s `build()` now shut the simulator
 (and everything else spawned so far) down on any failure,
 `KeyboardInterrupt` included, via the guarded `TeardownStack` described
@@ -811,8 +821,18 @@ prevented the ordering from disagreeing with itself again, and it had.
   every process is registered on the same `TeardownStack` at the moment it
   is spawned, so the ordering guarantee above extends to it for free.
   `--ci` mode bounds the run with `--seconds` (default 45s) and turns off
-  echo; either mode exits non-zero on any unmet marker, and a failure prints
-  the stage that failed, the process, its log path, and the log's tail.
+  echo; either mode exits non-zero on any unmet marker **or on a child that
+  exits during the hold**, and a failure prints the stage that failed, the
+  process, its log path, and the log's tail.
+
+  That second condition is worth stating separately because its absence was
+  the one real correctness gap the whole-branch review found. `_hold()`
+  originally took the Control tee and never read it, and nothing polled any
+  child's exit status, so an unattended `--ci` run in which Control (and
+  therefore Arco and every device under it) died seconds into a 45 s hold
+  still exited **0**. It now polls every child each tick, mirroring
+  `terrarium_boot`'s own `arco.poll() is not None` pattern, and reports a
+  `child-exited` stage naming which child died and its code.
 
   **CI mode is honestly best-effort.** The headless clock-sync defect (see
   *Not yet built / deferred* below, "A device cannot clock-sync to Arco
