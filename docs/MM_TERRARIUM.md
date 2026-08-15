@@ -855,9 +855,9 @@ prevented the ordering from disagreeing with itself again, and it had.
   `child-exited` stage naming which child died and its code.
 
   **CI mode is honestly best-effort.** The headless clock-sync defect (see
-  *Not yet built / deferred* below, "A device cannot clock-sync to Arco
-  after Control has connected — in a headless run") is upstream and
-  unfixed. `run_stack` does not fix it and does not pretend to -- its
+  *Not yet built / deferred* below, "A device's clock-sync to Arco after
+  Control has connected is unreliable -- in a headless run") is upstream
+  and unfixed. `run_stack` does not fix it and does not pretend to -- its
   `--help` says so in the same words as here. What it contributes is that
   the failure is bounded and named: a `device-sync` stage failure pointing
   at the device's own log and at `o2debug.log`, rather than a hang.
@@ -1133,11 +1133,12 @@ Kept explicit so the doc doesn't over-claim:
   if O2 already schedules delivery, the device-side `TimedQueue` is largely
   redundant on that path, and "one gesture, one shared `T`" may be enforced a
   layer lower than the design assumed.
-- **A device cannot clock-sync to Arco after Control has connected — in a
-  headless run.** Measured repeatedly on 2026-08-14 from a non-interactive
-  context. **It does not reproduce from an interactive terminal**: the same
-  commands run by hand joined, held a role and delivered thousands of frames
-  the same afternoon, which is how the figures above were obtained. So this
+- **A device's clock-sync to Arco after Control has connected is
+  unreliable -- in a headless run.** Measured repeatedly on 2026-08-14
+  from a non-interactive context. **It does not reproduce from an
+  interactive terminal**: the same commands run by hand joined, held a
+  role and delivered thousands of frames the same afternoon, which is how
+  the figures above were obtained. So this
   is a real and reproducible barrier to automating the measurement, not a
   fault in the o2lite path itself, and the cause of the interactive/headless
   difference is unknown. pyarco's `arco.initialize()` unconditionally calls

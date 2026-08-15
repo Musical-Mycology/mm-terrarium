@@ -230,10 +230,10 @@ def main() -> None:
     #
     # That is not a hypothetical. The clock-sync wait is exactly where a
     # device sits when the upstream /host/clear defect bites (see
-    # docs/MM_TERRARIUM.md, "A device cannot clock-sync to Arco after
-    # Control has connected"), so it is the likeliest place in this program
-    # to be signalled -- and it was the one path the SIGTERM handler did not
-    # protect. Measured live on 2026-08-14.
+    # docs/MM_TERRARIUM.md, "A device's clock-sync to Arco after Control
+    # has connected is unreliable"), so it is the likeliest place in this
+    # program to be signalled -- and it was the one path the SIGTERM
+    # handler did not protect. Measured live on 2026-08-14.
     try:
         o2lite.initialize(args.ensemble)
         o2lite.set_services(args.dev)      # the device offers its own ie<N>
