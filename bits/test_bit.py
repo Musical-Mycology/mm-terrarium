@@ -5,7 +5,7 @@ section 4.
 """
 
 from control.bit import Bit
-from control.cues import PlayCue
+from control.cues import ROOM, PlayCue
 from control.roles import Role, RoleClass, RoleTable
 from control.rooms import RoomType, room_role
 
@@ -14,6 +14,9 @@ RUN_DURATION_SECONDS = 2.0
 
 class TestBit(Bit):
     version = "0.1"
+
+    # Seconds for one full out-and-back sweep of the Room's ambient hue.
+    ROOM_DRIFT_PERIOD = 12.0
 
     def __init__(self, run_duration: float = RUN_DURATION_SECONDS):
         self._run_duration = run_duration
@@ -70,17 +73,9 @@ class TestBit(Bit):
         )
         jammer = Role(name="jammer", role_class=RoleClass.JAM,
                       capacity=None, scored=False, uses=["tilt"])
-        # NOTE: nothing in the current Bit interface can actually emit an
-        # ambient cue targeting the Room during a run -- Bit.update(dt) only
-        # returns a completion bool, and verb_handlers() below only ever
-        # addresses cues back to the calling device (see _on_tilt/_on_tap/
-        # _on_shake). So aurora here renders its declared static hue once
-        # and then holds it, unanimated, for the whole run; session.clear()
-        # is never reached either, since nothing drives that. That's fine
-        # for what this Bit proves (RoomBridge/LightSession wiring), but a
-        # future slice extending Bit.update() (or an equivalent hook) to
-        # also emit Room-targeted cues is needed before the Room's light can
-        # actually animate during gameplay.
+        # The Room's own role. Its cc:74 lane is driven two ways now: by any
+        # player's tilt (see _on_tilt) and by this Bit's own cues() drift, so
+        # the Room animates whether or not anyone has joined.
         room_name, room, room_node = room_role(
             RoomType.TEST,
             # A field-rate gesture, like player's aurora -- no note lane,
@@ -122,6 +117,24 @@ class TestBit(Bit):
         self._elapsed += dt
         return self._elapsed >= self._run_duration
 
+    def cues(self, at: float) -> list:
+        """Self-driven Room animation: a slow hue drift so the Room breathes
+        with nobody joined.
+
+        verb_handlers() can only ever react to a device, so without this the
+        Room's aurora reached its declared static hue once and held it,
+        unanimated, for a whole run. Deterministic in self._elapsed, which
+        update(dt) already accumulates, so a test can assert the exact value
+        at a given elapsed time.
+
+        Triangle rather than sawtooth: a sawtooth snaps from 127 back to 0
+        once per period, and aurora GLIDES to its target, so the snap reads
+        as a visible lurch rather than a wrap.
+        """
+        phase = (self._elapsed % self.ROOM_DRIFT_PERIOD) / self.ROOM_DRIFT_PERIOD
+        cc = int(round(254 * (phase if phase < 0.5 else 1.0 - phase)))
+        return [(ROOM, 0xB0, 74, cc)]
+
     def on_complete(self) -> None:
         self._completed = True
 
@@ -143,14 +156,23 @@ class TestBit(Bit):
                 "tap": self._on_tap,
                 "shake": self._on_shake}
 
-    def _on_tilt(self, dev: str, args: list) -> list:
-        """args: [dev, gamma]. gamma is degrees in [-90, 90]."""
+    def _on_tilt(self, dev: str, args: list, at: float) -> list:
+        """args: [dev, gamma]. gamma is degrees in [-90, 90].
+
+        Two cues, one `at`. The calling device's own hue lane, and the
+        Room's. The Room role declares cc:74 on BOTH its light_manifest
+        (aurora hue) and its ugen_manifest (FluidSynth cutoff), so one tilt
+        moves the Room's colour and the Room's drone timbre against a single
+        shared time. Neither cue names a time: control/engine.py stamps both
+        with `at`, which is what makes "one gesture, one T" hold without a
+        Bit having to remember to say so.
+        """
         gamma = float(args[1]) if len(args) > 1 else 0.0
         gamma = max(-90.0, min(90.0, gamma))
         cc = int(round((gamma + 90.0) / 180.0 * 127.0))
-        return [(dev, 0xB0, 74, cc)]
+        return [(dev, 0xB0, 74, cc), (ROOM, 0xB0, 74, cc)]
 
-    def _on_tap(self, dev: str, args: list) -> list:
+    def _on_tap(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, count]. A single tap clicks, a
         double chimes; both flash the hue lane so the tap is visible as well
         as audible."""
@@ -158,7 +180,7 @@ class TestBit(Bit):
         name = "chime" if count >= 2 else "click"
         return [PlayCue(dev, name, ""), (dev, 0xB0, 74, 127)]
 
-    def _on_shake(self, dev: str, args: list) -> list:
+    def _on_shake(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, sweep_deg]. Sweep drives the hue
         lane: a wider sweep pushes the colour further."""
         sweep = float(args[3]) if len(args) > 3 else 0.0

@@ -64,24 +64,28 @@ hardware fleet.
 > delivery measures 4.5 ms at p50 and 11.8 ms at p99. The "762 of 820 frames
 > clamped" that read as *timing not honored* was an artifact of re-checking a
 > deadline on a frame that O2 had already delivered on time. See
-> *Not yet built* below, which carries the numbers and the method.
+> *`cue_horizon` is measured as of 2026-08-14* under *Not yet built* below,
+> which carries the numbers and the method.
 >
-> What remains true: no Bit can compute a `T`, and no Bit emits a `LightCue`,
-> so the cue machinery is still **not load-bearing** — that gap is about the
-> `Bit` interface, not about the transport's timing.
+> **As of 2026-08-14, the cue machinery is also load-bearing.** The earlier
+> gap here -- no Bit could compute a `T`, no Bit emitted a `LightCue` -- was
+> closed the same day by a separate slice: `TestBit`'s `tilt` handler now
+> emits a Room-targeted cue alongside the calling device's own, and a new
+> `Bit.cues(at)` hook drives the Room's hue on its own with nobody joined.
+> Both were confirmed against a real Arco: a tilt visibly moved the calling
+> device's light, the Room's light, and the Room's drone timbre together,
+> from one shared computed time; the Room animated with no device joined.
+> That confirmation used the default 60 ms horizon and read a device-side
+> clamp count of 1405, then 1081, across two runs -- read against the
+> measurement above, that is the same saturation artifact, not a sign the
+> horizon is wrong.
 >
 > Still absent: **fairyring**, real scoring, and any production Bit.
 > As of 2026-08-10, **`Room`** exists as a boot-time concept and orchestration
 > (`control/boot.py` now spawns Arco itself, resolves a `RoomType`, and gates
 > Bit loading on it), and **TEST room now has a real renderer**: a devicelink-
 > connected simulator subprocess (browser-canvas LEDs) plus a real Arco voice,
-> both genuinely wired to `RoomBridge`. The one gap that survived to this line:
-> nothing in `TestBit`'s gameplay logic ever emits a cue *targeting* the Room,
-> so its light renders one static declared color and never animates during a
-> real run — the wiring is proven correct by tests, but nothing currently
-> drives it live. Audio is unaffected (the drone genuinely starts/stops on
-> RUNNING/UNLOADING). Keep this doc honest about that line: see
-> *Not yet built / deferred* below.
+> both genuinely wired to `RoomBridge`.
 
 ## What it is, in one picture
 
@@ -172,7 +176,14 @@ return to a clean waiting state. Landed in the first-slice spec
   refusal surfaced to the device as `/<dev>/error` — checked *before* the cue
   list's truthiness test, so a refusal string is never iterated
   character-by-character as garbage cues. Raising is still reserved for bugs
-  and yields the generic `"handler error"`.
+  and yields the generic `"handler error"`. As of the 2026-08-14
+  load-bearing-timed-cues slice, a `verb_handlers()` handler is called
+  `handler(dev, args, at)` — `at` is `GameServer`'s computed presentation
+  time, `origin + cue_horizon`, so a Bit never sees a raw gesture stamp or the
+  horizon itself — and the interface gained `cues(at) -> list`, called once
+  per RUNNING tick with the same cue vocabulary, for a Bit to emit cues with
+  no gesture behind them (the seam the Room-ambient-animation gap below was
+  waiting on).
 - **Observer hooks:** a **multi-observer** list (`add_observer()` with
   notify-all) fires `on_state_change` / `on_registration_change` /
   `on_devices_change`, plus **two** transport-owned sinks: `on_release` (one
@@ -766,17 +777,28 @@ self-addressed round trip before the tick loop starts, so a refused
 announcement fails loud instead of silently. Design:
 `docs/superpowers/specs/2026-08-14-room-simulator-service-collision-design.md`.
 
-**The gap that survived this slice, and it is the important one.** All of the
-above is built and unit-tested, and **nothing drives it end to end**. No Bit
-can compute the design's own `T = gesture_time + horizon`: verb handlers are
-called `handler(dev, args)`, the inbound envelope's timestamp is discarded
-before reaching them, and `BootConfig.cue_horizon` is never injected into a
-Bit. No Bit returns a `LightCue`. The non-Room branch of `_on_light_cue`
-accepts `when` and never reads it. Room audio never sees `when` at all, so
-`AudioBridge.feed_midi(when=...)` and `ArcoSynthPool.schedule_at` have **zero
-production callers**. The single production use of a real `when` stamps
-Control's own render clock, not any gesture's time. Treat "one gesture, one
-shared `T`" as designed and plumbed, not achieved. See *Not yet built* below.
+**The gap that survived this slice was closed 2026-08-14.** All of the above
+was built and unit-tested with nothing driving it end to end; a follow-up
+slice (design:
+[`.../2026-08-14-load-bearing-timed-cues-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-load-bearing-timed-cues-design.md))
+closed it. `GameServer.data()` now computes `at = origin + cue_horizon` once
+and hands a verb handler `handler(dev, args, at)`; `control/cues.py` gained a
+`ROOM` sentinel a Bit uses to target the Room without holding its runtime
+device id; `Bit` gained a `cues(at)` hook for self-driven cues, called once
+per RUNNING tick. `AudioBridge.feed_midi(when=...)` and
+`ArcoSynthPool.schedule_at` are gone rather than wired up: pyarco's scheduler
+polls on the same 44 Hz tick `TimedQueue` already does, so splitting light
+and audio bought no accuracy, and pyarco's `cause()` raises on a past time
+where `TimedQueue` clamps, which would have raised on the majority of cues
+given the horizon figure below. `TestBit`'s `tilt` now emits a cue for the
+calling device and a `ROOM`-targeted one from a single gesture, and its
+`cues(at)` drifts the Room's hue on its own. Live-verified against a real
+Arco 2026-08-14: gesture-driven Room light+drone confirmed, ambient drift
+with nobody joined confirmed. This run's ~1000-frame-scale device clamp
+counts are the same clamp-counter saturation artifact a separate, same-day
+measurement identified on the o2lite path -- see *`cue_horizon` is measured
+as of 2026-08-14* under *Not yet built* -- not evidence the horizon needs
+retuning. See the *Control on o2lite, and timed cues* status callout above.
 
 ### `control/teardown.py`, `control/process.py`, `harness/signals.py`, `harness/markers.py`, `harness/run_stack.py` -- teardown order, structurally, and a one-command Arco stack runner
 Closes the ordering gap the previous section's "third bug" investigation
@@ -1024,20 +1046,11 @@ yet**; the box does not exist.
 
 Kept explicit so the doc doesn't over-claim:
 
-- **Timed cues are plumbed but not load-bearing.** The machinery exists and is
-  unit-tested at every layer, and nothing drives it: no Bit can compute a `T`,
-  no Bit emits a `LightCue`, per-device cues silently drop `when`, and the
-  Room's audio never receives it. The design spec's success criteria 3 and 4
-  are recorded as **unmet**, with the evidence, in its own
-  *What is built but not yet load-bearing* section. Finishing this is a
-  **design decision, not mechanical work**: Room audio and light are currently
-  coupled through one synchronous `RoomBridge.feed_midi` call and therefore
-  cannot drift from each other, whereas splitting them into `TimedQueue` for
-  light plus pyarco's scheduler for audio could introduce drift *between*
-  them, which is the exact failure the timing work exists to prevent. It also
-  needs the `Bit` interface to grow a way to receive gesture time and the
-  horizon, which is the same interface change the Room-cue gap has been
-  waiting on.
+- ~~**Timed cues are plumbed but not load-bearing.**~~ **Closed 2026-08-14.**
+  See *`devicelink/o2_transport.py`, `control/timed_queue.py`,
+  `harness/o2_shroom.py`* above for what landed and *`cue_horizon`'s default
+  is measurably too small* below for what is still genuinely open (the
+  horizon value itself, not the mechanism).
 - **Device frame timing depends on which transport is in use.** On the
   o2lite transport, Control and the device now share one clock by
   construction: `DeviceLinkAgent` stamps frames off `o2lite.time_get()`
@@ -1118,6 +1131,12 @@ Kept explicit so the doc doesn't over-claim:
   if O2 already schedules delivery, the device-side `TimedQueue` is largely
   redundant on that path, and "one gesture, one shared `T`" may be enforced a
   layer lower than the design assumed.
+
+  A separate, same-day gesture-driven live verification of the
+  load-bearing-timed-cues slice (default 60 ms horizon, not `--horizon 0`, so
+  not a clean latency measurement) read a device-side clamp count of **1405**,
+  then **1081**, across two runs. Read against the finding above, that is the
+  same saturation artifact, not independent evidence the horizon is wrong.
 - **A device cannot clock-sync to Arco after Control has connected — in a
   headless run.** Measured repeatedly on 2026-08-14 from a non-interactive
   context. **It does not reproduce from an interactive terminal**: the same
@@ -1249,15 +1268,10 @@ Kept explicit so the doc doesn't over-claim:
 - **A real-hardware Room backend.** TEST room's only backend today is the
   browser simulator (`harness/room_simulator.py`); nothing implements the
   same seam against actual Tuneshroom/array hardware yet.
-- **Nothing drives the Room's light during a live run.** The rendering
-  pipeline is real and tested, but `Bit.update(dt)` has no mechanism to emit
-  a cue at all (only a completion bool), and `TestBit`'s verb handlers only
-  ever address the calling player device — so the Room's light reaches its
-  declared static hue once and never animates. Audio is unaffected (the
-  drone genuinely starts/stops on Bit state changes). Closing this means
-  extending the `Bit` interface to let it emit ambient, self-driven cues —
-  a real interface change, deliberately not attempted in the slice that
-  found this gap.
+- ~~**Nothing drives the Room's light during a live run.**~~ **Closed
+  2026-08-14** by `Bit.cues(at)` (see the `Bit` interface bullet above);
+  `TestBit`'s implementation and its live confirmation are described in the
+  *Control on o2lite, and timed cues* status callout above.
 - **`RoomBindingRegistry.save()`/`.load()` are implemented and tested but not
   called from `boot()`.** A restarted Terrarium does not yet reconnect a
   previously-bound physical Room device automatically; every restart
@@ -1298,6 +1312,12 @@ Kept explicit so the doc doesn't over-claim:
   [`.../plans/2026-08-12-control-o2lite-and-timed-cues.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-12-control-o2lite-and-timed-cues.md).
   Read the spec's *What is built but not yet load-bearing* section before
   extending anything that touches cue timing.
+- Making timed cues load-bearing (closes the gap the slice above left open):
+  [`.../2026-08-14-load-bearing-timed-cues-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-load-bearing-timed-cues-design.md)
+  and its plan
+  [`.../plans/2026-08-14-load-bearing-timed-cues.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-14-load-bearing-timed-cues.md).
+  Live-verified against a real Arco 2026-08-14; read its section 2 (the
+  timing model) before touching cue timing anywhere in this repo.
 - Teardown order, and a one-command Arco stack runner:
   [`.../2026-08-14-teardown-order-and-stack-runner-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-teardown-order-and-stack-runner-design.md)
   and its plan

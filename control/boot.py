@@ -28,7 +28,7 @@ class BootFailure(Exception):
 def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
          room_binding: RoomBindingRegistry, arco_process_cls=ArcoProcess,
          simulator_factory=None, known_device_connected=lambda dev: False,
-         tick=None, teardown=None):
+         tick=None, teardown=None, clock=time.monotonic):
     """Run the full load sequence. Returns (game_server, room_bridge,
     arco_process, teardown) once the Bit is loaded and either the Room is
     already bound (fast path) or a fresh tap has bound it.
@@ -54,6 +54,10 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
 
     `simulator_factory` is Callable[[TeardownStack], str]: a factory that
     spawns a process registers its own teardown on the stack it is handed.
+
+    `clock` is threaded into GameServer and must be the same callable the
+    caller hands DeviceLinkAgent (harness/terrarium_boot.py's build() does
+    exactly that). On the o2lite transport it is o2lite.time_get.
 
     Raises BootFailure on any stage failure. Once Arco has actually
     started, EVERY failure -- wait_ready timing out, an unknown or
@@ -96,7 +100,13 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
             raise BootFailure(
                 f"Bit {config.bit_name!r} does not support {room.room_type.name}")
 
-        gs = GameServer(bit_registry, room_binding=room_binding)
+        # cue_horizon and clock go in together and MUST match the ones
+        # DeviceLinkAgent is built with: GameServer computes every cue's
+        # target time (origin + horizon) and reads this clock for a
+        # self-driven cue's origin and for the no-stamp fallback. Two clock
+        # bases is the 2026-08-13 live-run bug.
+        gs = GameServer(bit_registry, room_binding=room_binding,
+                        cue_horizon=config.cue_horizon, clock=clock)
         gs.room = room
         try:
             gs.load_bit(config.bit_name)
