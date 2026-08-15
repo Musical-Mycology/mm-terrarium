@@ -1,7 +1,10 @@
 # Python
 __pycache__/
 *.py[cod]
-.venv/
+# No trailing slash: a worktree's .venv is a SYMLINK to the main checkout's,
+# and a directory-only pattern (".venv/") does not match a symlink, so every
+# worktree showed a spurious untracked .venv. A bare name matches both.
+.venv
 venv/
 *.egg-info/
 .pytest_cache/
