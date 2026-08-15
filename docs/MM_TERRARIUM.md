@@ -580,7 +580,12 @@ TEST room only; DEMO's simulated venue array is a deferred follow-up.
   via a small `WebSimLeds` adapter. Sends only `/game/hello`, **never**
   `/game/join` — Room binding is already recorded, by the Terrarium-assigned
   dev id, before this process is even spawned; there is no Registration Node
-  to tap for this path.
+  to tap for this path. As of the 2026-08-14 label slice, `build()` passes
+  its own `dev` (always `sim-room` here) as `WebSimBackend`'s new `label`
+  (landed in luxaeterna, `label` appended to the served page's `<title>`),
+  so this canvas's browser tab reads distinctly from a player device's own —
+  previously both were the identical generic title with no way to tell them
+  apart at a glance.
 - **`devicelink/agent.py`'s Room wiring** — `DeviceLinkAgent` now builds a
   real `LightSession` (via the loaded Bit's `room_role_name()`-declared
   Role, the same `compose_role_config`/`LightManifest.from_dict`/
@@ -663,7 +668,12 @@ Control becomes a real O2 participant, and a cue gains a time. Design:
 - **`harness/o2_shroom.py`** — a simulated Tuneshroom over real o2lite,
   rendering to a browser canvas. `--no-join` makes it serve as the Room
   simulator too (hello, never join), which is why `terrarium_boot`'s o2lite
-  mode spawns this one file rather than a second near-copy.
+  mode spawns this one file rather than a second near-copy. Same label slice
+  as `room_simulator.py`: `build()` passes its own `dev` through unconditionally
+  as `WebSimBackend`'s `label`, so the same one line covers both roles this file
+  plays — the Room path (`dev="sim-room"`, `--no-join`) and a real player
+  device's own canvas (`dev` is that device's id) — with no `--no-join`
+  branching needed, since `dev` already differs between them.
 - **`harness/sync_bench.py`** — reduces measured deltas to mean, p95, **p99**
   and worst, using absolute values so an early frame cannot cancel a late one
   into a flattering zero. p99 is the design point for `cue_horizon`
