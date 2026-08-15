@@ -1,7 +1,16 @@
 # Making timed cues load-bearing
 
 **Date:** 2026-08-14
-**Status:** Design. Not implemented.
+**Status:** Implemented and live-verified on 2026-08-14. On a real Arco over
+the o2lite transport: registration, clock sync, and the Room's drone all
+worked; a tilt gesture visibly moved both the calling device's light and the
+Room's light+drone together, from one shared `at`, with a small fixed-offset
+lag consistent with the already-known too-small default `cue_horizon`; the
+Room animated on its own with nobody joined (`Bit.cues(at)`); the player
+device's clamp counter read 1405, then 1081 on a second run (the Room's own
+clamp count was not captured). This document is a point-in-time design
+record, not a living doc: for current behavior, constraints and known issues
+read `docs/MM_TERRARIUM.md`.
 **Repos touched:** `mm-terrarium` only. No luxaeterna change, no mm-tuneshroom
 change, no Arco or pyarco change.
 **Predecessor:** [`2026-08-12-control-o2lite-and-timed-cues-design.md`](2026-08-12-control-o2lite-and-timed-cues-design.md),
