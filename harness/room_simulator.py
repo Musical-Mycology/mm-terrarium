@@ -53,7 +53,8 @@ def build(dev: str, sim_host: str = "127.0.0.1", sim_port: int = 0,
     from luxaeterna.synth.capability import shroom_capability
 
     backend = WebSimBackend(capability=shroom_capability(),
-                             host=sim_host, port=sim_port, serve=serve)
+                             host=sim_host, port=sim_port, serve=serve,
+                             label=dev)
     client = ShroomClient(dev, node="", leds=WebSimLeds(backend))
     return client, backend
 

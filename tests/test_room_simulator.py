@@ -37,3 +37,4 @@ def test_build_wires_the_client_and_backend():
     assert client.dev == "sim-room"
     assert client.leds is not None
     assert backend.is_open is False  # build() doesn't open() -- main() does
+    assert backend.label == "sim-room"
