@@ -63,7 +63,13 @@ class StackConfig:
     arco_command: str = DEFAULT_ARCO_COMMAND
     devices: int = 1
     ensemble: str = "arco"
-    setup_seconds: float = 20.0
+    # 90s, not 20s. A live run on 2026-08-14 measured device cold start at
+    # about 22s (python, luxaeterna import, WebSim backend, o2lite discovery,
+    # clock sync), and devices are spawned only AFTER Control reports SETUP,
+    # so the whole cold start burns this window. At 20s it closed first and
+    # the device was refused: `player` is a scored role, and
+    # RegistrationState.join() refuses scored roles once RUNNING.
+    setup_seconds: float = 90.0
     seconds: float | None = None      # None means hold until Ctrl-C
     horizon: float = 0.060
     echo: bool = True
@@ -375,10 +381,13 @@ def parse_args(argv=None):
                          "Default: runs/<timestamp>/.")
     ap.add_argument("--ensemble", default="arco")
     ap.add_argument("--arco-command", default=DEFAULT_ARCO_COMMAND)
-    ap.add_argument("--setup-seconds", type=float, default=20.0,
+    ap.add_argument("--setup-seconds", type=float, default=90.0,
                     help="How long Control holds registration open. A "
                          "device must join a SCORED role inside this "
-                         "window or be refused.")
+                         "window or be refused. Default 90s, not a round "
+                         "number: a live run measured device cold start at "
+                         "~22s, and devices only spawn once Control reports "
+                         "SETUP, so the cold start is inside this window.")
     ap.add_argument("--horizon", type=float, default=0.060,
                     help="Cue scheduling horizon, passed to both Control "
                          "and the devices so their reports agree.")

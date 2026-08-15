@@ -412,3 +412,22 @@ def test_the_failure_summary_points_at_the_failing_device_not_the_last_one(
     # quoted tail -- may appear, because ie1 is the one that failed.
     assert "ie1 line" in summary
     assert "ie2 line" not in summary
+
+
+def test_the_setup_window_clears_a_measured_device_cold_start():
+    """A live run on 2026-08-14 measured device cold start at about 22s:
+    Control connected at O2time 7.806 and the device clock-synced at 30.04.
+    run_stack spawns devices only AFTER Control reports SETUP, so that whole
+    cold start burns the window. At the old 20s default the window closed
+    first and the device was refused -- `player` is a scored role, and
+    RegistrationState.join() refuses scored roles once RUNNING.
+
+    Asserted on both declaration sites, because the dataclass default and
+    the argparse default are separate and only the argparse one reaches a
+    CLI run."""
+    from harness.run_stack import StackConfig, config_from_args, parse_args
+
+    measured_cold_start = 22.0
+
+    assert StackConfig(log_dir="x").setup_seconds > measured_cold_start
+    assert config_from_args(parse_args([])).setup_seconds > measured_cold_start

@@ -149,3 +149,56 @@ def test_service_conflict_asks_about_the_dev_it_was_given():
 
     service_conflict(object(), "ie1", verify=_verify)
     assert asked == ["ie1"]
+
+
+def test_main_has_exactly_one_backend_close():
+    """main() used to close the backend by hand at each exit path -- the
+    parent-gone return, the service-conflict SystemExit, and the tick loop's
+    finally -- with SIGTERM as a forgotten fourth. A KeyboardInterrupt raised
+    anywhere between backend.open() and the tick loop's try: therefore left
+    the WebSim backend open and printed an unhandled traceback, which is
+    exactly what a live run produced on 2026-08-14.
+
+    Asserted by source inspection rather than by running main(), because
+    main() imports o2litepy, which is absent from this offline suite by
+    design. The same technique and the same reason as tests/test_signals.py.
+
+    Walks the AST for real backend.close() Call nodes inside main(), rather
+    than counting the substring "backend.close()" across the module's raw
+    text. A substring count is blind to context: this file's own pre-fix
+    comment above sigterm_as_keyboard_interrupt() read "...the exit
+    lateness report and backend.close() below are simply lost", and that
+    prose alone pushed the count to 4 when only 3 real calls existed,
+    colliding with this exact assertion. A Call node cannot appear inside a
+    comment or docstring, so this version stays immune to that collision no
+    matter what a future contributor writes in prose anywhere in this
+    module.
+
+    One close call means one cleanup path. A second appearing means
+    per-exit-path cleanup has crept back into main()."""
+    import ast
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    close_calls = [
+        node for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "close"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "backend"
+    ]
+
+    assert len(close_calls) == 1, (
+        f"harness/o2_shroom.py's main() calls backend.close() at "
+        f"{len(close_calls)} real call site(s) (AST Call nodes, not text "
+        f"matches). Exactly one is expected, in the finally block. More "
+        f"than one means per-exit-path cleanup has crept back into "
+        f"main() -- the same defect that let the SIGTERM path go "
+        f"uncovered.")
