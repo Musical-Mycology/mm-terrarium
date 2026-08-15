@@ -137,7 +137,8 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     from harness.room_simulator import WebSimLeds
 
     backend = WebSimBackend(capability=shroom_capability(),
-                            host=sim_host, port=sim_port, serve=serve)
+                            host=sim_host, port=sim_port, serve=serve,
+                            label=dev)
     client = ShroomClient(dev, node, leds=WebSimLeds(backend))
     return client, backend
 

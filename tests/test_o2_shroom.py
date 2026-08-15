@@ -43,6 +43,7 @@ def test_build_wires_the_client_and_backend():
     assert client.node == "TEST_PLAYER_NODE"
     assert client.leds is not None
     assert backend.is_open is False
+    assert backend.label == "ie1"
 
 
 # --- Gating gestures on the role: harness/shroom_client.py's ShroomClient
