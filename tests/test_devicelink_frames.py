@@ -6,6 +6,7 @@ pytest.importorskip("luxaeterna")
 
 import devicelink.agent as devicelink_agent
 from bits.test_bit import TestBit
+from control.breath import BREATH_CC
 from control.engine import GameServer
 from devicelink.agent import DeviceLinkAgent
 from tests.test_devicelink_agent import FakeServer
@@ -285,3 +286,186 @@ def test_a_raising_session_does_not_break_poll(joined):
 
     agent.bridges["ie1"].session = Boom()
     agent.poll()          # must not raise
+
+
+def _make_timed_rig(now, horizon):
+    """A joined device on a SETTABLE clock, with GameServer and
+    DeviceLinkAgent sharing that clock and one horizon.
+
+    `now` is a one-element list the test mutates; both the engine and the
+    agent read it. Unlike _make_rig's clock iterator this can be moved
+    backwards and forwards freely, which cue-timing tests need.
+
+    Driven to RUNNING before returning, for the same reason
+    _make_rig_running does it: a session still playing its welcome
+    signature does not render a cue's effect, and a frozen clock never
+    finishes that signature. Returns (gs, server, agent) matching this
+    file's convention; the test reads now[0] afterwards for its own base
+    time, since warm-up advanced it by an amount the test should not
+    hardcode.
+    """
+    clk = lambda: now[0]
+    gs = GameServer({"test_bit": TestBit}, cue_horizon=horizon, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, horizon=horizon, clock=clk)
+    gs.load_bit("test_bit")
+    server.arrive("c1")
+    server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
+    agent.poll()
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    for _ in range(200):
+        if agent.bridges["ie1"].session.state == "running":
+            break
+        now[0] += 0.1
+        agent.poll()
+    else:
+        pytest.fail("session never reached RUNNING")
+    gs.run()
+    server.sent.clear()
+    agent._pending_at.clear()
+    return gs, server, agent
+
+
+HORIZON = 0.060
+
+
+def _leds(server, dev="ie1"):
+    return [m for d, m in server.sent if m["address"] == f"/{dev}/leds"]
+
+
+def test_device_frame_carries_the_cues_own_time_not_the_render_clock():
+    """A gesture's light must land at the time Control computed for THAT
+    gesture. Stamping clock()+horizon here while the cue already carried
+    origin+horizon charges the same constant twice, and the light would land
+    at gesture + 2*horizon."""
+    now = [1000.0]
+    gs, server, agent = _make_timed_rig(now, HORIZON)
+    base = now[0]
+    at = (base - 0.005) + HORIZON          # 5 ms of delivery on the way up
+
+    # Deviation from the brief: aurora's hue is behind a Smooth() one-pole
+    # glide (luxaeterna's synth/presets.py), which only moves with real dt.
+    # Rendering at the exact same `now` as the rig's last warm-up frame gives
+    # dt ~= 0, so the fed hue would not visibly move any byte of the 36-
+    # channel frame -- unrelated to the cue-timing behavior under test. Move
+    # the clock first so the glide has room to actually change the frame;
+    # `at` stays anchored to the original `base`, so it stays well in the
+    # past of the advanced `now` and the gesture-immediate-feed path (which
+    # this test is not itself about) still applies.
+    now[0] = base + 0.5
+    gs.on_light_cue("ie1", 0xB0, 74, 100, at)
+    agent.poll()
+
+    leds = _leds(server)
+    assert leds, "the cue should have changed the rendered frame"
+    assert leds[-1]["timestamp"] == pytest.approx(at)
+
+
+def test_frame_with_no_cue_behind_it_carries_the_render_clock():
+    """A breath-only frame is a STREAM frame: its origin genuinely is
+    Control's tick, so clock()+horizon is the right stamp for it."""
+    now = [1000.0]
+    gs, server, agent = _make_timed_rig(now, HORIZON)
+
+    now[0] += 1.0                          # the breath moves, no cue at all
+    agent.poll()
+
+    leds = _leds(server)
+    assert leds
+    assert leds[-1]["timestamp"] == pytest.approx(now[0] + HORIZON)
+
+
+def test_earliest_pending_time_wins_for_one_frame():
+    """One frame carries every cue applied that tick, so it must not be late
+    for the soonest deadline among them."""
+    now = [1000.0]
+    gs, server, agent = _make_timed_rig(now, HORIZON)
+    base = now[0]
+
+    # Deviation from the brief: with HORIZON=0.060, both these `when`s
+    # (base+0.20, base+0.10) push feed_at = when - horizon to base+0.14 and
+    # base+0.04 -- both still in the future of `now` (still == base) at the
+    # moment on_light_cue runs, so both are queued in _light_cues rather
+    # than fed immediately. The clock has to move past the later feed_at
+    # (base+0.14) before a poll()'s _drain_light_cues releases either one,
+    # let alone both together in the same tick the way this test needs to
+    # exercise "earliest wins".
+    gs.on_light_cue("ie1", 0xB0, 74, 100, base + 0.20)
+    gs.on_light_cue("ie1", 0xB0, 74, 110, base + 0.10)
+    now[0] = base + 0.15
+    agent.poll()
+
+    leds = _leds(server)
+    assert leds
+    assert leds[-1]["timestamp"] == pytest.approx(base + 0.10)
+
+
+def test_a_cue_that_changes_no_frame_leaves_no_stale_time_behind():
+    """A cue can feed a session without changing the rendered frame. If the
+    pending time survived, a stale `at` would attach to some LATER frame and
+    manufacture a spurious clamp on the device, corrupting the one counter
+    the horizon measurement depends on."""
+    now = [1000.0]
+    gs, server, agent = _make_timed_rig(now, HORIZON)
+    base = now[0]
+
+    # cc:7 has no lane in TestBit's player light_manifest, so the session
+    # accepts it and renders nothing differently.
+    gs.on_light_cue("ie1", 0xB0, 7, 100, base + 0.01)
+    agent.poll()
+    server.sent.clear()
+
+    now[0] = base + 5.0                    # much later: the breath has moved
+    agent.poll()
+
+    leds = _leds(server)
+    assert leds, "the breath should have changed the frame"
+    assert leds[-1]["timestamp"] == pytest.approx(now[0] + HORIZON)
+
+
+def test_a_far_future_cue_is_held_before_it_reaches_the_session():
+    """A Bit-declared cue further out than one horizon must not leak its
+    state into whatever breath frame renders in between. Held until
+    at - horizon, and NOT counted as a clamp."""
+    now = [1000.0]
+    gs, server, agent = _make_timed_rig(now, HORIZON)
+    base = now[0]
+    fed = []
+    agent.bridges["ie1"].session.feed_midi = lambda s, a, b: fed.append((s, a, b))
+
+    gs.on_light_cue("ie1", 0xB0, 74, 100, base + 0.50)   # feed at base+0.44
+    agent.poll()
+    assert fed == []
+    assert agent._light_cues.clamped == 0
+
+    now[0] = base + 0.45
+    agent.poll()
+    # Deviation from the brief: this poll() also advances the breath (see
+    # control/breath.py) far enough to change its quantized cc value, and
+    # _feed_breath runs before _drain_light_cues -- so the overridden
+    # feed_midi legitimately also records a (0xB0, BREATH_CC, ...) call
+    # ahead of the light cue's own. That is real, unrelated behavior (the
+    # breath must keep moving regardless of a queued light cue); filter it
+    # out rather than asserting an exact list that depends on incidental
+    # breath timing.
+    light_feeds = [f for f in fed if f[1] != BREATH_CC]
+    assert light_feeds == [(0xB0, 74, 100)]
+    assert agent._light_cues.clamped == 0
+
+
+def test_a_gesture_cue_is_fed_immediately_and_counts_no_clamp():
+    """A gesture cue's feed time (at - horizon) IS the gesture time, always
+    past by the time Control sees it. Queueing it would count a clamp on
+    every single gesture and destroy the counter's meaning, so it is applied
+    directly instead."""
+    now = [1000.0]
+    gs, server, agent = _make_timed_rig(now, HORIZON)
+    base = now[0]
+    fed = []
+    agent.bridges["ie1"].session.feed_midi = lambda s, a, b: fed.append((s, a, b))
+
+    gs.on_light_cue("ie1", 0xB0, 74, 100, (base - 0.005) + HORIZON)
+    assert fed == [(0xB0, 74, 100)]
+    assert agent._light_cues.clamped == 0
+    assert agent._light_cues.pending() == 0

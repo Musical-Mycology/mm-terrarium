@@ -56,7 +56,6 @@ class SynthPool(Protocol):
     def release(self, voice: DeviceVoice) -> None: ...
     def poll(self) -> None: ...
     def shutdown(self) -> None: ...
-    def schedule_at(self, when: float, fn) -> None: ...
 
 
 class FakeVoice:
@@ -87,7 +86,6 @@ class FakePool:
         self.released: list[FakeVoice] = []
         self.polls = 0
         self.shut = False
-        self.scheduled: list[tuple[float, object]] = []
 
     def acquire(self) -> FakeVoice:
         voice = FakeVoice()
@@ -102,11 +100,6 @@ class FakePool:
 
     def shutdown(self) -> None:
         self.shut = True
-
-    def schedule_at(self, when: float, fn) -> None:
-        """Record rather than run. A test fires the callable itself, which
-        is what makes 'scheduled for T' assertable with no scheduler."""
-        self.scheduled.append((when, fn))
 
 
 def _cc_number(ref: str) -> int:
@@ -191,23 +184,16 @@ class AudioBridge:
         self._pending_offs = still_sounding
         self._pool.poll()
 
-    def feed_midi(self, dev: str, status: int, d1: int, d2: int,
-                  when: float | None = None) -> None:
+    def feed_midi(self, dev: str, status: int, d1: int, d2: int) -> None:
         """Apply one MIDI event to `dev`'s voice through its declared lanes.
 
-        `when` is an absolute time on the O2 clock. None means apply now,
-        which is the pre-timing behavior and stays the default. A time is
-        handed to the pool's scheduler rather than slept on: this module
-        must never block the tick, and must never import pyarco to find a
-        clock (boundary: see the module docstring).
+        No `when`, deliberately. Cue timing is Control's, not the backend's:
+        a Room cue waits on control/timed_queue.py's TimedQueue inside
+        devicelink/agent.py and is applied here the instant it is released.
+        pyarco's scheduler is NOT used -- see harness/arco_synth.py's note
+        for the two reasons, both of which the offline suite cannot see.
         """
-        def apply() -> None:
-            self._apply_midi(dev, status, d1, d2)
-
-        if when is None:
-            apply()
-        else:
-            self._pool.schedule_at(when, apply)
+        self._apply_midi(dev, status, d1, d2)
 
     def _apply_midi(self, dev: str, status: int, d1: int, d2: int) -> None:
         """The one path from a MIDI byte to a synth call. An undeclared cc is

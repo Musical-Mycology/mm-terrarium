@@ -115,9 +115,9 @@ def test_a_full_capture_round_trip_writes_a_trace(tmp_path):
 
 def test_abandon_drops_the_capture(tmp_path):
     bit, store = make_bit(tmp_path)
-    bit._on_capture("ie1", open_args())
+    bit._on_capture("ie1", open_args(), 0.0)
     bit._on_capture("ie1", ["ie1", "abandon",
-                            {"capture_id": "shake-021", "reason": "cancelled"}])
+                            {"capture_id": "shake-021", "reason": "cancelled"}], 0.0)
     assert store.open_ids() == {}
     assert not (tmp_path / "SESSION" / "shake").exists()
 
@@ -126,16 +126,16 @@ def test_abandon_drops_the_capture(tmp_path):
 
 def test_telemetry_without_an_open_capture_is_refused(tmp_path):
     bit, _ = make_bit(tmp_path)
-    reason = bit._on_telemetry("ie1", telemetry_args())
+    reason = bit._on_telemetry("ie1", telemetry_args(), 0.0)
     assert isinstance(reason, str)
     assert "no open capture" in reason
 
 
 def test_a_malformed_batch_is_refused_with_the_parse_reason(tmp_path):
     bit, _ = make_bit(tmp_path)
-    bit._on_capture("ie1", open_args())
+    bit._on_capture("ie1", open_args(), 0.0)
     reason = bit._on_telemetry("ie1", ["ie1", 1.0, {"capture_id": "shake-021",
-                                                    "seq": 0, "t_ms": []}])
+                                                    "seq": 0, "t_ms": []}], 0.0)
     assert isinstance(reason, str)
     assert "t_ms" in reason
 
@@ -145,7 +145,7 @@ def test_an_incomplete_source_block_is_refused(tmp_path):
     bit, _ = make_bit(tmp_path)
     args = open_args()
     del args[2]["source"]["motion_stream"]
-    reason = bit._on_capture("ie1", args)
+    reason = bit._on_capture("ie1", args, 0.0)
     assert isinstance(reason, str)
     assert "motion_stream" in reason
 
@@ -165,8 +165,8 @@ def test_a_refusal_reaches_the_device_as_an_error_reason(tmp_path):
 def test_update_expires_an_idle_capture(tmp_path):
     clock = FakeClock()
     bit, store = make_bit(tmp_path, clock)
-    bit._on_capture("ie1", open_args())
-    bit._on_telemetry("ie1", telemetry_args())
+    bit._on_capture("ie1", open_args(), 0.0)
+    bit._on_telemetry("ie1", telemetry_args(), 0.0)
 
     clock.advance(5.0)
     bit.update(5.0)
@@ -181,8 +181,8 @@ def test_update_expires_an_idle_capture(tmp_path):
 
 def test_on_unload_truncates_whatever_is_still_open(tmp_path):
     bit, store = make_bit(tmp_path)
-    bit._on_capture("ie1", open_args())
-    bit._on_telemetry("ie1", telemetry_args())
+    bit._on_capture("ie1", open_args(), 0.0)
+    bit._on_telemetry("ie1", telemetry_args(), 0.0)
     bit.on_unload()
     assert store.open_ids() == {}
     body = json.loads((tmp_path / "SESSION" / "shake" / "003.json").read_text())
@@ -193,11 +193,11 @@ def test_on_unload_truncates_whatever_is_still_open(tmp_path):
 
 def test_status_reports_the_session_for_the_console(tmp_path):
     bit, _ = make_bit(tmp_path)
-    bit._on_capture("ie1", open_args())
+    bit._on_capture("ie1", open_args(), 0.0)
     assert bit.status()["open"] == {"ie1": "shake-021"}
 
-    bit._on_telemetry("ie1", telemetry_args())
-    bit._on_capture("ie1", close_args())
+    bit._on_telemetry("ie1", telemetry_args(), 0.0)
+    bit._on_capture("ie1", close_args(), 0.0)
     status = bit.status()
     assert status["session"] == "SESSION"
     assert status["captures"] == {"shake": 1}

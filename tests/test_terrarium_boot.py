@@ -299,6 +299,27 @@ def test_build_passes_the_supplied_clock_to_the_agent():
         shutdown(teardown)
 
 
+def test_build_gives_the_engine_and_the_agent_one_clock_and_one_horizon():
+    """Two clock bases is the bug that made the 2026-08-13 live run dark:
+    Control stamped frames off time.monotonic while the device ticked on the
+    O2 clock, roughly 518,000 against 45, so every frame was queued half a
+    million seconds out and none ever displayed. GameServer now reads a clock
+    too -- for Bit.cues origins and for the no-stamp fallback -- so the same
+    failure is available again unless the two are literally the same
+    callable.
+    """
+    clk = lambda: 4242.0
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit",
+                        cue_horizon=0.111)
+    gs, server, agent, arco, teardown = _build_with_fakes(config, clock=clk)
+    try:
+        assert gs._clock is agent._clock is clk
+        assert gs._horizon == 0.111
+        assert agent._horizon == 0.111
+    finally:
+        shutdown(teardown)
+
+
 def test_build_omitting_clock_keeps_the_existing_default():
     """The websocket path (and every existing caller) must see no change:
     omitting clock= leaves build() -- and therefore the agent -- on

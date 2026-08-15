@@ -132,7 +132,14 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     same clock (agent.py), so a welcome cue's due time (set at on_grant,
     against AudioBridge's own clock) and its expiry check (at tick, against
     the agent's) have to agree -- harness/led_smoke.py's own
-    AudioBridge(pool, clock=clock) is the existing precedent for this."""
+    AudioBridge(pool, clock=clock) is the existing precedent for this.
+
+    It is ALSO threaded into GameServer via boot(), because the engine now
+    computes every cue's target time and reads this clock both for a
+    self-driven cue's origin and for the fallback when a device did not
+    stamp its gesture. The engine and the agent must read the same clock or
+    a cue's time is unreachable -- the same failure this parameter was added
+    to fix, one layer up."""
     teardown = TeardownStack()
     if transport is None:
         server = DeviceLinkServer(host=host, port=port)
@@ -159,7 +166,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     gs, room_bridge, arco, teardown = _boot(
         config, bit_registry, arco_command=arco_command,
         room_binding=room_binding, arco_process_cls=arco_process_cls,
-        simulator_factory=factory, teardown=teardown)
+        simulator_factory=factory, teardown=teardown, clock=clock)
 
     try:
         if room_audio is None:

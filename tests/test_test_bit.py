@@ -149,7 +149,7 @@ def test_jammer_declares_only_tilt():
 def test_tap_yields_a_play_cue_and_a_light_cue():
     from bits.test_bit import TestBit
     from control.cues import PlayCue
-    cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 1])
+    cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 1], 0.0)
     assert PlayCue("ie1", "click", "") in cues
     assert any(isinstance(c, tuple) and c[0] == "ie1" for c in cues)
 
@@ -157,19 +157,19 @@ def test_tap_yields_a_play_cue_and_a_light_cue():
 def test_double_tap_plays_chime():
     from bits.test_bit import TestBit
     from control.cues import PlayCue
-    cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 2])
+    cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 2], 0.0)
     assert PlayCue("ie1", "chime", "") in cues
 
 
 def test_shake_maps_sweep_to_a_light_cue():
     from bits.test_bit import TestBit
-    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 90.0])
+    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 90.0], 0.0)
     assert cues == [("ie1", 0xB0, 74, 127)]
 
 
 def test_shake_clamps_out_of_range_sweep():
     from bits.test_bit import TestBit
-    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 999.0])
+    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 999.0], 0.0)
     assert cues == [("ie1", 0xB0, 74, 127)]
 
 
@@ -177,8 +177,8 @@ def test_gesture_handlers_tolerate_short_args():
     """A device must never be able to wedge Control with a truncated frame."""
     from bits.test_bit import TestBit
     bit = TestBit()
-    assert bit.verb_handlers()["tap"]("ie1", ["ie1"]) is not None
-    assert bit.verb_handlers()["shake"]("ie1", ["ie1"]) is not None
+    assert bit.verb_handlers()["tap"]("ie1", ["ie1"], 0.0) is not None
+    assert bit.verb_handlers()["shake"]("ie1", ["ie1"], 0.0) is not None
 
 
 def test_test_bit_declares_a_room_test_role():
@@ -195,3 +195,46 @@ def test_test_bit_room_node_is_registered():
     bit = TestBit()
     node = ROOM_NODE_IDS[RoomType.TEST]
     assert room_role_name(RoomType.TEST) in bit.role_table.node_map[node]
+
+
+def test_tilt_drives_the_calling_device_and_the_room_at_one_time():
+    """The Room role declares cc:74 on BOTH its light_manifest (aurora hue)
+    and its ugen_manifest (FluidSynth cutoff), so one tilt moves the Room's
+    colour and the Room's drone timbre against a single shared time. This is
+    the gesture that makes the timed-cue path load-bearing rather than merely
+    present."""
+    from control.cues import ROOM
+    bit = TestBit()
+    cues = bit._on_tilt("ie1", ["ie1", 0.0], at=1000.06)
+    assert cues == [("ie1", 0xB0, 74, 64), (ROOM, 0xB0, 74, 64)]
+
+
+def test_room_drift_is_a_deterministic_triangle():
+    """Deterministic in _elapsed, which update(dt) already accumulates, so a
+    test can assert the exact value. Triangle rather than sawtooth: a
+    sawtooth snaps from 127 back to 0 once a period and aurora glides to its
+    target, so the snap reads as a visible lurch."""
+    from control.cues import ROOM
+    bit = TestBit(run_duration=1000.0)
+    bit.on_run_start()
+
+    assert bit.cues(at=0.0) == [(ROOM, 0xB0, 74, 0)]
+
+    bit.update(TestBit.ROOM_DRIFT_PERIOD / 2)          # half a period
+    assert bit.cues(at=0.0) == [(ROOM, 0xB0, 74, 127)]
+
+    bit.update(TestBit.ROOM_DRIFT_PERIOD / 2)          # a full period
+    assert bit.cues(at=0.0) == [(ROOM, 0xB0, 74, 0)]
+
+    bit.update(TestBit.ROOM_DRIFT_PERIOD * 3 / 4)       # three-quarters through the next period
+    assert bit.cues(at=0.0) == [(ROOM, 0xB0, 74, 64)]
+
+
+def test_room_animates_with_no_device_joined():
+    """verb_handlers() can only react to a gesture. Without cues(), the
+    Room's aurora reached its declared static hue once and held it for the
+    whole run."""
+    bit = TestBit(run_duration=1000.0)
+    bit.on_run_start()
+    bit.update(1.0)
+    assert bit.cues(at=0.0), "the Room must animate with nobody joined"

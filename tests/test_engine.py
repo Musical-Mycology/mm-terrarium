@@ -482,3 +482,94 @@ def test_join_without_room_configured_ignores_room_gating():
     server.load_bit("TestBit")
     result = server.join("ie1", "TEST_PLAYER_NODE")
     assert result.granted is True
+
+
+def test_bit_cues_are_dispatched_once_per_running_tick():
+    """update(dt) answers 'am I done'; cues(at) answers 'what should happen'.
+    Without this hook nothing in a Bit can animate the Room on its own."""
+    from control.bit import Bit
+    from control.cues import ROOM
+    from control.roles import Role, RoleClass, RoleTable
+    from control.rooms import Room, RoomType
+
+    class AmbientBit(Bit):
+        version = "0.1"
+        def __init__(self):
+            self.at_seen = []
+        @property
+        def role_table(self):
+            player = Role(name="player", role_class=RoleClass.SHARED,
+                          capacity=None, scored=False)
+            return RoleTable(roles={"player": player},
+                             node_map={"NODE_A": ["player"]})
+        def cues(self, at):
+            self.at_seen.append(at)
+            return [(ROOM, 0xB0, 74, 42)]
+
+    bit = AmbientBit()
+    gs = GameServer({"ab": lambda: bit}, cue_horizon=0.06,
+                    clock=lambda: 1000.0)
+    gs.room = Room(room_type=RoomType.TEST)
+    gs.room.bound_dev = "sim-room"
+    seen = []
+    gs.on_light_cue = lambda *a: seen.append(a)
+    gs.load_bit("ab")
+    gs.run()
+    gs.tick(0.02)
+
+    assert bit.at_seen == [pytest.approx(1000.06)]
+    assert seen == [("sim-room", 0xB0, 74, 42, pytest.approx(1000.06))]
+
+
+def test_bit_cues_are_not_dispatched_on_the_completing_tick():
+    """A Bit that just signalled done is tearing down; dispatching a cue for
+    it would put light on a device the engine is about to release."""
+    from control.bit import Bit
+    from control.roles import Role, RoleClass, RoleTable
+
+    class DoneBit(Bit):
+        version = "0.1"
+        def __init__(self):
+            self.cue_calls = 0
+        @property
+        def role_table(self):
+            player = Role(name="player", role_class=RoleClass.SHARED,
+                          capacity=None, scored=False)
+            return RoleTable(roles={"player": player},
+                             node_map={"NODE_A": ["player"]})
+        def update(self, dt):
+            return True
+        def cues(self, at):
+            self.cue_calls += 1
+            return []
+
+    bit = DoneBit()
+    gs = GameServer({"db": lambda: bit})
+    gs.load_bit("db")
+    gs.run()
+    gs.tick(0.02)
+    assert bit.cue_calls == 0
+
+
+def test_raising_bit_cues_does_not_wedge_the_tick():
+    """Same guarantee every other Bit hook has: a misbehaving Bit must never
+    stop Control reaching COMPLETING."""
+    from control.bit import Bit
+    from control.roles import Role, RoleClass, RoleTable
+
+    class BadBit(Bit):
+        version = "0.1"
+        @property
+        def role_table(self):
+            player = Role(name="player", role_class=RoleClass.SHARED,
+                          capacity=None, scored=False)
+            return RoleTable(roles={"player": player},
+                             node_map={"NODE_A": ["player"]})
+        def cues(self, at):
+            raise RuntimeError("boom")
+
+    gs = GameServer({"bb": BadBit})
+    gs.load_bit("bb")
+    gs.run()
+    gs.tick(0.02)                    # must not raise
+    assert gs.state == State.RUNNING

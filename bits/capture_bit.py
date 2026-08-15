@@ -65,10 +65,12 @@ class CaptureBit(Bit):
     def verb_handlers(self) -> dict:
         return {"capture": self._on_capture, "telemetry": self._on_telemetry}
 
-    # Both handlers return [] on success (there are no light cues to emit)
-    # or a refusal string, which control/engine.py surfaces to the device as
-    # /<dev>/error. Neither ever raises: boundary rule 2.
-    def _on_capture(self, dev: str, args: list):
+    # Both handlers return [] on success (there are no light cues to emit) or
+    # a refusal string, which control/engine.py surfaces to the device as
+    # /<dev>/error. Neither ever raises: boundary rule 2. `at` is unused: a
+    # capture is a recording, not a rendered consequence, so there is nothing
+    # here to schedule.
+    def _on_capture(self, dev: str, args: list, at: float):
         try:
             cmd = decode_capture_command(args)
         except ValueError as exc:
@@ -84,7 +86,7 @@ class CaptureBit(Bit):
             return str(exc)
         return []
 
-    def _on_telemetry(self, dev: str, args: list):
+    def _on_telemetry(self, dev: str, args: list, at: float):
         try:
             batch = decode_telemetry_batch(args)
         except ValueError as exc:

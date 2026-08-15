@@ -14,7 +14,7 @@ from control.audio import AudioBridge, FakePool
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.room_bridge import FakeRoomLightSink, RoomBridge
+from control.room_bridge import FakeRoomAudioSink, FakeRoomLightSink, RoomBridge
 from control.rooms import Room, RoomType
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
@@ -58,10 +58,19 @@ class FakeServer:
     def arrive(self, client):
         self.new_clients.append(client)
 
-    def deliver(self, client, address, typespec="", args=None):
+    def deliver(self, client, address, typespec="", args=None,
+                timestamp=0.0):
+        # `timestamp` is not optional decoration. The real o2lite transport
+        # puts o2lite's msg_timestamp here (devicelink/o2_transport.py's
+        # _on_message), and the real websocket transport leaves it 0.0
+        # (devicelink/protocol.py's _event default). A double that could
+        # only ever produce one of those would hide half the design --
+        # boundary rule 5 covers what a double omits as much as what it
+        # permits.
         self.inbound.append((client, {"address": address,
                                       "typespec": typespec,
-                                      "args": args or []}))
+                                      "args": args or [],
+                                      "timestamp": timestamp}))
 
     def addressed(self, address):
         return [m for _, m in self.sent if m["address"] == address]
@@ -387,7 +396,7 @@ def test_play_cue_is_sent_to_the_device():
     gs.run()
 
     gs.bit.verb_handlers = lambda: {
-        "boop": lambda d, args: [PlayCue(d, "click", "hard")]}
+        "boop": lambda d, args, at: [PlayCue(d, "click", "hard")]}
     gs.data("ie1", "boop", ["ie1"])
 
     plays = [m for _c, m in server.sent if m["address"] == "/ie1/play"]
@@ -481,9 +490,10 @@ def test_room_dev_cue_routes_to_room_bridge_not_normal_bridges():
     baseline = bytes(universe.get_frame()[:36])
 
     gs.on_light_cue("sim-room", 0xB0, 74, 100)
-    agent._render_room()   # drains the Room's timed queue (Task 6) so the
-                            # untimed cue above -- due at once -- reaches
-                            # the session before the render below
+    agent._render_room()   # the untimed cue above already reached the
+                            # session synchronously inside on_light_cue; this
+                            # call renders+sends the resulting frame, it
+                            # does not feed anything
     clk.advance(2.0)
     session.render_into(universe)
     after = bytes(universe.get_frame()[:36])
@@ -567,22 +577,6 @@ def test_room_audio_bridge_gets_on_grant_at_setup():
                             room_audio=room_audio)
 
     assert len(pool.acquired) == 1   # TestBit's room_test role has one instrument
-
-
-def test_room_dev_cue_reaches_audio_bridge_too():
-    gs = _room_ready_game_server()
-    pool = FakePool()
-    room_audio = AudioBridge(pool)
-    room_bridge = RoomBridge()
-    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
-                            room_audio=room_audio)
-
-    gs.on_light_cue("sim-room", 0xB0, 74, 90)
-    agent._render_room()   # drains the Room's timed queue (Task 6); the
-                            # untimed cue above is due at once
-
-    voice = pool.acquired[0]
-    assert ("cc", 74, 90) in voice.sent
 
 
 def test_on_state_change_running_starts_the_drone():
@@ -700,3 +694,86 @@ def test_poll_survives_a_raising_audio_tick():
                             room_audio=_RaisingAudioBridge())
 
     agent.poll()   # must not raise; must not wedge the engine tick
+
+
+def test_gesture_stamp_reaches_the_engine():
+    """The stamp is already on the envelope and already decoded; only
+    _on_verb dropped it. Design Rule 4, timestamps at the source: jitter on
+    the way up must not become jitter in the output."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    gs.data = lambda d, v, a, gesture_time=None: seen.append(gesture_time)
+    server.deliver("c1", "/game/tilt", "sf", [dev, 12.0], timestamp=987.5)
+    agent.poll()
+    assert seen == [987.5]
+
+
+def test_unstamped_gesture_reaches_the_engine_as_zero():
+    """The websocket transport never stamps. GameServer falls back to its
+    own clock there, and it can only do that if it is told 0.0 rather than
+    something invented by the transport."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    gs.data = lambda d, v, a, gesture_time=None: seen.append(gesture_time)
+    server.deliver("c1", "/game/tilt", "sf", [dev, 12.0])
+    agent.poll()
+    assert seen == [0.0]
+
+
+def test_room_audio_waits_for_its_moment_and_light_does_not():
+    """One anchor, two releases. Light is fed immediately because its frame
+    still has to cross the wire; audio waits until `at` because it reaches
+    Arco from Control with no wire in between."""
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    light, audio = FakeRoomLightSink(), FakeRoomAudioSink()
+    now = [1000.0]
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            horizon=0.060, clock=lambda: now[0])
+    room_bridge.bind("sim-room", light=light, audio=audio)
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 100, 1000.05)
+    assert light.fed == [(0xB0, 74, 100)]     # fed on arrival
+    agent._render_room()
+    assert audio.fed == []                    # not yet: at is 1000.05
+
+    now[0] = 1000.06
+    agent._render_room()
+    assert audio.fed == [(0xB0, 74, 100)]
+
+
+def test_room_frame_carries_a_time():
+    """Room frames carried NO when at all before this: _render_room called
+    leds_event with no timestamp, so they bypassed the device's queue and its
+    clamp counter entirely while every per-device frame was scheduled."""
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    now = [1000.0]
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
+                            horizon=0.060, clock=lambda: now[0])
+    server.bind_dev("sim-room", "c-room")
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 100, 1000.05)
+    agent._render_room()
+
+    leds = [m for d, m in server.sent if m["address"] == "/sim-room/leds"]
+    assert leds
+    assert leds[-1]["timestamp"] == pytest.approx(1000.05)
+
+
+def test_a_room_audio_cue_already_past_clamps_and_counts():
+    """The horizon being too small must be VISIBLE, not silent. This counter
+    is what the separate horizon-measurement task consumes."""
+    gs = _room_ready_game_server()
+    room_bridge = RoomBridge()
+    audio = FakeRoomAudioSink()
+    now = [1000.0]
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            horizon=0.060, clock=lambda: now[0])
+    room_bridge.bind("sim-room", light=FakeRoomLightSink(), audio=audio)
+
+    gs.on_light_cue("sim-room", 0xB0, 74, 100, 999.0)   # already past
+    agent._render_room()
+    assert audio.fed == [(0xB0, 74, 100)]               # released anyway
+    assert agent.clamped == 1

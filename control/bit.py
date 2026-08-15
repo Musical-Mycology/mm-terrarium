@@ -45,6 +45,24 @@ class Bit(ABC):
         """
         return False
 
+    def cues(self, at: float) -> list:
+        """Self-driven cues for this tick, in the same vocabulary a verb
+        handler returns: plain (dev, status, data1, data2) tuples,
+        control.cues.LightCue, control.cues.PlayCue, and the
+        control.cues.ROOM target.
+
+        Called once per RUNNING tick, after update(dt), and skipped on the
+        tick update() signals completion. `at` is the absolute time at which
+        these cues should be PRESENTED; Control has already added the
+        installation's cue_horizon to its own clock.
+
+        This is the only way a Bit can animate anything without a device
+        doing something: verb_handlers() can only ever react to a gesture,
+        which is why the Room's light used to reach its declared static hue
+        once and hold it for a whole run. Default: nothing to emit.
+        """
+        return []
+
     def on_complete(self) -> None:
         """Called once when Control enters COMPLETING (scoring, closing actions)."""
 
@@ -70,7 +88,12 @@ class Bit(ABC):
         """Extra /game/* verb handlers this Bit adds, beyond the fixed
         lifecycle verbs Control always handles. Empty by default.
 
-        A handler is called as handler(dev, args) and returns either a list
+        A handler is called as handler(dev, args, at), where `at` is the
+        absolute O2 time at which this gesture's consequence should be
+        PRESENTED -- Control has already added the installation's
+        cue_horizon to the device's own gesture stamp, so a Bit never sees
+        the horizon and never sees a raw stamp. A handler returns either a
+        list
         of (dev, status, data1, data2) light cues, or a str refusal reason
         that Control surfaces to that device as /<dev>/error. Returning a
         str is how a Bit rejects a well-formed call for its own reasons;
