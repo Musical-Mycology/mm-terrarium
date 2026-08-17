@@ -5,6 +5,7 @@ from tools.render_diagrams import (
     d2_labels,
     source_labels,
     validate_d2_source,
+    verify_labels_present,
 )
 
 
@@ -52,9 +53,6 @@ def test_validate_rejects_sequence_diagram_shape():
 
 def test_validate_accepts_a_clean_source():
     validate_d2_source("topology", "a: Arco\na -> b: /game/join\n")
-
-
-from tools.render_diagrams import verify_labels_present
 
 
 def test_round_trip_passes_when_every_label_survives():
