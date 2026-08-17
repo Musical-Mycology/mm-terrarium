@@ -2279,8 +2279,12 @@ def test_build_uses_the_room_surface_not_the_shroom():
     pytest.importorskip("luxaeterna")
     from harness.room_simulator import build
     client, backend = build("sim-room", serve=False)
-    assert backend.capability.surface_id == "room_test"
-    assert backend.capability.pixel_count == 60
+    # WebSimBackend stores its capability privately as _cap and exposes no
+    # public accessor (luxaeterna backends/websim.py). Reaching for it is
+    # deliberate: the alternative is asserting nothing about the surface the
+    # simulator actually renders, which is the whole point of this task.
+    assert backend._cap.surface_id == "room_test"
+    assert backend._cap.pixel_count == 60
 
 
 def test_build_widens_the_client_to_the_room_frame():
@@ -2325,7 +2329,7 @@ def test_no_join_build_uses_the_room_surface():
     pytest.importorskip("luxaeterna")
     from harness.o2_shroom import build
     client, backend = build("sim-room", serve=False, room_type="TEST")
-    assert backend.capability.surface_id == "room_test"
+    assert backend._cap.surface_id == "room_test"
     assert client.expected_channels == 180
 
 
@@ -2333,7 +2337,7 @@ def test_a_player_build_is_unchanged():
     pytest.importorskip("luxaeterna")
     from harness.o2_shroom import build
     client, backend = build("ie1", serve=False)
-    assert backend.capability.pixel_count == 12
+    assert backend._cap.pixel_count == 12
     assert client.expected_channels == 36
 ```
 
