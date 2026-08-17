@@ -1,7 +1,47 @@
 # The Room panel: Room fixtures, and a Room read model for the Console
 
 **Date:** 2026-08-17
-**Status:** Designed, not implemented.
+**Status:** Implemented and live-verified 2026-08-17. Suite 764 to 844 passed,
+1 skipped.
+
+*Verified in a real browser*, against a real `GameServer`/`RoomBridge`/
+`ConsoleServer`/`ConsoleAgent` with a synthetic frame source fed through
+`ConsoleAgent.on_room_frame` (the same entry point `DeviceLinkAgent` calls), so
+no Arco was required: 60 swatches in three zones labelled `left (0..19)` /
+`center (20..39)` / `right (40..59)`; a LIGHT card for `aurora` and an AUDIO
+card for `flsyn` showing `cc:74 -> hue = 58` and `cc:74 -> cc:74 = 58` at the
+same instant, which is the shared-MIDI-stream property made visible; the header
+`TEST . 60 px . GRB . bound to sim-room`; and the section 3 hiding holding in a
+real browser, with Roles and Registration listing only `player` and `jammer`.
+GRB decode confirmed by writing a constant B=40 and reading blue=40 back.
+
+*Two Important defects were found by that browser check and fixed* (`0aad46a`,
+`e19f11d`), neither visible to 843 passing tests. `renderRoom` replaced the
+`#roomStrip` node on every `room_changed`, and `room_changed` fires on every
+controller change, so the strip was rebuilt about four times per painted frame
+(measured 1726 `room_changed` against 464 `room_frame`) and the live light was
+effectively never displayed while the room was active. And `body` had
+`color: #111` with no `background-color`, so under `prefers-color-scheme: dark`
+the whole console rendered near-black on black. The first fix then introduced a
+sibling-order regression, caught by re-review and fixed in a second round.
+`room.js` gained a real behavioral test (`tests/js/room_panel_behavior.test.js`
+via Node's `vm`, wrapped by `tests/test_room_panel_behavior.py`, skipping
+cleanly where node is absent); before this it had only substring greps over its
+own source, which is exactly why these reached a live run.
+
+*Verified against a real Arco* via `python -m harness.run_stack --ci
+--seconds 25 --devices 0 --console-port 8772`: the console served at the printed
+URL, the Room simulator came up, Arco opened audio at 10 ms latency, and
+teardown reaped everything with exit 0. **First attempt of two failed** at the
+`control-ready` stage with `verify_service_ownership` reporting the `game`
+service already claimed; no orphan was present afterwards, so this is the known
+intermittency, and the guard failed loud with a named cause rather than running
+dark. **Neither run reached RUNNING** (25 s bounded against a 90 s SETUP hold),
+so Room animation on the o2lite path was not observed here; that half was
+covered by the browser verification above.
+
+This document is a point-in-time design record, not a living doc. For current
+behavior, constraints and known issues read `docs/MM_TERRARIUM.md`.
 **Repos touched:** `mm-terrarium` only. No luxaeterna change, no mm-tuneshroom
 change, no Arco or pyarco change.
 **Scope:** Spec A of two. Spec B (triggers, cue scripts, conditions, and
@@ -9,9 +49,6 @@ firing) is a separate document and is not designed here. See section 14.
 **Amends:** [`2026-08-10-room-concept-and-load-sequence-design.md`](2026-08-10-room-concept-and-load-sequence-design.md)
 section 7, which established "the Room is never surfaced on the Console or
 uplink". Section 3 below narrows that rule rather than deleting it.
-
-This document is a point-in-time design record, not a living doc. For current
-behavior, constraints and known issues read `docs/MM_TERRARIUM.md`.
 
 ---
 
