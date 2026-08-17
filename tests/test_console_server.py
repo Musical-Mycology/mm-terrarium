@@ -12,12 +12,15 @@ from control.engine import GameServer
 
 
 def test_get_root_serves_index_html():
+    # "new WebSocket" used to be asserted here too, back when index.html was
+    # one self-contained file. It now lives in console.js; that split is
+    # covered by test_console_static.py's test_the_lifecycle_controls_
+    # survived_the_split, which scans all served assets together.
     server = ConsoleServer(port=0)
     server.start()
     try:
         body = urlopen(f"http://127.0.0.1:{server.port}/").read().decode()
         assert "Terrarium Console" in body
-        assert "new WebSocket" in body
     finally:
         server.stop()
 
@@ -56,3 +59,68 @@ def _recv_event(ws, agent, event_name, timeout=2.0):
         if msg.get("event") == event_name:
             return msg
     raise AssertionError(f"did not receive {event_name!r} in time")
+
+
+def test_root_serves_index_html():
+    import urllib.request
+    from console.server import ConsoleServer
+    server = ConsoleServer(port=0)
+    server.start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.port}/") as r:
+            body = r.read().decode()
+            assert r.headers["Content-Type"].startswith("text/html")
+        assert "Terrarium Console" in body
+    finally:
+        server.stop()
+
+
+def test_css_and_js_are_served_with_their_own_content_types():
+    import urllib.request
+    from console.server import ConsoleServer
+    server = ConsoleServer(port=0)
+    server.start()
+    try:
+        base = f"http://127.0.0.1:{server.port}"
+        with urllib.request.urlopen(f"{base}/style.css") as r:
+            assert r.headers["Content-Type"].startswith("text/css")
+        with urllib.request.urlopen(f"{base}/console.js") as r:
+            assert r.headers["Content-Type"].startswith("text/javascript")
+    finally:
+        server.stop()
+
+
+def test_an_unknown_path_is_a_404():
+    import urllib.error
+    import urllib.request
+    from console.server import ConsoleServer
+    server = ConsoleServer(port=0)
+    server.start()
+    try:
+        url = f"http://127.0.0.1:{server.port}/nope.js"
+        try:
+            urllib.request.urlopen(url)
+            assert False, "expected a 404"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+    finally:
+        server.stop()
+
+
+def test_a_traversal_attempt_is_refused():
+    """The console is trusted-LAN and unauthenticated, so path handling must
+    not be the thing that widens that."""
+    import urllib.error
+    import urllib.request
+    from console.server import ConsoleServer
+    server = ConsoleServer(port=0)
+    server.start()
+    try:
+        url = f"http://127.0.0.1:{server.port}/../agent.py"
+        try:
+            urllib.request.urlopen(url)
+            assert False, "expected a refusal"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+    finally:
+        server.stop()
