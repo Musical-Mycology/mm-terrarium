@@ -34,3 +34,22 @@ def test_the_lifecycle_controls_survived_the_split():
     assert "/ws" in assets
     assert "load_bit" in assets and "\"run\"" in assets and "abort" in assets
     assert "snapshot" in assets
+
+
+def test_room_panel_renders_zones_instruments_and_live_values():
+    room_js = (STATIC / "room.js").read_text()
+    # zone view driven by the capability
+    assert "capability" in room_js and "zones" in room_js
+    # the frame relay
+    assert "roomStrip" in room_js
+    # instrument cards, both kinds, with live controller values
+    assert "instruments" in room_js and "controllers" in room_js
+    assert "lanes" in room_js
+    # the empty state
+    assert "No Room configured" in room_js
+
+
+def test_room_panel_decodes_grb_not_rgb():
+    """The wire is GRB (control/room_profile.py's color_order), so a naive
+    rgb(c[0], c[1], c[2]) would render every zone the wrong colour."""
+    assert "GRB" in (STATIC / "room.js").read_text()
