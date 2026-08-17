@@ -1311,13 +1311,15 @@ Kept explicit so the doc doesn't over-claim:
   first-come-first-serve**. Roger explicitly blessed this repo's workaround:
   "the detection method described (send a message to the service and time out
   if you don't receive it) is OK", so `verify_service_ownership` is sanctioned
-  rather than a hack. **Do not expect an upstream fix.** One correction worth
-  carrying to any future upstream thread: Roger inferred that Control's
-  transport and the Room simulator offer the same service by design. They do
-  not (Control offers `actl,game`, the simulator offers `sim-room`, players
-  offer their own dev ids); the collision was an *orphan* re-claiming
-  `sim-room` on o2litepy's automatic reconnect. The client-side silence
-  described below is real and stands as a property to design around. `/_o2/*/sv` is fire-and-forget: O2 refuses a second claimant
+  rather than a hack. **Do not expect an upstream fix**, and treat a service
+  collision here as a design question on this side rather than a bug to report.
+  For the record of what was actually observed: Control offers `actl,game`, the
+  Room simulator offers `sim-room`, and players offer their own dev ids, so no
+  two live processes claim one name by design; the collision that prompted the
+  investigation was an *orphan* re-claiming `sim-room` on o2litepy's automatic
+  reconnect, which is why the guards below are about orphan lifetime rather
+  than about naming. The client-side silence stands as a property to design
+  around. `/_o2/*/sv` is fire-and-forget: O2 refuses a second claimant
   (`o2/src/bridge.cpp:231-237`), logs the drop on the **hub**, and offers
   the client no acknowledgement, no error callback and no way to query
   whether a registration took. A client that loses a service race
