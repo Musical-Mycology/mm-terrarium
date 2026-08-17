@@ -9,10 +9,33 @@
 
 let roomCapability = null;
 
+// A live session measured 1726 room_changed events against 464 room_frame
+// events: room_changed fires on every controller value change, while
+// room_frame (the thing that actually paints #roomStrip's swatches, via
+// renderRoomFrame below) arrives far less often. renderRoom used to start
+// with el.innerHTML = "", which threw away #roomStrip and rebuilt it as 60
+// fresh black divs on every one of those 1726 calls -- so the freshly
+// painted swatches were replaced with black well before the next
+// room_frame, and the Room's live light read as permanently off exactly
+// when the room was active. The capability (pixel_count, zones) that the
+// strip's shape depends on changes almost never -- only on a different Room
+// or a reconfigured one -- so the strip is now rebuilt ONLY when that
+// changes. Header text and instrument cards are cheap and change on every
+// room_changed anyway, so they keep being fully re-rendered.
+function capabilityShapeMatches(prev, next) {
+  if (!prev) return false;
+  if (prev.pixel_count !== next.pixel_count) return false;
+  return JSON.stringify(prev.zones) === JSON.stringify(next.zones);
+}
+
 function renderRoom(room) {
   const el = document.getElementById("room");
-  el.innerHTML = "";
+
   if (!room) {
+    // No Room: tear the whole panel down, including the strip, and reset
+    // the tracked capability so a later real Room is treated as new rather
+    // than compared against a capability that no longer applies.
+    el.innerHTML = "";
     roomCapability = null;
     const p = document.createElement("p");
     p.className = "muted";
@@ -20,19 +43,45 @@ function renderRoom(room) {
     el.appendChild(p);
     return;
   }
-  roomCapability = room.capability;
 
-  const header = document.createElement("p");
+  let header = document.getElementById("roomHeader");
+  if (!header) {
+    // Nothing to reuse yet (first Room since boot, or since the last "No
+    // Room configured" state cleared el). Start from a clean panel.
+    el.innerHTML = "";
+    header = document.createElement("p");
+    header.id = "roomHeader";
+    el.appendChild(header);
+  }
   header.textContent = `${room.room_type} · ${room.capability.pixel_count} px · `
     + `${room.capability.color_order} · `
     + (room.bound_dev ? `bound to ${room.bound_dev}` : "not bound");
-  el.appendChild(header);
 
-  el.appendChild(buildStrip(room.capability));
-  el.appendChild(buildZoneLabels(room.capability));
+  const rebuildStrip = !capabilityShapeMatches(roomCapability, room.capability);
+  roomCapability = room.capability;
 
-  const cards = document.createElement("div");
-  cards.className = "cards";
+  let strip = document.getElementById("roomStrip");
+  let zones = document.getElementById("roomZones");
+  if (rebuildStrip || !strip || !zones) {
+    // Only reached when the surface actually changed shape (or doesn't
+    // exist yet). This is the only place #roomStrip's nodes are created or
+    // discarded -- everywhere else in this function leaves it alone.
+    if (strip) strip.remove();
+    if (zones) zones.remove();
+    strip = buildStrip(room.capability);
+    zones = buildZoneLabels(room.capability);
+    el.appendChild(strip);
+    el.appendChild(zones);
+  }
+
+  let cards = document.getElementById("roomCards");
+  if (!cards) {
+    cards = document.createElement("div");
+    cards.id = "roomCards";
+    cards.className = "cards";
+    el.appendChild(cards);
+  }
+  cards.innerHTML = "";
   for (const inst of room.instruments) {
     cards.appendChild(buildCard(inst, room.controllers || {}));
   }
@@ -42,7 +91,6 @@ function renderRoom(room) {
     p.textContent = "No instruments declared (no Bit loaded).";
     cards.appendChild(p);
   }
-  el.appendChild(cards);
 }
 
 function buildStrip(capability) {

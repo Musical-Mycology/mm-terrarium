@@ -1,4 +1,13 @@
-body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem; color: #111; }
+/* The palette below (borders #ccc, log background #f6f6f6, muted text #888)
+   is designed for a light background. Without an explicit one, body falls
+   back to the browser's own canvas colour, which is black under
+   prefers-color-scheme: dark -- measured in the browser as #111 text on a
+   transparent (rgba(0,0,0,0)) background, i.e. unreadable. This is an
+   operator panel meant to be read at a venue, so its appearance must not
+   depend on the viewer's colour-scheme preference. Pinning white here is
+   the minimal fix; a real dark theme is a separate design decision. */
+body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem; color: #111;
+       background-color: #fff; }
 h1 { font-size: 1.2rem; } h2 { font-size: 1rem; margin: 1rem 0 .3rem; }
 #state { font-weight: 600; }
 button { margin-right: .5rem; padding: .3rem .7rem; }
