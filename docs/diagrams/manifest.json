@@ -1,0 +1,16 @@
+{
+  "d2_version": "0.8.1",
+  "diagrams": {
+    "topology": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "topology",
+      "outputs": {
+        "out/topology.svg": "d535429fa2fac5f0368aa199f0d15afe1bae50ad76b6c47ee3548b19976ba9e5",
+        "out/topology.txt": "ed6b7e03267a9bbbd4b5f821cf38fc7490660d1a5c1776dce3189b759e05c1ab"
+      },
+      "renderer": "d2",
+      "source": "topology.d2",
+      "source_sha256": "ed72b59df24d9dbf7ca2ceed4da112d27eb168e22e663d99d6992d6157016b88"
+    }
+  }
+}
