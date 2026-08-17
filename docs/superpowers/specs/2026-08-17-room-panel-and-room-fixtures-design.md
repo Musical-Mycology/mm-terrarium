@@ -134,20 +134,60 @@ fairyring broker has no reason to learn a venue's fixture layout.
 
 ## 4. The Room's own fixture model
 
-New module `control/room_profile.py`, exporting `room_capability(room_type) ->
-SurfaceCapability`, the Room-side sibling of luxaeterna's `shroom_capability()`.
+**Correction, 2026-08-17, made during planning.** This section first specified
+`control/room_profile.py` exporting `room_capability(room_type) ->
+SurfaceCapability`. That is wrong: `control/` imports luxaeterna, pyarco and
+o2litepy **zero** times today (every mention in that package is a comment), and
+returning a luxaeterna type would have made this slice the first real import.
+That purity is what lets the engine be reasoned about and tested with no
+renderer present, so the declaration is split in two, mirroring how
+`harness/device_bridge.py` already adapts Control-side declarations to
+luxaeterna for player devices.
+
+**`control/room_profile.py`, pure, no third-party imports:**
+
+```python
+@dataclass(frozen=True)
+class RoomZone:
+    name: str
+    start: int
+    count: int
+
+
+@dataclass(frozen=True)
+class RoomProfile:
+    surface_id: str
+    pixel_count: int
+    color_order: str
+    zones: tuple[RoomZone, ...]
+
+    @property
+    def channel_count(self) -> int:
+        return self.pixel_count * 3
+```
 
 TEST room:
 
 ```python
-SurfaceCapability(
-    surface_id="room_test",
-    pixel_count=60,
-    color_order="GRB",
-    zones=[Zone("left", 0, 20), Zone("center", 20, 20),
-           Zone("right", 40, 20), Zone("primary", 0, 60)],
+RoomProfile(
+    surface_id="room_test", pixel_count=60, color_order="GRB",
+    zones=(RoomZone("left", 0, 20), RoomZone("center", 20, 20),
+           RoomZone("right", 40, 20)),
 )
 ```
+
+**`harness/room_surface.py`, the adapter, imports luxaeterna:**
+`to_capability(profile) -> SurfaceCapability`, appending the `primary` zone that
+luxaeterna's `SurfaceCapability.zone()` expects to resolve. Both consumers,
+`devicelink/agent.py` and `harness/room_simulator.py`, already import from
+`harness/`, so this introduces no new dependency direction.
+
+`primary` therefore lives only in the adapter, which also makes section 5's
+"omit `primary` from the serialized zones" fall out for free rather than needing
+a filter.
+
+A test asserts `control/` contains no luxaeterna, pyarco or o2litepy import, so
+the invariant stops being accidental.
 
 Linear with three equal zones, because the physical Terrarium array is a single
 6 m run rather than a ring and a stem. 60 px is arbitrary but deliberate: large
@@ -155,7 +195,7 @@ enough that the Console view reads as a room rather than a Shroom, small enough
 to sit well inside F5's 170 px single-universe ceiling. `GRB` matches what the
 wire carries today; the RGBW question is F3's separate decision.
 
-`DEMO` raises `NotImplementedError` from `room_capability()`. Failing at boot
+`DEMO` raises `NotImplementedError` from `room_profile()`. Failing at boot
 matches `resolve_room_type()`'s existing fail-hard-never-downgrade contract, and
 DEMO's backend is already a deferred follow-up spec.
 
@@ -163,12 +203,12 @@ DEMO's backend is already a deferred follow-up spec.
 
 | Location | Today | Becomes |
 |---|---|---|
-| `devicelink/agent.py:153` | `self._capability or shroom_capability()` | `self._room_capability` |
+| `devicelink/agent.py:153` | `self._capability or shroom_capability()` | `to_capability(self._room_profile)` |
 | `devicelink/agent.py:249` | `bytes(universe.get_frame()[:36])` | slice `pixel_count * 3` from the room capability |
 | `harness/shroom_client.py:52,160` | module constant `LED_CHANNELS = 36`, equality check | per-instance `expected_channels`, defaulting to 36 |
-| `harness/room_simulator.py:56` | `WebSimBackend(capability=shroom_capability())` | the room capability |
+| `harness/room_simulator.py:56` | `WebSimBackend(capability=shroom_capability())` | `to_capability(room_profile(rt))` |
 
-`DeviceLinkAgent` gains a `room_capability=` constructor parameter alongside the
+`DeviceLinkAgent` gains a `room_profile=` constructor parameter alongside the
 existing `capability=`. The per-player path at `devicelink/agent.py:378` is not
 touched: player devices remain Tuneshrooms and keep `shroom_capability()`.
 
@@ -343,7 +383,7 @@ Default off, so every existing invocation is byte-identical.
 construction
   boot()                     resolves RoomType, binds Room, sets room.bound_dev
   terrarium_boot.build()     ConsoleServer + ConsoleAgent  (new, --console-port)
-                             DeviceLinkAgent(room_capability=..., on_room_frame=...)
+                             DeviceLinkAgent(room_profile=..., on_room_frame=...)
   _setup_room()              builds the Room LightSession against the ROOM capability
   SimulatorProcess           spawns the sim with --room-type TEST
 
@@ -359,7 +399,7 @@ per tick
 ```
 
 The simulator learns its surface by CLI argument (`--room-type TEST`, resolved
-through `room_capability()`), not over the wire. Control spawns the simulator and
+through `room_profile()` and `to_capability()`), not over the wire. Control spawns the simulator and
 therefore already knows the shape, and the Room path has no join and so receives
 no `/ie<N>/role` blob. A real-hardware Room backend will need the capability
 delivered over the wire; that is part of the already-deferred real-hardware Room
@@ -395,7 +435,7 @@ browser tab against a new server degrades to exactly today's behavior.
   method in `DeviceLinkAgent` already no-ops.
 - Room bound but no Bit loaded yields capability and zones with an empty
   `instruments` list.
-- `room_capability()` on an unsupported `RoomType` raises at boot, not at render
+- `room_profile()` on an unsupported `RoomType` raises at boot, not at render
   time.
 - A frame whose width disagrees with the capability is dropped and logged at the
   client, never truncated.
@@ -424,7 +464,7 @@ directly. Beyond the obvious coverage, three tests are load-bearing:
    `/<dev>/leds` from being sent and must not escape `poll()`. Mirrors the
    existing guard regressions for `on_release` and `on_light_cue`.
 3. **Frame width.** The Room's emitted frame is `pixel_count * 3` bytes and is
-   built from the room capability, not `shroom_capability()`; `ShroomClient`
+   built from the Room's profile, not `shroom_capability()`; `ShroomClient`
    drops a wrong-width frame rather than truncating it; and an existing
    `ShroomClient` built without `expected_channels` still accepts 36.
 
@@ -462,7 +502,7 @@ Explicitly out of scope, and compatible with every success criterion in section 
   document adds a `TriggerTable`, a script primitive, a `TriggerFired` event, or
   a Fire button.
 - **The DEMO room and its 864 px array**, and with it multi-universe rendering.
-  `room_capability(DEMO)` raises.
+  `room_profile(DEMO)` raises.
 - **A real-hardware Room backend**, and delivering the capability over the wire.
 - **The RGBW / 48-channel wire widening** (F3). Untouched.
 - **Uplink changes.** Not edited.
@@ -477,7 +517,7 @@ Explicitly out of scope, and compatible with every success criterion in section 
 1. `harness/run_stack.py --console-port N` serves a Console reachable during a
    live run, and the console server is torn down in reverse-of-registration
    order with the rest of the stack.
-2. The Room's `LightSession` is built from `room_capability(RoomType.TEST)`, and
+2. The Room's `LightSession` is built from `room_profile(RoomType.TEST)`, and
    the emitted Room frame is 180 bytes rather than 36.
 3. The Console's Room panel draws the live Room frame with `left` / `center` /
    `right` labelled, and one card per declared instrument showing its target
