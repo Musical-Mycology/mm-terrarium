@@ -22,6 +22,17 @@
       "renderer": "d2",
       "source": "cue-path.d2",
       "source_sha256": "19ebc5b576ca4e115cef3c58c00598ca604689851ee0df9e784daf5e71152ee6"
+    },
+    "lifecycle": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "lifecycle",
+      "outputs": {
+        "out/lifecycle.svg": "5a0dfec2e35b5d43ba8eb01859a392f91fc0ed66707e94cd7e029b78fd32aba4",
+        "out/lifecycle.txt": "07b65896f454fc972aaecbbacacf61aa13ee7117272918ea81e90ff5b61e370b"
+      },
+      "renderer": "d2",
+      "source": "lifecycle.d2",
+      "source_sha256": "9682d3939d4cf81838428e67faac2856715438d1302c08c6c099a74bb53ac82c"
     }
   }
 }
