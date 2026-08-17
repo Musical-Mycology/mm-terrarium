@@ -77,6 +77,7 @@ class StackConfig:
     join_timeout: float = 60.0
     settle_seconds: float = 5.0
     arco_ready_timeout: float = 60.0
+    console_port: int | None = None   # None = no Terrarium Console
 
 
 @dataclass
@@ -88,7 +89,7 @@ class RunResult:
 
 
 def control_command(cfg: StackConfig, ppid: int) -> list[str]:
-    return [
+    command = [
         sys.executable, "-u", "-m", "harness.terrarium_boot",
         "--transport", "o2lite",
         "--arco-command", cfg.arco_command,
@@ -106,6 +107,9 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
         # in their own session. See F5 in the final review.
         "--exit-with-parent", str(ppid),
     ]
+    if cfg.console_port is not None:
+        command += ["--console-port", str(cfg.console_port)]
+    return command
 
 
 def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
@@ -391,6 +395,9 @@ def parse_args(argv=None):
     ap.add_argument("--horizon", type=float, default=0.060,
                     help="Cue scheduling horizon, passed to both Control "
                          "and the devices so their reports agree.")
+    ap.add_argument("--console-port", type=int, default=None,
+                    help="Serve the Terrarium Console on this port and print "
+                         "its URL. Off by default.")
     return ap.parse_args(argv)
 
 
@@ -404,7 +411,8 @@ def config_from_args(args) -> StackConfig:
         log_dir=log_dir, arco_command=args.arco_command,
         devices=args.devices, ensemble=args.ensemble,
         setup_seconds=args.setup_seconds, seconds=seconds,
-        horizon=args.horizon, echo=not args.ci)
+        horizon=args.horizon, echo=not args.ci,
+        console_port=args.console_port)
 
 
 def _failing_log_key(result: RunResult) -> str | None:

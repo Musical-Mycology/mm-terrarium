@@ -183,6 +183,16 @@ class DeviceLinkAgent:
                                    audio=audio_sink)
 
     @property
+    def room_bridge(self):
+        """The Room's MIDI fan-out, or None when no Room is configured.
+
+        Public because harness/terrarium_boot.py's main() needs it to build a
+        ConsoleAgent: build() does not return it, and build()'s 5-tuple return
+        is unpacked at 16 sites, so widening it would be churn for no gain.
+        """
+        return self._room_bridge
+
+    @property
     def clamped(self) -> int:
         """Room AUDIO cues that arrived already past their target time.
 

@@ -758,3 +758,25 @@ def test_build_tears_down_both_subprocesses_if_room_audio_fails(monkeypatch):
 
 def _boom():
     raise OSError("no such process")
+
+
+def test_agent_exposes_its_room_bridge():
+    """main() reaches the bridge through the agent, since build() does not
+    return it and its signature is deliberately unchanged."""
+    from control.room_bridge import RoomBridge
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, teardown = _build_with_fakes(config)
+    try:
+        assert isinstance(agent.room_bridge, RoomBridge)
+    finally:
+        teardown.close()
+
+
+def test_console_is_off_by_default():
+    """Every existing invocation must be byte-identical."""
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, teardown = _build_with_fakes(config)
+    try:
+        assert agent._on_room_frame is None
+    finally:
+        teardown.close()
