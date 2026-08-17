@@ -236,7 +236,7 @@ Expected: PASS, 9 passed
 - [ ] **Step 5: Run the full suite**
 
 Run: `.venv/bin/python -m pytest tests -q`
-Expected: 772 passed, 1 skipped
+Expected: 773 passed, 1 skipped
 
 - [ ] **Step 6: Commit**
 
