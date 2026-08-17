@@ -46,6 +46,22 @@ def test_build_wires_the_client_and_backend():
     assert backend.label == "ie1"
 
 
+def test_no_join_build_uses_the_room_surface():
+    pytest.importorskip("luxaeterna")
+    from harness.o2_shroom import build
+    client, backend = build("sim-room", serve=False, room_type="TEST")
+    assert backend._cap.surface_id == "room_test"
+    assert client.expected_channels == 180
+
+
+def test_a_player_build_is_unchanged():
+    pytest.importorskip("luxaeterna")
+    from harness.o2_shroom import build
+    client, backend = build("ie1", serve=False)
+    assert backend._cap.pixel_count == 12
+    assert client.expected_channels == 36
+
+
 # --- Gating gestures on the role: harness/shroom_client.py's ShroomClient
 # sets .config in _on_role(), only once Control's granted-role reply has
 # actually arrived. main()'s join is sent over TCP (o2lite.send_cmd) but

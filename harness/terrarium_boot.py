@@ -50,6 +50,7 @@ class _SimulatorFactory:
     def __call__(self, teardown) -> str:
         command = [sys.executable, "-u", "-m", "harness.room_simulator",
                    "--dev", SIM_DEV, "--server", self._server_url]
+        command += ["--room-type", "TEST"]
         if self._horizon is not None:
             # So the Room reports frame latency in absolute terms on exit.
             command += ["--control-horizon", str(self._horizon)]
@@ -86,7 +87,8 @@ class _O2SimulatorFactory:
         self.process = SimulatorProcess(
             [sys.executable, "-u", "-m", "harness.o2_shroom",
              "--dev", SIM_DEV, "--ensemble", self._ensemble, "--no-join",
-             "--exit-with-parent", str(os.getpid())],
+             "--exit-with-parent", str(os.getpid()),
+             "--room-type", "TEST"],
             popen=self._popen)
         self.process.start()
         teardown.push("simulator", self.process.shutdown)
