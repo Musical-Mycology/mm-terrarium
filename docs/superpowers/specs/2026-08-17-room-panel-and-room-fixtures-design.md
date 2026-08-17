@@ -40,8 +40,6 @@ dark. **Neither run reached RUNNING** (25 s bounded against a 90 s SETUP hold),
 so Room animation on the o2lite path was not observed here; that half was
 covered by the browser verification above.
 
-This document is a point-in-time design record, not a living doc. For current
-behavior, constraints and known issues read `docs/MM_TERRARIUM.md`.
 **Repos touched:** `mm-terrarium` only. No luxaeterna change, no mm-tuneshroom
 change, no Arco or pyarco change.
 **Scope:** Spec A of two. Spec B (triggers, cue scripts, conditions, and
@@ -49,6 +47,9 @@ firing) is a separate document and is not designed here. See section 14.
 **Amends:** [`2026-08-10-room-concept-and-load-sequence-design.md`](2026-08-10-room-concept-and-load-sequence-design.md)
 section 7, which established "the Room is never surfaced on the Console or
 uplink". Section 3 below narrows that rule rather than deleting it.
+
+This document is a point-in-time design record, not a living doc. For current
+behavior, constraints and known issues read `docs/MM_TERRARIUM.md`.
 
 ---
 
