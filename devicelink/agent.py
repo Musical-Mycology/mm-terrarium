@@ -76,7 +76,7 @@ class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
                  capability=None, clock=time.monotonic,
                  room_bridge=None, room_audio=None, horizon: float = 0.0,
-                 room_profile=None):
+                 room_profile=None, on_room_frame=None):
         self.game_server = game_server
         self.server = server
         self._capability = capability
@@ -129,6 +129,16 @@ class DeviceLinkAgent:
         self._room_profile: RoomProfile | None = room_profile
         self._room_dev: str | None = None
         self._room_light = None
+        # Display-only copy of each changed Room frame, for the Terrarium
+        # Console. Optional and best-effort: None is the default, so a run
+        # without a console constructs and behaves exactly as before.
+        #
+        # Boundary rule 2 permits this. The rule forbids the console carrying
+        # per-device join/tick traffic and requires that gameplay correctness
+        # never depend on the link's health. Nothing here is retransmitted,
+        # nothing is awaited, and dropping every frame degrades the picture
+        # and changes nothing else.
+        self._on_room_frame = on_room_frame
         self._setup_room()
         game_server.add_observer(self)
         game_server.on_release = self._on_release
@@ -260,6 +270,7 @@ class DeviceLinkAgent:
         frame = bytes(universe.get_frame()[:self._room_profile.channel_count])
         if frame != self._last_frames.get(self._room_dev):
             self._last_frames[self._room_dev] = frame
+            self._emit_room_frame(self._room_dev, frame)
             when = at if at is not None else self._clock() + self._horizon
             try:
                 self._send(self._room_dev,
@@ -267,6 +278,16 @@ class DeviceLinkAgent:
                                                when=when))
             except Exception:
                 logger.exception("Room leds send failed")
+
+    def _emit_room_frame(self, dev: str, frame: bytes) -> None:
+        """Guarded exactly like on_release and on_light_cue already are: a
+        failing console must not stop the Room rendering or wedge the tick."""
+        if self._on_room_frame is None:
+            return
+        try:
+            self._on_room_frame(dev, frame)
+        except Exception:
+            logger.exception("room frame sink failed; dropping frame")
 
     def _feed_breath(self) -> None:
         """Drive every joined device's breath. Sent on change only, and never

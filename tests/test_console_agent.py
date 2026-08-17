@@ -30,6 +30,13 @@ class FakeConsoleServer:
         return out
 
     def send(self, client, msg):
+        # Mirrors ConsoleServer.send: a client whose send raises is DROPPED,
+        # not retried and not recorded as delivered. Boundary rule 5 -- this
+        # fake must not be more permissive than the library it stands for.
+        if client in self._raising:
+            self._clients.discard(client)
+            self.dropped.append(client)
+            return
         self.sent.append((client, msg))
 
     def broadcast(self, msg):
@@ -347,3 +354,59 @@ def test_a_dead_console_client_is_dropped_not_retried():
     agent._room_bridge.feed_light(0xB0, 74, 5)
     agent.poll()
     assert srv.dropped == ["c1"]
+
+
+def test_a_dead_console_client_is_dropped_not_retried_on_send():
+    """Boundary rule 5: FakeConsoleServer.send() must be no more permissive
+    than the real ConsoleServer.send() (console/server.py), which also drops
+    a client whose send() raises. Modelled on
+    test_a_dead_console_client_is_dropped_not_retried, which covers the
+    broadcast() path."""
+    gs, srv, agent = _room_console()
+    srv.connect("c1")
+    srv.fail_sends_to("c1")
+    agent.poll()
+    assert srv.dropped == ["c1"]
+
+
+class FakeClock:
+    def __init__(self, now=0.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+def test_room_frames_are_broadcast_at_the_decimated_rate():
+    from console.agent import ROOM_FRAME_INTERVAL
+    gs, srv, agent = _room_console()
+    clock = FakeClock(100.0)
+    agent._clock = clock
+
+    agent.on_room_frame("sim-room", bytes(range(180)))
+    agent.poll()
+    frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
+    assert len(frames) == 1
+    assert frames[0]["dev"] == "sim-room"
+    assert frames[0]["channels"] == list(range(180))
+
+    # Too soon: dropped, not queued.
+    agent.on_room_frame("sim-room", bytes(180))
+    clock.now += ROOM_FRAME_INTERVAL / 2
+    agent.poll()
+    assert len([b for b in srv.broadcasts if b["event"] == "room_frame"]) == 1
+
+    # Interval elapsed: the LATEST frame goes, the skipped one is gone.
+    clock.now += ROOM_FRAME_INTERVAL
+    agent.on_room_frame("sim-room", bytes([7] * 180))
+    agent.poll()
+    frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
+    assert len(frames) == 2
+    assert frames[1]["channels"] == [7] * 180
+
+
+def test_no_frame_received_broadcasts_nothing():
+    gs, srv, agent = _room_console()
+    agent._clock = FakeClock(100.0)
+    agent.poll()
+    assert [b for b in srv.broadcasts if b["event"] == "room_frame"] == []

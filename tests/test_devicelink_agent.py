@@ -834,3 +834,51 @@ def test_no_room_configured_leaves_the_profile_unset():
     agent = DeviceLinkAgent(gs, FakeServer())
     assert agent._room_profile is None
     assert agent._room_light is None
+
+
+# --- Room frame relay to the Console: an optional, guarded, best-effort
+# sink (see this task's brief and boundary rule 2). --------------------------
+
+def test_room_frames_reach_the_sink():
+    gs = _room_ready_game_server()
+    seen = []
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            on_room_frame=lambda dev, frame: seen.append((dev, frame)))
+
+    for _ in range(3):
+        agent.poll()
+
+    assert seen, "no room frame reached the sink"
+    assert seen[0][0] == "sim-room"
+    assert len(seen[0][1]) == 180
+
+
+def test_a_raising_room_frame_sink_does_not_stop_the_leds_going_out():
+    """Boundary rule 2, and the same guard the other two transport sinks
+    already carry: a failing console must not wedge the Room."""
+    gs = _room_ready_game_server()
+    server = FakeServer()
+    server.bind_dev("sim-room", "c-room")
+
+    def boom(dev, frame):
+        raise RuntimeError("console exploded")
+
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge(),
+                            on_room_frame=boom)
+
+    for _ in range(3):
+        agent.poll()
+
+    assert [m for _, m in server.sent if m["address"] == "/sim-room/leds"]
+
+
+def test_no_sink_is_the_default_and_changes_nothing():
+    gs = _room_ready_game_server()
+    server = FakeServer()
+    server.bind_dev("sim-room", "c-room")
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge())
+
+    for _ in range(3):
+        agent.poll()
+
+    assert [m for _, m in server.sent if m["address"] == "/sim-room/leds"]
