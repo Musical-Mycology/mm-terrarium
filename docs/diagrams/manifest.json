@@ -33,6 +33,16 @@
       "renderer": "d2",
       "source": "lifecycle.d2",
       "source_sha256": "31836d898fcbe51e6c3cde2f2f507a53a2e225c76be2fbb29fe8207ab6cb774e"
+    },
+    "player-flow": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "player-flow",
+      "outputs": {
+        "out/player-flow.txt": "296d6ebea21911a0d5497b2709d24252515ba746ee369d73bbea591898865c69"
+      },
+      "renderer": "seq",
+      "source": "player-flow.seq",
+      "source_sha256": "883b44913216b945e36dba8d82da6971bb92db58dad6a352ed4ed95636664499"
     }
   }
 }

@@ -1,0 +1,22 @@
+title: Player flow, hello to complete
+
+participants: Tuneshroom, Arco, Control
+
+# Registration. Control offers "game" on Arco's hub as an o2lite guest.
+Tuneshroom -> Arco: /game/hello
+Arco -> Control: /game/hello
+note: SETUP holds registration open; --setup-seconds widens the window
+Tuneshroom -> Arco: /game/join TEST_PLAYER_NODE
+Arco -> Control: /game/join
+Control -> Arco: /ie1/role composed config blob
+Arco -> Tuneshroom: /ie1/role
+
+# Play. Gesture in, timed frames out.
+Tuneshroom -> Arco: /game/tilt
+Arco -> Control: /game/tilt
+Control -> Arco: /ie1/leds at = origin + cue_horizon
+Arco -> Tuneshroom: /ie1/leds
+
+# Completion. Release arrives after the closing fade, not at Bit end.
+Control -> Arco: /ie1/release
+Arco -> Tuneshroom: /ie1/release
