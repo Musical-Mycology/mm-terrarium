@@ -17,12 +17,13 @@ import time
 from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
 from control.role_config import compose_role_config
+from control.room_profile import RoomProfile, room_profile
 from control.rooms import room_role_name
 from control.state import State
 from control.timed_queue import TimedQueue
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
-from luxaeterna.synth.capability import shroom_capability
+from harness.room_surface import to_capability
 from luxaeterna.synth.director import CLOSING
 from luxaeterna.synth.manifest import LightManifest
 from luxaeterna.synth.session import build_session
@@ -74,7 +75,8 @@ class _RoomAudioSink:
 class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
                  capability=None, clock=time.monotonic,
-                 room_bridge=None, room_audio=None, horizon: float = 0.0):
+                 room_bridge=None, room_audio=None, horizon: float = 0.0,
+                 room_profile=None):
         self.game_server = game_server
         self.server = server
         self._capability = capability
@@ -118,6 +120,13 @@ class DeviceLinkAgent:
         # below a no-op.
         self._room_bridge = room_bridge
         self._room_audio = room_audio
+        # The Room's fixture declaration. None here means "resolve it from the
+        # bound Room's type"; an explicit profile is for tests and for a future
+        # installation that overrides the shipped shape. self._capability is
+        # NOT consulted for the Room any more: that attribute is the player
+        # device shape, and sharing one capability between a Tuneshroom and a
+        # Room is exactly the confusion this slice removes.
+        self._room_profile: RoomProfile | None = room_profile
         self._room_dev: str | None = None
         self._room_light = None
         self._setup_room()
@@ -150,7 +159,9 @@ class DeviceLinkAgent:
         self._room_dev = room.bound_dev
         blob = compose_role_config(gs.bit_name, gs.bit.version, role)
         manifest = LightManifest.from_dict(blob["light_manifest"])
-        cap = self._capability or shroom_capability()
+        if self._room_profile is None:
+            self._room_profile = room_profile(room.room_type)
+        cap = to_capability(self._room_profile)
         session = build_session(manifest, cap, clock=self._clock)
         self._room_light = _RoomLightSink(session, Universe())
         audio_sink = None
@@ -246,7 +257,7 @@ class DeviceLinkAgent:
         except Exception:
             logger.exception("Room render failed; skipping frame")
             return
-        frame = bytes(universe.get_frame()[:36])
+        frame = bytes(universe.get_frame()[:self._room_profile.channel_count])
         if frame != self._last_frames.get(self._room_dev):
             self._last_frames[self._room_dev] = frame
             when = at if at is not None else self._clock() + self._horizon
