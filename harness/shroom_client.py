@@ -71,11 +71,18 @@ class ShroomClient:
     """Tracks one device's devicelink session and drives its LEDs."""
 
     def __init__(self, dev: str, node: str, leds=None,
-                 on_role: Callable[[dict], None] | None = None) -> None:
+                 on_role: Callable[[dict], None] | None = None,
+                 expected_channels: int = LED_CHANNELS) -> None:
         self.dev = dev
         self.node = node
         self.leds = leds
         self.on_role = on_role
+        # Frame width this client will accept, in channels. Defaults to the
+        # 12 px x GRB Tuneshroom wire, so every existing caller is unchanged.
+        # The Room simulator passes its RoomProfile.channel_count instead: a
+        # Room is not a Tuneshroom and does not have 36 channels. See
+        # control/room_profile.py.
+        self.expected_channels = expected_channels
         self.config: dict | None = None
         self.released = False
         self.last_deny: tuple[str, str] | None = None
@@ -157,8 +164,9 @@ class ShroomClient:
             logger.debug("dropping /leds with a non-list payload")
             return ""
         channels = env.args[0]
-        if len(channels) != LED_CHANNELS:
-            logger.debug("dropping /leds with %d channels", len(channels))
+        if len(channels) != self.expected_channels:
+            logger.debug("dropping /leds with %d channels, expected %d",
+                         len(channels), self.expected_channels)
             return ""
         frame = bytes(int(v) & 0xFF for v in channels)
         # timestamp 0.0 means "no declared time"; None is what TimedQueue

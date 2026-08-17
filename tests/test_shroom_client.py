@@ -303,3 +303,55 @@ def test_pump_tick_exits_once_released_flips_true():
 
     assert client.released is True
     assert len(client.ticks) == 1
+
+
+def test_default_width_is_still_thirty_six():
+    """Every existing caller constructs ShroomClient without this argument
+    and must be unaffected."""
+    from harness.shroom_client import LED_CHANNELS, ShroomClient
+    client = ShroomClient("ie1", "node-a")
+    assert client.expected_channels == LED_CHANNELS == 36
+
+
+def test_a_wider_client_accepts_its_own_width():
+    from harness.shroom_client import ShroomClient
+    from devicelink import protocol
+
+    class Leds:
+        def __init__(self):
+            self.shown = []
+
+        def show(self, frame):
+            self.shown.append(frame)
+
+        def clear(self):
+            self.shown.append(b"")
+
+    leds = Leds()
+    client = ShroomClient("sim-room", "", leds=leds, expected_channels=180)
+
+    assert client.handle(protocol.leds_event("sim-room", list(range(180)))) \
+        == "/sim-room/leds"
+    client.tick(now=1.0)
+    assert leds.shown == [bytes(v & 0xFF for v in range(180))]
+
+
+def test_a_wider_client_drops_a_thirty_six_channel_frame():
+    """Dropped, never truncated: rendering a short frame would turn a
+    configuration mismatch into a subtly wrong picture instead of a logged
+    drop."""
+    from harness.shroom_client import ShroomClient
+    from devicelink import protocol
+
+    client = ShroomClient("sim-room", "", expected_channels=180)
+
+    assert client.handle(protocol.leds_event("sim-room", list(range(36)))) == ""
+
+
+def test_a_default_client_drops_a_one_eighty_channel_frame():
+    from harness.shroom_client import ShroomClient
+    from devicelink import protocol
+
+    client = ShroomClient("ie1", "node-a")
+
+    assert client.handle(protocol.leds_event("ie1", list(range(180)))) == ""
