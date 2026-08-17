@@ -27,12 +27,12 @@
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "lifecycle",
       "outputs": {
-        "out/lifecycle.svg": "5a0dfec2e35b5d43ba8eb01859a392f91fc0ed66707e94cd7e029b78fd32aba4",
-        "out/lifecycle.txt": "07b65896f454fc972aaecbbacacf61aa13ee7117272918ea81e90ff5b61e370b"
+        "out/lifecycle.svg": "23cc3c589371a9adeda0e508f92dfee49c101ce12b204e3fa7c08ca05a41d2bd",
+        "out/lifecycle.txt": "4814a0c3e2ba1fdc2ab6df548c7a69f49b82cc4451f09e51abb733503f25face"
       },
       "renderer": "d2",
       "source": "lifecycle.d2",
-      "source_sha256": "9682d3939d4cf81838428e67faac2856715438d1302c08c6c099a74bb53ac82c"
+      "source_sha256": "31836d898fcbe51e6c3cde2f2f507a53a2e225c76be2fbb29fe8207ab6cb774e"
     }
   }
 }
