@@ -56,7 +56,7 @@ def test_injected_region_matches_the_rendered_text(name, entry):
     assert extract_region(markdown, entry["marker"]) == expected, f"{name}: {STALE}"
 
 
-def test_no_orphaned_markers_in_targets():
+def test_markers_match_manifest():
     manifest = load_manifest(ROOT)
     by_target: dict[str, set[str]] = {}
     for entry in manifest["diagrams"].values():
@@ -65,12 +65,28 @@ def test_no_orphaned_markers_in_targets():
             by_target.setdefault(target, set()).add(entry["marker"])
     for target, declared in by_target.items():
         found = markers_in((ROOT / target).read_text("utf-8"))
-        assert found == declared, (
-            f"{target}: markers in the document {found} do not match the manifest "
-            f"{declared}. An undeclared marker is never regenerated."
+        orphaned = found - declared
+        assert not orphaned, (
+            f"{target}: marker(s) {orphaned} appear in the document but are not "
+            f"declared in the manifest. An undeclared marker is never regenerated."
+        )
+        missing = declared - found
+        assert not missing, (
+            f"{target}: marker(s) {missing} are declared in the manifest but "
+            f"missing from the document. Restore the marker pair or remove the "
+            f"manifest entry."
         )
 
 
 def test_every_manifest_source_exists():
     for name, entry in _entries():
         assert (DIAGRAMS / entry["source"]).exists(), f"{name}: missing source"
+
+
+def test_manifest_declares_at_least_one_diagram():
+    manifest = load_manifest(ROOT)
+    assert manifest["diagrams"], (
+        "manifest.json declares no diagrams -- the drift checks above are "
+        "parametrized over this set and silently pass over an empty one. An "
+        "empty manifest is treated as a failure, not a vacuous success."
+    )
