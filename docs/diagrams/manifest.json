@@ -16,12 +16,12 @@
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "cue-path",
       "outputs": {
-        "out/cue-path.svg": "0e42eeb74c61da7daf5bc3c87e9b5691998f4952496f5e7a41c68f543b5da81e",
-        "out/cue-path.txt": "7916540d9a50f22359c88df14809ceb61f2edbcfa6f4abd05cd2cd761ce1ce73"
+        "out/cue-path.svg": "4ba2ab1bc9143442528d8ae020683675dd9836f74395fe8f8c09cbcca20ce827",
+        "out/cue-path.txt": "5d7d0cc088b8960d1291510fb363e777899cf0e9ed0db4f5d0e599c27d280af4"
       },
       "renderer": "d2",
       "source": "cue-path.d2",
-      "source_sha256": "cb4f7ca1016a1cd12b85e19a573a17d8ec6c2bb61cc6a9587729b6fac51d3a0a"
+      "source_sha256": "19ebc5b576ca4e115cef3c58c00598ca604689851ee0df9e784daf5e71152ee6"
     }
   }
 }
