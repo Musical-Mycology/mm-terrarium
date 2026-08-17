@@ -1,15 +1,18 @@
-"""Behavioral test for console/static/room.js.
+"""Behavioral test for console/static/room.js and console/static/console.js.
 
-tests/test_console_static.py greps room.js's source for substrings, which
-is exactly why Defect 1 (the Room strip was rebuilt, and its painted
-swatches destroyed, on every room_changed event) reached a live browser run
-undetected: a substring grep cannot see what the DOM looks like after the
-code runs. This test drives the real shipped room.js against a small
-hand-rolled DOM stub under Node and checks that the strip's DOM node
-survives an unchanged-capability re-render with its painted backgrounds
-intact, that a capability change rebuilds it, that renderRoom(null) resets
-cleanly, and that renderRoomFrame decodes the wire's GRB channel order
-correctly. See tests/js/room_panel_behavior.test.js for the scenarios.
+tests/test_console_static.py greps room.js's and console.js's source for
+substrings, which is exactly why Defect 1 (the Room strip was rebuilt, and
+its painted swatches destroyed, on every room_changed event) reached a live
+browser run undetected: a substring grep cannot see what the DOM looks like,
+or which function actually gets called, after the code runs. This test
+drives the real shipped room.js and console.js against a small hand-rolled
+DOM stub under Node and checks that the strip's DOM node survives an
+unchanged-capability re-render with its painted backgrounds intact, that a
+capability change rebuilds it, that renderRoom(null) resets cleanly, that
+renderRoomFrame decodes the wire's GRB channel order correctly, and that
+console.js's handle() routes "room_changed" and "room_frame" events to
+renderRoom/renderRoomFrame with the right payload. See
+tests/js/room_panel_behavior.test.js for the scenarios.
 
 No build step: node is used here only as a test runner for a plain script,
 never as a shipped dependency. Skips cleanly if node is not available

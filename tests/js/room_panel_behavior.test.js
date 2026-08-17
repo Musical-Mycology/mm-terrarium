@@ -2,15 +2,22 @@
 // Behavioral test for console/static/room.js, covering Defect 1 (the Room
 // strip was rebuilt -- and its painted swatches destroyed -- on every
 // room_changed event, measured live at 1726 room_changed events against
-// only 464 room_frame events) plus the GRB decode in renderRoomFrame.
-// tests/test_console_static.py only greps room.js's source for substrings;
-// that cannot see either of these, because both are about what the DOM
-// looks like after running the code, not what text appears in the file.
-// That gap is exactly why Defect 1 reached a live run undetected.
+// only 464 room_frame events) plus the GRB decode in renderRoomFrame. Also
+// covers console/static/console.js's handle() dispatch of "room_changed"
+// and "room_frame" into renderRoom/renderRoomFrame -- the two lines that
+// route those events into this panel, added by the same branch that added
+// room.js's coverage above, but themselves uncovered by anything before
+// this file.
+// tests/test_console_static.py only greps room.js's and console.js's
+// source for substrings; that cannot see any of the above, because it is
+// about what the DOM looks like, or which function actually gets called,
+// after the code runs, not what text appears in the file. That gap is
+// exactly why Defect 1 reached a live run undetected, and it is the same
+// gap this file's console.js scenarios close for the dispatch lines.
 //
-// This drives the real shipped room.js against a small hand-rolled DOM
-// stub under Node. No jsdom or other dependency: this repo has no build
-// step and nothing shipped may depend on npm.
+// This drives the real shipped room.js and console.js against a small
+// hand-rolled DOM stub under Node. No jsdom or other dependency: this repo
+// has no build step and nothing shipped may depend on npm.
 //
 // Run directly: node tests/js/room_panel_behavior.test.js
 // Wired into pytest via tests/test_room_panel_behavior.py, which shells
@@ -270,6 +277,93 @@ scenario("renderRoomFrame is safe before any renderRoom, and decodes GRB not RGB
     "GRB decode wrong for pixel 0, got " + swatches[0].style.background);
   assert(swatches[1].style.background === "rgb(50,40,60)",
     "GRB decode wrong for pixel 1, got " + swatches[1].style.background);
+`);
+
+// ---- console.js dispatch coverage ----------------------------------------
+// console/static/console.js's handle() gained two cases this branch:
+//   case "room_changed": renderRoom(msg.room); break;
+//   case "room_frame": renderRoomFrame(msg.channels); break;
+// renderRoom/renderRoomFrame are room.js's, already covered by the
+// scenarios above, so here they are replaced with spies: this checks only
+// that handle() routes each event to the right function with the right
+// payload, not what that function then does with it.
+//
+// Unlike room.js, console.js touches browser globals at load time: it
+// wires three onclick handlers via document.getElementById, and it calls
+// connect() itself at the very bottom of the file, which constructs a
+// WebSocket against `location.host`. The stub below satisfies exactly
+// those two needs (a document with the three ids, and an inert
+// WebSocket/location) so the file evaluates without touching a real
+// network. Nothing else in console.js runs at load time, and neither
+// room_changed nor room_frame touches the DOM through handle() itself --
+// that would happen inside renderRoom/renderRoomFrame, which are spied out
+// here instead of loaded from room.js.
+
+class FakeWebSocket {
+  constructor(url) {
+    this.url = url;
+  }
+}
+
+function newConsoleDocument() {
+  const root = makeNode("body");
+  for (const id of ["loadBtn", "runBtn", "abortBtn"]) {
+    const node = makeNode("button");
+    node.id = id;
+    root.appendChild(node);
+  }
+  return {
+    createElement: (tag) => makeNode(tag),
+    createTextNode: (text) => ({ nodeType: 3, textContent: text }),
+    getElementById: (id) => findById(root, id),
+  };
+}
+
+const consoleJsPath = path.join(__dirname, "..", "..", "console", "static", "console.js");
+const consoleJsSource = fs.readFileSync(consoleJsPath, "utf8");
+
+// Same shape as scenario() above: re-evaluate the real shipped console.js
+// per scenario in its own vm context, with renderRoom/renderRoomFrame
+// replaced by spies that record their calls.
+function consoleScenario(name, testBody) {
+  const calls = [];
+  const sandbox = {
+    document: newConsoleDocument(),
+    WebSocket: FakeWebSocket,
+    location: { host: "test.invalid" },
+    console,
+    assert,
+    calls,
+    renderRoom: (room) => calls.push(["renderRoom", room]),
+    renderRoomFrame: (channels) => calls.push(["renderRoomFrame", channels]),
+  };
+  vm.createContext(sandbox);
+  try {
+    vm.runInContext(consoleJsSource + "\n" + testBody, sandbox, { filename: `console.js+${name}` });
+  } catch (err) {
+    failures++;
+    console.error(`FAIL: scenario "${name}" threw: ${err.stack || err}`);
+  }
+}
+
+consoleScenario("room_changed dispatches to renderRoom with the message's room payload", `
+  const payload = { room_type: "TEST", capability: { pixel_count: 60, zones: [] }, instruments: [] };
+  handle({ event: "room_changed", room: payload });
+  assert(calls.length === 1, "expected exactly one render call, got " + calls.length);
+  assert(calls[0][0] === "renderRoom",
+    "room_changed should dispatch to renderRoom, got " + (calls[0] && calls[0][0]));
+  assert(calls[0][1] === payload,
+    "renderRoom was not called with the message's room payload");
+`);
+
+consoleScenario("room_frame dispatches to renderRoomFrame with the message's channels payload", `
+  const channels = [10, 20, 30, 40, 50, 60];
+  handle({ event: "room_frame", channels });
+  assert(calls.length === 1, "expected exactly one render call, got " + calls.length);
+  assert(calls[0][0] === "renderRoomFrame",
+    "room_frame should dispatch to renderRoomFrame, got " + (calls[0] && calls[0][0]));
+  assert(calls[0][1] === channels,
+    "renderRoomFrame was not called with the message's channels payload");
 `);
 
 // ---- report ---------------------------------------------------------------

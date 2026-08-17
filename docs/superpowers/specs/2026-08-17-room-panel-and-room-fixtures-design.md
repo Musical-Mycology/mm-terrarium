@@ -411,15 +411,31 @@ changes.
 ## 9. Wiring the Console into the drivers
 
 `harness/terrarium_boot.py` gains `--console-port` (default off). When set, it
-constructs `ConsoleServer` and `ConsoleAgent`, registers the server on the
-existing `TeardownStack` at the moment it is started, and calls
-`ConsoleAgent.poll()` from the same tick loop that already drives
-`DeviceLinkAgent.poll()`.
+constructs `ConsoleServer` and `ConsoleAgent` inside `main()`, *after*
+`build()` has already returned, registers the server on the `TeardownStack`
+`build()` created at that later point, and calls `ConsoleAgent.poll()` from
+the same tick loop that already drives `DeviceLinkAgent.poll()`.
 
-Registration order matters and is free here: the console server is started before
-`boot()` for the same reason the devicelink server is, so reverse-of-registration
-tears it down last. `harness/run_stack.py` passes the flag through and prints the
-console URL alongside the simulator URL it already prints.
+Registration order matters and is deliberate: the devicelink server is
+pushed onto the stack inside `build()`, before `boot()` runs, so the
+`TeardownStack`'s LIFO order tears it down *last* -- the Room simulator is
+its client, and client-before-hub is the ordering property this whole stack
+maintains everywhere else (see `shutdown()`'s docstring). The console server
+is pushed later, in `main()`, after `build()` returns, so it tears down
+*first*. That is correct rather than an oversight: the console is a monitor
+shell whose only clients are browsers, entirely outside this stack, so
+nothing here depends on it staying up during the rest of teardown.
+
+`build()`'s return signature -- the 5-tuple `(game_server, devicelink_server,
+devicelink_agent, arco_process, teardown)` -- is deliberately unchanged by
+this slice even though it now also needs to construct a console server. That
+tuple is unpacked at 16 call sites, and `main()` already owns the one place
+`--console-port` is parsed, so `main()` constructs `ConsoleServer` and
+`ConsoleAgent` itself and pushes them onto the `teardown` stack `build()`
+handed back, rather than growing `build()`'s contract for every caller.
+
+`harness/run_stack.py` passes the flag through and prints the console URL
+alongside the simulator URL it already prints.
 
 Default off, so every existing invocation is byte-identical.
 
