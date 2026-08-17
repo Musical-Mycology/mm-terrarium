@@ -50,6 +50,7 @@ class _SimulatorFactory:
     def __call__(self, teardown) -> str:
         command = [sys.executable, "-u", "-m", "harness.room_simulator",
                    "--dev", SIM_DEV, "--server", self._server_url]
+        command += ["--room-type", "TEST"]
         if self._horizon is not None:
             # So the Room reports frame latency in absolute terms on exit.
             command += ["--control-horizon", str(self._horizon)]
@@ -86,7 +87,8 @@ class _O2SimulatorFactory:
         self.process = SimulatorProcess(
             [sys.executable, "-u", "-m", "harness.o2_shroom",
              "--dev", SIM_DEV, "--ensemble", self._ensemble, "--no-join",
-             "--exit-with-parent", str(os.getpid())],
+             "--exit-with-parent", str(os.getpid()),
+             "--room-type", "TEST"],
             popen=self._popen)
         self.process.start()
         teardown.push("simulator", self.process.shutdown)
@@ -214,7 +216,8 @@ def shutdown(teardown) -> None:
 
 
 def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
-                   sleep=time.sleep, parent_pid: int | None = None) -> bool:
+                   sleep=time.sleep, parent_pid: int | None = None,
+                   console_agent=None) -> bool:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
@@ -231,6 +234,10 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     only way to notice is to keep asking. Returns True if that fired, so
     main() can skip straight to shutdown() instead of calling gs.run()
     into a stack whose supervisor is already gone.
+
+    console_agent, when given, is polled once per iteration too -- a device
+    joining during SETUP is exactly what the console's registration view
+    exists to show live.
     """
     if setup_seconds <= 0:
         return False
@@ -239,12 +246,15 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
         if parent_is_gone(parent_pid):
             return True
         agent.poll()
+        if console_agent is not None:
+            console_agent.poll()
         sleep(1.0 / 44.0)
     return False
 
 
 def _serve_until_done(gs, agent, arco, clock=time.monotonic,
-                      sleep=time.sleep, parent_pid: int | None = None) -> str:
+                      sleep=time.sleep, parent_pid: int | None = None,
+                      console_agent=None) -> str:
     """Tick until the Bit finishes, Arco dies, or the parent is gone.
     Returns the reason.
 
@@ -270,6 +280,11 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
     discovery-report.md names as a venue-scale hazard. See
     harness/o2_shroom.py's parent_is_gone for why this compares against a
     recorded pid rather than watching getppid() for a change.
+
+    console_agent, when given, is polled once per tick too, right after
+    agent.poll() -- the same tick loop, so the console's picture of the run
+    (bit status, Room frames, registration) is never more than one tick
+    stale.
     """
     while True:
         if parent_is_gone(parent_pid):
@@ -277,6 +292,8 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
         if arco.poll() is not None:
             return "arco-exited"
         agent.poll()
+        if console_agent is not None:
+            console_agent.poll()
         gs.tick(1.0 / 44.0)
         if gs.state == State.IDLE and not getattr(agent, "closing", 0):
             return "completed"
@@ -422,6 +439,11 @@ def main() -> None:
                          "by a human before, so it had no equivalent of "
                          "o2_shroom's --exit-with-parent. Off by default: "
                          "a hand-run terrarium_boot is unchanged.")
+    ap.add_argument("--console-port", type=int, default=None,
+                    help="Serve the Terrarium Console on this port. Off by "
+                         "default, so an existing invocation is unchanged. "
+                         "Binds --host, which defaults to 127.0.0.1: the "
+                         "console is unauthenticated and trusted-LAN only.")
     args = ap.parse_args()
 
     # harness/run_stack.py stops this process with SIGTERM, and the whole
@@ -496,8 +518,36 @@ def main() -> None:
     # subprocesses and room_audio's ArcoSynthPool is running -- everything
     # from here on must go through shutdown() on the way out, including a
     # failure to start the transport itself (its clock-sync assertion is an
-    # expected failure mode, not a hypothetical one).
+    # expected failure mode, not a hypothetical one). The console is
+    # constructed first, inside this same try, for that reason: ConsoleServer
+    # .start() binding a busy port is a real failure mode too, and it must
+    # unwind through the same shutdown(teardown) path rather than leaking
+    # Arco and the simulator that build() already spawned.
     try:
+        console_agent = None
+        if args.console_port is not None:
+            from console.agent import ConsoleAgent
+            from console.server import ConsoleServer
+            console_server = ConsoleServer(host=args.host,
+                                           port=args.console_port)
+            console_server.start()
+            # Registered AFTER build(), so it is torn down FIRST. That is
+            # correct here rather than an oversight: the console is a
+            # monitor shell whose only clients are browsers, outside this
+            # stack entirely. The devicelink server is last because the Room
+            # simulator is its client; nothing in the stack is a client of
+            # the console.
+            teardown.push("console-server", console_server.stop)
+            # clock is main()'s own already-resolved local (time.monotonic
+            # on the websocket path, o2lite.time_get on the o2lite path),
+            # not a fresh time.monotonic -- see build()'s clock= docstring
+            # for the two-clocks bug this guards against.
+            console_agent = ConsoleAgent(gs, console_server,
+                                         room_bridge=agent.room_bridge,
+                                         clock=clock)
+            agent._on_room_frame = console_agent.on_room_frame
+            print(f"Terrarium Console: "
+                  f"http://{args.host}:{console_server.port}/", flush=True)
         if transport is not None:
             transport.start(o2lite)            # raises if the clock is unsynced
             _register_o2lite_transport(teardown, transport)
@@ -521,12 +571,14 @@ def main() -> None:
             print(f"{markers.CONTROL_SETUP_HOLD} for {args.setup_seconds:g}s "
                   f"-- join now", flush=True)
         if _wait_in_setup(agent, args.setup_seconds,
-                          parent_pid=args.exit_with_parent):
+                          parent_pid=args.exit_with_parent,
+                          console_agent=console_agent):
             print("parent is gone; tearing down", file=sys.stderr)
         else:
             gs.run()
             reason = _serve_until_done(gs, agent, arco,
-                                       parent_pid=args.exit_with_parent)
+                                       parent_pid=args.exit_with_parent,
+                                       console_agent=console_agent)
             if reason == "arco-exited":
                 print("Arco exited; tearing down", file=sys.stderr)
             elif reason == "parent-gone":

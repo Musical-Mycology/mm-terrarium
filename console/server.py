@@ -18,7 +18,16 @@ from websockets.sync.server import serve
 
 logger = logging.getLogger(__name__)
 
-_INDEX_HTML = (Path(__file__).resolve().parent / "static" / "index.html")
+_STATIC_DIR = (Path(__file__).resolve().parent / "static")
+
+# Only these extensions are servable. An allowlist rather than mimetypes.guess
+# because this server is unauthenticated on a trusted LAN: the set of things it
+# can hand out should be readable in one line.
+_CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+}
 
 
 class ConsoleServer:
@@ -27,7 +36,14 @@ class ConsoleServer:
         self._port = port
         self._server = None
         self._thread = None
-        self._index_bytes = _INDEX_HTML.read_bytes()
+        # Read once at construction, like the single index.html always was: the
+        # console is a fixed asset set, and re-reading per request would put
+        # filesystem access on a request path for no benefit.
+        self._assets: dict[str, tuple[bytes, str]] = {}
+        for path in sorted(_STATIC_DIR.iterdir()):
+            content_type = _CONTENT_TYPES.get(path.suffix)
+            if path.is_file() and content_type is not None:
+                self._assets[path.name] = (path.read_bytes(), content_type)
         self._lock = threading.Lock()
         self._clients: set = set()
         self._new_clients: deque = deque()
@@ -53,14 +69,24 @@ class ConsoleServer:
     def port(self) -> int:
         return self._port
 
-    # --- HTTP: serve index.html on GET / ; let /ws upgrade -----------------
+    # --- HTTP: serve console/static/ assets ; let /ws upgrade --------------
     def _process_request(self, connection, request):
         if request.path == "/ws":
             return None   # proceed to the websocket handshake
+        # basename only: never join the request path onto a directory, so a
+        # traversal attempt resolves to a name that is simply not in _assets.
+        name = "index.html" if request.path == "/" \
+            else request.path.lstrip("/").split("/")[-1]
+        asset = self._assets.get(name)
+        if asset is None:
+            headers = Headers()
+            headers["Content-Length"] = "0"
+            return Response(404, "Not Found", headers, b"")
+        body, content_type = asset
         headers = Headers()
-        headers["Content-Type"] = "text/html; charset=utf-8"
-        headers["Content-Length"] = str(len(self._index_bytes))
-        return Response(200, "OK", headers, self._index_bytes)
+        headers["Content-Type"] = content_type
+        headers["Content-Length"] = str(len(body))
+        return Response(200, "OK", headers, body)
 
     # --- per-connection handler thread -------------------------------------
     def _handle(self, connection) -> None:

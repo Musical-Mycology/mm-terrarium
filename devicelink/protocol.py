@@ -88,7 +88,12 @@ def deny_event(dev: str, reason: str | None, hint: str | None) -> dict:
 
 
 def leds_event(dev: str, channels, when: float = 0.0) -> dict:
-    """channels: a flat sequence of 36 ints (12 pixels x GRB).
+    """channels: a flat sequence of ints, width-agnostic. This function does
+    `list(channels)` with no length assertion, so any frame width rides the
+    same wire shape. Two real callers, two widths: a Tuneshroom sends 36
+    (12 pixels x GRB, harness/shroom_client.py's LED_CHANNELS), and a Room
+    sends its RoomProfile.channel_count, currently 180 (60 pixels x GRB,
+    control/room_profile.py).
 
     `when` is an absolute O2 time at which the device should display this
     frame. 0.0 means no declared time: display on arrival, the pre-timing

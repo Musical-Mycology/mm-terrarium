@@ -17,12 +17,13 @@ import time
 from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
 from control.role_config import compose_role_config
+from control.room_profile import RoomProfile, room_profile
 from control.rooms import room_role_name
 from control.state import State
 from control.timed_queue import TimedQueue
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
-from luxaeterna.synth.capability import shroom_capability
+from harness.room_surface import to_capability
 from luxaeterna.synth.director import CLOSING
 from luxaeterna.synth.manifest import LightManifest
 from luxaeterna.synth.session import build_session
@@ -74,7 +75,8 @@ class _RoomAudioSink:
 class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
                  capability=None, clock=time.monotonic,
-                 room_bridge=None, room_audio=None, horizon: float = 0.0):
+                 room_bridge=None, room_audio=None, horizon: float = 0.0,
+                 room_profile=None, on_room_frame=None):
         self.game_server = game_server
         self.server = server
         self._capability = capability
@@ -118,8 +120,25 @@ class DeviceLinkAgent:
         # below a no-op.
         self._room_bridge = room_bridge
         self._room_audio = room_audio
+        # The Room's fixture declaration. None here means "resolve it from the
+        # bound Room's type"; an explicit profile is for tests and for a future
+        # installation that overrides the shipped shape. self._capability is
+        # NOT consulted for the Room any more: that attribute is the player
+        # device shape, and sharing one capability between a Tuneshroom and a
+        # Room is exactly the confusion this slice removes.
+        self._room_profile: RoomProfile | None = room_profile
         self._room_dev: str | None = None
         self._room_light = None
+        # Display-only copy of each changed Room frame, for the Terrarium
+        # Console. Optional and best-effort: None is the default, so a run
+        # without a console constructs and behaves exactly as before.
+        #
+        # Boundary rule 2 permits this. The rule forbids the console carrying
+        # per-device join/tick traffic and requires that gameplay correctness
+        # never depend on the link's health. Nothing here is retransmitted,
+        # nothing is awaited, and dropping every frame degrades the picture
+        # and changes nothing else.
+        self._on_room_frame = on_room_frame
         self._setup_room()
         game_server.add_observer(self)
         game_server.on_release = self._on_release
@@ -150,7 +169,9 @@ class DeviceLinkAgent:
         self._room_dev = room.bound_dev
         blob = compose_role_config(gs.bit_name, gs.bit.version, role)
         manifest = LightManifest.from_dict(blob["light_manifest"])
-        cap = self._capability or shroom_capability()
+        if self._room_profile is None:
+            self._room_profile = room_profile(room.room_type)
+        cap = to_capability(self._room_profile)
         session = build_session(manifest, cap, clock=self._clock)
         self._room_light = _RoomLightSink(session, Universe())
         audio_sink = None
@@ -160,6 +181,16 @@ class DeviceLinkAgent:
         if self._room_bridge is not None:
             self._room_bridge.bind(self._room_dev, light=self._room_light,
                                    audio=audio_sink)
+
+    @property
+    def room_bridge(self):
+        """The Room's MIDI fan-out, or None when no Room is configured.
+
+        Public because harness/terrarium_boot.py's main() needs it to build a
+        ConsoleAgent: build() does not return it, and build()'s 5-tuple return
+        is unpacked at 16 sites, so widening it would be churn for no gain.
+        """
+        return self._room_bridge
 
     @property
     def clamped(self) -> int:
@@ -246,9 +277,10 @@ class DeviceLinkAgent:
         except Exception:
             logger.exception("Room render failed; skipping frame")
             return
-        frame = bytes(universe.get_frame()[:36])
+        frame = bytes(universe.get_frame()[:self._room_profile.channel_count])
         if frame != self._last_frames.get(self._room_dev):
             self._last_frames[self._room_dev] = frame
+            self._emit_room_frame(self._room_dev, frame)
             when = at if at is not None else self._clock() + self._horizon
             try:
                 self._send(self._room_dev,
@@ -256,6 +288,16 @@ class DeviceLinkAgent:
                                                when=when))
             except Exception:
                 logger.exception("Room leds send failed")
+
+    def _emit_room_frame(self, dev: str, frame: bytes) -> None:
+        """Guarded exactly like on_release and on_light_cue already are: a
+        failing console must not stop the Room rendering or wedge the tick."""
+        if self._on_room_frame is None:
+            return
+        try:
+            self._on_room_frame(dev, frame)
+        except Exception:
+            logger.exception("room frame sink failed; dropping frame")
 
     def _feed_breath(self) -> None:
         """Drive every joined device's breath. Sent on change only, and never

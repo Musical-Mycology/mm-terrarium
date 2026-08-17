@@ -24,6 +24,7 @@ __all__ = [
     "state_changed_event", "role_view", "device_view", "snapshot_event",
     "devices_changed_event", "bit_status_event", "log_event",
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
+    "room_changed_event", "room_frame_event",
 ]
 
 
@@ -44,7 +45,7 @@ def device_view(info, role_name) -> dict:
 
 
 def snapshot_event(*, state, installed_bits, loaded_bit, roles,
-                   registration, devices, bit_status) -> dict:
+                   registration, devices, bit_status, room=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
@@ -54,7 +55,21 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "registration": registration,
         "devices": devices,
         "bit_status": bit_status,
+        "room": room,
     }
+
+
+def room_changed_event(room) -> dict:
+    """The Room panel's read model. `room` is control.room_view.room_view()'s
+    output, or None when no Room is configured."""
+    return {"event": "room_changed", "room": room}
+
+
+def room_frame_event(dev: str, channels) -> dict:
+    """One rendered Room frame, for display only. Decimated and droppable:
+    see console/agent.py's ROOM_FRAME_INTERVAL. An int list rather than base64
+    for consistency with devicelink/protocol.py's leds_event."""
+    return {"event": "room_frame", "dev": dev, "channels": list(channels)}
 
 
 def devices_changed_event(devices) -> dict:

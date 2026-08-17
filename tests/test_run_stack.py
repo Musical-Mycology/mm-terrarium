@@ -431,3 +431,22 @@ def test_the_setup_window_clears_a_measured_device_cold_start():
 
     assert StackConfig(log_dir="x").setup_seconds > measured_cold_start
     assert config_from_args(parse_args([])).setup_seconds > measured_cold_start
+
+
+def test_control_command_omits_console_port_by_default():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x")
+    assert "--console-port" not in control_command(cfg, ppid=1)
+
+
+def test_control_command_passes_console_port_when_set():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x", console_port=8772)
+    cmd = control_command(cfg, ppid=1)
+    assert "--console-port" in cmd
+    assert cmd[cmd.index("--console-port") + 1] == "8772"
+
+
+def test_console_port_defaults_to_none():
+    from harness.run_stack import StackConfig
+    assert StackConfig(log_dir="/tmp/x").console_port is None

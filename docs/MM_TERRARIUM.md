@@ -271,6 +271,12 @@ venue" question. Landed in
   **`127.0.0.1`** with `0.0.0.0` LAN exposure an explicit opt-in. This
   assumption is load-bearing — the moment a console faces an untrusted network,
   auth becomes a prerequisite, not an enhancement.
+- **Reachable during a live run only as of 2026-08-17.** Until then
+  `ConsoleServer`/`ConsoleAgent` were constructed **only under `tests/`** and
+  no harness driver built either, so there was no panel to open at a venue.
+  `harness/terrarium_boot.py --console-port N` (and `run_stack`'s passthrough)
+  now serves it and prints the URL. Off by default. It also gained a **Room
+  panel**; see the Room-panel section below.
 
 ### `harness/` — the in-process LED-sim harness (Slice 1)
 `DeviceBridge` + `led_smoke.py`: the first end-to-end exercise of the
@@ -367,8 +373,13 @@ every claim below is about code, not about a measured installation.
   address it handled or `""` if it dropped the frame, so the whole protocol
   surface is testable with no socket and no device. The transport half is
   confined to `main()` because that is the part o2lite replaces.
-  `LED_CHANNELS = 36` matches the current wire (12 px × GRB) — see the RGBW
-  mismatch under *Not yet built* below.
+  `LED_CHANNELS = 36` matches the Tuneshroom wire (12 px × GRB) — see the RGBW
+  mismatch under *Not yet built* below. As of 2026-08-17 that is a **default,
+  not a fixed width**: `ShroomClient(..., expected_channels=...)` is
+  per-instance, because a Room is not a Tuneshroom and ships 180 channels
+  (60 px × 3). A wrong-width frame is still dropped and logged, never
+  truncated: rendering a short frame would turn a configuration mismatch into
+  a subtly wrong picture instead of a logged drop.
 - **`local_sample.py`** — preloaded sample playback for the sub-20 ms tap path.
   `last_latency_ms` measures **dispatch, not sound**; the real tap-to-sound
   figure has to be read off a waveform and must not be quoted from this number.
@@ -575,6 +586,24 @@ renderer** — the concrete simulator/hardware backend is deferred, see
   `control.rooms.non_room_counts()` helper (a device bound as the Room still
   appears in the Console's device list — it said hello like any other device
   — just without revealing which role it holds).
+
+  **Narrowed 2026-08-17, and the shape of the narrowing is the point.** The
+  original rule said the Room is never surfaced at all. That was written
+  broader than the concern behind it, which is that the Room's Registration
+  Node grants control of the installation's rendering backend. A Bit's
+  declared Room *instruments* are not a credential; they are exactly what an
+  operator needs to see. So the Console now shows the Room's instruments, its
+  surface and zone names, and its live controller values, while the node id,
+  the registration counts and the role name stay hidden and the uplink stays
+  filtered unconditionally. **Implemented as addition, not relaxation:** every
+  filter named above is byte-identical to before, and visibility arrives
+  through a separately built `room` key. Prefer that shape if this is ever
+  extended: a filter that was never loosened cannot be accidentally widened,
+  and `tests/test_console_agent.py`'s
+  `test_the_room_stays_hidden_from_roles_and_registration_while_visible_as_room`
+  can assert both halves in one test, which a relaxed filter makes impossible
+  to state. See `docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md`
+  section 3.
 
 ### `control/simulator_process.py`, `harness/room_simulator.py`, `harness/terrarium_boot.py` — the Terrarium Visualization Simulator (TEST room)
 The first concrete `Room` backend — closes the gap the Room-concept slice
@@ -919,7 +948,83 @@ prevented the ordering from disagreeing with itself again, and it had.
   instead of five copies that could each drift independently.
 
 **Suite baseline as of this slice: 721 passed, 1 skipped** (662 at this
-branch's start).
+branch's start). **844 passed, 1 skipped as of the 2026-08-17 Room-panel
+slice.**
+
+### The Room panel and the Room's own fixtures (`control/room_profile.py`, `control/room_view.py`, `harness/room_surface.py`, `console/static/`)
+The Room stops being shaped like a Tuneshroom, and the Console becomes an
+operator surface for it. Design:
+[`.../2026-08-17-room-panel-and-room-fixtures-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md)
+(Spec A of two; Spec B covers triggers, cue scripts, conditions and firing and
+is not written yet).
+
+- **The Room had no fixtures of its own.** `devicelink/agent.py` built the
+  Room's `LightSession` from `self._capability or shroom_capability()` and
+  sliced its frame with a literal `[:36]`, so structurally a Room *was* a
+  12-LED Tuneshroom with a ring and a stem. `control/room_profile.py` now
+  declares its own surface: `RoomProfile(surface_id="room_test",
+  pixel_count=60, color_order="GRB", zones=(left/center/right, 20 px each))`,
+  linear because the real Terrarium array is a single 6 m run. `channel_count`
+  (180) is the single source of truth for frame width, honored by the agent's
+  slice, the client's `expected_channels`, and both simulator entry points.
+  A mismatch renders **nothing at all**, because a wrong-width frame is
+  dropped rather than truncated.
+- **`control/` stays dependency-free, and that is now pinned by a test.**
+  `room_profile.py` is pure; `harness/room_surface.py`'s `to_capability()`
+  does the luxaeterna conversion, mirroring how `harness/device_bridge.py`
+  already adapts a player role's declaration. The `primary` zone lives only in
+  the adapter: the renderer needs it to resolve an untargeted instrument, and
+  the Console must not draw it, since it spans the whole surface and would
+  cover every real zone. **The invariant is module-level imports only**: one
+  deliberate function-scoped `from pyarco.arco_engine import arco` exists at
+  `control/arco_process.py:37`, marked `# noqa: PLC0415 (lazy by design)`,
+  and is fine because a function-scoped import runs only when called. An
+  earlier draft of this work asserted a package-wide ban and was wrong; the
+  grep behind it was anchored at `^` and could not see an indented import.
+- **`control/room_view.py`** is the read model the browser renders: light and
+  audio instruments in **one list discriminated by `kind`**, not two. They are
+  declared in two fields of one `Role` and fed from one shared MIDI stream, so
+  two separate tables would hide the property the architecture is built
+  around. On the panel this shows as `cc:74` reading the same value on
+  `aurora`'s hue lane and FluidSynth's cutoff lane simultaneously.
+- **Frame relay.** `DeviceLinkAgent` gained an optional `on_room_frame` sink,
+  guarded at its call site exactly like `on_release` and `on_light_cue`, wired
+  by constructor injection so `control/engine.py` was not touched.
+  `ConsoleAgent` holds only the **latest** frame and broadcasts at ~10 Hz
+  against the 44 Hz render; intermediate frames are **dropped, never queued**.
+  That is what keeps it compatible with boundary rule 2: nothing is
+  retransmitted, nothing is awaited, and dropping every frame degrades the
+  picture and changes nothing else.
+- **`console/static/` is a directory now**, split into `index.html` /
+  `style.css` / `console.js` / `room.js` and served from an allowlisted asset
+  map, still with **no build step** (a venue box must never need npm). Path
+  handling takes the request's **basename only**, so the server has no code
+  path that touches the filesystem after construction and no request can
+  escape `console/static/` or the extension allowlist.
+- **`--console-port`** on `harness/terrarium_boot.py` and
+  `harness/run_stack.py`, off by default. Before this the Console was
+  **unreachable during a live run**: `ConsoleServer`/`ConsoleAgent` were
+  constructed only under `tests/`. `main()` owns the console rather than
+  `build()`, because `build()`'s 5-tuple return is unpacked at 17 sites; that
+  also gets the teardown ordering right, since the console is registered last
+  and therefore torn down first, correct because its only clients are browsers
+  outside the stack, unlike the devicelink server whose client is the Room
+  simulator.
+
+**Two defects here reached a live browser run past 843 passing tests, and the
+reason is worth internalizing.** The console's JavaScript was covered only by
+substring greps over its own source. `renderRoom` replaced the `#roomStrip`
+node on every `room_changed`, and `room_changed` fires on every controller
+change, so the strip was rebuilt roughly four times per painted frame
+(measured 1726 against 464) and the Room's live light was effectively never
+displayed *while the room was active*. Separately `body` had `color: #111`
+with no `background-color`, so under `prefers-color-scheme: dark` the whole
+Console rendered near-black on black. Both are fixed, and `room.js` plus
+`console.js`'s event dispatch now have real behavioral tests
+(`tests/js/room_panel_behavior.test.js` under a DOM stub via Node's `vm`,
+wrapped by `tests/test_room_panel_behavior.py`, skipping cleanly where node is
+absent). **A grep over source text is not a test of behavior**; if more
+browser code lands here, give it the same treatment.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -1198,8 +1303,23 @@ Kept explicit so the doc doesn't over-claim:
   successful live o2lite run as **currently unreliable rather than routine**,
   and check `o2debug.log` first -- `dropping message because service was not
   found` means Control was not up yet, and silence means the socket is dead.
-- **A refused o2lite service announcement is unobservable from the
-  client.** `/_o2/*/sv` is fire-and-forget: O2 refuses a second claimant
+- **A refused o2lite service announcement is unobservable from the client.
+  Not a defect: this is O2 working as designed** (Roger, 2026-08-17). The
+  host will not forward messages to two providers of the same service name,
+  so one must win; full O2 picks the highest IP+port lexicographically, and
+  **o2lite keeps no fallback list and does not prioritize at all, so it is
+  first-come-first-serve**. Roger explicitly blessed this repo's workaround:
+  "the detection method described (send a message to the service and time out
+  if you don't receive it) is OK", so `verify_service_ownership` is sanctioned
+  rather than a hack. **Do not expect an upstream fix**, and treat a service
+  collision here as a design question on this side rather than a bug to report.
+  For the record of what was actually observed: Control offers `actl,game`, the
+  Room simulator offers `sim-room`, and players offer their own dev ids, so no
+  two live processes claim one name by design; the collision that prompted the
+  investigation was an *orphan* re-claiming `sim-room` on o2litepy's automatic
+  reconnect, which is why the guards below are about orphan lifetime rather
+  than about naming. The client-side silence stands as a property to design
+  around. `/_o2/*/sv` is fire-and-forget: O2 refuses a second claimant
   (`o2/src/bridge.cpp:231-237`), logs the drop on the **hub**, and offers
   the client no acknowledgement, no error callback and no way to query
   whether a registration took. A client that loses a service race
@@ -1212,7 +1332,16 @@ Kept explicit so the doc doesn't over-claim:
   which `--exit-with-parent` and the extended shutdown guarantees close on
   the mm-terrarium side, but the underlying silence at the O2 layer stays
   open.)
-- **o2litepy's discovery has no ensemble filter at all.**
+- ~~**o2litepy's discovery has no ensemble filter at all.**~~ **Fixed
+  upstream 2026-08-17** (`rbdannenberg/arco` commit `379424e`, merged into the
+  local checkout; `o2litepy/o2lite_disc.py` now stores the ensemble and
+  `py3discovery.py` filters on it). Roger: "real, only in the Python port, and
+  is now fixed and tested in the regression tests". **Verified in source, not
+  yet re-verified live**, and properly closing it means re-running the original
+  reproduction, and the venue consequence below needs two O2 hosts to
+  exercise. The description of the original defect follows.
+
+  **The defect as reported.**
   `o2litepy/o2lite_disc.py:24` takes `ensemble` as a constructor argument
   and never stores it, and `py3discovery.py:74` browses
   `_o2proc._tcp.local.` and appends every host it resolves. So an o2lite
@@ -1264,6 +1393,20 @@ Kept explicit so the doc doesn't over-claim:
   o2lite transport that reads `JoinResult.config` is still unbuilt; the Arco
   cue path that plays the welcome audio half now exists in `control/audio.py`.)
 - **Real Bits beyond `TestBit`.** No production Bit exists.
+- **Bit-declared triggers, cue scripts and conditions (Spec B).** The Room
+  panel (Spec A, 2026-08-17) shows what a Bit *declares* for the Room and what
+  it is *doing now*. It does not show what will make something happen: there
+  is no `TriggerTable`, no named cue script a Bit can declare as data, no
+  Bit-reported adjudication event ("user wins a round"), and no admin
+  fire-this-trigger button. `verb_handlers()` still carries no description,
+  condition or target metadata, and a trigger fired by a Bit's own
+  adjudication has no incoming verb at all, so it cannot live there. Design
+  decisions already taken for that slice: declarative cue scripts rather than
+  callables (so the console can render the steps, not just a prose
+  description), the Bit evaluates conditions and Control only observes
+  (preserving the Bit-agnostic boundary), and manual fire is in scope because
+  the device path is currently too unreliable to test a Room instrument any
+  other way. Spec not yet written.
 - **The Tuneshroom LED wire cannot reach the white die.** The hardware is
   SK6812 Mini **RGBW** (4 channels, chosen for its dedicated white die and the
   clean diffusion that buys), but `protocol.leds_event` ships **36 ints
@@ -1285,7 +1428,8 @@ Kept explicit so the doc doesn't over-claim:
   provisioning/networking) are in the README's planned layout but not created.
 - **Operator command interface beyond the console** (physical control, a
   Registration Node convention) remains a later decision; the console is the
-  first concrete answer for a web panel.
+  first concrete answer for a web panel, and as of 2026-08-17 it is actually
+  openable during a run and shows the Room.
 - **`RoomType.DEMO`'s backend.** Only TEST room has a simulator; the venue
   array's simulated (and, later, real-hardware) backend is a deferred
   follow-up spec, not yet written.
@@ -1342,6 +1486,12 @@ Kept explicit so the doc doesn't over-claim:
   [`.../plans/2026-08-14-load-bearing-timed-cues.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-14-load-bearing-timed-cues.md).
   Live-verified against a real Arco 2026-08-14; read its section 2 (the
   timing model) before touching cue timing anywhere in this repo.
+- Room panel, and the Room's own fixtures (Spec A of two; Spec B covers
+  triggers, cue scripts, conditions and firing and is not written yet):
+  [`.../2026-08-17-room-panel-and-room-fixtures-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md)
+  and its plan
+  [`.../plans/2026-08-17-room-panel-and-room-fixtures.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-17-room-panel-and-room-fixtures.md).
+  Its Status line records what was live-verified and what was not.
 - Teardown order, and a one-command Arco stack runner:
   [`.../2026-08-14-teardown-order-and-stack-runner-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-teardown-order-and-stack-runner-design.md)
   and its plan

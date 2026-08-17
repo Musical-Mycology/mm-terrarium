@@ -21,42 +21,58 @@ Usage (normally spawned by harness/terrarium_boot.py, not run by hand):
 
 from __future__ import annotations
 
-from harness.shroom_client import LED_CHANNELS, ShroomClient, pump_tick
+from harness.shroom_client import ShroomClient, pump_tick
 from harness.signals import sigterm_as_keyboard_interrupt
 
 
 class WebSimLeds:
     """Adapts ShroomClient's leds.show(bytes)/leds.clear() to
-    WebSimBackend's send(frame). Frame byte counts already match: both
-    trace to the same shroom_capability() (12 pixels x 3 bytes = 36),
-    matching devicelink's own 36-int /<dev>/leds wire shape."""
+    WebSimBackend's send(frame).
 
-    def __init__(self, backend) -> None:
+    `channels` is the frame width this surface expects. It is a parameter
+    rather than the LED_CHANNELS constant because a Room is not a Tuneshroom:
+    the Room's width comes from its RoomProfile (60 px x 3 = 180), while a
+    player device is still 12 px x GRB = 36.
+    """
+
+    def __init__(self, backend, channels: int) -> None:
         self._backend = backend
+        self._channels = channels
 
     def show(self, frame: bytes) -> None:
         self._backend.send(frame)
 
     def clear(self) -> None:
-        self._backend.send(bytes(LED_CHANNELS))
+        self._backend.send(bytes(self._channels))
 
 
 def build(dev: str, sim_host: str = "127.0.0.1", sim_port: int = 0,
-          serve: bool = True):
+          serve: bool = True, room_type: str = "TEST"):
     """Construct the client + backend WITHOUT opening a socket or serving.
 
     Returns ``(client, backend)``. ``serve=False`` gives a record-only
     backend (no websockets, no port) for headless tests, matching
     ``led_smoke.py``'s ``build()``/``main()`` split -- the caller is
     responsible for ``backend.open()``/``.close()`` and the real
-    devicelink websocket loop."""
-    from luxaeterna.backends.websim import WebSimBackend
-    from luxaeterna.synth.capability import shroom_capability
+    devicelink websocket loop.
 
-    backend = WebSimBackend(capability=shroom_capability(),
+    The surface is the ROOM's, not a Tuneshroom's: this process renders a
+    Room, and borrowing shroom_capability() here is what made a Room a 12-LED
+    ring and stem. See control/room_profile.py.
+    """
+    from luxaeterna.backends.websim import WebSimBackend
+
+    from control.room_profile import room_profile
+    from control.rooms import RoomType
+    from harness.room_surface import to_capability
+
+    profile = room_profile(RoomType[room_type])
+    backend = WebSimBackend(capability=to_capability(profile),
                              host=sim_host, port=sim_port, serve=serve,
                              label=dev)
-    client = ShroomClient(dev, node="", leds=WebSimLeds(backend))
+    client = ShroomClient(dev, node="", leds=WebSimLeds(backend,
+                                                       profile.channel_count),
+                          expected_channels=profile.channel_count)
     return client, backend
 
 
@@ -74,6 +90,11 @@ def main() -> None:
                         help="Control's devicelink URL, e.g. ws://host:port/ws")
     parser.add_argument("--sim-host", default="127.0.0.1")
     parser.add_argument("--sim-port", type=int, default=0)
+    parser.add_argument("--room-type", default="TEST",
+                        help="Which RoomType's surface to render. Resolved "
+                             "through control/room_profile.py, so the "
+                             "simulator and Control agree on the shape by "
+                             "construction rather than by convention.")
     parser.add_argument("--control-horizon", type=float, default=None,
                         help="The horizon Control was run with, used only to "
                              "report absolute frame latency on exit. Same "
@@ -85,7 +106,8 @@ def main() -> None:
 
     sigterm_as_keyboard_interrupt()
 
-    client, backend = build(args.dev, args.sim_host, args.sim_port)
+    client, backend = build(args.dev, args.sim_host, args.sim_port,
+                            room_type=args.room_type)
     backend.open()
     print(f"Watch the Room at http://{args.sim_host}:{backend.port}/", flush=True)
 

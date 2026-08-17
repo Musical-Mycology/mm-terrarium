@@ -6,21 +6,42 @@ in-process fake. Driven from the engine tick loop via poll().
 """
 
 import logging
+import time
 
 from console import protocol
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.roles import RoleClass
-from control.rooms import RoomType, non_room_counts
+from control.room_profile import room_profile
+from control.room_view import room_view
+from control.rooms import RoomType, non_room_counts, room_role_name
 from control.state import State
 
 logger = logging.getLogger(__name__)
 
+# How often a Room frame may be broadcast. The Room renders at 44 Hz; the
+# Console is a monitor, so it gets roughly 10 Hz and intermediate frames are
+# DROPPED rather than queued. Boundary rule 2: nothing here may become
+# something gameplay waits on.
+ROOM_FRAME_INTERVAL = 0.1
+
 
 class ConsoleAgent:
-    def __init__(self, game_server: GameServer, server):
+    def __init__(self, game_server: GameServer, server, room_bridge=None,
+                 clock=time.monotonic):
         self.game_server = game_server
         self.server = server
+        # The Room's live MIDI fan-out, for its controllers read-out. Optional:
+        # a GameServer built the pre-Room way has none, and the panel then
+        # shows the Room's declarations with no live values rather than
+        # failing.
+        self._room_bridge = room_bridge
         self._last_status: dict | None = None
+        self._last_room: dict | None = None
+        self._clock = clock
+        # The latest Room frame not yet broadcast, or None. Overwritten, not
+        # queued: see _broadcast_room_frame and ROOM_FRAME_INTERVAL above.
+        self._pending_room_frame: tuple[str, bytes] | None = None
+        self._last_room_frame_at = 0.0
         game_server.add_observer(self)
 
     # --- driven once per tick-loop iteration -------------------------------
@@ -32,6 +53,8 @@ class ConsoleAgent:
             if error is not None:
                 self.server.send(client, error)
         self._broadcast_status_if_changed()
+        self._broadcast_room_if_changed()
+        self._broadcast_room_frame()
 
     # --- inbound command dispatch ------------------------------------------
     def _handle_command(self, msg: dict) -> dict | None:
@@ -88,6 +111,7 @@ class ConsoleAgent:
                      if r.role_class != RoleClass.ROOM]
             registration = protocol.registration_changed_event(
                 self._non_room_counts())["roles"]
+        self._last_room = self._current_room()
         return protocol.snapshot_event(
             state=gs.state.name,
             installed_bits=list(gs.bit_registry.keys()),
@@ -96,7 +120,53 @@ class ConsoleAgent:
             registration=registration,
             devices=self._devices_view(),
             bit_status=self._current_status(),
+            room=self._last_room,
         )
+
+    def _current_room(self) -> dict | None:
+        """Build the Room panel payload, or None when no Room is configured.
+
+        Deliberately scoped: see control/room_view.py's module docstring. The
+        Room-hiding filters this class already applies to `roles` and
+        `registration` are NOT relaxed by this method; it is a separate view.
+        """
+        gs = self.game_server
+        if gs.room is None:
+            return None
+        try:
+            profile = room_profile(gs.room.room_type)
+        except NotImplementedError:
+            logger.warning("no room profile for %s; Room panel disabled",
+                           gs.room.room_type.name)
+            return None
+        role = None
+        if gs.bit is not None:
+            role = gs.bit.role_table.roles.get(room_role_name(gs.room.room_type))
+        controllers = getattr(self._room_bridge, "controllers", {}) or {}
+        return room_view(gs.room, profile, role, controllers)
+
+    def _broadcast_room_if_changed(self) -> None:
+        room = self._current_room()
+        if room != self._last_room:
+            self._last_room = room
+            self.server.broadcast(protocol.room_changed_event(room))
+
+    def on_room_frame(self, dev: str, frame: bytes) -> None:
+        """DeviceLinkAgent's display-only frame sink. Called on the tick
+        thread. Stores the LATEST frame only; anything not yet broadcast is
+        overwritten, never queued."""
+        self._pending_room_frame = (dev, frame)
+
+    def _broadcast_room_frame(self) -> None:
+        if self._pending_room_frame is None:
+            return
+        now = self._clock()
+        if now - self._last_room_frame_at < ROOM_FRAME_INTERVAL:
+            return
+        dev, frame = self._pending_room_frame
+        self._pending_room_frame = None
+        self._last_room_frame_at = now
+        self.server.broadcast(protocol.room_frame_event(dev, frame))
 
     def _non_room_counts(self):
         """Never surface the Room's occupancy on any Console view -- design

@@ -777,3 +777,108 @@ def test_a_room_audio_cue_already_past_clamps_and_counts():
     agent._render_room()
     assert audio.fed == [(0xB0, 74, 100)]               # released anyway
     assert agent.clamped == 1
+
+
+# --- Room fixture profile: the Room's session is built from its own
+# RoomProfile (control/room_profile.py), not borrowed from the player
+# Tuneshroom's shroom_capability(). See this task's brief. ------------------
+
+def test_room_session_is_built_from_the_room_profile_not_the_shroom():
+    """The whole point of the fixture model: a Room is 60 px in three zones,
+    not a 12 px ring and stem."""
+    from control.room_profile import room_profile
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    assert agent._room_profile == room_profile(RoomType.TEST)
+    assert agent._room_light.session.cap.pixel_count == 60
+    assert agent._room_light.session.cap.surface_id == "room_test"
+
+
+def test_player_devices_still_get_the_shroom_capability():
+    """Players remain Tuneshrooms. Only the Room changed."""
+    gs, server, agent, dev, clk = _agent_with_joined_device("ie1")
+    assert agent.bridges["ie1"].session.cap.pixel_count == 12
+
+
+def test_room_frame_is_the_profile_width_not_thirty_six():
+    from control.room_profile import room_profile
+    gs = _room_ready_game_server()
+    server = FakeServer()
+    server.bind_dev("sim-room", "c-room")
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge())
+
+    for _ in range(3):
+        agent.poll()
+
+    frames = [m for dev, m in server.sent if m["address"] == "/sim-room/leds"]
+    assert frames, "the Room emitted no frame"
+    assert len(frames[-1]["args"][0]) == room_profile(RoomType.TEST).channel_count
+    assert len(frames[-1]["args"][0]) == 180
+
+
+def test_an_explicit_room_profile_overrides_the_resolved_one():
+    from control.room_profile import RoomProfile, RoomZone
+    profile = RoomProfile(surface_id="custom", pixel_count=24,
+                          color_order="GRB", zones=(RoomZone("all", 0, 24),))
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_profile=profile)
+
+    assert agent._room_light.session.cap.pixel_count == 24
+
+
+def test_no_room_configured_leaves_the_profile_unset():
+    """A GameServer built the pre-Room way must keep working."""
+    gs = GameServer({"TestBit": TestBit})
+    agent = DeviceLinkAgent(gs, FakeServer())
+    assert agent._room_profile is None
+    assert agent._room_light is None
+
+
+# --- Room frame relay to the Console: an optional, guarded, best-effort
+# sink (see this task's brief and boundary rule 2). --------------------------
+
+def test_room_frames_reach_the_sink():
+    gs = _room_ready_game_server()
+    seen = []
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            on_room_frame=lambda dev, frame: seen.append((dev, frame)))
+
+    for _ in range(3):
+        agent.poll()
+
+    assert seen, "no room frame reached the sink"
+    assert seen[0][0] == "sim-room"
+    assert len(seen[0][1]) == 180
+
+
+def test_a_raising_room_frame_sink_does_not_stop_the_leds_going_out():
+    """Boundary rule 2, and the same guard the other two transport sinks
+    already carry: a failing console must not wedge the Room."""
+    gs = _room_ready_game_server()
+    server = FakeServer()
+    server.bind_dev("sim-room", "c-room")
+
+    def boom(dev, frame):
+        raise RuntimeError("console exploded")
+
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge(),
+                            on_room_frame=boom)
+
+    for _ in range(3):
+        agent.poll()
+
+    assert [m for _, m in server.sent if m["address"] == "/sim-room/leds"]
+
+
+def test_no_sink_is_the_default_and_changes_nothing():
+    gs = _room_ready_game_server()
+    server = FakeServer()
+    server.bind_dev("sim-room", "c-room")
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge())
+
+    for _ in range(3):
+        agent.poll()
+
+    assert [m for _, m in server.sent if m["address"] == "/sim-room/leds"]
