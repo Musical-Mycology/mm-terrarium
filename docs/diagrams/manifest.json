@@ -5,12 +5,12 @@
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "boot-teardown",
       "outputs": {
-        "out/boot-teardown.svg": "18c334279583883dda484dfb94dc2c3825ffe50ab96ba426a4c41292f083fd95",
-        "out/boot-teardown.txt": "5b35df82587676f5991415f543c69a9be44c1b2665a0ef01ed6cdc29c5b6e31d"
+        "out/boot-teardown.svg": "c6d058cd53496ad41a98b574cbdb65d8a2e6d14d7cd79eb0ef7d8de4bf2c0a7e",
+        "out/boot-teardown.txt": "5053811dc3f87afb6f0b66d6a8a0229bd1d4a6918e6b5d363996d9b447a5c5b8"
       },
       "renderer": "d2",
       "source": "boot-teardown.d2",
-      "source_sha256": "b7cbad07eccaf7b9f35e6cda5c269997747620104e59dc3932120c530ee260e3"
+      "source_sha256": "c01b0b773fed4092dd8152a23ac06e700570cd7bd2ac2ca214335cedc38c16fc"
     }
   }
 }
