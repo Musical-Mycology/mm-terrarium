@@ -88,3 +88,26 @@ def test_parse_admin_command_rejects_missing_room_type():
 def test_parse_admin_command_rejects_unrecognized_command():
     with pytest.raises(ValueError):
         parse_admin_command({"command": "not_a_real_command"})
+
+
+def test_room_changed_event_shape():
+    from console import protocol
+    event = protocol.room_changed_event({"room_type": "TEST"})
+    assert event == {"event": "room_changed", "room": {"room_type": "TEST"}}
+
+
+def test_snapshot_carries_room():
+    from console import protocol
+    event = protocol.snapshot_event(
+        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        registration=[], devices=[], bit_status={},
+        room={"room_type": "TEST"})
+    assert event["room"] == {"room_type": "TEST"}
+
+
+def test_snapshot_room_defaults_to_none():
+    from console import protocol
+    event = protocol.snapshot_event(
+        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        registration=[], devices=[], bit_status={})
+    assert event["room"] is None

@@ -14,8 +14,11 @@ class FakeConsoleServer:
     def __init__(self):
         self.broadcasts = []                # list[dict]
         self.sent = []                      # list[(client, dict)]
+        self.dropped = []                   # list[client]
         self._new_clients = []
         self._inbound = []                  # list[(client, dict)]
+        self._clients = set()
+        self._raising = set()               # clients whose send() raises
 
     # --- tick-thread API consumed by ConsoleAgent ---
     def drain_new_clients(self):
@@ -30,11 +33,24 @@ class FakeConsoleServer:
         self.sent.append((client, msg))
 
     def broadcast(self, msg):
+        # Mirrors ConsoleServer.broadcast: a client whose send raises is
+        # DROPPED, not retried and not allowed to break the loop. Modelling
+        # this is boundary rule 5 -- a double must never be more permissive
+        # than the library it stands for.
         self.broadcasts.append(msg)
+        for client in list(self._clients):
+            if client in self._raising:
+                self._clients.discard(client)
+                self.dropped.append(client)
+
+    def fail_sends_to(self, client):
+        self._clients.add(client)
+        self._raising.add(client)
 
     # --- test helpers ---
     def connect(self, client):
         self._new_clients.append(client)
+        self._clients.add(client)
 
     def deliver(self, client, msg):
         self._inbound.append((client, msg))
@@ -224,3 +240,110 @@ def test_devices_view_hides_the_room_assignment():
 
     ie9 = next(d for d in devices if d["dev"] == "ie9")
     assert ie9["role"] is None    # device is listed, but not as "room_test"
+
+
+def _room_console(bit_name="TestBit"):
+    """A GameServer with a bound TEST Room and a loaded Bit, plus a
+    ConsoleAgent wired to a RoomBridge carrying a live cc value.
+
+    TestBit, NOT tests/test_engine.py's RoomCapableBit: that fixture overrides
+    role_table and rebuilds the Room role with a bare room_role(RoomType.TEST),
+    so its light_manifest and ugen_manifest are both empty. TestBit declares
+    the real aurora + flsyn Room instruments (bits/test_bit.py), which is what
+    these tests are asserting on."""
+    from control.room_bridge import RoomBridge
+    binding = RoomBindingRegistry()
+    gs = GameServer({bit_name: TestBit}, room_binding=binding)
+    gs.room = Room(room_type=RoomType.TEST, bound_dev="sim-room")
+    gs.load_bit(bit_name)
+    bridge = RoomBridge()
+    bridge.bind("sim-room")
+    bridge.feed_light(0xB0, 74, 93)
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv, room_bridge=bridge)
+    return gs, srv, agent
+
+
+def test_snapshot_carries_the_room_panel():
+    gs, srv, agent = _room_console()
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    assert msg["room"]["room_type"] == "TEST"
+    assert msg["room"]["bound_dev"] == "sim-room"
+    assert msg["room"]["capability"]["pixel_count"] == 60
+    assert [z["name"] for z in msg["room"]["capability"]["zones"]] == \
+        ["left", "center", "right"]
+
+
+def test_snapshot_room_instruments_include_light_and_audio():
+    gs, srv, agent = _room_console()
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    kinds = [i["kind"] for i in msg["room"]["instruments"]]
+    assert "light" in kinds and "audio" in kinds
+
+
+def test_snapshot_room_carries_live_controller_values():
+    gs, srv, agent = _room_console()
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    assert msg["room"]["controllers"] == {74: 93}
+
+
+def test_room_changed_broadcasts_only_when_it_changes():
+    gs, srv, agent = _room_console()
+    agent.poll()
+    srv.broadcasts.clear()
+    agent.poll()
+    assert [b for b in srv.broadcasts if b["event"] == "room_changed"] == []
+
+    agent._room_bridge.feed_light(0xB0, 74, 12)
+    agent.poll()
+    changed = [b for b in srv.broadcasts if b["event"] == "room_changed"]
+    assert len(changed) == 1
+    assert changed[0]["room"]["controllers"] == {74: 12}
+
+
+def test_no_room_configured_yields_a_null_room():
+    gs, srv, agent = _server_with_agent()
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    assert msg["room"] is None
+
+
+def test_the_room_stays_hidden_from_roles_and_registration_while_visible_as_room():
+    """The section 3 regression. BOTH halves in one test, because the whole
+    safety argument for amending the 2026-08-10 spec's section 7 is that they
+    hold simultaneously. This is the test most likely to catch a future
+    accidental widening."""
+    import json
+    from control.rooms import ROOM_NODE_IDS, room_role_name
+    gs, srv, agent = _room_console()
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+
+    # visible
+    assert msg["room"] is not None
+    assert msg["room"]["instruments"], "the Room panel must show instruments"
+
+    # hidden
+    room_name = room_role_name(RoomType.TEST)
+    assert room_name not in [r["role"] for r in msg["roles"]]
+    assert room_name not in [r["role"] for r in msg["registration"]]
+    for key in ("roles", "registration"):
+        assert ROOM_NODE_IDS[RoomType.TEST] not in json.dumps(msg[key])
+
+
+def test_a_dead_console_client_is_dropped_not_retried():
+    gs, srv, agent = _room_console()
+    srv.connect("c1")
+    srv.fail_sends_to("c1")
+    agent.poll()
+    agent._room_bridge.feed_light(0xB0, 74, 5)
+    agent.poll()
+    assert srv.dropped == ["c1"]
