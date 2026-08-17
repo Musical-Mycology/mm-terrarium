@@ -1,10 +1,16 @@
 direction: down
 
-shroom: Tuneshroom (o2lite)
-phone: Phone browser (websocket)
-arco: Arco server, "arco"
-control: Control+GameServer, "game", "actl"
+devices: Interactive Elements {
+  shroom: Tuneshroom (o2lite)
+  phone: Phone browser (websocket)
+}
 
-shroom -> arco: o2lite
-phone -> arco: websocket
-arco <-> control: o2lite, same box
+box: Terrarium box (one per room) {
+  arco: Arco server, "arco"
+  control: Control+GameServer, "game", "actl"
+}
+
+devices.shroom -> box.arco: o2lite
+devices.phone -> box.arco: websocket
+box.arco -> box.control: o2lite, same box
+box.control -> box.arco: only writes /arco
