@@ -1,23 +1,8 @@
-direction: right
+direction: down
 
-push: Push order (websocket mode) {
-  p1: 1. devicelink server
-  p2: 2. Arco
-  p3: 3. Room simulator
-  p4: 4. Room bridge
-  p5: 5. Bit
-  p1 -> p2 -> p3 -> p4 -> p5
-}
-
-teardown: Teardown order (LIFO pop) {
-  t5: 5. Bit
-  t4: 4. Room bridge
-  t3: 3. Room simulator
-  t2: 2. Arco
-  t1: 1. devicelink server
-  t5 -> t4 -> t3 -> t2 -> t1
-}
-
-push.p5 -> teardown.t5: reversed
-
-note: "o2lite mode: no devicelink server. The o2lite transport substitutes for it, pushed LAST instead of first, torn down FIRST, before Arco. Same order otherwise."
+p1: 1. devicelink server (ws-only)
+p2: 2. Arco (pop 4th)
+p3: 3. Room simulator (pop 3rd)
+p4: 4. Room bridge (pop 2nd)
+p5: 5. Bit (pop 1st)
+p1 -> p2 -> p3 -> p4 -> p5
