@@ -241,9 +241,35 @@ def test_a_failing_diagram_writes_nothing(tmp_path):
         "source": "bad.seq", "renderer": "seq",
         "source_sha256": "", "outputs": {},
     }
-    (root / "docs/diagrams/manifest.json").write_text(json.dumps(manifest))
+    manifest_before = json.dumps(manifest)
+    (root / "docs/diagrams/manifest.json").write_text(manifest_before)
+    target_before = (root / "docs/TARGET.md").read_text()
+
     assert main(["--root", str(root)]) == 1
+
     assert not (root / "docs/diagrams/out/demo.txt").exists()
+    assert (root / "docs/TARGET.md").read_text() == target_before
+    assert (root / "docs/diagrams/manifest.json").read_text() == manifest_before
+
+
+def test_a_missing_marker_writes_nothing(tmp_path):
+    """Atomicity: an injection target missing its marker pair must not leave
+    any diagram's rendered outputs, injected markdown, or manifest update on
+    disk -- the marker check runs before any write, not partway through the
+    write loop.
+    """
+    root = _fixture_root(tmp_path)
+    manifest = json.loads((root / "docs/diagrams/manifest.json").read_text())
+    manifest["diagrams"]["demo"]["marker"] = "missing"
+    manifest_before = json.dumps(manifest)
+    (root / "docs/diagrams/manifest.json").write_text(manifest_before)
+    target_before = (root / "docs/TARGET.md").read_text()
+
+    assert main(["--root", str(root)]) == 1
+
+    assert not (root / "docs/diagrams/out/demo.txt").exists()
+    assert (root / "docs/TARGET.md").read_text() == target_before
+    assert (root / "docs/diagrams/manifest.json").read_text() == manifest_before
 
 
 def test_missing_d2_binary_reports_the_install_command(tmp_path, monkeypatch):

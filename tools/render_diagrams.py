@@ -190,6 +190,19 @@ def render_all(root: Path, renderers: dict | None = None) -> dict[str, dict[str,
 
 def write_all(root: Path, rendered: dict[str, dict[str, str]], manifest: dict) -> None:
     docs = root / "docs/diagrams"
+
+    # Pre-flight: every injection target must already carry the diagram's
+    # marker pair. Checked in full, against nothing but what's already on
+    # disk, before a single byte is written anywhere below -- otherwise a
+    # missing marker discovered mid-loop would leave out/ files and injected
+    # markdown from earlier diagrams on disk with no manifest update to
+    # record it.
+    for name, entry in manifest["diagrams"].items():
+        target = entry.get("inject_into")
+        if target:
+            path = root / target
+            extract_region(path.read_text("utf-8"), entry["marker"])
+
     (docs / "out").mkdir(parents=True, exist_ok=True)
     for name, entry in manifest["diagrams"].items():
         source = docs / entry["source"]
@@ -246,7 +259,11 @@ def main(argv: list[str] | None = None) -> int:
         print("render_diagrams: diagrams are STALE. Run: python -m tools.render_diagrams")
         return 1
 
-    write_all(root, rendered, manifest)
+    try:
+        write_all(root, rendered, manifest)
+    except ValidationError as exc:
+        print(f"render_diagrams: {exc}")
+        return 1
     print(f"render_diagrams: wrote {len(rendered)} diagram(s)")
     return 0
 
