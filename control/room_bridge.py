@@ -58,6 +58,13 @@ class RoomBridge:
 
     def __init__(self) -> None:
         self.dev: str | None = None
+        # Last value seen per controller number, for the Console's live
+        # read-out. Recorded in feed_light rather than feed_audio because
+        # light is fed on every cue while audio is released on its own
+        # schedule (see feed_light/feed_audio below), so the light side is the
+        # one that sees every value. A plain dict of ints: this class stays
+        # backend-agnostic by construction and imports nothing.
+        self.controllers: dict[int, int] = {}
         self._light: RoomLightSink | None = None
         self._audio: RoomAudioSink | None = None
 
@@ -78,6 +85,8 @@ class RoomBridge:
         docs/superpowers/specs/
         2026-08-14-load-bearing-timed-cues-design.md section 2.
         """
+        if status & 0xF0 == 0xB0:
+            self.controllers[d1] = d2
         if self._light is not None:
             self._light.feed_midi(status, d1, d2)
 
@@ -89,6 +98,7 @@ class RoomBridge:
     def release(self) -> None:
         if self._light is not None:
             self._light.clear()
+        self.controllers.clear()
         self.dev = None
         self._light = None
         self._audio = None

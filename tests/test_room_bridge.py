@@ -70,3 +70,62 @@ def test_shutdown_calls_audio_shutdown_then_releases():
     assert audio.shut is True
     assert light.cleared is True
     assert bridge.dev is None
+
+
+def test_controllers_starts_empty():
+    from control.room_bridge import RoomBridge
+    assert RoomBridge().controllers == {}
+
+
+def test_feed_light_records_the_controller_value():
+    from control.room_bridge import FakeRoomLightSink, RoomBridge
+    bridge = RoomBridge()
+    bridge.bind("sim-room", light=FakeRoomLightSink())
+
+    bridge.feed_light(0xB0, 74, 93)
+
+    assert bridge.controllers == {74: 93}
+
+
+def test_feed_light_keeps_the_latest_value_per_controller():
+    from control.room_bridge import FakeRoomLightSink, RoomBridge
+    bridge = RoomBridge()
+    bridge.bind("sim-room", light=FakeRoomLightSink())
+
+    bridge.feed_light(0xB0, 74, 10)
+    bridge.feed_light(0xB0, 11, 55)
+    bridge.feed_light(0xB0, 74, 120)
+
+    assert bridge.controllers == {74: 120, 11: 55}
+
+
+def test_a_note_on_is_not_recorded_as_a_controller():
+    from control.room_bridge import FakeRoomLightSink, RoomBridge
+    bridge = RoomBridge()
+    bridge.bind("sim-room", light=FakeRoomLightSink())
+
+    bridge.feed_light(0x90, 45, 90)
+
+    assert bridge.controllers == {}
+
+
+def test_controllers_are_recorded_even_with_no_light_sink_bound():
+    """The Console reads this whether or not a renderer is attached."""
+    from control.room_bridge import RoomBridge
+    bridge = RoomBridge()
+    bridge.bind("sim-room")
+
+    bridge.feed_light(0xB0, 74, 42)
+
+    assert bridge.controllers == {74: 42}
+
+
+def test_release_clears_the_controllers():
+    from control.room_bridge import FakeRoomLightSink, RoomBridge
+    bridge = RoomBridge()
+    bridge.bind("sim-room", light=FakeRoomLightSink())
+    bridge.feed_light(0xB0, 74, 93)
+
+    bridge.release()
+
+    assert bridge.controllers == {}
