@@ -10,6 +10,34 @@
 
 **Spec:** [`2026-08-17-ascii-diagram-pipeline-design.md`](../specs/2026-08-17-ascii-diagram-pipeline-design.md)
 
+## Plan amendment, 2026-08-17: topology is not converted
+
+**Task 7 is now a revert, and the task order changes.** Decided by Chris during execution, after Task 7 was implemented, reviewed, fixed and re-reviewed.
+
+The plan chose the topology diagram first as a proof of pipeline, on the reasoning that it was the only diagram with a hand-drawn before-and-after to judge against. The judgment came back and it was negative:
+
+- Round 1 rendered a box that overflowed its container, and shipped an `arco -> control` edge which, under the grammar the diagram's own device edges establish, asserted that Arco attaches to Control. The deep-dive says the reverse (`docs/MM_TERRARIUM.md:13`, `:694`). It passed the automated label round trip while being architecturally wrong.
+- Round 1 also deleted the `each Tuneshroom offers "ie<N>", each browser offers "ui<X>"` fact, which lived inside the replaced fence.
+- The fix corrected all three, but cutting 33 lines to 24 required removing the `Terrarium box (one per room)` container, which was the single structural advantage the generated version had over the hand-drawn one.
+- Task review and scoped re-review both concluded, independently, that the result was **worse** than the 8-line original: same information, three times the height, plurality reduced to a caption, and the bidirectional-edge fix only reaching parity with what the original already drew.
+
+**The pipeline itself is unaffected and stays.** Tasks 1-6 are complete and reviewed. What this changes is only which diagrams it renders. The pipeline's value was always the four diagrams that do not exist in any form (teardown order, cue path, lifecycle, player flow), not the one that already reads well in 8 hand-drawn lines.
+
+**Revised task order:**
+
+| Was | Now |
+| --- | --- |
+| T7 topology | **T7 revert** the topology conversion; `docs/MM_TERRARIUM.md` returns byte-identical to `3b086fd` |
+| T8 drift test | **T8 moves after T9.** It runs against the real committed manifest and needs at least one diagram to exist first |
+| T9 boot/teardown | **T9 becomes the first real diagram**, and inherits Task 7's editorial bar |
+| T10-T12 | unchanged |
+
+Execution order from here: **T7 (revert) → T9 → T8 → T10 → T11 → T12.**
+
+**The editorial bar, now binding on T9-T12.** A generated diagram ships only if it genuinely serves a reader better than what it replaces, or better than nothing where no diagram exists today. A green `--check` and a passing label round trip are necessary and not sufficient. For T9-T12 there is no incumbent diagram, so the bar is "clearer than the prose alone", which is a much easier bar than T7 faced.
+
+Section 7's starter-set table below still lists `topology`; that row is superseded by this amendment.
+
 ## Global Constraints
 
 - **Pure stdlib.** Everything added to `tools/` and `tests/` uses only the Python standard library. `requirements-dev.txt` gains nothing.
