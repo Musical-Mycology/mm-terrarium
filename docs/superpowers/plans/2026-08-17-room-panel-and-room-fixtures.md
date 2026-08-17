@@ -2555,7 +2555,7 @@ def test_agent_exposes_its_room_bridge():
     """main() reaches the bridge through the agent, since build() does not
     return it and its signature is deliberately unchanged."""
     from control.room_bridge import RoomBridge
-    config = _default_config()          # the file's existing config helper
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
     gs, server, agent, arco, teardown = _build_with_fakes(config)
     try:
         assert isinstance(agent.room_bridge, RoomBridge)
@@ -2565,7 +2565,7 @@ def test_agent_exposes_its_room_bridge():
 
 def test_console_is_off_by_default():
     """Every existing invocation must be byte-identical."""
-    config = _default_config()
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
     gs, server, agent, arco, teardown = _build_with_fakes(config)
     try:
         assert agent._on_room_frame is None
@@ -2595,9 +2595,11 @@ def test_console_port_defaults_to_none():
     assert StackConfig(log_dir="/tmp/x").console_port is None
 ```
 
-If `_default_config()` does not exist under that name in
-`tests/test_terrarium_boot.py`, reuse whatever `BootConfig` the file's existing
-tests build (see its `_build_with_fakes` callers) rather than inventing one.
+`BootConfig` and `RoomType` are already imported at the top of
+`tests/test_terrarium_boot.py`, and `_build_with_fakes(config, *,
+transport=None, clock=time.monotonic)` is its existing shared helper returning
+`build()`'s 5-tuple. `StackConfig` needs only `log_dir`; every other field has a
+default.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
