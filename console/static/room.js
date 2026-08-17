@@ -57,6 +57,18 @@ function renderRoom(room) {
     + `${room.capability.color_order} · `
     + (room.bound_dev ? `bound to ${room.bound_dev}` : "not bound");
 
+  // Looked up before the strip rebuild below on purpose: on a first render
+  // #roomCards does not exist yet, but on a capability-change rebuild it
+  // already does, sitting at the end of #room's children from the last
+  // render. #room has no CSS rule of its own, so DOM order IS visual
+  // order (plain block flow) -- appending the rebuilt strip/zones with
+  // appendChild would put them after #roomCards and the live-light strip
+  // would visibly jump below the instrument cards every time the Room's
+  // capability changes. insertBefore(..., cards) keeps them pinned in the
+  // header, strip, zones, cards order regardless of which nodes already
+  // exist.
+  let cards = document.getElementById("roomCards");
+
   const rebuildStrip = !capabilityShapeMatches(roomCapability, room.capability);
   roomCapability = room.capability;
 
@@ -70,11 +82,15 @@ function renderRoom(room) {
     if (zones) zones.remove();
     strip = buildStrip(room.capability);
     zones = buildZoneLabels(room.capability);
-    el.appendChild(strip);
-    el.appendChild(zones);
+    if (cards) {
+      el.insertBefore(strip, cards);
+      el.insertBefore(zones, cards);
+    } else {
+      el.appendChild(strip);
+      el.appendChild(zones);
+    }
   }
 
-  let cards = document.getElementById("roomCards");
   if (!cards) {
     cards = document.createElement("div");
     cards.id = "roomCards";

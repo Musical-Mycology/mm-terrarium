@@ -23,7 +23,7 @@ const vm = require("vm");
 // ---- minimal hand-rolled DOM stub ---------------------------------------
 // Implements only what console/static/room.js actually touches:
 // createElement / createTextNode / getElementById, id / className /
-// textContent / style, appendChild / remove, children, and
+// textContent / style, appendChild / insertBefore / remove, children, and
 // innerHTML = "" (room.js never assigns innerHTML to anything else).
 
 function makeNode(tag) {
@@ -57,6 +57,20 @@ function makeNode(tag) {
     child.parentNode = node;
     node._children.push(child);
     return child;
+  };
+  node.insertBefore = (newChild, referenceChild) => {
+    newChild.parentNode = node;
+    if (referenceChild == null) {
+      node._children.push(newChild);
+      return newChild;
+    }
+    const at = node._children.indexOf(referenceChild);
+    if (at === -1) {
+      node._children.push(newChild);
+    } else {
+      node._children.splice(at, 0, newChild);
+    }
+    return newChild;
   };
   node.remove = () => {
     if (node.parentNode) {
@@ -115,6 +129,14 @@ function room(overrides) {
   );
 }
 
+// #room has no CSS rule of its own (confirmed against style.css), so DOM
+// order is visual order: header at top, strip and its zone labels below
+// it, instrument cards last. orderOf reads #room's direct children by id
+// so a scenario can assert that order survives a render.
+function orderOf(doc) {
+  return doc.getElementById("room").children.map((c) => c.id).join(",");
+}
+
 // ---- harness ----------------------------------------------------------
 
 let failures = 0;
@@ -136,7 +158,7 @@ const roomJsSource = fs.readFileSync(roomJsPath, "utf8");
 // repo's own source plus hardcoded literal test bodies below, never
 // external or attacker-influenced input.
 function scenario(name, testBody) {
-  const sandbox = { document: newDocument(), assert, cap, room, ZONES_3, console };
+  const sandbox = { document: newDocument(), assert, cap, room, ZONES_3, orderOf, console };
   vm.createContext(sandbox);
   try {
     vm.runInContext(roomJsSource + "\n" + testBody, sandbox, { filename: `room.js+${name}` });
@@ -156,6 +178,8 @@ scenario("strip survives unchanged-capability re-renders", `
   assert(stripBefore !== null, "strip should exist after the first renderRoom");
   const paintedBefore = stripBefore.children.filter((n) => n.style.background).length;
   assert(paintedBefore === 60, "expected all 60 swatches painted, got " + paintedBefore);
+  assert(orderOf(document) === "roomHeader,roomStrip,roomZones,roomCards",
+    "wrong sibling order after the first render, got: " + orderOf(document));
 
   // Simulate the common case: several more room_changed events carrying
   // only a moved controller value, same Room, same capability.
@@ -170,6 +194,8 @@ scenario("strip survives unchanged-capability re-renders", `
   const paintedAfter = stripAfter.children.filter((n) => n.style.background).length;
   assert(paintedAfter === 60,
     "painted swatches did not survive unchanged-capability re-renders, got " + paintedAfter);
+  assert(orderOf(document) === "roomHeader,roomStrip,roomZones,roomCards",
+    "sibling order changed across unchanged-capability re-renders, got: " + orderOf(document));
 `);
 
 scenario("a changed pixel_count rebuilds the strip", `
@@ -185,6 +211,13 @@ scenario("a changed pixel_count rebuilds the strip", `
     "expected 10 swatches after reconfigure, got " + stripAfter.children.length);
   const stale = stripAfter.children.filter((n) => n.style.background).length;
   assert(stale === 0, "rebuilt strip should start unpainted, found " + stale + " stale swatches");
+  // #roomCards already existed (from the first render, above) by the time
+  // this rebuild ran. Removing and re-appending the strip/zones with
+  // appendChild (rather than inserting them back before #roomCards) would
+  // put them AFTER the cards, so the live-light strip would visibly jump
+  // below the instrument cards on every capability change.
+  assert(orderOf(document) === "roomHeader,roomStrip,roomZones,roomCards",
+    "capability rebuild reordered #room's children, got: " + orderOf(document));
 `);
 
 scenario("changed zones (same pixel_count) also rebuilds the strip", `
@@ -200,6 +233,8 @@ scenario("changed zones (same pixel_count) also rebuilds the strip", `
     "strip was not rebuilt after zones changed, even though pixel_count stayed the same");
   const zonesBar = document.getElementById("roomZones");
   assert(zonesBar.children.length === 2, "zone labels were not rebuilt to match the new zones");
+  assert(orderOf(document) === "roomHeader,roomStrip,roomZones,roomCards",
+    "capability rebuild reordered #room's children, got: " + orderOf(document));
 `);
 
 scenario("renderRoom(null) renders the empty state and resets state cleanly", `
