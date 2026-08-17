@@ -429,7 +429,7 @@ nothing here depends on it staying up during the rest of teardown.
 `build()`'s return signature -- the 5-tuple `(game_server, devicelink_server,
 devicelink_agent, arco_process, teardown)` -- is deliberately unchanged by
 this slice even though it now also needs to construct a console server. That
-tuple is unpacked at 16 call sites, and `main()` already owns the one place
+tuple is unpacked at 17 call sites, and `main()` already owns the one place
 `--console-port` is parsed, so `main()` constructs `ConsoleServer` and
 `ConsoleAgent` itself and pushes them onto the `teardown` stack `build()`
 handed back, rather than growing `build()`'s contract for every caller.

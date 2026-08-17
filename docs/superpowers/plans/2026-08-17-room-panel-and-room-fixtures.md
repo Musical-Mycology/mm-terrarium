@@ -2532,7 +2532,8 @@ real-hardware Room backend."
 - Modify: `tests/test_terrarium_boot.py`, `tests/test_run_stack.py`
 
 **`build()`'s signature and 5-tuple return are deliberately NOT changed.** It is
-unpacked at 15 sites in `tests/test_terrarium_boot.py` (lines 43, 60, 76, 113,
+unpacked at 16 sites in `tests/test_terrarium_boot.py` (8 direct, 8 via
+`_build_with_fakes`) (lines 43, 60, 76, 113,
 158, 224, 243, 261, 279, 295, 314, 328, 372, 411, and inside
 `_build_with_fakes`) plus `harness/terrarium_boot.py:488`. Adding a sixth
 element would churn 16 lines for no gain. `main()` owns the console instead,
@@ -2618,7 +2619,7 @@ properties:
 
         Public because harness/terrarium_boot.py's main() needs it to build a
         ConsoleAgent: build() does not return it, and build()'s 5-tuple return
-        is unpacked at 16 sites, so widening it would be churn for no gain.
+        is unpacked at 17 sites, so widening it would be churn for no gain.
         """
         return self._room_bridge
 ```
@@ -2740,7 +2741,7 @@ ConsoleServer and ConsoleAgent existed only under tests/, so there was no
 admin panel to open during a live run at all. --console-port starts both,
 polls the agent from the same tick loop, and prints the URL.
 
-build()'s 5-tuple return is deliberately unchanged: it is unpacked at 16
+build()'s 5-tuple return is deliberately unchanged: it is unpacked at 17
 sites, so main() owns the console instead. That also gets the ordering
 right, since the console is a monitor shell whose only clients are
 browsers and nothing in the stack depends on it.
