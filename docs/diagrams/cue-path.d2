@@ -1,0 +1,20 @@
+direction: down
+
+gesture: "Device gesture"
+data: "GameServer.data(): at = origin + cue_horizon"
+handler: "Bit handler"
+selfcues: "Bit.cues(at)"
+dispatch: "GameServer._dispatch_cues"
+sink: "on_light_cue (transport-owned sink)"
+queue: "TimedQueue"
+dev_render: "Device renders frame"
+room_render: "Room renders light+drone"
+
+gesture -> data: raw gesture stamp
+data -> handler: "at, never the horizon; one gesture, two cues"
+handler -> dispatch
+selfcues -> dispatch
+dispatch -> sink: ROOM resolved to bound dev
+sink -> queue: when = at
+queue -> dev_render: on time
+queue -> room_render: on time
