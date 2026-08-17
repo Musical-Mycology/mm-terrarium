@@ -52,3 +52,38 @@ def test_validate_rejects_sequence_diagram_shape():
 
 def test_validate_accepts_a_clean_source():
     validate_d2_source("topology", "a: Arco\na -> b: /game/join\n")
+
+
+from tools.render_diagrams import verify_labels_present
+
+
+def test_round_trip_passes_when_every_label_survives():
+    verify_labels_present("topology", "d2", ["/game/join", "Arco"], "box /game/join -> Arco")
+
+
+def test_round_trip_catches_the_measured_d2_slash_corruption():
+    """D2 rendered '/abc' as 'abc' on right-to-left arrows. Spec section 1.2."""
+    with pytest.raises(ValidationError) as exc:
+        verify_labels_present("flow", "d2", ["/abc"], "|<-----abc------|")
+    assert "/abc" in str(exc.value)
+    assert "flow" in str(exc.value)
+    assert "d2" in str(exc.value)
+
+
+def test_round_trip_catches_a_silently_dropped_message():
+    """Diagon dropped a '//' message and every message after it."""
+    with pytest.raises(ValidationError):
+        verify_labels_present("flow", "seq", ["/a", "//b", "/c"], "only /a here")
+
+
+def test_round_trip_reports_the_first_missing_label_only():
+    with pytest.raises(ValidationError) as exc:
+        verify_labels_present("d", "d2", ["gone", "also-gone"], "")
+    assert "gone" in str(exc.value)
+    assert "also-gone" not in str(exc.value)
+
+
+def test_round_trip_names_the_regenerate_command():
+    with pytest.raises(ValidationError) as exc:
+        verify_labels_present("d", "d2", ["x"], "")
+    assert "shorten" in str(exc.value).lower()

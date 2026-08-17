@@ -64,3 +64,20 @@ def validate_d2_source(name: str, text: str) -> None:
                 f"{name}: label {label!r} contains a literal \\n, which corrupts D2's "
                 f"box grid. Split it into separate nodes."
             )
+
+
+def verify_labels_present(name: str, renderer: str, labels: list[str], rendered: str) -> None:
+    """Assert every source label appears verbatim in the rendered text.
+
+    Renderers in this space corrupt or silently truncate rather than raising.
+    This check caught, without knowing about any of them: D2 swallowing '/' from
+    right-to-left labels, Diagon dropping a '//' message and everything after it,
+    and 'cc:74' mis-parsing into a stray participant.
+    """
+    for label in labels:
+        if label not in rendered:
+            raise ValidationError(
+                f"{name}: renderer {renderer!r} did not reproduce label {label!r} "
+                f"verbatim. Either the renderer corrupted it or it wrapped across "
+                f"lines; shorten the label."
+            )
