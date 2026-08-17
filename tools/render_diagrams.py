@@ -7,8 +7,14 @@ Spec: docs/superpowers/specs/2026-08-17-ascii-diagram-pipeline-design.md
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import json
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 from tools import seqrender
 
@@ -125,3 +131,125 @@ def inject(markdown: str, name: str, ascii_text: str) -> str:
 
 def markers_in(markdown: str) -> set[str]:
     return set(_MARKER_RE.findall(markdown))
+
+
+class RenderError(Exception):
+    """A renderer could not be run."""
+
+
+def render_d2(source: Path, workdir: Path) -> dict[str, str]:
+    if shutil.which("d2") is None:
+        raise RenderError(
+            "d2 is not on PATH and is required to regenerate diagrams.\n"
+            "Install it with: brew install d2"
+        )
+    stem = source.stem
+    txt, svg = workdir / f"{stem}.txt", workdir / f"{stem}.svg"
+    for target in (txt, svg):
+        proc = subprocess.run(
+            ["d2", str(source), str(target)], capture_output=True, text=True
+        )
+        if proc.returncode != 0:
+            raise RenderError(f"{stem}: d2 failed\n{proc.stderr.strip()}")
+    return {f"out/{stem}.txt": txt.read_text("utf-8"),
+            f"out/{stem}.svg": svg.read_text("utf-8")}
+
+
+def render_seq(source: Path, _workdir: Path) -> dict[str, str]:
+    text = source.read_text("utf-8")
+    rendered = seqrender.render(seqrender.parse(text))
+    return {f"out/{source.stem}.txt": rendered}
+
+
+_RENDERERS = {"d2": render_d2, "seq": render_seq}
+
+
+def load_manifest(root: Path) -> dict:
+    return json.loads((root / "docs/diagrams/manifest.json").read_text("utf-8"))
+
+
+def render_all(root: Path, renderers: dict | None = None) -> dict[str, dict[str, str]]:
+    """Render every diagram into memory. Writes nothing."""
+    renderers = renderers or _RENDERERS
+    manifest = load_manifest(root)
+    out: dict[str, dict[str, str]] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        workdir = Path(tmp)
+        for name, entry in manifest["diagrams"].items():
+            source = root / "docs/diagrams" / entry["source"]
+            text = source.read_text("utf-8")
+            renderer = entry["renderer"]
+            if renderer == "d2":
+                validate_d2_source(name, text)
+            rendered = renderers[renderer](source, workdir)
+            ascii_text = rendered[f"out/{source.stem}.txt"]
+            verify_labels_present(name, renderer, source_labels(renderer, text), ascii_text)
+            out[name] = rendered
+    return out
+
+
+def write_all(root: Path, rendered: dict[str, dict[str, str]], manifest: dict) -> None:
+    docs = root / "docs/diagrams"
+    (docs / "out").mkdir(parents=True, exist_ok=True)
+    for name, entry in manifest["diagrams"].items():
+        source = docs / entry["source"]
+        entry["source_sha256"] = sha256_text(source.read_text("utf-8"))
+        entry["outputs"] = {}
+        for rel, text in rendered[name].items():
+            (docs / rel).write_text(text, encoding="utf-8")
+            entry["outputs"][rel] = sha256_text(text)
+        target = entry.get("inject_into")
+        if target:
+            path = root / target
+            ascii_text = rendered[name][f"out/{source.stem}.txt"]
+            path.write_text(
+                inject(path.read_text("utf-8"), entry["marker"], ascii_text),
+                encoding="utf-8",
+            )
+    (docs / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def _is_current(root: Path, rendered: dict, manifest: dict) -> bool:
+    for name, entry in manifest["diagrams"].items():
+        for rel, text in rendered[name].items():
+            path = root / "docs/diagrams" / rel
+            if not path.exists() or path.read_text("utf-8") != text:
+                return False
+        if entry.get("source_sha256") != sha256_text(
+            (root / "docs/diagrams" / entry["source"]).read_text("utf-8")
+        ):
+            return False
+    return True
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Render docs/diagrams sources.")
+    parser.add_argument("--root", default=".", help="repository root")
+    parser.add_argument("--check", action="store_true",
+                        help="report whether outputs are current; write nothing")
+    args = parser.parse_args(argv)
+    root = Path(args.root)
+
+    try:
+        rendered = render_all(root)
+    except (ValidationError, RenderError, seqrender.SeqParseError) as exc:
+        print(f"render_diagrams: {exc}")
+        return 1
+
+    manifest = load_manifest(root)
+    if args.check:
+        if _is_current(root, rendered, manifest):
+            print("render_diagrams: diagrams are current")
+            return 0
+        print("render_diagrams: diagrams are STALE. Run: python -m tools.render_diagrams")
+        return 1
+
+    write_all(root, rendered, manifest)
+    print(f"render_diagrams: wrote {len(rendered)} diagram(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
