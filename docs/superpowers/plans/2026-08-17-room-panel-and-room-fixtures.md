@@ -15,7 +15,7 @@
 - **Run the suite through the project venv, never a bare interpreter:** `.venv/bin/python -m pytest tests -v`. There is no bare `python` on the dev boxes and luxaeterna is installed only in `.venv`. Using `python3` produces a phantom import error in `tests/test_terrarium_boot.py` that looks exactly like a real failure.
 - **Baseline to not regress: 764 passed, 1 skipped.**
 - **The suite must stay green with no O2, no Arco, no pyarco importable.** Any test needing luxaeterna starts with `pytest.importorskip("luxaeterna")`.
-- **`control/` must not import luxaeterna, pyarco or o2litepy.** Currently zero such imports; Task 1 adds a test pinning this.
+- **No `control/` module may import luxaeterna, pyarco or o2litepy AT MODULE LEVEL.** Function-scoped lazy imports are permitted and one exists deliberately (`control/arco_process.py:37`, `# noqa: PLC0415 (lazy by design)`). Task 1 adds a test pinning the module-level boundary.
 - **`control/engine.py` is not edited by this plan.**
 - **`uplink/` is not edited by this plan.**
 - **Boundary rule 2:** nothing in `console/` or `devicelink/` may propagate an exception into the engine tick. Every new transport-owned sink is wrapped at its call site.
@@ -104,21 +104,31 @@ def test_zone_is_a_plain_value():
     assert (zone.name, zone.start, zone.count) == ("left", 0, 20)
 
 
-def test_control_package_imports_no_renderer_or_transport_library():
-    """control/ is reasoned about and tested with no renderer present. That
-    property is currently unbroken and accidental; this pins it. See the
-    design spec section 4's correction note."""
+def test_no_control_module_imports_a_renderer_at_module_level():
+    """Every control/ module must import, and the whole suite must run, with
+    luxaeterna, pyarco and o2litepy absent. A MODULE-LEVEL import breaks that;
+    a function-scoped one does not, because it runs only when called.
+
+    Indented imports are deliberately not flagged. control/arco_process.py:37
+    carries a lazy `from pyarco.arco_engine import arco` marked
+    `# noqa: PLC0415 (lazy by design)` -- probing the Arco subprocess for
+    readiness is that module's whole job. The repo states the stricter
+    no-import-anywhere rule per-module where it applies (see control/audio.py's
+    docstring), not package-wide. See the design spec section 4.
+    """
     control_dir = pathlib.Path(__file__).resolve().parent.parent / "control"
     banned = ("luxaeterna", "pyarco", "o2litepy")
     offenders = []
     for path in sorted(control_dir.glob("*.py")):
         for lineno, line in enumerate(path.read_text().splitlines(), 1):
-            stripped = line.strip()
-            if not (stripped.startswith("import ") or stripped.startswith("from ")):
+            if line[:1].isspace():          # indented: function-scoped, allowed
                 continue
-            if any(stripped.split()[1].split(".")[0] == pkg for pkg in banned):
-                offenders.append(f"{path.name}:{lineno}: {stripped}")
-    assert offenders == [], "control/ must stay dependency-free:\n" + "\n".join(offenders)
+            if not (line.startswith("import ") or line.startswith("from ")):
+                continue
+            if any(line.split()[1].split(".")[0] == pkg for pkg in banned):
+                offenders.append(f"{path.name}:{lineno}: {line.strip()}")
+    assert offenders == [], ("control/ must have no module-level renderer "
+                             "imports:\n" + "\n".join(offenders))
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -221,7 +231,7 @@ def room_profile(room_type: RoomType) -> RoomProfile:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_room_profile.py -v`
-Expected: PASS, 8 passed
+Expected: PASS, 9 passed
 
 - [ ] **Step 5: Run the full suite**
 

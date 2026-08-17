@@ -136,13 +136,22 @@ fairyring broker has no reason to learn a venue's fixture layout.
 
 **Correction, 2026-08-17, made during planning.** This section first specified
 `control/room_profile.py` exporting `room_capability(room_type) ->
-SurfaceCapability`. That is wrong: `control/` imports luxaeterna, pyarco and
-o2litepy **zero** times today (every mention in that package is a comment), and
-returning a luxaeterna type would have made this slice the first real import.
-That purity is what lets the engine be reasoned about and tested with no
-renderer present, so the declaration is split in two, mirroring how
-`harness/device_bridge.py` already adapts Control-side declarations to
-luxaeterna for player devices.
+SurfaceCapability`. That is wrong: no module in `control/` imports luxaeterna,
+pyarco or o2litepy **at module level**, and returning a luxaeterna type would
+have made this slice the first one. That is what lets every `control/` module be
+imported, and the whole suite run, with no renderer installed, so the
+declaration is split in two, mirroring how `harness/device_bridge.py` already
+adapts Control-side declarations to luxaeterna for player devices.
+
+**Module level is the precise boundary, corrected 2026-08-17 during Task 1.**
+An earlier draft of this note claimed `control/` referenced those packages zero
+times. It does not: `control/arco_process.py:37` carries a deliberate lazy
+`from pyarco.arco_engine import arco`, marked `# noqa: PLC0415 (lazy by
+design)`, because probing the Arco subprocess for readiness is that module's
+whole job. A function-scoped import runs only when the function is called, so it
+preserves the property that matters. The repo states the stricter rule
+per-module where it applies, in `control/audio.py`'s docstring ("MUST NOT import
+pyarco, at module level or anywhere else"), not package-wide.
 
 **`control/room_profile.py`, pure, no third-party imports:**
 
@@ -186,8 +195,9 @@ luxaeterna's `SurfaceCapability.zone()` expects to resolve. Both consumers,
 "omit `primary` from the serialized zones" fall out for free rather than needing
 a filter.
 
-A test asserts `control/` contains no luxaeterna, pyarco or o2litepy import, so
-the invariant stops being accidental.
+A test asserts no `control/` module imports luxaeterna, pyarco or o2litepy at
+module level, so the invariant stops being accidental. It deliberately does not
+flag indented imports: see the module-level boundary note above.
 
 Linear with three equal zones, because the physical Terrarium array is a single
 6 m run rather than a ring and a stem. 60 px is arbitrary but deliberate: large
