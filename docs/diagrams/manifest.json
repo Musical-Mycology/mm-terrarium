@@ -1,0 +1,16 @@
+{
+  "d2_version": "0.8.1",
+  "diagrams": {
+    "boot-teardown": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "boot-teardown",
+      "outputs": {
+        "out/boot-teardown.svg": "5deabdd5b8e6adbbfd308ebb46a144eadfdc4b565d12356388076cf82efccf40",
+        "out/boot-teardown.txt": "923a91cb6096ee8b0840c009da22310ced9a0e6b4da5b724efee8107efd3394f"
+      },
+      "renderer": "d2",
+      "source": "boot-teardown.d2",
+      "source_sha256": "fce3b31ee5a79cc9bef8bc897330ba2a18313e054208ed8432a86bbdb4b67f54"
+    }
+  }
+}
