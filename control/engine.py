@@ -18,6 +18,7 @@ from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
 from control.state import State
+from control.triggers import validate_trigger_table
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ class GameServer:
             bit = bit_cls()
             role_table = bit.role_table
             validate_role_declarations(role_table)
+            validate_trigger_table(bit.trigger_table, set(bit.verb_handlers()))
             registration = RegistrationState(role_table)
         except Exception as exc:
             self._set_state(State.IDLE)
