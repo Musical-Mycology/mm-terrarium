@@ -638,6 +638,44 @@ def test_zone_order_is_preserved_for_an_unsorted_profile():
 Add the `RoomFixture` import to `tests/test_room_surface.py`'s existing
 `from control.room_profile import RoomProfile, RoomZone, room_profile` line.
 
+Four MORE tests in the same file assert old single-fixture numbers against
+the REAL `room_profile(RoomType.TEST)` (not a custom-constructed profile):
+`test_scalar_fields_carry_across`, `test_declared_zones_carry_across_in_order`,
+`test_primary_is_appended_spanning_the_whole_surface`, and
+`test_declared_zones_resolve_by_name`. These also break once TEST becomes a
+90 px, 2-fixture, namespaced-zone profile. Update all four to the new
+numbers (the same numbers `tests/test_room_profile.py`'s own rewrite above
+already established for this exact profile):
+
+```python
+def test_scalar_fields_carry_across():
+    cap = to_capability(room_profile(RoomType.TEST))
+    assert cap.surface_id == "room_test"
+    assert cap.pixel_count == 90
+    assert cap.color_order == "GRB"
+
+
+def test_declared_zones_carry_across_in_order():
+    cap = to_capability(room_profile(RoomType.TEST))
+    named = [(z.name, z.start, z.count) for z in cap.zones]
+    assert named[:3] == [("main.left", 0, 20), ("main.center", 20, 20),
+                         ("main.right", 40, 20)]
+
+
+def test_primary_is_appended_spanning_the_whole_surface():
+    """light_manifest instruments target "primary" by default (see
+    bits/test_bit.py's Room declaration), so it has to resolve -- now over
+    the whole concatenated surface, not one fixture."""
+    cap = to_capability(room_profile(RoomType.TEST))
+    primary = cap.zone("primary")
+    assert (primary.start, primary.count) == (0, 90)
+
+
+def test_declared_zones_resolve_by_name():
+    cap = to_capability(room_profile(RoomType.TEST))
+    assert (cap.zone("main.center").start, cap.zone("main.center").count) == (20, 20)
+```
+
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_room_profile.py tests/test_room_surface.py -v`
