@@ -71,6 +71,12 @@ labelled view of the Room's live LED frame. Open it during a run by passing
 
 See `docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md`.
 
+It also carries a **Triggers panel**: every trigger a loaded Bit declares,
+shown with its condition and its cue-script steps, plus a Fire button for
+manual testing. A fire is tagged as either a real gameplay fire or an admin
+manual fire, so the two are never confused in the event log. See
+`docs/superpowers/specs/2026-08-17-bit-declared-triggers-and-cue-scripts-design.md`.
+
 Run the test suite with:
 
 ```

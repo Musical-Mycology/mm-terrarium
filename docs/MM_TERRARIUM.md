@@ -949,14 +949,14 @@ prevented the ordering from disagreeing with itself again, and it had.
 
 **Suite baseline as of this slice: 721 passed, 1 skipped** (662 at this
 branch's start). **844 passed, 1 skipped as of the 2026-08-17 Room-panel
-slice.**
+slice; 933 passed, 1 skipped as of the trigger slice that follows it.**
 
 ### The Room panel and the Room's own fixtures (`control/room_profile.py`, `control/room_view.py`, `harness/room_surface.py`, `console/static/`)
 The Room stops being shaped like a Tuneshroom, and the Console becomes an
 operator surface for it. Design:
 [`.../2026-08-17-room-panel-and-room-fixtures-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md)
-(Spec A of two; Spec B covers triggers, cue scripts, conditions and firing and
-is not written yet).
+(Spec A of two; Spec B covers triggers, cue scripts, conditions and firing,
+see the Design docs list below).
 
 - **The Room had no fixtures of its own.** `devicelink/agent.py` built the
   Room's `LightSession` from `self._capability or shroom_capability()` and
@@ -1393,20 +1393,42 @@ Kept explicit so the doc doesn't over-claim:
   o2lite transport that reads `JoinResult.config` is still unbuilt; the Arco
   cue path that plays the welcome audio half now exists in `control/audio.py`.)
 - **Real Bits beyond `TestBit`.** No production Bit exists.
-- **Bit-declared triggers, cue scripts and conditions (Spec B).** The Room
-  panel (Spec A, 2026-08-17) shows what a Bit *declares* for the Room and what
-  it is *doing now*. It does not show what will make something happen: there
-  is no `TriggerTable`, no named cue script a Bit can declare as data, no
-  Bit-reported adjudication event ("user wins a round"), and no admin
-  fire-this-trigger button. `verb_handlers()` still carries no description,
-  condition or target metadata, and a trigger fired by a Bit's own
-  adjudication has no incoming verb at all, so it cannot live there. Design
-  decisions already taken for that slice: declarative cue scripts rather than
-  callables (so the console can render the steps, not just a prose
-  description), the Bit evaluates conditions and Control only observes
-  (preserving the Bit-agnostic boundary), and manual fire is in scope because
-  the device path is currently too unreliable to test a Room instrument any
-  other way. Spec not yet written.
+- ~~**Bit-declared triggers, cue scripts and conditions (Spec B).**~~ **Built.**
+  `control/triggers.py` holds the trigger declaration (`Trigger`, `Condition`,
+  `ScriptStep`, `TriggerTable`), validated at `load_bit`: a trigger naming an
+  unimplemented verb fails there as a `BitLoadError` rather than mid-run.
+  `GameServer.fire_trigger` expands a trigger's script and dispatches it
+  through the existing `_dispatch_cues`/`on_light_cue` path, reusing
+  `DeviceLinkAgent._on_light_cue`'s existing far-future-cue holding rather than
+  adding a new scheduler. A fire is reported through a new multi-observer
+  engine hook, `on_trigger_fired`, rather than a transport-owned sink, because
+  the record has no device destination, and that is exactly the kind of event
+  the uplink chain will eventually want. The Console gained a Triggers panel
+  showing every declared trigger's script and a Fire button; a manually-fired
+  trigger is tagged distinctly from a real gameplay fire, because `fired_by`
+  and `declared_source` are separate fields for exactly this reason. `TestBit`
+  now declares two reference triggers: `play_aurora` (bit-adjudicated, three
+  full-deflection tilts) and `flash_device` (gesture-verb, `tap`). This slice
+  does not touch the Room's shape, it is still one bound device, not N
+  fixtures (see the new deferred entry below). Live-verified against a real
+  Arco: NOT YET DONE. Offline suite only. Design:
+  [`.../2026-08-17-bit-declared-triggers-and-cue-scripts-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-bit-declared-triggers-and-cue-scripts-design.md).
+- **A real venue Room is N light fixtures, not one (Spec C).** This slice
+  deliberately did not build it. Each fixture needs its own o2lite client with
+  its own unique service name, and service names are first-come-first-served
+  on o2lite with no client-side error on a collision, so the Room's current
+  shape does not support it: `Room.bound_dev` is a single string,
+  `RoleClass.ROOM` has capacity 1, `RoomProfile` declares one surface, and
+  `DeviceLinkAgent` holds one `_room_dev`/`_room_bridge`/`_room_light`. A
+  correction that was necessary during this slice's design: lights are **not**
+  wrapped in Arco ugens. Lux Aeterna (the light renderer) and Arco (the
+  synthesizer) are siblings, and light traffic transits Arco as a relay
+  without ever entering it as a ugen; an audio instrument, by contrast, is a
+  channel on a shared `Flsyn` ugen with no dev id of its own.
+  `GameServer._resolve_target` already returns a list of devices (today at
+  most one for `ROOM`), specifically so that when this Room-fixture work
+  lands, no Bit's trigger declaration has to change, only that one method's
+  resolution.
 - **The Tuneshroom LED wire cannot reach the white die.** The hardware is
   SK6812 Mini **RGBW** (4 channels, chosen for its dedicated white die and the
   clean diffusion that buys), but `protocol.leds_event` ships **36 ints
@@ -1487,11 +1509,16 @@ Kept explicit so the doc doesn't over-claim:
   Live-verified against a real Arco 2026-08-14; read its section 2 (the
   timing model) before touching cue timing anywhere in this repo.
 - Room panel, and the Room's own fixtures (Spec A of two; Spec B covers
-  triggers, cue scripts, conditions and firing and is not written yet):
+  triggers, cue scripts, conditions and firing, see below):
   [`.../2026-08-17-room-panel-and-room-fixtures-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md)
   and its plan
   [`.../plans/2026-08-17-room-panel-and-room-fixtures.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-17-room-panel-and-room-fixtures.md).
   Its Status line records what was live-verified and what was not.
+- Bit-declared triggers, cue scripts and conditions (Spec B of two):
+  [`.../2026-08-17-bit-declared-triggers-and-cue-scripts-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-bit-declared-triggers-and-cue-scripts-design.md)
+  and its plan
+  [`.../plans/2026-08-17-bit-declared-triggers-and-cue-scripts.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-17-bit-declared-triggers-and-cue-scripts.md).
+  Live-verified against a real Arco: not yet done, offline suite only.
 - Teardown order, and a one-command Arco stack runner:
   [`.../2026-08-14-teardown-order-and-stack-runner-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-teardown-order-and-stack-runner-design.md)
   and its plan
