@@ -5,9 +5,17 @@ section 4.
 """
 
 from control.bit import Bit
-from control.cues import ROOM, PlayCue
+from control.cues import ROOM, TARGET, FireTrigger, PlayCue
 from control.roles import Role, RoleClass, RoleTable
 from control.rooms import RoomType, room_role
+from control.triggers import (
+    Condition,
+    ConditionSource,
+    ScriptStep,
+    Trigger,
+    TriggerTable,
+    TriggerTarget,
+)
 
 RUN_DURATION_SECONDS = 2.0
 
@@ -18,6 +26,17 @@ class TestBit(Bit):
     # Seconds for one full out-and-back sweep of the Room's ambient hue.
     ROOM_DRIFT_PERIOD = 12.0
 
+    # Full-deflection tilts that win a round. A fixture's adjudication, not a
+    # game: it exists to be deterministic and assertable at an exact tick.
+    ROUND_TILTS = 3
+
+    # How long this Bit stops driving the Room's cc:74 after firing
+    # play_aurora. The drift below runs at 44 Hz and shares that lane with the
+    # script, so without yielding it the very next tick would overwrite step 0
+    # and the declared sweep would never be visible. A Bit yielding a lane it
+    # shares with its own script is the general shape here, not a TestBit quirk.
+    SCRIPT_QUIET_SECONDS = 2.0
+
     def __init__(self, run_duration: float = RUN_DURATION_SECONDS):
         self._run_duration = run_duration
         self._elapsed = 0.0
@@ -25,6 +44,10 @@ class TestBit(Bit):
         self._run_started = False
         self._completed = False
         self._unloaded = False
+        self._full_tilts = 0
+        self._round_won = False
+        self._rounds_won = 0
+        self._quiet_until = 0.0
 
     @property
     def role_table(self) -> RoleTable:
@@ -112,25 +135,82 @@ class TestBit(Bit):
     def on_run_start(self) -> None:
         self._run_started = True
         self._elapsed = 0.0
+        self._full_tilts = 0
+        self._round_won = False
+        self._quiet_until = 0.0
 
     def update(self, dt: float) -> bool:
         self._elapsed += dt
         return self._elapsed >= self._run_duration
 
-    def cues(self, at: float) -> list:
-        """Self-driven Room animation: a slow hue drift so the Room breathes
-        with nobody joined.
+    @property
+    def trigger_table(self) -> TriggerTable:
+        """Two triggers, deliberately: one per fire path.
 
-        verb_handlers() can only ever react to a device, so without this the
-        Room's aurora reached its declared static hue once and held it,
-        unanimated, for a whole run. Deterministic in self._elapsed, which
-        update(dt) already accumulates, so a test can assert the exact value
-        at a given elapsed time.
-
-        Triangle rather than sawtooth: a sawtooth snaps from 127 back to 0
-        once per period, and aurora GLIDES to its target, so the snap reads
-        as a visible lurch rather than a wrap.
+        play_aurora is bit-adjudicated, so nothing outside this Bit decides
+        when a round is won. flash_device is reached through the `tap` verb
+        this Bit already implements, and Control does NOT fire it just because
+        a tap arrived: _on_tap returns the FireTrigger itself, which is what
+        keeps condition evaluation inside the Bit.
         """
+        return TriggerTable(triggers={
+            "play_aurora": Trigger(
+                name="play_aurora",
+                description="A slow aurora sweep across the Room",
+                target=TriggerTarget.ROOM,
+                condition=Condition(
+                    name="round_won",
+                    description="User wins a round",
+                    source=ConditionSource.BIT_ADJUDICATED),
+                script=(
+                    ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
+                    ScriptStep(0.5, (TARGET, 0xB0, 74, 40)),
+                    ScriptStep(2.0, (TARGET, 0xB0, 74, 0)),
+                ),
+            ),
+            "flash_device": Trigger(
+                name="flash_device",
+                description="Flash the tapping device and click its speaker",
+                target=TriggerTarget.DEVICE,
+                condition=Condition(
+                    name="tapped",
+                    description="Player taps their Shroom",
+                    source=ConditionSource.GESTURE_VERB,
+                    verb="tap"),
+                script=(
+                    ScriptStep(0.0, PlayCue(TARGET, "click", "")),
+                    ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
+                ),
+            ),
+        })
+
+    def cues(self, at: float) -> list:
+        """Self-driven Room animation, plus this Bit's own adjudication report.
+
+        verb_handlers() can only ever react to a device, so without the drift
+        the Room's aurora reached its declared static hue once and held it,
+        unanimated, for a whole run. Deterministic in self._elapsed, which
+        update(dt) already accumulates, so a test can assert the exact value at
+        a given elapsed time.
+
+        Triangle rather than sawtooth: a sawtooth snaps from 127 back to 0 once
+        per period, and aurora GLIDES to its target, so the snap reads as a
+        visible lurch rather than a wrap.
+
+        A won round is reported here rather than from update(dt) because a fire
+        is returned in the cue vocabulary, and this is the hook that carries it
+        with a presentation time already computed. It latches, so a round fires
+        exactly once however many ticks pass before it is drained.
+        """
+        if self._round_won:
+            self._round_won = False
+            self._rounds_won += 1
+            self._quiet_until = self._elapsed + self.SCRIPT_QUIET_SECONDS
+            return [FireTrigger("play_aurora")]
+        if self._elapsed < self._quiet_until:
+            # play_aurora owns cc:74 until its script finishes. See
+            # SCRIPT_QUIET_SECONDS.
+            return []
         phase = (self._elapsed % self.ROOM_DRIFT_PERIOD) / self.ROOM_DRIFT_PERIOD
         cc = int(round(254 * (phase if phase < 0.5 else 1.0 - phase)))
         return [(ROOM, 0xB0, 74, cc)]
@@ -143,7 +223,9 @@ class TestBit(Bit):
 
     def status(self) -> dict:
         return {"elapsed": round(self._elapsed, 2),
-                "run_duration": self._run_duration}
+                "run_duration": self._run_duration,
+                "full_tilts": self._full_tilts,
+                "rounds_won": self._rounds_won}
 
     def verb_handlers(self) -> dict:
         """Gameplay verbs beyond the fixed lifecycle set. `tilt` maps device
@@ -159,26 +241,37 @@ class TestBit(Bit):
     def _on_tilt(self, dev: str, args: list, at: float) -> list:
         """args: [dev, gamma]. gamma is degrees in [-90, 90].
 
-        Two cues, one `at`. The calling device's own hue lane, and the
-        Room's. The Room role declares cc:74 on BOTH its light_manifest
-        (aurora hue) and its ugen_manifest (FluidSynth cutoff), so one tilt
-        moves the Room's colour and the Room's drone timbre against a single
-        shared time. Neither cue names a time: control/engine.py stamps both
-        with `at`, which is what makes "one gesture, one T" hold without a
-        Bit having to remember to say so.
+        Two cues, one `at`. The calling device's own hue lane, and the Room's.
+        The Room role declares cc:74 on BOTH its light_manifest (aurora hue)
+        and its ugen_manifest (FluidSynth cutoff), so one tilt moves the Room's
+        colour and the Room's drone timbre against a single shared time.
+        Neither cue names a time: control/engine.py stamps both with `at`,
+        which is what makes "one gesture, one T" hold without a Bit having to
+        remember to say so.
+
+        Full deflection also counts toward the round. Counted here rather than
+        reported here: a round is not a light consequence of this gesture, and
+        cues() is where this Bit reports one.
         """
         gamma = float(args[1]) if len(args) > 1 else 0.0
         gamma = max(-90.0, min(90.0, gamma))
         cc = int(round((gamma + 90.0) / 180.0 * 127.0))
+        if cc >= 127:
+            self._full_tilts += 1
+            if self._full_tilts >= self.ROUND_TILTS:
+                self._full_tilts = 0
+                self._round_won = True
         return [(dev, 0xB0, 74, cc), (ROOM, 0xB0, 74, cc)]
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, count]. A single tap clicks, a
         double chimes; both flash the hue lane so the tap is visible as well
-        as audible."""
+        as audible, and both fire this Bit's declared flash_device trigger for
+        the tapping device."""
         count = int(args[3]) if len(args) > 3 else 1
         name = "chime" if count >= 2 else "click"
-        return [PlayCue(dev, name, ""), (dev, 0xB0, 74, 127)]
+        return [PlayCue(dev, name, ""), (dev, 0xB0, 74, 127),
+                FireTrigger("flash_device", dev)]
 
     def _on_shake(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, sweep_deg]. Sweep drives the hue

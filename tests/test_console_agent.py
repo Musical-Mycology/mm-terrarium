@@ -416,15 +416,9 @@ def test_no_frame_received_broadcasts_nothing():
 
 
 def test_snapshot_carries_the_loaded_bits_triggers():
-    # NOTE: adjusted from the task-8 brief. The brief's version asserted
-    # names == ["play_aurora", "flash_device"], but TestBit does not declare
-    # any triggers yet (that lands in Task 10); control/bit.py's default
-    # trigger_table is empty, and TestBit does not override it. Asserting an
-    # empty list matches the codebase as it stands today. Re-tighten this
-    # once Task 10 gives TestBit real declared triggers.
     gs, srv, agent = _room_console()
-    names = [t["name"] for t in agent.snapshot()["triggers"]]
-    assert names == []
+    names = sorted(t["name"] for t in agent.snapshot()["triggers"])
+    assert names == ["flash_device", "play_aurora"]
 
 
 def test_snapshot_triggers_is_empty_with_no_bit_loaded():
@@ -436,20 +430,11 @@ def test_the_room_stays_hidden_while_triggers_are_visible():
     """The Spec A section 3 regression, extended. Both halves in one test,
     because the safety argument is that they hold simultaneously: a trigger
     panel must not become the thing that leaks the Room's role.
-
-    NOTE: adjusted from the task-8 brief. The brief's `assert
-    snapshot["triggers"]` requires a non-empty list, which is truthy only
-    once a Bit declares triggers; TestBit does not yet (Task 10, same gap
-    noted on test_snapshot_carries_the_loaded_bits_triggers above). Asserting
-    the surface is present (a list, not the absence of the key) is what
-    today's fixtures can support. The Room-hiding half is unaffected and
-    still exercised for real. Re-tighten the "is live" half to assert
-    non-emptiness once Task 10 gives TestBit real triggers.
     """
     gs, srv, agent = _room_console()
     snapshot = agent.snapshot()
 
-    assert snapshot["triggers"] is not None           # the new surface is live
+    assert snapshot["triggers"]                       # the new surface is live
     room_name = room_role_name(RoomType.TEST)
     assert all(r["role"] != room_name for r in snapshot["roles"])
     assert all(r["role"] != room_name for r in snapshot["registration"])
