@@ -191,10 +191,14 @@ return to a clean waiting state. Landed in the first-slice spec
   cues a Bit's verb handler emits). Both are wrapped by the engine, so a
   failing transport cannot wedge it. This is the shared seam the uplink,
   console, and devicelink all attach to.
-- **`abort()`** — Control-initiated early termination that force-unloads while
-  still running the Bit's `on_complete`/`on_unload` best-effort. COMPLETING and
-  UNLOADING are **always reachable even if a Bit hook raises** (deliberate — a
-  misbehaving Bit must never wedge Control loaded).
+- **`abort()`** — Control-initiated early termination. It runs the Bit's
+  `on_complete`/`on_unload` hooks best-effort, same as a normal completion,
+  but **skips the COMPLETING state** and goes straight to UNLOADING — the
+  hooks run, the state does not change. `State.COMPLETING` has exactly one
+  call site, inside `_complete()`, the tick-triggered path; `abort()` never
+  reaches it. Separately, and regardless of which path got there,
+  UNLOADING is **always reachable even if a Bit hook raises** (deliberate —
+  a misbehaving Bit must never wedge Control loaded).
 
 ### `bits/` — reference Bits
 `TestBit` is the **durable reference/regression fixture** (not throwaway): a
