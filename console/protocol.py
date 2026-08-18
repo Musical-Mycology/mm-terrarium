@@ -25,6 +25,7 @@ __all__ = [
     "devices_changed_event", "bit_status_event", "log_event",
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
     "room_changed_event", "room_frame_event",
+    "triggers_changed_event", "trigger_fired_event", "FireTriggerCommand",
 ]
 
 
@@ -45,7 +46,8 @@ def device_view(info, role_name) -> dict:
 
 
 def snapshot_event(*, state, installed_bits, loaded_bit, roles,
-                   registration, devices, bit_status, room=None) -> dict:
+                   registration, devices, bit_status, room=None,
+                   triggers=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
@@ -56,6 +58,7 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "devices": devices,
         "bit_status": bit_status,
         "room": room,
+        "triggers": triggers or [],
     }
 
 
@@ -70,6 +73,18 @@ def room_frame_event(dev: str, channels) -> dict:
     see console/agent.py's ROOM_FRAME_INTERVAL. An int list rather than base64
     for consistency with devicelink/protocol.py's leds_event."""
     return {"event": "room_frame", "dev": dev, "channels": list(channels)}
+
+
+def triggers_changed_event(triggers) -> dict:
+    """Every trigger the loaded Bit declares, as control.trigger_view's
+    triggers_view() builds them. A trigger table is static per Bit, so in
+    practice this fires on load and unload."""
+    return {"event": "triggers_changed", "triggers": triggers}
+
+
+def trigger_fired_event(fired) -> dict:
+    """One fire, as control.trigger_view's trigger_fired_view() builds it."""
+    return {"event": "trigger_fired", "fired": fired}
 
 
 def devices_changed_event(devices) -> dict:
@@ -95,11 +110,19 @@ class ReleaseRoomCommand:
     room_type: str
 
 
+@dataclass
+class FireTriggerCommand:
+    name: str
+    dev: str | None = None
+
+
 def parse_admin_command(msg: dict):
     """Console-only admin commands -- never sent by the uplink's remote
     broker. Kept separate from uplink.protocol.parse_command: Room
     registration is a local, trusted-operator action (design spec section
-    7), not something a remote fairyring peer should ever request."""
+    7), not something a remote fairyring peer should ever request. Firing a
+    declared trigger is the same kind of action for the same reason, so it
+    lives here too rather than in the shared parser."""
     command = msg.get("command")
     if command == "arm_room":
         room_type = msg.get("room_type")
@@ -112,4 +135,12 @@ def parse_admin_command(msg: dict):
         if not isinstance(room_type, str):
             raise ValueError("release_room requires a string 'room_type'")
         return ReleaseRoomCommand(room_type=room_type)
+    if command == "fire_trigger":
+        name = msg.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("fire_trigger requires a non-empty string 'name'")
+        dev = msg.get("dev")
+        if dev is not None and not isinstance(dev, str):
+            raise ValueError("fire_trigger 'dev' must be a string when given")
+        return FireTriggerCommand(name=name, dev=dev or None)
     raise ValueError(f"unrecognized admin command: {command!r}")

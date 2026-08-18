@@ -111,3 +111,64 @@ def test_snapshot_room_defaults_to_none():
         state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
         registration=[], devices=[], bit_status={})
     assert event["room"] is None
+
+
+def test_snapshot_carries_a_triggers_key():
+    event = protocol.snapshot_event(
+        state="SETUP", installed_bits=[], loaded_bit=None, roles=[],
+        registration=[], devices=[], bit_status={},
+        triggers=[{"name": "play_aurora"}])
+    assert event["triggers"] == [{"name": "play_aurora"}]
+
+
+def test_snapshot_defaults_triggers_to_an_empty_list():
+    """An old caller that does not pass triggers must still produce a key the
+    browser can read, rather than an absent one it has to guard."""
+    event = protocol.snapshot_event(
+        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        registration=[], devices=[], bit_status={})
+    assert event["triggers"] == []
+
+
+def test_triggers_changed_event_shape():
+    assert protocol.triggers_changed_event([{"name": "x"}]) == {
+        "event": "triggers_changed", "triggers": [{"name": "x"}]}
+
+
+def test_trigger_fired_event_shape():
+    fired = {"name": "x", "fired_by": "admin-manual"}
+    assert protocol.trigger_fired_event(fired) == {
+        "event": "trigger_fired", "fired": fired}
+
+
+def test_parse_fire_trigger_with_a_device():
+    command = protocol.parse_admin_command(
+        {"command": "fire_trigger", "name": "flash_device", "dev": "ie1"})
+    assert command == protocol.FireTriggerCommand(name="flash_device", dev="ie1")
+
+
+def test_parse_fire_trigger_without_a_device():
+    command = protocol.parse_admin_command(
+        {"command": "fire_trigger", "name": "play_aurora"})
+    assert command.name == "play_aurora"
+    assert command.dev is None
+
+
+def test_parse_fire_trigger_rejects_a_missing_name():
+    with pytest.raises(ValueError, match="non-empty string 'name'"):
+        protocol.parse_admin_command({"command": "fire_trigger"})
+
+
+def test_parse_fire_trigger_rejects_a_non_string_dev():
+    with pytest.raises(ValueError, match="'dev' must be a string"):
+        protocol.parse_admin_command(
+            {"command": "fire_trigger", "name": "x", "dev": 7})
+
+
+def test_fire_trigger_is_not_a_command_the_uplink_can_send():
+    """Firing a venue's trigger is a local trusted-operator action, exactly
+    like arm_room. A remote fairyring peer must not be able to request it."""
+    from uplink import protocol as uplink_protocol
+    with pytest.raises(ValueError):
+        uplink_protocol.parse_command(
+            {"command": "fire_trigger", "name": "play_aurora"})
