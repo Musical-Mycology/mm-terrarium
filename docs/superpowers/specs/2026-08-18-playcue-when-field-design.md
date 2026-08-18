@@ -14,6 +14,28 @@ predates this need.
 Baseline at the time of writing: `ad3ff9a`, **830 passed, 1 skipped**, fully
 offline.
 
+## Status (as of 2026-08-18)
+
+- **Written and self-reviewed. Not implemented — zero lines of code
+  changed.** Every file cited in section 1 is unmodified from the baseline
+  commit above.
+- **No implementation plan exists.** The next step, whenever this is
+  picked back up, is `superpowers:writing-plans` against this file.
+- **Deliberately paused before that step, at Chris's request — other
+  work was in flight and took priority.** Nothing about the design below
+  is an open question; this is a scheduling pause, not an unresolved
+  decision. The one real design fork (Control-side-hold-and-fire-at-`when`
+  vs. device-side-hold-and-delay) was already decided in section 6.
+- **Before resuming, re-verify the file:line citations in section 1
+  against the current tip of `main`.** They were correct as of the
+  baseline commit; if anything else has touched `control/cues.py`,
+  `control/engine.py`, `devicelink/agent.py`, or `devicelink/protocol.py`
+  since, re-trace them rather than trusting the line numbers here.
+- **This commit's location in git history may not be `main`.** Find it
+  with `git log --all --oneline -- docs/superpowers/specs/2026-08-18-
+  playcue-when-field-design.md` before assuming it is reachable from
+  wherever a new branch starts.
+
 ## 1. What's already there
 
 Traced directly against the code, not from memory:
