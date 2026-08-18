@@ -1,0 +1,17 @@
+direction: down
+
+idle: IDLE
+loading: LOADING
+loaded: LOADED
+setup: "SETUP (registration open)"
+running: "RUNNING (scored closed, jam open)"
+completing: COMPLETING
+unloading: "UNLOADING, then back to IDLE"
+
+idle -> loading
+loading -> loaded
+loaded -> setup
+setup -> running
+running -> completing: "Bit says done"
+completing -> unloading
+running -> unloading: "abort(): skips COMPLETING"

@@ -1,0 +1,48 @@
+{
+  "d2_version": "0.8.1",
+  "diagrams": {
+    "boot-teardown": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "boot-teardown",
+      "outputs": {
+        "out/boot-teardown.svg": "c6d058cd53496ad41a98b574cbdb65d8a2e6d14d7cd79eb0ef7d8de4bf2c0a7e",
+        "out/boot-teardown.txt": "5053811dc3f87afb6f0b66d6a8a0229bd1d4a6918e6b5d363996d9b447a5c5b8"
+      },
+      "renderer": "d2",
+      "source": "boot-teardown.d2",
+      "source_sha256": "c01b0b773fed4092dd8152a23ac06e700570cd7bd2ac2ca214335cedc38c16fc"
+    },
+    "cue-path": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "cue-path",
+      "outputs": {
+        "out/cue-path.svg": "4ba2ab1bc9143442528d8ae020683675dd9836f74395fe8f8c09cbcca20ce827",
+        "out/cue-path.txt": "5d7d0cc088b8960d1291510fb363e777899cf0e9ed0db4f5d0e599c27d280af4"
+      },
+      "renderer": "d2",
+      "source": "cue-path.d2",
+      "source_sha256": "19ebc5b576ca4e115cef3c58c00598ca604689851ee0df9e784daf5e71152ee6"
+    },
+    "lifecycle": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "lifecycle",
+      "outputs": {
+        "out/lifecycle.svg": "23cc3c589371a9adeda0e508f92dfee49c101ce12b204e3fa7c08ca05a41d2bd",
+        "out/lifecycle.txt": "4814a0c3e2ba1fdc2ab6df548c7a69f49b82cc4451f09e51abb733503f25face"
+      },
+      "renderer": "d2",
+      "source": "lifecycle.d2",
+      "source_sha256": "31836d898fcbe51e6c3cde2f2f507a53a2e225c76be2fbb29fe8207ab6cb774e"
+    },
+    "player-flow": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "player-flow",
+      "outputs": {
+        "out/player-flow.txt": "296d6ebea21911a0d5497b2709d24252515ba746ee369d73bbea591898865c69"
+      },
+      "renderer": "seq",
+      "source": "player-flow.seq",
+      "source_sha256": "883b44913216b945e36dba8d82da6971bb92db58dad6a352ed4ed95636664499"
+    }
+  }
+}
