@@ -12,13 +12,21 @@ import logging
 import time
 
 from control.bit import Bit
-from control.cues import ROOM, LightCue, PlayCue
+from control.cues import ROOM, FireTrigger, LightCue, PlayCue
 from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
 from control.state import State
-from control.triggers import validate_trigger_table
+from control.triggers import (
+    FIRED_BY_BIT_ADJUDICATED,
+    FIRED_BY_GESTURE_VERB,
+    SOURCE_WIRE,
+    TriggerFired,
+    TriggerTarget,
+    expand_script,
+    validate_trigger_table,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +231,7 @@ class GameServer:
             # character and try to unpack each character as a cue tuple.
             # `or` guards a blank reason so /<dev>/error is never empty.
             return cues or "handler refused"
-        self._dispatch_cues(cues, at)
+        self._dispatch_cues(cues, at, FIRED_BY_GESTURE_VERB)
         return None
 
     def _resolve_dev(self, dev: str) -> str | None:
@@ -243,7 +251,86 @@ class GameServer:
             return None
         return self.room.bound_dev
 
-    def _dispatch_cues(self, cues, at: float | None) -> None:
+    def _resolve_target(self, target, dev: str | None) -> list[str]:
+        """A trigger's declared target, resolved to the devs it lands on.
+
+        Returns a LIST even where at most one dev can come back today. The Room
+        is one bound device now and becomes N o2lite clients in the N-fixture
+        Room slice (spec section 4.2); returning a list from the start is what
+        makes that a change to this method and to nothing a Bit declares.
+        """
+        if target is TriggerTarget.DEVICE:
+            return [dev] if dev else []
+        room_devs: list[str] = []
+        if self.room is not None and self.room.bound_dev is not None:
+            room_devs.append(self.room.bound_dev)
+        if target is TriggerTarget.ROOM:
+            return room_devs
+        out = list(room_devs)
+        assignments = (self.registration.assignments
+                       if self.registration is not None else {})
+        for player, (_node, _role, role_class) in assignments.items():
+            if role_class != RoleClass.ROOM and player not in out:
+                out.append(player)
+        return out
+
+    def fire_trigger(self, name: str, *, fired_by: str,
+                     dev: str | None = None,
+                     at: float | None = None) -> str | None:
+        """Fire one declared trigger: expand its script, dispatch it, and tell
+        every observer it happened.
+
+        Returns None when fired, else a refusal reason, and NEVER raises, for
+        the same reason data() does not: neither a device nor a browser may be
+        able to wedge Control.
+
+        `fired_by` is what actually fired it THIS time, which is deliberately
+        not the same field as the condition's declared source: an operator may
+        fire a gesture-verb trigger by hand, and the record has to keep those
+        two distinguishable or a manual action reads as gameplay.
+
+        `at` is supplied by _dispatch_cues when a Bit fired this from a verb
+        handler or from cues(), so the whole script shares that gesture's
+        single presentation time. A manual fire has no origin, so it takes
+        Control's clock plus the installation's horizon, exactly as a
+        self-driven cue does.
+        """
+        if self.state not in (State.SETUP, State.RUNNING):
+            return "no Bit running"
+        try:
+            table = self.bit.trigger_table
+        except Exception:
+            logger.exception("Bit.trigger_table raised; refusing to fire %r",
+                             name)
+            return "trigger table error"
+        trigger = table.triggers.get(name)
+        if trigger is None:
+            return f"unknown trigger {name!r}"
+        if trigger.target is TriggerTarget.DEVICE and not dev:
+            return (f"trigger {name!r} targets the firing device; "
+                    f"no device given")
+        if at is None:
+            at = self._clock() + self._horizon
+        devs = self._resolve_target(trigger.target, dev)
+        cues = expand_script(trigger, at, devs)
+        # No fired_by passed on: expansion never yields a FireTrigger (a script
+        # step may only be a plain tuple or a PlayCue, enforced at load), so
+        # this cannot recurse and a trigger cannot chain into another.
+        self._dispatch_cues(cues, at)
+        self._notify("on_trigger_fired", TriggerFired(
+            name=trigger.name,
+            condition=trigger.condition.name,
+            fired_by=fired_by,
+            declared_source=SOURCE_WIRE[trigger.condition.source],
+            dev=dev,
+            devs=tuple(devs),
+            at=at,
+            steps=len(cues),
+        ))
+        return None
+
+    def _dispatch_cues(self, cues, at: float | None,
+                       fired_by: str | None = None) -> None:
         """Route a Bit's cues to the transport-owned sinks.
 
         Two things happen to every cue on the way out. A cue addressed to
@@ -262,6 +349,20 @@ class GameServer:
         """
         for cue in cues or ():
             try:
+                if isinstance(cue, FireTrigger):
+                    # A Bit reporting one of its own conditions satisfied.
+                    # fire_trigger re-enters this method with the expanded
+                    # script, carrying the same `at`, so a trigger fired from a
+                    # gesture lands on the same frame as the ordinary cues
+                    # returned beside it.
+                    reason = self.fire_trigger(
+                        cue.name,
+                        fired_by=fired_by or FIRED_BY_BIT_ADJUDICATED,
+                        dev=cue.dev, at=at)
+                    if reason is not None:
+                        logger.warning("Bit fired trigger %r: %s",
+                                       cue.name, reason)
+                    continue
                 if isinstance(cue, PlayCue):
                     dev = self._resolve_dev(cue.dev)
                     if dev is None:
@@ -311,7 +412,7 @@ class GameServer:
         except Exception:
             logger.exception("Bit.cues raised; ignoring this tick")
             return
-        self._dispatch_cues(cues, at)
+        self._dispatch_cues(cues, at, FIRED_BY_BIT_ADJUDICATED)
 
     def abort(self) -> None:
         """Force an early end to the current Bit from any non-IDLE state.
