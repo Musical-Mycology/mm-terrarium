@@ -272,3 +272,41 @@ def _validate_script_dev(dev, where: str) -> None:
             f"{where}: dev must be cues.TARGET ({TARGET!r}) or cues.ROOM "
             f"({ROOM!r}), got {dev!r}. Device ids are assigned at runtime, so "
             f"a literal in a static declaration can never resolve")
+
+
+def expand_script(trigger: Trigger, at: float, devs) -> list:
+    """Turn a declared script into concrete, timed cues for _dispatch_cues.
+
+    Every light step becomes a LightCue carrying an explicit when of
+    at + offset. GameServer._dispatch_cues already honors a LightCue's own
+    when, and DeviceLinkAgent._on_light_cue already holds a cue further out
+    than one horizon on its _light_cues queue, so this slice adds no
+    scheduler and no second copy of horizon arithmetic. That holding branch
+    was written on 2026-08-14 for exactly this case; expansion only supplies
+    it with input.
+
+    A step addressed at cues.TARGET fans out to every dev the trigger's target
+    resolved to. A step addressed at cues.ROOM is left alone and resolved
+    downstream, so one script can address the Room explicitly even when its
+    own target is DEVICE.
+    """
+    out: list = []
+    for step in trigger.script:
+        when = at + float(step.offset)
+        cue = step.cue
+        if isinstance(cue, PlayCue):
+            for dev in _step_devs(cue.dev, devs):
+                out.append(PlayCue(dev, cue.name, cue.params))
+            continue
+        step_dev, status, data1, data2 = cue
+        for dev in _step_devs(step_dev, devs):
+            out.append(LightCue(dev, status, data1, data2, when=when))
+    return out
+
+
+def _step_devs(step_dev: str, devs) -> tuple:
+    """TARGET fans out; anything else (in practice ROOM, the only other legal
+    value per _validate_script_dev) passes through as itself."""
+    if step_dev == TARGET:
+        return tuple(devs)
+    return (step_dev,)
