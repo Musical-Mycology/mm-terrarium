@@ -45,6 +45,7 @@ function renderRoles(roles) {
 }
 function renderDevices(devs) {
   rows("#devices", devs, (d) => [d.dev, d.name, d.role ?? "—"]);
+  renderTriggerDevices(devs);
 }
 function renderStatus(status) {
   rows("#bitStatus", Object.entries(status || {}), (kv) => [kv[0], kv[1]]);
@@ -75,6 +76,8 @@ function handle(msg) {
       renderDevices(msg.devices);
       renderStatus(msg.bit_status);
       renderRoom(msg.room);
+      renderTriggerDevices(msg.devices);
+      renderTriggers(msg.triggers);
       break;
     case "state_changed":
       $("state").textContent = msg.state;
@@ -85,6 +88,8 @@ function handle(msg) {
     case "bit_status": renderStatus(msg.status); break;
     case "room_changed": renderRoom(msg.room); break;
     case "room_frame": renderRoomFrame(msg.channels); break;
+    case "triggers_changed": renderTriggers(msg.triggers); break;
+    case "trigger_fired": renderTriggerFired(msg.fired); break;
     case "bit_completed": log("info", "bit completed: " + JSON.stringify(msg.result)); break;
     case "error": log("error", msg.command + ": " + msg.message); break;
     case "log": log(msg.level, msg.message); break;
