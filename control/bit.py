@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 
 from control.roles import RoleTable
 from control.rooms import RoomType
+from control.triggers import TriggerTable
 
 
 class Bit(ABC):
@@ -30,6 +31,20 @@ class Bit(ABC):
     @abstractmethod
     def role_table(self) -> RoleTable:
         """This Bit's static role declarations (control.roles.RoleTable)."""
+
+    @property
+    def trigger_table(self) -> TriggerTable:
+        """This Bit's declared triggers: the named things an operator can see
+        coming, each with a description, a target, a condition this Bit
+        evaluates itself, and a declarative cue script.
+
+        A plain property with an empty default, deliberately not abstract the
+        way role_table is, so every Bit written before triggers existed keeps
+        working untouched. Validated at load_bit (control/triggers.py), so a
+        trigger declared against a verb this Bit does not implement fails as a
+        BitLoadError rather than mid-installation.
+        """
+        return TriggerTable(triggers={})
 
     def on_setup_enter(self) -> None:
         """Called once when Control enters SETUP for this Bit."""

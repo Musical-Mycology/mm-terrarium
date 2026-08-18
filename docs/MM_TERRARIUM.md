@@ -1118,14 +1118,14 @@ prevented the ordering from disagreeing with itself again, and it had.
 
 **Suite baseline as of this slice: 721 passed, 1 skipped** (662 at this
 branch's start). **844 passed, 1 skipped as of the 2026-08-17 Room-panel
-slice.**
+slice; 933 passed, 1 skipped as of the trigger slice that follows it.**
 
 ### The Room panel and the Room's own fixtures (`control/room_profile.py`, `control/room_view.py`, `harness/room_surface.py`, `console/static/`)
 The Room stops being shaped like a Tuneshroom, and the Console becomes an
 operator surface for it. Design:
 [`.../2026-08-17-room-panel-and-room-fixtures-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md)
-(Spec A of two; Spec B covers triggers, cue scripts, conditions and firing and
-is not written yet).
+(Spec A of two; Spec B covers triggers, cue scripts, conditions and firing,
+see the Design docs list below).
 
 - **The Room had no fixtures of its own.** `devicelink/agent.py` built the
   Room's `LightSession` from `self._capability or shroom_capability()` and
@@ -1194,6 +1194,67 @@ Console rendered near-black on black. Both are fixed, and `room.js` plus
 wrapped by `tests/test_room_panel_behavior.py`, skipping cleanly where node is
 absent). **A grep over source text is not a test of behavior**; if more
 browser code lands here, give it the same treatment.
+
+### `control/triggers.py`, `control/trigger_view.py`, `console/static/triggers.js` -- Bit-declared triggers, cue scripts and conditions
+A Bit can now say what will make something happen, not only what it is doing
+now. Design:
+[`.../2026-08-17-bit-declared-triggers-and-cue-scripts-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-bit-declared-triggers-and-cue-scripts-design.md)
+(Spec B of two; Spec A is the Room panel above).
+
+- **The declaration.** `control/triggers.py` holds `Trigger` (name,
+  description, target, condition, script), `Condition` (name, description,
+  source -- gesture-verb / bit-adjudicated / admin-manual -- and, for a
+  gesture-verb condition, the verb it names), and `ScriptStep` (an offset in
+  seconds plus a plain MIDI-shaped cue or a `PlayCue`). `TriggerTable` is
+  declared alongside `RoleTable`. Validated at `load_bit`, in the same
+  location and the same shallow-structural style
+  `control/role_config.py` already established: a trigger whose condition
+  names a verb the Bit's own `verb_handlers()` does not implement fails there
+  as a `BitLoadError`, never as a surprise mid-installation.
+- **Firing costs no new scheduler.** `GameServer.fire_trigger` resolves the
+  trigger's target to one or more devs (`_resolve_target`, deliberately
+  list-returning even though the Room resolves to at most one today -- see
+  the Spec C entry below), expands the script into concrete, timed cues
+  (`expand_script`), and hands them to the pre-existing `_dispatch_cues`. That
+  method already knows how to stamp a cue with an absolute `when` and route it
+  through `on_light_cue`, and `DeviceLinkAgent._on_light_cue` already holds a
+  cue whose `when` is further out than one horizon on its `_light_cues` queue
+  (see the 2026-08-14 load-bearing-timed-cues slice above) -- so a trigger's
+  script rides machinery that already existed and was already live-verified,
+  rather than a new one. A `FireTrigger` cue is how a Bit reports a fire, from
+  a verb handler or from `cues(at)`, so it inherits that call's single
+  presentation time; `GameServer.fire_trigger` guards its own body end to end
+  (not only the `Bit.trigger_table` property read) so a Bit whose declaration
+  changes shape between `load_bit` and a later fire is refused, not a crash --
+  this was the one fix round in the slice's own implementation plan.
+- **A fire is observed, never decided, by Control.** `_notify("on_trigger_fired",
+  record)` rides the engine's existing multi-observer list (the same one
+  `on_state_change`/`on_registration_change`/`on_devices_change` already use),
+  not a transport-owned sink: the record has no device destination to
+  deliver, and it is exactly the shape of event a future uplink observer will
+  want. `TriggerFired` carries `fired_by` (what actually fired it this time)
+  and `declared_source` (what the condition declares) as separate fields, so
+  an operator manually firing a gesture-verb trigger from the Console is
+  never mistakable for a real gameplay event in the record or in the log.
+- **The Console gained a Triggers panel.** One card per declared trigger,
+  showing its description, its condition, and its script's actual steps --
+  not a prose summary -- plus a Fire button (with a device picker for a
+  `DEVICE`-target trigger). A `trigger_fired` event updates only that one
+  card's status line; the panel does not rebuild on every fire, the same
+  discipline the Room panel needed retroactively after its own strip-rebuild
+  defect (see above). `tests/js/trigger_panel_behavior.test.js` asserts this
+  directly: the card list survives a `trigger_fired` re-render with its
+  children intact.
+- **`TestBit` declares two reference triggers.** `play_aurora`
+  (bit-adjudicated, latched after three full-deflection tilts, targets the
+  Room) and `flash_device` (gesture-verb on the existing `tap` handler,
+  targets the firing device) -- one per fire source, so both paths are
+  exercised through the full engine by the suite's own reference fixture, not
+  only by isolated unit Bits.
+- **Live-verified against a real Arco: NOT YET DONE.** Everything above is
+  offline-suite-only as of this slice. Live-verify per the spec's section
+  13.1: fire `play_aurora` from the Console with no device joined and confirm
+  the Room's three zones sweep through the declared steps.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -1562,20 +1623,26 @@ Kept explicit so the doc doesn't over-claim:
   o2lite transport that reads `JoinResult.config` is still unbuilt; the Arco
   cue path that plays the welcome audio half now exists in `control/audio.py`.)
 - **Real Bits beyond `TestBit`.** No production Bit exists.
-- **Bit-declared triggers, cue scripts and conditions (Spec B).** The Room
-  panel (Spec A, 2026-08-17) shows what a Bit *declares* for the Room and what
-  it is *doing now*. It does not show what will make something happen: there
-  is no `TriggerTable`, no named cue script a Bit can declare as data, no
-  Bit-reported adjudication event ("user wins a round"), and no admin
-  fire-this-trigger button. `verb_handlers()` still carries no description,
-  condition or target metadata, and a trigger fired by a Bit's own
-  adjudication has no incoming verb at all, so it cannot live there. Design
-  decisions already taken for that slice: declarative cue scripts rather than
-  callables (so the console can render the steps, not just a prose
-  description), the Bit evaluates conditions and Control only observes
-  (preserving the Bit-agnostic boundary), and manual fire is in scope because
-  the device path is currently too unreliable to test a Room instrument any
-  other way. Spec not yet written.
+- ~~**Bit-declared triggers, cue scripts and conditions (Spec B).**~~ **Closed.**
+  See *Bit-declared triggers, cue scripts and conditions* under Landed
+  subsystems above. Live-verified against a real Arco: NOT YET DONE. Offline
+  suite only.
+- **A real venue Room is N light fixtures, not one (Spec C).** This slice
+  deliberately did not build it. Each fixture needs its own o2lite client with
+  its own unique service name, and service names are first-come-first-served
+  on o2lite with no client-side error on a collision, so the Room's current
+  shape does not support it: `Room.bound_dev` is a single string,
+  `RoleClass.ROOM` has capacity 1, `RoomProfile` declares one surface, and
+  `DeviceLinkAgent` holds one `_room_dev`/`_room_bridge`/`_room_light`. A
+  correction that was necessary during this slice's design: lights are **not**
+  wrapped in Arco ugens. Lux Aeterna (the light renderer) and Arco (the
+  synthesizer) are siblings, and light traffic transits Arco as a relay
+  without ever entering it as a ugen; an audio instrument, by contrast, is a
+  channel on a shared `Flsyn` ugen with no dev id of its own.
+  `GameServer._resolve_target` already returns a list of devices (today at
+  most one for `ROOM`), specifically so that when this Room-fixture work
+  lands, no Bit's trigger declaration has to change, only that one method's
+  resolution.
 - **The Tuneshroom LED wire cannot reach the white die.** The hardware is
   SK6812 Mini **RGBW** (4 channels, chosen for its dedicated white die and the
   clean diffusion that buys), but `protocol.leds_event` ships **36 ints
@@ -1656,11 +1723,16 @@ Kept explicit so the doc doesn't over-claim:
   Live-verified against a real Arco 2026-08-14; read its section 2 (the
   timing model) before touching cue timing anywhere in this repo.
 - Room panel, and the Room's own fixtures (Spec A of two; Spec B covers
-  triggers, cue scripts, conditions and firing and is not written yet):
+  triggers, cue scripts, conditions and firing, see below):
   [`.../2026-08-17-room-panel-and-room-fixtures-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md)
   and its plan
   [`.../plans/2026-08-17-room-panel-and-room-fixtures.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-17-room-panel-and-room-fixtures.md).
   Its Status line records what was live-verified and what was not.
+- Bit-declared triggers, cue scripts and conditions (Spec B of two):
+  [`.../2026-08-17-bit-declared-triggers-and-cue-scripts-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-bit-declared-triggers-and-cue-scripts-design.md)
+  and its plan
+  [`.../plans/2026-08-17-bit-declared-triggers-and-cue-scripts.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-17-bit-declared-triggers-and-cue-scripts.md).
+  Live-verified against a real Arco: not yet done, offline suite only.
 - Teardown order, and a one-command Arco stack runner:
   [`.../2026-08-14-teardown-order-and-stack-runner-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-teardown-order-and-stack-runner-design.md)
   and its plan

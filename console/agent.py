@@ -15,6 +15,8 @@ from control.room_profile import room_profile
 from control.room_view import room_view
 from control.rooms import RoomType, non_room_counts, room_role_name
 from control.state import State
+from control.trigger_view import trigger_fired_view, triggers_view
+from control.triggers import FIRED_BY_ADMIN_MANUAL
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class ConsoleAgent:
         self._room_bridge = room_bridge
         self._last_status: dict | None = None
         self._last_room: dict | None = None
+        self._last_triggers: list | None = None
         self._clock = clock
         # The latest Room frame not yet broadcast, or None. Overwritten, not
         # queued: see _broadcast_room_frame and ROOM_FRAME_INTERVAL above.
@@ -55,11 +58,12 @@ class ConsoleAgent:
         self._broadcast_status_if_changed()
         self._broadcast_room_if_changed()
         self._broadcast_room_frame()
+        self._broadcast_triggers_if_changed()
 
     # --- inbound command dispatch ------------------------------------------
     def _handle_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
-        if name in ("arm_room", "release_room"):
+        if name in ("arm_room", "release_room", "fire_trigger"):
             return self._handle_admin_command(msg)
         try:
             command = protocol.parse_command(msg)
@@ -83,6 +87,15 @@ class ConsoleAgent:
             command = protocol.parse_admin_command(msg)
         except ValueError as exc:
             return protocol.error_event(name, str(exc))
+        if isinstance(command, protocol.FireTriggerCommand):
+            # An operator action, tagged as one so the event log never reads it
+            # as gameplay. GameServer.fire_trigger never raises, so a refusal
+            # comes back as a reason string rather than an exception.
+            reason = self.game_server.fire_trigger(
+                command.name, fired_by=FIRED_BY_ADMIN_MANUAL, dev=command.dev)
+            if reason is not None:
+                return protocol.error_event(name, reason)
+            return None
         try:
             room_type = RoomType[command.room_type]
         except KeyError:
@@ -112,6 +125,7 @@ class ConsoleAgent:
             registration = protocol.registration_changed_event(
                 self._non_room_counts())["roles"]
         self._last_room = self._current_room()
+        self._last_triggers = self._current_triggers()
         return protocol.snapshot_event(
             state=gs.state.name,
             installed_bits=list(gs.bit_registry.keys()),
@@ -121,6 +135,7 @@ class ConsoleAgent:
             devices=self._devices_view(),
             bit_status=self._current_status(),
             room=self._last_room,
+            triggers=self._last_triggers,
         )
 
     def _current_room(self) -> dict | None:
@@ -167,6 +182,22 @@ class ConsoleAgent:
         self._pending_room_frame = None
         self._last_room_frame_at = now
         self.server.broadcast(protocol.room_frame_event(dev, frame))
+
+    def _current_triggers(self) -> list:
+        bit = self.game_server.bit
+        if bit is None:
+            return []
+        try:
+            return triggers_view(bit.trigger_table)
+        except Exception:
+            logger.exception("Bit.trigger_table raised; reporting no triggers")
+            return []
+
+    def _broadcast_triggers_if_changed(self) -> None:
+        triggers = self._current_triggers()
+        if triggers != self._last_triggers:
+            self._last_triggers = triggers
+            self.server.broadcast(protocol.triggers_changed_event(triggers))
 
     def _non_room_counts(self):
         """Never surface the Room's occupancy on any Console view -- design
@@ -218,6 +249,13 @@ class ConsoleAgent:
     def on_devices_change(self) -> None:
         self.server.broadcast(protocol.devices_changed_event(
             self._devices_view()))
+
+    def on_trigger_fired(self, record) -> None:
+        """Engine observer hook. A fire is engine-produced and has no device
+        destination, which is why it rides the multi-observer list rather than
+        a transport-owned sink -- see the design spec's section 8.1."""
+        self.server.broadcast(
+            protocol.trigger_fired_event(trigger_fired_view(record)))
 
     def _broadcast_bit_completed(self) -> None:
         bit = self.game_server.bit

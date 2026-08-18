@@ -1,6 +1,8 @@
 from bits.test_bit import TestBit
+from control.cues import ROOM, FireTrigger
 from control.roles import RoleClass
 from control.rooms import room_role_name, RoomType
+from control.triggers import validate_trigger_table
 
 
 def test_role_table_has_one_scored_and_one_jam_role():
@@ -238,3 +240,79 @@ def test_room_animates_with_no_device_joined():
     bit.on_run_start()
     bit.update(1.0)
     assert bit.cues(at=0.0), "the Room must animate with nobody joined"
+
+
+def test_test_bit_declares_both_triggers():
+    bit = TestBit()
+    names = sorted(bit.trigger_table.triggers)
+    assert names == ["flash_device", "play_aurora"]
+
+
+def test_test_bits_trigger_table_validates_against_its_own_verbs():
+    """The gesture-verb condition names `tap`, which TestBit implements. This
+    is the fixture behind the declared-but-unimplemented check."""
+    bit = TestBit()
+    validate_trigger_table(bit.trigger_table, set(bit.verb_handlers()))
+
+
+def test_a_tap_fires_flash_device_for_the_tapping_device():
+    bit = TestBit()
+    cues = bit.verb_handlers()["tap"]("ie1", ["ie1", 2.0, 30, 1], 100.0)
+    fires = [c for c in cues if isinstance(c, FireTrigger)]
+    assert [(f.name, f.dev) for f in fires] == [("flash_device", "ie1")]
+
+
+def test_full_deflection_tilts_win_a_round_and_fire_play_aurora():
+    bit = TestBit(run_duration=30.0)
+    bit.on_run_start()
+    for _ in range(TestBit.ROUND_TILTS):
+        bit.verb_handlers()["tilt"]("ie1", ["ie1", 90.0], 100.0)
+    bit.update(0.01)
+    fires = [c for c in bit.cues(100.0) if isinstance(c, FireTrigger)]
+    assert [f.name for f in fires] == ["play_aurora"]
+
+
+def test_a_partial_tilt_does_not_count_toward_the_round():
+    """The Bit adjudicates: Control must never fire just because the verb
+    arrived."""
+    bit = TestBit(run_duration=30.0)
+    bit.on_run_start()
+    for _ in range(TestBit.ROUND_TILTS):
+        bit.verb_handlers()["tilt"]("ie1", ["ie1", 10.0], 100.0)
+    bit.update(0.01)
+    assert not [c for c in bit.cues(100.0) if isinstance(c, FireTrigger)]
+
+
+def test_the_round_fires_once_not_every_tick():
+    bit = TestBit(run_duration=30.0)
+    bit.on_run_start()
+    for _ in range(TestBit.ROUND_TILTS):
+        bit.verb_handlers()["tilt"]("ie1", ["ie1", 90.0], 100.0)
+    bit.update(0.01)
+    first = [c for c in bit.cues(100.0) if isinstance(c, FireTrigger)]
+    bit.update(0.01)
+    second = [c for c in bit.cues(100.0) if isinstance(c, FireTrigger)]
+    assert len(first) == 1 and second == []
+
+
+def test_the_ambient_drift_yields_the_lane_while_the_script_plays():
+    """The drift and play_aurora's script both drive the Room's cc:74. Without
+    this the 44 Hz drift would overwrite every script step within one tick and
+    the declared sweep would never be visible."""
+    bit = TestBit(run_duration=30.0)
+    bit.on_run_start()
+    for _ in range(TestBit.ROUND_TILTS):
+        bit.verb_handlers()["tilt"]("ie1", ["ie1", 90.0], 100.0)
+    bit.update(0.01)
+    bit.cues(100.0)                       # the fire tick
+    bit.update(0.5)
+    assert bit.cues(100.5) == []          # still inside the script
+    bit.update(TestBit.SCRIPT_QUIET_SECONDS)
+    assert bit.cues(103.0)                # drift resumes afterwards
+
+
+def test_the_ambient_drift_is_unchanged_when_no_round_has_been_won():
+    bit = TestBit(run_duration=30.0)
+    bit.on_run_start()
+    bit.update(0.0)
+    assert bit.cues(100.0) == [(ROOM, 0xB0, 74, 0)]

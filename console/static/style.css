@@ -35,3 +35,12 @@ th, td { border: 1px solid #ccc; padding: .2rem .5rem; text-align: left; }
            margin: .3rem 0 0; font-size: .85rem; }
 .card dt { color: #666; } .card dd { margin: 0; font-family: ui-monospace, monospace; }
 .muted { color: #888; }
+
+/* Trigger panel */
+.card.trigger { min-width: 20rem; }
+.card.trigger p { margin: .2rem 0; }
+.step { font-family: ui-monospace, monospace; font-size: .8rem;
+        color: #333; white-space: pre; }
+.fired { font-size: .8rem; color: #666; margin-top: .4rem; }
+.fired.manual { color: #a60; font-weight: 600; }
+.card.trigger select { margin: .4rem .5rem .2rem 0; }

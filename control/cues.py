@@ -51,3 +51,31 @@ class LightCue:
     data1: int
     data2: int
     when: float | None = None
+
+
+# Sentinel dev id for a cue script step addressed at whatever the firing
+# trigger declared as its target. Substituted during expansion
+# (control.triggers.expand_script), before the cue ever reaches
+# GameServer._resolve_dev, so that method is not edited by the trigger slice
+# and ROOM resolution keeps working exactly as it does today. See
+# docs/superpowers/specs/
+# 2026-08-17-bit-declared-triggers-and-cue-scripts-design.md section 7.2.
+TARGET = "@target"
+
+
+@dataclass(frozen=True)
+class FireTrigger:
+    """A Bit's report that one of its own declared conditions is satisfied.
+
+    Returned in the same list a Bit already returns cues in, from a verb
+    handler or from cues(at), so a fire inherits that path's single
+    presentation time and lands on the same frame as the ordinary cues
+    returned beside it. `dev` names the device the fire is about, when there
+    is one; it is what TriggerTarget.DEVICE resolves to.
+
+    A distinct type rather than a magic tuple, for the same reason PlayCue and
+    LightCue are: GameServer._dispatch_cues tells cue kinds apart by identity,
+    never by guessing at tuple arity.
+    """
+    name: str
+    dev: str | None = None
