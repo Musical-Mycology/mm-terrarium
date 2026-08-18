@@ -311,3 +311,51 @@ def test_a_bit_whose_trigger_table_raises_is_refused_not_crashed():
     gs.run()
     gs.bit = ExplodingBit()
     assert gs.fire_trigger("x", fired_by="admin-manual") == "trigger table error"
+
+
+class _FlipTriggerTableBit(_BaseBit):
+    """trigger_table is valid on its first read (the one load_bit validates)
+    and structurally invalid on every read after that, modeling a Bit whose
+    property builds a fresh object per access -- the same hazard
+    RegistrationState's role_table snapshot exists to close for role_table."""
+
+    def __init__(self):
+        self._read_once = False
+
+    def verb_handlers(self) -> dict:
+        return {}
+
+    @property
+    def trigger_table(self) -> TriggerTable:
+        if not self._read_once:
+            self._read_once = True
+            return TriggerTable(triggers={
+                "bad": Trigger(
+                    name="bad", description="Valid at load, bad later",
+                    target=TriggerTarget.ROOM,
+                    condition=Condition(name="c", description="d",
+                                        source=ConditionSource.ADMIN_MANUAL),
+                    script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),)),
+            })
+        # A 3-tuple cue: legal nowhere, but load-time validation never sees
+        # it, because it only ran against the first, valid, access above.
+        return TriggerTable(triggers={
+            "bad": Trigger(
+                name="bad", description="Valid at load, bad later",
+                target=TriggerTarget.ROOM,
+                condition=Condition(name="c", description="d",
+                                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(0.0, (TARGET, 0xB0, 74)),)),
+        })
+
+
+def test_a_trigger_table_that_turns_invalid_after_load_is_refused_not_crashed():
+    """trigger_table is a property: load_bit validates whatever it returns on
+    that one call, and the validated object is never retained. fire_trigger
+    must guard its own later read of the same property rather than trust
+    load-time validation to still apply."""
+    gs = _server(_FlipTriggerTableBit)
+    gs.load_bit("bit")
+    reason = gs.fire_trigger("bad", fired_by="admin-manual")
+    assert reason is not None
+    assert isinstance(reason, str)

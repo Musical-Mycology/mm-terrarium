@@ -303,19 +303,33 @@ class GameServer:
             logger.exception("Bit.trigger_table raised; refusing to fire %r",
                              name)
             return "trigger table error"
-        trigger = table.triggers.get(name)
-        if trigger is None:
-            return f"unknown trigger {name!r}"
-        if trigger.target is TriggerTarget.DEVICE and not dev:
-            return (f"trigger {name!r} targets the firing device; "
-                    f"no device given")
-        if at is None:
-            at = self._clock() + self._horizon
-        devs = self._resolve_target(trigger.target, dev)
-        cues = expand_script(trigger, at, devs)
-        # No fired_by passed on: expansion never yields a FireTrigger (a script
-        # step may only be a plain tuple or a PlayCue, enforced at load), so
-        # this cannot recurse and a trigger cannot chain into another.
+        try:
+            trigger = table.triggers.get(name)
+            if trigger is None:
+                return f"unknown trigger {name!r}"
+            if trigger.target is TriggerTarget.DEVICE and not dev:
+                return (f"trigger {name!r} targets the firing device; "
+                        f"no device given")
+            if at is None:
+                at = self._clock() + self._horizon
+            devs = self._resolve_target(trigger.target, dev)
+            cues = expand_script(trigger, at, devs)
+        except Exception:
+            # trigger_table is a property: load_bit validated whatever it
+            # returned on THAT one call, and the validated object is never
+            # retained (the same hazard RegistrationState's role_table
+            # snapshot exists to close for role_table). A later access can
+            # return something else, so everything this trigger touches
+            # between lookup and expansion is guarded here, not just the
+            # property access above.
+            logger.exception("trigger %r script expansion failed; refusing "
+                             "to fire", name)
+            return "trigger script error"
+        # No fired_by passed on: expand_script only ever yields LightCue and
+        # PlayCue, never FireTrigger, so this cannot recurse and a trigger
+        # cannot chain into another. The guard above already contains
+        # anything a divergent trigger_table could throw while producing
+        # `cues`, so this call sees only well-formed cues.
         self._dispatch_cues(cues, at)
         self._notify("on_trigger_fired", TriggerFired(
             name=trigger.name,
