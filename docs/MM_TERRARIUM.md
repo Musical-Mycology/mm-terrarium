@@ -1026,6 +1026,67 @@ wrapped by `tests/test_room_panel_behavior.py`, skipping cleanly where node is
 absent). **A grep over source text is not a test of behavior**; if more
 browser code lands here, give it the same treatment.
 
+### `control/triggers.py`, `control/trigger_view.py`, `console/static/triggers.js` -- Bit-declared triggers, cue scripts and conditions
+A Bit can now say what will make something happen, not only what it is doing
+now. Design:
+[`.../2026-08-17-bit-declared-triggers-and-cue-scripts-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-bit-declared-triggers-and-cue-scripts-design.md)
+(Spec B of two; Spec A is the Room panel above).
+
+- **The declaration.** `control/triggers.py` holds `Trigger` (name,
+  description, target, condition, script), `Condition` (name, description,
+  source -- gesture-verb / bit-adjudicated / admin-manual -- and, for a
+  gesture-verb condition, the verb it names), and `ScriptStep` (an offset in
+  seconds plus a plain MIDI-shaped cue or a `PlayCue`). `TriggerTable` is
+  declared alongside `RoleTable`. Validated at `load_bit`, in the same
+  location and the same shallow-structural style
+  `control/role_config.py` already established: a trigger whose condition
+  names a verb the Bit's own `verb_handlers()` does not implement fails there
+  as a `BitLoadError`, never as a surprise mid-installation.
+- **Firing costs no new scheduler.** `GameServer.fire_trigger` resolves the
+  trigger's target to one or more devs (`_resolve_target`, deliberately
+  list-returning even though the Room resolves to at most one today -- see
+  the Spec C entry below), expands the script into concrete, timed cues
+  (`expand_script`), and hands them to the pre-existing `_dispatch_cues`. That
+  method already knows how to stamp a cue with an absolute `when` and route it
+  through `on_light_cue`, and `DeviceLinkAgent._on_light_cue` already holds a
+  cue whose `when` is further out than one horizon on its `_light_cues` queue
+  (see the 2026-08-14 load-bearing-timed-cues slice above) -- so a trigger's
+  script rides machinery that already existed and was already live-verified,
+  rather than a new one. A `FireTrigger` cue is how a Bit reports a fire, from
+  a verb handler or from `cues(at)`, so it inherits that call's single
+  presentation time; `GameServer.fire_trigger` guards its own body end to end
+  (not only the `Bit.trigger_table` property read) so a Bit whose declaration
+  changes shape between `load_bit` and a later fire is refused, not a crash --
+  this was the one fix round in the slice's own implementation plan.
+- **A fire is observed, never decided, by Control.** `_notify("on_trigger_fired",
+  record)` rides the engine's existing multi-observer list (the same one
+  `on_state_change`/`on_registration_change`/`on_devices_change` already use),
+  not a transport-owned sink: the record has no device destination to
+  deliver, and it is exactly the shape of event a future uplink observer will
+  want. `TriggerFired` carries `fired_by` (what actually fired it this time)
+  and `declared_source` (what the condition declares) as separate fields, so
+  an operator manually firing a gesture-verb trigger from the Console is
+  never mistakable for a real gameplay event in the record or in the log.
+- **The Console gained a Triggers panel.** One card per declared trigger,
+  showing its description, its condition, and its script's actual steps --
+  not a prose summary -- plus a Fire button (with a device picker for a
+  `DEVICE`-target trigger). A `trigger_fired` event updates only that one
+  card's status line; the panel does not rebuild on every fire, the same
+  discipline the Room panel needed retroactively after its own strip-rebuild
+  defect (see above). `tests/js/trigger_panel_behavior.test.js` asserts this
+  directly: the card list survives a `trigger_fired` re-render with its
+  children intact.
+- **`TestBit` declares two reference triggers.** `play_aurora`
+  (bit-adjudicated, latched after three full-deflection tilts, targets the
+  Room) and `flash_device` (gesture-verb on the existing `tap` handler,
+  targets the firing device) -- one per fire source, so both paths are
+  exercised through the full engine by the suite's own reference fixture, not
+  only by isolated unit Bits.
+- **Live-verified against a real Arco: NOT YET DONE.** Everything above is
+  offline-suite-only as of this slice. Live-verify per the spec's section
+  13.1: fire `play_aurora` from the Console with no device joined and confirm
+  the Room's three zones sweep through the declared steps.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -1393,26 +1454,10 @@ Kept explicit so the doc doesn't over-claim:
   o2lite transport that reads `JoinResult.config` is still unbuilt; the Arco
   cue path that plays the welcome audio half now exists in `control/audio.py`.)
 - **Real Bits beyond `TestBit`.** No production Bit exists.
-- ~~**Bit-declared triggers, cue scripts and conditions (Spec B).**~~ **Built.**
-  `control/triggers.py` holds the trigger declaration (`Trigger`, `Condition`,
-  `ScriptStep`, `TriggerTable`), validated at `load_bit`: a trigger naming an
-  unimplemented verb fails there as a `BitLoadError` rather than mid-run.
-  `GameServer.fire_trigger` expands a trigger's script and dispatches it
-  through the existing `_dispatch_cues`/`on_light_cue` path, reusing
-  `DeviceLinkAgent._on_light_cue`'s existing far-future-cue holding rather than
-  adding a new scheduler. A fire is reported through a new multi-observer
-  engine hook, `on_trigger_fired`, rather than a transport-owned sink, because
-  the record has no device destination, and that is exactly the kind of event
-  the uplink chain will eventually want. The Console gained a Triggers panel
-  showing every declared trigger's script and a Fire button; a manually-fired
-  trigger is tagged distinctly from a real gameplay fire, because `fired_by`
-  and `declared_source` are separate fields for exactly this reason. `TestBit`
-  now declares two reference triggers: `play_aurora` (bit-adjudicated, three
-  full-deflection tilts) and `flash_device` (gesture-verb, `tap`). This slice
-  does not touch the Room's shape, it is still one bound device, not N
-  fixtures (see the new deferred entry below). Live-verified against a real
-  Arco: NOT YET DONE. Offline suite only. Design:
-  [`.../2026-08-17-bit-declared-triggers-and-cue-scripts-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-bit-declared-triggers-and-cue-scripts-design.md).
+- ~~**Bit-declared triggers, cue scripts and conditions (Spec B).**~~ **Closed.**
+  See *Bit-declared triggers, cue scripts and conditions* under Landed
+  subsystems above. Live-verified against a real Arco: NOT YET DONE. Offline
+  suite only.
 - **A real venue Room is N light fixtures, not one (Spec C).** This slice
   deliberately did not build it. Each fixture needs its own o2lite client with
   its own unique service name, and service names are first-come-first-served
