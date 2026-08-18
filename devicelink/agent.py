@@ -453,7 +453,19 @@ class DeviceLinkAgent:
         """FluidSynth is silent without a note (see control/audio.py), so
         the Room's declared drone has to start once the Bit is actually
         RUNNING and stop once it's UNLOADING -- mirrors harness/led_smoke.py's
-        own start_drone/on_release-adjacent handling for a player role."""
+        own start_drone/on_release-adjacent handling for a player role.
+
+        UNLOADING also drops every still-pending timed cue. A trigger's cue
+        script can schedule a step past its Bit's own completion, and the
+        Room's bridge persists across a Bit lifecycle by design, so without
+        this the Room keeps gliding after the drone has stopped and the Bit is
+        gone. Player devices are already covered, because _feed_light_now
+        returns early once _finish_release has cleared the bridge. Dropped
+        rather than drained: these are cues for a Bit that no longer exists.
+        """
+        if new_state == State.UNLOADING:
+            self._room_cues = TimedQueue()
+            self._light_cues = TimedQueue()
         if self._room_audio is None or self._room_dev is None:
             return
         if new_state == State.RUNNING:

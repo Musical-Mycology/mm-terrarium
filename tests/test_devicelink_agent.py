@@ -882,3 +882,58 @@ def test_no_sink_is_the_default_and_changes_nothing():
         agent.poll()
 
     assert [m for _, m in server.sent if m["address"] == "/sim-room/leds"]
+
+
+# --- UNLOADING drops pending timed cues: a trigger's cue script can
+# schedule a step past its Bit's own completion, and the Room's bridge
+# persists across a Bit lifecycle by design, so without this the Room keeps
+# gliding after the drone has stopped and the Bit is gone. ------------------
+
+def test_pending_script_cues_are_dropped_at_unloading():
+    """A step scheduled past its Bit's completion must not still feed the Room
+    after UNLOADING. Player devices are already safe by accident, because
+    _feed_light_now returns early once _finish_release has cleared the bridge,
+    but the Room's bridge persists across a Bit lifecycle by design, so the
+    Room is the case that needs saying."""
+    gs, agent, bridge = _agent_with_bound_room()   # existing helper, line 438
+    now = agent._clock()
+    # Far enough out that the room queue holds it AND the light-session feed
+    # is deferred too (feed_at = when - horizon is still in the future).
+    agent._on_light_cue("sim-room", 0xB0, 74, 40, when=now + 5.0)
+    assert agent._room_cues.pending() == 1
+    assert agent._light_cues.pending() == 1
+
+    agent.on_state_change(State.RUNNING, State.UNLOADING)
+
+    assert agent._room_cues.pending() == 0
+    assert agent._light_cues.pending() == 0
+
+
+def test_unloading_still_stops_the_room_drone():
+    """The queue clear must not displace what this branch already did.
+
+    No manual on_grant call here: _room_ready_game_server() binds the Room
+    before the agent is constructed, so DeviceLinkAgent._setup_room() already
+    grants "sim-room" during __init__ (see devicelink/agent.py's
+    self._room_audio.on_grant call). Granting it again would acquire a
+    second voice and desync pool.acquired[0] from the one start_drone/
+    stop_drone actually operate on."""
+    gs = _room_ready_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+    agent.on_state_change(State.SETUP, State.RUNNING)
+    agent.on_state_change(State.RUNNING, State.UNLOADING)
+    voice = pool.acquired[0]
+    assert voice.sent[-1][0] in ("note_off", "all_off")
+
+
+def test_unloading_clears_queues_even_with_no_room_audio_injected():
+    """The clear sits before the room-audio early return on purpose."""
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+    agent._light_cues.push(agent._clock() + 5.0, ("ie1", 0xB0, 74, 1, 0.0),
+                           now=agent._clock())
+    agent.on_state_change(State.RUNNING, State.UNLOADING)
+    assert agent._light_cues.pending() == 0
