@@ -1,42 +1,43 @@
-// Room panel: a labelled zone view of the Room's live light, plus one card
-// per declared instrument showing its target zone, its lanes and each lane's
-// current controller value.
+// Room panel: N labelled strips (one per declared fixture), plus one card
+// per declared instrument showing its target zone, its lanes and each
+// lane's current controller value.
 //
 // The Room's declared light and audio instruments arrive in ONE list
 // discriminated by `kind` (see control/room_view.py). They are rendered
-// together on purpose: cc:74 drives aurora's hue and FluidSynth's cutoff from
-// one shared MIDI stream, and two separate tables would hide that.
+// together on purpose: cc:74 drives aurora's/rainbow's hue and FluidSynth's
+// cutoff from one shared MIDI stream, and two separate tables would hide
+// that.
+//
+// One shared LightSession renders the WHOLE concatenated surface every
+// tick (control/room_view.py's `fixtures` list carries each fixture's own
+// channel_start/channel_count into that one frame); a spatial instrument
+// like luxaeterna's rainbow can therefore paint one gradient across every
+// fixture. Each fixture's OWN strip is repainted only from ITS OWN
+// room_frame event (matched by `dev`, since a frame event names a dev, not
+// a fixture) -- see renderRoomFrame below.
 
-let roomCapability = null;
+let roomFixturesShape = null;   // last-seen [{name, pixel_count, zones}], for the same rebuild-only-on-change discipline the old single-strip code used
+let fixtureDevByName = {};      // name -> dev, refreshed every renderRoom call
+let fixtureNameByDev = {};      // dev -> name, the reverse lookup renderRoomFrame needs
 
-// A live session measured 1726 room_changed events against 464 room_frame
-// events: room_changed fires on every controller value change, while
-// room_frame (the thing that actually paints #roomStrip's swatches, via
-// renderRoomFrame below) arrives far less often. renderRoom used to start
-// with el.innerHTML = "", which threw away #roomStrip and rebuilt it as 60
-// fresh black divs on every one of those 1726 calls -- so the freshly
-// painted swatches were replaced with black well before the next
-// room_frame, and the Room's live light read as permanently off exactly
-// when the room was active. The capability (pixel_count, zones) that the
-// strip's shape depends on changes almost never -- only on a different Room
-// or a reconfigured one -- so the strip is now rebuilt ONLY when that
-// changes. Header text and instrument cards are cheap and change on every
-// room_changed anyway, so they keep being fully re-rendered.
-function capabilityShapeMatches(prev, next) {
-  if (!prev) return false;
-  if (prev.pixel_count !== next.pixel_count) return false;
-  return JSON.stringify(prev.zones) === JSON.stringify(next.zones);
+function fixturesShapeMatches(prev, next) {
+  if (!prev || prev.length !== next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    if (prev[i].name !== next[i].name) return false;
+    if (prev[i].pixel_count !== next[i].pixel_count) return false;
+    if (JSON.stringify(prev[i].zones) !== JSON.stringify(next[i].zones)) return false;
+  }
+  return true;
 }
 
 function renderRoom(room) {
   const el = document.getElementById("room");
 
   if (!room) {
-    // No Room: tear the whole panel down, including the strip, and reset
-    // the tracked capability so a later real Room is treated as new rather
-    // than compared against a capability that no longer applies.
     el.innerHTML = "";
-    roomCapability = null;
+    roomFixturesShape = null;
+    fixtureDevByName = {};
+    fixtureNameByDev = {};
     const p = document.createElement("p");
     p.className = "muted";
     p.textContent = "No Room configured";
@@ -46,48 +47,43 @@ function renderRoom(room) {
 
   let header = document.getElementById("roomHeader");
   if (!header) {
-    // Nothing to reuse yet (first Room since boot, or since the last "No
-    // Room configured" state cleared el). Start from a clean panel.
     el.innerHTML = "";
     header = document.createElement("p");
     header.id = "roomHeader";
     el.appendChild(header);
   }
+  const boundCount = room.fixtures.filter((f) => f.dev).length;
   header.textContent = `${room.room_type} · ${room.capability.pixel_count} px · `
     + `${room.capability.color_order} · `
-    + (room.bound_dev ? `bound to ${room.bound_dev}` : "not bound");
+    + `${boundCount}/${room.fixtures.length} fixture(s) bound`;
 
-  // Looked up before the strip rebuild below on purpose: on a first render
-  // #roomCards does not exist yet, but on a capability-change rebuild it
-  // already does, sitting at the end of #room's children from the last
-  // render. #room has no CSS rule of its own, so DOM order IS visual
-  // order (plain block flow) -- appending the rebuilt strip/zones with
-  // appendChild would put them after #roomCards and the live-light strip
-  // would visibly jump below the instrument cards every time the Room's
-  // capability changes. insertBefore(..., cards) keeps them pinned in the
-  // header, strip, zones, cards order regardless of which nodes already
-  // exist.
+  fixtureDevByName = {};
+  fixtureNameByDev = {};
+  for (const fixture of room.fixtures) {
+    fixtureDevByName[fixture.name] = fixture.dev;
+    if (fixture.dev) fixtureNameByDev[fixture.dev] = fixture.name;
+  }
+
   let cards = document.getElementById("roomCards");
+  const rebuildStrips = !fixturesShapeMatches(roomFixturesShape, room.fixtures);
+  roomFixturesShape = room.fixtures;
 
-  const rebuildStrip = !capabilityShapeMatches(roomCapability, room.capability);
-  roomCapability = room.capability;
-
-  let strip = document.getElementById("roomStrip");
-  let zones = document.getElementById("roomZones");
-  if (rebuildStrip || !strip || !zones) {
-    // Only reached when the surface actually changed shape (or doesn't
-    // exist yet). This is the only place #roomStrip's nodes are created or
-    // discarded -- everywhere else in this function leaves it alone.
-    if (strip) strip.remove();
-    if (zones) zones.remove();
-    strip = buildStrip(room.capability);
-    zones = buildZoneLabels(room.capability);
-    if (cards) {
-      el.insertBefore(strip, cards);
-      el.insertBefore(zones, cards);
-    } else {
-      el.appendChild(strip);
-      el.appendChild(zones);
+  if (rebuildStrips) {
+    for (const old of Array.from(el.children)) {
+      if (old.id && (old.id.startsWith("roomStrip-") || old.id.startsWith("roomZones-"))) {
+        old.remove();
+      }
+    }
+    for (const fixture of room.fixtures) {
+      const strip = buildFixtureStrip(fixture);
+      const zones = buildFixtureZoneLabels(fixture);
+      if (cards) {
+        el.insertBefore(strip, cards);
+        el.insertBefore(zones, cards);
+      } else {
+        el.appendChild(strip);
+        el.appendChild(zones);
+      }
     }
   }
 
@@ -109,19 +105,24 @@ function renderRoom(room) {
   }
 }
 
-function buildStrip(capability) {
+function buildFixtureStrip(fixture) {
   const strip = document.createElement("div");
-  strip.id = "roomStrip";
-  for (let i = 0; i < capability.pixel_count; i++) {
+  strip.id = `roomStrip-${fixture.name}`;
+  strip.className = "roomFixtureStrip";
+  for (let i = 0; i < fixture.pixel_count; i++) {
     strip.appendChild(document.createElement("div"));
   }
   return strip;
 }
 
-function buildZoneLabels(capability) {
+function buildFixtureZoneLabels(fixture) {
   const bar = document.createElement("div");
-  bar.id = "roomZones";
-  for (const zone of capability.zones) {
+  bar.id = `roomZones-${fixture.name}`;
+  const label = document.createElement("span");
+  label.className = "fixtureLabel";
+  label.textContent = `${fixture.name}${fixture.dev ? "" : " (not bound)"}`;
+  bar.appendChild(label);
+  for (const zone of fixture.zones) {
     const span = document.createElement("span");
     span.style.flex = `${zone.count} 1 0`;
     span.textContent = `${zone.name} (${zone.start}..${zone.start + zone.count - 1})`;
@@ -170,9 +171,17 @@ function addRow(dl, term, value) {
   dl.appendChild(dd);
 }
 
-function renderRoomFrame(channels) {
-  const strip = document.getElementById("roomStrip");
-  if (!strip || !roomCapability) return;
+function renderRoomFrame(dev, channels) {
+  // A room_frame event names the DEV that produced it, not the fixture --
+  // devicelink/agent.py's _render_room() sends one slice per bound fixture's
+  // own dev. fixtureNameByDev, rebuilt on every renderRoom(), is the lookup
+  // from dev back to which strip to paint. A dev with no matching fixture
+  // (unbound, or a frame that raced a Room reconfiguration) is a no-op, not
+  // an error -- boundary rule 2, nothing here may propagate a failure.
+  const name = fixtureNameByDev[dev];
+  if (!name) return;
+  const strip = document.getElementById(`roomStrip-${name}`);
+  if (!strip) return;
   const swatches = strip.children;
   // The wire is GRB, not RGB: control/room_profile.py declares color_order and
   // devicelink ships the channels in that order. Reading them as RGB would

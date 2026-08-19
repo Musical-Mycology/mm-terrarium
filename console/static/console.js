@@ -87,7 +87,7 @@ function handle(msg) {
     case "devices_changed": renderDevices(msg.devices); break;
     case "bit_status": renderStatus(msg.status); break;
     case "room_changed": renderRoom(msg.room); break;
-    case "room_frame": renderRoomFrame(msg.channels); break;
+    case "room_frame": renderRoomFrame(msg.dev, msg.channels); break;
     case "triggers_changed": renderTriggers(msg.triggers); break;
     case "trigger_fired": renderTriggerFired(msg.fired); break;
     case "bit_completed": log("info", "bit completed: " + JSON.stringify(msg.result)); break;
