@@ -133,19 +133,8 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
                 raise BootFailure(str(exc)) from exc
 
         room_bridge = RoomBridge()
-        # Profile declaration order, not dict-insertion order -- the same
-        # canonical-dev algorithm as GameServer._canonical_room_dev and
-        # DeviceLinkAgent._canonical_room_dev, reusing profile_for_wait
-        # (already resolved above) rather than a fresh next(iter(...))
-        # shortcut, which would silently pick whichever fixture happened
-        # to bind first rather than the profile's first-declared one.
-        canonical = None
-        if profile_for_wait is not None:
-            for fixture in profile_for_wait.fixtures:
-                dev = room.bound.get(fixture.name)
-                if dev is not None:
-                    canonical = dev
-                    break
+        canonical = (_canonical_room_dev(profile_for_wait, room.bound)
+                    if profile_for_wait is not None else None)
         if canonical is not None:
             room_bridge.bind(canonical)
         teardown.push("room-bridge", room_bridge.shutdown)
@@ -170,6 +159,21 @@ def _abort_if_running(gs) -> None:
     from control.state import State
     if gs.state != State.IDLE:
         gs.abort()
+
+
+def _canonical_room_dev(profile, bound: dict) -> str | None:
+    """The Room's one dev for RoomBridge purposes: the first bound fixture
+    in the profile's declaration order, not dict-insertion order -- the
+    same algorithm as GameServer._canonical_room_dev and
+    DeviceLinkAgent._canonical_room_dev. Extracted as its own function
+    specifically so this guarantee is unit-testable directly, without
+    needing to drive a full boot() through admin-tap timing to construct
+    a bound dict whose insertion order differs from declaration order."""
+    for fixture in profile.fixtures:
+        dev = bound.get(fixture.name)
+        if dev is not None:
+            return dev
+    return None
 
 
 def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,

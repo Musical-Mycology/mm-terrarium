@@ -17,6 +17,26 @@ def make_registry():
     return {"RoomCapableBit": RoomCapableBit}
 
 
+def test_canonical_room_dev_prefers_profile_order_over_bind_order():
+    """Regression test: control/engine.py needed two review rounds because
+    a similar canonical-dev pick used dict-insertion order instead of the
+    profile's declared order. Same algorithm here, tested directly against
+    a dict whose insertion order is deliberately reversed from profile
+    declaration order (accent inserted first, main second)."""
+    from control.boot import _canonical_room_dev
+    from control.room_profile import room_profile
+    profile = room_profile(RoomType.TEST)
+    bound = {"accent": "accent-dev", "main": "main-dev"}
+    assert _canonical_room_dev(profile, bound) == "main-dev"
+
+
+def test_canonical_room_dev_returns_none_when_nothing_bound():
+    from control.boot import _canonical_room_dev
+    from control.room_profile import room_profile
+    profile = room_profile(RoomType.TEST)
+    assert _canonical_room_dev(profile, {}) is None
+
+
 def test_boot_happy_path_via_simulator_factory():
     config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit")
     gs, room_bridge, arco, teardown = boot(
