@@ -1416,15 +1416,67 @@ to
 (`devs` itself, uncollapsed, still flows into the `TriggerFired` record below
 unchanged -- only the copy handed to `expand_script` is collapsed.)
 
+- [ ] **Step 3.5: Fix two more directly-broken tests this task's own reconnaissance missed**
+
+`tests/test_engine.py` and `tests/test_engine_data.py` both exercise
+`GameServer`'s Room-binding/cue paths directly against `.bound_dev`/the old
+un-fixture-aware `arm()`/`bound_device()` signatures, and break the moment
+`control/engine.py` changes above land. Neither file was in this task's
+original `Files:` list; both are this task's responsibility to close, since
+they test exactly the mechanism this step just changed.
+
+In `tests/test_engine.py`, `test_room_node_join_binds_device_once_armed`
+(around line 449) needs its old 2-arg `arm()` call widened and its
+assertions updated to the fixture-keyed shape:
+
+```python
+def test_room_node_join_binds_device_once_armed():
+    binding = RoomBindingRegistry()
+    server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
+    server.room = Room(room_type=RoomType.TEST)
+    server.load_bit("RoomCapableBit")
+    binding.arm(RoomType.TEST, "main", window_seconds=10.0)
+
+    result = server.join("ie9", "ROOM_TEST_NODE")
+
+    assert result.granted is True
+    assert result.role_class == RoleClass.ROOM
+    assert result.config is None
+    assert server.room.bound == {"main": "ie9"}
+    assert binding.bound_device(RoomType.TEST, "main") == "ie9"
+```
+
+Still in `tests/test_engine.py`, `test_bit_cues_are_dispatched_once_per_running_tick`
+(around line 512) sets the Room's bound dev directly; change only this one
+line (the `seen == [("sim-room", ...)]` assertion two lines below needs no
+change, since the dev STRING is unchanged, only how it's stored):
+
+```python
+    gs.room.bound = {"main": "sim-room"}
+```
+(replaces `gs.room.bound_dev = "sim-room"`)
+
+In `tests/test_engine_data.py`, the private helper `_room_bound` (around
+line 365, used by both `test_room_target_resolves_to_the_bound_dev` and
+`test_play_cue_can_target_the_room_too`) needs the same one-line fix, which
+closes both tests at once:
+
+```python
+    gs.room.bound = {"main": bound}
+```
+(replaces `gs.room.bound_dev = bound`; the `bound="sim-room"` default
+parameter and every assertion referencing that string stay unchanged,
+since only the storage shape moved, not the value)
+
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `.venv/bin/python -m pytest tests/test_engine_triggers.py tests/test_engine.py -v`
+Run: `.venv/bin/python -m pytest tests/test_engine_triggers.py tests/test_engine.py tests/test_engine_data.py -v`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add control/engine.py tests/test_engine_triggers.py
+git add control/engine.py tests/test_engine_triggers.py tests/test_engine.py tests/test_engine_data.py
 git commit -m "feat(engine): canonical Room dev and TARGET-fanout collapse for N fixtures"
 ```
 
