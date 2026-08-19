@@ -16,18 +16,14 @@
 // room_frame event (matched by `dev`, since a frame event names a dev, not
 // a fixture) -- see renderRoomFrame below.
 
-let roomFixturesShape = null;   // last-seen [{name, pixel_count, zones}], for the same rebuild-only-on-change discipline the old single-strip code used
+let roomFixtureShapes = {};     // fixture name -> last-seen {pixel_count, zones}, PER FIXTURE
 let fixtureDevByName = {};      // name -> dev, refreshed every renderRoom call
 let fixtureNameByDev = {};      // dev -> name, the reverse lookup renderRoomFrame needs
 
-function fixturesShapeMatches(prev, next) {
-  if (!prev || prev.length !== next.length) return false;
-  for (let i = 0; i < prev.length; i++) {
-    if (prev[i].name !== next[i].name) return false;
-    if (prev[i].pixel_count !== next[i].pixel_count) return false;
-    if (JSON.stringify(prev[i].zones) !== JSON.stringify(next[i].zones)) return false;
-  }
-  return true;
+function fixtureShapeMatches(prev, next) {
+  if (!prev) return false;
+  if (prev.pixel_count !== next.pixel_count) return false;
+  return JSON.stringify(prev.zones) === JSON.stringify(next.zones);
 }
 
 function renderRoom(room) {
@@ -35,7 +31,7 @@ function renderRoom(room) {
 
   if (!room) {
     el.innerHTML = "";
-    roomFixturesShape = null;
+    roomFixtureShapes = {};
     fixtureDevByName = {};
     fixtureNameByDev = {};
     const p = document.createElement("p");
@@ -65,26 +61,60 @@ function renderRoom(room) {
   }
 
   let cards = document.getElementById("roomCards");
-  const rebuildStrips = !fixturesShapeMatches(roomFixturesShape, room.fixtures);
-  roomFixturesShape = room.fixtures;
 
-  if (rebuildStrips) {
-    for (const old of Array.from(el.children)) {
-      if (old.id && (old.id.startsWith("roomStrip-") || old.id.startsWith("roomZones-"))) {
-        old.remove();
+  // Drop strips/zone-bars for any fixture no longer in the profile (not
+  // expected in practice -- room_profile()'s declared fixtures are fixed
+  // per RoomType -- but keeps stale nodes from surviving a hypothetical
+  // reconfiguration).
+  const currentNames = new Set(room.fixtures.map((f) => f.name));
+  for (const oldName of Object.keys(roomFixtureShapes)) {
+    if (!currentNames.has(oldName)) {
+      const oldStrip = document.getElementById(`roomStrip-${oldName}`);
+      const oldZones = document.getElementById(`roomZones-${oldName}`);
+      if (oldStrip) oldStrip.remove();
+      if (oldZones) oldZones.remove();
+      delete roomFixtureShapes[oldName];
+    }
+  }
+
+  // Rebuild only the fixtures whose OWN shape changed -- this is Defect 1's
+  // whole point applied at fixture granularity: an untouched fixture's live
+  // strip must survive another fixture's reconfiguration, not just survive
+  // an unrelated controller-value-only room_changed event. A rebuilt
+  // fixture is reinserted immediately before the nearest LATER fixture that
+  // still has a node in the DOM (or before #roomCards if it's the last),
+  // so declaration order survives a partial rebuild instead of every
+  // rebuilt fixture being appended after every untouched one.
+  for (let i = 0; i < room.fixtures.length; i++) {
+    const fixture = room.fixtures[i];
+    const nextShape = { pixel_count: fixture.pixel_count, zones: fixture.zones };
+    if (fixtureShapeMatches(roomFixtureShapes[fixture.name], nextShape)) {
+      continue;
+    }
+    const oldStrip = document.getElementById(`roomStrip-${fixture.name}`);
+    const oldZones = document.getElementById(`roomZones-${fixture.name}`);
+    if (oldStrip) oldStrip.remove();
+    if (oldZones) oldZones.remove();
+
+    let anchor = cards;
+    for (let j = i + 1; j < room.fixtures.length; j++) {
+      const nextStrip = document.getElementById(`roomStrip-${room.fixtures[j].name}`);
+      if (nextStrip) {
+        anchor = nextStrip;
+        break;
       }
     }
-    for (const fixture of room.fixtures) {
-      const strip = buildFixtureStrip(fixture);
-      const zones = buildFixtureZoneLabels(fixture);
-      if (cards) {
-        el.insertBefore(strip, cards);
-        el.insertBefore(zones, cards);
-      } else {
-        el.appendChild(strip);
-        el.appendChild(zones);
-      }
+
+    const strip = buildFixtureStrip(fixture);
+    const zones = buildFixtureZoneLabels(fixture);
+    if (anchor) {
+      el.insertBefore(strip, anchor);
+      el.insertBefore(zones, anchor);
+    } else {
+      el.appendChild(strip);
+      el.appendChild(zones);
     }
+    roomFixtureShapes[fixture.name] = nextShape;
   }
 
   if (!cards) {

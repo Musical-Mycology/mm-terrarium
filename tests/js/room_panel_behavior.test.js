@@ -227,52 +227,51 @@ scenario("strip survives unchanged-capability re-renders", `
     "sibling order changed across unchanged-capability re-renders, got: " + orderOf(document));
 `);
 
-scenario("a changed pixel_count rebuilds the strip", `
+scenario("a changed pixel_count rebuilds only the fixture that changed", `
   renderRoom(room());
   renderRoomFrame("sim-room-main", new Array(180).fill(1));
-  const stripBefore = document.getElementById("roomStrip-main");
+  const mainStripBefore = document.getElementById("roomStrip-main");
   const accentStripBefore = document.getElementById("roomStrip-accent");
 
-  renderRoom(room({ fixtures: fixtures((fx) => [{ ...fx[0], pixel_count: 10, channel_count: 30, zones: [{ name: "main.all", start: 0, count: 10 }] }, fx[1]]) }));
-  const stripAfter = document.getElementById("roomStrip-main");
-  const accentStripAfter = document.getElementById("roomStrip-accent");
+  renderRoom(room({ fixtures: fixtures((fx) => [
+    { ...fx[0], pixel_count: 10, channel_count: 30,
+      zones: [{ name: "main.all", start: 0, count: 10 }] },
+    fx[1],
+  ]) }));
 
-  assert(stripAfter !== stripBefore, "strip was not rebuilt after pixel_count changed");
-  assert(stripAfter.children.length === 10,
-    "expected 10 swatches after reconfigure, got " + stripAfter.children.length);
-  const stale = stripAfter.children.filter((n) => n.style.background).length;
-  assert(stale === 0, "rebuilt strip should start unpainted, found " + stale + " stale swatches");
-  // accent's OWN shape (pixel_count/zones) did not change, so its strip
-  // should come out the same shape it started in (still 30 swatches).
-  // NOTE: this is a shape check, not a node-identity check. renderRoom's
-  // rebuildStrips flag is computed once for the WHOLE fixtures array
-  // (fixturesShapeMatches short-circuits false as soon as ANY fixture
-  // differs), so main's change actually tears down and rebuilds accent's
-  // strip too -- accentStripAfter is a NEW node, not accentStripBefore.
-  // See task-11-report.md for the full finding; not fixed here since it
-  // would mean deviating from the brief's verbatim room.js.
-  assert(accentStripAfter.children.length === 30,
-    "accent strip should be untouched at 30 swatches, got " + accentStripAfter.children.length);
+  const mainStripAfter = document.getElementById("roomStrip-main");
+  const accentStripAfter = document.getElementById("roomStrip-accent");
+  assert(mainStripAfter !== mainStripBefore, "main's strip should have been rebuilt after its own pixel_count changed");
+  assert(mainStripAfter.children.length === 10, "expected 10 swatches on the rebuilt main strip, got " + mainStripAfter.children.length);
+  const staleMain = mainStripAfter.children.filter((n) => n.style.background).length;
+  assert(staleMain === 0, "rebuilt main strip should start unpainted, found " + staleMain + " stale swatches");
+  assert(accentStripAfter === accentStripBefore,
+    "accent's strip node identity changed even though only main's capability changed " +
+    "(a fixture's OWN shape change must not rebuild an unrelated fixture's strip)");
+  assert(accentStripAfter.children.length === 30, "accent strip should be untouched at 30 swatches, got " + accentStripAfter.children.length);
   assert(orderOf(document) === "roomHeader,roomStrip-main,roomZones-main,roomStrip-accent,roomZones-accent,roomCards",
-    "capability rebuild reordered #room's children, got: " + orderOf(document));
+    "declaration order must survive a partial rebuild, got: " + orderOf(document));
 `);
 
-scenario("changed zones (same pixel_count) also rebuilds the strip", `
+scenario("changed zones (same pixel_count) rebuilds only that fixture", `
   renderRoom(room());
   renderRoomFrame("sim-room-main", new Array(180).fill(1));
-  const stripBefore = document.getElementById("roomStrip-main");
+  const mainStripBefore = document.getElementById("roomStrip-main");
+  const accentStripBefore = document.getElementById("roomStrip-accent");
 
   const twoZones = [{ name: "main.left", start: 0, count: 30 }, { name: "main.right", start: 30, count: 30 }];
   renderRoom(room({ fixtures: fixtures((fx) => [{ ...fx[0], zones: twoZones }, fx[1]]) }));
-  const stripAfter = document.getElementById("roomStrip-main");
 
-  assert(stripAfter !== stripBefore,
-    "strip was not rebuilt after zones changed, even though pixel_count stayed the same");
-  const zonesBar = document.getElementById("roomZones-main");
-  // 1 fixtureLabel span + 1 span per zone (see buildFixtureZoneLabels).
-  assert(zonesBar.children.length === 3, "zone labels were not rebuilt to match the new zones, got " + zonesBar.children.length);
+  const mainStripAfter = document.getElementById("roomStrip-main");
+  const accentStripAfter = document.getElementById("roomStrip-accent");
+  assert(mainStripAfter !== mainStripBefore,
+    "main's strip should have been rebuilt after its zones changed, even though pixel_count stayed the same");
+  const mainZonesBar = document.getElementById("roomZones-main");
+  assert(mainZonesBar.children.length === 3, "main's zone bar should show 1 fixture-name label + 2 zones, got " + mainZonesBar.children.length);
+  assert(accentStripAfter === accentStripBefore,
+    "accent's strip node identity changed even though only main's zones changed");
   assert(orderOf(document) === "roomHeader,roomStrip-main,roomZones-main,roomStrip-accent,roomZones-accent,roomCards",
-    "capability rebuild reordered #room's children, got: " + orderOf(document));
+    "declaration order must survive a partial rebuild, got: " + orderOf(document));
 `);
 
 scenario("renderRoom(null) renders the empty state and resets state cleanly", `
