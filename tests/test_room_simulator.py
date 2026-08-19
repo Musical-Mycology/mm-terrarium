@@ -41,22 +41,19 @@ def test_build_wires_the_client_and_backend():
 
 
 def test_build_uses_the_room_surface_not_the_shroom():
-    pytest.importorskip("luxaeterna")
-    from harness.room_simulator import build
-    client, backend = build("sim-room", serve=False)
-    # WebSimBackend stores its capability privately as _cap and exposes no
-    # public accessor (luxaeterna backends/websim.py). Reaching for it is
-    # deliberate: the alternative is asserting nothing about the surface the
-    # simulator actually renders, which is the whole point of this task.
-    assert backend._cap.surface_id == "room_test"
+    client, backend = build("dev", room_type="TEST", fixture="main", serve=False)
     assert backend._cap.pixel_count == 60
 
 
 def test_build_widens_the_client_to_the_room_frame():
-    pytest.importorskip("luxaeterna")
-    from harness.room_simulator import build
-    client, backend = build("sim-room", serve=False)
+    client, backend = build("dev", room_type="TEST", fixture="main", serve=False)
     assert client.expected_channels == 180
+
+
+def test_build_scopes_to_the_named_fixture_not_the_whole_profile():
+    client, backend = build("dev", room_type="TEST", fixture="accent", serve=False)
+    assert backend._cap.pixel_count == 30
+    assert client.expected_channels == 90
 
 
 def test_clear_sends_a_room_width_all_zero_frame():

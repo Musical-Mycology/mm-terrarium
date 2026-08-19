@@ -31,33 +31,42 @@ from harness import markers
 from harness.o2_shroom import parent_is_gone
 from harness.signals import sigterm_as_keyboard_interrupt
 
-SIM_DEV = "sim-room"
+
+def sim_dev(fixture: str) -> str:
+    """Deterministic o2lite service name per fixture -- unique per fixture,
+    which is the entire reason each is spawned as its own client (design
+    spec section 3)."""
+    return f"sim-room-{fixture}"
 
 
 class _SimulatorFactory:
-    """boot()'s simulator_factory contract is Callable[[TeardownStack], str]:
-    the factory registers whatever it spawns on the stack it is handed, so
-    an orphaned simulator is impossible by construction. `self.process` is
-    kept only so tests can inspect the handle."""
+    """boot()'s simulator_factory contract is Callable[[TeardownStack, str],
+    str]: (teardown, fixture_name) -> dev, called once per fixture. The
+    factory registers whatever it spawns on the stack it is handed, so an
+    orphaned simulator is impossible by construction. `self.processes` is
+    kept only so tests can inspect the handles."""
 
     def __init__(self, server_url: str, *, popen=subprocess.Popen,
                  horizon: float | None = None) -> None:
         self._server_url = server_url
         self._popen = popen
         self._horizon = horizon
-        self.process: SimulatorProcess | None = None
+        self.processes: list[SimulatorProcess] = []
 
-    def __call__(self, teardown) -> str:
+    def __call__(self, teardown, fixture: str) -> str:
+        dev = sim_dev(fixture)
         command = [sys.executable, "-u", "-m", "harness.room_simulator",
-                   "--dev", SIM_DEV, "--server", self._server_url]
+                   "--dev", dev, "--server", self._server_url,
+                   "--fixture", fixture]
         command += ["--room-type", "TEST"]
         if self._horizon is not None:
             # So the Room reports frame latency in absolute terms on exit.
             command += ["--control-horizon", str(self._horizon)]
-        self.process = SimulatorProcess(command, popen=self._popen)
-        self.process.start()
-        teardown.push("simulator", self.process.shutdown)
-        return SIM_DEV
+        process = SimulatorProcess(command, popen=self._popen)
+        process.start()
+        teardown.push(f"simulator-{fixture}", process.shutdown)
+        self.processes.append(process)
+        return dev
 
 
 class _O2SimulatorFactory:
@@ -65,14 +74,15 @@ class _O2SimulatorFactory:
     websocket one. Reuses harness/o2_shroom.py with --no-join: Control has
     already recorded this dev as the bound Room before the process is
     spawned, so there is no Registration Node to tap -- the same rule
-    harness/room_simulator.py follows."""
+    harness/room_simulator.py follows. Called once per fixture, same as
+    _SimulatorFactory."""
 
     def __init__(self, ensemble: str, *, popen=subprocess.Popen) -> None:
         self._ensemble = ensemble
         self._popen = popen
-        self.process: SimulatorProcess | None = None
+        self.processes: list[SimulatorProcess] = []
 
-    def __call__(self, teardown) -> str:
+    def __call__(self, teardown, fixture: str) -> str:
         # -u for the same reason _SimulatorFactory passes it: without it
         # this child's stdout is block-buffered, so its exit report is lost
         # on an ungraceful exit and harness/run_stack.py cannot watch it for
@@ -80,19 +90,22 @@ class _O2SimulatorFactory:
         #
         # --exit-with-parent is what stops this subprocess outliving the
         # Terrarium. An orphan keeps its browser canvas open, reconnects to
-        # the next Arco (o2litepy reconnects on its own) and claims sim-room
-        # there, so the NEXT run's simulator is refused by O2 and renders
-        # nothing. Passing our own pid covers the case teardown cannot: an
-        # external SIGKILL of this process.
-        self.process = SimulatorProcess(
+        # the next Arco (o2litepy reconnects on its own) and claims this
+        # fixture's dev name there, so the NEXT run's simulator for that
+        # fixture is refused by O2 and renders nothing. Passing our own pid
+        # covers the case teardown cannot: an external SIGKILL of this
+        # process.
+        dev = sim_dev(fixture)
+        process = SimulatorProcess(
             [sys.executable, "-u", "-m", "harness.o2_shroom",
-             "--dev", SIM_DEV, "--ensemble", self._ensemble, "--no-join",
+             "--dev", dev, "--ensemble", self._ensemble, "--no-join",
              "--exit-with-parent", str(os.getpid()),
-             "--room-type", "TEST"],
+             "--room-type", "TEST", "--fixture", fixture],
             popen=self._popen)
-        self.process.start()
-        teardown.push("simulator", self.process.shutdown)
-        return SIM_DEV
+        process.start()
+        teardown.push(f"simulator-{fixture}", process.shutdown)
+        self.processes.append(process)
+        return dev
 
 
 def build(config: BootConfig, bit_registry: dict, *, arco_command: list,

@@ -126,17 +126,18 @@ def _gestures_ready(client) -> bool:
 
 def build(dev: str, node: str = "TEST_PLAYER_NODE",
           sim_host: str = "127.0.0.1", sim_port: int = 0,
-          serve: bool = True, room_type: str | None = None):
+          serve: bool = True, room_type: str | None = None,
+          fixture: str | None = None):
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
     headless tests, matching led_smoke.py's and room_simulator.py's
     build()/main() split.
 
-    room_type, when given, renders that ROOM's surface instead of a
-    Tuneshroom's. That is the --no-join path, where this module stands in for
-    harness/room_simulator.py on the o2lite transport. A Room is not a
-    Tuneshroom, so it must not be drawn as a 12-LED ring and stem.
+    room_type, when given, renders that ROOM's ONE named fixture instead of
+    a Tuneshroom's surface -- fixture is then required. This is the
+    --no-join path, where this module stands in for
+    harness/room_simulator.py, once per fixture, on the o2lite transport.
     """
     from luxaeterna.backends.websim import WebSimBackend
     from luxaeterna.synth.capability import shroom_capability
@@ -147,13 +148,15 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
         capability = shroom_capability()
         channels = LED_CHANNELS
     else:
+        if fixture is None:
+            raise ValueError("room_type requires fixture")
         from control.room_profile import room_profile
         from control.rooms import RoomType
-        from harness.room_surface import to_capability
+        from harness.room_surface import to_fixture_capability
 
         profile = room_profile(RoomType[room_type])
-        capability = to_capability(profile)
-        channels = profile.channel_count
+        capability = to_fixture_capability(profile, fixture)
+        channels = capability.pixel_count * 3
 
     backend = WebSimBackend(capability=capability,
                             host=sim_host, port=sim_port, serve=serve,
@@ -210,6 +213,9 @@ def main() -> None:
                              "Tuneshroom's. Only meaningful with --no-join, "
                              "which is how this module serves as the Room "
                              "simulator on the o2lite path.")
+    parser.add_argument("--fixture", default=None,
+                        help="Which Room fixture to render. Required "
+                             "together with --room-type.")
     parser.add_argument("--exit-with-parent", type=int, default=None,
                         metavar="PID",
                         help="Exit as soon as this process's parent is no "
@@ -233,7 +239,7 @@ def main() -> None:
 
     client, backend = build(args.dev, args.node,
                             args.sim_host, args.sim_port,
-                            room_type=args.room_type)
+                            room_type=args.room_type, fixture=args.fixture)
     backend.open()
     print(f"Watch the Shroom at http://{args.sim_host}:{backend.port}/")
 
