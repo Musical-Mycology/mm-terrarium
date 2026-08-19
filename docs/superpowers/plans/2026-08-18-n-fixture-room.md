@@ -1368,7 +1368,11 @@ Replace `_resolve_dev`, `_resolve_target`, and `_bind_room` (and add
         """
         if target is TriggerTarget.DEVICE:
             return [dev] if dev else []
-        room_devs: list[str] = list(self.room.bound.values()) if self.room is not None else []
+        room_devs: list[str] = []
+        if self.room is not None:
+            profile = room_profile(self.room.room_type)
+            room_devs = [self.room.bound[f.name] for f in profile.fixtures
+                        if f.name in self.room.bound]
         if target is TriggerTarget.ROOM:
             return room_devs
         out = list(room_devs)
