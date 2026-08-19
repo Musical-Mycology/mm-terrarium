@@ -3118,14 +3118,61 @@ call in the existing five scenarios to the new two-arg form, and every
 swatch-count assertion of `60` for `main`'s strip specifically:
 
 - `"strip survives unchanged-capability re-renders"`: `renderRoomFrame(new Array(180).fill(1))` becomes `renderRoomFrame("sim-room-main", new Array(180).fill(1))`; `paintedBefore === 60`/`paintedAfter === 60` stay checking `document.getElementById("roomStrip-main")`'s children instead of `roomStrip` (rename every `getElementById("roomStrip")` in this scenario to `getElementById("roomStrip-main")`). `orderOf` assertions change from `"roomHeader,roomStrip,roomZones,roomCards"` to `"roomHeader,roomStrip-main,roomZones-main,roomStrip-accent,roomZones-accent,roomCards"` (see Step 3's DOM order below).
-- `"a changed pixel_count rebuilds the strip"`: rebuild the `room({...})` override to change `main`'s `pixel_count`/`zones` via the `fixtures` override function, e.g. `room({ fixtures: fixtures((fx) => [{ ...fx[0], pixel_count: 10, channel_count: 30, zones: [{ name: "main.all", start: 0, count: 10 }] }, fx[1]]) })`, and check `roomStrip-main`'s new child count is 10 while `roomStrip-accent` is untouched (still 30 children) -- this is the key NEW assertion this scenario should gain: a capability change to ONE fixture must not rebuild the other's strip.
-- `"changed zones (same pixel_count) also rebuilds the strip"`: same pattern, override only `main`'s zones.
+- `"a changed pixel_count rebuilds the strip"` and `"changed zones (same pixel_count) also rebuilds the strip"`: replaced in full below by two scenarios with `"only the fixture that changed"` in their names -- these are the load-bearing regression tests for the per-fixture (not whole-array) rebuild guarantee `renderRoom` must provide, so they are given complete rather than described.
 - `"renderRoom(null) renders the empty state and resets state cleanly"`: unchanged shape, just confirm `getElementById("roomStrip-main")` and `getElementById("roomStrip-accent")` are BOTH null after `renderRoom(null)`, and both rebuild after a following `renderRoom(room())`.
 - `"renderRoomFrame is safe before any renderRoom, and decodes GRB not RGB"`: becomes `renderRoomFrame("sim-room-main", [10, 20, 30])` (must not throw with no strip yet, exactly as before); then `renderRoom(room({ fixtures: fixtures((fx) => [{ ...fx[0], pixel_count: 2, channel_count: 6, zones: [{name: "main.all", start: 0, count: 2}] }, fx[1]]) }))`; `renderRoomFrame("sim-room-main", [10, 20, 30, 40, 50, 60])`; assert against `getElementById("roomStrip-main")`'s children.
 
-Add two new scenarios:
+Add these scenarios in full (the two rebuild-granularity ones replace the two
+named above; the last two are brand new):
 
 ```javascript
+scenario("a changed pixel_count rebuilds only the fixture that changed", `
+  renderRoom(room());
+  renderRoomFrame("sim-room-main", new Array(180).fill(1));
+  const mainStripBefore = document.getElementById("roomStrip-main");
+  const accentStripBefore = document.getElementById("roomStrip-accent");
+
+  renderRoom(room({ fixtures: fixtures((fx) => [
+    { ...fx[0], pixel_count: 10, channel_count: 30,
+      zones: [{ name: "main.all", start: 0, count: 10 }] },
+    fx[1],
+  ]) }));
+
+  const mainStripAfter = document.getElementById("roomStrip-main");
+  const accentStripAfter = document.getElementById("roomStrip-accent");
+  assert(mainStripAfter !== mainStripBefore, "main's strip should have been rebuilt after its own pixel_count changed");
+  assert(mainStripAfter.children.length === 10, "expected 10 swatches on the rebuilt main strip, got " + mainStripAfter.children.length);
+  const staleMain = mainStripAfter.children.filter((n) => n.style.background).length;
+  assert(staleMain === 0, "rebuilt main strip should start unpainted, found " + staleMain + " stale swatches");
+  assert(accentStripAfter === accentStripBefore,
+    "accent's strip node identity changed even though only main's capability changed " +
+    "(a fixture's OWN shape change must not rebuild an unrelated fixture's strip)");
+  assert(accentStripAfter.children.length === 30, "accent strip should be untouched at 30 swatches, got " + accentStripAfter.children.length);
+  assert(orderOf(document) === "roomHeader,roomStrip-main,roomZones-main,roomStrip-accent,roomZones-accent,roomCards",
+    "declaration order must survive a partial rebuild, got: " + orderOf(document));
+`);
+
+scenario("changed zones (same pixel_count) rebuilds only that fixture", `
+  renderRoom(room());
+  renderRoomFrame("sim-room-main", new Array(180).fill(1));
+  const mainStripBefore = document.getElementById("roomStrip-main");
+  const accentStripBefore = document.getElementById("roomStrip-accent");
+
+  const twoZones = [{ name: "main.left", start: 0, count: 30 }, { name: "main.right", start: 30, count: 30 }];
+  renderRoom(room({ fixtures: fixtures((fx) => [{ ...fx[0], zones: twoZones }, fx[1]]) }));
+
+  const mainStripAfter = document.getElementById("roomStrip-main");
+  const accentStripAfter = document.getElementById("roomStrip-accent");
+  assert(mainStripAfter !== mainStripBefore,
+    "main's strip should have been rebuilt after its zones changed, even though pixel_count stayed the same");
+  const mainZonesBar = document.getElementById("roomZones-main");
+  assert(mainZonesBar.children.length === 3, "main's zone bar should show 1 fixture-name label + 2 zones, got " + mainZonesBar.children.length);
+  assert(accentStripAfter === accentStripBefore,
+    "accent's strip node identity changed even though only main's zones changed");
+  assert(orderOf(document) === "roomHeader,roomStrip-main,roomZones-main,roomStrip-accent,roomZones-accent,roomCards",
+    "declaration order must survive a partial rebuild, got: " + orderOf(document));
+`);
+
 scenario("one strip per fixture, each with its own zone bar", `
   renderRoom(room());
   const mainStrip = document.getElementById("roomStrip-main");
@@ -3135,8 +3182,11 @@ scenario("one strip per fixture, each with its own zone bar", `
   assert(accentStrip.children.length === 30, "accent strip should have 30 swatches, got " + accentStrip.children.length);
   const mainZones = document.getElementById("roomZones-main");
   const accentZones = document.getElementById("roomZones-accent");
-  assert(mainZones.children.length === 3, "main should show its own 3 zones");
-  assert(accentZones.children.length === 2, "accent should show its own 2 zones");
+  // Each zone bar prepends a fixture-name label span before its per-zone
+  // spans (buildFixtureZoneLabels below), so a 3-zone fixture's bar has 4
+  // children, not 3 -- one label + three zones.
+  assert(mainZones.children.length === 4, "main's zone bar should show 1 fixture-name label + 3 zones, got " + mainZones.children.length);
+  assert(accentZones.children.length === 3, "accent's zone bar should show 1 fixture-name label + 2 zones, got " + accentZones.children.length);
 `);
 
 scenario("a frame for one fixture does not repaint the other, and routes by dev", `
@@ -3182,18 +3232,14 @@ Replace the file in full:
 // room_frame event (matched by `dev`, since a frame event names a dev, not
 // a fixture) -- see renderRoomFrame below.
 
-let roomFixturesShape = null;   // last-seen [{name, pixel_count, zones}], for the same rebuild-only-on-change discipline the old single-strip code used
+let roomFixtureShapes = {};     // fixture name -> last-seen {pixel_count, zones}, PER FIXTURE
 let fixtureDevByName = {};      // name -> dev, refreshed every renderRoom call
 let fixtureNameByDev = {};      // dev -> name, the reverse lookup renderRoomFrame needs
 
-function fixturesShapeMatches(prev, next) {
-  if (!prev || prev.length !== next.length) return false;
-  for (let i = 0; i < prev.length; i++) {
-    if (prev[i].name !== next[i].name) return false;
-    if (prev[i].pixel_count !== next[i].pixel_count) return false;
-    if (JSON.stringify(prev[i].zones) !== JSON.stringify(next[i].zones)) return false;
-  }
-  return true;
+function fixtureShapeMatches(prev, next) {
+  if (!prev) return false;
+  if (prev.pixel_count !== next.pixel_count) return false;
+  return JSON.stringify(prev.zones) === JSON.stringify(next.zones);
 }
 
 function renderRoom(room) {
@@ -3201,7 +3247,7 @@ function renderRoom(room) {
 
   if (!room) {
     el.innerHTML = "";
-    roomFixturesShape = null;
+    roomFixtureShapes = {};
     fixtureDevByName = {};
     fixtureNameByDev = {};
     const p = document.createElement("p");
@@ -3231,26 +3277,60 @@ function renderRoom(room) {
   }
 
   let cards = document.getElementById("roomCards");
-  const rebuildStrips = !fixturesShapeMatches(roomFixturesShape, room.fixtures);
-  roomFixturesShape = room.fixtures;
 
-  if (rebuildStrips) {
-    for (const old of Array.from(el.children)) {
-      if (old.id && (old.id.startsWith("roomStrip-") || old.id.startsWith("roomZones-"))) {
-        old.remove();
+  // Drop strips/zone-bars for any fixture no longer in the profile (not
+  // expected in practice -- room_profile()'s declared fixtures are fixed
+  // per RoomType -- but keeps stale nodes from surviving a hypothetical
+  // reconfiguration).
+  const currentNames = new Set(room.fixtures.map((f) => f.name));
+  for (const oldName of Object.keys(roomFixtureShapes)) {
+    if (!currentNames.has(oldName)) {
+      const oldStrip = document.getElementById(`roomStrip-${oldName}`);
+      const oldZones = document.getElementById(`roomZones-${oldName}`);
+      if (oldStrip) oldStrip.remove();
+      if (oldZones) oldZones.remove();
+      delete roomFixtureShapes[oldName];
+    }
+  }
+
+  // Rebuild only the fixtures whose OWN shape changed -- this is Defect 1's
+  // whole point applied at fixture granularity: an untouched fixture's live
+  // strip must survive another fixture's reconfiguration, not just survive
+  // an unrelated controller-value-only room_changed event. A rebuilt
+  // fixture is reinserted immediately before the nearest LATER fixture that
+  // still has a node in the DOM (or before #roomCards if it's the last),
+  // so declaration order survives a partial rebuild instead of every
+  // rebuilt fixture being appended after every untouched one.
+  for (let i = 0; i < room.fixtures.length; i++) {
+    const fixture = room.fixtures[i];
+    const nextShape = { pixel_count: fixture.pixel_count, zones: fixture.zones };
+    if (fixtureShapeMatches(roomFixtureShapes[fixture.name], nextShape)) {
+      continue;
+    }
+    const oldStrip = document.getElementById(`roomStrip-${fixture.name}`);
+    const oldZones = document.getElementById(`roomZones-${fixture.name}`);
+    if (oldStrip) oldStrip.remove();
+    if (oldZones) oldZones.remove();
+
+    let anchor = cards;
+    for (let j = i + 1; j < room.fixtures.length; j++) {
+      const nextStrip = document.getElementById(`roomStrip-${room.fixtures[j].name}`);
+      if (nextStrip) {
+        anchor = nextStrip;
+        break;
       }
     }
-    for (const fixture of room.fixtures) {
-      const strip = buildFixtureStrip(fixture);
-      const zones = buildFixtureZoneLabels(fixture);
-      if (cards) {
-        el.insertBefore(strip, cards);
-        el.insertBefore(zones, cards);
-      } else {
-        el.appendChild(strip);
-        el.appendChild(zones);
-      }
+
+    const strip = buildFixtureStrip(fixture);
+    const zones = buildFixtureZoneLabels(fixture);
+    if (anchor) {
+      el.insertBefore(strip, anchor);
+      el.insertBefore(zones, anchor);
+    } else {
+      el.appendChild(strip);
+      el.appendChild(zones);
     }
+    roomFixtureShapes[fixture.name] = nextShape;
   }
 
   if (!cards) {
