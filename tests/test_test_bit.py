@@ -199,6 +199,26 @@ def test_test_bit_room_node_is_registered():
     assert room_role_name(RoomType.TEST) in bit.role_table.node_map[node]
 
 
+def test_test_bit_supports_test_and_demo_rooms():
+    assert TestBit.room_types == {RoomType.TEST, RoomType.DEMO}
+
+
+def test_test_bit_declares_a_room_role_per_supported_room_type():
+    table = TestBit().role_table
+    assert "room_test" in table.roles
+    assert "room_demo" in table.roles
+    assert table.node_map["ROOM_TEST_NODE"] == ["room_test"]
+    assert table.node_map["ROOM_DEMO_NODE"] == ["room_demo"]
+    # Same declared instruments: an instrument targets primary/zones,
+    # never blocks, so nothing about the declaration is room-specific.
+    assert (table.roles["room_test"].light_manifest
+            == table.roles["room_demo"].light_manifest)
+    # capacity is each profile's own fixture count (room_role reads it off
+    # the profile): TEST has 2 fixtures, DEMO has 1.
+    assert table.roles["room_test"].capacity == 2
+    assert table.roles["room_demo"].capacity == 1
+
+
 def test_tilt_drives_the_calling_device_and_the_room_at_one_time():
     """The Room role declares cc:74 on BOTH its light_manifest (aurora hue)
     and its ugen_manifest (FluidSynth cutoff), so one tilt moves the Room's

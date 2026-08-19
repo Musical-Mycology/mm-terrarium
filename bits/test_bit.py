@@ -23,6 +23,11 @@ RUN_DURATION_SECONDS = 2.0
 class TestBit(Bit):
     version = "0.1"
 
+    # TestBit is the reference fixture for BOTH shipped room types, so the
+    # Scored/Jam validation loop works in either. control/boot.py reads
+    # this off the class before instantiation.
+    room_types = {RoomType.TEST, RoomType.DEMO}
+
     # Seconds for one full out-and-back sweep of the Room's ambient hue.
     ROOM_DRIFT_PERIOD = 12.0
 
@@ -99,41 +104,42 @@ class TestBit(Bit):
         # The Room's own role. Its cc:74 lane is driven two ways now: by any
         # player's tilt (see _on_tilt) and by this Bit's own cues() drift, so
         # the Room animates whether or not anyone has joined.
-        room_name, room, room_node = room_role(
-            RoomType.TEST,
-            # A field-rate gesture, like player's aurora -- no note lane,
-            # so it renders continuously under cc:74 without the note-
-            # triggered strobe TestBit's own docstring already explains.
-            # Deliberately no cc:11/level lane (unlike player): breath-
-            # feeding the Room is a real, separable enhancement, not
-            # needed to prove RoomBridge renders at all. The instrument
-            # itself is `rainbow`, not `aurora`: a scrolling hue gradient
-            # across the Room's whole concatenated surface, which makes
-            # the cross-fixture property -- one declaration, one gradient
-            # spanning every fixture -- the thing the reference fixture
-            # visibly proves (see design spec section 9).
-            light_manifest={
-                "instruments": [
-                    {"instrument": "rainbow", "target": "primary",
-                     "params": {"hue": 0.6, "level": 0.55,
-                               "span": 1.0, "speed": 0.05},
-                     "lanes": [{"source": "cc:74", "dest": "hue"}]},
-                ],
-            },
-            ugen_manifest={
-                "instruments": [
-                    {"instrument": "flsyn", "program": 89,
-                     "drone": {"key": 50, "velocity": 80},
-                     "lanes": [{"source": "cc:74", "dest": "cc:74"}]},
-                ],
-            },
-        )
-        return RoleTable(
-            roles={"player": player, "jammer": jammer, room_name: room},
-            node_map={"TEST_PLAYER_NODE": ["player"],
-                      "TEST_JAM_NODE": ["jammer"],
-                      room_node: [room_name]},
-        )
+        # A field-rate gesture, like player's aurora -- no note lane, so it
+        # renders continuously under cc:74 without the note-triggered strobe
+        # TestBit's own docstring already explains. Deliberately no cc:11/
+        # level lane (unlike player): breath-feeding the Room is a real,
+        # separable enhancement, not needed to prove RoomBridge renders at
+        # all. The instrument itself is `rainbow`, not `aurora`: a scrolling
+        # hue gradient across the Room's whole concatenated surface, which
+        # makes the cross-fixture property -- one declaration, one gradient
+        # spanning every fixture -- the thing the reference fixture visibly
+        # proves (see design spec section 9).
+        room_light = {
+            "instruments": [
+                {"instrument": "rainbow", "target": "primary",
+                 "params": {"hue": 0.6, "level": 0.55,
+                           "span": 1.0, "speed": 0.05},
+                 "lanes": [{"source": "cc:74", "dest": "hue"}]},
+            ],
+        }
+        room_ugen = {
+            "instruments": [
+                {"instrument": "flsyn", "program": 89,
+                 "drone": {"key": 50, "velocity": 80},
+                 "lanes": [{"source": "cc:74", "dest": "cc:74"}]},
+            ],
+        }
+        room_entries = [
+            room_role(rt, light_manifest=room_light, ugen_manifest=room_ugen)
+            for rt in sorted(self.room_types, key=lambda t: t.name)
+        ]
+        roles = {"player": player, "jammer": jammer}
+        node_map = {"TEST_PLAYER_NODE": ["player"],
+                    "TEST_JAM_NODE": ["jammer"]}
+        for room_name, room, room_node in room_entries:
+            roles[room_name] = room
+            node_map[room_node] = [room_name]
+        return RoleTable(roles=roles, node_map=node_map)
 
     def on_setup_enter(self) -> None:
         self._setup_entered = True
