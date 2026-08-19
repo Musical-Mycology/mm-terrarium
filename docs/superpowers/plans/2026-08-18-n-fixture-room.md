@@ -3563,6 +3563,7 @@ git commit -m "feat(bits): TestBit's Room declares rainbow, not aurora"
 
 **Files:**
 - Grep sweep across `control/`, `devicelink/`, `harness/`, `console/`, `bits/`, `tests/` for any remaining `bound_dev` reference Tasks 2-12 missed.
+- Modify: `console/static/style.css` (Task 11's own review confirmed the Room panel currently renders functionally correct but visually unstyled -- the exact-id selectors `#roomStrip`/`#roomZones` no longer match anything now that every strip/zone-bar id is fixture-suffixed).
 - Modify: `docs/diagrams/cue-path.d2`, `docs/diagrams/boot-teardown.d2` (regenerate via `tools/render_diagrams.py`)
 - Modify: `docs/MM_TERRARIUM.md` (move the Spec C entry from "Not yet built / deferred" to a new Landed-subsystems section, mirroring how the trigger slice got its own section)
 
@@ -3571,8 +3572,15 @@ git commit -m "feat(bits): TestBit's Room declares rainbow, not aurora"
 - [ ] **Step 1: Grep for stragglers**
 
 ```bash
-grep -rn "bound_dev" control/ devicelink/ harness/ console/ bits/ tests/ | grep -v "\.pyc"
+grep -rn '\.bound_dev\b' control/ devicelink/ harness/ console/ bits/ tests/ uplink/ | grep -v "\.pyc"
 ```
+
+(anchored on `.bound_dev` -- the literal attribute-access form -- rather
+than the bare substring `bound_dev`, which false-positives on the
+legitimate `bound_device` method name (`RoomBindingRegistry.bound_device`,
+already landed in Task 4) and on unrelated identifiers like
+`an_unbound_dev_is_a_silent_no_op` in `tests/test_devicelink_server.py`/
+`tests/test_o2_transport.py`.)
 
 Expected: zero results. If any remain, they are files this plan's
 reconnaissance did not reach (most likely `uplink/` or a test file not
@@ -3595,6 +3603,53 @@ grep -rln "simulator_factory=lambda td: " tests/
 
 Expected: zero results (every occurrence widened to `lambda td, fixture:` in
 Task 7).
+
+- [ ] **Step 1.5: Restyle the Room panel for fixture-suffixed ids**
+
+`console/static/style.css`'s Room-panel block still targets the old
+singular `#roomStrip`/`#roomZones` ids, which no longer exist -- every
+strip/zone-bar id is now `roomStrip-<fixture>`/`roomZones-<fixture>` (Task
+11). `buildFixtureStrip` already sets `className = "roomFixtureStrip"` on
+each strip (anticipating exactly this fix); the zone bar itself has no
+class, and the new fixture-name label span inside it has
+`className = "fixtureLabel"`. Replace the Room panel block:
+
+```css
+#roomStrip { display: flex; gap: 1px; margin: .4rem 0 .1rem; height: 2.2rem; }
+#roomStrip div { flex: 1 1 0; background: #000; }
+#roomZones { display: flex; gap: 1px; font-size: .75rem; color: #555; }
+#roomZones span { text-align: center; border-top: 2px solid #999;
+                  padding-top: .15rem; }
+```
+with:
+```css
+[id^="roomStrip-"] { display: flex; gap: 1px; margin: .4rem 0 .1rem; height: 2.2rem; }
+[id^="roomStrip-"] div { flex: 1 1 0; background: #000; }
+[id^="roomZones-"] { display: flex; gap: 1px; font-size: .75rem; color: #555; }
+[id^="roomZones-"] span:not(.fixtureLabel) { text-align: center; border-top: 2px solid #999;
+                  padding-top: .15rem; }
+.fixtureLabel { font-weight: bold; margin-right: .4rem; color: #333; }
+```
+
+The prefix-match attribute selectors (`[id^="..."]`) restore the original
+strip/zone-bar layout and swatch styling for every fixture without touching
+`room.js` again (Task 11 is closed and reviewed; this is a CSS-only fix in
+a file that was explicitly out of that task's scope). `.fixtureLabel` gets
+its own rule so the new per-fixture name label reads as a label, not
+another zone.
+
+Run: `.venv/bin/python -m pytest tests/test_console_static.py -v`
+Expected: still passes (that file only checks for substrings/file
+existence, not computed styles, so this step has no test of its own
+beyond not breaking that one).
+
+Commit this step (and any straggler fixes from Step 1) separately from
+the docs/diagram sync below, keeping that commit docs-only:
+
+```bash
+git add console/static/style.css
+git commit -m "fix(console): restyle the Room panel for fixture-suffixed strip/zone-bar ids"
+```
 
 - [ ] **Step 2: Run the whole suite**
 
