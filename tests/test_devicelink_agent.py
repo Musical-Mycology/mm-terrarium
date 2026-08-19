@@ -442,6 +442,48 @@ def _room_ready_game_server(bound=None):
     return gs
 
 
+def _demo_room_ready_game_server(bound=None):
+    """DEMO-flavored sibling of _room_ready_game_server(): TestBit loaded
+    against RoomType.DEMO instead of TEST, with DEMO's one fixture ("array",
+    864px / 2592 channels -- see control/room_profile.py's ROOM_PROFILES)
+    bound. This is the regression coverage for the ChannelError bug: nothing
+    before this test drove _render_room() above 512 channels."""
+    if bound is None:
+        bound = {"array": "sim-room-array"}
+    binding = RoomBindingRegistry()
+    gs = GameServer({"TestBit": TestBit}, room_binding=binding)
+    gs.room = Room(room_type=RoomType.DEMO)
+    gs.load_bit("TestBit")
+    for fixture, dev in bound.items():
+        gs.room.bound[fixture] = dev
+        binding.bind(RoomType.DEMO, fixture, dev)
+    return gs
+
+
+def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
+    """Regression test for the DEMO Room ChannelError bug: DEMO's profile is
+    864px / 2592 channels, well past one DMX universe. Before the
+    channel_count fix, _setup_room() built the Room's light sink over a
+    hardcoded 512-channel Universe, so every render_into() call raised
+    ChannelError -- caught and silently swallowed by _render_room(), so the
+    Room's light never rendered a single frame against a real Arco."""
+    from control.room_profile import room_profile
+
+    gs = _demo_room_ready_game_server()
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server)
+    agent.server.bind_dev("sim-room-array", object())   # simulate the hello handshake
+
+    assert agent._room_light is not None
+    universe = agent._room_light.universe
+    assert len(universe) == room_profile(RoomType.DEMO).channel_count
+
+    agent._render_room()   # must not raise, and must actually send a frame
+
+    sent = server.addressed("/sim-room-array/leds")
+    assert sent
+
+
 def _agent_with_bound_room():
     """An agent with its Room's `main` fixture bound to 'sim-room-main',
     light routed through a bare FakeRoomLightSink rather than a real

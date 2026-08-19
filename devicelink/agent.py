@@ -169,7 +169,8 @@ class DeviceLinkAgent:
             self._room_profile = room_profile(room.room_type)
         cap = to_capability(self._room_profile)
         session = build_session(manifest, cap, clock=self._clock)
-        self._room_light = _RoomLightSink(session, Universe())
+        self._room_light = _RoomLightSink(
+            session, Universe(channel_count=self._room_profile.channel_count))
         audio_sink = None
         canonical = self._canonical_room_dev()
         if self._room_audio is not None and canonical is not None:
