@@ -153,9 +153,9 @@ class DeviceLinkAgent:
 
         Construction happens eagerly here, at agent-construction time, and
         _render_room() below is what scopes SENDING to whichever fixtures
-        are actually bound at the moment -- bound_devs() reads self.room.
-        bound fresh on every render, so a fixture bound after construction
-        (a late admin tap) is picked up on its next tick with no rebuild."""
+        are actually bound at the moment -- it reads self.room.bound fresh
+        on every render, so a fixture bound after construction (a late
+        admin tap) is picked up on its next tick with no rebuild."""
         gs = self.game_server
         room = gs.room
         if room is None or gs.bit is None:

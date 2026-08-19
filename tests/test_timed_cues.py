@@ -76,8 +76,8 @@ def _stack(now):
     gs = GameServer({"TestBit": lambda: TestBit(run_duration=1000.0)},
                     room_binding=binding, cue_horizon=HORIZON, clock=clock)
     gs.room = Room(room_type=RoomType.TEST)
-    gs.room.bound_dev = "sim-room"
-    binding.bind(RoomType.TEST, "sim-room")
+    gs.room.bound["main"] = "sim-room"
+    binding.bind(RoomType.TEST, "main", "sim-room")
     gs.load_bit("TestBit")
 
     server = FakeServer()

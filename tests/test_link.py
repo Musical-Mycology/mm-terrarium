@@ -247,7 +247,7 @@ def test_resync_never_sends_the_room_role():
 
     server.load_bit("room_bit")
     server.hello("ie9", "Shroom Nine", "1")
-    server.room_binding.arm(RoomType.TEST, window_seconds=10.0)
+    server.room_binding.arm(RoomType.TEST, "main", window_seconds=10.0)
     server.join("ie9", "ROOM_TEST_NODE")
 
     transport.disconnect()
@@ -273,7 +273,7 @@ def test_on_registration_change_never_sends_the_room_role():
 
     server.load_bit("room_bit")
     server.hello("ie9", "Shroom Nine", "1")
-    server.room_binding.arm(RoomType.TEST, window_seconds=10.0)
+    server.room_binding.arm(RoomType.TEST, "main", window_seconds=10.0)
     server.join("ie9", "ROOM_TEST_NODE")  # a Room join alone doesn't fire
                                            # on_registration_change
 
