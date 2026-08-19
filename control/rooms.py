@@ -6,7 +6,7 @@ sections 3-4.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
@@ -61,11 +61,16 @@ def resolve_room_type(target: RoomType, *,
 
 @dataclass
 class Room:
-    """Resolved once at boot. bound_dev is set once a device (physical,
-    simulated, or reconnected-from-a-prior-run) is attached as this Room's
-    rendering backend -- see control/room_binding.py and control/boot.py."""
+    """Resolved once at boot. `bound` maps fixture name to the dev bound as
+    that fixture's rendering backend -- see control/room_binding.py and
+    control/boot.py. A fixture absent from this dict is simply not bound
+    yet; a Room with SOME but not all fixtures bound renders to the ones it
+    has (see design spec section 6)."""
     room_type: RoomType
-    bound_dev: str | None = None
+    bound: dict[str, str] = field(default_factory=dict)
+
+    def fully_bound(self, profile) -> bool:
+        return all(fixture.name in self.bound for fixture in profile.fixtures)
 
 
 def room_role_name(room_type: RoomType) -> str:
@@ -82,12 +87,22 @@ def room_role(room_type: RoomType, *, ugen_manifest: dict | None = None,
     """Build a ROOM-class Role for room_type plus its canonical node id, so a
     Bit can merge them into its own RoleTable.roles / node_map. The role name
     is deterministic per RoomType so two Bits supporting the same RoomType
-    declare identical role names -- see design spec section 3."""
+    declare identical role names -- see design spec section 3. Capacity is
+    the profile's own fixture count: one join per fixture, no more -- see
+    design spec section 4.
+
+    Imports room_profile locally (not at module top) because
+    control/room_profile.py imports RoomType from this module -- a top-level
+    import here would make the two modules circularly dependent on each
+    other's not-yet-defined names.
+    """
+    from control.room_profile import room_profile
+
     name = room_role_name(room_type)
     role = Role(
         name=name,
         role_class=RoleClass.ROOM,
-        capacity=1,
+        capacity=len(room_profile(room_type).fixtures),
         scored=False,
         ugen_manifest=ugen_manifest or {},
         light_manifest=light_manifest or {},
