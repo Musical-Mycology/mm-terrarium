@@ -1972,7 +1972,7 @@ git commit -m "feat(devicelink): render the Room once, slice per fixture, send N
 
 **Interfaces:**
 - Consumes: `Room.fully_bound` (Task 3), `RoomBindingRegistry.bind(room_type, fixture, dev)`/`armed_fixture` (Task 4), `room_profile` (Task 2).
-- Produces: `simulator_factory` contract changes from `Callable[[TeardownStack], str]` to `Callable[[TeardownStack, str], str]` (teardown, fixture_name) -> dev, called once per fixture; `wait_for_room_binding` arms and waits for fixtures sequentially, sharing one overall timeout budget, and only raises `RoomBindingTimeout` when NO fixture ever binds (partial binding after timeout is a warning, not a failure).
+- Produces: `simulator_factory` contract changes from `Callable[[TeardownStack], str]` to `Callable[[TeardownStack, str], str]` (teardown, fixture_name) -> dev, called once per fixture; `wait_for_room_binding` arms and waits for fixtures sequentially, sharing one overall timeout budget, and only raises `RoomBindingTimeout` when NO fixture ever binds (partial binding after timeout is a warning, not a failure); new module-level `_canonical_room_dev(profile, bound: dict) -> str | None` (the profile-declaration-order dev pick, extracted as its own function so it is directly unit-testable rather than only reachable through a full `boot()` run).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2250,21 +2250,34 @@ to:
                 raise BootFailure(str(exc)) from exc
 
         room_bridge = RoomBridge()
-        # Profile declaration order, not dict-insertion order -- the same
-        # canonical-dev algorithm as GameServer._canonical_room_dev and
-        # DeviceLinkAgent._canonical_room_dev, reusing profile_for_wait
-        # (already resolved above) rather than a fresh next(iter(...))
-        # shortcut, which would silently pick whichever fixture happened
-        # to bind first rather than the profile's first-declared one.
-        canonical = None
-        if profile_for_wait is not None:
-            for fixture in profile_for_wait.fixtures:
-                dev = room.bound.get(fixture.name)
-                if dev is not None:
-                    canonical = dev
-                    break
+        canonical = (_canonical_room_dev(profile_for_wait, room.bound)
+                    if profile_for_wait is not None else None)
         if canonical is not None:
             room_bridge.bind(canonical)
+```
+
+Add a new small module-level function, near `_abort_if_running` (this file's
+other small helper), extracted as its own named, separately-testable unit
+rather than left inline -- mirroring `GameServer._canonical_room_dev` and
+`DeviceLinkAgent._canonical_room_dev`, which are both already separate,
+testable units for the identical algorithm. `boot.py`'s version cannot be a
+method (there is no persistent object to hang it on here), so it is a
+free function instead:
+
+```python
+def _canonical_room_dev(profile, bound: dict) -> str | None:
+    """The Room's one dev for RoomBridge purposes: the first bound fixture
+    in the profile's declaration order, not dict-insertion order -- the
+    same algorithm as GameServer._canonical_room_dev and
+    DeviceLinkAgent._canonical_room_dev. Extracted as its own function
+    specifically so this guarantee is unit-testable directly, without
+    needing to drive a full boot() through admin-tap timing to construct
+    a bound dict whose insertion order differs from declaration order."""
+    for fixture in profile.fixtures:
+        dev = bound.get(fixture.name)
+        if dev is not None:
+            return dev
+    return None
 ```
 
 Replace `wait_for_room_binding`:
@@ -2315,6 +2328,37 @@ import logging
 and after the imports, before `class BootFailure`:
 ```python
 logger = logging.getLogger(__name__)
+```
+
+Add two small direct tests for the new `_canonical_room_dev` function, near
+the top of `tests/test_boot.py` (after `make_registry()`, before the boot
+happy-path tests is a fine spot). These test the extracted function
+directly rather than through a full `boot()` run, since driving `boot()`
+end-to-end into a bind-order that differs from declaration order would
+need scripting a join against a `GameServer` instance `boot()` builds
+internally and never exposes to the caller -- these two tests are the
+actual regression coverage for the ordering guarantee `boot()`'s own
+`room_bridge.bind()` call site depends on:
+
+```python
+def test_canonical_room_dev_prefers_profile_order_over_bind_order():
+    """Regression test: control/engine.py needed two review rounds because
+    a similar canonical-dev pick used dict-insertion order instead of the
+    profile's declared order. Same algorithm here, tested directly against
+    a dict whose insertion order is deliberately reversed from profile
+    declaration order (accent inserted first, main second)."""
+    from control.boot import _canonical_room_dev
+    from control.room_profile import room_profile
+    profile = room_profile(RoomType.TEST)
+    bound = {"accent": "accent-dev", "main": "main-dev"}
+    assert _canonical_room_dev(profile, bound) == "main-dev"
+
+
+def test_canonical_room_dev_returns_none_when_nothing_bound():
+    from control.boot import _canonical_room_dev
+    from control.room_profile import room_profile
+    profile = room_profile(RoomType.TEST)
+    assert _canonical_room_dev(profile, {}) is None
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
