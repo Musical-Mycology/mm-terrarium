@@ -17,6 +17,7 @@ from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
+from control.room_profile import room_profile
 from control.state import State
 from control.triggers import (
     FIRED_BY_BIT_ADJUDICATED,
@@ -166,10 +167,13 @@ class GameServer:
         return self.room_binding.is_armed(self.room.room_type)
 
     def _bind_room(self, dev: str) -> None:
+        fixture = None
         if self.room_binding is not None and self.room is not None:
-            self.room_binding.bind(self.room.room_type, dev)
-        if self.room is not None:
-            self.room.bound_dev = dev
+            fixture = self.room_binding.armed_fixture(self.room.room_type)
+        if fixture is not None:
+            if self.room_binding is not None:
+                self.room_binding.bind(self.room.room_type, fixture, dev)
+            self.room.bound[fixture] = dev
         self._notify("on_devices_change")
 
     def _origin(self, gesture_time: float | None) -> float:
@@ -234,8 +238,25 @@ class GameServer:
         self._dispatch_cues(cues, at, FIRED_BY_GESTURE_VERB)
         return None
 
+    def _canonical_room_dev(self) -> str | None:
+        """The Room's one dev for MIDI-feed purposes: the first bound
+        fixture in the profile's declaration order. Room light/audio is one
+        shared session (design spec section 2), so every path that feeds it
+        -- the ROOM cue sentinel and TARGET-fanout across Room fixtures --
+        must resolve to exactly this one dev, never to whichever fixture
+        happened to bind first or most recently."""
+        if self.room is None or not self.room.bound:
+            return None
+        profile = room_profile(self.room.room_type)
+        for fixture in profile.fixtures:
+            dev = self.room.bound.get(fixture.name)
+            if dev is not None:
+                return dev
+        return None
+
     def _resolve_dev(self, dev: str) -> str | None:
-        """cues.ROOM -> the Room's bound dev; anything else passes through.
+        """cues.ROOM -> the Room's canonical dev; anything else passes
+        through.
 
         Returns None when a ROOM cue has no Room to go to, which the caller
         treats as a drop, never a raise. Warned once per Bit load rather than
@@ -243,27 +264,27 @@ class GameServer:
         """
         if dev != ROOM:
             return dev
-        if self.room is None or self.room.bound_dev is None:
+        canonical = self._canonical_room_dev()
+        if canonical is None:
             if not self._warned_no_room:
                 self._warned_no_room = True
                 logger.warning("Bit emitted a ROOM cue with no Room bound; "
                                "dropping (logged once per Bit load)")
             return None
-        return self.room.bound_dev
+        return canonical
 
     def _resolve_target(self, target, dev: str | None) -> list[str]:
         """A trigger's declared target, resolved to the devs it lands on.
 
-        Returns a LIST even where at most one dev can come back today. The Room
-        is one bound device now and becomes N o2lite clients in the N-fixture
-        Room slice (spec section 4.2); returning a list from the start is what
-        makes that a change to this method and to nothing a Bit declares.
+        Returns every bound Room fixture dev for ROOM, in declaration order
+        -- this is the one-method change the N-fixture Room slice makes; no
+        Bit's trigger declaration changes alongside it (design spec section
+        5). This full list is what TriggerFired.devs reports; a script's
+        TARGET fanout is collapsed separately, see _collapse_room_fanout.
         """
         if target is TriggerTarget.DEVICE:
             return [dev] if dev else []
-        room_devs: list[str] = []
-        if self.room is not None and self.room.bound_dev is not None:
-            room_devs.append(self.room.bound_dev)
+        room_devs: list[str] = list(self.room.bound.values()) if self.room is not None else []
         if target is TriggerTarget.ROOM:
             return room_devs
         out = list(room_devs)
@@ -272,6 +293,29 @@ class GameServer:
         for player, (_node, _role, role_class) in assignments.items():
             if role_class != RoleClass.ROOM and player not in out:
                 out.append(player)
+        return out
+
+    def _collapse_room_fanout(self, devs: list[str]) -> list[str]:
+        """A script step addressed at cues.TARGET fans out to every dev in
+        `devs` (control/triggers.py's expand_script), one independent cue
+        per dev. That is correct for player devices, each with its own
+        LightSession, but wrong for the Room: every Room fixture dev in
+        `devs` shares ONE session (design spec section 2), so feeding it
+        once per fixture would double-apply the same relative MIDI. Collapse
+        every Room-fixture dev down to the Room's single canonical dev, keep
+        every other dev untouched and in order."""
+        room_devs = set(self.room.bound.values()) if self.room is not None else set()
+        if not room_devs:
+            return devs
+        canonical = self._canonical_room_dev()
+        out: list[str] = []
+        seen_room = False
+        for d in devs:
+            if d not in room_devs:
+                out.append(d)
+            elif not seen_room:
+                out.append(canonical)
+                seen_room = True
         return out
 
     def fire_trigger(self, name: str, *, fired_by: str,
@@ -313,7 +357,7 @@ class GameServer:
             if at is None:
                 at = self._clock() + self._horizon
             devs = self._resolve_target(trigger.target, dev)
-            cues = expand_script(trigger, at, devs)
+            cues = expand_script(trigger, at, self._collapse_room_fanout(devs))
         except Exception:
             # trigger_table is a property: load_bit validated whatever it
             # returned on THAT one call, and the validated object is never
