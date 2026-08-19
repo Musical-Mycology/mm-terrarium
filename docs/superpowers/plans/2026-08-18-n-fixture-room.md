@@ -3925,6 +3925,217 @@ themselves.
 
 ---
 
+### Final review fix wave: Console frame relay and fixture zone offsets
+
+The whole-branch final review (BASE b4ce8a6, HEAD 80ec0d4, 36 commits)
+found 2 real bugs, both invisible to any single task's own scoped review
+because each is a cross-task interaction:
+
+1. **Important -- `console/agent.py`'s Room frame relay starves every
+   fixture but the last-declared one.** Task 6 made `_render_room()` call
+   `on_room_frame` once per CHANGED fixture slice, so a single tick can call
+   it twice (once for `main`, once for `accent`). Task 9/10's
+   `console/agent.py` was never touched for this and still has the
+   single-slot `_pending_room_frame: tuple[str, bytes] | None` from the
+   original one-fixture Room panel -- each call overwrites the previous one
+   before `_broadcast_room_frame` ever runs, so only the LAST fixture to
+   call in during a tick is ever relayed. Empirically confirmed with a live
+   400-tick run: `sim-room-main: 0 broadcasts, sim-room-accent: 80
+   broadcasts`.
+2. **Minor -- `control/room_view.py`'s `fixtures_view()` reports global
+   surface offsets as if they were fixture-local ones.** It builds each
+   fixture's `zones` list by filtering `profile.zones` (the NAMESPACED,
+   GLOBAL-offset union `RoomProfile.zones` builds for the whole concatenated
+   surface) by name prefix, instead of reading the fixture's OWN
+   `fixture.zones` (already in scope via the `fixture = next(f for f in
+   profile.fixtures if f.name == name)` lookup two lines above), which
+   carries fixture-LOCAL offsets. For `accent` (channel offset 60 in the
+   90 px TEST profile) this reports zone `start: 60`/`75` on the Console
+   instead of the correct fixture-local `start: 0`/`15`. Task 9's own review
+   only checked zone NAMES (`test_fixtures_zones_are_scoped_to_their_own_fixture`
+   asserts `["accent.low", "accent.high"]`), never the numeric `start`/
+   `count` values, so this shipped clean through task review.
+
+**Files:**
+- Modify: `console/agent.py`
+- Modify: `control/room_view.py`
+- Modify: `tests/test_console_agent.py`
+- Modify: `tests/test_room_view.py`
+
+**Interfaces:** none new; both fixes are internal to functions already in
+this plan's scope. No wire-format change -- `room_frame_event` and the
+`fixtures[].zones[]` shape are unchanged, only the VALUES `room_view.py`
+was computing wrongly are corrected.
+
+- [ ] **Step 1: Fix the Console frame relay to key by dev, not one slot**
+
+In `console/agent.py`, replace the single-slot instance variable (currently
+around line 44-46):
+
+```python
+        # The latest Room frame not yet broadcast, or None. Overwritten, not
+        # queued: see _broadcast_room_frame and ROOM_FRAME_INTERVAL above.
+        self._pending_room_frame: tuple[str, bytes] | None = None
+```
+
+with:
+
+```python
+        # The latest not-yet-broadcast frame per dev. Each dev's entry is
+        # overwritten, not queued: see _broadcast_room_frame and
+        # ROOM_FRAME_INTERVAL above. Keyed by dev, not a single slot --
+        # _render_room() can call on_room_frame for more than one fixture
+        # within one tick, and a single slot silently starves every fixture
+        # but the last one to call in that tick.
+        self._pending_room_frames: dict[str, bytes] = {}
+```
+
+Replace `on_room_frame` (currently around line 169-173):
+
+```python
+    def on_room_frame(self, dev: str, frame: bytes) -> None:
+        """DeviceLinkAgent's display-only frame sink. Called on the tick
+        thread. Stores the LATEST frame only; anything not yet broadcast is
+        overwritten, never queued."""
+        self._pending_room_frame = (dev, frame)
+```
+
+with:
+
+```python
+    def on_room_frame(self, dev: str, frame: bytes) -> None:
+        """DeviceLinkAgent's display-only frame sink. Called on the tick
+        thread, once per changed fixture slice -- so possibly several times
+        per tick, one per dev. Stores the LATEST frame per dev; anything not
+        yet broadcast for that dev is overwritten, never queued."""
+        self._pending_room_frames[dev] = frame
+```
+
+Replace `_broadcast_room_frame` (currently around line 175-184):
+
+```python
+    def _broadcast_room_frame(self) -> None:
+        if self._pending_room_frame is None:
+            return
+        now = self._clock()
+        if now - self._last_room_frame_at < ROOM_FRAME_INTERVAL:
+            return
+        dev, frame = self._pending_room_frame
+        self._pending_room_frame = None
+        self._last_room_frame_at = now
+        self.server.broadcast(protocol.room_frame_event(dev, frame))
+```
+
+with:
+
+```python
+    def _broadcast_room_frame(self) -> None:
+        if not self._pending_room_frames:
+            return
+        now = self._clock()
+        if now - self._last_room_frame_at < ROOM_FRAME_INTERVAL:
+            return
+        pending, self._pending_room_frames = self._pending_room_frames, {}
+        self._last_room_frame_at = now
+        for dev, frame in pending.items():
+            self.server.broadcast(protocol.room_frame_event(dev, frame))
+```
+
+- [ ] **Step 2: Add a regression test for two fixtures changing in one window**
+
+In `tests/test_console_agent.py`, add a sibling to
+`test_room_frames_are_broadcast_at_the_decimated_rate` (search for that
+name; add the new test directly after it):
+
+```python
+def test_two_fixtures_changing_in_the_same_window_both_broadcast():
+    from console.agent import ROOM_FRAME_INTERVAL
+    gs, srv, agent = _room_console()
+    clock = FakeClock(100.0)
+    agent._clock = clock
+
+    # Both fixtures change before the first poll -- the old single-slot
+    # implementation would only ever relay the second call's dev.
+    agent.on_room_frame("sim-room-main", bytes(180))
+    agent.on_room_frame("sim-room-accent", bytes(90))
+    agent.poll()
+    frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
+    assert {f["dev"] for f in frames} == {"sim-room-main", "sim-room-accent"}
+
+    # A later main-only change must still relay on its own -- accent's
+    # entry being consumed must not block main's next one, or vice versa.
+    clock.now += ROOM_FRAME_INTERVAL
+    agent.on_room_frame("sim-room-main", bytes([9] * 180))
+    agent.poll()
+    frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
+    assert len(frames) == 3
+    assert frames[2]["dev"] == "sim-room-main"
+    assert frames[2]["channels"] == [9] * 180
+```
+
+- [ ] **Step 3: Fix `fixtures_view()` to use fixture-local zone offsets**
+
+In `control/room_view.py`, in `fixtures_view()`, replace:
+
+```python
+            "zones": [{"name": z.name, "start": z.start, "count": z.count}
+                      for z in profile.zones if z.name.startswith(f"{name}.")],
+```
+
+with:
+
+```python
+            "zones": [{"name": f"{name}.{z.name}", "start": z.start, "count": z.count}
+                      for z in fixture.zones],
+```
+
+This reads the already-in-scope `fixture` local (bound two lines above via
+`fixture = next(f for f in profile.fixtures if f.name == name)`) instead of
+re-deriving from `profile.zones`, the namespaced GLOBAL-offset union meant
+for `capability_view()`'s whole-surface panel. The namespaced-name
+construction (`f"{name}.{z.name}"`) is kept exactly as before -- only the
+offset source changes, not the displayed name shape.
+
+- [ ] **Step 4: Tighten the existing zone-scoping test to assert offsets, not just names**
+
+In `tests/test_room_view.py`, replace
+`test_fixtures_zones_are_scoped_to_their_own_fixture` in full:
+
+```python
+def test_fixtures_zones_are_scoped_to_their_own_fixture():
+    fixtures = _view()["fixtures"]
+    assert [z["name"] for z in fixtures[0]["zones"]] == [
+        "main.left", "main.center", "main.right"]
+    assert [z["name"] for z in fixtures[1]["zones"]] == [
+        "accent.low", "accent.high"]
+    # Fixture-LOCAL offsets, not the global concatenated-surface offsets
+    # profile.zones carries -- accent starts at channel offset 60 in the
+    # concatenated surface, but its own zones must read from 0.
+    assert [(z["start"], z["count"]) for z in fixtures[0]["zones"]] == [
+        (0, 20), (20, 20), (40, 20)]
+    assert [(z["start"], z["count"]) for z in fixtures[1]["zones"]] == [
+        (0, 15), (15, 15)]
+```
+
+- [ ] **Step 5: Verify and commit**
+
+Run the full suite (`pytest`) and the JS test
+(`node tests/js/room_panel_behavior.test.js`) and confirm both are fully
+green, matching Task 13's 1037 passed / 0 failed / 1 skipped baseline plus
+the 2 new tests. Commit:
+
+```bash
+git add console/agent.py control/room_view.py tests/test_console_agent.py tests/test_room_view.py
+git commit -m "fix(console,room): relay every fixture's frames, report fixture-local zone offsets
+
+The whole-branch final review found two cross-task bugs neither task's own
+scoped review could see: console/agent.py's single-slot pending-frame
+overwrote every fixture but the last one to call in per tick once Task 6
+made _render_room() call on_room_frame per changed fixture; room_view.py's
+fixtures_view() read global concatenated-surface zone offsets instead of
+each fixture's own local ones."
+```
+
 ## Plan self-review notes
 
 - **Spec coverage:** every numbered success criterion (1-10) in the design
