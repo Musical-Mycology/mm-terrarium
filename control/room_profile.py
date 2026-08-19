@@ -220,6 +220,27 @@ ROOM_PROFILES: dict[RoomType, RoomProfile] = {
                       RoomZone("high", 15, 15))),
         ),
     ),
+    RoomType.DEMO: RoomProfile(
+        surface_id="room_demo",
+        fixtures=(
+            RoomFixture(
+                name="array", color_order="GRB",
+                # 144 LED/m x 6 m real array (MM_HARDWARE_DESIGN.md
+                # section 7.1), one block per physical meter run. Synthetic
+                # backend, real scale: unlocked by the per-block cap.
+                blocks=(
+                    RoomBlock("m1", 0, 144), RoomBlock("m2", 144, 144),
+                    RoomBlock("m3", 288, 144), RoomBlock("m4", 432, 144),
+                    RoomBlock("m5", 576, 144), RoomBlock("m6", 720, 144),
+                ),
+                # Gameplay/Console targeting thirds -- deliberately not 1:1
+                # with the 6 blocks: zones and blocks are different axes.
+                zones=(RoomZone("left", 0, 288),
+                      RoomZone("center", 288, 288),
+                      RoomZone("right", 576, 288)),
+            ),
+        ),
+    ),
 }
 
 

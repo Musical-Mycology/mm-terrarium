@@ -87,11 +87,28 @@ def test_primary_is_not_declared_here():
     assert "primary" not in [z.name for z in room_profile(RoomType.TEST).zones]
 
 
-def test_demo_room_raises_rather_than_downgrading():
-    """Matches resolve_room_type()'s existing fail-hard-never-downgrade
-    contract. DEMO's backend is a deferred follow-up spec."""
-    with pytest.raises(NotImplementedError):
-        room_profile(RoomType.DEMO)
+def test_demo_profile_matches_the_real_array_scale():
+    """864 px = 6 m x 144 LED/m, the real Terrarium array
+    (MM_HARDWARE_DESIGN.md section 7.1), one block per meter run."""
+    profile = room_profile(RoomType.DEMO)
+    assert profile.surface_id == "room_demo"
+    (array,) = profile.fixtures
+    assert array.name == "array"          # matches tests/test_room_binding.py
+    assert array.pixel_count == 864
+    assert profile.channel_count == 2592
+    assert [b.name for b in array.blocks] == ["m1", "m2", "m3", "m4", "m5", "m6"]
+    assert all(b.count == 144 for b in array.blocks)
+    assert [z.name for z in array.zones] == ["left", "center", "right"]
+    assert all(z.count == 288 for z in array.zones)
+
+
+def test_demo_zones_and_blocks_are_independent_axes():
+    """3 zones over 6 blocks, deliberately not 1:1 -- zones target
+    gameplay, blocks describe hardware (spec section 2.1)."""
+    (array,) = room_profile(RoomType.DEMO).fixtures
+    zone_bounds = {(z.start, z.start + z.count) for z in array.zones}
+    block_bounds = {(b.start, b.start + b.count) for b in array.blocks}
+    assert zone_bounds != block_bounds
 
 
 def test_profile_is_immutable():
