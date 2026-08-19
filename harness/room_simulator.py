@@ -15,7 +15,7 @@ Room's declared instrument (see devicelink/agent.py), the same way it
 already does for player roles. This process is a pure LED display.
 
 Usage (normally spawned by harness/terrarium_boot.py, not run by hand):
-    python3 -m harness.room_simulator --dev sim-room \
+    python3 -m harness.room_simulator --dev sim-room-main --fixture main \
         --server ws://127.0.0.1:8771/ws --sim-host 127.0.0.1 --sim-port 8770
 """
 
