@@ -2636,7 +2636,10 @@ def _role():
 
 def _room(bound=None):
     room = Room(room_type=RoomType.TEST)
-    room.bound = bound or {"main": "sim-room-main"}
+    # `or` would treat an explicitly-passed {} the same as "no argument",
+    # since both are falsy -- and _view(bound={}) below needs a genuinely
+    # empty dict to reach the "no fixture bound" case.
+    room.bound = {"main": "sim-room-main"} if bound is None else bound
     return room
 
 
