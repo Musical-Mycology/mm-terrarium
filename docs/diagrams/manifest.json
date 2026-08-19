@@ -5,23 +5,23 @@
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "boot-teardown",
       "outputs": {
-        "out/boot-teardown.svg": "c6d058cd53496ad41a98b574cbdb65d8a2e6d14d7cd79eb0ef7d8de4bf2c0a7e",
-        "out/boot-teardown.txt": "5053811dc3f87afb6f0b66d6a8a0229bd1d4a6918e6b5d363996d9b447a5c5b8"
+        "out/boot-teardown.svg": "db3016cee69943a4446b3aefe3fb460a0b6e582931ea0998c8aa0f7caa34ff46",
+        "out/boot-teardown.txt": "c938e6c37d5683a243fd2226ba6c880199860d168203033d9f5f784d95c98472"
       },
       "renderer": "d2",
       "source": "boot-teardown.d2",
-      "source_sha256": "c01b0b773fed4092dd8152a23ac06e700570cd7bd2ac2ca214335cedc38c16fc"
+      "source_sha256": "25c9f4e6aea9196054653100b2cdc0e0174a110c10c8c4e0503b55791edb1922"
     },
     "cue-path": {
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "cue-path",
       "outputs": {
-        "out/cue-path.svg": "4ba2ab1bc9143442528d8ae020683675dd9836f74395fe8f8c09cbcca20ce827",
-        "out/cue-path.txt": "5d7d0cc088b8960d1291510fb363e777899cf0e9ed0db4f5d0e599c27d280af4"
+        "out/cue-path.svg": "d1fc1a808695f7425e92126c724ea49de21726435f141502be542672341cdcaf",
+        "out/cue-path.txt": "e4995c77478a7ca3287dc988f0a38407141bce3f509571eba477c3f4174912d7"
       },
       "renderer": "d2",
       "source": "cue-path.d2",
-      "source_sha256": "19ebc5b576ca4e115cef3c58c00598ca604689851ee0df9e784daf5e71152ee6"
+      "source_sha256": "d7b92cac5cea0f40997d90128e9a23b2b48ff4dedda30fa0a4416f4022581704"
     },
     "lifecycle": {
       "inject_into": "docs/MM_TERRARIUM.md",
