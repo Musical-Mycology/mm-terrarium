@@ -273,6 +273,20 @@ def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
     assert [c[0] for c in light] == ["sim-room-main"] * 3
 
 
+def test_resolve_target_on_an_unbound_room_with_no_profile_does_not_raise():
+    """_resolve_target's room_devs block must short-circuit on "is anything
+    bound" before ever calling room_profile(), exactly like its sibling
+    _canonical_room_dev does -- RoomType.DEMO has no ROOM_PROFILES entry
+    (see control/room_profile.py), so room_profile(RoomType.DEMO) always
+    raises NotImplementedError. An empty, DEMO-typed Room must never reach
+    that call at all, the same way it never would through
+    _canonical_room_dev."""
+    from control.rooms import Room, RoomType
+    gs = GameServer({}, clock=lambda: 0.0)
+    gs.room = Room(room_type=RoomType.DEMO)
+    assert gs._resolve_target(TriggerTarget.ROOM, None) == []
+
+
 def test_all_resolves_to_the_room_plus_registered_players_deduped():
     gs, light, _ = _running()
     gs.fire_trigger("everywhere", fired_by="admin-manual")
