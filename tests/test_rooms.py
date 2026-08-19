@@ -1,5 +1,6 @@
 import pytest
 
+from control.room_profile import room_profile
 from control.roles import Role, RoleClass
 from control.rooms import (
     ROOM_NODE_IDS,
@@ -27,10 +28,11 @@ def test_resolve_room_type_demo_fails_without_array_backend():
         resolve_room_type(RoomType.DEMO, array_backend_configured=False)
 
 
-def test_room_role_builds_capacity_one_room_class_role():
+def test_room_role_capacity_matches_the_profiles_fixture_count():
     name, role, node = room_role(RoomType.TEST)
     assert role.role_class == RoleClass.ROOM
-    assert role.capacity == 1
+    assert role.capacity == len(room_profile(RoomType.TEST).fixtures)
+    assert role.capacity == 2
     assert role.scored is False
     assert node == ROOM_NODE_IDS[RoomType.TEST]
     assert name == "room_test"
@@ -38,21 +40,30 @@ def test_room_role_builds_capacity_one_room_class_role():
 
 def test_room_role_carries_declared_manifests():
     _, role, _ = room_role(
-        RoomType.DEMO,
-        light_manifest={"instruments": [{"instrument": "aurora", "target": "primary"}]},
+        RoomType.TEST,
+        light_manifest={"instruments": [{"instrument": "rainbow", "target": "primary"}]},
         ugen_manifest={"instruments": [{"instrument": "flsyn"}]})
-    assert role.light_manifest["instruments"][0]["instrument"] == "aurora"
+    assert role.light_manifest["instruments"][0]["instrument"] == "rainbow"
     assert role.ugen_manifest["instruments"][0]["instrument"] == "flsyn"
 
 
 def test_room_defaults_to_unbound():
     room = Room(room_type=RoomType.TEST)
-    assert room.bound_dev is None
+    assert room.bound == {}
+    assert room.fully_bound(room_profile(RoomType.TEST)) is False
+
+
+def test_room_fully_bound_requires_every_fixture():
+    room = Room(room_type=RoomType.TEST)
+    room.bound["main"] = "sim-room-main"
+    assert room.fully_bound(room_profile(RoomType.TEST)) is False
+    room.bound["accent"] = "sim-room-accent"
+    assert room.fully_bound(room_profile(RoomType.TEST)) is True
 
 
 def test_room_role_name_matches_room_role_helper():
-    name, role, node = room_role(RoomType.DEMO)
-    assert name == room_role_name(RoomType.DEMO)
+    name, role, node = room_role(RoomType.TEST)
+    assert name == room_role_name(RoomType.TEST)
 
 
 def test_room_role_name_is_deterministic_per_type():

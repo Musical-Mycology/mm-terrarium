@@ -65,14 +65,18 @@ def test_command_parsing_is_reused_from_uplink():
 
 
 def test_parse_admin_command_arm_room_with_default_window():
-    command = parse_admin_command({"command": "arm_room", "room_type": "TEST"})
-    assert command == ArmRoomCommand(room_type="TEST", window_seconds=30.0)
+    command = parse_admin_command(
+        {"command": "arm_room", "room_type": "TEST", "fixture": "main"})
+    assert command == ArmRoomCommand(
+        room_type="TEST", fixture="main", window_seconds=30.0)
 
 
 def test_parse_admin_command_arm_room_with_explicit_window():
     command = parse_admin_command(
-        {"command": "arm_room", "room_type": "DEMO", "window_seconds": 45.0})
-    assert command == ArmRoomCommand(room_type="DEMO", window_seconds=45.0)
+        {"command": "arm_room", "room_type": "DEMO", "fixture": "main",
+         "window_seconds": 45.0})
+    assert command == ArmRoomCommand(
+        room_type="DEMO", fixture="main", window_seconds=45.0)
 
 
 def test_parse_admin_command_release_room():

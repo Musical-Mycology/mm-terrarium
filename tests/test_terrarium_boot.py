@@ -42,7 +42,7 @@ def test_build_wires_devicelink_room_bridge_and_simulator():
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
     gs, server, agent, arco, teardown = _build_with_fakes(config)
 
-    assert gs.room.bound_dev == "sim-room"
+    assert gs.room.bound == {"main": "sim-room-main", "accent": "sim-room-accent"}
     assert agent._room_light is not None
     assert server.port != 0   # devicelink server actually bound before boot() ran
 
@@ -713,7 +713,7 @@ def test_o2_simulator_factory_ties_the_simulator_to_this_process():
     popen = FakePopen()
     factory = _O2SimulatorFactory("arco", popen=popen)
 
-    assert factory(TeardownStack()) == "sim-room"
+    assert factory(TeardownStack(), "main") == "sim-room-main"
     command = popen.commands[0]
     assert "--exit-with-parent" in command
     assert command[command.index("--exit-with-parent") + 1] == str(os.getpid())

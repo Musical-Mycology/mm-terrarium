@@ -8,10 +8,11 @@ class RoleClass(Enum):
     UNIQUE = auto()   # exclusive to one player (or capacity K)
     SHARED = auto()   # unbounded; every registrant gets the same effect
     JAM = auto()      # unbounded; full interaction but excluded from scoring
-    ROOM = auto()     # capacity 1; binds the Room's rendering backend, not a
-                       # player -- see control/rooms.py:room_role and
-                       # docs/superpowers/specs/2026-08-10-room-concept-and-
-                       # load-sequence-design.md section 3.
+    ROOM = auto()     # capacity = the Room's own fixture count; binds one
+                       # fixture's rendering backend per join, not a player
+                       # -- see control/rooms.py:room_role and
+                       # docs/superpowers/specs/2026-08-18-n-fixture-room-
+                       # design.md section 4.
 
 
 @dataclass

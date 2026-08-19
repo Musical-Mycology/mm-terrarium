@@ -106,11 +106,17 @@ class TestBit(Bit):
             # triggered strobe TestBit's own docstring already explains.
             # Deliberately no cc:11/level lane (unlike player): breath-
             # feeding the Room is a real, separable enhancement, not
-            # needed to prove RoomBridge renders at all.
+            # needed to prove RoomBridge renders at all. The instrument
+            # itself is `rainbow`, not `aurora`: a scrolling hue gradient
+            # across the Room's whole concatenated surface, which makes
+            # the cross-fixture property -- one declaration, one gradient
+            # spanning every fixture -- the thing the reference fixture
+            # visibly proves (see design spec section 9).
             light_manifest={
                 "instruments": [
-                    {"instrument": "aurora", "target": "primary",
-                     "params": {"hue": 0.6, "level": 0.55},
+                    {"instrument": "rainbow", "target": "primary",
+                     "params": {"hue": 0.6, "level": 0.55,
+                               "span": 1.0, "speed": 0.05},
                      "lanes": [{"source": "cc:74", "dest": "hue"}]},
                 ],
             },
@@ -156,7 +162,7 @@ class TestBit(Bit):
         return TriggerTable(triggers={
             "play_aurora": Trigger(
                 name="play_aurora",
-                description="A slow aurora sweep across the Room",
+                description="A slow rainbow sweep across the Room",
                 target=TriggerTarget.ROOM,
                 condition=Condition(
                     name="round_won",
@@ -188,13 +194,15 @@ class TestBit(Bit):
         """Self-driven Room animation, plus this Bit's own adjudication report.
 
         verb_handlers() can only ever react to a device, so without the drift
-        the Room's aurora reached its declared static hue once and held it,
-        unanimated, for a whole run. Deterministic in self._elapsed, which
-        update(dt) already accumulates, so a test can assert the exact value at
-        a given elapsed time.
+        the Room's rainbow would still scroll on its own -- its `speed` param
+        advances the gradient every tick with no input at all -- but its base
+        hue would sit fixed at the declared value for a whole run rather than
+        sweeping. Deterministic in self._elapsed, which update(dt) already
+        accumulates, so a test can assert the exact value at a given elapsed
+        time.
 
         Triangle rather than sawtooth: a sawtooth snaps from 127 back to 0 once
-        per period, and aurora GLIDES to its target, so the snap reads as a
+        per period, and rainbow GLIDES to its target, so the snap reads as a
         visible lurch rather than a wrap.
 
         A won round is reported here rather than from update(dt) because a fire
@@ -242,7 +250,7 @@ class TestBit(Bit):
         """args: [dev, gamma]. gamma is degrees in [-90, 90].
 
         Two cues, one `at`. The calling device's own hue lane, and the Room's.
-        The Room role declares cc:74 on BOTH its light_manifest (aurora hue)
+        The Room role declares cc:74 on BOTH its light_manifest (rainbow hue)
         and its ugen_manifest (FluidSynth cutoff), so one tilt moves the Room's
         colour and the Room's drone timbre against a single shared time.
         Neither cue names a time: control/engine.py stamps both with `at`,

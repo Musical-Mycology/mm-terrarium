@@ -15,7 +15,7 @@ Room's declared instrument (see devicelink/agent.py), the same way it
 already does for player roles. This process is a pure LED display.
 
 Usage (normally spawned by harness/terrarium_boot.py, not run by hand):
-    python3 -m harness.room_simulator --dev sim-room \
+    python3 -m harness.room_simulator --dev sim-room-main --fixture main \
         --server ws://127.0.0.1:8771/ws --sim-host 127.0.0.1 --sim-port 8770
 """
 
@@ -47,32 +47,27 @@ class WebSimLeds:
 
 
 def build(dev: str, sim_host: str = "127.0.0.1", sim_port: int = 0,
-          serve: bool = True, room_type: str = "TEST"):
+          serve: bool = True, room_type: str = "TEST", fixture: str = "main"):
     """Construct the client + backend WITHOUT opening a socket or serving.
 
-    Returns ``(client, backend)``. ``serve=False`` gives a record-only
-    backend (no websockets, no port) for headless tests, matching
-    ``led_smoke.py``'s ``build()``/``main()`` split -- the caller is
-    responsible for ``backend.open()``/``.close()`` and the real
-    devicelink websocket loop.
-
-    The surface is the ROOM's, not a Tuneshroom's: this process renders a
-    Room, and borrowing shroom_capability() here is what made a Room a 12-LED
-    ring and stem. See control/room_profile.py.
+    Returns ``(client, backend)``. Renders exactly one fixture's own
+    surface, with LOCAL zone names -- this process IS one physical strip,
+    not the whole Room. See harness/room_surface.py's to_fixture_capability
+    and design spec section 7.
     """
     from luxaeterna.backends.websim import WebSimBackend
 
     from control.room_profile import room_profile
     from control.rooms import RoomType
-    from harness.room_surface import to_capability
+    from harness.room_surface import to_fixture_capability
 
     profile = room_profile(RoomType[room_type])
-    backend = WebSimBackend(capability=to_capability(profile),
-                             host=sim_host, port=sim_port, serve=serve,
-                             label=dev)
+    cap = to_fixture_capability(profile, fixture)
+    backend = WebSimBackend(capability=cap, host=sim_host, port=sim_port,
+                             serve=serve, label=dev)
     client = ShroomClient(dev, node="", leds=WebSimLeds(backend,
-                                                       profile.channel_count),
-                          expected_channels=profile.channel_count)
+                                                       cap.pixel_count * 3),
+                          expected_channels=cap.pixel_count * 3)
     return client, backend
 
 
@@ -86,6 +81,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dev", required=True,
                         help="Dev id Terrarium assigned this Room instance.")
+    parser.add_argument("--fixture", required=True,
+                        help="Which of the Room's declared fixtures this "
+                             "process renders (see control/room_profile.py).")
     parser.add_argument("--server", required=True,
                         help="Control's devicelink URL, e.g. ws://host:port/ws")
     parser.add_argument("--sim-host", default="127.0.0.1")
@@ -107,7 +105,7 @@ def main() -> None:
     sigterm_as_keyboard_interrupt()
 
     client, backend = build(args.dev, args.sim_host, args.sim_port,
-                            room_type=args.room_type)
+                            room_type=args.room_type, fixture=args.fixture)
     backend.open()
     print(f"Watch the Room at http://{args.sim_host}:{backend.port}/", flush=True)
 

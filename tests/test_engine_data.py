@@ -366,7 +366,7 @@ def _room_bound(bit, cue_horizon=0.06, clock=lambda: 1000.0, bound="sim-room"):
     from control.rooms import Room, RoomType
     gs = GameServer({"vb": lambda: bit}, cue_horizon=cue_horizon, clock=clock)
     gs.room = Room(room_type=RoomType.TEST)
-    gs.room.bound_dev = bound
+    gs.room.bound = {"main": bound}
     gs.load_bit("vb")
     gs.join("ie1", "NODE_A")
     return gs

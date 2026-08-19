@@ -10,7 +10,7 @@ def _role():
     _, role, _ = room_role(
         RoomType.TEST,
         light_manifest={"instruments": [
-            {"instrument": "aurora", "target": "primary",
+            {"instrument": "rainbow", "target": "primary",
              "params": {"hue": 0.6, "level": 0.55},
              "lanes": [{"source": "cc:74", "dest": "hue"}]}]},
         ugen_manifest={"instruments": [
@@ -21,9 +21,17 @@ def _role():
     return role
 
 
-def _view():
-    return room_view(Room(room_type=RoomType.TEST, bound_dev="sim-room"),
-                     room_profile(RoomType.TEST), _role(), {74: 93})
+def _room(bound=None):
+    room = Room(room_type=RoomType.TEST)
+    # `or` would treat an explicitly-passed {} the same as "no argument",
+    # since both are falsy -- and _view(bound={}) below needs a genuinely
+    # empty dict to reach the "no fixture bound" case.
+    room.bound = {"main": "sim-room-main"} if bound is None else bound
+    return room
+
+
+def _view(bound=None):
+    return room_view(_room(bound), room_profile(RoomType.TEST), _role(), {74: 93})
 
 
 def test_no_room_configured_yields_none():
@@ -33,33 +41,60 @@ def test_no_room_configured_yields_none():
 def test_header_fields():
     view = _view()
     assert view["room_type"] == "TEST"
-    assert view["bound_dev"] == "sim-room"
 
 
-def test_capability_carries_the_zones():
+def test_fixtures_list_carries_name_dev_and_slice():
+    fixtures = _view()["fixtures"]
+    assert [f["name"] for f in fixtures] == ["main", "accent"]
+    assert fixtures[0]["dev"] == "sim-room-main"
+    assert fixtures[0]["pixel_count"] == 60
+    assert fixtures[0]["channel_start"] == 0
+    assert fixtures[0]["channel_count"] == 180
+    assert fixtures[1]["dev"] is None    # accent not bound in this fixture's default
+    assert fixtures[1]["pixel_count"] == 30
+    assert fixtures[1]["channel_start"] == 180
+    assert fixtures[1]["channel_count"] == 90
+
+
+def test_fixtures_zones_are_scoped_to_their_own_fixture():
+    fixtures = _view()["fixtures"]
+    assert [z["name"] for z in fixtures[0]["zones"]] == [
+        "main.left", "main.center", "main.right"]
+    assert [z["name"] for z in fixtures[1]["zones"]] == [
+        "accent.low", "accent.high"]
+    # Fixture-LOCAL offsets, not the global concatenated-surface offsets
+    # profile.zones carries -- accent starts at channel offset 60 in the
+    # concatenated surface, but its own zones must read from 0.
+    assert [(z["start"], z["count"]) for z in fixtures[0]["zones"]] == [
+        (0, 20), (20, 20), (40, 20)]
+    assert [(z["start"], z["count"]) for z in fixtures[1]["zones"]] == [
+        (0, 15), (15, 15)]
+
+
+def test_both_fixtures_bound_report_their_own_dev():
+    view = _view(bound={"main": "sim-room-main", "accent": "sim-room-accent"})
+    fixtures = view["fixtures"]
+    assert fixtures[0]["dev"] == "sim-room-main"
+    assert fixtures[1]["dev"] == "sim-room-accent"
+
+
+def test_capability_carries_the_whole_concatenated_surface():
     view = _view()
     assert view["capability"]["surface_id"] == "room_test"
-    assert view["capability"]["pixel_count"] == 60
+    assert view["capability"]["pixel_count"] == 90
     assert view["capability"]["color_order"] == "GRB"
-    assert view["capability"]["zones"] == [
-        {"name": "left", "start": 0, "count": 20},
-        {"name": "center", "start": 20, "count": 20},
-        {"name": "right", "start": 40, "count": 20},
-    ]
+    assert [z["name"] for z in view["capability"]["zones"]] == [
+        "main.left", "main.center", "main.right", "accent.low", "accent.high"]
 
 
 def test_primary_is_absent_from_the_serialized_zones():
-    """It spans the whole surface, so drawing it would cover every real zone.
-    The renderer gets it from harness/room_surface.py instead."""
     assert "primary" not in [z["name"] for z in _view()["capability"]["zones"]]
 
 
 def test_light_and_audio_appear_in_one_list_discriminated_by_kind():
-    """The point of the panel: cc:74 is visibly the same controller driving
-    aurora's hue and FluidSynth's cutoff."""
     instruments = _view()["instruments"]
     assert [i["kind"] for i in instruments] == ["light", "audio"]
-    assert instruments[0]["instrument"] == "aurora"
+    assert instruments[0]["instrument"] == "rainbow"
     assert instruments[0]["target"] == "primary"
     assert instruments[1]["instrument"] == "flsyn"
 
@@ -81,17 +116,15 @@ def test_controllers_are_carried_through():
 
 
 def test_no_bit_loaded_yields_capability_with_no_instruments():
-    view = room_view(Room(room_type=RoomType.TEST), room_profile(RoomType.TEST),
-                     None, {})
+    view = room_view(_room(bound={}), room_profile(RoomType.TEST), None, {})
     assert view["instruments"] == []
-    assert view["capability"]["pixel_count"] == 60
-    assert view["bound_dev"] is None
+    assert view["capability"]["pixel_count"] == 90
+    assert all(f["dev"] is None for f in view["fixtures"])
 
 
 def test_empty_manifests_yield_no_instruments():
     _, role, _ = room_role(RoomType.TEST)
-    view = room_view(Room(room_type=RoomType.TEST), room_profile(RoomType.TEST),
-                     role, {})
+    view = room_view(_room(bound={}), room_profile(RoomType.TEST), role, {})
     assert view["instruments"] == []
 
 
@@ -101,7 +134,8 @@ def test_the_view_is_json_serializable():
 
 
 def test_the_node_id_never_appears_anywhere_in_the_view():
-    """Section 3 of the design spec: the Registration Node id stays hidden."""
+    """Section 3 of the room-panel design spec: the Registration Node id
+    stays hidden."""
     import json
     from control.rooms import ROOM_NODE_IDS
     blob = json.dumps(_view())
@@ -109,14 +143,10 @@ def test_the_node_id_never_appears_anywhere_in_the_view():
 
 
 def test_the_room_role_name_never_appears_in_the_view():
-    """Corrected during Task 6: as written, this assertion is unsatisfiable
-    for RoomType.TEST. room_role_name(TEST) == "room_test"
-    (tests/test_rooms.py, landed pre-Task-6), and RoomProfile(TEST).surface_id
-    == "room_test" too (tests/test_room_profile.py, Task 1) -- two
-    independently authored, already-locked-in facts that happen to collide
-    for this one RoomType. capability.surface_id is meant to be visible (see
-    test_capability_carries_the_zones above and design spec section 3's
-    right-hand column), so its presence is not the role name leaking. The
+    """room_role_name(TEST) == "room_test", and RoomProfile(TEST).surface_id
+    == "room_test" too -- two independently authored, already-locked-in facts
+    that happen to collide for this one RoomType. capability.surface_id is
+    meant to be visible, so its presence is not the role name leaking. The
     check is scoped past that one legitimate field to assert the real fact:
     the role name has no other route into the view."""
     import json

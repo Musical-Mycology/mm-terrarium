@@ -112,23 +112,44 @@ function newDocument() {
 }
 
 // ---- fixtures -------------------------------------------------------------
+// A two-fixture Room, matching the wire shape control/room_view.py's
+// room_view() now produces (Task 9/10): a "fixtures" list, each entry
+// {name, pixel_count, channel_start, channel_count, zones, dev}, alongside
+// the unchanged whole-profile "capability" (pixel_count/color_order/zones
+// over the WHOLE concatenated surface). "accent" is left unbound (dev:
+// null) on purpose, so scenarios below can exercise both the "not bound"
+// label text and the dev-routing no-op path in renderRoomFrame.
 
-const ZONES_3 = [
-  { name: "left", start: 0, count: 20 },
-  { name: "center", start: 20, count: 20 },
-  { name: "right", start: 40, count: 20 },
+const MAIN_ZONES = [
+  { name: "main.left", start: 0, count: 20 },
+  { name: "main.center", start: 20, count: 20 },
+  { name: "main.right", start: 40, count: 20 },
+];
+const ACCENT_ZONES = [
+  { name: "accent.low", start: 60, count: 15 },
+  { name: "accent.high", start: 75, count: 15 },
 ];
 
 function cap(pixelCount, zones) {
   return { pixel_count: pixelCount, color_order: "GRB", zones };
 }
 
+function fixtures(overrides) {
+  const base = [
+    { name: "main", pixel_count: 60, channel_start: 0, channel_count: 180,
+      zones: MAIN_ZONES, dev: "sim-room-main" },
+    { name: "accent", pixel_count: 30, channel_start: 180, channel_count: 90,
+      zones: ACCENT_ZONES, dev: null },
+  ];
+  return overrides ? overrides(base) : base;
+}
+
 function room(overrides) {
   return Object.assign(
     {
-      room_type: "led_strip",
-      capability: cap(60, ZONES_3),
-      bound_dev: null,
+      room_type: "TEST",
+      capability: cap(90, MAIN_ZONES.concat(ACCENT_ZONES)),
+      fixtures: fixtures(),
       controllers: {},
       instruments: [],
     },
@@ -137,9 +158,10 @@ function room(overrides) {
 }
 
 // #room has no CSS rule of its own (confirmed against style.css), so DOM
-// order is visual order: header at top, strip and its zone labels below
-// it, instrument cards last. orderOf reads #room's direct children by id
-// so a scenario can assert that order survives a render.
+// order is visual order: header at top, then each fixture's strip and zone
+// labels, instrument cards last. orderOf reads #room's direct children by
+// id so a scenario can assert that order survives a render. Unaffected by
+// the N-strip change -- still just walks #room's direct children.
 function orderOf(doc) {
   return doc.getElementById("room").children.map((c) => c.id).join(",");
 }
@@ -158,14 +180,14 @@ const roomJsPath = path.join(__dirname, "..", "..", "console", "static", "room.j
 const roomJsSource = fs.readFileSync(roomJsPath, "utf8");
 
 // Runs testBody against a fresh document AND fresh room.js module state
-// (roomCapability starts at null again each time), by re-evaluating the
-// shipped source per scenario in its own vm context. testBody and
-// roomJsSource run in the same context, so testBody can call
-// renderRoom/renderRoomFrame by name. Everything executed here is this
-// repo's own source plus hardcoded literal test bodies below, never
-// external or attacker-influenced input.
+// (roomFixturesShape/fixtureDevByName/fixtureNameByDev start fresh again
+// each time), by re-evaluating the shipped source per scenario in its own
+// vm context. testBody and roomJsSource run in the same context, so
+// testBody can call renderRoom/renderRoomFrame by name. Everything
+// executed here is this repo's own source plus hardcoded literal test
+// bodies below, never external or attacker-influenced input.
 function scenario(name, testBody) {
-  const sandbox = { document: newDocument(), assert, cap, room, ZONES_3, orderOf, console };
+  const sandbox = { document: newDocument(), assert, cap, room, fixtures, orderOf, console };
   vm.createContext(sandbox);
   try {
     vm.runInContext(roomJsSource + "\n" + testBody, sandbox, { filename: `room.js+${name}` });
@@ -179,110 +201,152 @@ function scenario(name, testBody) {
 
 scenario("strip survives unchanged-capability re-renders", `
   renderRoom(room());
-  renderRoomFrame(new Array(180).fill(1)); // paints every swatch to rgb(1,1,1)
+  renderRoomFrame("sim-room-main", new Array(180).fill(1)); // paints every swatch to rgb(1,1,1)
 
-  const stripBefore = document.getElementById("roomStrip");
+  const stripBefore = document.getElementById("roomStrip-main");
   assert(stripBefore !== null, "strip should exist after the first renderRoom");
   const paintedBefore = stripBefore.children.filter((n) => n.style.background).length;
   assert(paintedBefore === 60, "expected all 60 swatches painted, got " + paintedBefore);
-  assert(orderOf(document) === "roomHeader,roomStrip,roomZones,roomCards",
+  assert(orderOf(document) === "roomHeader,roomStrip-main,roomZones-main,roomStrip-accent,roomZones-accent,roomCards",
     "wrong sibling order after the first render, got: " + orderOf(document));
 
   // Simulate the common case: several more room_changed events carrying
-  // only a moved controller value, same Room, same capability.
+  // only a moved controller value, same Room, same fixtures shape.
   for (let i = 0; i < 5; i++) {
     renderRoom(room({ controllers: { "74": i * 10 } }));
   }
 
-  const stripAfter = document.getElementById("roomStrip");
+  const stripAfter = document.getElementById("roomStrip-main");
   assert(stripAfter === stripBefore,
     "strip node identity changed across unchanged-capability renderRoom calls " +
     "(this is Defect 1: the strip was rebuilt on every room_changed)");
   const paintedAfter = stripAfter.children.filter((n) => n.style.background).length;
   assert(paintedAfter === 60,
     "painted swatches did not survive unchanged-capability re-renders, got " + paintedAfter);
-  assert(orderOf(document) === "roomHeader,roomStrip,roomZones,roomCards",
+  assert(orderOf(document) === "roomHeader,roomStrip-main,roomZones-main,roomStrip-accent,roomZones-accent,roomCards",
     "sibling order changed across unchanged-capability re-renders, got: " + orderOf(document));
 `);
 
-scenario("a changed pixel_count rebuilds the strip", `
+scenario("a changed pixel_count rebuilds only the fixture that changed", `
   renderRoom(room());
-  renderRoomFrame(new Array(180).fill(1));
-  const stripBefore = document.getElementById("roomStrip");
+  renderRoomFrame("sim-room-main", new Array(180).fill(1));
+  const mainStripBefore = document.getElementById("roomStrip-main");
+  const accentStripBefore = document.getElementById("roomStrip-accent");
 
-  renderRoom(room({ capability: cap(10, [{ name: "all", start: 0, count: 10 }]) }));
-  const stripAfter = document.getElementById("roomStrip");
+  renderRoom(room({ fixtures: fixtures((fx) => [
+    { ...fx[0], pixel_count: 10, channel_count: 30,
+      zones: [{ name: "main.all", start: 0, count: 10 }] },
+    fx[1],
+  ]) }));
 
-  assert(stripAfter !== stripBefore, "strip was not rebuilt after pixel_count changed");
-  assert(stripAfter.children.length === 10,
-    "expected 10 swatches after reconfigure, got " + stripAfter.children.length);
-  const stale = stripAfter.children.filter((n) => n.style.background).length;
-  assert(stale === 0, "rebuilt strip should start unpainted, found " + stale + " stale swatches");
-  // #roomCards already existed (from the first render, above) by the time
-  // this rebuild ran. Removing and re-appending the strip/zones with
-  // appendChild (rather than inserting them back before #roomCards) would
-  // put them AFTER the cards, so the live-light strip would visibly jump
-  // below the instrument cards on every capability change.
-  assert(orderOf(document) === "roomHeader,roomStrip,roomZones,roomCards",
-    "capability rebuild reordered #room's children, got: " + orderOf(document));
+  const mainStripAfter = document.getElementById("roomStrip-main");
+  const accentStripAfter = document.getElementById("roomStrip-accent");
+  assert(mainStripAfter !== mainStripBefore, "main's strip should have been rebuilt after its own pixel_count changed");
+  assert(mainStripAfter.children.length === 10, "expected 10 swatches on the rebuilt main strip, got " + mainStripAfter.children.length);
+  const staleMain = mainStripAfter.children.filter((n) => n.style.background).length;
+  assert(staleMain === 0, "rebuilt main strip should start unpainted, found " + staleMain + " stale swatches");
+  assert(accentStripAfter === accentStripBefore,
+    "accent's strip node identity changed even though only main's capability changed " +
+    "(a fixture's OWN shape change must not rebuild an unrelated fixture's strip)");
+  assert(accentStripAfter.children.length === 30, "accent strip should be untouched at 30 swatches, got " + accentStripAfter.children.length);
+  assert(orderOf(document) === "roomHeader,roomStrip-main,roomZones-main,roomStrip-accent,roomZones-accent,roomCards",
+    "declaration order must survive a partial rebuild, got: " + orderOf(document));
 `);
 
-scenario("changed zones (same pixel_count) also rebuilds the strip", `
+scenario("changed zones (same pixel_count) rebuilds only that fixture", `
   renderRoom(room());
-  renderRoomFrame(new Array(180).fill(1));
-  const stripBefore = document.getElementById("roomStrip");
+  renderRoomFrame("sim-room-main", new Array(180).fill(1));
+  const mainStripBefore = document.getElementById("roomStrip-main");
+  const accentStripBefore = document.getElementById("roomStrip-accent");
 
-  const twoZones = [{ name: "left", start: 0, count: 30 }, { name: "right", start: 30, count: 30 }];
-  renderRoom(room({ capability: cap(60, twoZones) }));
-  const stripAfter = document.getElementById("roomStrip");
+  const twoZones = [{ name: "main.left", start: 0, count: 30 }, { name: "main.right", start: 30, count: 30 }];
+  renderRoom(room({ fixtures: fixtures((fx) => [{ ...fx[0], zones: twoZones }, fx[1]]) }));
 
-  assert(stripAfter !== stripBefore,
-    "strip was not rebuilt after zones changed, even though pixel_count stayed the same");
-  const zonesBar = document.getElementById("roomZones");
-  assert(zonesBar.children.length === 2, "zone labels were not rebuilt to match the new zones");
-  assert(orderOf(document) === "roomHeader,roomStrip,roomZones,roomCards",
-    "capability rebuild reordered #room's children, got: " + orderOf(document));
+  const mainStripAfter = document.getElementById("roomStrip-main");
+  const accentStripAfter = document.getElementById("roomStrip-accent");
+  assert(mainStripAfter !== mainStripBefore,
+    "main's strip should have been rebuilt after its zones changed, even though pixel_count stayed the same");
+  const mainZonesBar = document.getElementById("roomZones-main");
+  assert(mainZonesBar.children.length === 3, "main's zone bar should show 1 fixture-name label + 2 zones, got " + mainZonesBar.children.length);
+  assert(accentStripAfter === accentStripBefore,
+    "accent's strip node identity changed even though only main's zones changed");
+  assert(orderOf(document) === "roomHeader,roomStrip-main,roomZones-main,roomStrip-accent,roomZones-accent,roomCards",
+    "declaration order must survive a partial rebuild, got: " + orderOf(document));
 `);
 
 scenario("renderRoom(null) renders the empty state and resets state cleanly", `
   renderRoom(room());
-  renderRoomFrame(new Array(180).fill(1));
+  renderRoomFrame("sim-room-main", new Array(180).fill(1));
 
   renderRoom(null);
   const roomDiv = document.getElementById("room");
   const text = roomDiv.children.map((c) => c.textContent).join(" ");
   assert(text.indexOf("No Room configured") !== -1, "expected the empty-state text, got: " + text);
-  assert(document.getElementById("roomStrip") === null, "strip should be gone after renderRoom(null)");
+  assert(document.getElementById("roomStrip-main") === null, "main strip should be gone after renderRoom(null)");
+  assert(document.getElementById("roomStrip-accent") === null, "accent strip should be gone after renderRoom(null)");
 
   // A later real Room must rebuild cleanly, not compare against the
-  // capability from before the null and wrongly skip the rebuild.
+  // fixtures shape from before the null and wrongly skip the rebuild.
   renderRoom(room());
-  const rebuilt = document.getElementById("roomStrip");
-  assert(rebuilt !== null, "a real Room after renderRoom(null) should rebuild the strip");
-  assert(rebuilt.children.length === 60, "the rebuilt strip after renderRoom(null) has the wrong pixel count");
-  const painted = rebuilt.children.filter((n) => n.style.background).length;
-  assert(painted === 0, "the rebuilt strip after renderRoom(null) should start unpainted, found " + painted);
+  const rebuiltMain = document.getElementById("roomStrip-main");
+  const rebuiltAccent = document.getElementById("roomStrip-accent");
+  assert(rebuiltMain !== null, "a real Room after renderRoom(null) should rebuild the main strip");
+  assert(rebuiltAccent !== null, "a real Room after renderRoom(null) should rebuild the accent strip");
+  assert(rebuiltMain.children.length === 60, "the rebuilt main strip after renderRoom(null) has the wrong pixel count");
+  assert(rebuiltAccent.children.length === 30, "the rebuilt accent strip after renderRoom(null) has the wrong pixel count");
+  const painted = rebuiltMain.children.filter((n) => n.style.background).length;
+  assert(painted === 0, "the rebuilt main strip after renderRoom(null) should start unpainted, found " + painted);
 `);
 
 scenario("renderRoomFrame is safe before any renderRoom, and decodes GRB not RGB", `
-  assert(document.getElementById("roomStrip") === null, "no strip should exist yet in a fresh document");
-  renderRoomFrame([10, 20, 30]); // must not throw
+  assert(document.getElementById("roomStrip-main") === null, "no strip should exist yet in a fresh document");
+  renderRoomFrame("sim-room-main", [10, 20, 30]); // must not throw
 
-  renderRoom(room({ capability: cap(2, [{ name: "all", start: 0, count: 2 }]) }));
+  renderRoom(room({ fixtures: fixtures((fx) => [{ ...fx[0], pixel_count: 2, channel_count: 6, zones: [{ name: "main.all", start: 0, count: 2 }] }, fx[1]]) }));
   // Wire order per pixel is [G, R, B] (control/room_profile.py's
   // color_order). Pixel 0: G=10 R=20 B=30. Pixel 1: G=40 R=50 B=60.
-  renderRoomFrame([10, 20, 30, 40, 50, 60]);
-  const swatches = document.getElementById("roomStrip").children;
+  renderRoomFrame("sim-room-main", [10, 20, 30, 40, 50, 60]);
+  const swatches = document.getElementById("roomStrip-main").children;
   assert(swatches[0].style.background === "rgb(20,10,30)",
     "GRB decode wrong for pixel 0, got " + swatches[0].style.background);
   assert(swatches[1].style.background === "rgb(50,40,60)",
     "GRB decode wrong for pixel 1, got " + swatches[1].style.background);
 `);
 
+scenario("one strip per fixture, each with its own zone bar", `
+  renderRoom(room());
+  const mainStrip = document.getElementById("roomStrip-main");
+  const accentStrip = document.getElementById("roomStrip-accent");
+  assert(mainStrip !== null && accentStrip !== null, "both fixture strips should exist");
+  assert(mainStrip.children.length === 60, "main strip should have 60 swatches, got " + mainStrip.children.length);
+  assert(accentStrip.children.length === 30, "accent strip should have 30 swatches, got " + accentStrip.children.length);
+  const mainZones = document.getElementById("roomZones-main");
+  const accentZones = document.getElementById("roomZones-accent");
+  // Each zone bar carries a leading fixtureLabel span (the fixture's name,
+  // plus "(not bound)" when unbound) ahead of one span per zone -- see
+  // buildFixtureZoneLabels in room.js. main has 3 zones -> 4 children;
+  // accent has 2 zones -> 3 children.
+  assert(mainZones.children.length === 4, "main should show its own 3 zones plus its fixture label, got " + mainZones.children.length);
+  assert(accentZones.children.length === 3, "accent should show its own 2 zones plus its fixture label, got " + accentZones.children.length);
+`);
+
+scenario("a frame for one fixture does not repaint the other, and routes by dev", `
+  renderRoom(room());
+  renderRoomFrame("sim-room-main", new Array(180).fill(9));
+  renderRoomFrame("sim-room-accent", new Array(90).fill(0));   // accent unbound in fixtures(), dev null -- must be a no-op, no matching strip by dev
+
+  const mainStrip = document.getElementById("roomStrip-main");
+  const accentStrip = document.getElementById("roomStrip-accent");
+  const mainPainted = mainStrip.children.filter((n) => n.style.background).length;
+  const accentPainted = accentStrip.children.filter((n) => n.style.background).length;
+  assert(mainPainted === 60, "main frame should paint every main swatch, got " + mainPainted);
+  assert(accentPainted === 0, "a frame addressed to an unbound fixture's stale dev must not paint anything, got " + accentPainted);
+`);
+
 // ---- console.js dispatch coverage ----------------------------------------
-// console/static/console.js's handle() gained two cases this branch:
+// console/static/console.js's handle() has two Room-related cases:
 //   case "room_changed": renderRoom(msg.room); break;
-//   case "room_frame": renderRoomFrame(msg.channels); break;
+//   case "room_frame": renderRoomFrame(msg.dev, msg.channels); break;
 // renderRoom/renderRoomFrame are room.js's, already covered by the
 // scenarios above, so here they are replaced with spies: this checks only
 // that handle() routes each event to the right function with the right
@@ -335,7 +399,7 @@ function consoleScenario(name, testBody) {
     assert,
     calls,
     renderRoom: (room) => calls.push(["renderRoom", room]),
-    renderRoomFrame: (channels) => calls.push(["renderRoomFrame", channels]),
+    renderRoomFrame: (dev, channels) => calls.push(["renderRoomFrame", dev, channels]),
   };
   vm.createContext(sandbox);
   try {
@@ -347,7 +411,7 @@ function consoleScenario(name, testBody) {
 }
 
 consoleScenario("room_changed dispatches to renderRoom with the message's room payload", `
-  const payload = { room_type: "TEST", capability: { pixel_count: 60, zones: [] }, instruments: [] };
+  const payload = { room_type: "TEST", capability: { pixel_count: 60, zones: [] }, fixtures: [], instruments: [] };
   handle({ event: "room_changed", room: payload });
   assert(calls.length === 1, "expected exactly one render call, got " + calls.length);
   assert(calls[0][0] === "renderRoom",
@@ -356,13 +420,15 @@ consoleScenario("room_changed dispatches to renderRoom with the message's room p
     "renderRoom was not called with the message's room payload");
 `);
 
-consoleScenario("room_frame dispatches to renderRoomFrame with the message's channels payload", `
+consoleScenario("room_frame dispatches to renderRoomFrame with the message's dev and channels payload", `
   const channels = [10, 20, 30, 40, 50, 60];
-  handle({ event: "room_frame", channels });
+  handle({ event: "room_frame", dev: "sim-room-main", channels });
   assert(calls.length === 1, "expected exactly one render call, got " + calls.length);
   assert(calls[0][0] === "renderRoomFrame",
     "room_frame should dispatch to renderRoomFrame, got " + (calls[0] && calls[0][0]));
-  assert(calls[0][1] === channels,
+  assert(calls[0][1] === "sim-room-main",
+    "renderRoomFrame was not called with the message's dev");
+  assert(calls[0][2] === channels,
     "renderRoomFrame was not called with the message's channels payload");
 `);
 

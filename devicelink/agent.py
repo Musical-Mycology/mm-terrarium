@@ -127,7 +127,6 @@ class DeviceLinkAgent:
         # device shape, and sharing one capability between a Tuneshroom and a
         # Room is exactly the confusion this slice removes.
         self._room_profile: RoomProfile | None = room_profile
-        self._room_dev: str | None = None
         self._room_light = None
         # Display-only copy of each changed Room frame, for the Terrarium
         # Console. Optional and best-effort: None is the default, so a run
@@ -146,27 +145,24 @@ class DeviceLinkAgent:
         game_server.on_play_cue = self._on_play_cue
 
     def _setup_room(self) -> None:
-        """Build the Room's real LightSession (and, if room_audio was
-        injected, wire its Arco voice) from the loaded Bit's own Room
-        declaration -- the same declare-then-compose pattern every per-role
-        device already uses, just without a JoinResult (there is no join
-        for this path; see design spec section 4).
+        """Build the Room's real LightSession over the WHOLE concatenated
+        profile (every fixture, bound or not -- see design spec section 2)
+        and, if room_audio was injected, wire its Arco voice. The
+        declare-then-compose pattern every per-role device already uses,
+        just without a JoinResult (there is no join for this path).
 
-        Construction happens eagerly here, at agent-construction time --
-        not deferred until the Room device's hello arrives, as design spec
-        section 5's wording ("when a connecting dev equals gs.room.bound_dev")
-        might suggest. There is nothing to wait for: room.bound_dev is
-        already known synchronously by the time this agent is constructed,
-        so an arrival-triggered build would just add an extra state to
-        track for no benefit."""
+        Construction happens eagerly here, at agent-construction time, and
+        _render_room() below is what scopes SENDING to whichever fixtures
+        are actually bound at the moment -- it reads self.room.bound fresh
+        on every render, so a fixture bound after construction (a late
+        admin tap) is picked up on its next tick with no rebuild."""
         gs = self.game_server
         room = gs.room
-        if room is None or room.bound_dev is None or gs.bit is None:
+        if room is None or gs.bit is None:
             return
         role = gs.bit.role_table.roles.get(room_role_name(room.room_type))
         if role is None:
             return
-        self._room_dev = room.bound_dev
         blob = compose_role_config(gs.bit_name, gs.bit.version, role)
         manifest = LightManifest.from_dict(blob["light_manifest"])
         if self._room_profile is None:
@@ -175,12 +171,33 @@ class DeviceLinkAgent:
         session = build_session(manifest, cap, clock=self._clock)
         self._room_light = _RoomLightSink(session, Universe())
         audio_sink = None
-        if self._room_audio is not None:
-            self._room_audio.on_grant(self._room_dev, role)
-            audio_sink = _RoomAudioSink(self._room_audio, self._room_dev)
+        canonical = self._canonical_room_dev()
+        if self._room_audio is not None and canonical is not None:
+            self._room_audio.on_grant(canonical, role)
+            audio_sink = _RoomAudioSink(self._room_audio, canonical)
         if self._room_bridge is not None:
-            self._room_bridge.bind(self._room_dev, light=self._room_light,
+            self._room_bridge.bind(canonical, light=self._room_light,
                                    audio=audio_sink)
+
+    def _canonical_room_dev(self) -> str | None:
+        """The Room's one dev for MIDI-feed/audio-grant purposes: the
+        first bound fixture in the profile's declaration order. Mirrors
+        GameServer._canonical_room_dev's algorithm as a self-contained
+        copy rather than reaching into the engine's method across the
+        module boundary -- this agent already holds everything the walk
+        needs (self._room_profile, self.game_server.room.bound). Every
+        caller of this method must get the SAME answer for the SAME
+        state, the same way every Room-dev decision in the engine goes
+        through its own single canonical-dev method -- see design spec
+        section 5's 'frame fan-out is the only per-fixture step'."""
+        gs = self.game_server
+        if gs.room is None or not gs.room.bound or self._room_profile is None:
+            return None
+        for fixture in self._room_profile.fixtures:
+            dev = gs.room.bound.get(fixture.name)
+            if dev is not None:
+                return dev
+        return None
 
     @property
     def room_bridge(self):
@@ -257,8 +274,13 @@ class DeviceLinkAgent:
             logger.exception("room audio tick failed")
 
     def _render_room(self) -> None:
-        if self._room_light is None or self._room_dev is None:
+        if self._room_light is None or self._room_profile is None:
             return
+        gs = self.game_server
+        bound = gs.room.bound if gs.room is not None else {}
+        if not bound:
+            return
+        canonical = self._canonical_room_dev()
         # Room AUDIO waits here for its moment. Room LIGHT was already fed in
         # _on_light_cue (or _drain_light_cues), because the frame it renders
         # still has to cross the wire to reach the simulator by `at`. One
@@ -270,7 +292,9 @@ class DeviceLinkAgent:
                 logger.exception("Room feed_audio failed")
         # Popped unconditionally, for the same reason _render_frames does it:
         # a cue that changes no frame must not leave a stale time behind.
-        at = self._pending_at.pop(self._room_dev, None)
+        # Keyed by the canonical dev: every bound fixture's slice shares one
+        # `at`, since they all come from the same single render.
+        at = self._pending_at.pop(canonical, None)
         universe = self._room_light.universe
         try:
             self._room_light.session.render_into(universe)
@@ -278,16 +302,19 @@ class DeviceLinkAgent:
             logger.exception("Room render failed; skipping frame")
             return
         frame = bytes(universe.get_frame()[:self._room_profile.channel_count])
-        if frame != self._last_frames.get(self._room_dev):
-            self._last_frames[self._room_dev] = frame
-            self._emit_room_frame(self._room_dev, frame)
-            when = at if at is not None else self._clock() + self._horizon
-            try:
-                self._send(self._room_dev,
-                           protocol.leds_event(self._room_dev, frame,
-                                               when=when))
-            except Exception:
-                logger.exception("Room leds send failed")
+        when = at if at is not None else self._clock() + self._horizon
+        for name, start, count in self._room_profile.fixture_slices():
+            dev = bound.get(name)
+            if dev is None:
+                continue   # this fixture is not bound yet -- send to the rest
+            slice_ = frame[start:start + count]
+            if slice_ != self._last_frames.get(dev):
+                self._last_frames[dev] = slice_
+                self._emit_room_frame(dev, slice_)
+                try:
+                    self._send(dev, protocol.leds_event(dev, slice_, when=when))
+                except Exception:
+                    logger.exception("Room leds send failed for %s", dev)
 
     def _emit_room_frame(self, dev: str, frame: bytes) -> None:
         """Guarded exactly like on_release and on_light_cue already are: a
@@ -463,15 +490,17 @@ class DeviceLinkAgent:
         returns early once _finish_release has cleared the bridge. Dropped
         rather than drained: these are cues for a Bit that no longer exists.
         """
+        gs = self.game_server
         if new_state == State.UNLOADING:
             self._room_cues = TimedQueue()
             self._light_cues = TimedQueue()
-        if self._room_audio is None or self._room_dev is None:
+        if self._room_audio is None or gs.room is None or not gs.room.bound:
             return
+        canonical = self._canonical_room_dev()
         if new_state == State.RUNNING:
-            self._room_audio.start_drone(self._room_dev)
+            self._room_audio.start_drone(canonical)
         elif new_state == State.UNLOADING:
-            self._room_audio.stop_drone(self._room_dev)
+            self._room_audio.stop_drone(canonical)
 
     def _on_release(self, dev: str) -> None:
         """Engine released dev. Kick off the closing fade -- but keep the
@@ -509,6 +538,10 @@ class DeviceLinkAgent:
         except Exception:
             logger.exception("release notify for %s failed", dev)
 
+    def _is_room_dev(self, dev: str) -> bool:
+        gs = self.game_server
+        return gs.room is not None and dev in gs.room.bound.values()
+
     def _feed_light_now(self, dev: str, status: int, d1: int, d2: int,
                         at: float | None) -> None:
         """Apply a light cue to its session and record when the frame it
@@ -517,7 +550,7 @@ class DeviceLinkAgent:
         Earliest wins: one frame carries every cue applied in a tick, so it
         must not be late for the soonest deadline among them.
         """
-        if dev == self._room_dev and self._room_bridge is not None:
+        if self._is_room_dev(dev) and self._room_bridge is not None:
             try:
                 self._room_bridge.feed_light(status, d1, d2)
             except Exception:
@@ -557,7 +590,7 @@ class DeviceLinkAgent:
         2026-08-14-load-bearing-timed-cues-design.md section 2.
         """
         now = self._clock()
-        if dev == self._room_dev and self._room_bridge is not None:
+        if self._is_room_dev(dev) and self._room_bridge is not None:
             self._room_cues.push(when, (status, data1, data2), now=now)
         feed_at = None if when is None else when - self._horizon
         if feed_at is not None and feed_at > now:

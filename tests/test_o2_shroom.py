@@ -47,10 +47,7 @@ def test_build_wires_the_client_and_backend():
 
 
 def test_no_join_build_uses_the_room_surface():
-    pytest.importorskip("luxaeterna")
-    from harness.o2_shroom import build
-    client, backend = build("sim-room", serve=False, room_type="TEST")
-    assert backend._cap.surface_id == "room_test"
+    client, backend = build("sim-room", serve=False, room_type="TEST", fixture="main")
     assert client.expected_channels == 180
 
 

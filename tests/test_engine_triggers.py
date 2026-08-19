@@ -169,15 +169,17 @@ class ScriptBit(_BaseBit):
 
 
 class _Room:
-    def __init__(self, bound_dev):
+    def __init__(self, bound):
         from control.rooms import RoomType
         self.room_type = RoomType.TEST
-        self.bound_dev = bound_dev
+        self.bound = bound   # dict[str, str], fixture name -> dev
 
 
-def _running(bit_cls=ScriptBit, bound_dev="sim-room", clock=None):
+def _running(bit_cls=ScriptBit, bound=None, clock=None):
+    if bound is None:
+        bound = {"main": "sim-room-main"}
     gs = GameServer({"bit": bit_cls}, clock=clock or (lambda: 100.0))
-    gs.room = _Room(bound_dev)
+    gs.room = _Room(bound)
     light, play = [], []
     gs.on_light_cue = lambda *a: light.append(a)
     gs.on_play_cue = lambda *a: play.append(a)
@@ -190,7 +192,7 @@ def _running(bit_cls=ScriptBit, bound_dev="sim-room", clock=None):
 def test_manual_fire_dispatches_every_step_with_its_offset():
     gs, light, _ = _running()
     assert gs.fire_trigger("sweep", fired_by="admin-manual") is None
-    assert [c[0] for c in light] == ["sim-room"] * 3
+    assert [c[0] for c in light] == ["sim-room-main"] * 3
     assert [c[4] for c in light] == [100.0, 100.5, 102.0]
     assert [c[3] for c in light] == [127, 40, 0]
 
@@ -198,8 +200,6 @@ def test_manual_fire_dispatches_every_step_with_its_offset():
 def test_a_verb_handler_fire_shares_the_gestures_presentation_time():
     gs, light, play = _running()
     assert gs.data("ie1", "tap", ["ie1"]) is None
-    # The handler's own cue, then the script's play and light steps, all at
-    # the same `at` the engine computed once for this gesture.
     assert play == [("ie1", "click", "")]
     assert [c[0] for c in light] == ["ie1", "ie1"]
     assert {c[4] for c in light} == {100.0}
@@ -234,19 +234,67 @@ def test_the_record_reports_what_the_fire_resolved_to():
     record = observer.fired[0]
     assert record.name == "sweep"
     assert record.condition == "round_won"
-    assert record.devs == ("sim-room",)
+    assert record.devs == ("sim-room-main",)
     assert record.steps == 3
     assert record.at == 100.0
+
+
+def test_a_target_fanout_across_two_bound_fixtures_feeds_the_room_once_per_step():
+    """The Room's TARGET-fanout would double-feed the shared session once per
+    bound fixture if not collapsed -- see control/engine.py's
+    _collapse_room_fanout. Two fixtures bound, three script steps: still
+    exactly 3 light cues, not 6, all addressed to the canonical
+    (first-declared) fixture's dev. The fired record still reports every
+    fixture the trigger's target resolved to, uncollapsed -- collapsing is a
+    fan-out concern, not a reporting one."""
+    gs, light, _ = _running(bound={"main": "sim-room-main",
+                                   "accent": "sim-room-accent"})
+    observer = Recorder()
+    gs.add_observer(observer)
+    assert gs.fire_trigger("sweep", fired_by="admin-manual") is None
+    assert [c[0] for c in light] == ["sim-room-main"] * 3
+    assert observer.fired[0].devs == ("sim-room-main", "sim-room-accent")
+    assert observer.fired[0].steps == 3
+
+
+def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
+    """_resolve_target must walk the profile's fixtures in declaration order
+    (main, then accent for the TEST profile), never dict/bind order -- an
+    operator can arm and bind accent before main, and nothing about admin
+    sequencing prevents that. Bound accent-first here, opposite of profile
+    declaration order, to prove the resolved and reported dev order still
+    comes out main-then-accent."""
+    gs, light, _ = _running(bound={"accent": "sim-room-accent",
+                                   "main": "sim-room-main"})
+    observer = Recorder()
+    gs.add_observer(observer)
+    assert gs.fire_trigger("sweep", fired_by="admin-manual") is None
+    assert observer.fired[0].devs == ("sim-room-main", "sim-room-accent")
+    assert [c[0] for c in light] == ["sim-room-main"] * 3
+
+
+def test_resolve_target_on_an_unbound_room_with_no_profile_does_not_raise():
+    """_resolve_target's room_devs block must short-circuit on "is anything
+    bound" before ever calling room_profile(), exactly like its sibling
+    _canonical_room_dev does -- RoomType.DEMO has no ROOM_PROFILES entry
+    (see control/room_profile.py), so room_profile(RoomType.DEMO) always
+    raises NotImplementedError. An empty, DEMO-typed Room must never reach
+    that call at all, the same way it never would through
+    _canonical_room_dev."""
+    from control.rooms import Room, RoomType
+    gs = GameServer({}, clock=lambda: 0.0)
+    gs.room = Room(room_type=RoomType.DEMO)
+    assert gs._resolve_target(TriggerTarget.ROOM, None) == []
 
 
 def test_all_resolves_to_the_room_plus_registered_players_deduped():
     gs, light, _ = _running()
     gs.fire_trigger("everywhere", fired_by="admin-manual")
-    assert [c[0] for c in light] == ["sim-room", "ie1"]
+    assert [c[0] for c in light] == ["sim-room-main", "ie1"]
 
 
 def test_all_never_lists_a_room_bound_device_twice():
-    gs, light, _ = _running(bound_dev="ie1")
+    gs, light, _ = _running(bound={"main": "ie1"})
     gs.fire_trigger("everywhere", fired_by="admin-manual")
     assert [c[0] for c in light] == ["ie1"]
 
@@ -271,7 +319,7 @@ def test_firing_with_no_bit_running_is_refused():
 
 def test_a_room_target_with_no_room_bound_fires_and_reaches_nothing():
     """A fire that reached nothing must be visible as such, not absent."""
-    gs, light, _ = _running(bound_dev=None)
+    gs, light, _ = _running(bound={})
     observer = Recorder()
     gs.add_observer(observer)
     assert gs.fire_trigger("sweep", fired_by="admin-manual") is None

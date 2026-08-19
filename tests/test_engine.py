@@ -451,15 +451,15 @@ def test_room_node_join_binds_device_once_armed():
     server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
     server.room = Room(room_type=RoomType.TEST)
     server.load_bit("RoomCapableBit")
-    binding.arm(RoomType.TEST, window_seconds=10.0)
+    binding.arm(RoomType.TEST, "main", window_seconds=10.0)
 
     result = server.join("ie9", "ROOM_TEST_NODE")
 
     assert result.granted is True
     assert result.role_class == RoleClass.ROOM
     assert result.config is None
-    assert server.room.bound_dev == "ie9"
-    assert binding.bound_device(RoomType.TEST) == "ie9"
+    assert server.room.bound == {"main": "ie9"}
+    assert binding.bound_device(RoomType.TEST, "main") == "ie9"
 
 
 def test_room_join_does_not_disturb_player_joins():
@@ -510,7 +510,7 @@ def test_bit_cues_are_dispatched_once_per_running_tick():
     gs = GameServer({"ab": lambda: bit}, cue_horizon=0.06,
                     clock=lambda: 1000.0)
     gs.room = Room(room_type=RoomType.TEST)
-    gs.room.bound_dev = "sim-room"
+    gs.room.bound = {"main": "sim-room"}
     seen = []
     gs.on_light_cue = lambda *a: seen.append(a)
     gs.load_bit("ab")

@@ -18,11 +18,12 @@ th, td { border: 1px solid #ccc; padding: .2rem .5rem; text-align: left; }
 .conn-down { color: #a00; }
 
 /* Room panel */
-#roomStrip { display: flex; gap: 1px; margin: .4rem 0 .1rem; height: 2.2rem; }
-#roomStrip div { flex: 1 1 0; background: #000; }
-#roomZones { display: flex; gap: 1px; font-size: .75rem; color: #555; }
-#roomZones span { text-align: center; border-top: 2px solid #999;
+[id^="roomStrip-"] { display: flex; gap: 1px; margin: .4rem 0 .1rem; height: 2.2rem; }
+[id^="roomStrip-"] div { flex: 1 1 0; background: #000; }
+[id^="roomZones-"] { display: flex; gap: 1px; font-size: .75rem; color: #555; }
+[id^="roomZones-"] span:not(.fixtureLabel) { text-align: center; border-top: 2px solid #999;
                   padding-top: .15rem; }
+.fixtureLabel { font-weight: bold; margin-right: .4rem; color: #333; }
 .cards { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
 .card { border: 1px solid #ccc; border-radius: 4px; padding: .5rem .7rem;
         min-width: 15rem; }
