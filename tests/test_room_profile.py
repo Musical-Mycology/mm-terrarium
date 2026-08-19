@@ -5,9 +5,16 @@ import pathlib
 
 import pytest
 
-from control.room_profile import (ROOM_PROFILES, RoomFixture, RoomProfile,
-                                  RoomZone, room_profile)
+from control.room_profile import (ROOM_PROFILES, RoomBlock, RoomFixture,
+                                  RoomProfile, RoomZone, room_profile)
 from control.rooms import RoomType
+
+
+def _fixture(name="main", blocks=None, zones=(), color_order="GRB"):
+    if blocks is None:
+        blocks = (RoomBlock("b1", 0, 60),)
+    return RoomFixture(name=name, color_order=color_order,
+                       blocks=blocks, zones=zones)
 
 
 def test_test_room_declares_two_asymmetric_fixtures():
@@ -118,26 +125,29 @@ def test_a_profile_needs_at_least_one_fixture():
 def test_duplicate_fixture_names_are_rejected():
     with pytest.raises(ValueError, match="duplicate"):
         RoomProfile(surface_id="dup", fixtures=(
-            RoomFixture("a", 10, "GRB", ()), RoomFixture("a", 10, "GRB", ())))
+            _fixture(name="a", blocks=(RoomBlock("a", 0, 10),)),
+            _fixture(name="a", blocks=(RoomBlock("a", 0, 10),))))
 
 
 def test_mixed_color_order_across_fixtures_is_rejected():
     with pytest.raises(ValueError, match="color_order"):
         RoomProfile(surface_id="mixed", fixtures=(
-            RoomFixture("a", 10, "GRB", ()), RoomFixture("b", 10, "RGB", ())))
+            _fixture(name="a", color_order="GRB", blocks=(RoomBlock("a", 0, 10),)),
+            _fixture(name="b", color_order="RGB", blocks=(RoomBlock("b", 0, 10),))))
 
 
 def test_zones_overrunning_their_fixture_are_rejected():
     with pytest.raises(ValueError, match="overrun"):
         RoomProfile(surface_id="overrun", fixtures=(
-            RoomFixture("a", 10, "GRB", (RoomZone("all", 0, 20),)),))
+            _fixture(name="a", blocks=(RoomBlock("a", 0, 10),),
+                    zones=(RoomZone("all", 0, 20),)),))
 
 
 def test_overlapping_zones_within_one_fixture_are_rejected():
     with pytest.raises(ValueError, match="overlap"):
         RoomProfile(surface_id="overlap", fixtures=(
-            RoomFixture("a", 10, "GRB",
-                       (RoomZone("x", 0, 5), RoomZone("y", 3, 5))),))
+            _fixture(name="a", blocks=(RoomBlock("a", 0, 10),),
+                    zones=(RoomZone("x", 0, 5), RoomZone("y", 3, 5))),))
 
 
 def test_zones_need_not_be_declared_in_position_order_or_tile_gaplessly():
@@ -149,15 +159,70 @@ def test_zones_need_not_be_declared_in_position_order_or_tile_gaplessly():
     test_zone_order_is_preserved_for_an_unsorted_profile, unaffected by this
     slice)."""
     profile = RoomProfile(surface_id="sparse-and-unsorted", fixtures=(
-        RoomFixture("a", 10, "GRB",
-                   (RoomZone("b", 6, 2), RoomZone("a", 0, 2))),))
+        _fixture(name="a", blocks=(RoomBlock("a", 0, 10),),
+                zones=(RoomZone("b", 6, 2), RoomZone("a", 0, 2))),))
     assert [z.name for z in profile.zones] == ["a.b", "a.a"]   # order preserved, gap at 2-6 allowed
 
 
-def test_a_profile_over_the_single_universe_cap_is_rejected():
-    with pytest.raises(ValueError, match="170"):
-        RoomProfile(surface_id="huge", fixtures=(
-            RoomFixture("a", 171, "GRB", ()),))
+def test_fixture_pixel_count_is_sum_of_blocks():
+    f = _fixture(blocks=(RoomBlock("b1", 0, 30), RoomBlock("b2", 30, 50),
+                        RoomBlock("b3", 80, 20)))
+    assert f.pixel_count == 100
+
+
+def test_overlapping_blocks_are_refused():
+    with pytest.raises(ValueError, match="overlapping blocks"):
+        RoomProfile(surface_id="p", fixtures=(
+            _fixture(blocks=(RoomBlock("b1", 0, 40), RoomBlock("b2", 30, 30))),))
+
+
+def test_block_gaps_are_refused():
+    # Blocks define the fixture's own extent, so unlike zones they must
+    # tile it exactly: a gap means a pixel range no physical device drives.
+    with pytest.raises(ValueError, match="do not tile"):
+        RoomProfile(surface_id="p", fixtures=(
+            _fixture(blocks=(RoomBlock("b1", 0, 30), RoomBlock("b2", 40, 30))),))
+
+
+def test_block_not_starting_at_zero_is_refused():
+    with pytest.raises(ValueError, match="do not tile"):
+        RoomProfile(surface_id="p", fixtures=(
+            _fixture(blocks=(RoomBlock("b1", 10, 30),)),))
+
+
+def test_duplicate_block_names_are_refused():
+    with pytest.raises(ValueError, match="duplicate block names"):
+        RoomProfile(surface_id="p", fixtures=(
+            _fixture(blocks=(RoomBlock("b1", 0, 30), RoomBlock("b1", 30, 30))),))
+
+
+def test_a_block_over_170px_is_refused():
+    with pytest.raises(ValueError, match="single-universe"):
+        RoomProfile(surface_id="p", fixtures=(
+            _fixture(blocks=(RoomBlock("big", 0, 171),)),))
+
+
+def test_a_fixture_over_170px_is_fine_when_each_block_is_under():
+    # The cap moved from whole-profile to per-block: this is the whole
+    # point of blocks (spec section 2).
+    profile = RoomProfile(surface_id="p", fixtures=(
+        _fixture(blocks=(RoomBlock("b1", 0, 170), RoomBlock("b2", 170, 170))),))
+    assert profile.pixel_count == 340
+
+
+def test_zero_or_negative_block_count_is_refused():
+    with pytest.raises(ValueError, match="positive"):
+        RoomProfile(surface_id="p", fixtures=(
+            _fixture(blocks=(RoomBlock("b1", 0, 0),)),))
+
+
+def test_test_profile_declares_explicit_blocks():
+    profile = room_profile(RoomType.TEST)
+    main, accent = profile.fixtures
+    assert [b.name for b in main.blocks] == ["main"]
+    assert main.pixel_count == 60
+    assert [b.name for b in accent.blocks] == ["accent"]
+    assert accent.pixel_count == 30
 
 
 def test_no_control_module_imports_a_renderer_at_module_level():

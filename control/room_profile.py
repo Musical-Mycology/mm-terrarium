@@ -15,10 +15,12 @@ from dataclasses import dataclass
 
 from control.rooms import RoomType
 
-# A single luxaeterna Universe is 512 DMX channels, so a Room caps at 170 px
-# RGB in total across every fixture. Anything larger needs PixelSpan/
-# UniverseSet (luxaeterna has them; harness/array_smoke.py uses them for the
-# 864 px venue array) and is out of scope for this slice (non-goal N5).
+# A single luxaeterna Universe is 512 DMX channels, so one BLOCK -- one
+# physical LED device / one controller's worth -- caps at 170 px RGB (see
+# RoomBlock). A whole profile may exceed this by declaring more blocks;
+# anything larger than one universe per block needs PixelSpan/UniverseSet
+# (luxaeterna has them; harness/array_smoke.py uses them for the 864 px venue
+# array) and is out of scope for this slice (non-goal N5).
 _MAX_PROFILE_PIXELS = 170
 
 
@@ -38,13 +40,40 @@ class RoomZone:
 
 
 @dataclass(frozen=True)
+class RoomBlock:
+    """A physical LED device's own pixel range within a Fixture -- the
+    build-out unit ("which literal LED device drives this pixel range").
+    Individually capped at _MAX_PROFILE_PIXELS (one DMX universe / one
+    controller's worth). Purely declarative this slice: no simulator or
+    backend consumes block boundaries for output routing yet -- a future
+    real per-controller adapter reads them off the profile with no further
+    data-model change needed. Only harness/room_simulator.py's
+    --identify-blocks debug tool reads them today. A different axis from
+    RoomZone, which is gameplay/Console targeting; blocks are hardware
+    composition. See
+    docs/superpowers/specs/2026-08-19-demo-room-and-block-profile-design.md
+    section 2."""
+    name: str
+    start: int
+    count: int
+
+
+@dataclass(frozen=True)
 class RoomFixture:
     """One physical (or simulated) light fixture -- its own o2lite client,
-    its own unique service name, once bound. See design spec section 3."""
+    its own unique service name, once bound. One continuous physical run,
+    decomposed into blocks (see RoomBlock). See design spec section 3 and
+    the 2026-08-19 block spec section 2."""
     name: str
-    pixel_count: int
     color_order: str
+    blocks: tuple[RoomBlock, ...]
     zones: tuple[RoomZone, ...]
+
+    @property
+    def pixel_count(self) -> int:
+        """Derived, not stored: the sum of this fixture's blocks, which
+        must tile the fixture exactly (validated in RoomProfile)."""
+        return sum(b.count for b in self.blocks)
 
 
 @dataclass(frozen=True)
@@ -71,6 +100,37 @@ class RoomProfile:
                 f"one Room renders through one shared session this slice "
                 f"(non-goal N4)")
         for fixture in self.fixtures:
+            if not fixture.blocks:
+                raise ValueError(
+                    f"fixture {fixture.name!r} declares no blocks")
+            block_names = [b.name for b in fixture.blocks]
+            if len(block_names) != len(set(block_names)):
+                raise ValueError(
+                    f"fixture {fixture.name!r} has duplicate block names: "
+                    f"{block_names}")
+            for block in fixture.blocks:
+                if block.count <= 0:
+                    raise ValueError(
+                        f"block {fixture.name!r}.{block.name!r} must have a "
+                        f"positive count, got {block.count}")
+                if block.count > _MAX_PROFILE_PIXELS:
+                    raise ValueError(
+                        f"block {fixture.name!r}.{block.name!r} is "
+                        f"{block.count} px, over the {_MAX_PROFILE_PIXELS} px "
+                        f"single-universe cap")
+            spans = sorted((b.start, b.start + b.count) for b in fixture.blocks)
+            for i in range(1, len(spans)):
+                if spans[i][0] < spans[i - 1][1]:
+                    raise ValueError(
+                        f"fixture {fixture.name!r} has overlapping blocks")
+            expected = 0
+            for start, end in spans:
+                if start != expected:
+                    raise ValueError(
+                        f"fixture {fixture.name!r}'s blocks do not tile the "
+                        f"fixture: gap before pixel {start}")
+                expected = end
+        for fixture in self.fixtures:
             # Overlap and overrun are real configuration bugs; declaration
             # order and full coverage are not requirements -- a fixture may
             # leave pixels undeclared, and harness/room_surface.py's adapter
@@ -87,11 +147,6 @@ class RoomProfile:
                 if intervals[i][0] < intervals[i - 1][1]:
                     raise ValueError(
                         f"fixture {fixture.name!r} has overlapping zones")
-        if self.pixel_count > _MAX_PROFILE_PIXELS:
-            raise ValueError(
-                f"profile {self.surface_id!r} has {self.pixel_count} px "
-                f"total, over the {_MAX_PROFILE_PIXELS} px single-universe "
-                f"cap (non-goal N5)")
 
     @property
     def pixel_count(self) -> int:
@@ -153,12 +208,14 @@ ROOM_PROFILES: dict[RoomType, RoomProfile] = {
         surface_id="room_test",
         fixtures=(
             RoomFixture(
-                name="main", pixel_count=60, color_order="GRB",
+                name="main", color_order="GRB",
+                blocks=(RoomBlock("main", 0, 60),),
                 zones=(RoomZone("left", 0, 20),
                       RoomZone("center", 20, 20),
                       RoomZone("right", 40, 20))),
             RoomFixture(
-                name="accent", pixel_count=30, color_order="GRB",
+                name="accent", color_order="GRB",
+                blocks=(RoomBlock("accent", 0, 30),),
                 zones=(RoomZone("low", 0, 15),
                       RoomZone("high", 15, 15))),
         ),
