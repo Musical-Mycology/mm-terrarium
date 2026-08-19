@@ -1495,7 +1495,7 @@ git commit -m "feat(engine): canonical Room dev and TARGET-fanout collapse for N
 
 **Interfaces:**
 - Consumes: `Room.bound` (Task 3), `RoomProfile.fixture_slices()` (Task 2).
-- Produces: `DeviceLinkAgent._room_dev` (the old singular attribute) is deleted, not replaced by a stored dict -- every consumer reads `self.game_server.room.bound` live instead, via a new `_is_room_dev(dev) -> bool` helper; `_render_room()` renders the one shared session once per tick and sends each bound fixture's own slice to its own dev; `harness.room_surface.to_fixture_capability(profile, fixture_name) -> SurfaceCapability` (NEW, for per-fixture simulator canvases -- distinct from the existing whole-profile `to_capability`, which stays unchanged and keeps building the ONE session's capability).
+- Produces: `DeviceLinkAgent._room_dev` (the old singular attribute) is deleted, not replaced by a stored dict -- every consumer reads `self.game_server.room.bound` live instead, via a new `_is_room_dev(dev) -> bool` helper and a new `_canonical_room_dev() -> str | None` helper (walks `self._room_profile.fixtures` in declaration order, mirroring `GameServer._canonical_room_dev` -- used everywhere this file needs "the one Room dev," never `next(iter(bound.values()))`, which would return dict-insertion order instead of profile order); `_render_room()` renders the one shared session once per tick and sends each bound fixture's own slice to its own dev; `harness.room_surface.to_fixture_capability(profile, fixture_name) -> SurfaceCapability` (NEW, for per-fixture simulator canvases -- distinct from the existing whole-profile `to_capability`, which stays unchanged and keeps building the ONE session's capability).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1723,13 +1723,33 @@ Replace `_setup_room()`:
         session = build_session(manifest, cap, clock=self._clock)
         self._room_light = _RoomLightSink(session, Universe())
         audio_sink = None
-        canonical = next(iter(room.bound.values()), None)
+        canonical = self._canonical_room_dev()
         if self._room_audio is not None and canonical is not None:
             self._room_audio.on_grant(canonical, role)
             audio_sink = _RoomAudioSink(self._room_audio, canonical)
         if self._room_bridge is not None:
             self._room_bridge.bind(canonical, light=self._room_light,
                                    audio=audio_sink)
+
+    def _canonical_room_dev(self) -> str | None:
+        """The Room's one dev for MIDI-feed/audio-grant purposes: the
+        first bound fixture in the profile's declaration order. Mirrors
+        GameServer._canonical_room_dev's algorithm as a self-contained
+        copy rather than reaching into the engine's method across the
+        module boundary -- this agent already holds everything the walk
+        needs (self._room_profile, self.game_server.room.bound). Every
+        caller of this method must get the SAME answer for the SAME
+        state, the same way every Room-dev decision in the engine goes
+        through its own single canonical-dev method -- see design spec
+        section 5's 'frame fan-out is the only per-fixture step'."""
+        gs = self.game_server
+        if gs.room is None or not gs.room.bound or self._room_profile is None:
+            return None
+        for fixture in self._room_profile.fixtures:
+            dev = gs.room.bound.get(fixture.name)
+            if dev is not None:
+                return dev
+        return None
 ```
 
 Note the changed gate at the top: the ORIGINAL code returned early when
@@ -1758,7 +1778,7 @@ Replace `_render_room()`:
         bound = gs.room.bound if gs.room is not None else {}
         if not bound:
             return
-        canonical = next(iter(bound.values()))
+        canonical = self._canonical_room_dev()
         # Room AUDIO waits here for its moment. Room LIGHT was already fed in
         # _on_light_cue (or _drain_light_cues), because the frame it renders
         # still has to cross the wire to reach the simulator by `at`. One
@@ -1824,7 +1844,7 @@ directly:
 ```python
         if self._room_audio is None or gs.room is None or not gs.room.bound:
             return
-        canonical = next(iter(gs.room.bound.values()))
+        canonical = self._canonical_room_dev()
         if new_state == State.RUNNING:
             self._room_audio.start_drone(canonical)
         elif new_state == State.UNLOADING:
@@ -2168,7 +2188,19 @@ to:
                 raise BootFailure(str(exc)) from exc
 
         room_bridge = RoomBridge()
-        canonical = next(iter(room.bound.values()), None)
+        # Profile declaration order, not dict-insertion order -- the same
+        # canonical-dev algorithm as GameServer._canonical_room_dev and
+        # DeviceLinkAgent._canonical_room_dev, reusing profile_for_wait
+        # (already resolved above) rather than a fresh next(iter(...))
+        # shortcut, which would silently pick whichever fixture happened
+        # to bind first rather than the profile's first-declared one.
+        canonical = None
+        if profile_for_wait is not None:
+            for fixture in profile_for_wait.fixtures:
+                dev = room.bound.get(fixture.name)
+                if dev is not None:
+                    canonical = dev
+                    break
         if canonical is not None:
             room_bridge.bind(canonical)
 ```
