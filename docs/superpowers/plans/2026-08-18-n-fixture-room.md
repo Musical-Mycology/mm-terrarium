@@ -3489,6 +3489,7 @@ commit too.)
 
 **Files:**
 - Modify: `bits/test_bit.py`
+- Modify: `tests/test_devicelink_agent.py` (one test, see Step 3 -- a real cross-task interaction, not a hypothetical)
 
 **Interfaces:**
 - Consumes: the `rainbow` preset (Task 1, already merged into luxaeterna's editable-installed checkout by the time this task runs).
@@ -3538,22 +3539,122 @@ spec section 9. Keep the existing explanation of why NEITHER instrument
 carries a note lane (still true: `rainbow`, like `aurora`, is a field-rate
 gesture with no note lane).
 
-- [ ] **Step 3: Run the whole suite**
+- [ ] **Step 3: Run the whole suite, and fix the one real cross-task interaction it surfaces**
 
 Run: `.venv/bin/python -m pytest tests -v`
-Expected: all pass. `tests/test_test_bit.py`'s player-role assertions are
-untouched (Step 1 confirmed no test names the Room's instrument), and
-`tests/test_devicelink_agent.py`'s Room tests (Task 6) build sessions from
-TestBit's real declaration -- if any of those assert
-`agent._room_light.session` renders a specific COLOR tied to `aurora`'s
-uniform-fill behavior (none identified during reconnaissance; they assert
-frame WIDTH and cue ROUTING, not rendered color), they would need
-adjustment here.
+
+`tests/test_test_bit.py`'s player-role assertions are untouched (Step 1
+confirmed no test names the Room's instrument), and none of
+`tests/test_devicelink_agent.py`'s Room tests assert a specific rendered
+COLOR tied to `aurora`'s uniform-fill behavior (they assert frame WIDTH
+and cue ROUTING, as anticipated during planning). But ONE test asserts a
+TIME-based property that only held for `aurora`, not for any
+Room instrument in general, and this task's own change breaks it for a
+real reason, not a flaky one:
+`tests/test_devicelink_agent.py::test_an_unchanged_fixture_slice_is_not_resent_after_settling`
+(added in Task 6) proves `_last_frames`' per-fixture dedup by settling the
+render, advancing the clock once more with no new cue, and asserting the
+resend counts didn't move. `aurora`, once its `level`/`hue` glide
+converges, renders a genuinely constant frame forever (no cc:11 lane on
+the Room role, so no self-breathing either) -- so advancing time changed
+nothing to resend. `rainbow` has no such constant steady state: its hue
+keeps scrolling from `ctx.time` forever by design (that animation is the
+whole point of the instrument), so advancing the clock further, with or
+without a new cue, legitimately produces a different frame every time --
+correctly detected and resent, not a bug.
+
+The fix is not to touch production code (`_last_frames`'s comparison logic
+is correct and unaffected) -- it's to stop coupling this SPECIFIC test's
+final comparison to elapsed time, since "no cue, no resend" was never
+actually a property of `_last_frames` alone, it depended on the settled
+render also being time-invariant, which was only ever true for the
+instrument Task 6 happened to test against. `RenderContext.time` is
+derived from the injected clock in luxaeterna's own
+`LightSession.render_into` (`t = now - self._start`), so a render at the
+SAME clock instant is byte-identical regardless of which instrument
+produced it -- proving the actual property under test (do two identical
+renders both dedup correctly) without depending on any instrument's
+animation behavior. Replace the test's docstring and final comparison
+in `tests/test_devicelink_agent.py`:
+
+```python
+def test_an_unchanged_fixture_slice_is_not_resent_after_settling():
+    """_last_frames is keyed per fixture dev, so once the shared session's
+    output is stable, neither fixture keeps resending on every tick.
+
+    TestBit's Room manifest targets "primary" (the whole concatenated
+    surface) with one instrument, so there is no way to change only ONE
+    fixture's pixels through its real declaration -- proving per-fixture
+    selectivity that way is not available at this integration level. What
+    IS provable, and is the same underlying _last_frames mechanism: with
+    no NEW cue and no elapsed time (no breath reaching the Room either --
+    TestBit's Room role declares no cc:11 lane, unlike player), a second
+    render produces byte-identical output to the first, and NEITHER
+    fixture resends it -- which could only hold if each fixture's slice is
+    compared against its OWN last-sent bytes rather than some shared or
+    always-different state.
+
+    Uses a fake, manually-advanced clock (same idiom as
+    test_room_dev_cue_routes_to_room_bridge_not_normal_bridges above) so
+    the settling loop's Smooth-driven params (hue/level glide) actually
+    converge before the counts being compared are captured -- with the
+    default wall clock, successive polls advance real time by
+    microseconds, nowhere near enough to settle, and this assertion would
+    be flaky by construction without it.
+
+    The final "before" vs "after" comparison deliberately does NOT advance
+    the clock further, unlike the settling loop above it. TestBit's Room
+    declares rainbow (see bits/test_bit.py), which -- unlike aurora's
+    settle-to-a-constant behavior -- keeps its hue scrolling forever from
+    ctx.time even with no new cue, by design (that animation is the whole
+    point of the instrument). So "render again after real time passes,
+    expect no resend" is no longer a universally true property once the
+    Room's instrument can be a perpetually-animating one; "render again at
+    the SAME instant, expect no resend" still is, for any instrument,
+    because RenderContext.time is derived from the injected clock
+    (luxaeterna's LightSession.render_into: t = now - self._start), so a
+    frozen clock yields byte-identical output regardless of which
+    instrument computed it. This isolates the property actually under
+    test (_last_frames' own comparison logic) from whichever instrument
+    the Room happens to declare."""
+    clk = _Clock()
+    gs = _room_ready_game_server(
+        bound={"main": "sim-room-main", "accent": "sim-room-accent"})
+    server = FakeServer()
+    server.bind_dev("sim-room-main", "c-main")
+    server.bind_dev("sim-room-accent", "c-accent")
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge(), clock=clk)
+
+    for _ in range(5):
+        clk.advance(2.0)
+        agent.poll()   # let hue/level glide converge
+
+    def counts():
+        main = len([m for d, m in server.sent if m["address"] == "/sim-room-main/leds"])
+        accent = len([m for d, m in server.sent if m["address"] == "/sim-room-accent/leds"])
+        return main, accent
+
+    before = counts()
+    agent.poll()   # same clock instant, no new cue: output must be identical
+    after = counts()
+
+    assert after == before   # neither fixture resent an unchanged frame
+```
+
+(only the docstring and the removal of the `clk.advance(2.0)` line right
+before the final `agent.poll()` change; the settling loop, the `counts()`
+helper, and every other line are unchanged.)
+
+Before applying, confirm this reasoning empirically rather than taking it
+on faith: run the test against the pre-fix version to see it genuinely
+fail on `rainbow` (not for some unrelated reason), apply the fix, confirm
+it passes, then run the full suite once more to confirm this is the only
+casualty.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add bits/test_bit.py
+git add bits/test_bit.py tests/test_devicelink_agent.py
 git commit -m "feat(bits): TestBit's Room declares rainbow, not aurora"
 ```
 
