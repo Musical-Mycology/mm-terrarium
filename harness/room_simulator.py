@@ -24,6 +24,31 @@ from __future__ import annotations
 from harness.shroom_client import ShroomClient, pump_tick
 from harness.signals import sigterm_as_keyboard_interrupt
 
+# Fixed identification palette, assigned to blocks in declaration order
+# (red, orange, yellow, green, blue, violet). RGB triples; laid out per the
+# fixture's color_order when painted. Repeats past six blocks.
+BLOCK_PALETTE: tuple[tuple[int, int, int], ...] = (
+    (255, 0, 0), (255, 128, 0), (255, 255, 0),
+    (0, 255, 0), (0, 0, 255), (148, 0, 211),
+)
+
+
+def identify_blocks_frame(profile, fixture_name: str) -> bytes:
+    """One static frame painting each of the fixture's blocks a distinct
+    solid color, so a human can visually confirm the physical build-out
+    mapping on the canvas. Harness-only: the one consumer of block
+    boundaries this slice (blocks are otherwise declarative -- see
+    control/room_profile.py's RoomBlock)."""
+    fixture = next(f for f in profile.fixtures if f.name == fixture_name)
+    order = fixture.color_order.upper()
+    frame = bytearray(fixture.pixel_count * 3)
+    for i, block in enumerate(fixture.blocks):
+        rgb = dict(zip("RGB", BLOCK_PALETTE[i % len(BLOCK_PALETTE)]))
+        px = bytes(rgb[ch] for ch in order)
+        frame[block.start * 3:(block.start + block.count) * 3] = \
+            px * block.count
+    return bytes(frame)
+
 
 class WebSimLeds:
     """Adapts ShroomClient's leds.show(bytes)/leds.clear() to
@@ -100,6 +125,12 @@ def main() -> None:
     parser.add_argument("--samples-out", default=None,
                         help="Write raw per-frame lateness samples here as "
                              "JSON, for python -m harness.sync_bench.")
+    parser.add_argument("--identify-blocks", action="store_true",
+                        help="Debug: skip Control entirely; paint each of "
+                             "this fixture's declared blocks a distinct "
+                             "solid color and hold until Ctrl-C, so the "
+                             "physical build-out mapping can be confirmed "
+                             "visually. See the 2026-08-19 spec section 4.")
     args = parser.parse_args()
 
     sigterm_as_keyboard_interrupt()
@@ -108,6 +139,25 @@ def main() -> None:
                             room_type=args.room_type, fixture=args.fixture)
     backend.open()
     print(f"Watch the Room at http://{args.sim_host}:{backend.port}/", flush=True)
+
+    if args.identify_blocks:
+        import time
+
+        from control.room_profile import room_profile
+        from control.rooms import RoomType
+
+        profile = room_profile(RoomType[args.room_type])
+        backend.send(identify_blocks_frame(profile, args.fixture))
+        print(f"identify-blocks: {args.fixture} painted; Ctrl-C to exit",
+              flush=True)
+        try:
+            while True:
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            backend.close()
+        return
 
     async def run() -> None:
         async with websockets.connect(args.server) as ws:

@@ -273,15 +273,22 @@ def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
     assert [c[0] for c in light] == ["sim-room-main"] * 3
 
 
-def test_resolve_target_on_an_unbound_room_with_no_profile_does_not_raise():
+def test_resolve_target_on_an_unbound_room_never_calls_room_profile(monkeypatch):
     """_resolve_target's room_devs block must short-circuit on "is anything
     bound" before ever calling room_profile(), exactly like its sibling
-    _canonical_room_dev does -- RoomType.DEMO has no ROOM_PROFILES entry
-    (see control/room_profile.py), so room_profile(RoomType.DEMO) always
-    raises NotImplementedError. An empty, DEMO-typed Room must never reach
-    that call at all, the same way it never would through
-    _canonical_room_dev."""
+    _canonical_room_dev does. DEMO now has a real ROOM_PROFILES entry (see
+    control/room_profile.py), so room_profile(RoomType.DEMO) no longer raises
+    -- this can no longer prove the short-circuit by relying on that raise.
+    Instead, patch control.engine.room_profile to raise on any call: an
+    empty, DEMO-typed Room must never reach that call at all, the same way
+    it never would through _canonical_room_dev."""
+    import control.engine as engine_module
     from control.rooms import Room, RoomType
+
+    def _boom(room_type):
+        raise AssertionError("room_profile() must not be called for an unbound Room")
+
+    monkeypatch.setattr(engine_module, "room_profile", _boom)
     gs = GameServer({}, clock=lambda: 0.0)
     gs.room = Room(room_type=RoomType.DEMO)
     assert gs._resolve_target(TriggerTarget.ROOM, None) == []

@@ -1,6 +1,9 @@
 import pytest
 
-from harness.room_simulator import WebSimLeds, build
+from control.room_profile import room_profile
+from control.rooms import RoomType
+from harness.room_simulator import BLOCK_PALETTE, WebSimLeds, build, \
+    identify_blocks_frame
 
 
 class FakeBackend:
@@ -61,3 +64,31 @@ def test_clear_sends_a_room_width_all_zero_frame():
     backend = FakeBackend()
     WebSimLeds(backend, channels=180).clear()
     assert backend.sent == [bytes(180)]
+
+
+def test_identify_blocks_frame_paints_demo_blocks_distinctly():
+    profile = room_profile(RoomType.DEMO)
+    frame = identify_blocks_frame(profile, "array")
+    (array,) = profile.fixtures
+    assert len(frame) == array.pixel_count * 3          # 2592
+    # First pixel of each 144px block carries that block's own palette
+    # color, GRB order per the profile.
+    for i, block in enumerate(array.blocks):
+        r, g, b = BLOCK_PALETTE[i % len(BLOCK_PALETTE)]
+        offset = block.start * 3
+        assert frame[offset:offset + 3] == bytes((g, r, b))
+    # Adjacent blocks differ at their boundary.
+    for prev, cur in zip(array.blocks, array.blocks[1:]):
+        last_of_prev = (cur.start - 1) * 3
+        first_of_cur = cur.start * 3
+        assert frame[last_of_prev:last_of_prev + 3] != \
+            frame[first_of_cur:first_of_cur + 3]
+
+
+def test_identify_blocks_frame_works_for_a_single_block_fixture():
+    profile = room_profile(RoomType.TEST)
+    frame = identify_blocks_frame(profile, "accent")
+    assert len(frame) == 30 * 3
+    r, g, b = BLOCK_PALETTE[0]
+    assert frame[:3] == bytes((g, r, b))
+    assert frame == frame[:3] * 30

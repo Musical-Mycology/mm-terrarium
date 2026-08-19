@@ -957,9 +957,10 @@ def test_setup_room_builds_the_session_even_with_nothing_bound_yet():
 
 
 def test_an_explicit_room_profile_overrides_the_resolved_one():
-    from control.room_profile import RoomFixture, RoomProfile, RoomZone
+    from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
     profile = RoomProfile(surface_id="custom", fixtures=(
-        RoomFixture(name="only", pixel_count=24, color_order="GRB",
+        RoomFixture(name="only", color_order="GRB",
+                   blocks=(RoomBlock("only", 0, 24),),
                    zones=(RoomZone("all", 0, 24),)),))
     gs = _room_ready_game_server()
     agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),

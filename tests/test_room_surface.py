@@ -4,7 +4,8 @@ import pytest
 
 pytest.importorskip("luxaeterna")
 
-from control.room_profile import RoomFixture, RoomProfile, RoomZone, room_profile
+from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
+                                  RoomZone, room_profile)
 from control.rooms import RoomType
 from harness.room_surface import to_capability
 
@@ -46,14 +47,16 @@ def test_adapter_does_not_mutate_the_profile():
 
 def test_a_profile_with_no_zones_still_yields_a_usable_primary():
     profile = RoomProfile(surface_id="bare", fixtures=(
-        RoomFixture(name="only", pixel_count=12, color_order="GRB", zones=()),))
+        RoomFixture(name="only", color_order="GRB",
+                   blocks=(RoomBlock("only", 0, 12),), zones=()),))
     cap = to_capability(profile)
     assert cap.zone("primary").count == 12
 
 
 def test_zone_order_is_preserved_for_an_unsorted_profile():
     profile = RoomProfile(surface_id="odd", fixtures=(
-        RoomFixture(name="only", pixel_count=30, color_order="GRB",
+        RoomFixture(name="only", color_order="GRB",
+                   blocks=(RoomBlock("only", 0, 30),),
                    zones=(RoomZone("b", 10, 20), RoomZone("a", 0, 10))),))
     cap = to_capability(profile)
     # Namespaced now (RoomProfile.zones prefixes every zone with its

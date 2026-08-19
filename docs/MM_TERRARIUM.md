@@ -699,7 +699,9 @@ renderer** — the concrete simulator/hardware backend is deferred, see
 The first concrete `Room` backend — closes the gap the Room-concept slice
 above deliberately left open (`RoomBridge` existed but rendered nothing).
 Design: [`.../2026-08-10-terrarium-visualization-simulator-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-terrarium-visualization-simulator-design.md).
-TEST room only; DEMO's simulated venue array is a deferred follow-up.
+TEST room only as of this slice; DEMO's own real-scale simulated backend
+landed later, see the *`control/room_profile.py`'s `RoomBlock`, and the DEMO
+room* section below. A real-hardware Art-Net venue array remains deferred.
 
 - **`SimulatorProcess`** (`control/simulator_process.py`) — spawns/SIGTERM-
   shuts-down the simulator subprocess, peer to `ArcoProcess` minus a
@@ -1292,6 +1294,76 @@ The Room stops being exactly one bound device. Design:
   13.1: fire a rainbow-bearing cue with both simulator tabs open and confirm
   one gradient scrolls continuously across both canvases with no seam.
 
+### `control/room_profile.py`'s `RoomBlock`, and the DEMO room
+`RoomType.DEMO` — previously a stub enum value with a recipe and a
+Registration Node id but no `RoomProfile` (`room_profile(RoomType.DEMO)`
+raised `NotImplementedError`) and no supporting Bit — now has a real,
+real-scale profile, and `TestBit` runs in it. Design:
+[`.../2026-08-19-demo-room-and-block-profile-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-19-demo-room-and-block-profile-design.md).
+
+- **`RoomBlock`** (`control/room_profile.py`) — a new declarative
+  sub-structure inside `RoomFixture`: which physical LED device drives which
+  pixel range within one continuous fixture. A different axis from the
+  pre-existing `RoomZone` (gameplay/Console targeting) — a Block is hardware
+  composition, a Zone is what a light instrument can address. `RoomFixture`
+  reshaped: `pixel_count` is now a derived property (sum of its blocks'
+  counts) rather than a stored field, so a fixture's total size is no longer
+  capped — only each block individually is, at `_MAX_PROFILE_PIXELS` (170 px,
+  one DMX universe / one controller's worth). This is the load-bearing change:
+  the old whole-*profile* cap is gone, replaced by a per-*block* cap, which is
+  what makes a real-scale DEMO profile representable at all. TEST's existing
+  `main`/`accent` fixtures each gained one explicit block spanning their full
+  size — every fixture's build-out is always explicit, no implicit
+  single-block default exists.
+- **DEMO's profile** — one fixture (`"array"`, matching the name
+  `tests/test_room_binding.py` already used), **864 px**, matching the real
+  6 m / 144-LED-per-m Terrarium array (`MM_HARDWARE_DESIGN.md` section 7.1):
+  six 144 px blocks (`m1`..`m6`, one per physical meter run) and three 288 px
+  zones (`left`/`center`/`right`), deliberately not 1:1 with the blocks.
+  Blocks are **purely declarative this slice** — no renderer, backend, or
+  engine code consumes block boundaries for actual per-controller output
+  routing; that real Art-Net/multi-controller wiring (`harness/array_smoke.py`
+  already exists standalone but is not plugged into `boot()`) remains a
+  separate, deferred slice.
+- **`TestBit` supports DEMO** (`bits/test_bit.py`) — `room_types = {RoomType.TEST,
+  RoomType.DEMO}` (the `Bit` base class default is `{RoomType.TEST}` alone),
+  and `role_table` now merges a `room_role()` for each supported RoomType, both
+  built from the same shared `light_manifest`/`ugen_manifest` (an instrument
+  targets `primary`/zones, never blocks, so nothing room-specific differs
+  between the two declarations). `player` (scored) and `jammer` (jam) were
+  already room-agnostic, so the existing Scored/Jam validation loop applies to
+  DEMO for free — this closes the original gap: every shipped RoomType now has
+  a reference Bit that exercises both a scored and a jam role.
+- **Boot harness threading** — `harness/room_simulator.py` and
+  `harness/o2_shroom.py` already took `--room-type`/`--fixture` generically;
+  only `harness/terrarium_boot.py`'s two simulator factories (`_SimulatorFactory`,
+  `_O2SimulatorFactory`) and `main()` hardcoded `"TEST"`. Both now read a new
+  `--room-type {TEST,DEMO}` CLI flag (default `TEST`), which `main()` also uses
+  to set `BootConfig.array_backend="simulator"` for DEMO (satisfying its
+  `RoomRecipe(requires_array_backend=True)`) — `array_backend=None` for TEST,
+  unchanged. `harness/run_stack.py` gained the identical flag and forwards it
+  into the `terrarium_boot` child command it spawns. So `python -m
+  harness.run_stack --room-type DEMO` brings up a DEMO room simulator
+  end-to-end the same way TEST already worked — this repo's **first working
+  simulated backend for `RoomType.DEMO`**, superseding the "TEST room only"
+  framing the *Terrarium Visualization Simulator* section above still carries
+  in its own prose (the section itself is unedited; read it as TEST-shaped
+  history, not current scope).
+- **`--identify-blocks`** (`harness/room_simulator.py`) — a debug-only CLI
+  flag: bypasses Control entirely (no websocket connect at all in this mode)
+  and paints each of a fixture's declared blocks a distinct fixed solid color
+  (red/orange/yellow/green/blue/violet, repeating past six), reading block
+  boundaries straight off `room_profile()`, so a human can visually confirm
+  the physical build-out mapping on the canvas. The one and only consumer of
+  block boundaries in the codebase this slice.
+- **Live-verified against a real Arco: NOT YET DONE.** Everything above is
+  offline-suite-only. Live-verify per the spec's section 7: boot a DEMO room
+  via `run_stack` against a real Arco, confirm a device can join, complete a
+  scored round and an unscored jam join, and confirm the Room's `rainbow` cue
+  sweeps the full 864 px canvas with no seam at any of the 6 block
+  boundaries; separately, run `--identify-blocks` and visually confirm 6
+  distinct solid colors, each exactly 144 px, in order.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -1689,12 +1761,14 @@ Kept explicit so the doc doesn't over-claim:
   Registration Node convention) remains a later decision; the console is the
   first concrete answer for a web panel, and as of 2026-08-17 it is actually
   openable during a run and shows the Room.
-- **`RoomType.DEMO`'s backend.** Only TEST room has a simulator; the venue
-  array's simulated (and, later, real-hardware) backend is a deferred
-  follow-up spec, not yet written.
-- **A real-hardware Room backend.** TEST room's only backend today is the
-  browser simulator (`harness/room_simulator.py`); nothing implements the
-  same seam against actual Tuneshroom/array hardware yet.
+- **A real-hardware Room backend, for either RoomType.** Both TEST and DEMO's
+  only backend today is the browser simulator (`harness/room_simulator.py`,
+  `harness/o2_shroom.py`); nothing implements the same seam against actual
+  Tuneshroom/array hardware yet. For DEMO specifically, `RoomBlock`
+  boundaries are declarative-only (see the *`RoomBlock`, and the DEMO room*
+  section above) — no real Art-Net/multi-controller output backend exists;
+  `harness/array_smoke.py` drives the real 864 px array standalone but is not
+  wired into `boot()`.
 - ~~**Nothing drives the Room's light during a live run.**~~ **Closed
   2026-08-14** by `Bit.cues(at)` (see the `Bit` interface bullet above);
   `TestBit`'s implementation and its live confirmation are described in the
