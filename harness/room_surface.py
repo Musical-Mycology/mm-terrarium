@@ -34,3 +34,21 @@ def to_capability(profile: RoomProfile) -> SurfaceCapability:
         color_order=profile.color_order,
         zones=zones,
     )
+
+
+def to_fixture_capability(profile: RoomProfile, fixture_name: str):
+    """Build ONE fixture's own standalone capability -- for a simulator
+    process that displays only that fixture's own physical strip, with
+    LOCAL (unprefixed) zone names, not the profile's global namespaced
+    union. Distinct from to_capability(), which builds the WHOLE
+    concatenated surface for DeviceLinkAgent's one shared session. See
+    design spec section 7."""
+    fixture = next(f for f in profile.fixtures if f.name == fixture_name)
+    zones = [Zone(z.name, z.start, z.count) for z in fixture.zones]
+    zones.append(Zone("primary", 0, fixture.pixel_count))
+    return SurfaceCapability(
+        surface_id=f"{profile.surface_id}_{fixture_name}",
+        pixel_count=fixture.pixel_count,
+        color_order=fixture.color_order,
+        zones=zones,
+    )
