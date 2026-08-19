@@ -882,6 +882,64 @@ def test_a_room_cue_feeds_the_shared_session_once_and_reaches_both_fixtures():
     assert main_frames and accent_frames   # both slices of the one render went out
 
 
+def test_an_unchanged_fixture_slice_is_not_resent_after_settling():
+    """_last_frames is keyed per fixture dev, so once the shared session's
+    output is stable, neither fixture keeps resending on every tick.
+
+    TestBit's Room manifest targets "primary" (the whole concatenated
+    surface) with a uniform-fill instrument, so there is no way to change
+    only ONE fixture's pixels through its real declaration -- proving
+    per-fixture selectivity that way is not available at this integration
+    level. What IS provable, and is the same underlying _last_frames
+    mechanism: once the render has genuinely stabilized (no new cue, no
+    breath reaching the Room -- TestBit's Room role declares no cc:11
+    lane, unlike player), NEITHER fixture keeps resending, which could
+    only hold if each fixture's slice is compared against its OWN last-sent
+    bytes rather than some shared/always-different state.
+
+    Uses a fake, manually-advanced clock (same idiom as
+    test_room_dev_cue_routes_to_room_bridge_not_normal_bridges above) so
+    aurora's level glide (a real Smooth time constant) has actually
+    converged before the counts being compared are captured -- with the
+    default wall clock, successive polls advance real time by
+    microseconds, nowhere near enough for the glide to settle, and this
+    assertion would be flaky by construction without it."""
+    clk = _Clock()
+    gs = _room_ready_game_server(
+        bound={"main": "sim-room-main", "accent": "sim-room-accent"})
+    server = FakeServer()
+    server.bind_dev("sim-room-main", "c-main")
+    server.bind_dev("sim-room-accent", "c-accent")
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge(), clock=clk)
+
+    for _ in range(5):
+        clk.advance(2.0)
+        agent.poll()   # let aurora's level glide converge
+
+    def counts():
+        main = len([m for d, m in server.sent if m["address"] == "/sim-room-main/leds"])
+        accent = len([m for d, m in server.sent if m["address"] == "/sim-room-accent/leds"])
+        return main, accent
+
+    before = counts()
+    clk.advance(2.0)
+    agent.poll()   # no new cue; settled output should be byte-identical
+    after = counts()
+
+    assert after == before   # neither fixture resent an unchanged frame
+
+
+def test_setup_room_builds_the_session_even_with_nothing_bound_yet():
+    """A late admin tap must not need a session rebuild -- the session
+    spans the whole profile regardless of binding state (see this task's
+    changed _setup_room gate)."""
+    gs = _room_ready_game_server(bound={})
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    assert agent._room_light is not None
+    assert agent._room_profile is not None
+
+
 def test_an_explicit_room_profile_overrides_the_resolved_one():
     from control.room_profile import RoomFixture, RoomProfile, RoomZone
     profile = RoomProfile(surface_id="custom", fixtures=(
