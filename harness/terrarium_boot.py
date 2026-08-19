@@ -47,10 +47,12 @@ class _SimulatorFactory:
     kept only so tests can inspect the handles."""
 
     def __init__(self, server_url: str, *, popen=subprocess.Popen,
-                 horizon: float | None = None) -> None:
+                 horizon: float | None = None,
+                 room_type: str = "TEST") -> None:
         self._server_url = server_url
         self._popen = popen
         self._horizon = horizon
+        self._room_type = room_type
         self.processes: list[SimulatorProcess] = []
 
     def __call__(self, teardown, fixture: str) -> str:
@@ -58,7 +60,7 @@ class _SimulatorFactory:
         command = [sys.executable, "-u", "-m", "harness.room_simulator",
                    "--dev", dev, "--server", self._server_url,
                    "--fixture", fixture]
-        command += ["--room-type", "TEST"]
+        command += ["--room-type", self._room_type]
         if self._horizon is not None:
             # So the Room reports frame latency in absolute terms on exit.
             command += ["--control-horizon", str(self._horizon)]
@@ -77,9 +79,11 @@ class _O2SimulatorFactory:
     harness/room_simulator.py follows. Called once per fixture, same as
     _SimulatorFactory."""
 
-    def __init__(self, ensemble: str, *, popen=subprocess.Popen) -> None:
+    def __init__(self, ensemble: str, *, popen=subprocess.Popen,
+                 room_type: str = "TEST") -> None:
         self._ensemble = ensemble
         self._popen = popen
+        self._room_type = room_type
         self.processes: list[SimulatorProcess] = []
 
     def __call__(self, teardown, fixture: str) -> str:
@@ -100,7 +104,7 @@ class _O2SimulatorFactory:
             [sys.executable, "-u", "-m", "harness.o2_shroom",
              "--dev", dev, "--ensemble", self._ensemble, "--no-join",
              "--exit-with-parent", str(os.getpid()),
-             "--room-type", "TEST", "--fixture", fixture],
+             "--room-type", self._room_type, "--fixture", fixture],
             popen=self._popen)
         process.start()
         teardown.push(f"simulator-{fixture}", process.shutdown)
@@ -174,10 +178,12 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     if transport is None:
         factory = _SimulatorFactory(f"ws://{host}:{server.port}/ws",
                                     popen=simulator_popen,
-                                    horizon=config.cue_horizon)
+                                    horizon=config.cue_horizon,
+                                    room_type=config.room_type.name)
     else:
         factory = _O2SimulatorFactory(config.o2_ensemble,
-                                      popen=simulator_popen)
+                                      popen=simulator_popen,
+                                      room_type=config.room_type.name)
     gs, room_bridge, arco, teardown = _boot(
         config, bit_registry, arco_command=arco_command,
         room_binding=room_binding, arco_process_cls=arco_process_cls,
@@ -457,6 +463,11 @@ def main() -> None:
                          "default, so an existing invocation is unchanged. "
                          "Binds --host, which defaults to 127.0.0.1: the "
                          "console is unauthenticated and trusted-LAN only.")
+    ap.add_argument("--room-type", default="TEST", choices=["TEST", "DEMO"],
+                    help="Which RoomType to boot. DEMO configures the "
+                         "simulated array backend (spec 2026-08-19); its "
+                         "864 px canvas is otherwise identical in kind to "
+                         "TEST's.")
     args = ap.parse_args()
 
     # harness/run_stack.py stops this process with SIGTERM, and the whole
@@ -483,7 +494,13 @@ def main() -> None:
         # the agent below.
         clock = o2lite.time_get
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    room_type = RoomType[args.room_type]
+    config = BootConfig(
+        room_type=room_type, bit_name="TestBit",
+        # DEMO's recipe requires an array backend (control/rooms.py);
+        # "simulator" is the Terrarium-spawns-one value BootConfig already
+        # defines. TEST ignores the field.
+        array_backend="simulator" if room_type is RoomType.DEMO else None)
     if args.horizon is not None:
         config.cue_horizon = args.horizon
     if args.arco_ready_timeout is not None:

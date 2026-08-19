@@ -78,6 +78,7 @@ class StackConfig:
     settle_seconds: float = 5.0
     arco_ready_timeout: float = 60.0
     console_port: int | None = None   # None = no Terrarium Console
+    room_type: str = "TEST"
 
 
 @dataclass
@@ -109,6 +110,7 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
     ]
     if cfg.console_port is not None:
         command += ["--console-port", str(cfg.console_port)]
+    command += ["--room-type", cfg.room_type]
     return command
 
 
@@ -398,6 +400,11 @@ def parse_args(argv=None):
     ap.add_argument("--console-port", type=int, default=None,
                     help="Serve the Terrarium Console on this port and print "
                          "its URL. Off by default.")
+    ap.add_argument("--room-type", default="TEST", choices=["TEST", "DEMO"],
+                    help="Which RoomType to boot. DEMO configures the "
+                         "simulated array backend (spec 2026-08-19); its "
+                         "864 px canvas is otherwise identical in kind to "
+                         "TEST's.")
     return ap.parse_args(argv)
 
 
@@ -412,7 +419,7 @@ def config_from_args(args) -> StackConfig:
         devices=args.devices, ensemble=args.ensemble,
         setup_seconds=args.setup_seconds, seconds=seconds,
         horizon=args.horizon, echo=not args.ci,
-        console_port=args.console_port)
+        console_port=args.console_port, room_type=args.room_type)
 
 
 def _failing_log_key(result: RunResult) -> str | None:

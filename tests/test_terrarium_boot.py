@@ -719,6 +719,35 @@ def test_o2_simulator_factory_ties_the_simulator_to_this_process():
     assert command[command.index("--exit-with-parent") + 1] == str(os.getpid())
 
 
+def test_simulator_factory_spawns_with_its_room_type():
+    """_SimulatorFactory hardcoded --room-type TEST until this Task -- DEMO
+    (control/room_profile.py, spec 2026-08-19) could resolve and boot but
+    never actually reach the simulator subprocess it spawns."""
+    from harness.terrarium_boot import _SimulatorFactory
+
+    popen = FakePopen()
+    factory = _SimulatorFactory("ws://x/ws", popen=popen, room_type="DEMO")
+
+    assert factory(TeardownStack(), "array") == "sim-room-array"
+    command = popen.commands[0]
+    i = command.index("--room-type")
+    assert command[i + 1] == "DEMO"
+
+
+def test_o2_simulator_factory_spawns_with_its_room_type():
+    """Same defect as _SimulatorFactory above, for the o2lite-transport
+    factory."""
+    from harness.terrarium_boot import _O2SimulatorFactory
+
+    popen = FakePopen()
+    factory = _O2SimulatorFactory("arco", popen=popen, room_type="DEMO")
+
+    assert factory(TeardownStack(), "main") == "sim-room-main"
+    command = popen.commands[0]
+    i = command.index("--room-type")
+    assert command[i + 1] == "DEMO"
+
+
 def test_build_tears_down_both_subprocesses_if_room_audio_fails(monkeypatch):
     """_boot() has already spawned Arco AND the simulator by the time
     build() constructs room_audio. If that raises, build() never returns,

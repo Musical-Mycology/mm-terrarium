@@ -450,3 +450,23 @@ def test_control_command_passes_console_port_when_set():
 def test_console_port_defaults_to_none():
     from harness.run_stack import StackConfig
     assert StackConfig(log_dir="/tmp/x").console_port is None
+
+
+def test_control_command_defaults_room_type_to_test():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x")
+    cmd = control_command(cfg, ppid=1)
+    assert cmd[cmd.index("--room-type") + 1] == "TEST"
+
+
+def test_control_command_passes_room_type_when_set():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x", room_type="DEMO")
+    cmd = control_command(cfg, ppid=1)
+    assert cmd[cmd.index("--room-type") + 1] == "DEMO"
+
+
+def test_config_from_args_forwards_room_type():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--room-type", "DEMO"])
+    assert config_from_args(args).room_type == "DEMO"
