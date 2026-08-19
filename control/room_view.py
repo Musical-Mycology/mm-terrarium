@@ -61,6 +61,30 @@ def capability_view(profile) -> dict:
     }
 
 
+def fixtures_view(profile, room) -> list[dict]:
+    """One entry per fixture: its own pixel count, its zones (already
+    namespaced <fixture>.<zone> by RoomProfile.zones), its channel offset
+    into the concatenated frame, and which dev is bound (None if not yet).
+    The dev id is shown, matching the precedent this module already set for
+    the whole Room (the old single bound_dev field): it is not the
+    Registration Node id, the role name, or a registration count, so it is
+    not covered by the hiding rule in this module's docstring.
+    """
+    out = []
+    for name, start, count in profile.fixture_slices():
+        fixture = next(f for f in profile.fixtures if f.name == name)
+        out.append({
+            "name": name,
+            "pixel_count": fixture.pixel_count,
+            "channel_start": start,
+            "channel_count": count,
+            "zones": [{"name": z.name, "start": z.start, "count": z.count}
+                      for z in profile.zones if z.name.startswith(f"{name}.")],
+            "dev": room.bound.get(name),
+        })
+    return out
+
+
 def room_view(room, profile, role, controllers: dict) -> dict | None:
     """Build the Console's whole Room panel payload.
 
@@ -69,10 +93,11 @@ def room_view(room, profile, role, controllers: dict) -> dict | None:
     the surface with an empty instrument list.
 
     Light and audio instruments are returned as ONE list discriminated by
-    `kind`, not two. They are declared in two fields of one Role and fed from
-    one shared MIDI stream, so presenting them apart would hide the property
-    the architecture is built around: one controller drives aurora's hue and
-    FluidSynth's cutoff together.
+    `kind`, not two -- see the module docstring. `fixtures` replaced the
+    single `bound_dev` field once the Room became N fixtures: an old browser
+    tab reading `room.bound_dev` degrades gracefully to `undefined` rather
+    than breaking, and the privacy filters this module's docstring describes
+    (node id, role name, registration counts) are unaffected either way.
     """
     if room is None or profile is None:
         return None
@@ -82,7 +107,7 @@ def room_view(room, profile, role, controllers: dict) -> dict | None:
                        + _audio_instruments(role.ugen_manifest or {}))
     return {
         "room_type": room.room_type.name,
-        "bound_dev": room.bound_dev,
+        "fixtures": fixtures_view(profile, room),
         "capability": capability_view(profile),
         "instruments": instruments,
         "controllers": dict(controllers),
