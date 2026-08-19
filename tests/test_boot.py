@@ -23,25 +23,27 @@ def test_boot_happy_path_via_simulator_factory():
         config, make_registry(), arco_command=["arco-server"],
         room_binding=RoomBindingRegistry(),
         arco_process_cls=lambda cmd: _ready_arco(cmd),
-        simulator_factory=lambda td: "sim-room-dev")
+        simulator_factory=lambda td, fixture: f"sim-room-{fixture}-dev")
 
     assert gs.state == State.SETUP
     assert gs.room.room_type == RoomType.TEST
-    assert gs.room.bound_dev == "sim-room-dev"
-    assert room_bridge.dev == "sim-room-dev"
+    assert gs.room.bound == {"main": "sim-room-main-dev",
+                             "accent": "sim-room-accent-dev"}
+    assert room_bridge.dev == "sim-room-main-dev"   # canonical: first declared
 
 
 def test_boot_happy_path_via_recorded_device_reconnect():
     binding = RoomBindingRegistry()
-    binding.bind(RoomType.TEST, "ie7")
+    binding.bind(RoomType.TEST, "main", "ie7")
+    binding.bind(RoomType.TEST, "accent", "ie8")
     config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit")
 
     gs, room_bridge, arco, teardown = boot(
         config, make_registry(), arco_command=["arco-server"],
         room_binding=binding, arco_process_cls=_ready_arco,
-        known_device_connected=lambda dev: dev == "ie7")
+        known_device_connected=lambda dev: dev in ("ie7", "ie8"))
 
-    assert gs.room.bound_dev == "ie7"
+    assert gs.room.bound == {"main": "ie7", "accent": "ie8"}
     assert room_bridge.dev == "ie7"
 
 
@@ -58,7 +60,7 @@ def test_boot_fails_when_arco_never_ready():
     with pytest.raises(BootFailure, match="Arco failed to start"):
         boot(config, make_registry(), arco_command=["arco-server"],
              room_binding=RoomBindingRegistry(), arco_process_cls=_never_ready_arco,
-             simulator_factory=lambda td: "sim-room-dev")
+             simulator_factory=lambda td, fixture: "sim-room-dev")
 
 
 def test_boot_fails_for_unknown_bit_name():
@@ -66,7 +68,7 @@ def test_boot_fails_for_unknown_bit_name():
     with pytest.raises(BootFailure, match="unknown Bit"):
         boot(config, make_registry(), arco_command=["arco-server"],
              room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
-             simulator_factory=lambda td: "sim-room-dev")
+             simulator_factory=lambda td, fixture: "sim-room-dev")
 
 
 def test_boot_fails_when_bit_does_not_support_resolved_room_type():
@@ -78,7 +80,7 @@ def test_boot_fails_when_bit_does_not_support_resolved_room_type():
     with pytest.raises(BootFailure, match="does not support TEST"):
         boot(config, registry, arco_command=["arco-server"],
              room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
-             simulator_factory=lambda td: "sim-room-dev")
+             simulator_factory=lambda td, fixture: "sim-room-dev")
 
 
 def test_boot_shuts_down_arco_on_any_failure_after_start():
@@ -88,7 +90,7 @@ def test_boot_shuts_down_arco_on_any_failure_after_start():
         boot(config, make_registry(), arco_command=["arco-server"],
              room_binding=RoomBindingRegistry(),
              arco_process_cls=lambda cmd: _ready_arco(cmd, popen=fake_popen),
-             simulator_factory=lambda td: "sim-room-dev")
+             simulator_factory=lambda td, fixture: "sim-room-dev")
     assert fake_popen.signals   # Arco was told to stop, not orphaned
 
 
@@ -112,37 +114,40 @@ def test_boot_shuts_down_arco_when_wait_ready_times_out():
              arco_process_cls=lambda cmd: ArcoProcess(
                  cmd, popen=fake_popen, probe=lambda: False,
                  clock=clock, sleep=sleep),
-             simulator_factory=lambda td: "sim-room-dev")
+             simulator_factory=lambda td, fixture: "sim-room-dev")
     assert fake_popen.signals   # Arco was told to stop, not orphaned
 
 
 def test_wait_for_room_binding_returns_immediately_if_already_bound():
     gs, room_binding = _setup_loaded_room_bit()
-    gs.room.bound_dev = "ie7"
+    gs.room.bound = {"main": "ie7", "accent": "ie8"}
     calls = []
     wait_for_room_binding(gs, room_binding, timeout=5.0,
                           tick=lambda: calls.append(1))
     assert calls == []
 
 
-def test_wait_for_room_binding_arms_and_detects_a_late_join():
+def test_wait_for_room_binding_arms_each_unbound_fixture_in_turn():
     gs, room_binding = _setup_loaded_room_bit()
     ticks = [0]
+    joined = []
 
     def tick():
         ticks[0] += 1
-        if ticks[0] == 3:
-            gs.join("ie9", "ROOM_TEST_NODE")
+        armed = room_binding.armed_fixture(gs.room.room_type)
+        if armed is not None and armed not in joined and ticks[0] % 3 == 0:
+            joined.append(armed)
+            gs.join(f"dev-{armed}", "ROOM_TEST_NODE")
 
     clock, sleep = _fake_clock()
     wait_for_room_binding(gs, room_binding, timeout=5.0, tick=tick,
                           clock=clock, sleep=sleep)
 
-    assert gs.room.bound_dev == "ie9"
-    assert room_binding.is_armed(gs.room.room_type) is False   # disarmed on success
+    assert gs.room.bound == {"main": "dev-main", "accent": "dev-accent"}
+    assert room_binding.is_armed(gs.room.room_type) is False
 
 
-def test_wait_for_room_binding_times_out_and_disarms():
+def test_wait_for_room_binding_times_out_with_nothing_bound():
     gs, room_binding = _setup_loaded_room_bit()
     clock, sleep = _fake_clock()
 
@@ -151,6 +156,24 @@ def test_wait_for_room_binding_times_out_and_disarms():
                               clock=clock, sleep=sleep)
 
     assert room_binding.is_armed(gs.room.room_type) is False
+
+
+def test_wait_for_room_binding_proceeds_partially_bound_after_timeout(caplog):
+    """One unresponsive fixture must not fail the whole boot -- design spec
+    section 7."""
+    gs, room_binding = _setup_loaded_room_bit()
+    ticks = [0]
+
+    def tick():
+        ticks[0] += 1
+        if ticks[0] == 2 and room_binding.armed_fixture(gs.room.room_type) == "main":
+            gs.join("dev-main", "ROOM_TEST_NODE")
+
+    clock, sleep = _fake_clock()
+    wait_for_room_binding(gs, room_binding, timeout=1.0, tick=tick,
+                          clock=clock, sleep=sleep)   # must not raise
+
+    assert gs.room.bound == {"main": "dev-main"}
 
 
 def test_shutdown_aborts_a_running_bit_then_tears_down():
@@ -231,19 +254,18 @@ class _SpyProcess:
 
 
 class _SpyFactory:
-    """A simulator_factory that SPAWNS. The contract is now
-    Callable[[TeardownStack], str]: a factory that spawns a process
-    registers its own teardown on the stack it is handed. That replaces
-    PR #24's getattr(factory, "process", None) convention, which existed
-    only because the factory had no way to hand its handle back."""
+    """A simulator_factory that SPAWNS, once per fixture. The contract is
+    Callable[[TeardownStack, str], str]: a factory that spawns a process
+    registers its own teardown on the stack it is handed."""
 
     def __init__(self):
-        self.process = None
+        self.processes = []
 
-    def __call__(self, teardown):
-        self.process = _SpyProcess()
-        teardown.push("simulator", self.process.shutdown)
-        return "sim-room-dev"
+    def __call__(self, teardown, fixture):
+        process = _SpyProcess()
+        self.processes.append(process)
+        teardown.push(f"simulator-{fixture}", process.shutdown)
+        return f"sim-room-{fixture}-dev"
 
 
 def test_teardown_stops_the_simulator_before_arco():
@@ -255,13 +277,16 @@ def test_teardown_stops_the_simulator_before_arco():
     order = []
 
     class _RecordingProcess:
+        def __init__(self, fixture):
+            self.fixture = fixture
+
         def shutdown(self):
-            order.append("simulator")
+            order.append(f"simulator-{self.fixture}")
 
     class _RecordingFactory:
-        def __call__(self, teardown):
-            teardown.push("simulator", _RecordingProcess().shutdown)
-            return "sim-room-dev"
+        def __call__(self, teardown, fixture):
+            teardown.push(f"simulator-{fixture}", _RecordingProcess(fixture).shutdown)
+            return f"sim-room-{fixture}-dev"
 
     class _RecordingArco(ArcoProcess):
         def shutdown(self):
@@ -277,7 +302,10 @@ def test_teardown_stops_the_simulator_before_arco():
 
     teardown.close()
 
-    assert order == ["simulator", "arco"]
+    # Both fixture simulators (registered before Arco, since
+    # _bind_room_fast_path spawns them before this function's own Arco
+    # readiness/Bit-load steps complete) stop before Arco, in LIFO order.
+    assert order == ["simulator-accent", "simulator-main", "arco"]
 
 
 def test_teardown_aborts_the_bit_before_the_room_bridge(monkeypatch):
@@ -300,7 +328,7 @@ def test_teardown_aborts_the_bit_before_the_room_bridge(monkeypatch):
     gs, room_bridge, arco, teardown = boot(
         config, make_registry(), arco_command=["arco-server"],
         room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
-        simulator_factory=lambda td: "sim-room-dev")
+        simulator_factory=lambda td, fixture: "sim-room-dev")
 
     gs.run()
     gs.abort = lambda: order.append("bit")
@@ -325,7 +353,7 @@ def test_a_caller_supplied_stack_gets_boots_steps_pushed_onto_it():
         config, make_registry(), arco_command=["arco-server"],
         room_binding=RoomBindingRegistry(),
         arco_process_cls=lambda cmd: _ready_arco(cmd),
-        simulator_factory=lambda td: "sim-room-dev",
+        simulator_factory=lambda td, fixture: "sim-room-dev",
         teardown=teardown)
 
     assert returned is teardown
@@ -347,7 +375,8 @@ def test_boot_shuts_down_the_simulator_on_a_failure_after_it_spawned():
              room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
              simulator_factory=factory)
 
-    assert factory.process.shutdowns == 1
+    assert len(factory.processes) == 2
+    assert all(p.shutdowns == 1 for p in factory.processes)
 
 
 def test_boot_shuts_down_the_simulator_when_the_bit_fails_to_load():
@@ -363,7 +392,8 @@ def test_boot_shuts_down_the_simulator_when_the_bit_fails_to_load():
              room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
              simulator_factory=factory)
 
-    assert factory.process.shutdowns == 1
+    assert len(factory.processes) == 2
+    assert all(p.shutdowns == 1 for p in factory.processes)
 
 
 def test_boot_shuts_both_down_on_a_keyboard_interrupt():
@@ -387,7 +417,8 @@ def test_boot_shuts_both_down_on_a_keyboard_interrupt():
              arco_process_cls=lambda cmd: _ready_arco(cmd, popen=fake_popen),
              simulator_factory=factory)
 
-    assert factory.process.shutdowns == 1
+    assert len(factory.processes) == 2
+    assert all(p.shutdowns == 1 for p in factory.processes)
     assert fake_popen.signals      # and Arco was told to stop too
 
 
@@ -399,7 +430,7 @@ def test_boot_still_accepts_a_factory_that_spawns_nothing():
     with pytest.raises(BootFailure, match="unknown Bit"):
         boot(config, make_registry(), arco_command=["arco-server"],
              room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
-             simulator_factory=lambda td: "sim-room-dev")
+             simulator_factory=lambda td, fixture: "sim-room-dev")
 
 
 def test_boot_shuts_arco_down_even_if_the_simulator_shutdown_raises():
@@ -413,7 +444,7 @@ def test_boot_shuts_arco_down_even_if_the_simulator_shutdown_raises():
         def __init__(self):
             self.process = None
 
-        def __call__(self, teardown):
+        def __call__(self, teardown, fixture):
             self.process = _RaisingProcess()
             teardown.push("simulator", self.process.shutdown)
             return "sim-room-dev"
@@ -448,4 +479,4 @@ def test_boot_raises_the_original_failure_even_if_arco_shutdown_raises():
              room_binding=RoomBindingRegistry(),
              arco_process_cls=lambda cmd: _RaisingArco(
                  cmd, popen=FakePopen(), probe=lambda: True),
-             simulator_factory=lambda td: "sim-room-dev")
+             simulator_factory=lambda td, fixture: "sim-room-dev")
