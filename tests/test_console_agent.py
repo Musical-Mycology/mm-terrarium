@@ -174,24 +174,58 @@ def test_arm_room_arms_the_configured_room_binding():
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv)
 
-    error = agent._handle_command({"command": "arm_room", "room_type": "TEST"})
+    error = agent._handle_command(
+        {"command": "arm_room", "room_type": "TEST", "fixture": "main"})
 
     assert error is None
     assert gs.room_binding.is_armed(RoomType.TEST) is True
+    assert gs.room_binding.armed_fixture(RoomType.TEST) == "main"
 
 
-def test_release_room_clears_the_binding():
+def test_arm_room_without_a_fixture_is_refused():
+    gs = GameServer({"TestBit": TestBit}, room_binding=RoomBindingRegistry())
+    gs.room = Room(room_type=RoomType.TEST)
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+
+    error = agent._handle_command({"command": "arm_room", "room_type": "TEST"})
+
+    assert error is not None
+    assert error["event"] == "error"
+
+
+def test_release_room_clears_one_fixtures_binding():
     binding = RoomBindingRegistry()
-    binding.bind(RoomType.TEST, "ie7")
+    binding.bind(RoomType.TEST, "main", "ie7")
+    binding.bind(RoomType.TEST, "accent", "ie8")
     gs = GameServer({"TestBit": TestBit}, room_binding=binding)
     gs.room = Room(room_type=RoomType.TEST)
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv)
 
-    error = agent._handle_command({"command": "release_room", "room_type": "TEST"})
+    error = agent._handle_command(
+        {"command": "release_room", "room_type": "TEST", "fixture": "main"})
 
     assert error is None
-    assert binding.bound_device(RoomType.TEST) is None
+    assert binding.bound_device(RoomType.TEST, "main") is None
+    assert binding.bound_device(RoomType.TEST, "accent") == "ie8"
+
+
+def test_release_room_without_a_fixture_clears_every_fixture():
+    binding = RoomBindingRegistry()
+    binding.bind(RoomType.TEST, "main", "ie7")
+    binding.bind(RoomType.TEST, "accent", "ie8")
+    gs = GameServer({"TestBit": TestBit}, room_binding=binding)
+    gs.room = Room(room_type=RoomType.TEST)
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+
+    error = agent._handle_command(
+        {"command": "release_room", "room_type": "TEST"})
+
+    assert error is None
+    assert binding.bound_device(RoomType.TEST, "main") is None
+    assert binding.bound_device(RoomType.TEST, "accent") is None
 
 
 def test_arm_room_errors_when_no_room_configured():
@@ -199,7 +233,8 @@ def test_arm_room_errors_when_no_room_configured():
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv)
 
-    error = agent._handle_command({"command": "arm_room", "room_type": "TEST"})
+    error = agent._handle_command(
+        {"command": "arm_room", "room_type": "TEST", "fixture": "main"})
 
     assert error is not None
     assert error["event"] == "error"
@@ -211,7 +246,8 @@ def test_arm_room_errors_for_mismatched_room_type():
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv)
 
-    error = agent._handle_command({"command": "arm_room", "room_type": "DEMO"})
+    error = agent._handle_command(
+        {"command": "arm_room", "room_type": "DEMO", "fixture": "main"})
 
     assert error is not None
 
@@ -241,7 +277,7 @@ def test_devices_view_hides_the_room_assignment():
     gs.room = Room(room_type=RoomType.TEST)
     gs.load_bit("RoomCapableBit")
     gs.hello("ie9", "Shroom Nine", "1")
-    binding.arm(RoomType.TEST, window_seconds=10.0)
+    binding.arm(RoomType.TEST, "main", window_seconds=10.0)
     gs.join("ie9", "ROOM_TEST_NODE")
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv)
@@ -264,10 +300,11 @@ def _room_console(bit_name="TestBit"):
     from control.room_bridge import RoomBridge
     binding = RoomBindingRegistry()
     gs = GameServer({bit_name: TestBit}, room_binding=binding)
-    gs.room = Room(room_type=RoomType.TEST, bound_dev="sim-room")
+    gs.room = Room(room_type=RoomType.TEST)
+    gs.room.bound = {"main": "sim-room-main"}
     gs.load_bit(bit_name)
     bridge = RoomBridge()
-    bridge.bind("sim-room")
+    bridge.bind("sim-room-main")
     bridge.feed_light(0xB0, 74, 93)
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv, room_bridge=bridge)
@@ -280,10 +317,11 @@ def test_snapshot_carries_the_room_panel():
     agent.poll()
     _, msg = srv.sent[0]
     assert msg["room"]["room_type"] == "TEST"
-    assert msg["room"]["bound_dev"] == "sim-room"
-    assert msg["room"]["capability"]["pixel_count"] == 60
-    assert [z["name"] for z in msg["room"]["capability"]["zones"]] == \
-        ["left", "center", "right"]
+    main = msg["room"]["fixtures"][0]
+    assert main["name"] == "main"
+    assert main["dev"] == "sim-room-main"
+    assert [z["name"] for z in main["zones"]] == \
+        ["main.left", "main.center", "main.right"]
 
 
 def test_snapshot_room_instruments_include_light_and_audio():

@@ -102,12 +102,14 @@ def log_event(level: str, message: str) -> dict:
 @dataclass
 class ArmRoomCommand:
     room_type: str
+    fixture: str
     window_seconds: float = 30.0
 
 
 @dataclass
 class ReleaseRoomCommand:
     room_type: str
+    fixture: str | None = None
 
 
 @dataclass
@@ -128,13 +130,20 @@ def parse_admin_command(msg: dict):
         room_type = msg.get("room_type")
         if not isinstance(room_type, str):
             raise ValueError("arm_room requires a string 'room_type'")
+        fixture = msg.get("fixture")
+        if not isinstance(fixture, str) or not fixture:
+            raise ValueError("arm_room requires a non-empty string 'fixture'")
         window = msg.get("window_seconds", 30.0)
-        return ArmRoomCommand(room_type=room_type, window_seconds=float(window))
+        return ArmRoomCommand(room_type=room_type, fixture=fixture,
+                              window_seconds=float(window))
     if command == "release_room":
         room_type = msg.get("room_type")
         if not isinstance(room_type, str):
             raise ValueError("release_room requires a string 'room_type'")
-        return ReleaseRoomCommand(room_type=room_type)
+        fixture = msg.get("fixture")
+        if fixture is not None and not isinstance(fixture, str):
+            raise ValueError("release_room 'fixture' must be a string when given")
+        return ReleaseRoomCommand(room_type=room_type, fixture=fixture)
     if command == "fire_trigger":
         name = msg.get("name")
         if not isinstance(name, str) or not name:

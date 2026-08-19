@@ -106,9 +106,9 @@ class ConsoleAgent:
             return protocol.error_event(
                 name, f"no {command.room_type} Room configured")
         if isinstance(command, protocol.ArmRoomCommand):
-            gs.room_binding.arm(room_type, command.window_seconds)
+            gs.room_binding.arm(room_type, command.fixture, command.window_seconds)
         elif isinstance(command, protocol.ReleaseRoomCommand):
-            gs.room_binding.release(room_type)
+            gs.room_binding.release(room_type, command.fixture)
         return None
 
     # --- snapshot (connect-time full read model) ---------------------------
