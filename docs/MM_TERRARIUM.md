@@ -1356,13 +1356,43 @@ real-scale profile, and `TestBit` runs in it. Design:
   boundaries straight off `room_profile()`, so a human can visually confirm
   the physical build-out mapping on the canvas. The one and only consumer of
   block boundaries in the codebase this slice.
-- **Live-verified against a real Arco: NOT YET DONE.** Everything above is
-  offline-suite-only. Live-verify per the spec's section 7: boot a DEMO room
-  via `run_stack` against a real Arco, confirm a device can join, complete a
-  scored round and an unscored jam join, and confirm the Room's `rainbow` cue
-  sweeps the full 864 px canvas with no seam at any of the 6 block
-  boundaries; separately, run `--identify-blocks` and visually confirm 6
-  distinct solid colors, each exactly 144 px, in order.
+- **First live-verify attempt found the Room's light didn't render at all —
+  fixed 2026-08-19.** `devicelink/agent.py`'s `_setup_room()` built the
+  Room's `LightSession` over a bare `Universe()`, and luxaeterna's `Universe`
+  was hardcoded to exactly 512 DMX channels everywhere a bound was checked.
+  DEMO's profile is 864 px / 2592 channels (this section, above), so every
+  `render_into()` call raised `ChannelError: Range 0:2592 exceeds universe
+  bounds` — caught and silently logged-and-skipped by `_render_room()`, so
+  the Room's light never rendered a single frame against a real Arco even
+  though audio came up fine. 2172 occurrences over one 45s run. Latent since
+  before this slice: the old whole-*profile* 170 px cap (superseded by the
+  per-block cap above) meant no `RoomProfile` had ever been constructible
+  wide enough to exercise this path — 1056 offline tests across both repos
+  never caught it because nothing drove `_render_room()` above 512 channels.
+  Fixed by widening luxaeterna's `Universe` to accept an optional
+  `channel_count` constructor param (default unchanged at 512 — every other
+  caller, including the real Art-Net/sACN/serial-Enttec backends and
+  per-device player buffers, is unaffected, since this `Universe` instance
+  is never handed to any of them) and passing the Room profile's real
+  `channel_count` through at construction. Design:
+  [`.../2026-08-19-room-universe-channel-count-fix-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-19-room-universe-channel-count-fix-design.md).
+  Regression-tested offline (a new test drives `_render_room()` against
+  DEMO's real 2592-channel profile) and live-verified: a full 45s `--ci
+  --room-type DEMO` run shows 0 `ChannelError`, Room light actively
+  rendering the whole run. That run used `--devices 0` — `--devices 1`
+  independently hit the pre-existing, unrelated headless clock-sync defect
+  documented under *Not yet built* below before the render bug could be
+  isolated, and separately hit a transient `game`-service-already-claimed
+  race on the Arco hub; neither reproduced with `--devices 0`, and the
+  Room's fixture binds and renders at boot independent of player-device
+  count, so this is genuine full-duration coverage of the fixed path.
+- **Live-verified against a real Arco: PARTIALLY DONE (light-rendering crash
+  only).** The bug above is confirmed fixed live. The rest of the spec's
+  section 7 checklist is still offline-suite-only: a device joining and
+  completing a scored round plus an unscored jam join, the Room's `rainbow`
+  cue sweeping the full 864 px canvas with no seam at any of the 6 block
+  boundaries, and `--identify-blocks` visually confirming 6 distinct solid
+  colors of exactly 144 px each, in order.
 
 ## Boundary rules (the load-bearing invariants)
 
