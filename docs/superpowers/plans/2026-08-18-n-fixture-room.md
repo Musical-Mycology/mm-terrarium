@@ -3665,6 +3665,7 @@ git commit -m "feat(bits): TestBit's Room declares rainbow, not aurora"
 **Files:**
 - Grep sweep across `control/`, `devicelink/`, `harness/`, `console/`, `bits/`, `tests/` for any remaining `bound_dev` reference Tasks 2-12 missed.
 - Modify: `console/static/style.css` (Task 11's own review confirmed the Room panel currently renders functionally correct but visually unstyled -- the exact-id selectors `#roomStrip`/`#roomZones` no longer match anything now that every strip/zone-bar id is fixture-suffixed).
+- Modify: `bits/test_bit.py` (Task 12's own review confirmed several docstrings, comments, and the `play_aurora` trigger's operator-facing `description` field still describe the Room's light instrument as `aurora`; the Room declares `rainbow` as of Task 12, and this text is now inaccurate -- see Step 1.6).
 - Modify: `docs/diagrams/cue-path.d2`, `docs/diagrams/boot-teardown.d2` (regenerate via `tools/render_diagrams.py`)
 - Modify: `docs/MM_TERRARIUM.md` (move the Spec C entry from "Not yet built / deferred" to a new Landed-subsystems section, mirroring how the trigger slice got its own section)
 
@@ -3750,6 +3751,60 @@ the docs/diagram sync below, keeping that commit docs-only:
 ```bash
 git add console/static/style.css
 git commit -m "fix(console): restyle the Room panel for fixture-suffixed strip/zone-bar ids"
+```
+
+- [ ] **Step 1.6: Fix stale "aurora" text in `bits/test_bit.py`**
+
+Task 12 correctly left every line of CODE and BEHAVIOR in this file
+untouched outside the Room role's own `light_manifest` block (per its own
+brief's explicit instruction), but several docstrings, comments, and one
+operator-facing field still describe the Room's light instrument as
+`aurora`. Fix the TEXT only -- no code, no logic, no behavior changes
+anywhere in this step:
+
+- Line ~165, the `play_aurora` trigger's `description` field (shown on the
+  Terrarium Console's trigger panel to a real operator, so this one must
+  be exact): change `"A slow aurora sweep across the Room"` to
+  `"A slow rainbow sweep across the Room"`.
+- Line ~251, `_on_tilt`'s docstring: change the parenthetical
+  `"(aurora hue)"` to `"(rainbow hue)"` (it's part of "The Room role
+  declares cc:74 on BOTH its light_manifest (aurora hue) and its
+  ugen_manifest (FluidSynth cutoff)").
+- Lines ~197 and ~203, `cues(at)`'s docstring: both currently name
+  `aurora` specifically ("the Room's aurora reached its declared static
+  hue," "aurora GLIDES to its target"). Update both to name `rainbow`
+  instead of `aurora`. For line ~197's surrounding claim specifically ("...
+  reached its declared static hue once and held it, unanimated, for a
+  whole run") -- rainbow's own `speed` param means it keeps scrolling on
+  its own even with no cc:74 input at all, unlike aurora's true
+  once-settled stillness, so this exact claim needs to be true for
+  rainbow, not copied verbatim with only the instrument name swapped. Use
+  your own judgment on the precise wording (you can verify rainbow's
+  actual behavior by reading `luxaeterna/synth/presets.py`'s
+  `_make_rainbow` and `luxaeterna/synth/ugens.py`'s `Rainbow._compute`,
+  both in the sibling `/Users/chris/projects/luxaeterna` checkout, or by
+  running a quick scripted check) -- the point this comment needs to keep
+  making accurately is why `cues(at)`'s own periodic cc:74 drift still
+  matters (it moves the gradient's BASE hue; `speed` alone would leave the
+  base hue fixed even though the gradient keeps scrolling around it).
+
+Do NOT touch: the `player` role's own `aurora` declaration and its
+surrounding comments (lines ~65-70, unrelated, correct, unchanged), line
+~104's "like player's aurora" comparison (still factually true --
+`rainbow` is also a field-rate gesture with no note lane, same structural
+point), line ~110's already-correct new sentence from Task 12, or any
+line ~34/156/238 reference to the `play_aurora` TRIGGER'S NAME itself
+(renaming that identifier is a separate decision this step does not make
+-- text accuracy only, not an identifier rename).
+
+Run: `.venv/bin/python -m pytest tests/test_test_bit.py tests/test_devicelink_agent.py -v`
+Expected: all pass, unchanged (this step touches no code, so nothing
+should move; run it anyway as a cheap confirmation the file still
+imports and parses correctly).
+
+```bash
+git add bits/test_bit.py
+git commit -m "docs(bits): fix stale aurora references in TestBit's Room-facing text"
 ```
 
 - [ ] **Step 2: Run the whole suite**
