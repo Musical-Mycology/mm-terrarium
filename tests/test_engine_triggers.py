@@ -257,6 +257,22 @@ def test_a_target_fanout_across_two_bound_fixtures_feeds_the_room_once_per_step(
     assert observer.fired[0].steps == 3
 
 
+def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
+    """_resolve_target must walk the profile's fixtures in declaration order
+    (main, then accent for the TEST profile), never dict/bind order -- an
+    operator can arm and bind accent before main, and nothing about admin
+    sequencing prevents that. Bound accent-first here, opposite of profile
+    declaration order, to prove the resolved and reported dev order still
+    comes out main-then-accent."""
+    gs, light, _ = _running(bound={"accent": "sim-room-accent",
+                                   "main": "sim-room-main"})
+    observer = Recorder()
+    gs.add_observer(observer)
+    assert gs.fire_trigger("sweep", fired_by="admin-manual") is None
+    assert observer.fired[0].devs == ("sim-room-main", "sim-room-accent")
+    assert [c[0] for c in light] == ["sim-room-main"] * 3
+
+
 def test_all_resolves_to_the_room_plus_registered_players_deduped():
     gs, light, _ = _running()
     gs.fire_trigger("everywhere", fired_by="admin-manual")
