@@ -887,23 +887,40 @@ def test_an_unchanged_fixture_slice_is_not_resent_after_settling():
     output is stable, neither fixture keeps resending on every tick.
 
     TestBit's Room manifest targets "primary" (the whole concatenated
-    surface) with a uniform-fill instrument, so there is no way to change
-    only ONE fixture's pixels through its real declaration -- proving
-    per-fixture selectivity that way is not available at this integration
-    level. What IS provable, and is the same underlying _last_frames
-    mechanism: once the render has genuinely stabilized (no new cue, no
-    breath reaching the Room -- TestBit's Room role declares no cc:11
-    lane, unlike player), NEITHER fixture keeps resending, which could
-    only hold if each fixture's slice is compared against its OWN last-sent
-    bytes rather than some shared/always-different state.
+    surface) with one instrument, so there is no way to change only ONE
+    fixture's pixels through its real declaration -- proving per-fixture
+    selectivity that way is not available at this integration level. What
+    IS provable, and is the same underlying _last_frames mechanism: with
+    no NEW cue and no elapsed time (no breath reaching the Room either --
+    TestBit's Room role declares no cc:11 lane, unlike player), a second
+    render produces byte-identical output to the first, and NEITHER
+    fixture resends it -- which could only hold if each fixture's slice is
+    compared against its OWN last-sent bytes rather than some shared or
+    always-different state.
 
     Uses a fake, manually-advanced clock (same idiom as
     test_room_dev_cue_routes_to_room_bridge_not_normal_bridges above) so
-    aurora's level glide (a real Smooth time constant) has actually
-    converged before the counts being compared are captured -- with the
+    the settling loop's Smooth-driven params (hue/level glide) actually
+    converge before the counts being compared are captured -- with the
     default wall clock, successive polls advance real time by
-    microseconds, nowhere near enough for the glide to settle, and this
-    assertion would be flaky by construction without it."""
+    microseconds, nowhere near enough to settle, and this assertion would
+    be flaky by construction without it.
+
+    The final "before" vs "after" comparison deliberately does NOT advance
+    the clock further, unlike the settling loop above it. TestBit's Room
+    declares rainbow (see bits/test_bit.py), which -- unlike aurora's
+    settle-to-a-constant behavior -- keeps its hue scrolling forever from
+    ctx.time even with no new cue, by design (that animation is the whole
+    point of the instrument). So "render again after real time passes,
+    expect no resend" is no longer a universally true property once the
+    Room's instrument can be a perpetually-animating one; "render again at
+    the SAME instant, expect no resend" still is, for any instrument,
+    because RenderContext.time is derived from the injected clock
+    (luxaeterna's LightSession.render_into: t = now - self._start), so a
+    frozen clock yields byte-identical output regardless of which
+    instrument computed it. This isolates the property actually under
+    test (_last_frames' own comparison logic) from whichever instrument
+    the Room happens to declare."""
     clk = _Clock()
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
@@ -914,7 +931,7 @@ def test_an_unchanged_fixture_slice_is_not_resent_after_settling():
 
     for _ in range(5):
         clk.advance(2.0)
-        agent.poll()   # let aurora's level glide converge
+        agent.poll()   # let hue/level glide converge
 
     def counts():
         main = len([m for d, m in server.sent if m["address"] == "/sim-room-main/leds"])
@@ -922,8 +939,7 @@ def test_an_unchanged_fixture_slice_is_not_resent_after_settling():
         return main, accent
 
     before = counts()
-    clk.advance(2.0)
-    agent.poll()   # no new cue; settled output should be byte-identical
+    agent.poll()   # same clock instant, no new cue: output must be identical
     after = counts()
 
     assert after == before   # neither fixture resent an unchanged frame

@@ -106,11 +106,17 @@ class TestBit(Bit):
             # triggered strobe TestBit's own docstring already explains.
             # Deliberately no cc:11/level lane (unlike player): breath-
             # feeding the Room is a real, separable enhancement, not
-            # needed to prove RoomBridge renders at all.
+            # needed to prove RoomBridge renders at all. The instrument
+            # itself is `rainbow`, not `aurora`: a scrolling hue gradient
+            # across the Room's whole concatenated surface, which makes
+            # the cross-fixture property -- one declaration, one gradient
+            # spanning every fixture -- the thing the reference fixture
+            # visibly proves (see design spec section 9).
             light_manifest={
                 "instruments": [
-                    {"instrument": "aurora", "target": "primary",
-                     "params": {"hue": 0.6, "level": 0.55},
+                    {"instrument": "rainbow", "target": "primary",
+                     "params": {"hue": 0.6, "level": 0.55,
+                               "span": 1.0, "speed": 0.05},
                      "lanes": [{"source": "cc:74", "dest": "hue"}]},
                 ],
             },
