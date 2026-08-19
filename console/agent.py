@@ -41,9 +41,13 @@ class ConsoleAgent:
         self._last_room: dict | None = None
         self._last_triggers: list | None = None
         self._clock = clock
-        # The latest Room frame not yet broadcast, or None. Overwritten, not
-        # queued: see _broadcast_room_frame and ROOM_FRAME_INTERVAL above.
-        self._pending_room_frame: tuple[str, bytes] | None = None
+        # The latest not-yet-broadcast frame per dev. Each dev's entry is
+        # overwritten, not queued: see _broadcast_room_frame and
+        # ROOM_FRAME_INTERVAL above. Keyed by dev, not a single slot --
+        # _render_room() can call on_room_frame for more than one fixture
+        # within one tick, and a single slot silently starves every fixture
+        # but the last one to call in that tick.
+        self._pending_room_frames: dict[str, bytes] = {}
         self._last_room_frame_at = 0.0
         game_server.add_observer(self)
 
@@ -168,20 +172,21 @@ class ConsoleAgent:
 
     def on_room_frame(self, dev: str, frame: bytes) -> None:
         """DeviceLinkAgent's display-only frame sink. Called on the tick
-        thread. Stores the LATEST frame only; anything not yet broadcast is
-        overwritten, never queued."""
-        self._pending_room_frame = (dev, frame)
+        thread, once per changed fixture slice -- so possibly several times
+        per tick, one per dev. Stores the LATEST frame per dev; anything not
+        yet broadcast for that dev is overwritten, never queued."""
+        self._pending_room_frames[dev] = frame
 
     def _broadcast_room_frame(self) -> None:
-        if self._pending_room_frame is None:
+        if not self._pending_room_frames:
             return
         now = self._clock()
         if now - self._last_room_frame_at < ROOM_FRAME_INTERVAL:
             return
-        dev, frame = self._pending_room_frame
-        self._pending_room_frame = None
+        pending, self._pending_room_frames = self._pending_room_frames, {}
         self._last_room_frame_at = now
-        self.server.broadcast(protocol.room_frame_event(dev, frame))
+        for dev, frame in pending.items():
+            self.server.broadcast(protocol.room_frame_event(dev, frame))
 
     def _current_triggers(self) -> list:
         bit = self.game_server.bit

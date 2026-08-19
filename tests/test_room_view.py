@@ -58,10 +58,17 @@ def test_fixtures_list_carries_name_dev_and_slice():
 
 def test_fixtures_zones_are_scoped_to_their_own_fixture():
     fixtures = _view()["fixtures"]
-    main_zones = [z["name"] for z in fixtures[0]["zones"]]
-    accent_zones = [z["name"] for z in fixtures[1]["zones"]]
-    assert main_zones == ["main.left", "main.center", "main.right"]
-    assert accent_zones == ["accent.low", "accent.high"]
+    assert [z["name"] for z in fixtures[0]["zones"]] == [
+        "main.left", "main.center", "main.right"]
+    assert [z["name"] for z in fixtures[1]["zones"]] == [
+        "accent.low", "accent.high"]
+    # Fixture-LOCAL offsets, not the global concatenated-surface offsets
+    # profile.zones carries -- accent starts at channel offset 60 in the
+    # concatenated surface, but its own zones must read from 0.
+    assert [(z["start"], z["count"]) for z in fixtures[0]["zones"]] == [
+        (0, 20), (20, 20), (40, 20)]
+    assert [(z["start"], z["count"]) for z in fixtures[1]["zones"]] == [
+        (0, 15), (15, 15)]
 
 
 def test_both_fixtures_bound_report_their_own_dev():

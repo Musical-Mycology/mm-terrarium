@@ -78,8 +78,8 @@ def fixtures_view(profile, room) -> list[dict]:
             "pixel_count": fixture.pixel_count,
             "channel_start": start,
             "channel_count": count,
-            "zones": [{"name": z.name, "start": z.start, "count": z.count}
-                      for z in profile.zones if z.name.startswith(f"{name}.")],
+            "zones": [{"name": f"{name}.{z.name}", "start": z.start, "count": z.count}
+                      for z in fixture.zones],
             "dev": room.bound.get(name),
         })
     return out

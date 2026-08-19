@@ -446,6 +446,35 @@ def test_room_frames_are_broadcast_at_the_decimated_rate():
     assert frames[1]["channels"] == [7] * 180
 
 
+def test_two_fixtures_changing_in_the_same_window_both_broadcast():
+    from console.agent import ROOM_FRAME_INTERVAL
+    gs, srv, agent = _room_console()
+    clock = FakeClock(100.0)
+    agent._clock = clock
+
+    # Both fixtures change before the first poll -- the old single-slot
+    # implementation would only ever relay the second call's dev.
+    agent.on_room_frame("sim-room-main", bytes(180))
+    agent.on_room_frame("sim-room-accent", bytes(90))
+    agent.poll()
+    frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
+    assert {f["dev"] for f in frames} == {"sim-room-main", "sim-room-accent"}
+
+    # A later main-only change must still relay on its own -- accent's
+    # entry being consumed must not block main's next one, or vice versa.
+    # (2x, not 1x: 100.0 + ROOM_FRAME_INTERVAL - 100.0 rounds to just under
+    # ROOM_FRAME_INTERVAL in float64, which would spuriously trip the "too
+    # soon" guard -- see test_room_frames_are_broadcast_at_the_decimated_rate
+    # above, which sidesteps the same hazard with its own 1.5x net bump.)
+    clock.now += ROOM_FRAME_INTERVAL * 2
+    agent.on_room_frame("sim-room-main", bytes([9] * 180))
+    agent.poll()
+    frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
+    assert len(frames) == 3
+    assert frames[2]["dev"] == "sim-room-main"
+    assert frames[2]["channels"] == [9] * 180
+
+
 def test_no_frame_received_broadcasts_nothing():
     gs, srv, agent = _room_console()
     agent._clock = FakeClock(100.0)
