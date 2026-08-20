@@ -102,6 +102,70 @@ def service_conflict(o2lite, dev: str, *, verify=None):
             f"'python -m harness.o2_shroom --dev {dev}' and kill it.")
 
 
+def reconnect_recheck(o2lite, dev: str, previous_bridge_id, *, verify=None):
+    """If o2lite's bridge id has changed since the last check, re-run the
+    service-ownership check and return (current_bridge_id, problem).
+
+    o2litepy auto-reconnects silently and stamps a new bridge_id on
+    reconnect; a reconnect that lands after this device's own service
+    announcement was lost leaves it clock-synced against the OLD hub
+    forever, with the hub dropping every reply as "service was not
+    found" (measured 2026-08-20: fifteen dropped Control replies while
+    the device saw pure silence). The one-shot startup check
+    (service_conflict) cannot catch this because it only runs once,
+    before any reconnect has happened.
+
+    `problem` is None when the bridge id is unchanged (nothing to do) or
+    when the re-check passes. `verify` defaults to
+    devicelink.o2_transport.verify_service_ownership, imported lazily for
+    the same reason as service_conflict's `verify`.
+    """
+    current = getattr(o2lite, "bridge_id", previous_bridge_id)
+    if current == previous_bridge_id:
+        return previous_bridge_id, None
+
+    print(f"reconnected to the hub (bridge id {previous_bridge_id} -> "
+          f"{current}); re-verifying service")
+
+    if verify is None:
+        from devicelink.o2_transport import verify_service_ownership
+        verify = verify_service_ownership
+
+    # A reconnect can land on a hub that is busy (e.g. a cold audio
+    # open), and Task 2 established that a blocked hub needs the resend
+    # window to be distinguished from a genuine conflict -- so this call
+    # passes timeout/resend_interval explicitly rather than relying on
+    # verify_service_ownership's tight defaults. The STARTUP check (in
+    # service_conflict) keeps those tight defaults: it runs after clock
+    # sync, when the hub is provably alive.
+    if verify(o2lite, dev, timeout=10.0, resend_interval=2.0):
+        return current, None
+
+    problem = (f"{markers.DEVICE_SERVICE_CONFLICT} {dev!r} is not routed "
+               f"back to this process after reconnecting to the hub "
+               f"(bridge id {previous_bridge_id} -> {current}). Another "
+               f"process has likely claimed it, and O2 refuses a second "
+               f"claimant silently (o2/src/bridge.cpp:231-237). Nothing "
+               f"addressed to /{dev}/* will ever arrive here.")
+    return current, problem
+
+
+def join_stall_hint(dev: str) -> str:
+    """The tail of the message printed every 5 unanswered joins (the
+    caller prepends "N joins unanswered. ").
+
+    The old wording ("is Control up and in SETUP?") pointed at Control
+    even on a run where Control was perfectly healthy: the actual cause,
+    measured 2026-08-20, was this device's own service announcement
+    being lost, which the hub logs as "service was not found" and never
+    tells the device about. Naming that -- and where to look for it --
+    turns a guess into an instruction.
+    """
+    return (f"Either Control is not up yet, or this device's service "
+            f"announcement was lost (check o2debug.log on the hub for "
+            f'"/{dev}/... service was not found").')
+
+
 def _gestures_ready(client) -> bool:
     """True once Control's granted-role reply has actually reached this
     client, i.e. once ShroomClient._on_role() has set client.config (see
@@ -145,7 +209,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     from harness.room_simulator import WebSimLeds
 
     if room_type is None:
-        capability = shroom_capability()
+        capability = shroom_capability(surface_id=dev)
         channels = LED_CHANNELS
     else:
         if fixture is None:
@@ -161,8 +225,19 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     backend = WebSimBackend(capability=capability,
                             host=sim_host, port=sim_port, serve=serve,
                             label=dev)
+
+    def _on_role(config: dict) -> None:
+        # Where client.config is first set. A granted role whose
+        # light_manifest declares no instruments (TestBit's `jammer`, on
+        # purpose) renders a black canvas that is otherwise
+        # indistinguishable from a broken one -- reported as a failure
+        # once already because nothing said this was expected.
+        if not (config.get("light_manifest") or {}).get("instruments"):
+            print("role has no light declaration -- canvas stays dark "
+                  "by design")
+
     client = ShroomClient(dev, node, leds=WebSimLeds(backend, channels),
-                          expected_channels=channels)
+                          on_role=_on_role, expected_channels=channels)
     return client, backend
 
 
@@ -335,11 +410,16 @@ def main() -> None:
         next_join = (o2lite.time_get() + args.join_retry
                      if args.join_retry > 0 and not args.no_join else None)
         joins_sent = 1
+        bridge_id = getattr(o2lite, "bridge_id", None)
         while not client.released:
             if parent_is_gone(args.exit_with_parent):
                 print("parent is gone; exiting")
                 break
             o2lite.poll()
+            bridge_id, problem = reconnect_recheck(o2lite, args.dev, bridge_id)
+            if problem is not None:
+                print(problem, file=sys.stderr)
+                raise SystemExit(1)
             now = o2lite.time_get()
             if next_join is not None and now >= next_join:
                 if client.config is not None or client.last_deny is not None \
@@ -357,8 +437,8 @@ def main() -> None:
                     joins_sent += 1
                     next_join = now + args.join_retry
                     if joins_sent % 5 == 0:
-                        print(f"still waiting on a role after {joins_sent} "
-                              f"joins -- is Control up and in SETUP?")
+                        print(f"{joins_sent} joins unanswered. "
+                              f"{join_stall_hint(args.dev)}")
             if not deny_printed and client.last_deny is not None:
                 reason, hint = client.last_deny
                 print(f"{markers.DEVICE_JOIN_DENIED} {reason} ({hint})",
