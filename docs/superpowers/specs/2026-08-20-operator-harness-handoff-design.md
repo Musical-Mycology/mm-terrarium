@@ -156,12 +156,17 @@ Four small observability gaps, each of which cost real time on 2026-08-20:
 
 **Fixes**, all in `harness/` (the engine is untouched):
 
-- `terrarium_boot` registers a small logging observer on the engine --
-  the same seam `ConsoleAgent` uses -- printing one line per lifecycle
-  event: `device hello: ie1`, `join granted: ie1 -> player (scored) via
+- `terrarium_boot` prints one line per device lifecycle event: `device
+  hello: ie1`, `join granted: ie1 -> player (scored) via
   TEST_PLAYER_NODE`, `join denied: ie1 -> TEST_PLAYER_NODE (reason)`,
-  `device released: ie1`. Denials print unconditionally. `run_stack`'s
-  tee then lands all of it in `control.log` for free.
+  `device released: ie1`. Two seams, because denials never cross the
+  engine's observer list (the engine notifies on grants and releases,
+  not refusals): hellos, grants and releases ride an engine observer
+  exactly as `ConsoleAgent` does, while denials ride a new optional
+  `on_join_denied` sink on `DeviceLinkAgent`, constructor-injected and
+  guarded at its call site -- the same pattern `on_room_frame` already
+  established. `run_stack`'s tee then lands all of it in `control.log`
+  for free.
 - `_wait_in_setup` prints `SETUP open, {n:.0f}s remaining` every 15 s.
 - `o2_shroom` builds `shroom_capability(surface_id=dev)`.
 - On role grant, if the config blob's `light_manifest` has no
