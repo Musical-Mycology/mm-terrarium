@@ -162,7 +162,7 @@ def test_list_indices_do_not_grow_the_warning_set_without_bound(caplog):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-.venv/bin/python -m pytest tests/test_wire_json.py -v
+cd /Users/chris/projects/mm-terrarium/.claude/worktrees/sweet-swirles-296e20 && .venv/bin/python -m pytest tests/test_wire_json.py -v
 ```
 
 Expected: every test FAILS at collection with `ModuleNotFoundError: No module named 'control.wire_json'`.
@@ -356,8 +356,6 @@ class _FakeServer:
 def test_console_snapshot_survives_an_infinite_bit_status():
     """The exact live failure: an unbounded run_duration must not make the
     whole snapshot unparseable."""
-    from console.server import ConsoleServer
-
     gs = GameServer({"TestBit": lambda: TestBit(run_duration=float("inf"))})
     gs.load_bit("TestBit")
     agent = ConsoleAgent(gs, _FakeServer())
@@ -449,7 +447,8 @@ Expected: all PASS. If `tests/test_devicelink_server.py` does not exist under th
 cd /Users/chris/projects/mm-terrarium/.claude/worktrees/sweet-swirles-296e20 && .venv/bin/python -m pytest tests -q
 ```
 
-Expected: `1073 passed, 1 skipped` (1068 plus 5 new). Every pre-existing test must still pass. In particular `tests/test_console_agent.py` and the capture tests read these payloads and must be unaffected, because Task 1 pinned that finite payloads serialise byte-identically.
+Expected: `1074 passed, 1 skipped` (1068 plus 6 new: three test functions
+plus a three-way parametrised one). Every pre-existing test must still pass. In particular `tests/test_console_agent.py` and the capture tests read these payloads and must be unaffected, because Task 1 pinned that finite payloads serialise byte-identically.
 
 - [ ] **Step 6: Commit**
 
@@ -886,7 +885,7 @@ Expected: all PASS. These load room.js and triggers.js and call their functions 
 cd /Users/chris/projects/mm-terrarium/.claude/worktrees/sweet-swirles-296e20 && .venv/bin/python -m pytest tests -q
 ```
 
-Expected: `1075 passed, 1 skipped` (1073 plus 2 parametrised cases).
+Expected: `1076 passed, 1 skipped` (1074 plus 2 parametrised cases).
 
 - [ ] **Step 10: Commit**
 
