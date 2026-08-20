@@ -299,3 +299,139 @@ def test_start_refuses_when_game_is_held_by_another_process():
 
     with pytest.raises(RuntimeError, match="game"):
         transport.start(fake, ownership_timeout=1.0, clock=clock, sleep=sleep)
+
+
+class _FakeO2LiteAnsweringAfter:
+    """Models a hub that is blocked (cold audio open, undrained pty) and
+    cannot answer the first `sends - 1` svcheck probes, then answers.
+
+    Dispatch happens only from poll(), per the repo's rule since the old
+    FakeO2Lite dispatched handlers directly from send()/deliver() and hid
+    a real bug: o2lite only calls a registered handler from inside
+    poll(). This fake must not be more permissive than the library it
+    stands for."""
+
+    def __init__(self, sends: int) -> None:
+        self._sends_to_answer = sends
+        self.svcheck_sends = 0
+        self._handler = None
+        self._queue: list[tuple[str, str, tuple, float]] = []
+        self._pull: list = []
+        self.msg_timestamp = 0.0
+
+    def time_get(self) -> float:
+        return 100.0
+
+    def set_services(self, services: str) -> None:
+        pass
+
+    def method_new(self, path, typespec, full, handler, info) -> None:
+        self._handler = handler
+
+    def send_cmd(self, addr, timestamp, *args) -> None:
+        if addr != "/game/_svcheck":
+            return
+        self.svcheck_sends += 1
+        typespec = args[0] if len(args) > 1 else ""
+        rest = tuple(args[1:])
+        if self.svcheck_sends >= self._sends_to_answer:
+            self._queue.append((addr, typespec, rest, timestamp))
+
+    def poll(self) -> None:
+        queue, self._queue = self._queue, []
+        for address, typespec, args, timestamp in queue:
+            if self._handler is None:
+                continue
+            self.msg_timestamp = timestamp
+            self._pull = list(args)
+            self._handler(address[1:], typespec, None)
+
+    def get_int32(self):
+        return self._pull.pop(0)
+
+
+class _FakeO2LiteNeverAnswers:
+    """Models a genuine second claimant: the hub refuses silently and no
+    reply ever arrives, no matter how many times the probe resends."""
+
+    def __init__(self) -> None:
+        self.svcheck_sends = 0
+        self._handler = None
+
+    def time_get(self) -> float:
+        return 100.0
+
+    def set_services(self, services: str) -> None:
+        pass
+
+    def method_new(self, path, typespec, full, handler, info) -> None:
+        self._handler = handler
+
+    def send_cmd(self, addr, timestamp, *args) -> None:
+        if addr == "/game/_svcheck":
+            self.svcheck_sends += 1
+
+    def poll(self) -> None:
+        pass  # nothing ever queued: no reply, ever
+
+    def get_int32(self):
+        raise AssertionError("no message was ever dispatched")
+
+
+def test_ownership_probe_resends_and_accepts_a_late_reply():
+    """2026-08-19/20, five occurrences: a hub blocked in its cold audio
+    open (or frozen on an undrained pty) cannot answer inside 2s, and the
+    old single-shot probe misdiagnosed that as a service conflict on a
+    host proven clean. A blocked hub answers when it unblocks; a genuine
+    second claimant never answers. Waiting distinguishes them."""
+    from devicelink.o2_transport import verify_service_ownership
+
+    fake = _FakeO2LiteAnsweringAfter(sends=2)   # ignores the 1st svcheck
+    t = {"now": 0.0}
+
+    def clock():
+        return t["now"]
+
+    def sleep(s):
+        t["now"] += s
+
+    ok = verify_service_ownership(fake, "game", timeout=10.0,
+                                  resend_interval=2.0,
+                                  clock=clock, sleep=sleep)
+    assert ok is True
+    assert fake.svcheck_sends >= 2              # it actually resent
+
+
+def test_ownership_probe_still_fails_when_nothing_ever_answers():
+    from devicelink.o2_transport import verify_service_ownership
+
+    fake = _FakeO2LiteNeverAnswers()
+    t = {"now": 0.0}
+
+    def clock():
+        return t["now"]
+
+    def sleep(s):
+        t["now"] += s
+
+    ok = verify_service_ownership(fake, "game", timeout=10.0,
+                                  resend_interval=2.0,
+                                  clock=clock, sleep=sleep)
+    assert ok is False
+    assert fake.svcheck_sends >= 4              # kept trying to the end
+
+
+def test_start_failure_message_names_the_blocked_hub_first():
+    fake = _FakeO2LiteNeverAnswers()
+    transport = O2LiteTransport()
+    clock, sleep = _fake_clock()
+
+    with pytest.raises(RuntimeError) as excinfo:
+        transport.start(fake, ownership_timeout=1.0, clock=clock, sleep=sleep)
+
+    message = str(excinfo.value)
+    blocked_pos = message.find("blocked")
+    orphan_pos = message.find("second claimant")
+    assert blocked_pos != -1 and orphan_pos != -1
+    assert blocked_pos < orphan_pos
+    assert "o2debug.log" in message
