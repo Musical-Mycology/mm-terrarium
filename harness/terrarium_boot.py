@@ -375,6 +375,92 @@ def _timed_test_bit_cls(run_duration: float) -> type:
     return _TimedTestBit
 
 
+class _LifecycleLogger:
+    """Prints the device lifecycle (hello / join granted / released) to
+    Control's stdout. Registered via gs.add_observer(), the same
+    multi-observer seam console.agent.ConsoleAgent already rides -- so it
+    sees exactly the same on_devices_change/on_registration_change payload
+    shapes ConsoleAgent does (there is no per-call payload at all; both
+    hooks are pure "something changed, go re-read gs" signals).
+
+    Denials never reach this seam: GameServer.join() returns a refused
+    JoinResult without ever touching registration state, so neither hook
+    fires for a deny. Those print via DeviceLinkAgent's own on_join_denied
+    sink instead -- see _print_join_denied below.
+
+    Derivation:
+      - "device hello: <dev>" -- a dev appearing in gs.devices.all() that
+        was not there the last time on_devices_change fired. DevicePool
+        never drops a device (control/device_pool.py), so this set only
+        grows.
+      - "join granted: <dev> -> <role> (<category>) via <node>" -- a dev
+        whose (node, role, role_class) tuple in gs.registration.assignments
+        is new or changed since the last on_registration_change (a role
+        switch -- re-tapping a different node -- changes the tuple without
+        the dev ever leaving assignments, and must still print).
+      - "device released: <dev>" -- a dev that HAD an assignments entry
+        last time but has none now. control/engine.py's on_release is a
+        single transport-owned sink (already claimed by DeviceLinkAgent for
+        the /release wire message), not a multi-observer event, so release
+        can't ride that hook. GameServer._unload() releases every assigned
+        device via registration.release_all() and notifies ONLY
+        on_devices_change afterward (never on_registration_change) -- see
+        engine.py's _unload(). So this diff runs in on_devices_change,
+        against the assignments snapshot on_registration_change last left
+        behind.
+
+    A Room join (role_class ROOM) never reaches either hook's assignments
+    diff as a grant: GameServer.join() returns before notifying
+    on_registration_change for those (control/engine.py's _bind_room()
+    notifies on_devices_change only), the same exclusion
+    ConsoleAgent._non_room_counts() applies to the registration panel.
+    """
+
+    def __init__(self, game_server) -> None:
+        self._gs = game_server
+        self._last_devices: set = set()
+        self._last_assignments: dict = {}
+
+    def _current_assignments(self) -> dict:
+        registration = self._gs.registration
+        return dict(registration.assignments) if registration is not None else {}
+
+    def on_devices_change(self) -> None:
+        current_devs = {info.dev for info in self._gs.devices.all()}
+        for dev in current_devs - self._last_devices:
+            print(f"device hello: {dev}", flush=True)
+        self._last_devices = current_devs
+
+        current_assignments = self._current_assignments()
+        for dev in self._last_assignments:
+            if dev not in current_assignments:
+                print(f"device released: {dev}", flush=True)
+        self._last_assignments = current_assignments
+
+    def on_registration_change(self) -> None:
+        registration = self._gs.registration
+        current_assignments = self._current_assignments()
+        for dev, value in current_assignments.items():
+            if value == self._last_assignments.get(dev):
+                continue
+            node, role_name, role_class = value
+            role = registration.role_table.roles[role_name]
+            category = "scored" if role.scored else role_class.name.lower()
+            print(f"join granted: {dev} -> {role_name} ({category}) "
+                  f"via {node}", flush=True)
+        self._last_assignments = current_assignments
+
+
+def _print_join_denied(dev: str, node: str, reason: str) -> None:
+    """DeviceLinkAgent's on_join_denied sink (see devicelink/agent.py's
+    _notify_join_denied, called at the deny reply's send site and guarded
+    there so a raise here can never cost the device its /deny reply).
+    Denials never touch registration state, so _LifecycleLogger's
+    engine-observer seam above never sees them -- this is Control's only
+    stdout line for a denial."""
+    print(f"join denied: {dev} -> {node} ({reason})", flush=True)
+
+
 def _register_o2lite_transport(teardown, transport) -> None:
     """Push the o2lite transport's teardown -- exactly where main() calls
     this, right after transport.start(o2lite) has actually adopted the
@@ -567,6 +653,13 @@ def main() -> None:
         room_binding=room_binding, host=args.host, port=args.port,
         transport=transport, clock=clock,
         arco_process_cls=arco_process_cls)
+
+    # Device lifecycle on Control's stdout (2026-08-20 UAT: a denial was
+    # invisible anywhere but the denied device's own terminal). Unconditional
+    # -- unlike the Console below, this costs nothing and needs no port, so
+    # it is wired for every invocation, not gated behind --console-port.
+    gs.add_observer(_LifecycleLogger(gs))
+    agent._on_join_denied = _print_join_denied
 
     # Once build() has returned, Arco and the simulator are live
     # subprocesses and room_audio's ArcoSynthPool is running -- everything

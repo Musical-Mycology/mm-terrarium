@@ -206,6 +206,40 @@ def test_denied_join_sends_deny_with_engine_reason(rig):
     assert "ie1" not in agent.bridges
 
 
+def test_denied_join_calls_the_on_join_denied_sink():
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    calls = []
+    agent = DeviceLinkAgent(gs, server,
+                            on_join_denied=lambda dev, node, reason: calls.append(
+                                (dev, node, reason)))
+    gs.load_bit("test_bit")
+    _hello(server, agent)
+    server.deliver("c1", "/game/join", "ss", ["ie1", "NO_SUCH_NODE"])
+    agent.poll()
+
+    assert calls == [("ie1", "NO_SUCH_NODE", "no such node")]
+
+
+def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply():
+    """Same guarantee as on_room_frame: a failing sink must not strand the
+    device without its /deny reply."""
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+
+    def boom(dev, node, reason):
+        raise RuntimeError("sink exploded")
+
+    agent = DeviceLinkAgent(gs, server, on_join_denied=boom)
+    gs.load_bit("test_bit")
+    _hello(server, agent)
+    server.deliver("c1", "/game/join", "ss", ["ie1", "NO_SUCH_NODE"])
+    agent.poll()          # must not raise
+
+    denies = server.addressed("/ie1/deny")
+    assert denies[0]["args"][0] == "no such node"
+
+
 def test_join_with_no_bit_loaded_is_denied(rig):
     gs, server, agent = rig
     _hello(server, agent)

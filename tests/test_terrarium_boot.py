@@ -12,7 +12,9 @@ from control.rooms import RoomType
 from control.state import State
 from control.teardown import TeardownStack
 from devicelink.server import DeviceLinkServer
-from harness.terrarium_boot import _run_duration, _timed_test_bit_cls, build, shutdown
+from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
+                                    _run_duration, _timed_test_bit_cls, build,
+                                    shutdown)
 
 
 def _fake_arco(command, popen=None):
@@ -901,3 +903,111 @@ def test_console_is_off_by_default():
         assert agent._on_room_frame is None
     finally:
         teardown.close()
+
+
+# --- Task 4: device lifecycle lines on Control's stdout --------------------
+#
+# Scripted against a real GameServer + DeviceLinkAgent (the same fixtures
+# tests/test_devicelink_agent.py already uses), not through build()/main(),
+# since _LifecycleLogger only needs gs.add_observer() and
+# _print_join_denied only needs DeviceLinkAgent's on_join_denied sink --
+# neither depends on Arco, the simulator, or the Console.
+
+def _lifecycle_rig():
+    from control.engine import GameServer
+    from devicelink.agent import DeviceLinkAgent
+    from tests.test_devicelink_agent import FakeServer
+
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, on_join_denied=_print_join_denied)
+    gs.add_observer(_LifecycleLogger(gs))
+    return gs, server, agent
+
+
+def _deliver_hello(server, agent, dev="ie1", client="c1"):
+    server.arrive(client)
+    server.deliver(client, "/game/hello", "sss", [dev, "sim", "1"])
+    agent.poll()
+
+
+def _deliver_join(server, agent, dev, node, client="c1"):
+    server.deliver(client, "/game/join", "ss", [dev, node])
+    agent.poll()
+
+
+def test_device_hello_line(capsys):
+    gs, server, agent = _lifecycle_rig()
+    _deliver_hello(server, agent, dev="ie1")
+
+    out = capsys.readouterr().out
+    assert "device hello: ie1\n" in out
+
+
+def test_join_granted_line(capsys):
+    gs, server, agent = _lifecycle_rig()
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    capsys.readouterr()   # discard the hello line
+    _deliver_join(server, agent, "ie1", "TEST_PLAYER_NODE")
+
+    out = capsys.readouterr().out
+    assert "join granted: ie1 -> player (scored) via TEST_PLAYER_NODE\n" in out
+
+
+def test_join_granted_line_for_a_jam_role(capsys):
+    gs, server, agent = _lifecycle_rig()
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    capsys.readouterr()
+    _deliver_join(server, agent, "ie1", "TEST_JAM_NODE")
+
+    out = capsys.readouterr().out
+    assert "join granted: ie1 -> jammer (jam) via TEST_JAM_NODE\n" in out
+
+
+def test_join_denied_line(capsys):
+    gs, server, agent = _lifecycle_rig()
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    capsys.readouterr()
+    _deliver_join(server, agent, "ie1", "NO_SUCH_NODE")
+
+    out = capsys.readouterr().out
+    assert "join denied: ie1 -> NO_SUCH_NODE (no such node)\n" in out
+
+
+def test_device_released_line(capsys):
+    gs, server, agent = _lifecycle_rig()
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    _deliver_join(server, agent, "ie1", "TEST_PLAYER_NODE")
+    capsys.readouterr()   # discard hello/granted lines
+
+    gs.abort()
+
+    out = capsys.readouterr().out
+    assert "device released: ie1\n" in out
+
+
+def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply(capsys):
+    """The deny path must survive a raising sink, and the device must still
+    get its /deny reply -- same guarantee devicelink/agent.py already gives
+    on_room_frame."""
+    from control.engine import GameServer
+    from devicelink.agent import DeviceLinkAgent
+    from tests.test_devicelink_agent import FakeServer
+
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+
+    def boom(dev, node, reason):
+        raise RuntimeError("sink exploded")
+
+    agent = DeviceLinkAgent(gs, server, on_join_denied=boom)
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    _deliver_join(server, agent, "ie1", "NO_SUCH_NODE")   # must not raise
+
+    denies = server.addressed("/ie1/deny")
+    assert denies[0]["args"][0] == "no such node"
