@@ -116,7 +116,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
          room_binding: RoomBindingRegistry, host: str = "127.0.0.1",
          port: int = 0, arco_process_cls=ArcoProcess,
          simulator_popen=subprocess.Popen, room_audio=None, transport=None,
-         clock=time.monotonic):
+         clock=time.monotonic, on_join_denied=None):
     """Construct the whole stack. Returns (game_server, devicelink_server,
     devicelink_agent, arco_process, teardown).
 
@@ -200,7 +200,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
 
         agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
                                 room_audio=room_audio,
-                                horizon=config.cue_horizon, clock=clock)
+                                horizon=config.cue_horizon, clock=clock,
+                                on_join_denied=on_join_denied)
     except BaseException:
         # _boot() has already spawned Arco AND the simulator by this point,
         # and main() cannot clean either up: build() never returns, so its
@@ -457,7 +458,14 @@ def _print_join_denied(dev: str, node: str, reason: str) -> None:
     there so a raise here can never cost the device its /deny reply).
     Denials never touch registration state, so _LifecycleLogger's
     engine-observer seam above never sees them -- this is Control's only
-    stdout line for a denial."""
+    stdout line for a denial.
+
+    Lowercase "join denied:" is deliberate and load-bearing: the DEVICE-side
+    marker is harness/markers.py's DEVICE_JOIN_DENIED = "JOIN DENIED:", and
+    harness/run_stack.py matches markers as plain substrings of a child's
+    stdout. Uppercasing this line to "match" would make Control's own
+    stdout satisfy the device's readiness marker and desync run_stack's
+    bookkeeping -- keep the casing apart."""
     print(f"join denied: {dev} -> {node} ({reason})", flush=True)
 
 
@@ -652,14 +660,18 @@ def main() -> None:
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
         transport=transport, clock=clock,
-        arco_process_cls=arco_process_cls)
+        arco_process_cls=arco_process_cls, on_join_denied=_print_join_denied)
 
     # Device lifecycle on Control's stdout (2026-08-20 UAT: a denial was
     # invisible anywhere but the denied device's own terminal). Unconditional
     # -- unlike the Console below, this costs nothing and needs no port, so
-    # it is wired for every invocation, not gated behind --console-port.
+    # it is wired for every invocation, not gated behind --console-port. The
+    # deny sink is threaded through build() to DeviceLinkAgent's constructor
+    # (above) rather than poked in here as agent._on_join_denied -- the
+    # console-frame sink two functions below still does that (build() never
+    # took an on_room_frame parameter), but on_join_denied has one, so
+    # production wiring uses it rather than reaching past it.
     gs.add_observer(_LifecycleLogger(gs))
-    agent._on_join_denied = _print_join_denied
 
     # Once build() has returned, Arco and the simulator are live
     # subprocesses and room_audio's ArcoSynthPool is running -- everything

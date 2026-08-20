@@ -990,6 +990,36 @@ def test_device_released_line(capsys):
     assert "device released: ie1\n" in out
 
 
+def test_build_wires_on_join_denied_to_the_agent_constructor():
+    """The production path: build() threads on_join_denied straight into
+    DeviceLinkAgent's constructor (the whole-branch review's Important
+    finding was main() poking agent._on_join_denied after construction
+    instead) -- exercised end to end through a denied /game/join on the
+    FakeServer the agent test fixtures already use, not just an attribute
+    check on the built agent."""
+    calls = []
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, teardown = build(
+        config, {"TestBit": TestBit},
+        arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
+        clock=time.monotonic,
+        on_join_denied=lambda dev, node, reason: calls.append(
+            (dev, node, reason)))
+    try:
+        # build() already loads TestBit and lets its own simulators join
+        # (see test_build_wires_devicelink_room_bridge_and_simulator above),
+        # so a nonexistent node -- not "no Bit loaded" -- is the reliable
+        # deny here. Drives the real, built agent's own inbound dispatch
+        # (_on_join -> _notify_join_denied), not a substitute server.
+        agent._on_join("fake-client", "ie1", ["ie1", "NO_SUCH_NODE"])
+
+        assert calls == [("ie1", "NO_SUCH_NODE", "no such node")]
+    finally:
+        shutdown(teardown)
+
+
 def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply(capsys):
     """The deny path must survive a raising sink, and the device must still
     get its /deny reply -- same guarantee devicelink/agent.py already gives
