@@ -1556,6 +1556,40 @@ and operator surface, none in the engine. Design:
   during the hold and completed, Console Run mid-hold handed off with no
   crash, drone and device animation live.
 
+### WebSim two-way input -- browser gestures become real /game/* messages
+The simulated Tuneshroom is now playable from its own canvas. Design:
+[`.../2026-08-20-websim-two-way-input-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-20-websim-two-way-input-design.md).
+Cross-repo: luxaeterna's `WebSimBackend` gained an optional `on_input`
+callback (inbound JSON text messages over the already-open page websocket;
+binary stays down-only; malformed JSON and raising callbacks are dropped,
+never fatal) and `PAGE_HTML` gained pointer handlers -- click sends
+`{"type":"tap","count":1}`, double-click exactly one count-2 tap (the
+single-click send is held 250 ms and cancelled by the dblclick), and a
+horizontal drag maps canvas x onto gamma in [-90, 90] as
+`{"type":"tilt","gamma":g}` at most every 50 ms, with a >5 px drag
+suppressing the click that browsers still fire after it. On this side,
+`harness/o2_shroom.py` bridges callback -> bounded `queue.Queue`
+(drop-oldest; the callback runs on the websocket handler thread) ->
+`drain_gestures()` in the existing tick loop, which sends the documented
+wire rows `/game/tap sffi [dev, 1.0, 50.0, count]` and `/game/tilt sf`.
+Stamping follows Design Rule 4: the harness stamps `o2lite.time_get()` at
+drain time -- the whole simulator process is the device, so the browser
+hop is inside it and browser clocks never touch the wire. An operator
+drag suspends the synthetic tilt sweep for `SWEEP_RESUME_SECONDS` (5.0)
+while `next_tilt` keeps advancing, so the sweep resumes on schedule with
+no overdue-tilt burst. Gestures are dropped until the role is granted
+(same UDP-overtakes-TCP race guard as the sweep) and on `--no-join`
+(Room) runs. No `devicelink/protocol.py`, engine, or Bit changes:
+`tap`/`tilt` already ride the generic `/game/<verb>` path into TestBit's
+handlers. `ShroomClient` also gained the `tap()` encoder its docstring's
+wire table had documented but never implemented. Live-verified
+2026-08-20 against a real Arco via `run_stack --ci --devices 1`: taps
+sent over ie1's WebSim socket came back as `/ie1/play` cues (click,
+chime, and the `flash_device` trigger), teardown clean. Note the device
+still ignores `/<dev>/play` by design, so the sample plays nowhere on the
+simulator yet -- local sample playback on the sim is a separate, later
+slice.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
