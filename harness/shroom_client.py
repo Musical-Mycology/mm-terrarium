@@ -24,7 +24,7 @@ The wire, from devicelink/protocol.py and devicelink/agent.py:
     down  /<dev>/error   ss   [context, message]
 
 The gesture and play rows are implemented by the Flutter simulator today;
-this client sends tilt only and ignores /<dev>/play. Design Rule 2 requires
+this client sends tilt and tap and ignores /<dev>/play. Design Rule 2 requires
 both clients to send byte-identical messages, so the shapes are recorded
 here before this client grows into them.
 
@@ -120,6 +120,14 @@ class ShroomClient:
 
     def tilt(self, value: float) -> dict:
         return self._up("tilt", "sf", [self.dev, float(value)])
+
+    def tap(self, peak_g: float = 1.0, duration_ms: float = 50.0,
+            count: int = 1) -> dict:
+        """The documented tap row. Defaults are the simulator's honest
+        placeholders for values a mouse cannot measure; count is real."""
+        return self._up("tap", "sffi",
+                        [self.dev, float(peak_g), float(duration_ms),
+                         int(count)])
 
     # --- inbound ---
 
