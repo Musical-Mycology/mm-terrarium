@@ -1121,7 +1121,8 @@ prevented the ordering from disagreeing with itself again, and it had.
 **Suite baseline as of this slice: 721 passed, 1 skipped** (662 at this
 branch's start). **844 passed, 1 skipped as of the 2026-08-17 Room-panel
 slice; 933 passed, 1 skipped as of the trigger slice that follows it; 1037
-passed, 1 skipped as of the N-fixture Room slice.**
+passed, 1 skipped as of the N-fixture Room slice; 1076 passed, 1 skipped
+as of the wire-JSON and Console-script-isolation slice.**
 
 ### The Room panel and the Room's own fixtures (`control/room_profile.py`, `control/room_view.py`, `harness/room_surface.py`, `console/static/`)
 The Room stops being shaped like a Tuneshroom, and the Console becomes an
@@ -1254,10 +1255,23 @@ now. Design:
   targets the firing device) -- one per fire source, so both paths are
   exercised through the full engine by the suite's own reference fixture, not
   only by isolated unit Bits.
-- **Live-verified against a real Arco: NOT YET DONE.** Everything above is
-  offline-suite-only as of this slice. Live-verify per the spec's section
-  13.1: fire `play_aurora` from the Console with no device joined and confirm
-  the Room's three zones sweep through the declared steps.
+- **Live-verified against a real Arco: DONE 2026-08-20**, per the spec's
+  section 13.1, and the attempt is what surfaced the two Console defects the
+  wire-JSON slice below fixes -- the first try found every Console panel
+  empty, so nothing could be fired from the panel at all. After the fix:
+  `play_aurora` fired from the panel's own Fire button with **no device
+  joined**; the card's status line updated in place to `last fired by
+  admin-manual -> sim-room-main, sim-room-accent (3 cues) ADMIN MANUAL`
+  while `flash_device` stayed at `never fired` (so the card list was not
+  rebuilt); `fired_by` stayed distinct from `declared_source`
+  (`bit-adjudicated`); and the Room's role name, counts and node id appeared
+  nowhere in the rendered page. The zone sweep itself was confirmed off the
+  wire at ~9 Hz (Console `room_frame` relay): all three zones drift in
+  lockstep ambiently, depart into independent motion during the script's
+  declared 2 s, and snap back to lockstep at the `+2.00 s` step. One
+  honesty note: the ambient `cues(at)` drift is superimposed on the script,
+  so the per-step values were bounded and visible but not individually
+  attributable.
 
 ### `control/room_profile.py`, `control/room_binding.py`, `control/engine.py`, `devicelink/agent.py` -- the N-fixture Room (Spec C)
 The Room stops being exactly one bound device. Design:
@@ -1289,10 +1303,17 @@ The Room stops being exactly one bound device. Design:
   each on the `TeardownStack` individually.
 - **The Console shows one strip per fixture**, each painted only from its
   own fixture's `room_frame` events.
-- **Live-verified against a real Arco: NOT YET DONE.** Everything above is
-  offline-suite-only as of this slice. Live-verify per the spec's section
-  13.1: fire a rainbow-bearing cue with both simulator tabs open and confirm
-  one gradient scrolls continuously across both canvases with no seam.
+- **Live-verified against a real Arco: DONE 2026-08-19**, with both
+  simulator tabs open and measured off the canvas bitmaps rather than
+  eyeballed: `main` (60 px) and `accent` (30 px) carry ONE continuous ramp.
+  The decisive number is hue slope per pixel -- `main` 4.04 deg/px, `accent`
+  4.049 deg/px; an independent per-fixture rainbow on a 30 px surface would
+  be ~12 deg/px, three times steeper. 90 px x 4.04 deg ~= 364 deg: a single
+  rainbow spanning both fixtures, `accent` continuing `main`'s ramp rather
+  than restarting it. The Console's Room panel corroborated independently
+  (`main` ends and `accent` begins on the same hue). Note the measurement
+  needed luxaeterna's WebSim canvas fix first (its PR #14, below): before
+  it, only 12 pixels of ANY linear surface were ever on-canvas.
 
 ### `control/room_profile.py`'s `RoomBlock`, and the DEMO room
 `RoomType.DEMO` — previously a stub enum value with a recipe and a
@@ -1386,13 +1407,79 @@ real-scale profile, and `TestBit` runs in it. Design:
   race on the Arco hub; neither reproduced with `--devices 0`, and the
   Room's fixture binds and renders at boot independent of player-device
   count, so this is genuine full-duration coverage of the fixed path.
-- **Live-verified against a real Arco: PARTIALLY DONE (light-rendering crash
-  only).** The bug above is confirmed fixed live. The rest of the spec's
-  section 7 checklist is still offline-suite-only: a device joining and
-  completing a scored round plus an unscored jam join, the Room's `rainbow`
+- **Live-verified against a real Arco: PARTIALLY DONE.** The
+  light-rendering crash above is confirmed fixed live, and as of 2026-08-19
+  `--identify-blocks` is confirmed too (needs no Arco): six distinct solid
+  colors in declaration order, each measured off the canvas bitmap at
+  exactly 200 screen px = 144 LEDs at the fitted 1.389 px/LED pitch, first
+  painted pixel at x=20 (the margin) and last at x=1220 on a 1240 px
+  canvas. That confirmation was also the discovery vehicle for two
+  luxaeterna WebSim defects (12-px truncation of every linear surface, and
+  a one-shot frame sent before any browser connects being lost forever) --
+  fixed in luxaeterna PR #14; without them the canvas was black or 12 px
+  wide and no visual confirmation was possible at all. Still outstanding
+  from the spec's section 7: a device joining and completing a scored round
+  plus an unscored jam join (gated on the upstream headless clock-sync
+  defect; run it from an interactive terminal), and the Room's `rainbow`
   cue sweeping the full 864 px canvas with no seam at any of the 6 block
-  boundaries, and `--identify-blocks` visually confirming 6 distinct solid
-  colors of exactly 144 px each, in order.
+  boundaries.
+
+### `control/wire_json.py`, and the isolated Console scripts
+Two defects found in one live run (the triggers live-verify above), each of
+which left the Terrarium Console rendering nothing at a venue. Design:
+`docs/superpowers/specs/2026-08-19-wire-json-and-console-script-isolation-design.md`.
+PR #38.
+
+- **The rule this slice establishes: every outbound JSON payload goes
+  through `control/wire_json.dumps()`, never bare `json.dumps`.** Python's
+  encoder emits non-finite floats as the bare tokens `Infinity`/`NaN` (a
+  documented extension), and Python's own decoder accepts them back -- so a
+  payload carrying one round-trips cleanly inside Python and is rejected by
+  every strict parser, including every browser's `JSON.parse` and Dart's
+  `jsonDecode`. The observed failure: `TestBit.status()`'s `run_duration`
+  is `float("inf")` under `--hold` (which `run_stack` always passes), the
+  snapshot carried a bare `Infinity`, and the whole Console rendered empty
+  against a healthy stack, on every `run_stack` run. `dumps()` replaces
+  non-finite floats with `null` (this wire's existing word for unbounded --
+  an uncapped capacity is already `null` and renders as an infinity sign),
+  passes `allow_nan=False` so a missed path raises rather than emitting an
+  unparseable token, and warns once per offending path shape. Adopted at
+  all eight outbound sites: the Console's two, the devicelink server's two,
+  the o2lite blob encoder, the uplink, and capture's two on-disk writes.
+  Finite payloads serialise byte-identically, pinned by test.
+- **The testing rule that follows, worth internalizing alongside the
+  o2lite-fake lesson: never validate wire output with bare `json.loads`.**
+  It accepts the same extension the encoder emits, so it is a more
+  permissive double for `JSON.parse` and passes against exactly this bug.
+  Assert on the raw text, or parse with `parse_constant=` a raiser.
+  `tests/test_wire_json.py` and `tests/test_wire_json_boundaries.py` do
+  this throughout.
+- **Console scripts are IIFE-isolated now, exporting only their entry
+  points.** `room.js` and `triggers.js` both declared a global
+  `function buildCard`; loaded as plain scripts, triggers.js silently won,
+  and `renderRoom` called the trigger version with a room instrument and
+  threw on every `room_changed` -- 222 throws in 2.5 s live -- aborting
+  `handle()` and killing the Room's instrument cards, the whole Triggers
+  panel and the Event log. Both files now export exactly the five names
+  `console.js` dispatches to (`renderRoom`, `renderRoomFrame`,
+  `renderTriggers`, `renderTriggerDevices`, `renderTriggerFired`);
+  everything else is private. The guard is structural:
+  `tests/js/console_script_isolation.test.js` reads the `<script>` list out
+  of `index.html` and asserts the global surfaces are disjoint, so a fourth
+  script is covered automatically, and
+  `tests/js/console_full_stack.test.js` loads all three scripts together --
+  the combination the browser actually runs, which no earlier test loaded
+  (one loaded room.js+console.js, another triggers.js alone; each file was
+  correct in isolation, the defect existed only in the pair).
+- **Known accepted gaps, recorded here so nobody rediscovers them:**
+  non-finite dict KEYS raise loudly via the `allow_nan=False` belt rather
+  than degrading to null (deliberate; the belt test exercises exactly that
+  path); harness dev clients (`shroom_client.py`, `room_simulator.py`)
+  still send raw `json.dumps` toward Control (their payloads carry no
+  float fields today; candidate follow-up); and `bit_status` renders a
+  `null` `run_duration` as an empty cell rather than an infinity sign
+  (`renderStatus` is a generic k/v table; only the Registration capacity
+  column maps null to infinity). Cosmetic.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -1529,6 +1616,21 @@ yet**; the box does not exist.
   (parsed device-side by `LightManifest.from_dict`; ratified in luxaeterna's
   2026-07-22 session-lifecycle spec §9, adopted here in
   `docs/superpowers/specs/2026-07-22-light-manifest-v2-adoption-design.md`).
+  Two facts landed by luxaeterna's PR #14 (merged 2026-08-20) that this
+  repo's harness work depends on: the WebSim canvas now fits a LINEAR
+  surface of any pixel count in one fitted row (before, `pos()`'s fallback
+  drew a fixed 24 px pitch on a 320 px canvas, so pixel 12 landed at x=328
+  and 852 of an 864 px Room surface were drawn off-canvas -- every Room
+  canvas "visual check" before this fix was looking at 12 of N pixels), and
+  `WebSimBackend` replays its last frame to a client that connects after a
+  send (before, a one-shot consumer like `--identify-blocks` always showed
+  a black canvas, because the human necessarily opens the printed URL after
+  the single frame was sent). The same PR also added `SurfaceCapability`
+  **zone-coverage validation**: zones must account for the surface, checked
+  at construction. mm-terrarium's `harness/room_surface.py` adapters
+  already conform (verified: the 1076-test suite is green against it), but
+  any future hand-built capability that under-covers its `pixel_count`
+  now fails loudly in luxaeterna instead of silently truncating pixels.
 
 ## Not yet built / deferred
 
