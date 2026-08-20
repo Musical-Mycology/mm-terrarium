@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import os
+import queue
 
 from harness import markers
 from harness.shroom_client import LED_CHANNELS, ShroomClient
@@ -46,6 +47,68 @@ def tilt_sweep(elapsed: float) -> float:
     phase = (elapsed % SWEEP_PERIOD) / SWEEP_PERIOD
     triangle = 2.0 * abs(2.0 * (phase - math.floor(phase + 0.5)))
     return SWEEP_DEGREES * (triangle - 1.0)
+
+
+# Seconds after the operator's last drag-tilt before the synthetic sweep
+# resumes. Long enough that hue does not snap back mid-exploration, short
+# enough that an unattended run still animates.
+SWEEP_RESUME_SECONDS = 5.0
+
+# Bound on browser gestures queued between ticks. Generous: the page
+# rate-bounds tilts to 20 Hz and the loop drains every ~5 ms.
+INPUT_QUEUE_MAX = 64
+
+
+def enqueue_input(q: "queue.Queue", msg: dict) -> None:
+    """Queue one browser gesture, dropping the OLDEST on overflow.
+
+    Runs on WebSimBackend's websocket handler thread, so it must never
+    block; drop-oldest keeps the freshest gestures, matching the
+    drop-not-queue rule frame relay already follows elsewhere."""
+    while True:
+        try:
+            q.put_nowait(msg)
+            return
+        except queue.Full:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+
+
+def drain_gestures(q: "queue.Queue", send, dev: str, now: float):
+    """Translate every queued browser gesture into a /game/* send.
+
+    `send` has o2lite.send's signature: send(address, time, typespec,
+    *args). Gestures are stamped `now` -- the caller's o2lite clock
+    reading -- because the whole simulator process is the device, so
+    this IS the source stamp (Design Rule 4); the browser hop happened
+    inside the device. Returns `now` if any tilt went out (the caller
+    suspends its synthetic sweep against it), else None. Malformed
+    entries are dropped with one diagnostic per drain, mirroring the
+    engine's drop-this-frame rule."""
+    tilted = None
+    complained = False
+    while True:
+        try:
+            msg = q.get_nowait()
+        except queue.Empty:
+            return tilted
+        kind = msg.get("type") if isinstance(msg, dict) else None
+        try:
+            if kind == "tap":
+                count = max(1, int(msg.get("count", 1)))
+                send("/game/tap", now, "sffi", dev, 1.0, 50.0, count)
+            elif kind == "tilt":
+                gamma = max(-90.0, min(90.0, float(msg["gamma"])))
+                send("/game/tilt", now, "sf", dev, gamma)
+                tilted = now
+            else:
+                raise ValueError(kind)
+        except (KeyError, TypeError, ValueError):
+            if not complained:
+                print(f"dropping operator gesture {msg!r}")
+                complained = True
 
 
 def parent_is_gone(expected_ppid, getppid=os.getppid) -> bool:
@@ -191,7 +254,8 @@ def _gestures_ready(client) -> bool:
 def build(dev: str, node: str = "TEST_PLAYER_NODE",
           sim_host: str = "127.0.0.1", sim_port: int = 0,
           serve: bool = True, room_type: str | None = None,
-          fixture: str | None = None):
+          fixture: str | None = None,
+          input_queue: "queue.Queue | None" = None):
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
@@ -202,6 +266,9 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     a Tuneshroom's surface -- fixture is then required. This is the
     --no-join path, where this module stands in for
     harness/room_simulator.py, once per fixture, on the o2lite transport.
+
+    input_queue, when given, receives every gesture the browser page sends
+    back; see drain_gestures.
     """
     from luxaeterna.backends.websim import WebSimBackend
     from luxaeterna.synth.capability import shroom_capability
@@ -222,9 +289,11 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
         capability = to_fixture_capability(profile, fixture)
         channels = capability.pixel_count * 3
 
+    on_input = (None if input_queue is None
+                else lambda msg: enqueue_input(input_queue, msg))
     backend = WebSimBackend(capability=capability,
                             host=sim_host, port=sim_port, serve=serve,
-                            label=dev)
+                            label=dev, on_input=on_input)
 
     def _on_role(config: dict) -> None:
         # Where client.config is first set. A granted role whose
@@ -312,9 +381,11 @@ def main() -> None:
 
     from devicelink.o2_transport import pull_args
 
+    operator_input = queue.Queue(maxsize=INPUT_QUEUE_MAX)
     client, backend = build(args.dev, args.node,
                             args.sim_host, args.sim_port,
-                            room_type=args.room_type, fixture=args.fixture)
+                            room_type=args.room_type, fixture=args.fixture,
+                            input_queue=operator_input)
     backend.open()
     print(f"Watch the Shroom at http://{args.sim_host}:{backend.port}/")
 
@@ -398,6 +469,7 @@ def main() -> None:
         # actually arrives, not backdated to loop start (which would fire a
         # burst of "overdue" tilts back-to-back the instant the gate opens).
         next_tilt = None
+        last_operator_tilt = None
         # The join reply is asynchronous -- it only arrives once the loop below
         # polls it in -- so noticing a deny/error has to happen inside the loop,
         # not right after send_cmd. Printed once each: without this, a refused
@@ -461,11 +533,21 @@ def main() -> None:
                     # arrived, and the two want completely different fixes.
                     print(f"{markers.DEVICE_ROLE_GRANTED} {joins_sent} "
                           f"join(s); gestures starting at {now:.3f}", flush=True)
+                operator = drain_gestures(operator_input, o2lite.send,
+                                          args.dev, now)
+                if operator is not None:
+                    last_operator_tilt = operator
+                sweeping = (last_operator_tilt is None
+                            or now - last_operator_tilt >= SWEEP_RESUME_SECONDS)
                 if now >= next_tilt:
-                    gamma = tilt_sweep(now - start)
-                    # Timestamps at the source (Design Rule 4): the device's
-                    # own synced clock reading, not Control's receipt time.
-                    o2lite.send("/game/tilt", now, "sf", args.dev, gamma)
+                    if sweeping:
+                        gamma = tilt_sweep(now - start)
+                        # Timestamps at the source (Design Rule 4): the
+                        # device's own synced clock reading, not Control's
+                        # receipt time.
+                        o2lite.send("/game/tilt", now, "sf", args.dev, gamma)
+                    # Advance even while suspended, so the sweep resumes on
+                    # schedule instead of firing a backlog of overdue tilts.
                     next_tilt += interval
             client.tick(now)
             time.sleep(0.005)
