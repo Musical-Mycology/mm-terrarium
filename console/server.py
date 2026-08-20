@@ -16,6 +16,8 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 from websockets.sync.server import serve
 
+from control.wire_json import dumps as _json_dumps
+
 logger = logging.getLogger(__name__)
 
 _STATIC_DIR = (Path(__file__).resolve().parent / "static")
@@ -123,7 +125,7 @@ class ConsoleServer:
 
     def send(self, client, msg: dict) -> None:
         try:
-            client.send(json.dumps(msg))
+            client.send(_json_dumps(msg))
         except Exception:
             logger.debug("console send failed; dropping client", exc_info=True)
             with self._lock:
@@ -132,7 +134,7 @@ class ConsoleServer:
     def broadcast(self, msg: dict) -> None:
         with self._lock:
             clients = list(self._clients)
-        payload = json.dumps(msg)
+        payload = _json_dumps(msg)
         for client in clients:
             try:
                 client.send(payload)

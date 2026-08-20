@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import datetime
 import io
-import json
 import logging
 import secrets
 import time
@@ -29,6 +28,7 @@ import wave
 from pathlib import Path
 
 from capture.trace import DEFAULT_AUDIO_RATE, Trace
+from control.wire_json import dumps as _json_dumps
 from devicelink.protocol import CaptureCommand, TelemetryBatch
 
 logger = logging.getLogger(__name__)
@@ -191,7 +191,7 @@ class CaptureStore:
             return
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            body = json.dumps(trace.to_dict(audio_file), separators=(",", ":"))
+            body = _json_dumps(trace.to_dict(audio_file), separators=(",", ":"))
             (directory / f"{stem}.json").write_text(body)
             self.bytes_written += len(body)
             if audio_file is not None:
@@ -208,7 +208,7 @@ class CaptureStore:
         self._append_index(trace, stem)
 
     def _append_index(self, trace: Trace, stem: str) -> None:
-        line = json.dumps({"capture_id": trace.capture_id,
+        line = _json_dumps({"capture_id": trace.capture_id,
                            "label": trace.label, "series": trace.series,
                            "dev": trace.dev, "n": trace.n,
                            "truncated": trace.truncated,
