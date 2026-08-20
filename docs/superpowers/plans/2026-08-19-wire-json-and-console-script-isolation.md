@@ -404,6 +404,13 @@ def test_remaining_outbound_sites_use_the_guarded_serialiser(module_name):
     assert "json.dumps(" not in text, f"{module_name} must use wire_json.dumps"
 ```
 
+**If `ConsoleAgent.snapshot()` needs more setup than shown** (a room binding,
+say, for the Room panel's read-out), build it exactly the way
+`tests/test_console_agent.py` already does rather than inventing a second
+construction. That file is the established reference for wiring a GameServer
+and a ConsoleAgent together in a test, and matching it keeps one pattern in
+the suite instead of two.
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
