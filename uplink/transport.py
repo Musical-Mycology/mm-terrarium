@@ -9,6 +9,8 @@ from typing import Protocol
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect as ws_connect
 
+from control.wire_json import dumps as _json_dumps
+
 
 class Transport(Protocol):
     """What UplinkAgent needs from a connection to fairyring. Non-blocking:
@@ -82,7 +84,7 @@ class WebSocketTransport:
         if not self.connected:
             raise RuntimeError("send() called while disconnected")
         try:
-            self._ws.send(json.dumps(msg))
+            self._ws.send(_json_dumps(msg))
         except ConnectionClosed:
             self.connected = False
             raise

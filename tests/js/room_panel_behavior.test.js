@@ -188,6 +188,10 @@ const roomJsSource = fs.readFileSync(roomJsPath, "utf8");
 // bodies below, never external or attacker-influenced input.
 function scenario(name, testBody) {
   const sandbox = { document: newDocument(), assert, cap, room, fixtures, orderOf, console };
+  sandbox.window = sandbox; // room.js is IIFE-wrapped and exports via window.*;
+  // giving the sandbox its own window makes those names reachable as bare
+  // globals again inside this vm context, the way a browser's top-level
+  // `window` already does.
   vm.createContext(sandbox);
   try {
     vm.runInContext(roomJsSource + "\n" + testBody, sandbox, { filename: `room.js+${name}` });

@@ -19,6 +19,8 @@ import json
 import logging
 import time
 
+from control.wire_json import dumps as _json_dumps
+
 logger = logging.getLogger(__name__)
 
 # o2litepy refuses a service name longer than this (o2lite.py:697), and a
@@ -56,7 +58,7 @@ def to_o2_arg(type_char: str, value):
         return Blob(bytes(value))
     if isinstance(value, list) and all(isinstance(v, int) for v in value):
         return Blob(bytes(v & 0xFF for v in value))
-    return Blob(json.dumps(value).encode("utf-8"))
+    return Blob(_json_dumps(value).encode("utf-8"))
 
 # The complete services string. set_services REPLACES rather than appends
 # (o2litepy o2lite.py:707), and pyarco has already claimed "actl"
