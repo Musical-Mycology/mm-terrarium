@@ -1420,9 +1420,22 @@ real-scale profile, and `TestBit` runs in it. Design:
   wide and no visual confirmation was possible at all. Still outstanding
   from the spec's section 7: a device joining and completing a scored round
   plus an unscored jam join (gated on the upstream headless clock-sync
-  defect; run it from an interactive terminal), and the Room's `rainbow`
-  cue sweeping the full 864 px canvas with no seam at any of the 6 block
-  boundaries.
+  defect; run it from an interactive terminal). The rainbow seam sweep is
+  DONE as of 2026-08-20, measured rather than eyeballed: all 864 LEDs lit,
+  total hue span 359.6 deg (one full rainbow across the array), per-pixel
+  hue deltas median 0.429 deg / p99 1.04 deg / max 1.252 deg -- and the max
+  sits at LED 177, NOT at a block boundary. The five interior boundaries
+  (144/288/432/576/720) measured 0.429-0.857 deg, indistinguishable from
+  ordinary neighbouring steps. Firing `play_aurora` (resolved to
+  `sim-room-array`, 3 steps, admin-manual) moved the centre LED's hue 121
+  deg in 1.5 s, so the cue visibly sweeps the whole array. The transient
+  `game`-service-already-claimed race recurred on the first stack attempt
+  (third occurrence: 2026-08-19 and twice on 2026-08-20, always the first
+  attempt after idle, always clean on retry); `verify_service_ownership`
+  failed loud and teardown reaped everything both times, but three
+  occurrences is a pattern, not a fluke -- worth an upstream look at
+  whether the previous run's `game` registration lingers on the hub across
+  an Arco restart window.
 
 ### `control/wire_json.py`, and the isolated Console scripts
 Two defects found in one live run (the triggers live-verify above), each of
