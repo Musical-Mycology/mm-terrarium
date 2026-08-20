@@ -16,6 +16,8 @@
 // room_frame event (matched by `dev`, since a frame event names a dev, not
 // a fixture) -- see renderRoomFrame below.
 
+(function () {
+"use strict";
 let roomFixtureShapes = {};     // fixture name -> last-seen {pixel_count, zones}, PER FIXTURE
 let fixtureDevByName = {};      // name -> dev, refreshed every renderRoom call
 let fixtureNameByDev = {};      // dev -> name, the reverse lookup renderRoomFrame needs
@@ -224,3 +226,12 @@ function renderRoomFrame(dev, channels) {
     swatches[i].style.background = `rgb(${r},${g},${b})`;
   }
 }
+
+// The panel's entry points, and the ONLY names this file puts in the shared
+// global scope. console.js dispatches to these; everything else above is
+// private, so a helper here can never again silently overwrite a
+// same-named helper in another script. See
+// docs/superpowers/specs/2026-08-19-wire-json-and-console-script-isolation-design.md
+window.renderRoom = renderRoom;
+window.renderRoomFrame = renderRoomFrame;
+})();

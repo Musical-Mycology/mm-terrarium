@@ -147,6 +147,10 @@ function scenario(name, testBody) {
     console, assert, sent, SWEEP, FLASH, findAll,
     send: (command, extra) => sent.push([command, extra]),
   };
+  sandbox.window = sandbox; // triggers.js is IIFE-wrapped and exports via
+  // window.*; giving the sandbox its own window makes those names reachable
+  // as bare globals again inside this vm context, the way a browser's
+  // top-level `window` already does.
   vm.createContext(sandbox);
   try {
     vm.runInContext(triggersJsSource + "\n" + testBody, sandbox,

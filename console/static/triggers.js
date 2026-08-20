@@ -8,6 +8,8 @@
 // static per Bit, so a rebuild on every fire would be pure waste and would
 // discard the picker selections an operator had made.
 
+(function () {
+"use strict";
 let triggerSignature = null;      // JSON of the last rendered declaration
 const lastFired = {};             // trigger name -> its last fire record
 let triggerDevices = [];          // device ids offered by DEVICE-target pickers
@@ -155,3 +157,12 @@ function renderTriggerFired(fired) {
   const line = document.getElementById("triggerFired_" + fired.name);
   if (line) applyFired(line, fired);
 }
+
+// The panel's entry points, and the ONLY names this file puts in the shared
+// global scope. buildCard in particular is private now: it previously
+// collided with room.js's same-named helper, and because triggers.js loads
+// second it silently won, making renderRoom throw on every room_changed.
+window.renderTriggers = renderTriggers;
+window.renderTriggerDevices = renderTriggerDevices;
+window.renderTriggerFired = renderTriggerFired;
+})();
