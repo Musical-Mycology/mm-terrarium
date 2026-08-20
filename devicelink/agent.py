@@ -76,7 +76,7 @@ class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
                  capability=None, clock=time.monotonic,
                  room_bridge=None, room_audio=None, horizon: float = 0.0,
-                 room_profile=None, on_room_frame=None):
+                 room_profile=None, on_room_frame=None, on_join_denied=None):
         self.game_server = game_server
         self.server = server
         self._capability = capability
@@ -138,6 +138,7 @@ class DeviceLinkAgent:
         # nothing is awaited, and dropping every frame degrades the picture
         # and changes nothing else.
         self._on_room_frame = on_room_frame
+        self._on_join_denied = on_join_denied
         self._setup_room()
         game_server.add_observer(self)
         game_server.on_release = self._on_release
@@ -317,6 +318,17 @@ class DeviceLinkAgent:
                 except Exception:
                     logger.exception("Room leds send failed for %s", dev)
 
+    def _notify_join_denied(self, dev: str, node: str, reason: str) -> None:
+        """Guarded exactly like on_release and on_light_cue already are: a
+        failing console/harness sink must not stop the deny reply itself
+        (already sent by the caller, above) or wedge the tick."""
+        if self._on_join_denied is None:
+            return
+        try:
+            self._on_join_denied(dev, node, reason)
+        except Exception:
+            logger.exception("join-denied sink failed for %s", dev)
+
     def _emit_room_frame(self, dev: str, frame: bytes) -> None:
         """Guarded exactly like on_release and on_light_cue already are: a
         failing console must not stop the Room rendering or wedge the tick."""
@@ -444,6 +456,7 @@ class DeviceLinkAgent:
         result = self.game_server.join(dev, args[1])
         if not result.granted:
             self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
+            self._notify_join_denied(dev, args[1], result.reason)
             return
         bridge = DeviceBridge(capability=self._capability, clock=self._clock)
         try:

@@ -119,6 +119,7 @@ _OWNERSHIP_POLL_INTERVAL = 0.005
 
 
 def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
+                             resend_interval: float | None = None,
                              clock=time.monotonic, sleep=time.sleep) -> bool:
     """Does `service` actually route back to THIS o2lite connection?
 
@@ -141,6 +142,16 @@ def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
     `sleep` are injected so a test can exhaust the timeout without
     spending real time, the same way control/boot.py's
     wait_for_room_binding already does.
+
+    `resend_interval`, if set, resends the same fixed-nonce svcheck every
+    time that many seconds elapse without a reply. This is safe because
+    the nonce is constant: a late reply to an early send is
+    indistinguishable from a reply to a fresh one, and for this check
+    that is exactly correct -- either way the hub just proved it routes
+    `service` back to us. Resending is what lets the probe outwait a hub
+    that is merely blocked (a cold audio-device open, an undrained pty)
+    rather than misdiagnosing it as a second claimant after one silent
+    2s window.
     """
     received = []
 
@@ -151,12 +162,17 @@ def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
     o2lite.send_cmd(f"/{service}/_svcheck", 0, "i", _OWNERSHIP_NONCE)
 
     deadline = clock() + timeout
+    next_resend = (clock() + resend_interval
+                   if resend_interval is not None else None)
     while True:
         o2lite.poll()
         if _OWNERSHIP_NONCE in received:
             return True
         if clock() >= deadline:
             return False
+        if next_resend is not None and clock() >= next_resend:
+            o2lite.send_cmd(f"/{service}/_svcheck", 0, "i", _OWNERSHIP_NONCE)
+            next_resend += resend_interval
         sleep(_OWNERSHIP_POLL_INTERVAL)
 
 
@@ -290,7 +306,7 @@ class O2LiteTransport:
         self._inbound: list[tuple[object, dict]] = []
         self._devs: dict[str, object] = {}
 
-    def start(self, o2lite, *, ownership_timeout: float = 2.0,
+    def start(self, o2lite, *, ownership_timeout: float = 10.0,
               clock=time.monotonic, sleep=time.sleep) -> None:
         """Adopt an already-connected o2lite object and claim `game` on it.
 
@@ -318,14 +334,21 @@ class O2LiteTransport:
                               self._on_message, None)
         if not verify_service_ownership(o2lite, "game",
                                         timeout=ownership_timeout,
+                                        resend_interval=2.0,
                                         clock=clock, sleep=sleep):
             self._o2 = None
             raise RuntimeError(
-                "the `game` service is not routed back to this connection: "
-                "another process on the Arco hub already offers it. O2 "
-                "refuses a second claimant silently "
-                "(o2/src/bridge.cpp:231-237). Look for an orphaned "
-                "Terrarium or a stale harness/o2_shroom.py holding it.")
+                "the `game` service did not route back to this connection "
+                f"within {ownership_timeout:.0f}s. Most likely the hub is "
+                "blocked and cannot answer yet: a cold audio-device open "
+                "blocks Arco for seconds after idle, and an undrained pty "
+                "freezes it entirely (see the SETUP-hold drain rule in "
+                "harness/terrarium_boot.py). The rarer cause is a genuine "
+                "second claimant already offering `game` -- O2 refuses "
+                "silently (o2/src/bridge.cpp:231-237) and logs only on the "
+                "hub. Check o2debug.log: a frozen hub shows no recent "
+                "lines at all; a conflict shows this connection's own "
+                "`sv` being refused.")
 
     def _on_message(self, address, typespec, info) -> None:
         """o2lite handler.

@@ -116,7 +116,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
          room_binding: RoomBindingRegistry, host: str = "127.0.0.1",
          port: int = 0, arco_process_cls=ArcoProcess,
          simulator_popen=subprocess.Popen, room_audio=None, transport=None,
-         clock=time.monotonic):
+         clock=time.monotonic, on_join_denied=None):
     """Construct the whole stack. Returns (game_server, devicelink_server,
     devicelink_agent, arco_process, teardown).
 
@@ -200,7 +200,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
 
         agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
                                 room_audio=room_audio,
-                                horizon=config.cue_horizon, clock=clock)
+                                horizon=config.cue_horizon, clock=clock,
+                                on_join_denied=on_join_denied)
     except BaseException:
         # _boot() has already spawned Arco AND the simulator by this point,
         # and main() cannot clean either up: build() never returns, so its
@@ -236,7 +237,7 @@ def shutdown(teardown) -> None:
 
 def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
-                   console_agent=None) -> bool:
+                   console_agent=None, arco=None, gs=None) -> str:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
@@ -250,25 +251,49 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     harness/o2_shroom.py's parent_is_gone -- see F5 in the final review
     for why this reuses that predicate rather than a second one. A
     SIGKILLed or OOM-killed run_stack cannot signal this process, so the
-    only way to notice is to keep asking. Returns True if that fired, so
-    main() can skip straight to shutdown() instead of calling gs.run()
-    into a stack whose supervisor is already gone.
+    only way to notice is to keep asking. Returns "parent-gone" if that
+    fired, so main() can skip straight to shutdown() instead of calling
+    gs.run() into a stack whose supervisor is already gone.
 
     console_agent, when given, is polled once per iteration too -- a device
     joining during SETUP is exactly what the console's registration view
     exists to show live.
+
+    arco, when given, is drained every iteration. Every loop that holds
+    while Arco is alive must drain Arco's pty: Arco is a curses app, an
+    undrained pty blocks it mid-write, and a blocked Arco serves no clock
+    sync, routes no messages and plays no audio. This loop not draining
+    it froze whole rooms for the length of the hold (2026-08-20).
+
+    gs, when given, is watched: the Console is a second driver, and if
+    the operator moves the engine out of SETUP (Run, Abort) this hold
+    yields immediately instead of letting main() call run() into a
+    RUNNING engine.
+
+    Returns "expired", "parent-gone", or "state-changed".
     """
     if setup_seconds <= 0:
-        return False
-    deadline = clock() + setup_seconds
-    while clock() < deadline:
+        return "expired"
+    start = clock()
+    deadline = start + setup_seconds
+    next_countdown = start + 15.0
+    while True:
+        now = clock()
+        if now >= deadline:
+            return "expired"
         if parent_is_gone(parent_pid):
-            return True
+            return "parent-gone"
+        if arco is not None:
+            arco.poll()
         agent.poll()
         if console_agent is not None:
             console_agent.poll()
+        if gs is not None and gs.state is not State.SETUP:
+            return "state-changed"
+        if now >= next_countdown:
+            print(f"SETUP open, {deadline - now:.0f}s remaining", flush=True)
+            next_countdown = now + 15.0
         sleep(1.0 / 44.0)
-    return False
 
 
 def _serve_until_done(gs, agent, arco, clock=time.monotonic,
@@ -349,6 +374,99 @@ def _timed_test_bit_cls(run_duration: float) -> type:
             super().__init__(run_duration=run_duration)
 
     return _TimedTestBit
+
+
+class _LifecycleLogger:
+    """Prints the device lifecycle (hello / join granted / released) to
+    Control's stdout. Registered via gs.add_observer(), the same
+    multi-observer seam console.agent.ConsoleAgent already rides -- so it
+    sees exactly the same on_devices_change/on_registration_change payload
+    shapes ConsoleAgent does (there is no per-call payload at all; both
+    hooks are pure "something changed, go re-read gs" signals).
+
+    Denials never reach this seam: GameServer.join() returns a refused
+    JoinResult without ever touching registration state, so neither hook
+    fires for a deny. Those print via DeviceLinkAgent's own on_join_denied
+    sink instead -- see _print_join_denied below.
+
+    Derivation:
+      - "device hello: <dev>" -- a dev appearing in gs.devices.all() that
+        was not there the last time on_devices_change fired. DevicePool
+        never drops a device (control/device_pool.py), so this set only
+        grows.
+      - "join granted: <dev> -> <role> (<category>) via <node>" -- a dev
+        whose (node, role, role_class) tuple in gs.registration.assignments
+        is new or changed since the last on_registration_change (a role
+        switch -- re-tapping a different node -- changes the tuple without
+        the dev ever leaving assignments, and must still print).
+      - "device released: <dev>" -- a dev that HAD an assignments entry
+        last time but has none now. control/engine.py's on_release is a
+        single transport-owned sink (already claimed by DeviceLinkAgent for
+        the /release wire message), not a multi-observer event, so release
+        can't ride that hook. GameServer._unload() releases every assigned
+        device via registration.release_all() and notifies ONLY
+        on_devices_change afterward (never on_registration_change) -- see
+        engine.py's _unload(). So this diff runs in on_devices_change,
+        against the assignments snapshot on_registration_change last left
+        behind.
+
+    A Room join (role_class ROOM) never reaches either hook's assignments
+    diff as a grant: GameServer.join() returns before notifying
+    on_registration_change for those (control/engine.py's _bind_room()
+    notifies on_devices_change only), the same exclusion
+    ConsoleAgent._non_room_counts() applies to the registration panel.
+    """
+
+    def __init__(self, game_server) -> None:
+        self._gs = game_server
+        self._last_devices: set = set()
+        self._last_assignments: dict = {}
+
+    def _current_assignments(self) -> dict:
+        registration = self._gs.registration
+        return dict(registration.assignments) if registration is not None else {}
+
+    def on_devices_change(self) -> None:
+        current_devs = {info.dev for info in self._gs.devices.all()}
+        for dev in current_devs - self._last_devices:
+            print(f"device hello: {dev}", flush=True)
+        self._last_devices = current_devs
+
+        current_assignments = self._current_assignments()
+        for dev in self._last_assignments:
+            if dev not in current_assignments:
+                print(f"device released: {dev}", flush=True)
+        self._last_assignments = current_assignments
+
+    def on_registration_change(self) -> None:
+        registration = self._gs.registration
+        current_assignments = self._current_assignments()
+        for dev, value in current_assignments.items():
+            if value == self._last_assignments.get(dev):
+                continue
+            node, role_name, role_class = value
+            role = registration.role_table.roles[role_name]
+            category = "scored" if role.scored else role_class.name.lower()
+            print(f"join granted: {dev} -> {role_name} ({category}) "
+                  f"via {node}", flush=True)
+        self._last_assignments = current_assignments
+
+
+def _print_join_denied(dev: str, node: str, reason: str) -> None:
+    """DeviceLinkAgent's on_join_denied sink (see devicelink/agent.py's
+    _notify_join_denied, called at the deny reply's send site and guarded
+    there so a raise here can never cost the device its /deny reply).
+    Denials never touch registration state, so _LifecycleLogger's
+    engine-observer seam above never sees them -- this is Control's only
+    stdout line for a denial.
+
+    Lowercase "join denied:" is deliberate and load-bearing: the DEVICE-side
+    marker is harness/markers.py's DEVICE_JOIN_DENIED = "JOIN DENIED:", and
+    harness/run_stack.py matches markers as plain substrings of a child's
+    stdout. Uppercasing this line to "match" would make Control's own
+    stdout satisfy the device's readiness marker and desync run_stack's
+    bookkeeping -- keep the casing apart."""
+    print(f"join denied: {dev} -> {node} ({reason})", flush=True)
 
 
 def _register_o2lite_transport(teardown, transport) -> None:
@@ -542,7 +660,18 @@ def main() -> None:
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
         transport=transport, clock=clock,
-        arco_process_cls=arco_process_cls)
+        arco_process_cls=arco_process_cls, on_join_denied=_print_join_denied)
+
+    # Device lifecycle on Control's stdout (2026-08-20 UAT: a denial was
+    # invisible anywhere but the denied device's own terminal). Unconditional
+    # -- unlike the Console below, this costs nothing and needs no port, so
+    # it is wired for every invocation, not gated behind --console-port. The
+    # deny sink is threaded through build() to DeviceLinkAgent's constructor
+    # (above) rather than poked in here as agent._on_join_denied -- the
+    # console-frame sink two functions below still does that (build() never
+    # took an on_room_frame parameter), but on_join_denied has one, so
+    # production wiring uses it rather than reaching past it.
+    gs.add_observer(_LifecycleLogger(gs))
 
     # Once build() has returned, Arco and the simulator are live
     # subprocesses and room_audio's ArcoSynthPool is running -- everything
@@ -600,12 +729,21 @@ def main() -> None:
         if args.setup_seconds > 0:
             print(f"{markers.CONTROL_SETUP_HOLD} for {args.setup_seconds:g}s "
                   f"-- join now", flush=True)
-        if _wait_in_setup(agent, args.setup_seconds,
-                          parent_pid=args.exit_with_parent,
-                          console_agent=console_agent):
+        reason = _wait_in_setup(agent, args.setup_seconds,
+                                parent_pid=args.exit_with_parent,
+                                console_agent=console_agent,
+                                arco=arco, gs=gs)
+        if reason == "parent-gone":
             print("parent is gone; tearing down", file=sys.stderr)
         else:
-            gs.run()
+            if gs.state is State.SETUP:
+                gs.run()
+            else:
+                # The operator drove the engine from the Console during the
+                # hold. That is a handoff, not an error: run() from here
+                # would raise InvalidTransition into a live room.
+                print("operator changed state from the Console; "
+                      "skipping harness run()", flush=True)
             reason = _serve_until_done(gs, agent, arco,
                                        parent_pid=args.exit_with_parent,
                                        console_agent=console_agent)
