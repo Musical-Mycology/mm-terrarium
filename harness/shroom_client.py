@@ -124,7 +124,8 @@ class ShroomClient:
     def tap(self, peak_g: float = 1.0, duration_ms: float = 50.0,
             count: int = 1) -> dict:
         """The documented tap row. Defaults are the simulator's honest
-        placeholders for values a mouse cannot measure; count is real."""
+        placeholders for values a mouse cannot measure; count comes from
+        the caller's own detection."""
         return self._up("tap", "sffi",
                         [self.dev, float(peak_g), float(duration_ms),
                          int(count)])

@@ -107,7 +107,7 @@ def drain_gestures(q: "queue.Queue", send, dev: str, now: float):
                 raise ValueError(kind)
         except (KeyError, TypeError, ValueError):
             if not complained:
-                print(f"dropping operator gesture {msg!r}")
+                print(f"dropping operator gesture {msg!r}", flush=True)
                 complained = True
 
 
