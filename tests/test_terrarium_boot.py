@@ -12,7 +12,9 @@ from control.rooms import RoomType
 from control.state import State
 from control.teardown import TeardownStack
 from devicelink.server import DeviceLinkServer
-from harness.terrarium_boot import _run_duration, _timed_test_bit_cls, build, shutdown
+from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
+                                    _run_duration, _timed_test_bit_cls, build,
+                                    shutdown)
 
 
 def _fake_arco(command, popen=None):
@@ -472,8 +474,9 @@ def test_wait_in_setup_polls_for_the_requested_window():
             polls.append(1)
 
     ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
-    _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
-                   sleep=lambda _s: None)
+    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                            sleep=lambda _s: None)
+    assert reason == "expired"
     assert len(polls) >= 3
 
 
@@ -487,9 +490,100 @@ def test_wait_in_setup_returns_immediately_when_not_requested():
         def poll(self):
             polls.append(1)
 
-    _wait_in_setup(FakeAgent(), 0.0, clock=lambda: 0.0,
-                   sleep=lambda _s: None)
+    reason = _wait_in_setup(FakeAgent(), 0.0, clock=lambda: 0.0,
+                            sleep=lambda _s: None)
+    assert reason == "expired"
     assert polls == []
+
+
+def test_wait_in_setup_drains_arco_every_iteration():
+    """The 2026-08-20 freeze: nothing drained Arco's pty during the hold,
+    so Arco blocked mid-write and the whole room froze (0-byte arco.log
+    tee 11 minutes after spawn, static o2debug.log, no drone at RUNNING).
+    Every loop that holds while Arco is alive must drain Arco's pty."""
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class FakeArco:
+        def __init__(self):
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            return None                      # still running
+
+    ticks = iter([0.0, 0.1, 0.2, 0.3, 0.4, 1.1, 1.2])
+    arco = FakeArco()
+    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                            sleep=lambda s: None, arco=arco)
+    assert reason == "expired"
+    assert arco.polls >= 4          # once per iteration, not once total
+
+
+def test_wait_in_setup_returns_state_changed_when_the_engine_leaves_setup():
+    """The 2026-08-20 crash: the operator pressed Run on the Console during
+    the hold, and main() then called gs.run() into a RUNNING engine ->
+    InvalidTransition killed the harness. The hold must yield instead."""
+    from control.state import State
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class FakeGs:
+        def __init__(self):
+            self.state = State.SETUP
+
+    gs = FakeGs()
+    calls = {"n": 0}
+
+    def clock():
+        calls["n"] += 1
+        if calls["n"] == 3:
+            gs.state = State.RUNNING         # operator clicks Run mid-hold
+        return calls["n"] * 0.1
+
+    reason = _wait_in_setup(FakeAgent(), 10.0, clock=clock,
+                            sleep=lambda s: None, gs=gs)
+    assert reason == "state-changed"
+
+
+def test_wait_in_setup_yields_on_abort_too():
+    from control.state import State
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class FakeGs:
+        state = State.IDLE                   # operator aborted instantly
+
+    reason = _wait_in_setup(FakeAgent(), 10.0, clock=iter(
+        [0.0, 0.1]).__next__, sleep=lambda s: None, gs=FakeGs())
+    assert reason == "state-changed"
+
+
+def test_wait_in_setup_prints_a_countdown(capsys):
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    t = {"now": 0.0}
+
+    def clock():
+        t["now"] += 4.0                      # 4s per iteration
+        return t["now"]
+    _wait_in_setup(FakeAgent(), 60.0, clock=clock, sleep=lambda s: None)
+    out = capsys.readouterr().out
+    assert "SETUP open," in out
+    assert out.count("SETUP open,") >= 2     # every ~15s across 60s
 
 
 def test_wait_in_setup_exits_early_when_the_parent_is_gone(monkeypatch):
@@ -513,9 +607,9 @@ def test_wait_in_setup_exits_early_when_the_parent_is_gone(monkeypatch):
             polls.append(1)
 
     ticks = iter([0.0, 0.1, 0.2, 5.0])
-    parent_gone = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
-                                 sleep=lambda _s: None, parent_pid=111)
-    assert parent_gone is True
+    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                            sleep=lambda _s: None, parent_pid=111)
+    assert reason == "parent-gone"
     assert polls == []          # returned before ever polling the agent
 
 
@@ -532,9 +626,9 @@ def test_wait_in_setup_ignores_a_live_parent():
             polls.append(1)
 
     ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
-    parent_gone = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
-                                 sleep=lambda _s: None)
-    assert parent_gone is False
+    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                            sleep=lambda _s: None)
+    assert reason == "expired"
     assert len(polls) >= 3
 
 
@@ -809,3 +903,141 @@ def test_console_is_off_by_default():
         assert agent._on_room_frame is None
     finally:
         teardown.close()
+
+
+# --- Task 4: device lifecycle lines on Control's stdout --------------------
+#
+# Scripted against a real GameServer + DeviceLinkAgent (the same fixtures
+# tests/test_devicelink_agent.py already uses), not through build()/main(),
+# since _LifecycleLogger only needs gs.add_observer() and
+# _print_join_denied only needs DeviceLinkAgent's on_join_denied sink --
+# neither depends on Arco, the simulator, or the Console.
+
+def _lifecycle_rig():
+    from control.engine import GameServer
+    from devicelink.agent import DeviceLinkAgent
+    from tests.test_devicelink_agent import FakeServer
+
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, on_join_denied=_print_join_denied)
+    gs.add_observer(_LifecycleLogger(gs))
+    return gs, server, agent
+
+
+def _deliver_hello(server, agent, dev="ie1", client="c1"):
+    server.arrive(client)
+    server.deliver(client, "/game/hello", "sss", [dev, "sim", "1"])
+    agent.poll()
+
+
+def _deliver_join(server, agent, dev, node, client="c1"):
+    server.deliver(client, "/game/join", "ss", [dev, node])
+    agent.poll()
+
+
+def test_device_hello_line(capsys):
+    gs, server, agent = _lifecycle_rig()
+    _deliver_hello(server, agent, dev="ie1")
+
+    out = capsys.readouterr().out
+    assert "device hello: ie1\n" in out
+
+
+def test_join_granted_line(capsys):
+    gs, server, agent = _lifecycle_rig()
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    capsys.readouterr()   # discard the hello line
+    _deliver_join(server, agent, "ie1", "TEST_PLAYER_NODE")
+
+    out = capsys.readouterr().out
+    assert "join granted: ie1 -> player (scored) via TEST_PLAYER_NODE\n" in out
+
+
+def test_join_granted_line_for_a_jam_role(capsys):
+    gs, server, agent = _lifecycle_rig()
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    capsys.readouterr()
+    _deliver_join(server, agent, "ie1", "TEST_JAM_NODE")
+
+    out = capsys.readouterr().out
+    assert "join granted: ie1 -> jammer (jam) via TEST_JAM_NODE\n" in out
+
+
+def test_join_denied_line(capsys):
+    gs, server, agent = _lifecycle_rig()
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    capsys.readouterr()
+    _deliver_join(server, agent, "ie1", "NO_SUCH_NODE")
+
+    out = capsys.readouterr().out
+    assert "join denied: ie1 -> NO_SUCH_NODE (no such node)\n" in out
+
+
+def test_device_released_line(capsys):
+    gs, server, agent = _lifecycle_rig()
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    _deliver_join(server, agent, "ie1", "TEST_PLAYER_NODE")
+    capsys.readouterr()   # discard hello/granted lines
+
+    gs.abort()
+
+    out = capsys.readouterr().out
+    assert "device released: ie1\n" in out
+
+
+def test_build_wires_on_join_denied_to_the_agent_constructor():
+    """The production path: build() threads on_join_denied straight into
+    DeviceLinkAgent's constructor (the whole-branch review's Important
+    finding was main() poking agent._on_join_denied after construction
+    instead) -- exercised end to end through a denied /game/join on the
+    FakeServer the agent test fixtures already use, not just an attribute
+    check on the built agent."""
+    calls = []
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    gs, server, agent, arco, teardown = build(
+        config, {"TestBit": TestBit},
+        arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
+        clock=time.monotonic,
+        on_join_denied=lambda dev, node, reason: calls.append(
+            (dev, node, reason)))
+    try:
+        # build() already loads TestBit and lets its own simulators join
+        # (see test_build_wires_devicelink_room_bridge_and_simulator above),
+        # so a nonexistent node -- not "no Bit loaded" -- is the reliable
+        # deny here. Drives the real, built agent's own inbound dispatch
+        # (_on_join -> _notify_join_denied), not a substitute server.
+        agent._on_join("fake-client", "ie1", ["ie1", "NO_SUCH_NODE"])
+
+        assert calls == [("ie1", "NO_SUCH_NODE", "no such node")]
+    finally:
+        shutdown(teardown)
+
+
+def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply(capsys):
+    """The deny path must survive a raising sink, and the device must still
+    get its /deny reply -- same guarantee devicelink/agent.py already gives
+    on_room_frame."""
+    from control.engine import GameServer
+    from devicelink.agent import DeviceLinkAgent
+    from tests.test_devicelink_agent import FakeServer
+
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+
+    def boom(dev, node, reason):
+        raise RuntimeError("sink exploded")
+
+    agent = DeviceLinkAgent(gs, server, on_join_denied=boom)
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    _deliver_join(server, agent, "ie1", "NO_SUCH_NODE")   # must not raise
+
+    denies = server.addressed("/ie1/deny")
+    assert denies[0]["args"][0] == "no such node"

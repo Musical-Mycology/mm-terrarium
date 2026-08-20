@@ -1076,13 +1076,15 @@ prevented the ordering from disagreeing with itself again, and it had.
   `terrarium_boot`'s own `arco.poll() is not None` pattern, and reports a
   `child-exited` stage naming which child died and its code.
 
-  **CI mode is honestly best-effort.** The headless clock-sync defect (see
-  *Not yet built / deferred* below, "A device's clock-sync to Arco after
-  Control has connected is unreliable -- in a headless run") is upstream
-  and unfixed. `run_stack` does not fix it and does not pretend to -- its
-  `--help` says so in the same words as here. What it contributes is that
-  the failure is bounded and named: a `device-sync` stage failure pointing
-  at the device's own log and at `o2debug.log`, rather than a hang.
+  **CI mode works as of 2026-08-20.** The "headless clock-sync defect"
+  this paragraph used to disclaim turned out to be mm-terrarium's own
+  SETUP-hold loop starving Arco's pty (see the operator/harness handoff
+  slice below): spawned devices always synced into a frozen hold, which is
+  why headless failed while interactive sometimes squeaked through. With
+  the hold draining, `run_stack --ci --devices 1` produced the repo's
+  first green end-to-end run: clock sync at O2 12.5 s, role granted on the
+  first join, clean exit, zero orphans (runs/20260820-161425). The
+  `device-sync` failure stage remains as a guard, not a disclaimer.
 
   **Exercised against a live Arco for the first time on 2026-08-14.** Three
   runs, one device each, via `--ci --seconds N --devices 1`. No run reached
@@ -1097,7 +1099,9 @@ prevented the ordering from disagreeing with itself again, and it had.
   failures diagnosable at all. `o2debug.log` recorded zero dropped messages
   and zero service-provider refusals across all three runs. CI mode bounded
   and named both failure modes and exited non-zero rather than hanging, as
-  designed.
+  designed. **Postscript, 2026-08-20:** those two "upstream" clock-sync
+  failures were the pty starvation above; with it fixed, the same command
+  runs green.
 - **`harness/markers.py`** -- the readiness contract `run_stack` watches
   for: named constants emitted by `terrarium_boot`/`o2_shroom` and matched
   on both sides by `tests/test_markers.py`. Matching on incidental print
@@ -1121,8 +1125,9 @@ prevented the ordering from disagreeing with itself again, and it had.
 **Suite baseline as of this slice: 721 passed, 1 skipped** (662 at this
 branch's start). **844 passed, 1 skipped as of the 2026-08-17 Room-panel
 slice; 933 passed, 1 skipped as of the trigger slice that follows it; 1037
-passed, 1 skipped as of the N-fixture Room slice; 1076 passed, 1 skipped
-as of the wire-JSON and Console-script-isolation slice.**
+passed, 1 skipped as of the N-fixture Room slice ; 1076 passed, 1 skipped
+as of the wire-JSON and Console-script-isolation slice; 1099 passed, 1
+skipped as of the operator/harness handoff slice.**
 
 ### The Room panel and the Room's own fixtures (`control/room_profile.py`, `control/room_view.py`, `harness/room_surface.py`, `console/static/`)
 The Room stops being shaped like a Tuneshroom, and the Console becomes an
@@ -1417,10 +1422,12 @@ real-scale profile, and `TestBit` runs in it. Design:
   luxaeterna WebSim defects (12-px truncation of every linear surface, and
   a one-shot frame sent before any browser connects being lost forever) --
   fixed in luxaeterna PR #14; without them the canvas was black or 12 px
-  wide and no visual confirmation was possible at all. Still outstanding
-  from the spec's section 7: a device joining and completing a scored round
-  plus an unscored jam join (gated on the upstream headless clock-sync
-  defect; run it from an interactive terminal). The rainbow seam sweep is
+  wide and no visual confirmation was possible at all. The device-join half
+  completed 2026-08-20 on the operator/harness handoff branch: a scored
+  round joined during the hold (clock sync in seconds once the hold
+  stopped starving Arco's pty) and completed live, and an unscored jam
+  join was granted mid-RUNNING the same day -- the spec's section 7
+  checklist is now fully verified. The rainbow seam sweep is
   DONE as of 2026-08-20, measured rather than eyeballed: all 864 LEDs lit,
   total hue span 359.6 deg (one full rainbow across the array), per-pixel
   hue deltas median 0.429 deg / p99 1.04 deg / max 1.252 deg -- and the max
@@ -1429,13 +1436,16 @@ real-scale profile, and `TestBit` runs in it. Design:
   ordinary neighbouring steps. Firing `play_aurora` (resolved to
   `sim-room-array`, 3 steps, admin-manual) moved the centre LED's hue 121
   deg in 1.5 s, so the cue visibly sweeps the whole array. The transient
-  `game`-service-already-claimed race recurred on the first stack attempt
-  (third occurrence: 2026-08-19 and twice on 2026-08-20, always the first
-  attempt after idle, always clean on retry); `verify_service_ownership`
-  failed loud and teardown reaped everything both times, but three
-  occurrences is a pattern, not a fluke -- worth an upstream look at
-  whether the previous run's `game` registration lingers on the hub across
-  an Arco restart window.
+  `game`-service-already-claimed failures (five occurrences across
+  2026-08-19/20, always the first attempt after idle) were root-caused on
+  2026-08-20 and were never a second claimant at all: the hosts were
+  proven process-clean, a 15 s LAN probe found no other hub, and the hub
+  log carried no refusal. The probe's 2 s single shot was expiring against
+  a hub blocked in its cold audio-device open (and, during holds, frozen
+  on the undrained pty). Fixed on the handoff branch: the probe now
+  resends every 2 s across a 10 s window, and its error names the
+  blocked-hub cause first. The earlier "lingering registration"
+  speculation this entry carried is withdrawn.
 
 ### `control/wire_json.py`, and the isolated Console scripts
 Two defects found in one live run (the triggers live-verify above), each of
@@ -1493,6 +1503,92 @@ PR #38.
   `null` `run_duration` as an empty cell rather than an infinity sign
   (`renderStatus` is a generic k/v table; only the Registration capacity
   column maps null to infinity). Cosmetic.
+
+### The operator/harness handoff, and the starved Arco pty
+Five defects from one live UAT afternoon (2026-08-20), all in the harness
+and operator surface, none in the engine. Design:
+`docs/superpowers/specs/2026-08-20-operator-harness-handoff-design.md`.
+
+- **The load-bearing rule this slice earned: every loop that holds while
+  Arco is alive must drain Arco's pty.** `_wait_in_setup` did not, so for
+  the whole of any `--setup-seconds` hold Arco (a curses app on a pty)
+  filled its buffer, blocked mid-write, and froze: no clock sync served,
+  no routing, no audio. Verified live before the fix: a 0-byte
+  `--arco-log` tee eleven minutes after spawn, a byte-static
+  `o2debug.log`, and an engine in RUNNING with no drone. This one starved
+  pty explained, at a stroke: devices "taking 60-100 s to clock-sync"
+  (blocked, not slow -- they synced the instant the hold expired and
+  draining resumed, straight into a closed scored window, which read as
+  "the tuneshroom crashes when the sound starts"); most of the
+  cold-start ownership-probe failures; and the entire "headless
+  clock-sync defect" (spawned devices always synced into a frozen hold).
+- **The hold yields to the operator.** `_wait_in_setup` returns a reason
+  string (`"expired"`/`"parent-gone"`/`"state-changed"`) and watches
+  `gs.state`; `main()` calls `gs.run()` only when the state is still
+  SETUP. Before this, an operator pressing Run on the Console during the
+  hold killed the harness with an uncaught `InvalidTransition` at hold
+  expiry, taking Arco down mid-session while a lingering console thread
+  kept serving stale state. The engine was and is correct; the harness
+  stopped assuming it is the only driver.
+- **The ownership probe distinguishes a blocked hub from a conflict**:
+  resend every 2 s across a 10 s window (`ownership_timeout` is now the
+  total). A genuine second claimant never answers; a blocked hub answers
+  when it unblocks. The error names the blocked-hub cause first.
+- **`o2_shroom` re-verifies its service on any `bridge_id` change** (an
+  auto-reconnected device once lost its announcement and heard silence
+  forever while fifteen Control replies were dropped hub-side), passes
+  `surface_id=dev` so the canvas header stops calling every device `ie0`,
+  prints `role has no light declaration -- canvas stays dark by design`
+  for a light-less role (TestBit's `jammer` is deliberately such), and
+  its unanswered-join hint now names the lost-service cause and the hub
+  log line to check instead of pointing at a healthy Control.
+- **Control's stdout narrates the device lifecycle**: `device hello:`,
+  `join granted: ie1 -> player (scored) via TEST_PLAYER_NODE`,
+  `join denied: ... (reason)`, `device released:`, plus
+  `SETUP open, Ns remaining` every 15 s. Hellos/grants/releases ride an
+  engine observer (the ConsoleAgent seam; releases are derived from
+  registration diffs because `on_release` is a transport-owned sink);
+  denials ride a guarded `on_join_denied` sink on `DeviceLinkAgent`
+  threaded through `build()`. The lowercase `join denied:` casing is
+  load-bearing against the uppercase `JOIN DENIED:` marker.
+- **Live-verified 2026-08-20, both halves.** Headless: the repo's first
+  green end-to-end CI run (above). Interactive: scored round joined
+  during the hold and completed, Console Run mid-hold handed off with no
+  crash, drone and device animation live.
+
+### WebSim two-way input -- browser gestures become real /game/* messages
+The simulated Tuneshroom is now playable from its own canvas. Design:
+[`.../2026-08-20-websim-two-way-input-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-20-websim-two-way-input-design.md).
+Cross-repo: luxaeterna's `WebSimBackend` gained an optional `on_input`
+callback (inbound JSON text messages over the already-open page websocket;
+binary stays down-only; malformed JSON and raising callbacks are dropped,
+never fatal) and `PAGE_HTML` gained pointer handlers -- click sends
+`{"type":"tap","count":1}`, double-click exactly one count-2 tap (the
+single-click send is held 250 ms and cancelled by the dblclick), and a
+horizontal drag maps canvas x onto gamma in [-90, 90] as
+`{"type":"tilt","gamma":g}` at most every 50 ms, with a >5 px drag
+suppressing the click that browsers still fire after it. On this side,
+`harness/o2_shroom.py` bridges callback -> bounded `queue.Queue`
+(drop-oldest; the callback runs on the websocket handler thread) ->
+`drain_gestures()` in the existing tick loop, which sends the documented
+wire rows `/game/tap sffi [dev, 1.0, 50.0, count]` and `/game/tilt sf`.
+Stamping follows Design Rule 4: the harness stamps `o2lite.time_get()` at
+drain time -- the whole simulator process is the device, so the browser
+hop is inside it and browser clocks never touch the wire. An operator
+drag suspends the synthetic tilt sweep for `SWEEP_RESUME_SECONDS` (5.0)
+while `next_tilt` keeps advancing, so the sweep resumes on schedule with
+no overdue-tilt burst. Gestures are dropped until the role is granted
+(same UDP-overtakes-TCP race guard as the sweep) and on `--no-join`
+(Room) runs. No `devicelink/protocol.py`, engine, or Bit changes:
+`tap`/`tilt` already ride the generic `/game/<verb>` path into TestBit's
+handlers. `ShroomClient` also gained the `tap()` encoder its docstring's
+wire table had documented but never implemented. Live-verified
+2026-08-20 against a real Arco via `run_stack --ci --devices 1`: taps
+sent over ie1's WebSim socket came back as `/ie1/play` cues (click,
+chime, and the `flash_device` trigger), teardown clean. Note the device
+still ignores `/<dev>/play` by design, so the sample plays nowhere on the
+simulator yet -- local sample playback on the sim is a separate, later
+slice.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -1741,14 +1837,19 @@ Kept explicit so the doc doesn't over-claim:
   then **1081**, across two runs. Read against the finding above, that is the
   same saturation artifact, not independent evidence the horizon is wrong.
 - **A device's clock-sync to Arco after Control has connected is
-  unreliable -- in a headless run.** Measured repeatedly on 2026-08-14
-  from a non-interactive context. **It does not reproduce from an
-  interactive terminal**: the same commands run by hand joined, held a
-  role and delivered thousands of frames the same afternoon, which is how
-  the figures above were obtained. So this
-  is a real and reproducible barrier to automating the measurement, not a
-  fault in the o2lite path itself, and the cause of the interactive/headless
-  difference is unknown. pyarco's `arco.initialize()` unconditionally calls
+  unreliable -- SOLVED 2026-08-20, and it was never headless-specific.**
+  The intermittent-sync half of this entry was mm-terrarium's own
+  `_wait_in_setup` never draining Arco's pty (see the operator/harness
+  handoff slice above): a held stack froze its hub, and any device
+  syncing during the hold stalled until the hold expired. "Headless"
+  correlated only because spawned devices always joined during holds and
+  buffer-fill time varied run to run -- note the 2026-08-14 measurement
+  below, where the 1-of-3 that synced did so at O2time 30, early in a
+  90 s hold before the buffer filled. With the hold draining, headless CI
+  runs green (first ever, runs/20260820-161425) and interactive devices
+  sync in seconds. What follows is preserved as the measurement record,
+  and the second half -- pyarco's reset killing sockets of clients that
+  connected before it -- remains real and upstream, unchanged. pyarco's `arco.initialize()` unconditionally calls
   `reset()`,
   which sends `/host/clear`; from that moment a **new** o2lite client hangs
   in `o2_shroom`'s `while o2lite.time_get() < 0` loop. Isolated: a lone
@@ -1782,10 +1883,14 @@ Kept explicit so the doc doesn't over-claim:
   "only the first client after an Arco server start gets working audio"
   trap, and it is not something this repo can fix.
 
-  Why 2026-08-13 worked and 2026-08-14 did not is unresolved. Treat a
-  successful live o2lite run as **currently unreliable rather than routine**,
-  and check `o2debug.log` first -- `dropping message because service was not
-  found` means Control was not up yet, and silence means the socket is dead.
+  Why 2026-08-13 worked and 2026-08-14 did not resolved itself with the
+  2026-08-20 root cause: the 08-13 runs joined before the hold's pty
+  buffer filled, the 08-14 ones after. A live o2lite run is routine now;
+  when one does fail, check `o2debug.log` first -- `dropping message
+  because service was not found` means Control was not up yet (or a
+  device's own service announcement was lost; the device now re-verifies
+  on reconnect), and silence means the socket is dead (still the
+  upstream reset behavior).
 - **A refused o2lite service announcement is unobservable from the client.
   Not a defect: this is O2 working as designed** (Roger, 2026-08-17). The
   host will not forward messages to two providers of the same service name,

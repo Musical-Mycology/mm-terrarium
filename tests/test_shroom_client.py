@@ -305,6 +305,14 @@ def test_pump_tick_exits_once_released_flips_true():
     assert len(client.ticks) == 1
 
 
+def test_tap_encodes_the_documented_wire_row():
+    client = ShroomClient("ie1", "node-a")
+    msg = client.tap(count=2)
+    assert msg["address"] == "/game/tap"
+    assert msg["typespec"] == "sffi"
+    assert msg["args"] == ["ie1", 1.0, 50.0, 2]
+
+
 def test_default_width_is_still_thirty_six():
     """Every existing caller constructs ShroomClient without this argument
     and must be unaffected."""

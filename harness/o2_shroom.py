@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import os
+import queue
 
 from harness import markers
 from harness.shroom_client import LED_CHANNELS, ShroomClient
@@ -46,6 +47,68 @@ def tilt_sweep(elapsed: float) -> float:
     phase = (elapsed % SWEEP_PERIOD) / SWEEP_PERIOD
     triangle = 2.0 * abs(2.0 * (phase - math.floor(phase + 0.5)))
     return SWEEP_DEGREES * (triangle - 1.0)
+
+
+# Seconds after the operator's last drag-tilt before the synthetic sweep
+# resumes. Long enough that hue does not snap back mid-exploration, short
+# enough that an unattended run still animates.
+SWEEP_RESUME_SECONDS = 5.0
+
+# Bound on browser gestures queued between ticks. Generous: the page
+# rate-bounds tilts to 20 Hz and the loop drains every ~5 ms.
+INPUT_QUEUE_MAX = 64
+
+
+def enqueue_input(q: "queue.Queue", msg: dict) -> None:
+    """Queue one browser gesture, dropping the OLDEST on overflow.
+
+    Runs on WebSimBackend's websocket handler thread, so it must never
+    block; drop-oldest keeps the freshest gestures, matching the
+    drop-not-queue rule frame relay already follows elsewhere."""
+    while True:
+        try:
+            q.put_nowait(msg)
+            return
+        except queue.Full:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+
+
+def drain_gestures(q: "queue.Queue", send, dev: str, now: float):
+    """Translate every queued browser gesture into a /game/* send.
+
+    `send` has o2lite.send's signature: send(address, time, typespec,
+    *args). Gestures are stamped `now` -- the caller's o2lite clock
+    reading -- because the whole simulator process is the device, so
+    this IS the source stamp (Design Rule 4); the browser hop happened
+    inside the device. Returns `now` if any tilt went out (the caller
+    suspends its synthetic sweep against it), else None. Malformed
+    entries are dropped with one diagnostic per drain, mirroring the
+    engine's drop-this-frame rule."""
+    tilted = None
+    complained = False
+    while True:
+        try:
+            msg = q.get_nowait()
+        except queue.Empty:
+            return tilted
+        kind = msg.get("type") if isinstance(msg, dict) else None
+        try:
+            if kind == "tap":
+                count = max(1, int(msg.get("count", 1)))
+                send("/game/tap", now, "sffi", dev, 1.0, 50.0, count)
+            elif kind == "tilt":
+                gamma = max(-90.0, min(90.0, float(msg["gamma"])))
+                send("/game/tilt", now, "sf", dev, gamma)
+                tilted = now
+            else:
+                raise ValueError(kind)
+        except (KeyError, TypeError, ValueError):
+            if not complained:
+                print(f"dropping operator gesture {msg!r}", flush=True)
+                complained = True
 
 
 def parent_is_gone(expected_ppid, getppid=os.getppid) -> bool:
@@ -102,6 +165,70 @@ def service_conflict(o2lite, dev: str, *, verify=None):
             f"'python -m harness.o2_shroom --dev {dev}' and kill it.")
 
 
+def reconnect_recheck(o2lite, dev: str, previous_bridge_id, *, verify=None):
+    """If o2lite's bridge id has changed since the last check, re-run the
+    service-ownership check and return (current_bridge_id, problem).
+
+    o2litepy auto-reconnects silently and stamps a new bridge_id on
+    reconnect; a reconnect that lands after this device's own service
+    announcement was lost leaves it clock-synced against the OLD hub
+    forever, with the hub dropping every reply as "service was not
+    found" (measured 2026-08-20: fifteen dropped Control replies while
+    the device saw pure silence). The one-shot startup check
+    (service_conflict) cannot catch this because it only runs once,
+    before any reconnect has happened.
+
+    `problem` is None when the bridge id is unchanged (nothing to do) or
+    when the re-check passes. `verify` defaults to
+    devicelink.o2_transport.verify_service_ownership, imported lazily for
+    the same reason as service_conflict's `verify`.
+    """
+    current = getattr(o2lite, "bridge_id", previous_bridge_id)
+    if current == previous_bridge_id:
+        return previous_bridge_id, None
+
+    print(f"reconnected to the hub (bridge id {previous_bridge_id} -> "
+          f"{current}); re-verifying service")
+
+    if verify is None:
+        from devicelink.o2_transport import verify_service_ownership
+        verify = verify_service_ownership
+
+    # A reconnect can land on a hub that is busy (e.g. a cold audio
+    # open), and Task 2 established that a blocked hub needs the resend
+    # window to be distinguished from a genuine conflict -- so this call
+    # passes timeout/resend_interval explicitly rather than relying on
+    # verify_service_ownership's tight defaults. The STARTUP check (in
+    # service_conflict) keeps those tight defaults: it runs after clock
+    # sync, when the hub is provably alive.
+    if verify(o2lite, dev, timeout=10.0, resend_interval=2.0):
+        return current, None
+
+    problem = (f"{markers.DEVICE_SERVICE_CONFLICT} {dev!r} is not routed "
+               f"back to this process after reconnecting to the hub "
+               f"(bridge id {previous_bridge_id} -> {current}). Another "
+               f"process has likely claimed it, and O2 refuses a second "
+               f"claimant silently (o2/src/bridge.cpp:231-237). Nothing "
+               f"addressed to /{dev}/* will ever arrive here.")
+    return current, problem
+
+
+def join_stall_hint(dev: str) -> str:
+    """The tail of the message printed every 5 unanswered joins (the
+    caller prepends "N joins unanswered. ").
+
+    The old wording ("is Control up and in SETUP?") pointed at Control
+    even on a run where Control was perfectly healthy: the actual cause,
+    measured 2026-08-20, was this device's own service announcement
+    being lost, which the hub logs as "service was not found" and never
+    tells the device about. Naming that -- and where to look for it --
+    turns a guess into an instruction.
+    """
+    return (f"Either Control is not up yet, or this device's service "
+            f"announcement was lost (check o2debug.log on the hub for "
+            f'"/{dev}/... service was not found").')
+
+
 def _gestures_ready(client) -> bool:
     """True once Control's granted-role reply has actually reached this
     client, i.e. once ShroomClient._on_role() has set client.config (see
@@ -127,7 +254,8 @@ def _gestures_ready(client) -> bool:
 def build(dev: str, node: str = "TEST_PLAYER_NODE",
           sim_host: str = "127.0.0.1", sim_port: int = 0,
           serve: bool = True, room_type: str | None = None,
-          fixture: str | None = None):
+          fixture: str | None = None,
+          input_queue: "queue.Queue | None" = None):
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
@@ -138,6 +266,9 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     a Tuneshroom's surface -- fixture is then required. This is the
     --no-join path, where this module stands in for
     harness/room_simulator.py, once per fixture, on the o2lite transport.
+
+    input_queue, when given, receives every gesture the browser page sends
+    back; see drain_gestures.
     """
     from luxaeterna.backends.websim import WebSimBackend
     from luxaeterna.synth.capability import shroom_capability
@@ -145,7 +276,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     from harness.room_simulator import WebSimLeds
 
     if room_type is None:
-        capability = shroom_capability()
+        capability = shroom_capability(surface_id=dev)
         channels = LED_CHANNELS
     else:
         if fixture is None:
@@ -158,11 +289,24 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
         capability = to_fixture_capability(profile, fixture)
         channels = capability.pixel_count * 3
 
+    on_input = (None if input_queue is None
+                else lambda msg: enqueue_input(input_queue, msg))
     backend = WebSimBackend(capability=capability,
                             host=sim_host, port=sim_port, serve=serve,
-                            label=dev)
+                            label=dev, on_input=on_input)
+
+    def _on_role(config: dict) -> None:
+        # Where client.config is first set. A granted role whose
+        # light_manifest declares no instruments (TestBit's `jammer`, on
+        # purpose) renders a black canvas that is otherwise
+        # indistinguishable from a broken one -- reported as a failure
+        # once already because nothing said this was expected.
+        if not (config.get("light_manifest") or {}).get("instruments"):
+            print("role has no light declaration -- canvas stays dark "
+                  "by design")
+
     client = ShroomClient(dev, node, leds=WebSimLeds(backend, channels),
-                          expected_channels=channels)
+                          on_role=_on_role, expected_channels=channels)
     return client, backend
 
 
@@ -237,9 +381,11 @@ def main() -> None:
 
     from devicelink.o2_transport import pull_args
 
+    operator_input = queue.Queue(maxsize=INPUT_QUEUE_MAX)
     client, backend = build(args.dev, args.node,
                             args.sim_host, args.sim_port,
-                            room_type=args.room_type, fixture=args.fixture)
+                            room_type=args.room_type, fixture=args.fixture,
+                            input_queue=operator_input)
     backend.open()
     print(f"Watch the Shroom at http://{args.sim_host}:{backend.port}/")
 
@@ -323,6 +469,7 @@ def main() -> None:
         # actually arrives, not backdated to loop start (which would fire a
         # burst of "overdue" tilts back-to-back the instant the gate opens).
         next_tilt = None
+        last_operator_tilt = None
         # The join reply is asynchronous -- it only arrives once the loop below
         # polls it in -- so noticing a deny/error has to happen inside the loop,
         # not right after send_cmd. Printed once each: without this, a refused
@@ -335,11 +482,16 @@ def main() -> None:
         next_join = (o2lite.time_get() + args.join_retry
                      if args.join_retry > 0 and not args.no_join else None)
         joins_sent = 1
+        bridge_id = getattr(o2lite, "bridge_id", None)
         while not client.released:
             if parent_is_gone(args.exit_with_parent):
                 print("parent is gone; exiting")
                 break
             o2lite.poll()
+            bridge_id, problem = reconnect_recheck(o2lite, args.dev, bridge_id)
+            if problem is not None:
+                print(problem, file=sys.stderr)
+                raise SystemExit(1)
             now = o2lite.time_get()
             if next_join is not None and now >= next_join:
                 if client.config is not None or client.last_deny is not None \
@@ -357,8 +509,8 @@ def main() -> None:
                     joins_sent += 1
                     next_join = now + args.join_retry
                     if joins_sent % 5 == 0:
-                        print(f"still waiting on a role after {joins_sent} "
-                              f"joins -- is Control up and in SETUP?")
+                        print(f"{joins_sent} joins unanswered. "
+                              f"{join_stall_hint(args.dev)}")
             if not deny_printed and client.last_deny is not None:
                 reason, hint = client.last_deny
                 print(f"{markers.DEVICE_JOIN_DENIED} {reason} ({hint})",
@@ -381,11 +533,21 @@ def main() -> None:
                     # arrived, and the two want completely different fixes.
                     print(f"{markers.DEVICE_ROLE_GRANTED} {joins_sent} "
                           f"join(s); gestures starting at {now:.3f}", flush=True)
+                operator = drain_gestures(operator_input, o2lite.send,
+                                          args.dev, now)
+                if operator is not None:
+                    last_operator_tilt = operator
+                sweeping = (last_operator_tilt is None
+                            or now - last_operator_tilt >= SWEEP_RESUME_SECONDS)
                 if now >= next_tilt:
-                    gamma = tilt_sweep(now - start)
-                    # Timestamps at the source (Design Rule 4): the device's
-                    # own synced clock reading, not Control's receipt time.
-                    o2lite.send("/game/tilt", now, "sf", args.dev, gamma)
+                    if sweeping:
+                        gamma = tilt_sweep(now - start)
+                        # Timestamps at the source (Design Rule 4): the
+                        # device's own synced clock reading, not Control's
+                        # receipt time.
+                        o2lite.send("/game/tilt", now, "sf", args.dev, gamma)
+                    # Advance even while suspended, so the sweep resumes on
+                    # schedule instead of firing a backlog of overdue tilts.
                     next_tilt += interval
             client.tick(now)
             time.sleep(0.005)

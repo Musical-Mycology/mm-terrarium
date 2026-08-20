@@ -59,6 +59,16 @@ def test_a_player_build_is_unchanged():
     assert client.expected_channels == 36
 
 
+def test_build_stamps_the_capability_with_the_devs_own_id():
+    """shroom_capability() used to be called with no surface_id, so every
+    device's canvas header read ie0 regardless of who it actually was.
+    build() must pass its own `dev` through."""
+    pytest.importorskip("luxaeterna")
+    from harness.o2_shroom import build
+    client, backend = build("ie2", serve=False)
+    assert backend._cap.surface_id == "ie2"
+
+
 # --- Gating gestures on the role: harness/shroom_client.py's ShroomClient
 # sets .config in _on_role(), only once Control's granted-role reply has
 # actually arrived. main()'s join is sent over TCP (o2lite.send_cmd) but
@@ -162,6 +172,120 @@ def test_service_conflict_asks_about_the_dev_it_was_given():
 
     service_conflict(object(), "ie1", verify=_verify)
     assert asked == ["ie1"]
+
+
+# --- Reconnect re-verification. o2litepy auto-reconnects a device to a
+# new hub and stamps a new o2lite.bridge_id, but a service lost in that
+# reconnect (its /ie1 announcement never re-arrives) leaves the device
+# clock-synced and silent forever -- the STARTUP check already passed
+# against the PREVIOUS hub. See harness/o2_shroom.py's reconnect_recheck().
+# -----------------------------------------------------------------------
+
+class _FakeO2Bridge:
+    def __init__(self, bridge_id):
+        self.bridge_id = bridge_id
+
+
+def test_reconnect_recheck_is_silent_when_the_bridge_id_is_unchanged():
+    from harness.o2_shroom import reconnect_recheck
+
+    o2 = _FakeO2Bridge(bridge_id="A")
+    calls = []
+
+    def verify(o2lite, dev, timeout=None, resend_interval=None):
+        calls.append((dev, timeout, resend_interval))
+        return True
+
+    bridge_id, problem = reconnect_recheck(o2, "ie1", "A", verify=verify)
+
+    assert bridge_id == "A"
+    assert problem is None
+    assert calls == []          # no re-verification when nothing changed
+
+
+def test_reconnect_recheck_reverifies_exactly_once_on_a_bridge_id_change():
+    """The decision from Task 2's review: the reconnect check must pass
+    timeout=10.0, resend_interval=2.0 explicitly, not the tight startup
+    defaults -- a reconnect can land on a hub that is busy (cold audio
+    open), and only the resend window can tell that apart from a real
+    conflict."""
+    from harness.o2_shroom import reconnect_recheck
+
+    o2 = _FakeO2Bridge(bridge_id="B")
+    calls = []
+
+    def verify(o2lite, dev, timeout=None, resend_interval=None):
+        calls.append((dev, timeout, resend_interval))
+        return True
+
+    bridge_id, problem = reconnect_recheck(o2, "ie1", "A", verify=verify)
+
+    assert bridge_id == "B"
+    assert problem is None
+    assert calls == [("ie1", 10.0, 2.0)]
+
+
+def test_reconnect_recheck_reports_a_failed_reverification():
+    from harness.o2_shroom import reconnect_recheck
+
+    o2 = _FakeO2Bridge(bridge_id="B")
+
+    bridge_id, problem = reconnect_recheck(
+        o2, "ie1", "A", verify=lambda o2lite, dev, timeout=None,
+        resend_interval=None: False)
+
+    assert bridge_id == "B"
+    assert problem is not None
+    assert "ie1" in problem
+
+
+# --- Unanswered-join hinting. The old message pointed at Control even
+# though Control was healthy; the real cause fifteen dropped Control
+# replies traced to was a lost service announcement on the HUB side. -----
+
+def test_join_stall_hint_names_the_devs_own_service_and_the_hub_log():
+    from harness.o2_shroom import join_stall_hint
+
+    hint = join_stall_hint("ie1")
+
+    assert "ie1" in hint
+    assert "service was not found" in hint
+    assert "o2debug.log" in hint
+
+
+# --- Dark-by-design notice. TestBit's jammer is deliberately light-less;
+# its black canvas was reported as a failure because a silent role grant
+# looks identical to a broken one. -----------------------------------------
+
+def test_role_with_no_light_manifest_prints_the_dark_by_design_notice(capsys):
+    pytest.importorskip("luxaeterna.backends.websim")
+    from harness.o2_shroom import build
+    from devicelink import protocol
+
+    client, _backend = build("ie1", serve=False)
+    msg = protocol.encode(protocol.Envelope(
+        timestamp=0.0, address="/ie1/role", typespec="b",
+        args=[{"bit_name": "jammer", "light_manifest": {}}]))
+    client.handle(msg)
+
+    out = capsys.readouterr().out
+    assert "role has no light declaration -- canvas stays dark by design" in out
+
+
+def test_role_with_instruments_stays_silent(capsys):
+    pytest.importorskip("luxaeterna.backends.websim")
+    from harness.o2_shroom import build
+    from devicelink import protocol
+
+    client, _backend = build("ie1", serve=False)
+    msg = protocol.encode(protocol.Envelope(
+        timestamp=0.0, address="/ie1/role", typespec="b",
+        args=[{"bit_name": "player",
+              "light_manifest": {"instruments": ["aurora"]}}]))
+    client.handle(msg)
+
+    out = capsys.readouterr().out
+    assert "canvas stays dark by design" not in out
 
 
 def test_main_has_exactly_one_backend_close():
