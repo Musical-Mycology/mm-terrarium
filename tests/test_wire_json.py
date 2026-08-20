@@ -69,15 +69,14 @@ def test_finite_payloads_are_byte_identical_to_json_dumps():
 
 
 def test_a_missed_path_raises_rather_than_emitting_a_bad_token():
-    """allow_nan=False is the belt to the sanitiser's braces. A float
-    subclass that slips past an isinstance check must fail loudly here, not
-    silently produce something no browser can read."""
-    class Sneaky(float):
-        pass
+    """allow_nan=False is the belt to the sanitiser's braces: a path the
+    walk misses must fail loudly, never emit a token no browser can read.
 
-    # Sneaky IS a float instance, so it is sanitised; this pins that the
-    # guard is in place by confirming no bad token can reach the output.
-    assert "Infinity" not in dumps({"x": Sneaky("inf")})
+    The reachable missed path today is a non-finite float used as a dict
+    KEY: _sanitise's dict branch sanitises values, not keys, so the key
+    reaches json.dumps untouched and the belt is what stops it."""
+    with pytest.raises(ValueError):
+        dumps({float("inf"): "x"})
 
 
 def test_bools_and_ints_are_untouched():
