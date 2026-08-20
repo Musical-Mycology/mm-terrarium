@@ -472,8 +472,9 @@ def test_wait_in_setup_polls_for_the_requested_window():
             polls.append(1)
 
     ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
-    _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
-                   sleep=lambda _s: None)
+    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                            sleep=lambda _s: None)
+    assert reason == "expired"
     assert len(polls) >= 3
 
 
@@ -487,9 +488,100 @@ def test_wait_in_setup_returns_immediately_when_not_requested():
         def poll(self):
             polls.append(1)
 
-    _wait_in_setup(FakeAgent(), 0.0, clock=lambda: 0.0,
-                   sleep=lambda _s: None)
+    reason = _wait_in_setup(FakeAgent(), 0.0, clock=lambda: 0.0,
+                            sleep=lambda _s: None)
+    assert reason == "expired"
     assert polls == []
+
+
+def test_wait_in_setup_drains_arco_every_iteration():
+    """The 2026-08-20 freeze: nothing drained Arco's pty during the hold,
+    so Arco blocked mid-write and the whole room froze (0-byte arco.log
+    tee 11 minutes after spawn, static o2debug.log, no drone at RUNNING).
+    Every loop that holds while Arco is alive must drain Arco's pty."""
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class FakeArco:
+        def __init__(self):
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            return None                      # still running
+
+    ticks = iter([0.0, 0.1, 0.2, 0.3, 0.4, 1.1, 1.2])
+    arco = FakeArco()
+    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                            sleep=lambda s: None, arco=arco)
+    assert reason == "expired"
+    assert arco.polls >= 4          # once per iteration, not once total
+
+
+def test_wait_in_setup_returns_state_changed_when_the_engine_leaves_setup():
+    """The 2026-08-20 crash: the operator pressed Run on the Console during
+    the hold, and main() then called gs.run() into a RUNNING engine ->
+    InvalidTransition killed the harness. The hold must yield instead."""
+    from control.state import State
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class FakeGs:
+        def __init__(self):
+            self.state = State.SETUP
+
+    gs = FakeGs()
+    calls = {"n": 0}
+
+    def clock():
+        calls["n"] += 1
+        if calls["n"] == 3:
+            gs.state = State.RUNNING         # operator clicks Run mid-hold
+        return calls["n"] * 0.1
+
+    reason = _wait_in_setup(FakeAgent(), 10.0, clock=clock,
+                            sleep=lambda s: None, gs=gs)
+    assert reason == "state-changed"
+
+
+def test_wait_in_setup_yields_on_abort_too():
+    from control.state import State
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class FakeGs:
+        state = State.IDLE                   # operator aborted instantly
+
+    reason = _wait_in_setup(FakeAgent(), 10.0, clock=iter(
+        [0.0, 0.1]).__next__, sleep=lambda s: None, gs=FakeGs())
+    assert reason == "state-changed"
+
+
+def test_wait_in_setup_prints_a_countdown(capsys):
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    t = {"now": 0.0}
+
+    def clock():
+        t["now"] += 4.0                      # 4s per iteration
+        return t["now"]
+    _wait_in_setup(FakeAgent(), 60.0, clock=clock, sleep=lambda s: None)
+    out = capsys.readouterr().out
+    assert "SETUP open," in out
+    assert out.count("SETUP open,") >= 2     # every ~15s across 60s
 
 
 def test_wait_in_setup_exits_early_when_the_parent_is_gone(monkeypatch):
@@ -513,9 +605,9 @@ def test_wait_in_setup_exits_early_when_the_parent_is_gone(monkeypatch):
             polls.append(1)
 
     ticks = iter([0.0, 0.1, 0.2, 5.0])
-    parent_gone = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
-                                 sleep=lambda _s: None, parent_pid=111)
-    assert parent_gone is True
+    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                            sleep=lambda _s: None, parent_pid=111)
+    assert reason == "parent-gone"
     assert polls == []          # returned before ever polling the agent
 
 
@@ -532,9 +624,9 @@ def test_wait_in_setup_ignores_a_live_parent():
             polls.append(1)
 
     ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
-    parent_gone = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
-                                 sleep=lambda _s: None)
-    assert parent_gone is False
+    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                            sleep=lambda _s: None)
+    assert reason == "expired"
     assert len(polls) >= 3
 
 

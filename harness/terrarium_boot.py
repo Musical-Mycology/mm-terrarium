@@ -236,7 +236,7 @@ def shutdown(teardown) -> None:
 
 def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
-                   console_agent=None) -> bool:
+                   console_agent=None, arco=None, gs=None) -> str:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
@@ -250,25 +250,49 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     harness/o2_shroom.py's parent_is_gone -- see F5 in the final review
     for why this reuses that predicate rather than a second one. A
     SIGKILLed or OOM-killed run_stack cannot signal this process, so the
-    only way to notice is to keep asking. Returns True if that fired, so
-    main() can skip straight to shutdown() instead of calling gs.run()
-    into a stack whose supervisor is already gone.
+    only way to notice is to keep asking. Returns "parent-gone" if that
+    fired, so main() can skip straight to shutdown() instead of calling
+    gs.run() into a stack whose supervisor is already gone.
 
     console_agent, when given, is polled once per iteration too -- a device
     joining during SETUP is exactly what the console's registration view
     exists to show live.
+
+    arco, when given, is drained every iteration. Every loop that holds
+    while Arco is alive must drain Arco's pty: Arco is a curses app, an
+    undrained pty blocks it mid-write, and a blocked Arco serves no clock
+    sync, routes no messages and plays no audio. This loop not draining
+    it froze whole rooms for the length of the hold (2026-08-20).
+
+    gs, when given, is watched: the Console is a second driver, and if
+    the operator moves the engine out of SETUP (Run, Abort) this hold
+    yields immediately instead of letting main() call run() into a
+    RUNNING engine.
+
+    Returns "expired", "parent-gone", or "state-changed".
     """
     if setup_seconds <= 0:
-        return False
-    deadline = clock() + setup_seconds
-    while clock() < deadline:
+        return "expired"
+    start = clock()
+    deadline = start + setup_seconds
+    next_countdown = start + 15.0
+    while True:
+        now = clock()
+        if now >= deadline:
+            return "expired"
         if parent_is_gone(parent_pid):
-            return True
+            return "parent-gone"
+        if arco is not None:
+            arco.poll()
         agent.poll()
         if console_agent is not None:
             console_agent.poll()
+        if gs is not None and gs.state is not State.SETUP:
+            return "state-changed"
+        if now >= next_countdown:
+            print(f"SETUP open, {deadline - now:.0f}s remaining", flush=True)
+            next_countdown = now + 15.0
         sleep(1.0 / 44.0)
-    return False
 
 
 def _serve_until_done(gs, agent, arco, clock=time.monotonic,
@@ -600,12 +624,21 @@ def main() -> None:
         if args.setup_seconds > 0:
             print(f"{markers.CONTROL_SETUP_HOLD} for {args.setup_seconds:g}s "
                   f"-- join now", flush=True)
-        if _wait_in_setup(agent, args.setup_seconds,
-                          parent_pid=args.exit_with_parent,
-                          console_agent=console_agent):
+        reason = _wait_in_setup(agent, args.setup_seconds,
+                                parent_pid=args.exit_with_parent,
+                                console_agent=console_agent,
+                                arco=arco, gs=gs)
+        if reason == "parent-gone":
             print("parent is gone; tearing down", file=sys.stderr)
         else:
-            gs.run()
+            if gs.state is State.SETUP:
+                gs.run()
+            else:
+                # The operator drove the engine from the Console during the
+                # hold. That is a handoff, not an error: run() from here
+                # would raise InvalidTransition into a live room.
+                print("operator changed state from the Console; "
+                      "skipping harness run()", flush=True)
             reason = _serve_until_done(gs, agent, arco,
                                        parent_pid=args.exit_with_parent,
                                        console_agent=console_agent)
