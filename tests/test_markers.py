@@ -45,6 +45,32 @@ def test_markers_are_non_empty_and_distinct():
                 assert not a.startswith(b)
 
 
+def test_browse_url_marker_is_emitted_by_every_browser_surface():
+    """Every browser-facing surface (the Console, a Room fixture canvas, a
+    simulated Tuneshroom canvas) prints its URL behind markers.BROWSE_URL,
+    so harness/run_stack.py can collect and open them. Matching the
+    incidental wording ('Watch the Shroom at ...') instead would be the
+    silent-hang trap this module exists to prevent, one URL at a time."""
+    import harness.o2_shroom
+    import harness.room_simulator
+    import harness.terrarium_boot
+
+    for module in (harness.terrarium_boot, harness.room_simulator,
+                   harness.o2_shroom):
+        assert "markers.BROWSE_URL" in inspect.getsource(module), (
+            f"{module.__name__} no longer emits markers.BROWSE_URL; "
+            f"run_stack --open would silently stop opening its tab.")
+
+
+def test_browse_url_marker_is_distinct_from_every_other_marker():
+    others = list(markers.READY_MARKERS.values()) + \
+        list(markers.FAILURE_MARKERS.values())
+    assert markers.BROWSE_URL.strip()
+    for other in others:
+        assert not markers.BROWSE_URL.startswith(other)
+        assert not other.startswith(markers.BROWSE_URL)
+
+
 def _module_for(name: str):
     import harness.o2_shroom
     import harness.terrarium_boot

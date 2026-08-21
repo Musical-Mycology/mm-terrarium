@@ -21,6 +21,7 @@ Usage (normally spawned by harness/terrarium_boot.py, not run by hand):
 
 from __future__ import annotations
 
+from harness import markers
 from harness.shroom_client import ShroomClient, pump_tick
 from harness.signals import sigterm_as_keyboard_interrupt
 
@@ -138,7 +139,8 @@ def main() -> None:
     client, backend = build(args.dev, args.sim_host, args.sim_port,
                             room_type=args.room_type, fixture=args.fixture)
     backend.open()
-    print(f"Watch the Room at http://{args.sim_host}:{backend.port}/", flush=True)
+    print(f"{markers.BROWSE_URL} Watch the Room at "
+          f"http://{args.sim_host}:{backend.port}/", flush=True)
 
     if args.identify_blocks:
         import time

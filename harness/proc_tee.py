@@ -26,8 +26,9 @@ class ProcTee:
     """Reads `stream` to EOF on a daemon thread."""
 
     def __init__(self, name: str, stream, log_path: str, *, markers,
-                 echo: bool = False, out=None) -> None:
+                 echo: bool = False, out=None, on_line=None) -> None:
         self.name = name
+        self._on_line = on_line
         self._stream = stream
         self._log_path = log_path
         self._echo = echo
@@ -57,6 +58,8 @@ class ProcTee:
                 for marker, event in self._events.items():
                     if marker in line:
                         event.set()
+                if self._on_line is not None:
+                    self._on_line(line)
 
     def seen(self, marker: str) -> bool:
         return self._events[marker].is_set()
