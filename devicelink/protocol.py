@@ -131,6 +131,16 @@ def play_event(dev: str, name: str, params: str = "") -> dict:
     return _event(f"/{dev}/play", "ss", [name, params])
 
 
+def room_event(dev: str, blob: dict) -> dict:
+    """Informational room snapshot pushed to hello'd devices: engine state,
+    loaded Bit, and the Registration Nodes a player could tap with their
+    fill counts. Hardware ignores it (NFC tells it the node); the Flutter
+    simulator draws its node tiles from it. Downstream only -- no device
+    ever asks for it. See mm-tuneshroom's
+    docs/superpowers/specs/2026-08-21-simulated-room-flow-design.md."""
+    return _event(f"/{dev}/room", "b", [blob])
+
+
 # --- telemetry capture (see docs/telemetry-trace-schema.md) ---------------
 #
 # Two research verbs used by the capture Bit. Both ride the generic
