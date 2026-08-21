@@ -17,13 +17,14 @@ import subprocess
 import sys
 import time
 
-from bits.metronome.metronome_bit import MetronomeBit
-from bits.test.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.arco_process import ArcoProcess
+from control.bit_config import StartCondition
+from control.bit_registry import BitRegistry
 from control.boot import boot as _boot
 from control.boot_config import BootConfig
 from control.room_binding import RoomBindingRegistry
 from control.simulator_process import SimulatorProcess
+from control.start_condition import scored_count, start_decision
 from control.state import State
 from control.teardown import TeardownStack
 from devicelink.agent import DeviceLinkAgent
@@ -238,7 +239,9 @@ def shutdown(teardown) -> None:
 
 def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
-                   console_agent=None, arco=None, gs=None) -> str:
+                   console_agent=None, arco=None, gs=None,
+                   condition: StartCondition | None = None,
+                   game_server=None) -> str:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
@@ -271,7 +274,18 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     yields immediately instead of letting main() call run() into a
     RUNNING engine.
 
-    Returns "expired", "parent-gone", or "state-changed".
+    condition, when given together with game_server, is consulted once per
+    iteration via control.start_condition.start_decision (scored count read
+    off game_server via scored_count). "players" conditions distinguish a
+    genuinely-met threshold ("players-met") from a timeout resolution
+    ("timeout-start"/"timeout-abort") by checking the same scored>=min_scored
+    test start_decision itself prioritizes -- see control/start_condition.py.
+    An "immediate" condition's own elapsed>=setup_seconds threshold is the
+    same instant as this function's own deadline, so "expired" always wins
+    that race; a "players"/"operator" condition never produces "expired".
+
+    Returns "expired", "parent-gone", "state-changed", "players-met",
+    "timeout-start", or "timeout-abort".
     """
     if setup_seconds <= 0:
         return "expired"
@@ -291,6 +305,18 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
             console_agent.poll()
         if gs is not None and gs.state is not State.SETUP:
             return "state-changed"
+        if condition is not None and game_server is not None:
+            scored = scored_count(game_server)
+            decision = start_decision(condition, scored=scored,
+                                      elapsed=now - start,
+                                      setup_seconds=setup_seconds)
+            if decision is not None:
+                if condition.when == "players" and scored >= condition.min_scored:
+                    return "players-met"
+                if decision == "start":
+                    return "timeout-start"
+                if decision == "abort":
+                    return "timeout-abort"
         if now >= next_countdown:
             print(f"SETUP open, {deadline - now:.0f}s remaining", flush=True)
             next_countdown = now + 15.0
@@ -345,36 +371,17 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
         sleep(1.0 / 44.0)
 
 
-def _run_duration(args) -> float:
+def _run_duration(args) -> float | None:
     """Same shape as harness/devicelink_smoke.py's _run_duration: --hold
-    wins over --seconds, and no flags at all preserves the exact default
-    (RUN_DURATION_SECONDS) that a bare `python -m harness.terrarium_boot`
-    has always used."""
+    wins over --seconds. Unlike that sibling, a bare invocation (neither
+    flag given) now returns None rather than a hardcoded fallback -- main()
+    only adds a `defaults.run_duration_seconds` override when this returns
+    a value, so an unrequested run leaves the manifest's own default (or,
+    absent one, the Bit's own hardcoded fallback -- TestBit's is still
+    RUN_DURATION_SECONDS) untouched."""
     if args.hold:
         return float("inf")
-    return RUN_DURATION_SECONDS if args.seconds is None else args.seconds
-
-
-def _timed_test_bit_cls(run_duration: float) -> type:
-    """Wrap TestBit in a zero-arg subclass carrying the resolved duration.
-
-    control/boot.py's boot() reads `bit_cls.room_types` straight off the
-    registry entry -- before ever instantiating it -- to gate the Bit
-    against the Room type (`if room.room_type not in bit_cls.room_types`).
-    control/engine.py's GameServer.load_bit() then calls `bit_cls()` with no
-    arguments. A functools.partial(TestBit, run_duration=...) would satisfy
-    the second half but not the first: a partial object has no `room_types`
-    of its own, only what TestBit would have if called. A small subclass
-    satisfies both -- room_types is inherited normally through the MRO
-    (TestBit doesn't override it, so it resolves to control.bit.Bit's
-    `{RoomType.TEST}`), and __init__ takes no arguments while closing over
-    the resolved duration.
-    """
-    class _TimedTestBit(TestBit):
-        def __init__(self) -> None:
-            super().__init__(run_duration=run_duration)
-
-    return _TimedTestBit
+    return args.seconds
 
 
 class _LifecycleLogger:
@@ -560,11 +567,13 @@ def main() -> None:
                     help="websocket: the JSON devicelink shim, no Arco in "
                          "the device path. o2lite: real O2 through the Arco "
                          "hub, which requires a running Arco server.")
-    ap.add_argument("--setup-seconds", type=float, default=0.0,
+    ap.add_argument("--setup-seconds", type=float, default=None,
                     help="Hold the Bit in SETUP for this long before "
                          "run(), so a device can join a scored role (e.g. "
                          "TEST_PLAYER_NODE) before registration closes for "
-                         "it. Default 0 keeps the instant-run behavior.")
+                         "it. Default: the selected Bit manifest's "
+                         "launch.setup_seconds (0.0 keeps the instant-run "
+                         "behavior).")
     ap.add_argument("--exit-with-parent", type=int, default=None,
                     metavar="PID",
                     help="Exit through the normal shutdown() teardown path "
@@ -582,18 +591,41 @@ def main() -> None:
                          "default, so an existing invocation is unchanged. "
                          "Binds --host, which defaults to 127.0.0.1: the "
                          "console is unauthenticated and trusted-LAN only.")
-    ap.add_argument("--room-type", default="TEST", choices=["TEST", "DEMO"],
+    ap.add_argument("--room-type", default=None, choices=["TEST", "DEMO"],
                     help="Which RoomType to boot. DEMO configures the "
                          "simulated array backend (spec 2026-08-19); its "
                          "864 px canvas is otherwise identical in kind to "
-                         "TEST's.")
+                         "TEST's. Default: the selected Bit manifest's "
+                         "launch.default_room_type.")
     ap.add_argument("--bit", default="TestBit",
-                    choices=["TestBit", "MetronomeBit"],
-                    help="Which Bit to run. MetronomeBit is DEMO-only -- "
-                         "boot() already fails loud if the resolved "
-                         "RoomType is not in the chosen Bit's room_types, "
-                         "so pair this with --room-type DEMO.")
+                    help="Which Bit to run, by its discovered manifest name "
+                         "(bits/*/bit.toml). boot() already fails loud if "
+                         "the resolved RoomType is not in the chosen Bit's "
+                         "room_types. See --list-bits for what's available.")
+    ap.add_argument("--list-bits", action="store_true",
+                    help="Print every discovered Bit package (name, "
+                         "version, kind, room types, start condition, "
+                         "description) and any manifest errors, then exit.")
     args = ap.parse_args()
+
+    registry = BitRegistry.discover()
+
+    if args.list_bits:
+        for row in registry.list_view(include_hidden=True):
+            rooms = ",".join(row["room_types"])
+            print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"
+                 f"{rooms}\t{row['start']['when']}\t{row['description']}")
+        for err in registry.errors_view():
+            print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
+        sys.exit(0)
+
+    if args.bit not in registry.packages:
+        available = sorted(registry.packages)
+        print(f"unknown Bit {args.bit!r}; available: {available}",
+             file=sys.stderr)
+        for err in registry.errors_view():
+            print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
+        sys.exit(1)
 
     # harness/run_stack.py stops this process with SIGTERM, and the whole
     # ordered teardown below lives in a finally that a bare SIGTERM skips.
@@ -619,9 +651,26 @@ def main() -> None:
         # the agent below.
         clock = o2lite.time_get
 
-    room_type = RoomType[args.room_type]
+    # Collect ONLY explicitly-given CLI values into the overrides dict --
+    # anything left at its argparse None default falls through to the
+    # selected Bit's manifest (or, absent an override, whatever that
+    # manifest itself already defaulted to). See control/bit_config.py's
+    # merge_overrides for the shape this dict must take.
+    overrides: dict = {}
+    launch_overrides: dict = {}
+    if args.setup_seconds is not None:
+        launch_overrides["setup_seconds"] = args.setup_seconds
+    if launch_overrides:
+        overrides["launch"] = launch_overrides
+    run_duration = _run_duration(args)
+    if run_duration is not None:
+        overrides["defaults"] = {"run_duration_seconds": run_duration}
+    cfg = registry.resolve_config(args.bit, overrides or None)
+
+    room_type_name = args.room_type or cfg.launch.default_room_type
+    room_type = RoomType[room_type_name]
     config = BootConfig(
-        room_type=room_type, bit_name=args.bit,
+        room_type=room_type, bit_name=args.bit, bit_config=cfg,
         # DEMO's recipe requires an array backend (control/rooms.py);
         # "simulator" is the Terrarium-spawns-one value BootConfig already
         # defines. TEST ignores the field.
@@ -663,8 +712,7 @@ def main() -> None:
         return proc
 
     gs, server, agent, arco, teardown = build(
-        config, {"TestBit": _timed_test_bit_cls(_run_duration(args)),
-                 "MetronomeBit": MetronomeBit},
+        config, {args.bit: registry.bit_class(args.bit)},
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
         transport=transport, clock=clock,
@@ -734,15 +782,21 @@ def main() -> None:
             else:
                 print("--arco-start-audio needs --arco-pty; ignoring",
                       file=sys.stderr)
-        if args.setup_seconds > 0:
-            print(f"{markers.CONTROL_SETUP_HOLD} for {args.setup_seconds:g}s "
+        setup_seconds = cfg.launch.setup_seconds
+        if setup_seconds > 0:
+            print(f"{markers.CONTROL_SETUP_HOLD} for {setup_seconds:g}s "
                   f"-- join now", flush=True)
-        reason = _wait_in_setup(agent, args.setup_seconds,
+        reason = _wait_in_setup(agent, setup_seconds,
                                 parent_pid=args.exit_with_parent,
                                 console_agent=console_agent,
-                                arco=arco, gs=gs)
+                                arco=arco, gs=gs,
+                                condition=cfg.start, game_server=gs)
         if reason == "parent-gone":
             print("parent is gone; tearing down", file=sys.stderr)
+        elif reason == "timeout-abort":
+            print("start condition timed out without meeting players; "
+                 "aborting", file=sys.stderr)
+            gs.abort()
         else:
             if gs.state is State.SETUP:
                 gs.run()

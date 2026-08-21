@@ -4,7 +4,7 @@ import argparse
 import sys
 import time
 
-from bits.test.test_bit import RUN_DURATION_SECONDS, TestBit
+from bits.test.test_bit import TestBit
 from control.arco_process import FakePopen
 from control.audio import AudioBridge, FakePool
 from control.boot_config import BootConfig
@@ -14,8 +14,7 @@ from control.state import State
 from control.teardown import TeardownStack
 from devicelink.server import DeviceLinkServer
 from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
-                                    _run_duration, _timed_test_bit_cls, build,
-                                    main, shutdown)
+                                    _run_duration, build, main, shutdown)
 
 
 def _fake_arco(command, popen=None):
@@ -633,6 +632,54 @@ def test_wait_in_setup_ignores_a_live_parent():
     assert len(polls) >= 3
 
 
+def test_wait_in_setup_returns_players_met_when_threshold_crossed():
+    """A `players` StartCondition ends the hold the instant enough scored
+    devices have joined -- Task 8's whole reason for threading `condition`
+    and `game_server` through this loop."""
+    from control.bit_config import StartCondition
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class FakeRole:
+        scored = True
+
+    class FakeRoleTable:
+        roles = {"player": FakeRole()}
+
+    class FakeBit:
+        role_table = FakeRoleTable()
+
+    class FakeRegistration:
+        def __init__(self, count):
+            self._count = count
+
+        def counts(self):
+            return [("player", self._count, None)]
+
+    class FakeGameServer:
+        def __init__(self):
+            self.bit = FakeBit()
+            self.registration = FakeRegistration(0)
+
+    game_server = FakeGameServer()
+    ticks = iter([0.0, 0.1, 0.2])
+
+    def clock():
+        now = next(ticks)
+        if now >= 0.2:
+            game_server.registration = FakeRegistration(1)
+        return now
+
+    condition = StartCondition(when="players", min_scored=1)
+    reason = _wait_in_setup(FakeAgent(), 5.0, clock=clock,
+                            sleep=lambda _s: None, condition=condition,
+                            game_server=game_server)
+    assert reason == "players-met"
+
+
 def test_serve_until_done_stops_when_the_bit_completes():
     """The Bit declares itself finished via update(); the driver must
     notice and tear down rather than ticking an unloaded Bit forever."""
@@ -761,10 +808,12 @@ def _args(seconds=None, hold=False):
     return argparse.Namespace(seconds=seconds, hold=hold)
 
 
-def test_run_duration_default_is_test_bit_natural():
-    """No flags at all -- the demo run length must stay exactly what it
-    is today."""
-    assert _run_duration(_args()) == RUN_DURATION_SECONDS
+def test_run_duration_default_is_none():
+    """No flags at all -- main() must add no `defaults.run_duration_seconds`
+    override, leaving the selected Bit's manifest (TestBit's is 2.0, the
+    same RUN_DURATION_SECONDS this used to hardcode) or its own fallback in
+    force."""
+    assert _run_duration(_args()) is None
 
 
 def test_run_duration_seconds_overrides():
@@ -779,21 +828,6 @@ def test_run_duration_hold_beats_seconds():
     """--hold and --seconds together: --hold wins, matching
     harness/devicelink_smoke.py's _run_duration."""
     assert _run_duration(_args(seconds=5.0, hold=True)) == float("inf")
-
-
-def test_timed_test_bit_cls_carries_duration_and_exposes_room_types():
-    """This is the part most likely to break silently: control/boot.py's
-    boot() reads bit_cls.room_types off the registry entry BEFORE
-    instantiating it, and control/engine.py's GameServer.load_bit() then
-    calls bit_cls() with no arguments. Whatever gets registered must
-    satisfy both."""
-    bit_cls = _timed_test_bit_cls(12.0)
-
-    assert bit_cls.room_types == TestBit.room_types
-
-    bit = bit_cls()
-    assert isinstance(bit, TestBit)
-    assert bit._run_duration == 12.0
 
 
 def _run_main_capturing_build(monkeypatch, argv):
@@ -831,6 +865,36 @@ def test_main_forwards_bit_flag_to_boot_config(monkeypatch):
         monkeypatch, ["--bit", "MetronomeBit", "--room-type", "DEMO"])
     assert captured["config"].bit_name == "MetronomeBit"
     assert "MetronomeBit" in captured["bit_registry"]
+
+
+def test_list_bits_prints_every_discovered_package(monkeypatch, capsys):
+    """--bit is discovery-driven now (bits/*/bit.toml), not a hardcoded
+    choices= list -- --list-bits is how an operator finds out what's
+    actually installed."""
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--list-bits"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "TestBit" in out
+    assert "MetronomeBit" in out
+    assert "CaptureBit" in out
+
+
+def test_unknown_bit_exits_nonzero_naming_available_bits(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv",
+                        ["terrarium_boot.py", "--bit", "NoSuchBit"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code != 0
+    err = capsys.readouterr().err
+    assert "NoSuchBit" in err
+    assert "TestBit" in err
+    assert "MetronomeBit" in err
 
 
 def test_o2_simulator_factory_ties_the_simulator_to_this_process():
