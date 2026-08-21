@@ -266,7 +266,8 @@ class ConsoleAgent:
 
     # --- engine observer callbacks -----------------------------------------
     def on_state_change(self, old_state: State, new_state: State) -> None:
-        self.server.broadcast(protocol.state_changed_event(new_state.name))
+        self.server.broadcast(
+            protocol.state_changed_event(new_state.name, self.game_server.bit_name))
         if new_state == State.UNLOADING:
             self._broadcast_bit_completed()
 

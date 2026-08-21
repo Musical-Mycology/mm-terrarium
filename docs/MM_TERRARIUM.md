@@ -1160,7 +1160,8 @@ slice; 933 passed, 1 skipped as of the trigger slice that follows it; 1037
 passed, 1 skipped as of the N-fixture Room slice ; 1076 passed, 1 skipped
 as of the wire-JSON and Console-script-isolation slice; 1099 passed, 1
 skipped as of the operator/harness handoff slice; 1254 passed, 1 skipped
-as of the Bit packaging and launch slice.**
+as of the Bit packaging and launch slice; 1267 passed, 1 skipped as of
+the console-operator-rounds slice.**
 
 ### The Room panel and the Room's own fixtures (`control/room_profile.py`, `control/room_view.py`, `harness/room_surface.py`, `console/static/`)
 The Room stops being shaped like a Tuneshroom, and the Console becomes an
@@ -1762,6 +1763,72 @@ full run evidence):
 - `console/server.py`'s websocket endpoint is `/ws`, not the port root —
   a raw client (or a future non-browser consumer) must dial
   `ws://host:port/ws`.
+
+### Console-operator rounds: serve-mode round loop, lazy full registry, merged control bar (2026-08-21)
+Design:
+[`.../2026-08-21-console-operator-rounds-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-21-console-operator-rounds-design.md).
+Before this slice, `run_stack`/`terrarium_boot` ran exactly one Bit and
+exited when it finished — an operator working the Console could load
+whatever Bit they wanted, but only for round one; loading a second Bit
+after the first completed had nowhere to go because the process was
+already tearing down. This slice makes the stack **stay up across rounds**
+and lets discovery (not a hardcoded class map) decide what the Console can
+load.
+
+- **`BitRegistry.lazy_class_map()`.** Previously the engine's
+  `bit_registry` dict was built from a fixed, hand-maintained set of
+  imports; any newly-packaged Bit needed a code change to become
+  *loadable*, even though `--list-bits` already discovered it. This method
+  returns a `Mapping[str, type]` that resolves each entry's class from its
+  manifest's `entry = "module:Class"` lazily, on first `__getitem__` — so
+  every discovered package (`bits/*/bit.toml`) is loadable from the
+  Console with no import list to keep in sync. A broken manifest still
+  surfaces as a located error at discovery time, not as a `KeyError` at
+  load time.
+- **`terrarium_boot --serve` round loop.** `_wait_for_load` (sit in IDLE
+  until a console `load_bit` moves the engine out of it) and
+  `_serve_rounds` (load → hold-in-SETUP → run → complete → repeat, calling
+  `_wait_for_load` again for the next round) turn the single-round driver
+  into a loop that keeps the Arco/Room/device processes alive across
+  Console `load_bit`/`run`/`abort` cycles. A console-port flag now
+  **implies** `--serve` unless the caller also passes `--seconds` or
+  `--hold` (an operator who opened a Console clearly wants to drive
+  rounds from it, not have the process exit under them the instant the
+  first one ends).
+- **`run_stack --serve` forwarding.** `run_stack` forwards `--serve` to
+  `terrarium_boot` the same way; a console requested outside `--ci`
+  implies `--serve` for the identical reason. `--ci --serve` together is
+  refused — a headless CI run has no operator to drive a round loop, so
+  asking for one is almost certainly a mistake, not an unusual but valid
+  combination.
+- **Merged Console top control bar.** The Console used to show two
+  separate ideas of "which Bit is active" — a legacy status block (state
+  + a bare Load button) above the Bits panel's own cards. That block is
+  deleted; the Bits panel is now the single owner of load/run/abort, and
+  `state_changed` (`console/protocol.py`'s `state_changed_event`) carries
+  `loaded_bit` alongside `state` so the header updates on every state
+  transition — not only at connect (`snapshot`) or on a `bits_listed`
+  refresh — without a page reload.
+
+**Live-verified 2026-08-21** (headless, no browser): `run_stack
+--console-port 0 --devices 0 --room-type DEMO --setup-seconds 90`, driven
+over the console `/ws` with a small `websockets` client. Full round cycle
+exercised: `load_bit MetronomeBit` → `abort` → `load_bit TestBit` → `run`
+→ TestBit's own run completes → `load_bit MetronomeBit` again — all under
+one `run_stack`/`terrarium_boot` process pair that never restarted, then
+a clean `SIGINT` teardown (`pgrep -f "o2_shroom|terrarium_boot|
+room_simulator"` empty afterward). One correction to the plan's live-test
+assumption surfaced in the process: `--setup-seconds` on `run_stack` only
+bounds **round one**'s SETUP hold (the CLI-selected Bit); every later
+round's SETUP window comes from that round's own Bit manifest
+(`cfg.launch.setup_seconds`, read by `_serve_rounds`, not the CLI flag) —
+so TestBit's own (short) manifest window governed its round, and the
+explicit `run` command raced a state already mid-transition to `SETUP`/
+`RUNNING` on its own. This is `_serve_rounds`'s documented per-round
+config lookup working as designed, not a bug — see its docstring in
+`harness/terrarium_boot.py`. Real-browser click-through of the merged
+control bar remains for a human: see the spec's Status section for the
+exact split of what ran here versus what's still unverified.
 
 ## Boundary rules (the load-bearing invariants)
 

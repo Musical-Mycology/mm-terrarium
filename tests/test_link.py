@@ -244,7 +244,9 @@ def test_reconnect_sends_resync_snapshot():
 
     agent.maintain_connection()
 
-    assert transport.sent[0] == {"event": "state_changed", "state": "SETUP"}
+    assert transport.sent[0] == {
+        "event": "state_changed", "state": "SETUP", "loaded_bit": "test_bit",
+    }
     reg_event = transport.sent[1]
     assert reg_event["event"] == "registration_changed"
     roles = {r["role"]: r["count"] for r in reg_event["roles"]}
@@ -258,7 +260,9 @@ def test_resync_omits_registration_snapshot_when_no_bit_loaded():
 
     agent.maintain_connection()
 
-    assert transport.sent == [{"event": "state_changed", "state": "IDLE"}]
+    assert transport.sent == [
+        {"event": "state_changed", "state": "IDLE", "loaded_bit": None},
+    ]
 
 
 def test_resync_never_sends_the_room_role():

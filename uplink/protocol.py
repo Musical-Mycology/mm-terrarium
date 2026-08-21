@@ -56,8 +56,8 @@ def parse_command(msg: dict):
 # (terminal messages -- only ever produced here, never parsed back on this
 # side, so a builder function is enough; no dataclass round-trip needed.)
 
-def state_changed_event(state_name: str) -> dict:
-    return {"event": "state_changed", "state": state_name}
+def state_changed_event(state_name: str, loaded_bit: str | None = None) -> dict:
+    return {"event": "state_changed", "state": state_name, "loaded_bit": loaded_bit}
 
 
 def registration_changed_event(counts: list[tuple[str, int, int | None]]) -> dict:

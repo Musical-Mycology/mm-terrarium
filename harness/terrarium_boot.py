@@ -372,6 +372,101 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
         sleep(1.0 / 44.0)
 
 
+def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
+                   sleep=time.sleep, parent_pid: int | None = None,
+                   console_agent=None) -> str:
+    """Hold in IDLE until a console `load_bit` moves the engine out of it --
+    the between-rounds counterpart to `_wait_in_setup`'s in-SETUP hold.
+
+    Ticks agent/console/gs exactly like `_serve_until_done`'s loop body
+    (parent-gone check, arco liveness, agent.poll(), console_agent.poll(),
+    gs.tick()) so a starved Arco pty can never freeze this wait either --
+    see `_serve_until_done`'s docstring for why that drain is load-bearing.
+
+    Returns "loaded" the instant `gs.state` leaves IDLE (a console
+    `load_bit` ran) -- immediately, with no tick at all, if the engine is
+    already out of IDLE on entry (the first, CLI-selected round: main()
+    has already loaded a Bit before this is ever called). Returns
+    "parent-gone" or "arco-exited" on those conditions, same as
+    `_serve_until_done`.
+    """
+    if gs.state is not State.IDLE:
+        return "loaded"
+    while True:
+        if parent_is_gone(parent_pid):
+            return "parent-gone"
+        if arco.poll() is not None:
+            return "arco-exited"
+        agent.poll()
+        if console_agent is not None:
+            console_agent.poll()
+        gs.tick(1.0 / 44.0)
+        if gs.state is not State.IDLE:
+            return "loaded"
+        sleep(1.0 / 44.0)
+
+
+def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
+                  console_agent=None, drain_arco=None) -> str:
+    """The `--serve` round loop: load, hold, run, complete, repeat -- until
+    the parent or Arco disappears. Each iteration is one round:
+
+      1. `_wait_for_load` -- sit in IDLE until the Console loads a Bit.
+      2. Read that round's own start condition and setup window off
+         `gs.bit.config` (a console `load_bit` resolves overrides into this
+         same BitConfig shape main() reads for round 1 -- see
+         console.agent.ConsoleAgent). A Bit with no config (None) gets an
+         immediate 0-second window, same as an unconfigured manifest.
+      3. `_wait_in_setup` with that condition/window -- identical hold to
+         round 1's, including its pty-drain and operator-driven
+         state-change escape.
+      4. "timeout-abort" -- the operator (or nobody) never met the start
+         condition: `gs.abort()` and go straight to the next round rather
+         than running an unmet Bit. Otherwise `gs.run()`, but ONLY if the
+         engine is still in SETUP -- the same operator-handoff guard
+         main() applies to round 1, since the Console is a second driver
+         that can move the engine on its own during the hold.
+      5. `_serve_until_done` -- run to completion. "completed" (which
+         covers an in-round operator abort too -- both land back in IDLE)
+         loops back to step 1 for the next round.
+
+    `drain_arco`, when given, is called once per iteration of the setup
+    and run legs in addition to `arco.poll()` -- an extra pty-drain hook
+    for callers whose Arco handle needs draining separately from its
+    liveness check. Unused by the two callers `arco.poll()` already
+    covers both concerns for.
+    """
+    while True:
+        reason = _wait_for_load(gs, agent, arco, parent_pid=parent_pid,
+                                console_agent=console_agent)
+        if reason != "loaded":
+            return reason
+
+        cfg = getattr(gs.bit, "config", None)
+        cond = cfg.start if cfg else None
+        setup = cfg.launch.setup_seconds if cfg else 0.0
+
+        reason = _wait_in_setup(agent, setup, parent_pid=parent_pid,
+                                console_agent=console_agent, arco=arco,
+                                gs=gs, condition=cond, game_server=gs)
+        if reason == "parent-gone":
+            return reason
+        if reason == "timeout-abort":
+            gs.abort()
+            continue
+        if gs.state is State.SETUP:
+            gs.run()
+        # else: the operator already drove the engine from the Console
+        # during the hold -- a handoff, not an error (same guard main()
+        # applies to round 1).
+
+        reason = _serve_until_done(gs, agent, arco, parent_pid=parent_pid,
+                                   console_agent=console_agent)
+        if reason in ("parent-gone", "arco-exited"):
+            return reason
+        print("round complete; waiting for next load", flush=True)
+
+
 def _run_duration(args) -> float | None:
     """Same shape as harness/devicelink_smoke.py's _run_duration: --hold
     wins over --seconds. Unlike that sibling, a bare invocation (neither
@@ -496,10 +591,31 @@ def _register_o2lite_transport(teardown, transport) -> None:
     teardown.push("o2lite-transport", transport.stop)
 
 
-def main() -> None:
-    import argparse
+def _effective_serve(args) -> bool:
+    """`--serve` OR ("--console-port with neither --seconds nor --hold").
+    `--hold`/`--seconds` are bounded/one-shot intents -- a console with
+    neither implies rounds instead. `harness/run_stack.py --ci` never
+    passes `--serve` (its one-shot semantics are unchanged), and this
+    process itself has no --ci."""
+    return bool(args.serve or (args.console_port is not None
+                               and args.seconds is None and not args.hold))
 
-    from control.rooms import RoomType
+
+def _print_round_outcome(reason: str) -> None:
+    """The one shared tail message for however the run(-or-rounds) ended --
+    factored out so both the one-shot path and the `--serve` path (which
+    may have looped through several rounds via `_serve_rounds` before
+    landing here) print it exactly once."""
+    if reason == "arco-exited":
+        print("Arco exited; tearing down", file=sys.stderr)
+    elif reason == "parent-gone":
+        print("parent is gone; tearing down", file=sys.stderr)
+    elif reason == "completed":
+        print(markers.CONTROL_BIT_COMPLETED)
+
+
+def _build_arg_parser():
+    import argparse
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", default="127.0.0.1")
@@ -617,7 +733,24 @@ def main() -> None:
                     help="Print every discovered Bit package (name, "
                          "version, kind, room types, start condition, "
                          "description) and any manifest errors, then exit.")
+    ap.add_argument("--serve", action="store_true",
+                    help="Loop rounds: load, hold, run, complete, wait for "
+                         "the next console load_bit -- rather than tearing "
+                         "down after the first Bit completes. Off by "
+                         "default, but implied by --console-port when "
+                         "neither --seconds nor --hold is given -- a "
+                         "console with no bounded/one-shot intent implies "
+                         "rounds. harness/run_stack.py --ci never passes "
+                         "this flag.")
+    return ap
+
+
+def main() -> None:
+    from control.rooms import RoomType
+
+    ap = _build_arg_parser()
     args = ap.parse_args()
+    effective_serve = _effective_serve(args)
 
     registry = BitRegistry.discover()
 
@@ -736,7 +869,7 @@ def main() -> None:
         return proc
 
     gs, server, agent, arco, teardown = build(
-        config, {bit: registry.bit_class(bit)},
+        config, registry.lazy_class_map(),
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
         transport=transport, clock=clock,
@@ -823,6 +956,10 @@ def main() -> None:
             print("start condition timed out without meeting players; "
                  "aborting", file=sys.stderr)
             gs.abort()
+            if effective_serve:
+                _print_round_outcome(_serve_rounds(
+                    gs, agent, arco, parent_pid=args.exit_with_parent,
+                    console_agent=console_agent))
         else:
             if gs.state is State.SETUP:
                 gs.run()
@@ -835,12 +972,12 @@ def main() -> None:
             reason = _serve_until_done(gs, agent, arco,
                                        parent_pid=args.exit_with_parent,
                                        console_agent=console_agent)
-            if reason == "arco-exited":
-                print("Arco exited; tearing down", file=sys.stderr)
-            elif reason == "parent-gone":
-                print("parent is gone; tearing down", file=sys.stderr)
-            else:
-                print(markers.CONTROL_BIT_COMPLETED)
+            if effective_serve and reason == "completed":
+                print("round complete; waiting for next load", flush=True)
+                reason = _serve_rounds(gs, agent, arco,
+                                       parent_pid=args.exit_with_parent,
+                                       console_agent=console_agent)
+            _print_round_outcome(reason)
     except KeyboardInterrupt:
         pass
     finally:

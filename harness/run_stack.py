@@ -90,6 +90,7 @@ class StackConfig:
     node: str | None = None
     open_urls: bool = False           # open each BROWSE_URL in the browser
     profile: str | None = None        # forwarded to terrarium_boot verbatim
+    serve: bool = False               # forward --serve to terrarium_boot
 
 
 @dataclass
@@ -131,6 +132,14 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
         # config_from_args) only needs the profile to derive ITS launch
         # defaults (devices, node, ...), not to run the Bit.
         command += ["--profile", cfg.profile]
+    if cfg.serve:
+        # terrarium_boot's own effective-serve rule (args.serve or
+        # (console_port set and seconds is None and not hold)) would NOT
+        # fire here on console_port alone: run_stack always passes
+        # --setup-seconds (never --seconds) and --hold, so forwarding
+        # --serve explicitly is what actually makes serve mode happen --
+        # and it keeps intent visible in the child's own argv either way.
+        command += ["--serve"]
     return command
 
 
@@ -487,6 +496,11 @@ def parse_args(argv=None):
                     help="Print every discovered Bit package (name, "
                          "version, kind, room types, start condition, "
                          "description) and any manifest errors, then exit.")
+    ap.add_argument("--serve", action="store_true",
+                    help="Forward --serve to terrarium_boot: hold until "
+                         "Ctrl-C or a child exit instead of a fixed "
+                         "duration. Implied when a console is requested "
+                         "outside --ci. Refused under --ci.")
     ap.add_argument("--node", default=None,
                     help="Which node spawned devices join. Default: "
                          "derived from the selected Bit's manifest "
@@ -498,6 +512,10 @@ def parse_args(argv=None):
     if args.ci and args.open:
         ap.error("--open makes no sense under --ci: a headless CI run "
                  "has no browser to open tabs in.")
+    if args.ci and args.serve:
+        ap.error("--serve makes no sense under --ci: a headless CI run "
+                 "needs a bounded hold, not one that runs until Ctrl-C or "
+                 "a child exit.")
     return args
 
 
@@ -553,13 +571,21 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         # Port 0: ConsoleServer binds an ephemeral port and terrarium_boot
         # prints the real URL, so the implied Console can never collide.
         console_port = 0
+    # A console requested outside --ci implies --serve: an operator who
+    # asked for a console has nowhere else to watch the run from, so the
+    # hold should run until they say stop, not until a fixed duration
+    # elapses underneath them. --ci is refused together with --serve at
+    # parse time above, so `not args.ci` here is just documenting that
+    # invariant, not re-deriving it.
+    serve = args.serve or (console_port is not None and not args.ci)
     return StackConfig(
         log_dir=log_dir, arco_command=args.arco_command,
         devices=devices, ensemble=args.ensemble,
         setup_seconds=args.setup_seconds, seconds=seconds,
         horizon=args.horizon, echo=not args.ci,
         console_port=console_port, room_type=room_type,
-        bit=bit, node=node, open_urls=args.open, profile=args.profile)
+        bit=bit, node=node, open_urls=args.open, profile=args.profile,
+        serve=serve)
 
 
 def _failing_log_key(result: RunResult) -> str | None:

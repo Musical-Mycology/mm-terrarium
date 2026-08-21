@@ -9,24 +9,19 @@
 <body>
 <h1>Terrarium Console <span id="conn" class="conn-down">(connecting…)</span></h1>
 
-<p>State: <span id="state">—</span> &nbsp; Loaded Bit: <span id="loaded">—</span></p>
-
-<h2>Controls</h2>
-<div>
-  <select id="bitPicker"></select>
-  <button id="loadBtn">Load Bit</button>
+<h2>Bits</h2>
+<div id="bitsHeader">
+  <p>Loaded Bit: <span id="loaded">—</span> &nbsp; State: <span id="state">—</span></p>
   <button id="runBtn">Run</button>
   <button id="abortBtn">Abort</button>
 </div>
+<div id="bits"></div>
 
 <h2>Room</h2>
 <div id="room"></div>
 
 <h2>Triggers</h2>
 <div id="triggers"></div>
-
-<h2>Bits</h2>
-<div id="bits"></div>
 
 <h2>Registration</h2>
 <table id="registration"><thead><tr><th>Role</th><th>Count</th><th>Capacity</th></tr></thead><tbody></tbody></table>
