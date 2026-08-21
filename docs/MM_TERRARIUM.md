@@ -1071,7 +1071,13 @@ prevented the ordering from disagreeing with itself again, and it had.
   `--ci` mode bounds the run with `--seconds` (default 45s) and turns off
   echo; either mode exits non-zero on any unmet marker **or on a child that
   exits during the hold**, and a failure prints the stage that failed, the
-  process, its log path, and the log's tail.
+  process, its log path, and the log's tail. One deliberate exception
+  (2026-08-21): a `control` child that exits **zero** after emitting
+  `CONTROL_BIT_COMPLETED` ("Bit completed; tearing down") is a
+  self-completing Bit ending the run on its own -- MetronomeBit does this,
+  TestBit under `--hold` never does -- and the run exits 0 with stage
+  `bit-completed`; a markerless or nonzero exit keeps the `child-exited`
+  failure diagnosis.
 
   **`--open` (2026-08-20) makes it the one-command simulator test
   environment.** Every browser-facing surface -- the Terrarium Console,

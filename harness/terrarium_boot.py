@@ -760,7 +760,7 @@ def main() -> None:
             elif reason == "parent-gone":
                 print("parent is gone; tearing down", file=sys.stderr)
             else:
-                print("Bit completed; tearing down")
+                print(markers.CONTROL_BIT_COMPLETED)
     except KeyboardInterrupt:
         pass
     finally:
