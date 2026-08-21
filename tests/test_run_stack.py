@@ -951,3 +951,21 @@ def test_one_shot_mode_still_fails_on_a_clean_device_exit(tmp_path):
                  {"control": _Proc(None), "ie1": _Proc(0)},
                  clock=lambda: next(ticks), sleep=lambda _s: None)
     assert dead == ("ie1", 0)
+
+
+def test_flutter_sim_is_spawned_after_control_with_serve_args(tmp_path):
+    popen = ScriptedPopen(
+        [_CONTROL_OK,
+         f"{markers.BROWSE_URL} http://127.0.0.1:8780/?dev=ie1\n"])
+    cfg = _cfg(tmp_path, devices=0, flutter_sim="/repo/tuneshroom", flutter_devices=1)
+    result = run(cfg, popen=popen, sleep=lambda _s: None)
+    assert result.ok, result.detail
+    assert popen.commands[1] == ["/repo/tuneshroom/tool/sim", "serve", "--devices", "1",
+                                 "--link", "ws://127.0.0.1:8771/ws", "--no-open"]
+    assert "http://127.0.0.1:8780/?dev=ie1" in result.urls
+
+
+def test_no_flutter_flags_spawns_nothing_extra(tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK])
+    run(_cfg(tmp_path, devices=0), popen=popen, sleep=lambda _s: None)
+    assert len(popen.commands) == 1
