@@ -1,7 +1,7 @@
 # Console operator rounds — design
 
 **Date:** 2026-08-21
-**Status:** Draft
+**Status:** Implemented
 **Depends on:** Bit packaging and launch slice (same branch, PR #46).
 **Origin:** First interactive UAT of the Bits panel found three defects:
 after a console abort no Bit can be loaded; the Bits panel duplicates the
@@ -64,3 +64,47 @@ do not work at all.
 - Live (Mycological): run_stack with console; from the panel: load
   MetronomeBit → abort → load TestBit → run → complete → load again; stack
   stays up throughout; Ctrl-C tears down clean.
+
+## Status (2026-08-21, Task 5)
+
+All four implementation tasks landed (`lazy_class_map()`, the `--serve`
+round loop, `run_stack --serve` forwarding, the merged control bar) and
+the full suite is green: 1267 passed, 1 skipped.
+
+**Live-verified, with evidence:**
+- Started `.venv/bin/python -m harness.run_stack --console-port 0
+  --devices 0 --room-type DEMO --setup-seconds 90` on this box (Arco
+  spawned by `run_stack` itself, run dir `runs/20260821-123104/`).
+  `--room-type DEMO` was needed because MetronomeBit is DEMO-only and the
+  stack's CLI default room type is TEST — matches the brief's documented
+  caveat, not a workaround.
+- Drove the full round cycle over the console `/ws` with a small
+  `websockets` client (headless, no browser): initial snapshot showed
+  `state: SETUP, loaded_bit: TestBit`; sent `abort` → `IDLE`; sent
+  `load_bit MetronomeBit` → `state_changed` with `loaded_bit:
+  "MetronomeBit"`; sent `abort` → `IDLE`; sent `load_bit TestBit` →
+  loaded, `SETUP`; TestBit's own manifest-driven SETUP window is short
+  enough that it moved into `RUNNING` before the explicit `run` command
+  landed (a genuine race against `_serve_rounds`'s per-round hold, not a
+  bug — see the harness doc's write-up); the round then completed
+  (`RUNNING` → `COMPLETING` → `UNLOADING` → `IDLE`) with `bit_completed`
+  observed; sent `load_bit MetronomeBit` again → loaded successfully.
+  Both `run_stack` and `terrarium_boot` processes stayed alive
+  (confirmed via `ps`) across every step — the stack never restarted.
+- Sent `SIGINT` to `run_stack` afterward: clean exit, `pgrep -f
+  "o2_shroom|terrarium_boot|room_simulator"` returned empty (exit 1) —
+  zero orphaned processes.
+- Full event transcript, driver script, and process logs are recorded in
+  `.superpowers/sdd/2026-08-21-console-operator-rounds/task-5-report.md`.
+
+**Not live-verified (remaining for the user):**
+- Real-browser click-through of the merged Console control bar (clicking
+  Load/Run/Abort in an actual browser tab, watching the header update
+  live). Only the underlying `/ws` protocol was exercised headlessly here.
+- Confirming every discovered Bit's Load works from the browser UI
+  specifically (CaptureBit was listed by `bits_listed` but not
+  load-tested in this pass — it requires a phone-side capture client to
+  do anything interesting once loaded).
+- Interactive verification that an operator can drive rounds indefinitely
+  over a long session (this run exercised exactly the round sequence in
+  the brief, not an extended soak).
