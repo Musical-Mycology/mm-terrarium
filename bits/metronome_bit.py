@@ -247,8 +247,19 @@ class MetronomeBit(Bit):
     def on_unload(self) -> None:
         pass
 
+    def result(self) -> dict:
+        return {"phrases": self.CYCLES, "successes": dict(self._successes)}
+
     def status(self) -> dict:
-        return {}
+        cycle = self._judged_cycles if self._judged_cycles < self.CYCLES else self.CYCLES - 1
+        return {
+            "turn": self._turn_dev(cycle),
+            "cycle": cycle,
+            "judged_cycles": self._judged_cycles,
+            "elapsed": round(self._elapsed, 3),
+            "done": self._done,
+            "tap_errors_ms": list(self._tap_errors_ms[-8:]),
+        }
 
     def verb_handlers(self) -> dict:
         return {"tap": self._on_tap}
@@ -370,4 +381,15 @@ class MetronomeBit(Bit):
                     out.append(FireTrigger("fail_player", dev))
                     out.append(FireTrigger("fail_room"))
             self._judged_cycles += 1
+            if self._judged_cycles == self.CYCLES:
+                if sum(self._successes.values()) >= 1:
+                    if self._finale_end is None:
+                        out.append(FireTrigger("finale"))
+                        self._finale_end = at + self.FINALE_S
+                else:
+                    self._done = True
+
+        if self._finale_end is not None and at >= self._finale_end:
+            self._done = True
+
         return out
