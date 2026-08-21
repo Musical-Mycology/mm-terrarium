@@ -58,7 +58,10 @@ def test_parse_unknown_command_raises():
 
 def test_state_changed_event_shape():
     assert state_changed_event("RUNNING") == {
-        "event": "state_changed", "state": "RUNNING",
+        "event": "state_changed", "state": "RUNNING", "loaded_bit": None,
+    }
+    assert state_changed_event("RUNNING", "metronome_bit") == {
+        "event": "state_changed", "state": "RUNNING", "loaded_bit": "metronome_bit",
     }
 
 

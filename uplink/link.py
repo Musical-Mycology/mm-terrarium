@@ -50,7 +50,8 @@ class UplinkAgent:
         self._send_resync()
 
     def _send_resync(self) -> None:
-        self._send(protocol.state_changed_event(self.game_server.state.name))
+        self._send(protocol.state_changed_event(
+            self.game_server.state.name, self.game_server.bit_name))
         if self.game_server.registration is not None:
             counts = non_room_counts(self.game_server.registration)
             self._send(protocol.registration_changed_event(counts))
@@ -103,7 +104,8 @@ class UplinkAgent:
             self._send(protocol.error_event(command_name, str(exc)))
 
     def on_state_change(self, old_state: State, new_state: State) -> None:
-        self._send(protocol.state_changed_event(new_state.name))
+        self._send(protocol.state_changed_event(
+            new_state.name, self.game_server.bit_name))
         if new_state == State.UNLOADING:
             self._send_bit_completed()
 

@@ -313,17 +313,25 @@ scenario("a state_changed event updates the header text but preserves bit-card i
   const first = list.children[0];
   const childrenBefore = list.children.length;
 
-  handle({ event: "state_changed", state: "RUNNING" });
+  handle({ event: "state_changed", state: "RUNNING", loaded_bit: "metronome_bit" });
 
   assert(document.getElementById("state").textContent === "RUNNING",
     "state_changed should update the state header text, got " +
     document.getElementById("state").textContent);
+  assert(document.getElementById("loaded").textContent === "metronome_bit",
+    "state_changed should update the loaded-bit header text, got " +
+    document.getElementById("loaded").textContent);
   assert(document.getElementById("bitCards") === list,
     "state_changed must not replace the bits card list node");
   assert(list.children.length === childrenBefore,
     "state_changed must not rebuild the bits cards");
   assert(list.children[0] === first,
     "state_changed must not rebuild individual bit cards");
+
+  handle({ event: "state_changed", state: "IDLE", loaded_bit: null });
+  assert(document.getElementById("loaded").textContent === "—",
+    "state_changed with loaded_bit=null should fall back to the placeholder, got " +
+    document.getElementById("loaded").textContent);
 `);
 
 scenario("Run and Abort send the run/abort commands", `

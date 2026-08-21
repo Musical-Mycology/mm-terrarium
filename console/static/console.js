@@ -155,6 +155,7 @@ function handle(msg) {
     case "bits_listed": renderBits(msg.bits, msg.errors); break;
     case "state_changed":
       $("state").textContent = msg.state;
+      $("loaded").textContent = msg.loaded_bit ?? "—";
       log("info", "state → " + msg.state);
       break;
     case "registration_changed": renderRegistration(msg.roles); break;
