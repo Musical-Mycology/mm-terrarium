@@ -804,6 +804,240 @@ def test_serve_until_done_lets_closing_devices_finish_their_fade():
     assert agent.polls >= 4
 
 
+class _FakeLaunch:
+    def __init__(self, setup_seconds):
+        self.setup_seconds = setup_seconds
+
+
+class _FakeBitConfig:
+    def __init__(self, setup_seconds, start=None):
+        self.launch = _FakeLaunch(setup_seconds)
+        self.start = start
+
+
+class _FakeBit:
+    def __init__(self, config, role_table=None):
+        self.config = config
+        self.role_table = role_table
+
+
+class _FakeArco:
+    def poll(self):
+        return None
+
+
+class _FakeAgent:
+    closing = 0
+
+    def poll(self):
+        pass
+
+
+class _FakeConsoleAgent:
+    """Fires the next scripted (state, action) pair the first time gs is
+    found in that state -- a "console load/abort happens now" stand-in,
+    gated on engine state so it never fires early (e.g. mid-round)."""
+
+    def __init__(self, gs, script):
+        self._gs = gs
+        self._script = list(script)
+
+    def poll(self):
+        if not self._script:
+            return
+        required_state, action = self._script[0]
+        if self._gs.state is required_state:
+            self._script.pop(0)
+            action()
+
+
+def test_serve_rounds_cycles_idle_load_run_idle(monkeypatch):
+    """Round 1: IDLE -> (console load) SETUP -> RUNNING -> IDLE. Round 2:
+    IDLE -> (console load) SETUP -> operator abort -> IDLE -> parent-gone.
+    The second round's operator abort happens DURING the hold, so it never
+    reaches run() -- run_calls stays at 1."""
+    from harness.terrarium_boot import _serve_rounds
+
+    class FakeGS:
+        def __init__(self):
+            self.state = State.IDLE
+            self.bit = None
+            self.run_calls = 0
+            self._tick_count = 0
+
+        def tick(self, dt):
+            self._tick_count += 1
+            if self.state is State.RUNNING and self._tick_count >= 2:
+                self.state = State.IDLE
+
+        def run(self):
+            self.run_calls += 1
+            self.state = State.RUNNING
+            self._tick_count = 0
+
+        def abort(self):
+            self.state = State.IDLE
+
+    gs = FakeGS()
+
+    def load_round1():
+        gs.bit = _FakeBit(_FakeBitConfig(0.0))
+
+        gs.state = State.SETUP
+
+    def load_round2():
+        gs.bit = _FakeBit(_FakeBitConfig(5.0))
+        gs.state = State.SETUP
+
+    aborted = {"since": 0, "fired": False}
+
+    def abort_round2():
+        gs.abort()
+        aborted["fired"] = True
+
+    console_agent = _FakeConsoleAgent(gs, [
+        (State.IDLE, load_round1),
+        (State.IDLE, load_round2),
+        (State.SETUP, abort_round2),
+    ])
+
+    def fake_parent_is_gone(pid):
+        if not aborted["fired"]:
+            return False
+        aborted["since"] += 1
+        return aborted["since"] > 1
+
+    monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
+                        fake_parent_is_gone)
+
+    reason = _serve_rounds(gs, _FakeAgent(), _FakeArco(),
+                           console_agent=console_agent)
+
+    assert reason == "parent-gone"
+    assert gs.run_calls == 1
+
+
+def test_serve_rounds_honors_players_condition_per_round(monkeypatch):
+    """Round 2's Bit config asks for a `players` start condition -- the
+    round must start via "players-met" the instant enough scored devices
+    join, not by falling through to a timeout."""
+    from control.bit_config import StartCondition
+    from harness.terrarium_boot import _serve_rounds
+
+    class FakeRole:
+        scored = True
+
+    class FakeRoleTable:
+        roles = {"player": FakeRole()}
+
+    class FakeRegistration:
+        def __init__(self):
+            self.count = 0
+
+        def counts(self):
+            return [("player", self.count, None)]
+
+    class FakeGS:
+        def __init__(self):
+            self.state = State.IDLE
+            self.bit = None
+            self.registration = FakeRegistration()
+            self.run_calls = 0
+            self._tick_count = 0
+
+        def tick(self, dt):
+            self._tick_count += 1
+            if self.state is State.RUNNING and self._tick_count >= 2:
+                self.state = State.IDLE
+
+        def run(self):
+            self.run_calls += 1
+            self.state = State.RUNNING
+            self._tick_count = 0
+
+        def abort(self):
+            self.state = State.IDLE
+
+    gs = FakeGS()
+
+    def load_round1():
+        condition = StartCondition(when="players", min_scored=1)
+        gs.bit = _FakeBit(_FakeBitConfig(5.0, start=condition),
+                          role_table=FakeRoleTable())
+        gs.state = State.SETUP
+
+    def player_joins():
+        gs.registration.count = 1
+
+    completed = {"count": 0}
+
+    def fake_parent_is_gone(pid):
+        # Only relevant after round 1 has completed once -- ends the test
+        # by refusing round 2's load.
+        if gs.state is State.IDLE and completed["count"] > 0:
+            return True
+        if gs.state is State.IDLE:
+            completed["count"] += 1
+        return False
+
+    console_agent = _FakeConsoleAgent(gs, [
+        (State.IDLE, load_round1),
+        (State.SETUP, player_joins),
+    ])
+
+    monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
+                        fake_parent_is_gone)
+
+    reason = _serve_rounds(gs, _FakeAgent(), _FakeArco(),
+                           console_agent=console_agent)
+
+    assert reason == "parent-gone"
+    assert gs.run_calls == 1
+
+
+def test_wait_for_load_returns_loaded_immediately_when_not_idle():
+    """The first, CLI-selected round: main() has already loaded a Bit
+    before this is ever called, so there is nothing to wait for."""
+    from harness.terrarium_boot import _wait_for_load
+
+    class FakeGS:
+        state = State.SETUP
+
+        def tick(self, dt):
+            raise AssertionError("must not tick when already loaded")
+
+    class FakeAgent:
+        def poll(self):
+            raise AssertionError("must not poll when already loaded")
+
+    reason = _wait_for_load(FakeGS(), FakeAgent(), _FakeArco())
+    assert reason == "loaded"
+
+
+def test_console_port_implies_serve_and_seconds_suppresses_it():
+    """--console-port with neither --seconds nor --hold implies rounds;
+    either bounded/one-shot flag suppresses that implication. --serve
+    itself always wins regardless of the other two."""
+    from harness.terrarium_boot import _build_arg_parser, _effective_serve
+
+    ap = _build_arg_parser()
+
+    args = ap.parse_args(["--console-port", "0"])
+    assert _effective_serve(args) is True
+
+    args = ap.parse_args(["--console-port", "0", "--seconds", "5"])
+    assert _effective_serve(args) is False
+
+    args = ap.parse_args(["--console-port", "0", "--hold"])
+    assert _effective_serve(args) is False
+
+    args = ap.parse_args([])
+    assert _effective_serve(args) is False
+
+    args = ap.parse_args(["--serve"])
+    assert _effective_serve(args) is True
+
+
 def _args(seconds=None, hold=False):
     return argparse.Namespace(seconds=seconds, hold=hold)
 
