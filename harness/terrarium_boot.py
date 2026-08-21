@@ -23,6 +23,7 @@ from control.bit_registry import BitRegistry
 from control.boot import boot as _boot
 from control.boot_config import BootConfig
 from control.room_binding import RoomBindingRegistry
+from control.run_profile import RunProfile, deep_merge_overrides, parse_profile
 from control.simulator_process import SimulatorProcess
 from control.start_condition import scored_count, start_decision
 from control.state import State
@@ -597,11 +598,21 @@ def main() -> None:
                          "864 px canvas is otherwise identical in kind to "
                          "TEST's. Default: the selected Bit manifest's "
                          "launch.default_room_type.")
-    ap.add_argument("--bit", default="TestBit",
+    ap.add_argument("--bit", default=None,
                     help="Which Bit to run, by its discovered manifest name "
                          "(bits/*/bit.toml). boot() already fails loud if "
                          "the resolved RoomType is not in the chosen Bit's "
-                         "room_types. See --list-bits for what's available.")
+                         "room_types. See --list-bits for what's available. "
+                         "Default: the --profile's own [run].bit, else "
+                         "TestBit.")
+    ap.add_argument("--profile", default=None, metavar="PATH",
+                    help="A venue TOML (see profiles/dev-metronome.toml) "
+                         "supplying launch defaults -- bit, room_type, "
+                         "devices, console_port, seconds -- and a "
+                         "[bit.overrides] table merged under this "
+                         "process's own CLI-derived overrides (setup_seconds, "
+                         "run duration). Precedence is manifest < profile < "
+                         "explicit CLI flags.")
     ap.add_argument("--list-bits", action="store_true",
                     help="Print every discovered Bit package (name, "
                          "version, kind, room types, start condition, "
@@ -619,9 +630,19 @@ def main() -> None:
             print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
         sys.exit(0)
 
-    if args.bit not in registry.packages:
+    profile = RunProfile()
+    if args.profile is not None:
+        with open(args.profile, encoding="utf-8") as handle:
+            profile = parse_profile(handle.read(), source=args.profile)
+
+    # manifest < profile < explicit CLI, applied once here -- the same
+    # precedence harness/run_stack.py's config_from_args applies for its
+    # own launcher fields.
+    bit = args.bit or profile.bit or "TestBit"
+
+    if bit not in registry.packages:
         available = sorted(registry.packages)
-        print(f"unknown Bit {args.bit!r}; available: {available}",
+        print(f"unknown Bit {bit!r}; available: {available}",
              file=sys.stderr)
         for err in registry.errors_view():
             print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
@@ -663,14 +684,17 @@ def main() -> None:
     if launch_overrides:
         overrides["launch"] = launch_overrides
     run_duration = _run_duration(args)
+    if run_duration is None:
+        run_duration = profile.seconds
     if run_duration is not None:
         overrides["defaults"] = {"run_duration_seconds": run_duration}
-    cfg = registry.resolve_config(args.bit, overrides or None)
+    overrides = deep_merge_overrides(profile.overrides, overrides)
+    cfg = registry.resolve_config(bit, overrides or None)
 
-    room_type_name = args.room_type or cfg.launch.default_room_type
+    room_type_name = args.room_type or profile.room_type or cfg.launch.default_room_type
     room_type = RoomType[room_type_name]
     config = BootConfig(
-        room_type=room_type, bit_name=args.bit, bit_config=cfg,
+        room_type=room_type, bit_name=bit, bit_config=cfg,
         # DEMO's recipe requires an array backend (control/rooms.py);
         # "simulator" is the Terrarium-spawns-one value BootConfig already
         # defines. TEST ignores the field.
@@ -712,7 +736,7 @@ def main() -> None:
         return proc
 
     gs, server, agent, arco, teardown = build(
-        config, {args.bit: registry.bit_class(args.bit)},
+        config, {bit: registry.bit_class(bit)},
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
         transport=transport, clock=clock,
@@ -738,13 +762,15 @@ def main() -> None:
     # .start() binding a busy port is a real failure mode too, and it must
     # unwind through the same shutdown(teardown) path rather than leaking
     # Arco and the simulator that build() already spawned.
+    console_port = (args.console_port if args.console_port is not None
+                    else profile.console_port)
     try:
         console_agent = None
-        if args.console_port is not None:
+        if console_port is not None:
             from console.agent import ConsoleAgent
             from console.server import ConsoleServer
             console_server = ConsoleServer(host=args.host,
-                                           port=args.console_port)
+                                           port=console_port)
             console_server.start()
             # Registered AFTER build(), so it is torn down FIRST. That is
             # correct here rather than an oversight: the console is a

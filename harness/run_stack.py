@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 
 from control.bit_registry import BitRegistry
 from control.process import stop_process
+from control.run_profile import RunProfile, parse_profile
 from control.teardown import TeardownStack
 from harness import markers
 from harness.proc_tee import ProcTee
@@ -88,6 +89,7 @@ class StackConfig:
     bit: str = "TestBit"
     node: str | None = None
     open_urls: bool = False           # open each BROWSE_URL in the browser
+    profile: str | None = None        # forwarded to terrarium_boot verbatim
 
 
 @dataclass
@@ -122,6 +124,13 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
         command += ["--console-port", str(cfg.console_port)]
     command += ["--room-type", cfg.room_type]
     command += ["--bit", cfg.bit]
+    if cfg.profile is not None:
+        # terrarium_boot re-parses the same file and applies the same
+        # manifest < profile < CLI precedence for its own process's
+        # BitConfig -- run_stack's own resolve_config call above (in
+        # config_from_args) only needs the profile to derive ITS launch
+        # defaults (devices, node, ...), not to run the Bit.
+        command += ["--profile", cfg.profile]
     return command
 
 
@@ -453,10 +462,18 @@ def parse_args(argv=None):
                          "864 px canvas is otherwise identical in kind to "
                          "TEST's. Default: the selected Bit manifest's "
                          "launch.default_room_type.")
-    ap.add_argument("--bit", default="TestBit",
+    ap.add_argument("--bit", default=None,
                     help="Which Bit to run, by its discovered manifest name "
                          "(bits/*/bit.toml). See --list-bits for what's "
-                         "available.")
+                         "available. Default: the --profile's own "
+                         "[run].bit, else TestBit.")
+    ap.add_argument("--profile", default=None, metavar="PATH",
+                    help="A venue TOML (see profiles/dev-metronome.toml) "
+                         "supplying launch defaults -- bit, room_type, "
+                         "devices, console_port, seconds -- and a "
+                         "[bit.overrides] table forwarded verbatim to "
+                         "terrarium_boot. Precedence is manifest < profile "
+                         "< explicit CLI flags.")
     ap.add_argument("--list-bits", action="store_true",
                     help="Print every discovered Bit package (name, "
                          "version, kind, room types, start condition, "
@@ -477,27 +494,36 @@ def parse_args(argv=None):
 
 def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
     registry = registry if registry is not None else BitRegistry.discover()
-    if args.bit not in registry.packages:
+
+    profile = RunProfile()
+    if args.profile is not None:
+        with open(args.profile, encoding="utf-8") as handle:
+            profile = parse_profile(handle.read(), source=args.profile)
+
+    # manifest < profile < explicit CLI, applied once here.
+    bit = args.bit or profile.bit or "TestBit"
+    if bit not in registry.packages:
         available = sorted(registry.packages)
-        print(f"unknown Bit {args.bit!r}; available: {available}",
+        print(f"unknown Bit {bit!r}; available: {available}",
              file=sys.stderr)
         raise SystemExit(1)
-    bit_cfg = registry.resolve_config(args.bit)
+    bit_cfg = registry.resolve_config(bit, profile.overrides or None)
 
     node = args.node or bit_cfg.join_node()
     if node is None:
-        print(f"Bit {args.bit!r} defines no launch.nodes and no --node "
+        print(f"Bit {bit!r} defines no launch.nodes and no --node "
               f"was given -- a spawned device would have nothing to "
               f"join.", file=sys.stderr)
         raise SystemExit(1)
 
     devices = (args.devices if args.devices is not None
+               else profile.devices if profile.devices is not None
                else bit_cfg.launch.default_devices)
-    room_type = args.room_type or bit_cfg.launch.default_room_type
+    room_type = args.room_type or profile.room_type or bit_cfg.launch.default_room_type
 
     log_dir = args.log_dir or os.path.join(
         "runs", time.strftime("%Y%m%d-%H%M%S"))
-    seconds = args.seconds
+    seconds = args.seconds if args.seconds is not None else profile.seconds
     if seconds is None and args.ci:
         # An unbounded CI run is a hung job. The bound is the setup window
         # that actually governs the hold -- max(manifest setup_seconds,
@@ -512,7 +538,8 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         seconds = (max(bit_cfg.launch.setup_seconds, args.setup_seconds)
                   + (bit_cfg.launch.expected_run_seconds or CI_DEFAULT_SECONDS)
                   + 15.0)
-    console_port = args.console_port
+    console_port = (args.console_port if args.console_port is not None
+                    else profile.console_port)
     if args.open and console_port is None:
         # Port 0: ConsoleServer binds an ephemeral port and terrarium_boot
         # prints the real URL, so the implied Console can never collide.
@@ -523,7 +550,7 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         setup_seconds=args.setup_seconds, seconds=seconds,
         horizon=args.horizon, echo=not args.ci,
         console_port=console_port, room_type=room_type,
-        bit=args.bit, node=node, open_urls=args.open)
+        bit=bit, node=node, open_urls=args.open, profile=args.profile)
 
 
 def _failing_log_key(result: RunResult) -> str | None:
