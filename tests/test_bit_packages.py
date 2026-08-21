@@ -20,3 +20,4 @@ def test_metronome_package_rhythm_block_reaches_instance():
     assert abs(fast.BEAT_S - 0.5) < 1e-9
     default = cls()
     assert abs(default.BEAT_S - 0.6) < 1e-9
+    assert abs(fast.LEAD_IN_S - 0.5) < 1e-9

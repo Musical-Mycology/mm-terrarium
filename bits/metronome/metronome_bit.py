@@ -100,6 +100,7 @@ class MetronomeBit(Bit):
         if config and config.rhythm:
             r = config.rhythm
             self.BEAT_S = 60.0 / r.bpm
+            self.LEAD_IN_S = self.BEAT_S
             self.BEATS_PER_CYCLE = r.beats_per_cycle
             self.CYCLES = r.cycles
             self.TOLERANCE_S = r.grading_window_ms / 1000.0
