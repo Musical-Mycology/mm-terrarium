@@ -705,7 +705,7 @@ def main() -> None:
                                          room_bridge=agent.room_bridge,
                                          clock=clock)
             agent._on_room_frame = console_agent.on_room_frame
-            print(f"Terrarium Console: "
+            print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
         if transport is not None:
             transport.start(o2lite)            # raises if the clock is unsynced

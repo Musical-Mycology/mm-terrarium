@@ -42,9 +42,11 @@ that the failure is BOUNDED and NAMED rather than a hang.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
+import webbrowser
 from dataclasses import dataclass, field
 
 from control.process import stop_process
@@ -79,6 +81,7 @@ class StackConfig:
     arco_ready_timeout: float = 60.0
     console_port: int | None = None   # None = no Terrarium Console
     room_type: str = "TEST"
+    open_urls: bool = False           # open each BROWSE_URL in the browser
 
 
 @dataclass
@@ -87,6 +90,7 @@ class RunResult:
     stage: str
     detail: str
     logs: dict = field(default_factory=dict)
+    urls: list = field(default_factory=list)
 
 
 def control_command(cfg: StackConfig, ppid: int) -> list[str]:
@@ -128,8 +132,12 @@ def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
     ]
 
 
+_URL_PATTERN = re.compile(r"http://\S+")
+
+
 def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
-        sleep=time.sleep, getpid=os.getpid) -> RunResult:
+        sleep=time.sleep, getpid=os.getpid,
+        opener=webbrowser.open) -> RunResult:
     """Bring the stack up, hold it, and tear it down in order.
 
     Every process is registered on the TeardownStack at the moment it is
@@ -142,6 +150,24 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
     tees: dict[str, ProcTee] = {}
     processes: dict[str, object] = {}
     logs = {}
+    urls: list[str] = []
+
+    def collect_url(line: str) -> None:
+        """Record (and under --open, open) a child's BROWSE_URL line.
+
+        Runs on the child's tee thread. A marker line whose URL cannot be
+        parsed degrades to a missing tab, never a crashed stack -- a
+        future emit site that garbles its URL is a cosmetic bug, not a
+        run-ending one.
+        """
+        if markers.BROWSE_URL not in line:
+            return
+        match = _URL_PATTERN.search(line)
+        if match is None:
+            return
+        urls.append(match.group())
+        if cfg.open_urls:
+            opener(match.group())
 
     def spawn(name: str, command: list[str], watch) -> ProcTee:
         process = popen(command, stdout=subprocess.PIPE,
@@ -152,7 +178,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         log_path = os.path.join(cfg.log_dir, f"{name}.log")
         logs[name] = log_path
         tee = ProcTee(name, process.stdout, log_path, markers=watch,
-                      echo=cfg.echo)
+                      echo=cfg.echo, on_line=collect_url)
         tee.start()
         tees[name] = tee
         return tee
@@ -169,7 +195,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
              "Control came up but never opened registration."),
         ):
             if not control.wait_for(marker, cfg.ready_timeout, clock, sleep):
-                return RunResult(False, stage, detail, logs)
+                return RunResult(False, stage, detail, logs, urls)
 
         devices = []
         for index in range(1, cfg.devices + 1):
@@ -181,7 +207,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
             ok, failed = _wait_for_marker(tee, markers.DEVICE_CLOCK_SYNCED,
                                           cfg.join_timeout, clock, sleep)
             if failed is not None:
-                return RunResult(False, "device-join", failed, logs)
+                return RunResult(False, "device-join", failed, logs, urls)
             if not ok:
                 return RunResult(
                     False, "device-sync",
@@ -192,17 +218,18 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                     f"interactive terminal. Check o2debug.log -- 'dropping "
                     f"message because service was not found' means Control "
                     f"was not up yet, and total silence means the socket is "
-                    f"dead. See docs/MM_TERRARIUM.md 'Not yet built'.", logs)
+                    f"dead. See docs/MM_TERRARIUM.md 'Not yet built'.", logs,
+                    urls)
             ok, failed = _wait_for_marker(tee, markers.DEVICE_ROLE_GRANTED,
                                           cfg.join_timeout, clock, sleep)
             if failed is not None:
-                return RunResult(False, "device-join", failed, logs)
+                return RunResult(False, "device-join", failed, logs, urls)
             if not ok:
                 return RunResult(
                     False, "device-join",
                     f"{tee.name} synced but was never granted a role. Is "
                     f"Control still in SETUP? `player` is a scored role "
-                    f"and is refused once RUNNING.", logs)
+                    f"and is refused once RUNNING.", logs, urls)
 
         dead = _hold(cfg, processes, clock, sleep)
         if dead is not None:
@@ -211,10 +238,11 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                 False, "child-exited",
                 f"{name} exited (code {code!r}) during the hold, before "
                 f"the run ended on its own. Check {name}.log for what "
-                f"happened.", logs)
-        return RunResult(True, "complete", "", logs)
+                f"happened.", logs, urls)
+        return RunResult(True, "complete", "", logs, urls)
     except KeyboardInterrupt:
-        return RunResult(True, "interrupted", "stopped by Ctrl-C", logs)
+        return RunResult(True, "interrupted", "stopped by Ctrl-C",
+                         logs, urls)
     finally:
         for name, exc in teardown.close():
             print(f"teardown step {name!r} failed: {exc!r}", file=sys.stderr)
@@ -400,12 +428,22 @@ def parse_args(argv=None):
     ap.add_argument("--console-port", type=int, default=None,
                     help="Serve the Terrarium Console on this port and print "
                          "its URL. Off by default.")
+    ap.add_argument("--open", action="store_true",
+                    help="Open a browser tab for every surface as it comes "
+                         "up: the Terrarium Console, each Room fixture "
+                         "canvas, and each simulated Tuneshroom canvas. "
+                         "Implies a Console on an ephemeral port unless "
+                         "--console-port is given. Refused under --ci.")
     ap.add_argument("--room-type", default="TEST", choices=["TEST", "DEMO"],
                     help="Which RoomType to boot. DEMO configures the "
                          "simulated array backend (spec 2026-08-19); its "
                          "864 px canvas is otherwise identical in kind to "
                          "TEST's.")
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if args.ci and args.open:
+        ap.error("--open makes no sense under --ci: a headless CI run "
+                 "has no browser to open tabs in.")
+    return args
 
 
 def config_from_args(args) -> StackConfig:
@@ -414,12 +452,18 @@ def config_from_args(args) -> StackConfig:
     seconds = args.seconds
     if seconds is None and args.ci:
         seconds = CI_DEFAULT_SECONDS      # an unbounded CI run is a hung job
+    console_port = args.console_port
+    if args.open and console_port is None:
+        # Port 0: ConsoleServer binds an ephemeral port and terrarium_boot
+        # prints the real URL, so the implied Console can never collide.
+        console_port = 0
     return StackConfig(
         log_dir=log_dir, arco_command=args.arco_command,
         devices=args.devices, ensemble=args.ensemble,
         setup_seconds=args.setup_seconds, seconds=seconds,
         horizon=args.horizon, echo=not args.ci,
-        console_port=args.console_port, room_type=args.room_type)
+        console_port=console_port, room_type=args.room_type,
+        open_urls=args.open)
 
 
 def _failing_log_key(result: RunResult) -> str | None:
@@ -484,6 +528,8 @@ def main() -> None:
     print(f"logs: {cfg.log_dir}")
     result = run(cfg)
     if result.ok:
+        for url in result.urls:
+            print(f"  browser surface: {url}")
         print(f"stack run {result.stage}; logs in {cfg.log_dir}")
         return
     print(format_failure(result), file=sys.stderr)

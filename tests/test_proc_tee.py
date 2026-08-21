@@ -62,3 +62,9 @@ def test_echo_is_off_by_default(tmp_path):
 def test_tail_returns_the_last_lines_for_a_failure_summary(tmp_path):
     tee, _log = _tee("".join(f"line{i}\n" for i in range(50)), tmp_path)
     assert tee.tail(3) == ["line47", "line48", "line49"]
+
+
+def test_on_line_sees_every_line(tmp_path):
+    seen = []
+    _tee("first\nsecond\n", tmp_path, on_line=seen.append)
+    assert seen == ["first", "second"]

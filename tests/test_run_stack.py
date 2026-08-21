@@ -470,3 +470,91 @@ def test_config_from_args_forwards_room_type():
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--room-type", "DEMO"])
     assert config_from_args(args).room_type == "DEMO"
+
+
+_CONTROL_OK_WITH_URLS = (
+    f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
+    f"{markers.BROWSE_URL} Terrarium Console at http://127.0.0.1:8901/\n"
+    f"{markers.BROWSE_URL} Watch the Room at http://127.0.0.1:8902/\n"
+    f"{markers.CONTROL_SETUP_HOLD} for 20s\n")
+_DEVICE_OK_WITH_URL = (
+    f"{markers.BROWSE_URL} Watch the Shroom at http://127.0.0.1:8903/\n"
+    f"{markers.DEVICE_CLOCK_SYNCED} 12.345\n"
+    f"{markers.DEVICE_ROLE_GRANTED} 1 join(s)\n")
+
+
+def test_browse_urls_are_collected_from_every_child(tmp_path):
+    """The Console URL and the Room fixture URLs arrive on Control's own
+    stream (the Room simulator inherits terrarium_boot's stdout); each
+    device canvas URL arrives on that device's stream. All of them land in
+    the result, so even a non---open run's summary can print them."""
+    popen = ScriptedPopen([_CONTROL_OK_WITH_URLS, _DEVICE_OK_WITH_URL])
+    result = run(_cfg(tmp_path), popen=popen, sleep=lambda _s: None)
+
+    assert result.ok is True
+    assert result.urls == ["http://127.0.0.1:8901/",
+                           "http://127.0.0.1:8902/",
+                           "http://127.0.0.1:8903/"]
+
+
+def test_open_urls_opens_each_url_exactly_once(tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK_WITH_URLS, _DEVICE_OK_WITH_URL])
+    opened = []
+    result = run(_cfg(tmp_path, open_urls=True), popen=popen,
+                 sleep=lambda _s: None, opener=opened.append)
+
+    assert result.ok is True
+    assert opened == ["http://127.0.0.1:8901/",
+                      "http://127.0.0.1:8902/",
+                      "http://127.0.0.1:8903/"]
+
+
+def test_without_open_urls_no_tab_is_opened(tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK_WITH_URLS, _DEVICE_OK_WITH_URL])
+    opened = []
+    run(_cfg(tmp_path), popen=popen, sleep=lambda _s: None,
+        opener=opened.append)
+
+    assert opened == []
+
+
+def test_a_marker_line_without_a_url_is_ignored_not_crashed(tmp_path):
+    """A future emit site that prints the marker but garbles the URL must
+    degrade to a missing tab, never take the whole stack down."""
+    control_script = (f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
+                      f"{markers.BROWSE_URL} (port not known yet)\n"
+                      f"{markers.CONTROL_SETUP_HOLD} for 20s\n")
+    popen = ScriptedPopen([control_script, _DEVICE_OK])
+    result = run(_cfg(tmp_path, open_urls=True), popen=popen,
+                 sleep=lambda _s: None, opener=lambda _u: None)
+
+    assert result.ok is True
+    assert result.urls == []
+
+
+def test_open_flag_sets_open_urls_and_implies_a_console():
+    """--open with no --console-port asks for port 0: ConsoleServer binds
+    an ephemeral port and terrarium_boot prints the real URL, so the
+    implied console can never collide with anything."""
+    from harness.run_stack import config_from_args, parse_args
+
+    cfg = config_from_args(parse_args(["--open"]))
+
+    assert cfg.open_urls is True
+    assert cfg.console_port == 0
+
+
+def test_open_flag_respects_an_explicit_console_port():
+    from harness.run_stack import config_from_args, parse_args
+
+    cfg = config_from_args(parse_args(["--open", "--console-port", "8772"]))
+
+    assert cfg.console_port == 8772
+
+
+def test_ci_refuses_open():
+    """A headless CI run opening browser tabs is never right."""
+    from harness.run_stack import parse_args
+
+    with pytest.raises(SystemExit):
+        parse_args(["--ci", "--open"])

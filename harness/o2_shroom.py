@@ -387,7 +387,8 @@ def main() -> None:
                             room_type=args.room_type, fixture=args.fixture,
                             input_queue=operator_input)
     backend.open()
-    print(f"Watch the Shroom at http://{args.sim_host}:{backend.port}/")
+    print(f"{markers.BROWSE_URL} Watch the Shroom at "
+          f"http://{args.sim_host}:{backend.port}/", flush=True)
 
     # ONE cleanup path, covering everything after backend.open(). The guard
     # starts here and not at the tick loop because every step between is
