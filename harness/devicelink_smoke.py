@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import time
 
-from bits.test_bit import RUN_DURATION_SECONDS, TestBit
+from bits.test.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.engine import GameServer
 from control.state import State
 from devicelink.agent import DeviceLinkAgent

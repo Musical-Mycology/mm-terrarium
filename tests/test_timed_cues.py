@@ -12,7 +12,7 @@ import pytest
 # luxaeterna checkout. Same guard tests/test_devicelink_agent.py uses.
 pytest.importorskip("luxaeterna")
 
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_bridge import RoomBridge

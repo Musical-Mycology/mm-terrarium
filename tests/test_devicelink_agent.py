@@ -9,7 +9,7 @@ import pytest
 # (requirements-dev.txt states that contract).
 pytest.importorskip("luxaeterna")
 
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.audio import AudioBridge, FakePool
 from control.breath import BREATH_CC
 from control.engine import GameServer

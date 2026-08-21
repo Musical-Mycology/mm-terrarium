@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("luxaeterna.backends.websim")
 
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.engine import GameServer
 from harness.device_bridge import DeviceBridge
 

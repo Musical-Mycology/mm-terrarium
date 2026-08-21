@@ -5,7 +5,7 @@ from urllib.request import urlopen
 
 from websockets.sync.client import connect as ws_connect
 
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from console.server import ConsoleServer
 from control.engine import GameServer

@@ -4,7 +4,7 @@ import argparse
 import sys
 import time
 
-from bits.test_bit import RUN_DURATION_SECONDS, TestBit
+from bits.test.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.arco_process import FakePopen
 from control.audio import AudioBridge, FakePool
 from control.boot_config import BootConfig

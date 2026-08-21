@@ -1,6 +1,6 @@
 import json
 
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry

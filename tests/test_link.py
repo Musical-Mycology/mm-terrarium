@@ -1,4 +1,4 @@
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.rooms import Room, RoomType

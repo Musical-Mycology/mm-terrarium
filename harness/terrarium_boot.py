@@ -18,7 +18,7 @@ import sys
 import time
 
 from bits.metronome_bit import MetronomeBit
-from bits.test_bit import RUN_DURATION_SECONDS, TestBit
+from bits.test.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.arco_process import ArcoProcess
 from control.boot import boot as _boot
 from control.boot_config import BootConfig

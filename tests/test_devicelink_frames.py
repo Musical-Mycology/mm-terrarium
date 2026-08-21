@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("luxaeterna")
 
 import devicelink.agent as devicelink_agent
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from devicelink.agent import DeviceLinkAgent

@@ -1,4 +1,4 @@
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.cues import ROOM, FireTrigger
 from control.roles import RoleClass
 from control.rooms import room_role_name, RoomType
@@ -94,7 +94,7 @@ def test_bit_status_defaults_to_empty_dict():
 
 
 def test_test_bit_status_reports_elapsed_and_duration():
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     bit = TestBit(run_duration=5.0)
     bit.on_run_start()
     bit.update(1.5)
@@ -134,7 +134,7 @@ def test_test_bit_declares_a_version():
 
 
 def test_player_declares_surfaces_and_samples():
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     player = TestBit().role_table.roles["player"]
     assert player.uses == ["tilt", "tap", "shake", "speaker"]
     assert player.samples == ["click", "chime"]
@@ -142,14 +142,14 @@ def test_player_declares_surfaces_and_samples():
 
 def test_jammer_declares_only_tilt():
     """The asymmetry is the point: the two nodes light different surfaces."""
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     jammer = TestBit().role_table.roles["jammer"]
     assert jammer.uses == ["tilt"]
     assert jammer.samples == []
 
 
 def test_tap_yields_a_play_cue_and_a_light_cue():
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     from control.cues import PlayCue
     cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 1], 0.0)
     assert PlayCue("ie1", "click", "") in cues
@@ -157,27 +157,27 @@ def test_tap_yields_a_play_cue_and_a_light_cue():
 
 
 def test_double_tap_plays_chime():
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     from control.cues import PlayCue
     cues = TestBit().verb_handlers()["tap"]("ie1", ["ie1", 2.4, 40.0, 2], 0.0)
     assert PlayCue("ie1", "chime", "") in cues
 
 
 def test_shake_maps_sweep_to_a_light_cue():
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 90.0], 0.0)
     assert cues == [("ie1", 0xB0, 74, 127)]
 
 
 def test_shake_clamps_out_of_range_sweep():
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 999.0], 0.0)
     assert cues == [("ie1", 0xB0, 74, 127)]
 
 
 def test_gesture_handlers_tolerate_short_args():
     """A device must never be able to wedge Control with a truncated frame."""
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     bit = TestBit()
     assert bit.verb_handlers()["tap"]("ie1", ["ie1"], 0.0) is not None
     assert bit.verb_handlers()["shake"]("ie1", ["ie1"], 0.0) is not None
