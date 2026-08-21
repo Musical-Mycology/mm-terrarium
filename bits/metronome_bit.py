@@ -103,7 +103,7 @@ class MetronomeBit(Bit):
         self._elapsed = 0.0
         self._done = False
         self._successes: dict[str, int] = {}
-        self._phrase = None
+        self._phrases: dict[int, dict] = {}
         self._judged_cycles = 0
         self._finale_end = None
         self._tap_errors_ms: list[float] = []
@@ -227,7 +227,7 @@ class MetronomeBit(Bit):
         self._elapsed = 0.0
         self._done = False
         self._successes = {}
-        self._phrase = None
+        self._phrases = {}
         self._judged_cycles = 0
         self._finale_end = None
         self._tap_errors_ms = []
@@ -259,9 +259,9 @@ class MetronomeBit(Bit):
         return self._rotation[cycle % len(self._rotation)]
 
     def _phrase_for(self, cycle: int) -> dict:
-        if self._phrase is None or self._phrase["cycle"] != cycle:
-            self._phrase = {"cycle": cycle, "hits": set(), "spoiled": False}
-        return self._phrase
+        if cycle not in self._phrases:
+            self._phrases[cycle] = {"cycle": cycle, "hits": set(), "spoiled": False}
+        return self._phrases[cycle]
 
     def _current_cycle(self, t: float) -> int | None:
         if self._t0 is None:
@@ -278,13 +278,11 @@ class MetronomeBit(Bit):
             cycle = 0
         if cycle >= self.CYCLES:
             cycle = self.CYCLES - 1
-        # Boundary overlap: a tap within TOLERANCE_S of cycle c's last wait
-        # beat but landing after cycle c+1 has started must still grade
-        # against cycle c.
-        if cycle > 0:
-            prev_last = self._grid((cycle - 1) * self.BEATS_PER_CYCLE + 7)
-            if t <= prev_last + self.TOLERANCE_S:
-                cycle -= 1
+        # Floor division alone always lands on the right cycle here: cycle
+        # spacing (BEAT_S == 0.6s) is far larger than TOLERANCE_S (0.05s),
+        # so a tap within tolerance of cycle c's last wait beat can never
+        # cross into the beat-index range of cycle c+1. This would only
+        # matter if TOLERANCE_S approached BEAT_S.
         return cycle
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
@@ -351,21 +349,25 @@ class MetronomeBit(Bit):
             out.extend(self._beat_cues(self._next_beat))
             self._next_beat += 1
 
-        # Judge the oldest unjudged cycle once its slack window has passed.
-        c = self._judged_cycles
-        if c < self.CYCLES:
+        # Judge every unjudged cycle whose slack window has passed. A loop
+        # (not a single check) so a cues(at) call whose `at` jumps past more
+        # than one cycle's judge deadline -- a stalled tick, scheduler
+        # catch-up, or the final call -- still judges each of them.
+        while self._judged_cycles < self.CYCLES:
+            c = self._judged_cycles
             deadline = self._grid(c * 8 + 7) + self.TOLERANCE_S + self.JUDGE_SLACK_S
-            if at >= deadline:
-                dev = self._turn_dev(c)
-                if dev is not None:
-                    phrase = self._phrase_for(c)
-                    success = phrase["hits"] == {0, 1, 2, 3} and not phrase["spoiled"]
-                    if success:
-                        out.append(FireTrigger("fireworks_player", dev))
-                        out.append(FireTrigger("fireworks_room"))
-                        self._successes[dev] = self._successes.get(dev, 0) + 1
-                    else:
-                        out.append(FireTrigger("fail_player", dev))
-                        out.append(FireTrigger("fail_room"))
-                self._judged_cycles += 1
+            if at < deadline:
+                break
+            dev = self._turn_dev(c)
+            if dev is not None:
+                phrase = self._phrase_for(c)
+                success = phrase["hits"] == {0, 1, 2, 3} and not phrase["spoiled"]
+                if success:
+                    out.append(FireTrigger("fireworks_player", dev))
+                    out.append(FireTrigger("fireworks_room"))
+                    self._successes[dev] = self._successes.get(dev, 0) + 1
+                else:
+                    out.append(FireTrigger("fail_player", dev))
+                    out.append(FireTrigger("fail_room"))
+            self._judged_cycles += 1
         return out

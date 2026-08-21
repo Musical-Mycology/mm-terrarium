@@ -93,3 +93,25 @@ def test_tap_errors_are_recorded_in_ms():
     bit = _started()
     bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1], _wait_grid(bit, 0, 0) + 0.02)
     assert bit._tap_errors_ms[-1] == 20.0
+
+
+def test_multi_cycle_jump_judges_every_pending_cycle():
+    bit = _started(players=("ie1", "ie2"))
+    _tap_all_four(bit, 0, dev="ie1")
+    _tap_all_four(bit, 1, dev="ie2")
+    end = _wait_grid(bit, 1, 3) + 0.2
+    fires = [c for c in bit.cues(end) if isinstance(c, FireTrigger)]
+    names = [(f.name, f.dev) for f in fires]
+    assert ("fireworks_player", "ie1") in names
+    assert ("fireworks_player", "ie2") in names
+    assert sum(f.name == "fireworks_room" for f in fires) == 2
+
+
+def test_call_beat_tap_spoils_phrase():
+    bit = _started()
+    call_beat_at = bit._t0 + 0 * 8 * B + 1 * B   # cycle 0, call beat 1
+    bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1], call_beat_at)
+    _tap_all_four(bit, 0)
+    fires = _drain_until(bit, _wait_grid(bit, 0, 3) + 0.2)
+    assert ("fail_player", "ie1") in [(f.name, f.dev) for f in fires]
+    assert bit._successes.get("ie1", 0) == 0
