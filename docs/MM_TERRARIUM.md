@@ -544,7 +544,7 @@ that instant was denied instantly, with no window to join. Pass
 `SETUP` — polling DeviceLink so joins land — for `N` seconds before `run()`
 closes it; only the unscored jam role stayed joinable without this.
 
-### `capture/` + `bits/capture_bit.py` — labelled sensor telemetry capture (tool Bit)
+### `capture/` + `bits/capture/capture_bit.py` — labelled sensor telemetry capture (tool Bit)
 A **tool Bit**, not a production game Bit — it doesn't close the "no
 production Bit exists" gap below. Built to answer a concrete measurement
 question: mm-tuneshroom's two gesture detectors (native `TapDetector` and
@@ -1153,7 +1153,8 @@ branch's start). **844 passed, 1 skipped as of the 2026-08-17 Room-panel
 slice; 933 passed, 1 skipped as of the trigger slice that follows it; 1037
 passed, 1 skipped as of the N-fixture Room slice ; 1076 passed, 1 skipped
 as of the wire-JSON and Console-script-isolation slice; 1099 passed, 1
-skipped as of the operator/harness handoff slice.**
+skipped as of the operator/harness handoff slice; 1254 passed, 1 skipped
+as of the Bit packaging and launch slice.**
 
 ### The Room panel and the Room's own fixtures (`control/room_profile.py`, `control/room_view.py`, `harness/room_surface.py`, `console/static/`)
 The Room stops being shaped like a Tuneshroom, and the Console becomes an
@@ -1622,7 +1623,7 @@ still ignores `/<dev>/play` by design, so the sample plays nowhere on the
 simulator yet -- local sample playback on the sim is a separate, later
 slice.
 
-### `bits/metronome_bit.py` -- MetronomeBit, the first production game Bit
+### `bits/metronome/metronome_bit.py` -- MetronomeBit, the first production game Bit
 A call-and-response rhythm game for `RoomType.DEMO`, built entirely on
 existing seams. Design:
 [`.../2026-08-20-metronome-bit-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-20-metronome-bit-design.md)
@@ -1648,15 +1649,109 @@ and its plan `.../plans/2026-08-20-metronome-bit.md`. PR #44.
   bass 38 / warm pad 89). A failed shroom is tracked in a failed-devs set
   so the ambient beat pulse skips it -- it stays dark until its own turn's
   recovery cues relight it.
-- **Harness:** `--bit {TestBit,MetronomeBit}` on `terrarium_boot`/`run_stack`,
-  and run_stack derives each spawned device's join node from the bit
-  (explicit `--node` overrides) -- found by the first live run, where
-  devices joined `TEST_PLAYER_NODE` and were denied.
+- **Harness:** at the time this Bit landed, `--bit {TestBit,MetronomeBit}`
+  was a hardcoded choice on `terrarium_boot`/`run_stack`, and `run_stack`
+  derived each spawned device's join node from a hardcoded bit-to-node
+  dict (explicit `--node` overrides) -- found by the first live run, where
+  devices joined `TEST_PLAYER_NODE` and were denied. The Bit packaging and
+  launch slice (2026-08-21, below) replaced both the choices list and the
+  node dict with manifest-driven discovery: `--bit` now accepts any
+  registered package name (`--list-bits` enumerates them), and the join
+  node comes from the Bit's own `bit.toml` (`[launch.nodes]`), not a table
+  in the harness.
 - **Live-verified headless 2026-08-20** (`--ci --devices 2 --room-type DEMO
   --bit MetronomeBit`, runs/20260820-231958): both joins granted, clean
   teardown. The interactive tap-through (fireworks/red/finale by playing,
   reading `tap_errors_ms`) is the remaining human verification. CI note:
   a `--seconds` bound below ~35 s can truncate the finale window.
+
+### Bit packaging, manifests, start conditions, profiles, and launch (2026-08-21)
+Design:
+[`.../2026-08-21-bit-packaging-and-launch-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-21-bit-packaging-and-launch-design.md).
+A Bit used to be a Python class plus knowledge hardcoded across three
+harness files (the class map, the `--bit` choices list, a bit-to-join-node
+dict). This slice turns a Bit into a **discoverable package**: a directory
+under `bits/` with a declarative `bit.toml` manifest, so the harness, the
+Console, and (in principle) a third-party launcher over the uplink can all
+enumerate, configure, and launch Bits without importing their code first.
+
+- **`bits/<name>/bit.toml` + no-import discovery.** Each of the three
+  existing Bits (`bits/test/`, `bits/metronome/`, `bits/capture/`) is now a
+  package: `bit.toml` (schema below) plus the unchanged Bit class module.
+  `control/bit_registry.py` scans `bits/*/bit.toml` with stdlib `tomllib`
+  and never imports the Bit's own module until `load_bit` — a broken
+  manifest is collected as a located, per-package error (surfaced by
+  `--list-bits` and the Console) and never breaks discovery of the other
+  packages. The Bit's module is imported only via the manifest's
+  `entry = "module:Class"`.
+- **`control/bit_config.py` — `BitConfig` schema v1.** Validates and parses
+  `bit.toml`: `kind` (`music`/`r_game`/`game`/`tool`/`ambient`), `[launch]`
+  (room types, default room type, default device count, setup/expected
+  seconds, transport, default join role, `[launch.nodes]` role->join-node
+  map), `[start]` (start condition — see below), `[console]` (display name,
+  notes), `[results]` (declarative result keys), and the Bit-specific
+  `[rhythm]`/`[ambient]` blocks. `merge_overrides` re-validates after
+  applying CLI/profile overrides — an override can't silently produce an
+  invalid config; it fails the same way a bad manifest would.
+- **`Bit(config)` + `GameServer.load_bit(name, config=None)`.** The engine
+  stays Bit-agnostic: `load_bit` resolves the manifest, imports the entry
+  class, and passes the opaque `BitConfig` into the constructor — Control
+  never inspects the config's contents, only threads it through. This is
+  the slice's one change to the engine itself.
+- **`control/start_condition.py` — declarative start conditions.**
+  `immediate` (starts as soon as SETUP's own deadline is reached),
+  `players` (starts the instant `scored >= min_scored`, evaluated inside
+  the existing SETUP hold in `harness/terrarium_boot.py` — see the live
+  caveat below), and `operator` (console-driven only), each with a
+  `timeout_seconds` / `on_timeout` (`start`/`abort`) fallback.
+  `start_decision(cond, scored=, elapsed=, setup_seconds=)` is the single
+  function both the harness hold and its CI-timeout math call.
+- **`terrarium_boot` + `run_stack` are discovery-driven.** `--bit` accepts
+  any registered package name (previously a hardcoded choices list);
+  `--list-bits` enumerates name/version/kind/room-types/start-condition/
+  description for every discovered package (including located manifest
+  errors); when `--room-type`/`--node`/`--devices` are omitted they come
+  from the manifest's `[launch]` defaults, not a CLI default or a hardcoded
+  dict. The CI timeout bound is `max(manifest setup_seconds, --setup-seconds)
+  + expected_run_seconds + 15`.
+- **`control/run_profile.py` + `--profile`.** A profile (e.g.
+  `profiles/dev-metronome.toml`) names a bit and can override any of its
+  manifest fields (`[bit.overrides.*]`); precedence is
+  **manifest < profile < CLI flag**, so a profile can pin defaults for a
+  named scenario (a demo, a load test) while a CLI flag still wins for a
+  one-off tweak.
+- **Uplink/console.** `uplink/protocol.py` gained `list_bits` and a
+  `load_bit` override path; `console/agent.py`/`uplink/link.py` stamp
+  `bit_completed` with the active bit's name. The Console's Bits panel
+  (`renderBits` in `console/static/console.js`) renders the same
+  `bits_listed` snapshot sent at connect time.
+
+**Load-bearing:** the engine boundary rule holds — `GameServer.load_bit`
+threading an opaque `config` through to the Bit constructor is the *only*
+change to `control/` proper; every other consumer (harness, console,
+uplink) reads the manifest, never the Bit's Python.
+
+**Traps live-verified 2026-08-21** (see the design doc's Status section for
+full run evidence):
+- A `players` start condition with `min_scored = N` closes scored
+  registration **the instant** the Nth scored device joins — not after the
+  full SETUP hold. A CI smoke test that spawns more devices than
+  `min_scored` (e.g. `--devices 2` against MetronomeBit's shipped
+  `min_scored = 1`) will see the extra device(s) denied with
+  "registration closed for scored roles"; this is the start condition
+  working as designed, not a bug, but it means the device count for a
+  smoke test must match (or a profile must override) the Bit's own
+  `min_scored`.
+- `run_stack` treats a child that exits cleanly (code 0) **during the
+  SETUP-hold-turned-RUNNING duration**, before the requested `--seconds`
+  elapses, as a `child-exited` stage failure — even though the game
+  itself completed normally. A short demo game (MetronomeBit's 4 cycles)
+  finishes well inside a generous `--seconds`, so pick a `--seconds` close
+  to `expected_run_seconds`, not an arbitrarily large one, when driving it
+  through `run_stack` directly.
+- `console/server.py`'s websocket endpoint is `/ws`, not the port root —
+  a raw client (or a future non-browser consumer) must dial
+  `ws://host:port/ws`.
 
 ## Boundary rules (the load-bearing invariants)
 

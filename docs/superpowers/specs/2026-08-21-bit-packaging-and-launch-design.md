@@ -1,7 +1,7 @@
 # Bit packaging and launch — design
 
 **Date:** 2026-08-21
-**Status:** Draft, pending approval
+**Status:** Implemented
 **Depends on:** MetronomeBit slice (PR #44), operator/harness handoff slice,
 wire-JSON slice.
 
@@ -235,3 +235,55 @@ that connection.
 - A `players` start condition run: devices join during hold, run starts on
   threshold, not on timer.
 - Console `list_bits` renders; `load_bit` by name from the panel works.
+
+## Status (2026-08-21, Task 13 live verification)
+
+Live-verified on Mycological (dev box, Arco reachable):
+
+- `--list-bits` (`runs/` none created; stdout only): all three packages
+  (`CaptureBit`, `MetronomeBit`, `TestBit`) listed with correct kind/room
+  types/start condition, no manifest errors.
+- `--ci --bit MetronomeBit --devices 2` with **no** `--room-type`/`--node`:
+  the manifest alone drives `default_room_type = DEMO` and
+  `launch.nodes.player = METRO_PLAYER_NODE`; confirmed live (control.log:
+  `join granted: ie2 -> player (scored) via METRO_PLAYER_NODE`). Node/room
+  resolution from the manifest is verified.
+  Caveat: this exact invocation exits 1, reproducibly. MetronomeBit's
+  manifest declares `start.min_scored = 1`, so with the "players" start
+  condition the run transitions out of SETUP the instant the *first*
+  scored device joins (`control/start_condition.py`, the SETUP hold in
+  `harness/terrarium_boot.py`). `--devices 2` then spawns a second
+  simulated device that arrives after registration has already closed
+  ("registration closed for scored roles"), which `run_stack` reports as
+  a failed device-join stage. This is the start-condition machinery
+  working as designed (§5), not a regression from this slice — but it
+  means `--devices 2` is the wrong shape for a min_scored=1 Bit's CI
+  smoke test; `--devices 1` (or a manifest/profile with `min_scored = 2`,
+  as `profiles/dev-metronome.toml` uses) is the correct invocation. Filed
+  as an observation, not fixed here (out of scope for a docs+verify task).
+- `players` start condition, via
+  `run_stack --profile profiles/dev-metronome.toml --seconds 240`
+  (profile overrides `min_scored = 2`): control.log shows both `ie1` and
+  `ie2` granted scored joins within ~0.5s of SETUP opening (a 90s hold),
+  and gameplay starts immediately after the second join — confirmed via
+  `terrarium_boot.py`'s `players-met` path, not `expired`/timeout. Threshold-
+  driven start is verified live.
+  Caveat: the overall run still exits 1, because MetronomeBit's own
+  gameplay (4 cycles at the profile's 80 BPM) finishes in well under the
+  requested `--seconds 240` hold, and `run_stack` treats the child's early,
+  clean exit (code 0) during the hold as a `child-exited` stage failure.
+  Teardown itself is clean (no orphaned processes; Arco releases both
+  devices and exits). This is a `--seconds`-vs-game-length mismatch in the
+  test invocation, unrelated to Task 13's changes.
+- Console wire check: a standalone websocket client (`websockets` from
+  `.venv`) connected to `ws://127.0.0.1:<port>/ws` during a
+  `--console-port 8901` run and received a `bits_listed` event
+  (`CaptureBit`/`MetronomeBit`/`TestBit`, each with kind/room
+  types/start condition) in the connect snapshot. Verified live.
+- Full suite: `pytest tests -q` → 1254 passed, 1 skipped.
+
+Not verified live (offline-only, per house style): the browser Console UI
+itself (`renderBits`) was not opened in a real browser this pass — only the
+underlying `bits_listed` wire event was checked with a raw websocket client.
+Everything else in this section was exercised end-to-end on real
+Room/Arco/DeviceLink processes, not mocked.
