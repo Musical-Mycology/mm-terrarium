@@ -59,6 +59,90 @@ function populateBits(bits) {
     sel.appendChild(opt);
   }
 }
+// Bits panel: one card per discovered package plus an error row per disabled
+// one. Rebuilt ONLY when the declared table changes -- bits_listed fires once
+// at connect (see console/agent.py's snapshot path) and never per-frame, but
+// state_changed fires continuously, so this earns the same discipline the
+// Room strip and the Trigger cards needed after their live defects: a
+// high-frequency event must not touch this list.
+let bitsSignature = null;
+
+function startText(start) {
+  if (!start) return "—";
+  let text = start.when;
+  if (start.timeout_seconds != null) text += `, ${start.timeout_seconds}s timeout`;
+  return text;
+}
+
+function buildBitCard(bit) {
+  const card = document.createElement("div");
+  card.className = bit.hidden ? "card bit hidden" : "card bit";
+
+  const title = document.createElement("h3");
+  title.textContent = (bit.display_name || bit.name) + "  (" + bit.name + ")";
+  card.appendChild(title);
+
+  const kind = document.createElement("span");
+  kind.className = "kind";
+  kind.textContent = bit.kind;
+  card.appendChild(kind);
+
+  const meta = document.createElement("p");
+  meta.className = "muted";
+  meta.textContent = "v" + bit.version
+    + "   rooms: " + ((bit.room_types || []).join(", ") || "none")
+    + "   start: " + startText(bit.start);
+  card.appendChild(meta);
+
+  const description = document.createElement("p");
+  description.textContent = bit.description || "";
+  card.appendChild(description);
+
+  const button = document.createElement("button");
+  button.textContent = "Load";
+  button.onclick = () => send("load_bit", { name: bit.name });
+  card.appendChild(button);
+
+  return card;
+}
+
+function buildBitErrorRow(err) {
+  const row = document.createElement("div");
+  row.className = "card bit error";
+  const path = document.createElement("h3");
+  path.textContent = err.path;
+  row.appendChild(path);
+  const message = document.createElement("p");
+  message.textContent = err.message;
+  row.appendChild(message);
+  return row;
+}
+
+function renderBits(bits, errors) {
+  const el = $("bits");
+  const bitList = bits || [];
+  const errorList = errors || [];
+  const signature = JSON.stringify([bitList, errorList]);
+  if (signature === bitsSignature) return;
+  bitsSignature = signature;
+
+  el.innerHTML = "";
+  if (!bitList.length && !errorList.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No Bits discovered";
+    el.appendChild(empty);
+    return;
+  }
+
+  const cards = document.createElement("div");
+  cards.id = "bitCards";
+  cards.className = "cards";
+  el.appendChild(cards);
+  for (const bit of bitList) cards.appendChild(buildBitCard(bit));
+  for (const err of errorList) cards.appendChild(buildBitErrorRow(err));
+}
+
 function log(level, message) {
   const el = $("log");
   el.textContent += `[${level}] ${message}\n`;
@@ -79,6 +163,7 @@ function handle(msg) {
       renderTriggerDevices(msg.devices);
       renderTriggers(msg.triggers);
       break;
+    case "bits_listed": renderBits(msg.bits, msg.errors); break;
     case "state_changed":
       $("state").textContent = msg.state;
       log("info", "state → " + msg.state);

@@ -57,6 +57,14 @@ class ConsoleAgent:
     def poll(self) -> None:
         for client in self.server.drain_new_clients():
             self.server.send(client, self.snapshot())
+            # The Bits panel needs no request round-trip: it renders on
+            # bits_listed only, and this is the one place that event fires
+            # (see console/static/console.js's renderBits). No registry (a
+            # GameServer built the pre-Bits-registry way) means no Bits
+            # panel, silently -- not an error, since nothing asked for one.
+            if self.registry is not None:
+                self.server.send(client, protocol.bits_listed_event(
+                    self.registry.list_view(), self.registry.errors_view()))
         for client, msg in self.server.drain_inbound():
             error = self._handle_command(msg)
             if error is not None:

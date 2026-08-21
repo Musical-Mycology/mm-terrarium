@@ -40,6 +40,12 @@ th, td { border: 1px solid #ccc; padding: .2rem .5rem; text-align: left; }
 /* Trigger panel */
 .card.trigger { min-width: 20rem; }
 .card.trigger p { margin: .2rem 0; }
+
+/* Bits panel */
+.card.bit { min-width: 18rem; }
+.card.bit.hidden { opacity: .5; }
+.card.bit.error { border-color: #a00; }
+.card.bit.error h3 { color: #a00; }
 .step { font-family: ui-monospace, monospace; font-size: .8rem;
         color: #333; white-space: pre; }
 .fired { font-size: .8rem; color: #666; margin-top: .4rem; }

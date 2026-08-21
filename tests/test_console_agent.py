@@ -639,9 +639,35 @@ def test_list_bits_with_registry_answers_bits_listed():
     srv.deliver("c1", {"command": "list_bits"})
     agent.poll()
     sent = [msg for _client, msg in srv.sent if msg.get("event") == "bits_listed"]
+    # Two: one from the connect-time snapshot path (so the Bits panel needs
+    # no request round-trip, see console/agent.py's poll()) and one from the
+    # explicit list_bits command this test also sends.
+    expected = {"event": "bits_listed",
+                "bits": [{"name": "TestBit"}],
+                "errors": [{"path": "x", "message": "bad"}]}
+    assert sent == [expected, expected]
+
+
+def test_connect_with_registry_sends_bits_listed_without_a_request():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    registry = FakeBitRegistry()
+    agent = ConsoleAgent(gs, srv, registry=registry)
+    srv.connect("c1")
+    agent.poll()
+    sent = [msg for _client, msg in srv.sent if msg.get("event") == "bits_listed"]
     assert sent == [{"event": "bits_listed",
                      "bits": [{"name": "TestBit"}],
                      "errors": [{"path": "x", "message": "bad"}]}]
+
+
+def test_connect_without_registry_sends_no_bits_listed_and_no_error():
+    gs, srv, agent = _server_with_agent()
+    srv.connect("c1")
+    agent.poll()
+    events = [msg.get("event") for _client, msg in srv.sent]
+    assert "bits_listed" not in events
+    assert "error" not in events
 
 
 def test_load_bit_with_registry_resolves_overrides_into_constructed_bit():
