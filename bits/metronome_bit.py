@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, LightCue
+from control.cues import ROOM, TARGET, FireTrigger, LightCue
 from control.roles import Role, RoleClass, RoleTable
 from control.rooms import RoomType, room_role
 from control.triggers import (
@@ -251,7 +251,62 @@ class MetronomeBit(Bit):
         return {}
 
     def verb_handlers(self) -> dict:
-        return {}
+        return {"tap": self._on_tap}
+
+    def _turn_dev(self, cycle: int) -> str | None:
+        if not self._rotation:
+            return None
+        return self._rotation[cycle % len(self._rotation)]
+
+    def _phrase_for(self, cycle: int) -> dict:
+        if self._phrase is None or self._phrase["cycle"] != cycle:
+            self._phrase = {"cycle": cycle, "hits": set(), "spoiled": False}
+        return self._phrase
+
+    def _current_cycle(self, t: float) -> int | None:
+        if self._t0 is None:
+            return None
+        dt = t - self._t0
+        if dt < -self.TOLERANCE_S:
+            return None
+        last_grid = self._grid(self.CYCLES * self.BEATS_PER_CYCLE - 1)
+        if t > last_grid + self.TOLERANCE_S:
+            return None
+        k = dt / self.BEAT_S
+        cycle = int(k // self.BEATS_PER_CYCLE)
+        if cycle < 0:
+            cycle = 0
+        if cycle >= self.CYCLES:
+            cycle = self.CYCLES - 1
+        # Boundary overlap: a tap within TOLERANCE_S of cycle c's last wait
+        # beat but landing after cycle c+1 has started must still grade
+        # against cycle c.
+        if cycle > 0:
+            prev_last = self._grid((cycle - 1) * self.BEATS_PER_CYCLE + 7)
+            if t <= prev_last + self.TOLERANCE_S:
+                cycle -= 1
+        return cycle
+
+    def _on_tap(self, dev: str, args: list, at: float) -> list:
+        if self._t0 is None or self._done:
+            return []
+        t = at - self.INPUT_OFFSET_S
+        cycle = self._current_cycle(t)
+        if cycle is None or dev != self._turn_dev(cycle):
+            return []
+        phrase = self._phrase_for(cycle)
+        # nearest wait-beat gridpoint of this cycle
+        best_w, best_err = None, None
+        for w in range(4):
+            err = t - self._grid(cycle * 8 + 4 + w)
+            if best_err is None or abs(err) < abs(best_err):
+                best_w, best_err = w, err
+        self._tap_errors_ms.append(round(best_err * 1000.0, 1))
+        if abs(best_err) <= self.TOLERANCE_S:
+            phrase["hits"].add(best_w)
+        else:
+            phrase["spoiled"] = True
+        return []
 
     def _grid(self, k: int) -> float:
         """Absolute O2 time of global beat index `k` (0..31)."""
@@ -276,7 +331,11 @@ class MetronomeBit(Bit):
             out.append(LightCue(ROOM, 0x80, self.CLICK_KEY, 0, when=t + 0.1))
 
         if pos == 0:
-            pass  # recovery: Task 7
+            out.append(LightCue(ROOM, 0xB0, 74, self.GREEN_CC, when=t))
+            dev = self._turn_dev(k // self.BEATS_PER_CYCLE)
+            if dev is not None:
+                out.append(LightCue(dev, 0xB0, 74, self.GREEN_CC, when=t))
+                out.append(LightCue(dev, 0xB0, 11, self.LEVEL_BASE, when=t))
 
         return out
 
@@ -291,4 +350,22 @@ class MetronomeBit(Bit):
                and self._grid(self._next_beat) <= at + self.BEAT_S):
             out.extend(self._beat_cues(self._next_beat))
             self._next_beat += 1
+
+        # Judge the oldest unjudged cycle once its slack window has passed.
+        c = self._judged_cycles
+        if c < self.CYCLES:
+            deadline = self._grid(c * 8 + 7) + self.TOLERANCE_S + self.JUDGE_SLACK_S
+            if at >= deadline:
+                dev = self._turn_dev(c)
+                if dev is not None:
+                    phrase = self._phrase_for(c)
+                    success = phrase["hits"] == {0, 1, 2, 3} and not phrase["spoiled"]
+                    if success:
+                        out.append(FireTrigger("fireworks_player", dev))
+                        out.append(FireTrigger("fireworks_room"))
+                        self._successes[dev] = self._successes.get(dev, 0) + 1
+                    else:
+                        out.append(FireTrigger("fail_player", dev))
+                        out.append(FireTrigger("fail_room"))
+                self._judged_cycles += 1
         return out
