@@ -390,28 +390,45 @@ def _hold(cfg: StackConfig, children: dict[str, object], clock,
     same reason: a dead child is news the instant it happens, not news
     worth waiting out the rest of the hold for.
     """
+    tolerate = cfg.serve
     if cfg.seconds is None:
         while True:
-            dead = _dead_child(children)
+            dead = _dead_child(children, tolerate_clean_devices=tolerate)
             if dead is not None:
                 return dead
             sleep(0.5)
     deadline = clock() + cfg.seconds
     while clock() < deadline:
-        dead = _dead_child(children)
+        dead = _dead_child(children, tolerate_clean_devices=tolerate)
         if dead is not None:
             return dead
         sleep(0.1)
     return None
 
 
-def _dead_child(children: dict[str, object]) -> tuple[str, int] | None:
+def _dead_child(children: dict[str, object], *,
+                tolerate_clean_devices: bool = False
+                ) -> tuple[str, int] | None:
     """The first child (in spawn order: control, then ie1, ie2, ...)
-    whose process has already exited, paired with its exit code."""
+    whose process has already exited, paired with its exit code.
+
+    tolerate_clean_devices is serve mode's rule: a simulated device exits
+    with code 0 the moment Control releases it (harness/o2_shroom.py loops
+    `while not client.released`), and in a multi-round session that is the
+    round ending, not the stack failing. Live 2026-08-21 a Console abort
+    released ie1, ie1 exited 0, this function reported it, run() SIGTERMed
+    a perfectly healthy Control mid-serve and Arco went down with it. A
+    control exit of any code and a NON-zero device exit still count.
+    Devices that stay up across rounds are a later slice (Tuneshroom
+    reconnection); until then round 2+ under run_stack runs device-less.
+    """
     for name, process in children.items():
         code = process.poll()
-        if code is not None:
-            return name, code
+        if code is None:
+            continue
+        if tolerate_clean_devices and name != "control" and code == 0:
+            continue
+        return name, code
     return None
 
 

@@ -1765,6 +1765,17 @@ full run evidence):
   `ws://host:port/ws`.
 
 ### Console-operator rounds: serve-mode round loop, lazy full registry, merged control bar (2026-08-21)
+
+> **Trap, live 2026-08-21 (fixed the same day):** under `run_stack`, a
+> Console abort looked like "Arco closes". It was `run_stack._hold`
+> treating the released device's by-design code-0 exit as `child-exited`
+> and SIGTERMing a healthy Control; Control's normal teardown then took
+> Arco down (`Arco_engine: finish called` is the room-bridge teardown
+> step, not a failure). Serve mode now tolerates clean device exits;
+> control death and non-zero device exits still fail loud. Consequence:
+> round 2+ under `run_stack` runs device-less until Tuneshroom
+> reconnection lands -- drive later rounds from the Console, or start an
+> `o2_shroom` by hand.
 Design:
 [`.../2026-08-21-console-operator-rounds-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-21-console-operator-rounds-design.md).
 Before this slice, `run_stack`/`terrarium_boot` ran exactly one Bit and

@@ -10,7 +10,7 @@ import pytest
 
 from control.arco_process import FakePopen
 from harness import markers
-from harness.run_stack import (StackConfig, _failed_marker, control_command,
+from harness.run_stack import (StackConfig, _failed_marker, _hold, control_command,
                                device_command, run)
 
 
@@ -903,3 +903,51 @@ def test_a_zero_exit_without_the_completion_marker_still_fails(tmp_path):
 
     assert result.ok is False
     assert result.stage == "child-exited"
+
+
+class _Proc:
+    """A child whose poll() answer is fixed at construction."""
+
+    def __init__(self, code):
+        self.code = code
+
+    def poll(self):
+        return self.code
+
+
+def _serve_cfg(tmp_path, **kwargs):
+    return StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                       echo=False, seconds=1.0, **kwargs)
+
+
+def test_serve_mode_tolerates_a_clean_device_exit_during_the_hold(tmp_path):
+    """Live 2026-08-21: after a Console abort the released o2_shroom exits
+    with code 0 by design, and _hold read that as `child-exited`, SIGTERMed
+    Control mid-serve and took Arco down with it. In serve mode a clean
+    device exit is the round ending, not the stack failing."""
+    children = {"control": _Proc(None), "ie1": _Proc(0)}
+    ticks = iter([0.0, 0.0, 10.0])
+    dead = _hold(_serve_cfg(tmp_path, serve=True), children,
+                 clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert dead is None
+
+
+def test_serve_mode_still_fails_loud_on_control_or_nonzero_device_exit(tmp_path):
+    ticks = iter([0.0] * 10)
+    dead = _hold(_serve_cfg(tmp_path, serve=True),
+                 {"control": _Proc(0), "ie1": _Proc(None)},
+                 clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert dead == ("control", 0)
+    ticks = iter([0.0] * 10)
+    dead = _hold(_serve_cfg(tmp_path, serve=True),
+                 {"control": _Proc(None), "ie1": _Proc(1)},
+                 clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert dead == ("ie1", 1)
+
+
+def test_one_shot_mode_still_fails_on_a_clean_device_exit(tmp_path):
+    ticks = iter([0.0] * 10)
+    dead = _hold(_serve_cfg(tmp_path, serve=False),
+                 {"control": _Proc(None), "ie1": _Proc(0)},
+                 clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert dead == ("ie1", 0)

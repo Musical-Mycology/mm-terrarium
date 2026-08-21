@@ -108,3 +108,24 @@ the full suite is green: 1267 passed, 1 skipped.
 - Interactive verification that an operator can drive rounds indefinitely
   over a long session (this run exercised exactly the round sequence in
   the brief, not an extended soak).
+
+## Live UAT follow-up (2026-08-21, after PR #47)
+
+**Reported:** after a Console abort, "Arco closes" and no Bit can be loaded
+(`runs/20260821-152658`). **Root cause, traced not guessed:** Arco never
+failed. The released simulated device exits with code 0 by design
+(`o2_shroom` loops `while not client.released`), `run_stack._hold` read
+that as `child-exited`, SIGTERMed a healthy Control mid-serve, and
+Control's normal teardown (room bridge → `ArcoSynthPool.shutdown` →
+pyarco `finish()`, the "Arco_engine: finish called" line) took Arco down.
+Control's round loop had already printed "round complete; waiting for
+next load". A bare `terrarium_boot --serve` was never affected.
+
+**Decision (user):** tolerate clean device exits only. In serve mode
+`_dead_child` ignores a code-0 exit from a non-control child; a control
+exit of any code and a non-zero device exit still fail loud. Round 2+
+under `run_stack` therefore runs device-less until Tuneshroom reconnection
+(explicitly deferred) or per-round device respawn (offered, declined for
+now) lands. "Spin up a new Arco on load" was considered and rejected:
+restarting Arco per round would reintroduce the documented pyarco-reset
+audio trap, and Arco was not the failing component.
