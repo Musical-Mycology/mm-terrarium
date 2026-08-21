@@ -500,6 +500,9 @@ is not, so the later swap to o2ws is mechanical. **Arco is not in this path**,
 so nothing here may be read as a hop count or a latency figure. Same trust
 model as the console: trusted LAN, no auth, `127.0.0.1` by default.
 
+- `/ie<N>/room` is pushed on hello and on state/registration change; devices
+  never request it.
+
 `DeviceLinkAgent` also ticks `control/breath.py` now, feeding every joined,
 non-closing device's `cc:11` on change. The Tuneshroom audio design originally
 scoped devicelink out entirely, but that was wrong for the light half: once
