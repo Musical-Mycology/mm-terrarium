@@ -779,7 +779,7 @@ Control becomes a real O2 participant, and a cue gains a time. Design:
   already-connected object into `start()`, and a local `Blob` class
   duck-types `O2blob` (`_add_blob` reads only `.size`/`.data`) so the module
   imports fine with no o2litepy present.
-  Four o2litepy facts are encoded here because each one breaks the transport
+  Five o2lite facts are encoded here because each one breaks the transport
   at runtime otherwise: a handler takes **three** parameters
   `(address, types, info)` with arguments **pulled** off the o2lite object in
   typespec order, not handed over as a list; the delivered address has its
@@ -791,7 +791,14 @@ Control becomes a real O2 participant, and a cue gains a time. Design:
   `"actl,game"` string: pyarco already claimed `actl` on the shared
   connection, and writing just `"game"` would silently drop it and stop
   Arco's control replies. **Control is a guest on pyarco's connection**, not
-  the owner of its own.
+  the owner of its own. The fifth (from Roger's 2026-08-20 reply to the
+  upstream report): **immediately after `o2lite.set_services()`, a UDP send
+  addressed to that service can arrive at the hub before the service
+  registration does and is silently dropped** -- send via TCP (`send_cmd`)
+  at least the first time. `verify_service_ownership` already does this,
+  which incidentally shields the transport's startup from the race, but any
+  new o2lite client here must not fire a UDP message straight after
+  announcing its services.
 - **`TimedQueue`** (`control/timed_queue.py`) — holds `(when, payload)` and
   releases at the tick covering `when`. Payload-generic on purpose, because
   the two consumers hold different things: Control holds `(when, midi)` and
@@ -1854,8 +1861,10 @@ yet**; the box does not exist.
   announcement is silent on the client; o2litepy's discovery has no ensemble
   filter) are written up for Roger at
   [`docs/upstream/2026-08-14-o2-service-and-discovery-report.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/upstream/2026-08-14-o2-service-and-discovery-report.md)
-  -- reports, not proposals; see *Not yet built / deferred* below for the
-  standing descriptions of both.
+  -- reports, not proposals. Roger replied 2026-08-20: defect 1 is O2 working
+  as designed (design guidance given, no upstream change coming), defect 2 is
+  fixed and regression-tested upstream in `rbdannenberg/o2`; see *Not yet
+  built / deferred* below for the standing descriptions of both.
 - **pyarco**: the Python control layer Control+GameServer builds ugen graphs
   through. A **dev/test-only dependency reached by `PYTHONPATH`**, following
   the luxaeterna precedent: nothing is vendored or submoduled, and
@@ -1868,7 +1877,12 @@ yet**; the box does not exist.
   predated this decision; it is now archived and superseded.
 - **o2litepy** (`arco/o2litepy/`, same checkout as pyarco) — the Python o2lite
   implementation pyarco connects through, and now the one `O2LiteTransport`
-  rides. Reached by the same `PYTHONPATH`, never vendored. **No module under
+  rides. Reached by the same `PYTHONPATH`, never vendored. **Its canonical
+  home is `rbdannenberg/o2`, not arco** (Roger, 2026-08-20): commit `f21499e`
+  there reworks the o2litepy package and adds multi-client regression tests;
+  the `arco/o2litepy` copy is downstream, currently byte-identical, and Roger
+  may remove it -- if a future `arco` pull loses the directory, point
+  `PYTHONPATH` at the `o2` checkout's package instead. **No module under
   `control/` may import it**, and `devicelink/o2_transport.py` does not either
   (the caller injects an already-connected object), which is what keeps the
   whole suite runnable with no Arco, no pyarco and no O2. That rule is the
@@ -2084,6 +2098,23 @@ Kept explicit so the doc doesn't over-claim:
   if you don't receive it) is OK", so `verify_service_ownership` is sanctioned
   rather than a hack. **Do not expect an upstream fix**, and treat a service
   collision here as a design question on this side rather than a bug to report.
+  Roger's fuller reply (2026-08-20, to the upstream report) restates the model
+  -- O2 forwards each service to exactly one provider, and for o2lite clients
+  it is first-come-first-serve with no fallback list, so two o2lite processes
+  offering the same service name is a design error on the client side -- and
+  suggests two workarounds: (a) namespace services per process (e.g.
+  `/room/...` and `/control/...`), or (b) build unique names from
+  `o2lite.bridge_id` (which he notes is fragile across multiple hosts).
+  Assessed 2026-08-20: **no code change warranted.** mm-terrarium already
+  satisfies the constraint by construction -- every live process claims a
+  distinct name (Control `actl,game`, per-fixture simulators
+  `sim-room-<fixture>`, players `ie<N>`), which is workaround (a) in
+  substance if not in slash-prefix form. The one collision ever observed was
+  an *orphan* of a previous run re-claiming its own name, which namespacing
+  cannot prevent (the orphan carries the same namespace) and which the
+  `--exit-with-parent` / `TeardownStack` / `verify_service_ownership` guards
+  already close. Option (b) is both fragile per Roger and would defeat
+  `verify_service_ownership`'s ability to detect exactly that orphan case.
   For the record of what was actually observed: Control offers `actl,game`, the
   Room simulator offers `sim-room`, and players offer their own dev ids, so no
   two live processes claim one name by design; the collision that prompted the
@@ -2107,8 +2138,12 @@ Kept explicit so the doc doesn't over-claim:
   upstream 2026-08-17** (`rbdannenberg/arco` commit `379424e`, merged into the
   local checkout; `o2litepy/o2lite_disc.py` now stores the ensemble and
   `py3discovery.py` filters on it). Roger: "real, only in the Python port, and
-  is now fixed and tested in the regression tests". **Verified in source, not
-  yet re-verified live**, and properly closing it means re-running the original
+  is now fixed and tested in the regression tests". His 2026-08-20 reply
+  confirms the canonical fix lives in `rbdannenberg/o2` (commit `f21499e`
+  reworks the o2litepy package and adds multi-client regression tests); the
+  `arco/o2litepy` copy this repo reaches by `PYTHONPATH` is downstream of it,
+  currently byte-identical, and Roger may remove it -- see the o2litepy
+  dependency bullet above. **Verified in source, not yet re-verified live**, and properly closing it means re-running the original
   reproduction, and the venue consequence below needs two O2 hosts to
   exercise. The description of the original defect follows.
 
