@@ -130,6 +130,9 @@ judgment at beat 8's end -> next cycle or `FINALE`/complete.
 - A device released mid-run drops out of the rotation at the next cycle
   boundary; if the current turn's device disappears mid-phrase, the phrase
   becomes unjudged.
+- Join order is learned via a new optional no-op
+  `Bit.on_join(dev, role_name)` hook (the one engine-seam addition; same
+  extension precedent as `cues(at)`).
 
 ## 6. TriggerTable
 
@@ -141,7 +144,7 @@ manually -- for free, via machinery live-verified 2026-08-20:
 |---|---|---|
 | `fireworks_player` | DEVICE | ~1.5 s of bloom note-ons at random hues (script steps at 60-120 ms spacing, hue cc before each note-on) |
 | `fireworks_room` | ROOM | same shape across the array |
-| `fail_player` | DEVICE | cc:74 -> red; program 38; note-on key 33; note-off; then cc:11 -> 0 (non-glowing) |
+| `fail_player` | DEVICE | cc:74 -> red; program 38; note-on key 33; note-off; then cc:11 -> 0 (non-glowing) -- light-only: players have no Arco voice in `devicelink/agent.py`, all audio is ROOM-side |
 | `fail_room` | ROOM | cc:74 -> red; program 38; note-on key 33; note-off |
 | `finale` | ROOM | program 89; sustained note-on; cc:21 -> 127 (rainbow up) + cc:11 -> 0 (aurora dark); 10 s of cc:74 up/down steps (pad filter sweep); then cc:21 -> 0, cc:11 restored, note-off |
 
@@ -204,6 +207,9 @@ separate later slice, only if this fails.
   audio today.
 - TEST-room support: not declared. DEMO is the point; offline tests do not
   need a RoomType to exercise the Bit.
+- All audio is ROOM-side: players have no Arco voice in
+  `devicelink/agent.py`, so `fail_player` (and every other DEVICE trigger)
+  is light-only.
 
 ## 10. Testing
 
