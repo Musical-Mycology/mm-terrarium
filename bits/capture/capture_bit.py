@@ -10,7 +10,9 @@ byte of persistence lives in capture/store.py, so what is left here is the
 declaration plus dispatch.
 """
 
-from capture.store import CaptureError, CaptureStore
+from pathlib import Path
+
+from capture.store import CaptureError, CaptureStore, new_session_id
 from control.bit import Bit
 from control.roles import Role, RoleClass, RoleTable
 from devicelink.protocol import decode_capture_command, decode_telemetry_batch
@@ -22,12 +24,20 @@ CAPTURE_NODE = "CAPTURE_NODE"
 # a capture open for the rest of the session.
 IDLE_TIMEOUT_S = 10.0
 
+# Default trace root when no store is supplied, matching harness/capture_smoke.py.
+CAPTURE_DIR = "./captures"
+
 
 class CaptureBit(Bit):
     version = "0.1"
 
-    def __init__(self, store: CaptureStore,
+    def __init__(self, store: CaptureStore | None = None, config=None,
                  idle_timeout_s: float = IDLE_TIMEOUT_S):
+        super().__init__(config)
+        if store is None:
+            store = CaptureStore(root=Path(CAPTURE_DIR),
+                                 session_id=new_session_id(),
+                                 bit={"name": "capture", "version": self.version})
         self._store = store
         self._idle_timeout_s = idle_timeout_s
 

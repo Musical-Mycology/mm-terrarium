@@ -42,8 +42,13 @@ class TestBit(Bit):
     # shares with its own script is the general shape here, not a TestBit quirk.
     SCRIPT_QUIET_SECONDS = 2.0
 
-    def __init__(self, run_duration: float = RUN_DURATION_SECONDS):
-        self._run_duration = run_duration
+    def __init__(self, config=None, run_duration: float | None = None):
+        super().__init__(config)
+        self._run_duration = (
+            run_duration if run_duration is not None
+            else (config.extras.get("run_duration_seconds") if config else None)
+            or RUN_DURATION_SECONDS
+        )
         self._elapsed = 0.0
         self._setup_entered = False
         self._run_started = False
@@ -53,6 +58,10 @@ class TestBit(Bit):
         self._round_won = False
         self._rounds_won = 0
         self._quiet_until = 0.0
+
+    @property
+    def run_duration(self) -> float:
+        return self._run_duration
 
     @property
     def role_table(self) -> RoleTable:

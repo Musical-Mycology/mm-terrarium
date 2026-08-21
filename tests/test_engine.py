@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.bit import Bit
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.room_binding import RoomBindingRegistry
@@ -25,7 +25,7 @@ class RoomCapableBit(TestBit):
 
 def test_add_observer_notifies_multiple_observers_of_state_changes():
     from types import SimpleNamespace
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     from control.engine import GameServer
     a, b = [], []
     server = GameServer({"TestBit": TestBit})
@@ -39,7 +39,7 @@ def test_add_observer_notifies_multiple_observers_of_state_changes():
 
 def test_observer_exception_does_not_break_engine_or_peers():
     from types import SimpleNamespace
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     from control.engine import GameServer
     seen = []
     server = GameServer({"TestBit": TestBit})
@@ -56,7 +56,7 @@ def test_observer_exception_does_not_break_engine_or_peers():
 
 def test_on_devices_change_fires_on_hello_join_and_unload():
     from types import SimpleNamespace
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     from control.engine import GameServer
     calls = []
     server = GameServer({"TestBit": TestBit})

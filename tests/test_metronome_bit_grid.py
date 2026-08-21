@@ -1,5 +1,5 @@
 """tests/test_metronome_bit_grid.py"""
-from bits.metronome_bit import MetronomeBit
+from bits.metronome.metronome_bit import MetronomeBit
 from control.cues import ROOM, LightCue
 
 

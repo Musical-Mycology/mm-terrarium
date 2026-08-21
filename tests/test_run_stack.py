@@ -316,7 +316,7 @@ def test_control_command_carries_the_flags_a_headless_run_needs(tmp_path):
 def test_device_command_carries_join_retry_and_samples_out(tmp_path):
     """--join-retry because a join sent before Control is listening is
     dropped with no queue behind it."""
-    command = device_command(_cfg(tmp_path), 1, 99)
+    command = device_command(_cfg(tmp_path, node="TEST_PLAYER_NODE"), 1, 99)
 
     assert "--join-retry" in command
     assert "--samples-out" in command
@@ -325,21 +325,12 @@ def test_device_command_carries_join_retry_and_samples_out(tmp_path):
     assert "TEST_PLAYER_NODE" in command
 
 
-def test_device_command_defaults_node_from_test_bit(tmp_path):
-    command = device_command(_cfg(tmp_path, bit="TestBit"), 1, 99)
-
-    assert command[command.index("--node") + 1] == "TEST_PLAYER_NODE"
-
-
-def test_device_command_derives_node_from_metronome_bit(tmp_path):
-    command = device_command(_cfg(tmp_path, bit="MetronomeBit"), 1, 99)
-
-    assert command[command.index("--node") + 1] == "METRO_PLAYER_NODE"
-
-
-def test_device_command_explicit_node_overrides_bit_mapping(tmp_path):
-    command = device_command(
-        _cfg(tmp_path, bit="MetronomeBit", node="SOME_OTHER_NODE"), 1, 99)
+def test_device_command_uses_the_configs_node_verbatim(tmp_path):
+    """Node derivation from the Bit manifest happens once, in
+    config_from_args (BitRegistry.resolve_config(...).join_node()) -- by
+    the time device_command runs, cfg.node is already the resolved value,
+    and this function just forwards it."""
+    command = device_command(_cfg(tmp_path, node="SOME_OTHER_NODE"), 1, 99)
 
     assert command[command.index("--node") + 1] == "SOME_OTHER_NODE"
 
@@ -517,16 +508,166 @@ def test_config_from_args_defaults_bit_to_test_bit():
     assert config_from_args(args).bit == "TestBit"
 
 
-def test_config_from_args_node_defaults_to_none():
+def test_config_from_args_derives_node_from_test_bit_manifest():
+    """No --node and the default Bit (TestBit): the node comes from
+    bits/test/bit.toml's launch.default_join_role ("player") resolved
+    against launch.nodes, via BitConfig.join_node()."""
     from harness.run_stack import config_from_args, parse_args
     args = parse_args([])
-    assert config_from_args(args).node is None
+    assert config_from_args(args).node == "TEST_PLAYER_NODE"
+
+
+def test_config_from_args_derives_node_from_metronome_bit_manifest():
+    """bits/metronome/bit.toml's launch.nodes maps player -> METRO_PLAYER_NODE
+    and default_join_role is "player", so join_node() resolves it without
+    any --node."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit"])
+    assert config_from_args(args).node == "METRO_PLAYER_NODE"
 
 
 def test_config_from_args_forwards_node():
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--node", "SOME_OTHER_NODE"])
     assert config_from_args(args).node == "SOME_OTHER_NODE"
+
+
+def test_config_from_args_devices_defaults_from_metronome_bit_manifest():
+    """bits/metronome/bit.toml's launch.default_devices is 2."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit"])
+    assert config_from_args(args).devices == 2
+
+
+def test_config_from_args_devices_defaults_from_test_bit_manifest():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args([])
+    assert config_from_args(args).devices == 1
+
+
+def test_config_from_args_forwards_explicit_devices_over_the_manifest():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit", "--devices", "5"])
+    assert config_from_args(args).devices == 5
+
+
+def test_config_from_args_room_type_defaults_from_metronome_bit_manifest():
+    """bits/metronome/bit.toml's launch.default_room_type is DEMO."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit"])
+    assert config_from_args(args).room_type == "DEMO"
+
+
+def test_config_from_args_forwards_explicit_room_type_over_the_manifest():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit", "--room-type", "TEST"])
+    assert config_from_args(args).room_type == "TEST"
+
+
+def test_ci_bound_uses_the_forwarded_setup_seconds_when_it_exceeds_the_manifest():
+    """--ci with no --seconds and no --setup-seconds: --setup-seconds keeps
+    its own 90s default (the controller ruling -- it is forwarded to
+    terrarium_boot unchanged regardless of the manifest), and that is what
+    actually governs how long Control holds SETUP. bits/test/bit.toml's
+    launch.setup_seconds is 0, so deriving the bound from the manifest
+    alone (0+45+15=60) would undercut the real 90s hold -- the bound must
+    be max(0, 90) + 45 + 15 = 150."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci"])
+    assert config_from_args(args).seconds == 90.0 + 45.0 + 15.0
+
+
+def test_ci_bound_uses_an_explicit_setup_seconds_when_it_exceeds_the_manifest():
+    """An explicit --setup-seconds still wins the max() over the
+    manifest's own (here larger) setup_seconds is NOT the point here --
+    MetronomeBit's manifest setup_seconds is 20, so an explicit
+    --setup-seconds 5 is smaller than the manifest and must NOT shrink the
+    bound below what the manifest itself needs: max(20, 5) + 45 + 15 = 80."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--bit", "MetronomeBit", "--setup-seconds", "5"])
+    assert config_from_args(args).seconds == 20.0 + 45.0 + 15.0
+
+
+def test_ci_bound_uses_the_larger_of_manifest_and_forwarded_setup_seconds():
+    """MetronomeBit's manifest setup_seconds (20) is smaller than the
+    forwarded --setup-seconds default (90), so the bound must use 90:
+    max(20, 90) + 45 + 15 = 150."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--bit", "MetronomeBit"])
+    assert config_from_args(args).seconds == 90.0 + 45.0 + 15.0
+
+
+def test_ci_bound_falls_back_to_45s_when_the_manifest_has_no_expected_run_seconds():
+    """bits/test/bit.toml sets no launch.expected_run_seconds, so the bound
+    falls back to the historical 45s default; setup contributes the
+    forwarded --setup-seconds default (90, larger than the manifest's 0),
+    plus the 15s grace: 90+45+15=150."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci"])
+    assert config_from_args(args).seconds == 90.0 + 45.0 + 15.0
+
+
+def test_ci_bound_with_an_explicit_setup_seconds_that_exceeds_the_manifest():
+    """An explicit --setup-seconds larger than TestBit's manifest
+    setup_seconds (0): max(0, 5) + 45 + 15 = 65."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--setup-seconds", "5"])
+    assert config_from_args(args).seconds == 5.0 + 45.0 + 15.0
+
+
+def test_ci_bound_is_overridden_by_an_explicit_seconds():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--bit", "MetronomeBit", "--seconds", "5"])
+    assert config_from_args(args).seconds == 5.0
+
+
+def test_an_unresolvable_node_is_a_config_error_before_anything_spawns():
+    """A Bit with no launch.nodes and no --node has nothing for a spawned
+    device to join -- that has to fail loud before any child is spawned,
+    not surface as a device-join timeout later."""
+    from harness.run_stack import config_from_args, parse_args
+    from control.bit_config import BitConfig, BitIdentity, ConsoleBlock, LaunchConfig, StartCondition
+
+    class _NodelessRegistry:
+        packages = {"NodelessBit": object()}
+
+        def resolve_config(self, name, overrides=None):
+            return BitConfig(
+                identity=BitIdentity(name="NodelessBit"),
+                launch=LaunchConfig(nodes=(), default_join_role=""),
+                start=StartCondition(), console=ConsoleBlock())
+
+    args = parse_args(["--bit", "NodelessBit"])
+    with pytest.raises(SystemExit) as exc_info:
+        config_from_args(args, registry=_NodelessRegistry())
+    assert exc_info.value.code != 0
+
+
+def test_an_unknown_bit_is_a_config_error_before_anything_spawns():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "NoSuchBit"])
+    with pytest.raises(SystemExit) as exc_info:
+        config_from_args(args)
+    assert exc_info.value.code != 0
+
+
+def test_list_bits_prints_every_discovered_bit_and_exits_zero(capsys):
+    from harness.run_stack import main
+    import sys as _sys
+
+    argv = ["run_stack.py", "--list-bits"]
+    old_argv = _sys.argv
+    _sys.argv = argv
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+    finally:
+        _sys.argv = old_argv
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "TestBit" in out
+    assert "MetronomeBit" in out
 
 
 _CONTROL_OK_WITH_URLS = (

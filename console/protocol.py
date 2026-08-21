@@ -9,9 +9,11 @@ from dataclasses import dataclass
 
 from uplink.protocol import (  # re-exported: single source of truth
     AbortCommand,
+    ListBitsCommand,
     LoadBitCommand,
     RunCommand,
     bit_completed_event,
+    bits_listed_event,
     error_event,
     parse_command,
     registration_changed_event,
@@ -19,8 +21,9 @@ from uplink.protocol import (  # re-exported: single source of truth
 )
 
 __all__ = [
-    "AbortCommand", "LoadBitCommand", "RunCommand", "parse_command",
-    "bit_completed_event", "error_event", "registration_changed_event",
+    "AbortCommand", "ListBitsCommand", "LoadBitCommand", "RunCommand",
+    "parse_command", "bit_completed_event", "bits_listed_event",
+    "error_event", "registration_changed_event",
     "state_changed_event", "role_view", "device_view", "snapshot_event",
     "devices_changed_event", "bit_status_event", "log_event",
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",

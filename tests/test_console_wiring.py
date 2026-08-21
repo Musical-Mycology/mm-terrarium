@@ -1,4 +1,4 @@
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.engine import GameServer
 from uplink.link import UplinkAgent

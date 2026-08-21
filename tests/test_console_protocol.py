@@ -64,6 +64,17 @@ def test_command_parsing_is_reused_from_uplink():
         {"command": "load_bit", "name": "TestBit"}) == LoadBitCommand("TestBit")
 
 
+def test_list_bits_command_parsing_is_reused_from_uplink():
+    from uplink.protocol import ListBitsCommand
+    assert protocol.parse_command(
+        {"command": "list_bits"}) == ListBitsCommand()
+
+
+def test_bits_listed_event_is_reused_from_uplink():
+    assert protocol.bits_listed_event([{"name": "TestBit"}], []) == {
+        "event": "bits_listed", "bits": [{"name": "TestBit"}], "errors": []}
+
+
 def test_parse_admin_command_arm_room_with_default_window():
     command = parse_admin_command(
         {"command": "arm_room", "room_type": "TEST", "fixture": "main"})

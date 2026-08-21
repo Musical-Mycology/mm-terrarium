@@ -9,6 +9,7 @@ import logging
 import time
 
 from console import protocol
+from control.bit_config import ManifestError
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.roles import RoleClass
 from control.room_profile import room_profile
@@ -29,9 +30,10 @@ ROOM_FRAME_INTERVAL = 0.1
 
 class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_bridge=None,
-                 clock=time.monotonic):
+                 clock=time.monotonic, registry=None):
         self.game_server = game_server
         self.server = server
+        self.registry = registry
         # The Room's live MIDI fan-out, for its controllers read-out. Optional:
         # a GameServer built the pre-Room way has none, and the panel then
         # shows the Room's declarations with no live values rather than
@@ -55,6 +57,14 @@ class ConsoleAgent:
     def poll(self) -> None:
         for client in self.server.drain_new_clients():
             self.server.send(client, self.snapshot())
+            # The Bits panel needs no request round-trip: it renders on
+            # bits_listed only, and this is the one place that event fires
+            # (see console/static/console.js's renderBits). No registry (a
+            # GameServer built the pre-Bits-registry way) means no Bits
+            # panel, silently -- not an error, since nothing asked for one.
+            if self.registry is not None:
+                self.server.send(client, protocol.bits_listed_event(
+                    self.registry.list_view(), self.registry.errors_view()))
         for client, msg in self.server.drain_inbound():
             error = self._handle_command(msg)
             if error is not None:
@@ -74,9 +84,22 @@ class ConsoleAgent:
         except ValueError as exc:
             logger.warning("dropping unparseable console message: %s", exc)
             return None
+        if isinstance(command, protocol.ListBitsCommand):
+            if self.registry is None:
+                return protocol.error_event(name, "no registry")
+            return protocol.bits_listed_event(
+                self.registry.list_view(), self.registry.errors_view())
         try:
             if isinstance(command, protocol.LoadBitCommand):
-                self.game_server.load_bit(command.name)
+                if self.registry is None:
+                    self.game_server.load_bit(command.name)
+                else:
+                    try:
+                        cfg = self.registry.resolve_config(
+                            command.name, command.overrides)
+                    except (ManifestError, KeyError) as exc:
+                        return protocol.error_event(name, str(exc))
+                    self.game_server.load_bit(command.name, config=cfg)
             elif isinstance(command, protocol.RunCommand):
                 self.game_server.run()
             elif isinstance(command, protocol.AbortCommand):
@@ -272,4 +295,5 @@ class ConsoleAgent:
             logger.exception("Bit.result raised; not broadcasting bit_completed")
             return
         if result is not None:
-            self.server.broadcast(protocol.bit_completed_event(result))
+            self.server.broadcast(protocol.bit_completed_event(
+                result, self.game_server.bit_name or "", bit.version))

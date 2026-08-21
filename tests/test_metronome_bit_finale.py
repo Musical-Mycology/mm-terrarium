@@ -1,5 +1,5 @@
 """tests/test_metronome_bit_finale.py"""
-from bits.metronome_bit import MetronomeBit
+from bits.metronome.metronome_bit import MetronomeBit
 from control.cues import FireTrigger
 
 B = MetronomeBit.BEAT_S

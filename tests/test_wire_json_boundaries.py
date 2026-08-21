@@ -12,7 +12,7 @@ import pytest
 
 from console.agent import ConsoleAgent
 from control.engine import GameServer
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 
 
 def strict_loads(text: str):

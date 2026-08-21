@@ -49,7 +49,9 @@ import time
 import webbrowser
 from dataclasses import dataclass, field
 
+from control.bit_registry import BitRegistry
 from control.process import stop_process
+from control.run_profile import RunProfile, parse_profile
 from control.teardown import TeardownStack
 from harness import markers
 from harness.proc_tee import ProcTee
@@ -60,16 +62,6 @@ DEFAULT_ARCO_COMMAND = "/Users/chris/projects/arco/apps/pytest/server"
 # DEFAULT_ARCO_COMMAND already hardcodes, so falling back to it adds no
 # new assumption about the dev box.
 ARCO_PYTHONPATH = "/Users/chris/projects/arco"
-PLAYER_NODE = "TEST_PLAYER_NODE"
-
-# Which node a spawned device joins by default, keyed by --bit -- each Bit
-# grants players through its own node (control/registration.py), so the
-# device command must follow whichever Bit Control is actually running.
-# An explicit --node overrides this mapping.
-BIT_PLAYER_NODES = {
-    "TestBit": "TEST_PLAYER_NODE",
-    "MetronomeBit": "METRO_PLAYER_NODE",
-}
 
 
 @dataclass
@@ -97,6 +89,7 @@ class StackConfig:
     bit: str = "TestBit"
     node: str | None = None
     open_urls: bool = False           # open each BROWSE_URL in the browser
+    profile: str | None = None        # forwarded to terrarium_boot verbatim
 
 
 @dataclass
@@ -131,12 +124,22 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
         command += ["--console-port", str(cfg.console_port)]
     command += ["--room-type", cfg.room_type]
     command += ["--bit", cfg.bit]
+    if cfg.profile is not None:
+        # terrarium_boot re-parses the same file and applies the same
+        # manifest < profile < CLI precedence for its own process's
+        # BitConfig -- run_stack's own resolve_config call above (in
+        # config_from_args) only needs the profile to derive ITS launch
+        # defaults (devices, node, ...), not to run the Bit.
+        command += ["--profile", cfg.profile]
     return command
 
 
 def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
+    """cfg.node is expected to already be resolved (config_from_args does
+    that once, via args.node or BitRegistry.resolve_config(cfg.bit)
+    .join_node()) -- this just forwards it."""
     dev = f"ie{index}"
-    node = cfg.node or BIT_PLAYER_NODES.get(cfg.bit, PLAYER_NODE)
+    node = cfg.node
     return [
         sys.executable, "-u", "-m", "harness.o2_shroom",
         "--dev", dev,
@@ -431,8 +434,10 @@ def parse_args(argv=None):
     ap.add_argument("--ci", action="store_true",
                     help="Non-interactive: no terminal echo, a bounded run, "
                          "and a non-zero exit on any failure.")
-    ap.add_argument("--devices", type=int, default=1,
-                    help="How many simulated player devices to join.")
+    ap.add_argument("--devices", type=int, default=None,
+                    help="How many simulated player devices to join. "
+                         "Default: the selected Bit manifest's "
+                         "launch.default_devices.")
     ap.add_argument("--seconds", type=float, default=None,
                     help="How long to hold the stack up. Default: forever "
                          "(Ctrl-C to stop), or 45s under --ci.")
@@ -460,21 +465,35 @@ def parse_args(argv=None):
                          "canvas, and each simulated Tuneshroom canvas. "
                          "Implies a Console on an ephemeral port unless "
                          "--console-port is given. Refused under --ci.")
-    ap.add_argument("--room-type", default="TEST", choices=["TEST", "DEMO"],
+    ap.add_argument("--room-type", default=None, choices=["TEST", "DEMO"],
                     help="Which RoomType to boot. DEMO configures the "
                          "simulated array backend (spec 2026-08-19); its "
                          "864 px canvas is otherwise identical in kind to "
-                         "TEST's.")
-    ap.add_argument("--bit", default="TestBit",
-                    choices=["TestBit", "MetronomeBit"],
-                    help="Which Bit to run. MetronomeBit is DEMO-only -- "
-                         "pair this with --room-type DEMO.")
+                         "TEST's. Default: the selected Bit manifest's "
+                         "launch.default_room_type.")
+    ap.add_argument("--bit", default=None,
+                    help="Which Bit to run, by its discovered manifest name "
+                         "(bits/*/bit.toml). See --list-bits for what's "
+                         "available. Default: the --profile's own "
+                         "[run].bit, else TestBit.")
+    ap.add_argument("--profile", default=None, metavar="PATH",
+                    help="A venue TOML (see profiles/dev-metronome.toml) "
+                         "supplying launch defaults -- bit, room_type, "
+                         "devices, console_port, seconds -- and a "
+                         "[bit.overrides] table forwarded verbatim to "
+                         "terrarium_boot. Precedence is manifest < profile "
+                         "< explicit CLI flags.")
+    ap.add_argument("--list-bits", action="store_true",
+                    help="Print every discovered Bit package (name, "
+                         "version, kind, room types, start condition, "
+                         "description) and any manifest errors, then exit.")
     ap.add_argument("--node", default=None,
                     help="Which node spawned devices join. Default: "
-                         "derived from --bit (BIT_PLAYER_NODES) -- "
-                         "TEST_PLAYER_NODE for TestBit, METRO_PLAYER_NODE "
-                         "for MetronomeBit. Set this to override that "
-                         "mapping.")
+                         "derived from the selected Bit's manifest "
+                         "(BitConfig.join_node() -- its "
+                         "launch.default_join_role resolved against "
+                         "launch.nodes, or the first node if there is no "
+                         "default role). Set this to override that.")
     args = ap.parse_args(argv)
     if args.ci and args.open:
         ap.error("--open makes no sense under --ci: a headless CI run "
@@ -482,24 +501,65 @@ def parse_args(argv=None):
     return args
 
 
-def config_from_args(args) -> StackConfig:
+def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
+    registry = registry if registry is not None else BitRegistry.discover()
+
+    profile = RunProfile()
+    if args.profile is not None:
+        with open(args.profile, encoding="utf-8") as handle:
+            profile = parse_profile(handle.read(), source=args.profile)
+
+    # manifest < profile < explicit CLI, applied once here.
+    bit = args.bit or profile.bit or "TestBit"
+    if bit not in registry.packages:
+        available = sorted(registry.packages)
+        print(f"unknown Bit {bit!r}; available: {available}",
+             file=sys.stderr)
+        raise SystemExit(1)
+    bit_cfg = registry.resolve_config(bit, profile.overrides or None)
+
+    node = args.node or bit_cfg.join_node()
+    if node is None:
+        print(f"Bit {bit!r} defines no launch.nodes and no --node "
+              f"was given -- a spawned device would have nothing to "
+              f"join.", file=sys.stderr)
+        raise SystemExit(1)
+
+    devices = (args.devices if args.devices is not None
+               else profile.devices if profile.devices is not None
+               else bit_cfg.launch.default_devices)
+    room_type = args.room_type or profile.room_type or bit_cfg.launch.default_room_type
+
     log_dir = args.log_dir or os.path.join(
         "runs", time.strftime("%Y%m%d-%H%M%S"))
-    seconds = args.seconds
+    seconds = args.seconds if args.seconds is not None else profile.seconds
     if seconds is None and args.ci:
-        seconds = CI_DEFAULT_SECONDS      # an unbounded CI run is a hung job
-    console_port = args.console_port
+        # An unbounded CI run is a hung job. The bound is the setup window
+        # that actually governs the hold -- max(manifest setup_seconds,
+        # forwarded --setup-seconds) -- plus the expected-run window, plus
+        # a 15s grace that covers teardown and the closing fades. The
+        # max() matters: --setup-seconds keeps its own 90s default
+        # regardless of the manifest (see its argparse default above), so
+        # a manifest with a shorter setup_seconds (e.g. TestBit's 0s)
+        # never governs the actual hold -- deriving the bound from the
+        # manifest alone would undercut a run that Control legitimately
+        # holds open for the full forwarded --setup-seconds.
+        seconds = (max(bit_cfg.launch.setup_seconds, args.setup_seconds)
+                  + (bit_cfg.launch.expected_run_seconds or CI_DEFAULT_SECONDS)
+                  + 15.0)
+    console_port = (args.console_port if args.console_port is not None
+                    else profile.console_port)
     if args.open and console_port is None:
         # Port 0: ConsoleServer binds an ephemeral port and terrarium_boot
         # prints the real URL, so the implied Console can never collide.
         console_port = 0
     return StackConfig(
         log_dir=log_dir, arco_command=args.arco_command,
-        devices=args.devices, ensemble=args.ensemble,
+        devices=devices, ensemble=args.ensemble,
         setup_seconds=args.setup_seconds, seconds=seconds,
         horizon=args.horizon, echo=not args.ci,
-        console_port=console_port, room_type=args.room_type,
-        bit=args.bit, node=args.node, open_urls=args.open)
+        console_port=console_port, room_type=room_type,
+        bit=bit, node=node, open_urls=args.open, profile=args.profile)
 
 
 def _failing_log_key(result: RunResult) -> str | None:
@@ -583,6 +643,17 @@ def _ensure_o2litepy(*, importer=_import_o2litepy, syspath=sys.path,
 def main() -> None:
     sigterm_as_keyboard_interrupt()
     args = parse_args()
+
+    if args.list_bits:
+        registry = BitRegistry.discover()
+        for row in registry.list_view(include_hidden=True):
+            rooms = ",".join(row["room_types"])
+            print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"
+                 f"{rooms}\t{row['start']['when']}\t{row['description']}")
+        for err in registry.errors_view():
+            print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
+        raise SystemExit(0)
+
     cfg = config_from_args(args)
 
     if not _ensure_o2litepy():

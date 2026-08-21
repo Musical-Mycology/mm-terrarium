@@ -13,7 +13,7 @@ import pytest
 
 pytest.importorskip("luxaeterna")
 
-from bits.test_bit import RUN_DURATION_SECONDS
+from bits.test.test_bit import RUN_DURATION_SECONDS
 from harness.devicelink_smoke import _run_duration, _wait_in_setup
 
 

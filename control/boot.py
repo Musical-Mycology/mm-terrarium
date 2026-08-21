@@ -114,7 +114,7 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
                         cue_horizon=config.cue_horizon, clock=clock)
         gs.room = room
         try:
-            gs.load_bit(config.bit_name)
+            gs.load_bit(config.bit_name, config=config.bit_config)
         except BitLoadError as exc:
             raise BootFailure(f"Bit load failed: {exc}") from exc
 

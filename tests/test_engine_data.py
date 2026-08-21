@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.cues import LightCue
 from control.engine import GameServer
 from control.roles import Role, RoleClass, RoleTable

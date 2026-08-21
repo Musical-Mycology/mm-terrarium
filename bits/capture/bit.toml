@@ -1,0 +1,21 @@
+[bit]
+name = "CaptureBit"
+version = "0.1"
+description = "Records labelled sensor telemetry from a real phone"
+entry = "capture_bit:CaptureBit"
+kind = "tool"
+author = "Musical Mycology"
+
+[launch]
+room_types = ["TEST"]
+default_join_role = "recorder"
+
+[launch.nodes]
+recorder = "CAPTURE_NODE"
+
+[start]
+when = "operator"
+
+[console]
+display_name = "Capture"
+notes = "Operator-driven: a capture session starts and ends from the console, which doubles as a live capture dashboard (open captures, counts, bytes written, failures)."

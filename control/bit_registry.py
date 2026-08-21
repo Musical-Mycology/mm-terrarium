@@ -1,0 +1,134 @@
+"""Bit package discovery: scan `bits/*/bit.toml` into a registry of
+`BitPackage`s without ever importing Bit code at discovery time.
+
+See .superpowers/sdd/2026-08-21-bit-packaging-and-launch/ for the design.
+"""
+
+from __future__ import annotations
+
+import importlib
+import sys
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+
+from control.bit_config import BitConfig, ManifestError, merge_overrides, parse_manifest
+
+_DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "bits"
+
+
+@dataclass
+class BitPackage:
+    name: str
+    config: BitConfig
+    path: Path
+    import_root: str
+
+
+@dataclass
+class PackageError:
+    path: str
+    message: str
+
+
+class BitRegistry:
+    def __init__(self):
+        self.packages: dict[str, BitPackage] = {}
+        self.errors: list[PackageError] = []
+
+    @classmethod
+    def discover(cls, root: Path | None = None) -> "BitRegistry":
+        is_default_root = root is None
+        root = root if root is not None else _DEFAULT_ROOT
+        registry = cls()
+
+        if not root.is_dir():
+            return registry
+
+        for pkg_dir in sorted(root.iterdir()):
+            manifest_path = pkg_dir / "bit.toml"
+            if not pkg_dir.is_dir() or not manifest_path.is_file():
+                continue
+
+            source = str(manifest_path)
+            try:
+                text = manifest_path.read_text()
+                config = parse_manifest(text, source=source)
+            except ManifestError as exc:
+                registry.errors.append(PackageError(path=source, message=str(exc)))
+                continue
+            except tomllib.TOMLDecodeError as exc:
+                registry.errors.append(PackageError(path=source, message=str(exc)))
+                continue
+
+            import_root = (
+                f"bits.{pkg_dir.name}" if is_default_root else pkg_dir.name
+            )
+            name = config.identity.name
+            if name in registry.packages:
+                registry.errors.append(PackageError(
+                    path=source,
+                    message=f"duplicate bit name {name!r} (already provided by "
+                             f"{registry.packages[name].path})",
+                ))
+                continue
+
+            registry.packages[name] = BitPackage(
+                name=name, config=config, path=pkg_dir, import_root=import_root)
+
+        return registry
+
+    def _import_module(self, pkg: BitPackage, module_name: str):
+        if pkg.path.parent != _DEFAULT_ROOT:
+            parent = str(pkg.path.parent)
+            if parent not in sys.path:
+                sys.path.insert(0, parent)
+        return importlib.import_module(f"{pkg.import_root}.{module_name}")
+
+    def bit_class(self, name: str) -> type:
+        pkg = self.packages[name]
+        entry = pkg.config.identity.entry
+        module_name, _, class_name = entry.partition(":")
+        source = str(pkg.path / "bit.toml")
+        try:
+            module = self._import_module(pkg, module_name)
+            return getattr(module, class_name)
+        except Exception as exc:
+            raise ManifestError(
+                source=source, key="bit.entry",
+                message=f"failed to load entry {entry!r}: {exc}") from exc
+
+    def resolve_config(self, name: str, overrides: dict | None = None) -> BitConfig:
+        pkg = self.packages[name]
+        if not overrides:
+            return pkg.config
+        return merge_overrides(pkg.config, overrides,
+                                source=str(pkg.path / "bit.toml"))
+
+    def list_view(self, *, include_hidden: bool = True) -> list[dict]:
+        rows = []
+        for name in sorted(self.packages):
+            pkg = self.packages[name]
+            config = pkg.config
+            if not include_hidden and config.console.hidden:
+                continue
+            rows.append({
+                "name": config.identity.name,
+                "version": config.identity.version,
+                "kind": config.identity.kind,
+                "description": config.identity.description,
+                "display_name": config.console.display_name,
+                "hidden": config.console.hidden,
+                "room_types": list(config.launch.room_types),
+                "start": {
+                    "when": config.start.when,
+                    "min_scored": config.start.min_scored,
+                    "timeout_seconds": config.start.timeout_seconds,
+                    "on_timeout": config.start.on_timeout,
+                },
+                "notes": config.console.notes,
+            })
+        return rows
+
+    def errors_view(self) -> list[dict]:
+        return [{"path": e.path, "message": e.message} for e in self.errors]

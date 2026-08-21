@@ -1,6 +1,6 @@
 """tests/test_engine_on_join.py"""
 from control.engine import GameServer, State
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 
 
 class _JoinRecorder(TestBit):

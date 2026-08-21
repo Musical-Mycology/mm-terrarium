@@ -1,10 +1,14 @@
 """Base interface every Bit implements. See design spec section 4."""
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from control.roles import RoleTable
 from control.rooms import RoomType
 from control.triggers import TriggerTable
+
+if TYPE_CHECKING:
+    from control.bit_config import BitConfig
 
 
 class Bit(ABC):
@@ -13,6 +17,13 @@ class Bit(ABC):
     Subclasses must provide `role_table`. All lifecycle hooks below are
     no-ops by default; a Bit overrides only the ones it needs.
     """
+
+    def __init__(self, config: "BitConfig | None" = None) -> None:
+        # Opaque to the engine -- GameServer.load_bit passes whatever it was
+        # given through unexamined. A Bit subclass reads its own fields off
+        # this if it wants packaged manifest data; the default None keeps
+        # every hand-constructed test Bit working unchanged.
+        self.config = config
 
     # Bit identity for provenance stamping (light-manifest v2 bit_version).
     # The bit *name* is the registry key GameServer loaded it under -- not

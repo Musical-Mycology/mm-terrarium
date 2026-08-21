@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from bits.capture_bit import CAPTURE_NODE, CaptureBit
+from bits.capture.capture_bit import CAPTURE_NODE, CaptureBit
 from capture.store import CaptureStore
 from control.engine import GameServer
 from control.roles import RoleClass

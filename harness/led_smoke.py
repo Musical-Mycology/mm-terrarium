@@ -23,7 +23,7 @@ import argparse
 import os
 import time
 
-from bits.test_bit import RUN_DURATION_SECONDS, TestBit
+from bits.test.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.audio import AudioBridge
 from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer

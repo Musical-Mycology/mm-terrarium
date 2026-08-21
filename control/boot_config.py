@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from control.bit_config import BitConfig
 from control.rooms import RoomType
 
 
@@ -14,6 +15,14 @@ from control.rooms import RoomType
 class BootConfig:
     room_type: RoomType
     bit_name: str
+    # The resolved BitConfig (manifest + any launch-time overrides) for
+    # bit_name, threaded through to GameServer.load_bit() so a Bit's
+    # __init__ sees its own manifest defaults (e.g. TestBit's
+    # extras["run_duration_seconds"]). None keeps every existing caller
+    # that never set this (e.g. tests constructing BootConfig directly)
+    # on load_bit's own config=None default -- an unconfigured Bit
+    # instantiation, exactly as before this field existed.
+    bit_config: BitConfig | None = None
     arco_soundfont: str | None = None
     # None = no array backend configured; "simulator" = Terrarium spawns
     # one (Spec 2's job); any other string = a real ArtNet/WLED host.
