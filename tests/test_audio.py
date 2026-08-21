@@ -79,6 +79,11 @@ def test_midi_for_an_ungranted_device_is_ignored():
     AudioBridge(pool).feed_midi("nobody", 0xB0, 74, 100)   # must not raise
 
 
+def test_program_change_for_unknown_dev_is_ignored():
+    pool = FakePool()
+    AudioBridge(pool).feed_midi("nobody", 0xC0, 38, 0)     # must not raise
+
+
 def test_feed_midi_applies_immediately():
     """The pre-timing behavior is the default and must not regress."""
     pool = FakePool()
