@@ -611,7 +611,7 @@ def _print_round_outcome(reason: str) -> None:
     elif reason == "parent-gone":
         print("parent is gone; tearing down", file=sys.stderr)
     elif reason == "completed":
-        print("Bit completed; tearing down")
+        print(markers.CONTROL_BIT_COMPLETED)
 
 
 def _build_arg_parser():

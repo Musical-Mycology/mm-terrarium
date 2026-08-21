@@ -263,6 +263,15 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         dead = _hold(cfg, processes, clock, sleep)
         if dead is not None:
             name, code = dead
+            # A control child that exits ZERO after announcing the Bit
+            # completed is the run ending on its own (a self-completing
+            # Bit like MetronomeBit), not a crash. wait_for rather than
+            # seen(): _hold notices the exit the instant it happens, which
+            # can be before the tee thread has drained the final lines.
+            if (name == "control" and code == 0
+                    and tees["control"].wait_for(
+                        markers.CONTROL_BIT_COMPLETED, 5.0, clock, sleep)):
+                return RunResult(True, "bit-completed", "", logs, urls)
             return RunResult(
                 False, "child-exited",
                 f"{name} exited (code {code!r}) during the hold, before "

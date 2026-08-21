@@ -860,3 +860,46 @@ def test_arco_path_fallback_reports_failure_when_the_checkout_lacks_it():
     ok = _ensure_o2litepy(importer=importer, syspath=[], environ={})
 
     assert ok is False
+
+
+class _CompletingControlPopen(ScriptedPopen):
+    """Models a Control whose Bit finished on its own: the child prints the
+    completion marker and exits ZERO. Same construction-time-death shape as
+    _CrashingControlPopen above, and for the same determinism reason."""
+
+    def __call__(self, command, **kwargs):
+        child = super().__call__(command, **kwargs)
+        if "harness.terrarium_boot" in command:
+            child.returncode = 0
+        return child
+
+
+def test_a_self_completed_bit_ends_the_hold_as_success(tmp_path):
+    """A Bit that signals done (MetronomeBit after its 4th judgment) makes
+    terrarium_boot print CONTROL_BIT_COMPLETED and exit 0. That is the run
+    ending on its own, not a crash -- observed live 2026-08-21 (runs/
+    20260821-094252), where a fully successful interactive run exited 1."""
+    script = _CONTROL_OK + f"{markers.CONTROL_BIT_COMPLETED}\n"
+    popen = _CompletingControlPopen([script, _DEVICE_OK])
+    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                      echo=False, seconds=5.0)
+    ticks = iter([0.0] * 20 + [1_000_000.0 * (i + 1) for i in range(30)])
+    result = run(cfg, popen=popen, clock=lambda: next(ticks),
+                 sleep=time.sleep)
+
+    assert result.ok is True
+    assert result.stage == "bit-completed"
+
+
+def test_a_zero_exit_without_the_completion_marker_still_fails(tmp_path):
+    """Exit 0 alone is not proof the run ended on its own -- a markerless
+    zero exit (a child that died quietly) keeps the failure diagnosis."""
+    popen = _CompletingControlPopen([_CONTROL_OK, _DEVICE_OK])
+    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                      echo=False, seconds=5.0)
+    ticks = iter([0.0] * 20 + [1_000_000.0 * (i + 1) for i in range(30)])
+    result = run(cfg, popen=popen, clock=lambda: next(ticks),
+                 sleep=time.sleep)
+
+    assert result.ok is False
+    assert result.stage == "child-exited"
