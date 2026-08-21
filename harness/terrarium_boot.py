@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 
+from bits.metronome_bit import MetronomeBit
 from bits.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.arco_process import ArcoProcess
 from control.boot import boot as _boot
@@ -586,6 +587,12 @@ def main() -> None:
                          "simulated array backend (spec 2026-08-19); its "
                          "864 px canvas is otherwise identical in kind to "
                          "TEST's.")
+    ap.add_argument("--bit", default="TestBit",
+                    choices=["TestBit", "MetronomeBit"],
+                    help="Which Bit to run. MetronomeBit is DEMO-only -- "
+                         "boot() already fails loud if the resolved "
+                         "RoomType is not in the chosen Bit's room_types, "
+                         "so pair this with --room-type DEMO.")
     args = ap.parse_args()
 
     # harness/run_stack.py stops this process with SIGTERM, and the whole
@@ -614,7 +621,7 @@ def main() -> None:
 
     room_type = RoomType[args.room_type]
     config = BootConfig(
-        room_type=room_type, bit_name="TestBit",
+        room_type=room_type, bit_name=args.bit,
         # DEMO's recipe requires an array backend (control/rooms.py);
         # "simulator" is the Terrarium-spawns-one value BootConfig already
         # defines. TEST ignores the field.
@@ -656,7 +663,8 @@ def main() -> None:
         return proc
 
     gs, server, agent, arco, teardown = build(
-        config, {"TestBit": _timed_test_bit_cls(_run_duration(args))},
+        config, {"TestBit": _timed_test_bit_cls(_run_duration(args)),
+                 "MetronomeBit": MetronomeBit},
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
         transport=transport, clock=clock,

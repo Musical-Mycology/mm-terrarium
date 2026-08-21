@@ -1,6 +1,7 @@
 import pytest
 
 import argparse
+import sys
 import time
 
 from bits.test_bit import RUN_DURATION_SECONDS, TestBit
@@ -14,7 +15,7 @@ from control.teardown import TeardownStack
 from devicelink.server import DeviceLinkServer
 from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
                                     _run_duration, _timed_test_bit_cls, build,
-                                    shutdown)
+                                    main, shutdown)
 
 
 def _fake_arco(command, popen=None):
@@ -793,6 +794,43 @@ def test_timed_test_bit_cls_carries_duration_and_exposes_room_types():
     bit = bit_cls()
     assert isinstance(bit, TestBit)
     assert bit._run_duration == 12.0
+
+
+def _run_main_capturing_build(monkeypatch, argv):
+    """main() cannot be driven directly to completion (see
+    test_full_o2lite_unwind_order_through_main above -- it needs a live
+    Arco and o2litepy), but everything up to and including the build()
+    call is pure argument plumbing. Stubbing build() to raise as soon as
+    it is invoked captures the BootConfig and bit registry main() built
+    without running any of that."""
+    captured = {}
+
+    def fake_build(config, bit_registry, **kwargs):
+        captured["config"] = config
+        captured["bit_registry"] = bit_registry
+        raise SystemExit(0)
+
+    import harness.terrarium_boot as terrarium_boot_module
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py"] + argv)
+
+    with pytest.raises(SystemExit):
+        main()
+
+    return captured
+
+
+def test_main_defaults_bit_to_test_bit(monkeypatch):
+    captured = _run_main_capturing_build(monkeypatch, [])
+    assert captured["config"].bit_name == "TestBit"
+    assert "TestBit" in captured["bit_registry"]
+
+
+def test_main_forwards_bit_flag_to_boot_config(monkeypatch):
+    captured = _run_main_capturing_build(
+        monkeypatch, ["--bit", "MetronomeBit", "--room-type", "DEMO"])
+    assert captured["config"].bit_name == "MetronomeBit"
+    assert "MetronomeBit" in captured["bit_registry"]
 
 
 def test_o2_simulator_factory_ties_the_simulator_to_this_process():

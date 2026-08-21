@@ -62,6 +62,15 @@ DEFAULT_ARCO_COMMAND = "/Users/chris/projects/arco/apps/pytest/server"
 ARCO_PYTHONPATH = "/Users/chris/projects/arco"
 PLAYER_NODE = "TEST_PLAYER_NODE"
 
+# Which node a spawned device joins by default, keyed by --bit -- each Bit
+# grants players through its own node (control/registration.py), so the
+# device command must follow whichever Bit Control is actually running.
+# An explicit --node overrides this mapping.
+BIT_PLAYER_NODES = {
+    "TestBit": "TEST_PLAYER_NODE",
+    "MetronomeBit": "METRO_PLAYER_NODE",
+}
+
 
 @dataclass
 class StackConfig:
@@ -85,6 +94,8 @@ class StackConfig:
     arco_ready_timeout: float = 60.0
     console_port: int | None = None   # None = no Terrarium Console
     room_type: str = "TEST"
+    bit: str = "TestBit"
+    node: str | None = None
     open_urls: bool = False           # open each BROWSE_URL in the browser
 
 
@@ -119,15 +130,17 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
     if cfg.console_port is not None:
         command += ["--console-port", str(cfg.console_port)]
     command += ["--room-type", cfg.room_type]
+    command += ["--bit", cfg.bit]
     return command
 
 
 def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
     dev = f"ie{index}"
+    node = cfg.node or BIT_PLAYER_NODES.get(cfg.bit, PLAYER_NODE)
     return [
         sys.executable, "-u", "-m", "harness.o2_shroom",
         "--dev", dev,
-        "--node", PLAYER_NODE,
+        "--node", node,
         "--ensemble", cfg.ensemble,
         "--join-retry", "2.0",
         "--control-horizon", str(cfg.horizon),
@@ -443,6 +456,16 @@ def parse_args(argv=None):
                          "simulated array backend (spec 2026-08-19); its "
                          "864 px canvas is otherwise identical in kind to "
                          "TEST's.")
+    ap.add_argument("--bit", default="TestBit",
+                    choices=["TestBit", "MetronomeBit"],
+                    help="Which Bit to run. MetronomeBit is DEMO-only -- "
+                         "pair this with --room-type DEMO.")
+    ap.add_argument("--node", default=None,
+                    help="Which node spawned devices join. Default: "
+                         "derived from --bit (BIT_PLAYER_NODES) -- "
+                         "TEST_PLAYER_NODE for TestBit, METRO_PLAYER_NODE "
+                         "for MetronomeBit. Set this to override that "
+                         "mapping.")
     args = ap.parse_args(argv)
     if args.ci and args.open:
         ap.error("--open makes no sense under --ci: a headless CI run "
@@ -467,7 +490,7 @@ def config_from_args(args) -> StackConfig:
         setup_seconds=args.setup_seconds, seconds=seconds,
         horizon=args.horizon, echo=not args.ci,
         console_port=console_port, room_type=args.room_type,
-        open_urls=args.open)
+        bit=args.bit, node=args.node, open_urls=args.open)
 
 
 def _failing_log_key(result: RunResult) -> str | None:

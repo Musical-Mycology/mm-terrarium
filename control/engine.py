@@ -150,6 +150,10 @@ class GameServer:
             role = self.registration.role_table.roles[result.role]
             result.config = compose_role_config(
                 self.bit_name, self.bit.version, role)
+            try:
+                self.bit.on_join(dev, result.role)
+            except Exception:
+                logger.exception("Bit.on_join failed; continuing")
             self._notify("on_registration_change")
             self._notify("on_devices_change")
         return result

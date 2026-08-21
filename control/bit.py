@@ -52,6 +52,11 @@ class Bit(ABC):
     def on_run_start(self) -> None:
         """Called once when Control enters RUNNING for this Bit."""
 
+    def on_join(self, dev: str, role_name: str) -> None:
+        """Called once per granted (non-ROOM) join, after the grant is
+        recorded. `role_name` is the granted role's name. Default: no-op.
+        Guarded by GameServer -- a raising Bit cannot break join()."""
+
     def update(self, dt: float) -> bool:
         """Called once per tick while RUNNING.
 

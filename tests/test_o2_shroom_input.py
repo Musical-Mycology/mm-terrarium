@@ -12,10 +12,10 @@ from harness.o2_shroom import (INPUT_QUEUE_MAX, SWEEP_RESUME_SECONDS,
                                drain_gestures, enqueue_input)
 
 
-def _q(*msgs):
+def _q(*msgs, stamp=None):
     q = queue.Queue(maxsize=INPUT_QUEUE_MAX)
     for m in msgs:
-        enqueue_input(q, m)
+        enqueue_input(q, m, stamp=stamp)
     return q
 
 
@@ -60,12 +60,22 @@ def test_drain_empties_the_queue():
 
 def test_enqueue_drops_oldest_on_overflow():
     q = queue.Queue(maxsize=2)
-    enqueue_input(q, {"type": "tap", "count": 1})
-    enqueue_input(q, {"type": "tap", "count": 2})
-    enqueue_input(q, {"type": "tap", "count": 3})
+    enqueue_input(q, {"type": "tap", "count": 1}, stamp=None)
+    enqueue_input(q, {"type": "tap", "count": 2}, stamp=None)
+    enqueue_input(q, {"type": "tap", "count": 3}, stamp=None)
     sent = []
     drain_gestures(q, lambda *a: sent.append(a), "ie1", now=1.0)
     assert [s[6] for s in sent] == [2, 3]
+
+
+def test_gesture_carries_enqueue_stamp_not_drain_time():
+    q = queue.Queue(maxsize=8)
+    enqueue_input(q, {"type": "tap", "count": 1}, stamp=12.345)
+    sent = []
+    drain_gestures(q, lambda *a: sent.append(a), "ie1", now=99.0)
+    address, when, typespec, dev, peak, dur, count = sent[0]
+    assert address == "/game/tap"
+    assert when == 12.345          # the enqueue-time stamp, not 99.0
 
 
 def test_build_wires_the_queue_into_the_backend():
@@ -75,7 +85,9 @@ def test_build_wires_the_queue_into_the_backend():
     try:
         assert backend.on_input is not None
         backend.on_input({"type": "tap", "count": 1})
-        assert q.get_nowait() == {"type": "tap", "count": 1}
+        stamp, msg = q.get_nowait()
+        assert msg == {"type": "tap", "count": 1}
+        assert stamp is None  # build() defaults clock=None -> no clock wired
     finally:
         backend.close()
 

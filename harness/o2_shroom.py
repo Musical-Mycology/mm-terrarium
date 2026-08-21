@@ -59,15 +59,19 @@ SWEEP_RESUME_SECONDS = 5.0
 INPUT_QUEUE_MAX = 64
 
 
-def enqueue_input(q: "queue.Queue", msg: dict) -> None:
-    """Queue one browser gesture, dropping the OLDEST on overflow.
+def enqueue_input(q: "queue.Queue", msg: dict, stamp: float | None) -> None:
+    """Queue one browser gesture with its enqueue-time stamp, dropping the
+    OLDEST on overflow.
 
     Runs on WebSimBackend's websocket handler thread, so it must never
     block; drop-oldest keeps the freshest gestures, matching the
-    drop-not-queue rule frame relay already follows elsewhere."""
+    drop-not-queue rule frame relay already follows elsewhere. `stamp` is
+    read on THIS thread, at enqueue time, so it does not absorb the
+    latency of waiting for the next tick's drain (see drain_gestures)."""
+    entry = (stamp, msg)
     while True:
         try:
-            q.put_nowait(msg)
+            q.put_nowait(entry)
             return
         except queue.Full:
             try:
@@ -80,29 +84,35 @@ def drain_gestures(q: "queue.Queue", send, dev: str, now: float):
     """Translate every queued browser gesture into a /game/* send.
 
     `send` has o2lite.send's signature: send(address, time, typespec,
-    *args). Gestures are stamped `now` -- the caller's o2lite clock
-    reading -- because the whole simulator process is the device, so
-    this IS the source stamp (Design Rule 4); the browser hop happened
-    inside the device. Returns `now` if any tilt went out (the caller
-    suspends its synthetic sweep against it), else None. Malformed
-    entries are dropped with one diagnostic per drain, mirroring the
-    engine's drop-this-frame rule."""
+    *args). Each gesture carries its own enqueue-time stamp (see
+    enqueue_input); that stamp is used as the send time when present,
+    with `now` -- the caller's o2lite clock reading -- as the fallback
+    for entries stamped None. Either way the stamp is still a reading
+    taken somewhere inside this simulator process, because the whole
+    simulator process is the device (Design Rule 4); the browser hop
+    happened inside the device, and moving the stamp from drain time to
+    enqueue time only moves it earlier within that same device, not
+    outside it. Returns the stamp of the drained tilt if any tilt went
+    out (the caller suspends its synthetic sweep against it), else None.
+    Malformed entries are dropped with one diagnostic per drain,
+    mirroring the engine's drop-this-frame rule."""
     tilted = None
     complained = False
     while True:
         try:
-            msg = q.get_nowait()
+            stamp, msg = q.get_nowait()
         except queue.Empty:
             return tilted
+        when = stamp if stamp is not None else now
         kind = msg.get("type") if isinstance(msg, dict) else None
         try:
             if kind == "tap":
                 count = max(1, int(msg.get("count", 1)))
-                send("/game/tap", now, "sffi", dev, 1.0, 50.0, count)
+                send("/game/tap", when, "sffi", dev, 1.0, 50.0, count)
             elif kind == "tilt":
                 gamma = max(-90.0, min(90.0, float(msg["gamma"])))
-                send("/game/tilt", now, "sf", dev, gamma)
-                tilted = now
+                send("/game/tilt", when, "sf", dev, gamma)
+                tilted = when
             else:
                 raise ValueError(kind)
         except (KeyError, TypeError, ValueError):
@@ -255,7 +265,8 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
           sim_host: str = "127.0.0.1", sim_port: int = 0,
           serve: bool = True, room_type: str | None = None,
           fixture: str | None = None,
-          input_queue: "queue.Queue | None" = None):
+          input_queue: "queue.Queue | None" = None,
+          clock=None):
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
@@ -269,6 +280,16 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
 
     input_queue, when given, receives every gesture the browser page sends
     back; see drain_gestures.
+
+    clock, when given, is called ON THE WEBSOCKET HANDLER THREAD to stamp
+    each gesture at enqueue time rather than at the next drain (see
+    enqueue_input). Pass o2lite.time_get: verified against o2litepy's
+    source (arco checkout, o2litepy/o2lite.py) to be a pure read --
+    local_time() (== time.monotonic() - a fixed start offset) plus the
+    already-synced global_minus_local float, no socket I/O and no state
+    mutation -- so it is safe to call from a thread other than the one
+    running the o2lite event loop. If clock is None, gestures are queued
+    with stamp=None and drain_gestures falls back to its own `now`.
     """
     from luxaeterna.backends.websim import WebSimBackend
     from luxaeterna.synth.capability import shroom_capability
@@ -290,7 +311,9 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
         channels = capability.pixel_count * 3
 
     on_input = (None if input_queue is None
-                else lambda msg: enqueue_input(input_queue, msg))
+                else lambda msg: enqueue_input(
+                    input_queue, msg,
+                    stamp=(clock() if clock is not None else None)))
     backend = WebSimBackend(capability=capability,
                             host=sim_host, port=sim_port, serve=serve,
                             label=dev, on_input=on_input)
@@ -385,7 +408,8 @@ def main() -> None:
     client, backend = build(args.dev, args.node,
                             args.sim_host, args.sim_port,
                             room_type=args.room_type, fixture=args.fixture,
-                            input_queue=operator_input)
+                            input_queue=operator_input,
+                            clock=o2lite.time_get)
     backend.open()
     print(f"{markers.BROWSE_URL} Watch the Shroom at "
           f"http://{args.sim_host}:{backend.port}/", flush=True)

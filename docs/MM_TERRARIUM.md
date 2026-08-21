@@ -80,7 +80,10 @@ hardware fleet.
 > measurement above, that is the same saturation artifact, not a sign the
 > horizon is wrong.
 >
-> Still absent: **fairyring**, real scoring, and any production Bit.
+> Still absent: **fairyring** and a real scoring framework. The "no
+> production Bit" gap closed 2026-08-20: **MetronomeBit** (see *Landed
+> subsystems*) is the first production game Bit, though scoring beyond a
+> Bit's own `result()` payload remains unbuilt.
 > As of 2026-08-10, **`Room`** exists as a boot-time concept and orchestration
 > (`control/boot.py` now spawns Arco itself, resolves a `RoomType`, and gates
 > Bit loading on it), and **TEST room now has a real renderer**: a devicelink-
@@ -269,7 +272,10 @@ return to a clean waiting state. Landed in the first-slice spec
   horizon itself — and the interface gained `cues(at) -> list`, called once
   per RUNNING tick with the same cue vocabulary, for a Bit to emit cues with
   no gesture behind them (the seam the Room-ambient-animation gap below was
-  waiting on).
+  waiting on). As of the MetronomeBit slice (2026-08-20) the interface also
+  carries an optional no-op `on_join(dev, role_name)` hook, called guarded
+  once per granted non-ROOM join -- the only way a Bit can learn join order,
+  which turn-based gameplay needs.
 - **Observer hooks:** a **multi-observer** list (`add_observer()` with
   notify-all) fires `on_state_change` / `on_registration_change` /
   `on_devices_change`, plus **two** transport-owned sinks: `on_release` (one
@@ -1583,8 +1589,10 @@ Cross-repo: luxaeterna's `WebSimBackend` gained an optional `on_input`
 callback (inbound JSON text messages over the already-open page websocket;
 binary stays down-only; malformed JSON and raising callbacks are dropped,
 never fatal) and `PAGE_HTML` gained pointer handlers -- click sends
-`{"type":"tap","count":1}`, double-click exactly one count-2 tap (the
-single-click send is held 250 ms and cancelled by the dblclick), and a
+`{"type":"tap","count":1}` (**as of the MetronomeBit slice, immediately on
+pointerup**: the original 250 ms held click and its double-click count-2
+path were removed as fatal to rhythm input; a pointerup with no preceding
+pointerdown is guarded and sends nothing), and a
 horizontal drag maps canvas x onto gamma in [-90, 90] as
 `{"type":"tilt","gamma":g}` at most every 50 ms, with a >5 px drag
 suppressing the click that browsers still fire after it. On this side,
@@ -1592,9 +1600,13 @@ suppressing the click that browsers still fire after it. On this side,
 (drop-oldest; the callback runs on the websocket handler thread) ->
 `drain_gestures()` in the existing tick loop, which sends the documented
 wire rows `/game/tap sffi [dev, 1.0, 50.0, count]` and `/game/tilt sf`.
-Stamping follows Design Rule 4: the harness stamps `o2lite.time_get()` at
-drain time -- the whole simulator process is the device, so the browser
-hop is inside it and browser clocks never touch the wire. An operator
+Stamping follows Design Rule 4: the harness stamps `o2lite.time_get()`
+**at enqueue time, on the websocket callback thread** (moved from drain
+time by the MetronomeBit slice -- drain-time stamping added up to ~23 ms
+of 44 Hz tick quantization, fatal to a +/-50 ms rhythm window; `time_get`
+was verified a pure read before being called off-thread). The whole
+simulator process is still the device, so the browser hop is inside it
+and browser clocks never touch the wire. An operator
 drag suspends the synthetic tilt sweep for `SWEEP_RESUME_SECONDS` (5.0)
 while `next_tilt` keeps advancing, so the sweep resumes on schedule with
 no overdue-tilt burst. Gestures are dropped until the role is granted
@@ -1609,6 +1621,42 @@ chime, and the `flash_device` trigger), teardown clean. Note the device
 still ignores `/<dev>/play` by design, so the sample plays nowhere on the
 simulator yet -- local sample playback on the sim is a separate, later
 slice.
+
+### `bits/metronome_bit.py` -- MetronomeBit, the first production game Bit
+A call-and-response rhythm game for `RoomType.DEMO`, built entirely on
+existing seams. Design:
+[`.../2026-08-20-metronome-bit-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-20-metronome-bit-design.md)
+and its plan `.../plans/2026-08-20-metronome-bit.md`. PR #44.
+
+- **Gameplay:** 100 BPM 4/4 metronome (woodblock, 1 HARD + 3 soft), 8-beat
+  cycle (4 call + 4 wait) x4 per run, round-robin turns over up to 2
+  Tuneshrooms (`RoleClass.UNIQUE`, capacity 2, node `METRO_PLAYER_NODE`).
+  A phrase succeeds only when all 4 wait beats get an in-time tap
+  (+/-50 ms) and no off-grid tap spoils it; success fires fireworks on
+  that shroom and the array, failure goes red with a low synth-bass tone.
+  Any success earns a 10 s rainbow + modulating warm-pad finale.
+- **Timing model:** the whole game lives in `at`-space -- the beat grid is
+  anchored on the first `cues(at)` call and taps are graded against it, so
+  the `cue_horizon` offset cancels by construction. `INPUT_OFFSET_S` is a
+  class-constant calibration knob; `status()` surfaces the last 8 signed
+  tap errors in ms, making the Console the measurement instrument for
+  whether the +/-50 ms window is achievable on a given input path.
+- **All consequences are `TriggerTable` scripts** (fireworks_player/room,
+  fail_player/room, finale), so the Console shows and can manually fire
+  each. All audio is ROOM-side (players hold no Arco voice); the room's
+  flsyn switches programs mid-run via 0xC0 cues (woodblock 115 / synth
+  bass 38 / warm pad 89). A failed shroom is tracked in a failed-devs set
+  so the ambient beat pulse skips it -- it stays dark until its own turn's
+  recovery cues relight it.
+- **Harness:** `--bit {TestBit,MetronomeBit}` on `terrarium_boot`/`run_stack`,
+  and run_stack derives each spawned device's join node from the bit
+  (explicit `--node` overrides) -- found by the first live run, where
+  devices joined `TEST_PLAYER_NODE` and were denied.
+- **Live-verified headless 2026-08-20** (`--ci --devices 2 --room-type DEMO
+  --bit MetronomeBit`, runs/20260820-231958): both joins granted, clean
+  teardown. The interactive tap-through (fireworks/red/finale by playing,
+  reading `tap_errors_ms`) is the remaining human verification. CI note:
+  a `--seconds` bound below ~35 s can truncate the finale window.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -2010,7 +2058,9 @@ Kept explicit so the doc doesn't over-claim:
   at load — but nothing *sends* the composed `/ie<N>/role` blob yet: the
   o2lite transport that reads `JoinResult.config` is still unbuilt; the Arco
   cue path that plays the welcome audio half now exists in `control/audio.py`.)
-- **Real Bits beyond `TestBit`.** No production Bit exists.
+- ~~**Real Bits beyond `TestBit`.** No production Bit exists.~~ **Closed
+  2026-08-20** by MetronomeBit (see *Landed subsystems*). A general scoring
+  framework is still absent; MetronomeBit reports through `result()` only.
 - ~~**Bit-declared triggers, cue scripts and conditions (Spec B).**~~ **Closed.**
   See *Bit-declared triggers, cue scripts and conditions* under Landed
   subsystems above. Live-verified against a real Arco: NOT YET DONE. Offline
