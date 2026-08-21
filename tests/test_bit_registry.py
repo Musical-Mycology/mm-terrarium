@@ -67,7 +67,6 @@ def test_list_view_shape_and_hidden_filter(tmp_path):
     assert row["room_types"] == ["TEST"]
 
 
-@pytest.mark.xfail(strict=False, reason="until bits are migrated")
 def test_real_bits_tree_discovers_cleanly():
     reg = BitRegistry.discover()
     assert reg.errors == []

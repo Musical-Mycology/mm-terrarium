@@ -21,3 +21,11 @@ def test_metronome_package_rhythm_block_reaches_instance():
     default = cls()
     assert abs(default.BEAT_S - 0.6) < 1e-9
     assert abs(fast.LEAD_IN_S - 0.5) < 1e-9
+
+
+def test_capturebit_package_resolves_and_constructs():
+    reg = BitRegistry.discover()
+    assert "CaptureBit" in reg.packages, reg.errors
+    cls = reg.bit_class("CaptureBit")
+    bit = cls(config=reg.resolve_config("CaptureBit"))
+    assert isinstance(bit.status(), dict)
