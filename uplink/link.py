@@ -5,6 +5,7 @@ See design spec sections 3-5.
 import logging
 import time
 
+from control.bit_config import ManifestError
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.rooms import non_room_counts
 from control.state import State
@@ -18,9 +19,10 @@ class UplinkAgent:
     MAX_BACKOFF_SECONDS = 30.0
 
     def __init__(self, game_server: GameServer, transport, *,
-                 time_source=time.monotonic):
+                 time_source=time.monotonic, registry=None):
         self.game_server = game_server
         self.transport = transport
+        self.registry = registry
         self._time_source = time_source
         self._next_attempt_at = 0.0
         self._backoff = self.INITIAL_BACKOFF_SECONDS
@@ -73,9 +75,26 @@ class UplinkAgent:
         self._dispatch(msg.get("command"), command)
 
     def _dispatch(self, command_name: str, command) -> None:
+        if isinstance(command, protocol.ListBitsCommand):
+            if self.registry is None:
+                self._send(protocol.error_event(command_name, "no registry"))
+                return
+            self._send(protocol.bits_listed_event(
+                self.registry.list_view(), self.registry.errors_view()))
+            return
         try:
             if isinstance(command, protocol.LoadBitCommand):
-                self.game_server.load_bit(command.name)
+                if self.registry is None:
+                    self.game_server.load_bit(command.name)
+                else:
+                    try:
+                        cfg = self.registry.resolve_config(
+                            command.name, command.overrides)
+                    except (ManifestError, KeyError) as exc:
+                        self._send(protocol.error_event(
+                            command_name, str(exc)))
+                        return
+                    self.game_server.load_bit(command.name, config=cfg)
             elif isinstance(command, protocol.RunCommand):
                 self.game_server.run()
             elif isinstance(command, protocol.AbortCommand):
@@ -98,7 +117,8 @@ class UplinkAgent:
             logger.exception("Bit.result raised; not sending bit_completed")
             return
         if result is not None:
-            self._send(protocol.bit_completed_event(result))
+            self._send(protocol.bit_completed_event(
+                result, self.game_server.bit_name or "", bit.version))
 
     def on_registration_change(self) -> None:
         counts = non_room_counts(self.game_server.registration)

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 @dataclass
 class LoadBitCommand:
     name: str
+    overrides: dict | None = None
 
 
 @dataclass
@@ -20,6 +21,11 @@ class RunCommand:
 
 @dataclass
 class AbortCommand:
+    pass
+
+
+@dataclass
+class ListBitsCommand:
     pass
 
 
@@ -33,11 +39,16 @@ def parse_command(msg: dict):
         name = msg.get("name")
         if not isinstance(name, str):
             raise ValueError("load_bit requires a string 'name'")
-        return LoadBitCommand(name=name)
+        overrides = msg.get("overrides")
+        if overrides is not None and not isinstance(overrides, dict):
+            raise ValueError("load_bit 'overrides' must be a dict when given")
+        return LoadBitCommand(name=name, overrides=overrides)
     if command == "run":
         return RunCommand()
     if command == "abort":
         return AbortCommand()
+    if command == "list_bits":
+        return ListBitsCommand()
     raise ValueError(f"unrecognized command: {command!r}")
 
 
@@ -59,8 +70,17 @@ def registration_changed_event(counts: list[tuple[str, int, int | None]]) -> dic
     }
 
 
-def bit_completed_event(result: dict) -> dict:
-    return {"event": "bit_completed", "result": result}
+def bit_completed_event(result: dict, bit_name: str = "",
+                        bit_version: str = "") -> dict:
+    return {
+        "event": "bit_completed",
+        "result": result,
+        "bit": {"name": bit_name, "version": bit_version},
+    }
+
+
+def bits_listed_event(bits: list[dict], errors: list[dict]) -> dict:
+    return {"event": "bits_listed", "bits": bits, "errors": errors}
 
 
 def error_event(command: str, message: str) -> dict:

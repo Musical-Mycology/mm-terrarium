@@ -1,4 +1,5 @@
 from bits.test.test_bit import TestBit
+from control.bit_config import ManifestError
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.rooms import Room, RoomType
@@ -7,6 +8,28 @@ from uplink.link import UplinkAgent
 from uplink.transport import FakeTransport
 
 REGISTRY = {"test_bit": TestBit}
+
+
+class FakeBitRegistry:
+    """Records what it was asked to resolve, and returns/raises canned
+    results -- a stand-in for control.bit_registry.BitRegistry."""
+
+    def __init__(self, config=None, raises=None):
+        self._config = config
+        self._raises = raises
+        self.resolve_calls = []
+
+    def resolve_config(self, name, overrides):
+        self.resolve_calls.append((name, overrides))
+        if self._raises is not None:
+            raise self._raises
+        return self._config
+
+    def list_view(self, *, include_hidden=True):
+        return [{"name": "test_bit"}]
+
+    def errors_view(self):
+        return [{"path": "x", "message": "bad"}]
 
 
 def make_agent():
@@ -123,7 +146,8 @@ def test_bit_completed_sent_at_unload_when_result_present():
     server.tick(3.0)  # crosses TestBit's default 2.0s completion threshold
 
     completed = [m for m in transport.sent if m["event"] == "bit_completed"]
-    assert completed == [{"event": "bit_completed", "result": {"score": 99}}]
+    assert completed == [{"event": "bit_completed", "result": {"score": 99},
+                          "bit": {"name": "scoring_bit", "version": "0.1"}}]
 
 
 def test_exploding_result_does_not_wedge_state_machine():
@@ -325,3 +349,79 @@ def test_backoff_doubles_on_repeated_failures():
     clock.advance(0.2)  # t=3.1
     agent.maintain_connection()
     assert transport.connected is True
+
+
+def test_list_bits_without_registry_sends_no_registry_error():
+    agent, server, transport = make_agent()
+    transport.push_incoming({"command": "list_bits"})
+
+    agent.poll()
+
+    errors = [m for m in transport.sent if m["event"] == "error"]
+    assert len(errors) == 1
+    assert errors[0]["message"] == "no registry"
+
+
+def test_list_bits_with_registry_sends_bits_listed():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    registry = FakeBitRegistry()
+    agent = UplinkAgent(server, transport, registry=registry)
+    transport.connect()
+    transport.push_incoming({"command": "list_bits"})
+
+    agent.poll()
+
+    listed = [m for m in transport.sent if m["event"] == "bits_listed"]
+    assert listed == [{"event": "bits_listed",
+                       "bits": [{"name": "test_bit"}],
+                       "errors": [{"path": "x", "message": "bad"}]}]
+
+
+def test_load_bit_with_registry_resolves_overrides_and_loads():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    registry = FakeBitRegistry(config=None)
+    agent = UplinkAgent(server, transport, registry=registry)
+    transport.connect()
+    overrides = {"launch": {"setup_seconds": 1}}
+    transport.push_incoming({"command": "load_bit", "name": "test_bit",
+                             "overrides": overrides})
+
+    agent.poll()
+
+    assert registry.resolve_calls == [("test_bit", overrides)]
+    assert server.state.name == "SETUP"
+
+
+def test_load_bit_with_registry_bad_overrides_sends_error_not_raise():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    registry = FakeBitRegistry(raises=ManifestError(
+        source="s", key="launch.setup_seconds", message="bad value"))
+    agent = UplinkAgent(server, transport, registry=registry)
+    transport.connect()
+    transport.push_incoming({"command": "load_bit", "name": "test_bit",
+                             "overrides": {"launch": {"setup_seconds": "x"}}})
+
+    agent.poll()  # must not raise
+
+    assert server.state.name == "IDLE"
+    errors = [m for m in transport.sent if m["event"] == "error"]
+    assert len(errors) == 1
+    assert errors[0]["command"] == "load_bit"
+
+
+def test_load_bit_with_registry_unknown_bit_sends_error_not_raise():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    registry = FakeBitRegistry(raises=KeyError("nope"))
+    agent = UplinkAgent(server, transport, registry=registry)
+    transport.connect()
+    transport.push_incoming({"command": "load_bit", "name": "nope"})
+
+    agent.poll()  # must not raise
+
+    assert server.state.name == "IDLE"
+    errors = [m for m in transport.sent if m["event"] == "error"]
+    assert len(errors) == 1

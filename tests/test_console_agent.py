@@ -2,11 +2,34 @@ import json
 
 from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
+from control.bit_config import ManifestError, merge_overrides, parse_manifest
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.rooms import ROOM_NODE_IDS, Room, RoomType, room_role_name
 from control.triggers import TriggerFired
 from tests.test_engine import RoomCapableBit
+
+
+class FakeBitRegistry:
+    """Records what it was asked to resolve, and returns/raises canned
+    results -- a stand-in for control.bit_registry.BitRegistry."""
+
+    def __init__(self, config=None, raises=None):
+        self._config = config
+        self._raises = raises
+        self.resolve_calls = []
+
+    def resolve_config(self, name, overrides):
+        self.resolve_calls.append((name, overrides))
+        if self._raises is not None:
+            raise self._raises
+        return self._config
+
+    def list_view(self, *, include_hidden=True):
+        return [{"name": "TestBit"}]
+
+    def errors_view(self):
+        return [{"path": "x", "message": "bad"}]
 
 
 class FakeConsoleServer:
@@ -595,3 +618,91 @@ def test_an_unparseable_fire_command_is_surfaced_not_dropped():
     errors = [msg for _client, msg in srv.sent
               if msg.get("event") == "error"]
     assert "name" in errors[0]["message"]
+
+
+def test_list_bits_without_registry_sends_no_registry_error():
+    gs, srv, agent = _server_with_agent()
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "list_bits"})
+    agent.poll()
+    errors = [msg for _client, msg in srv.sent if msg.get("event") == "error"]
+    assert len(errors) == 1
+    assert errors[0]["message"] == "no registry"
+
+
+def test_list_bits_with_registry_answers_bits_listed():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    registry = FakeBitRegistry()
+    agent = ConsoleAgent(gs, srv, registry=registry)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "list_bits"})
+    agent.poll()
+    sent = [msg for _client, msg in srv.sent if msg.get("event") == "bits_listed"]
+    assert sent == [{"event": "bits_listed",
+                     "bits": [{"name": "TestBit"}],
+                     "errors": [{"path": "x", "message": "bad"}]}]
+
+
+def test_load_bit_with_registry_resolves_overrides_into_constructed_bit():
+    base = parse_manifest(open("bits/test/bit.toml").read(),
+                          source="bits/test/bit.toml")
+    merged = merge_overrides(base, {"launch": {"setup_seconds": 1}},
+                             source="bits/test/bit.toml")
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    registry = FakeBitRegistry(config=merged)
+    agent = ConsoleAgent(gs, srv, registry=registry)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "overrides": {"launch": {"setup_seconds": 1}}})
+    agent.poll()
+    assert registry.resolve_calls == [
+        ("TestBit", {"launch": {"setup_seconds": 1}})]
+    assert gs.bit.config.launch.setup_seconds == 1
+    assert gs.state.name == "SETUP"
+
+
+def test_load_bit_with_registry_bad_overrides_sends_error_state_stays_idle():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    registry = FakeBitRegistry(raises=ManifestError(
+        source="s", key="launch.setup_seconds", message="bad value"))
+    agent = ConsoleAgent(gs, srv, registry=registry)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "overrides": {"launch": {"setup_seconds": "x"}}})
+    agent.poll()
+    errors = [msg for _client, msg in srv.sent if msg.get("event") == "error"]
+    assert len(errors) == 1
+    assert gs.state.name == "IDLE"
+
+
+def test_load_bit_with_registry_unknown_bit_sends_error_state_stays_idle():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    registry = FakeBitRegistry(raises=KeyError("nope"))
+    agent = ConsoleAgent(gs, srv, registry=registry)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "nope"})
+    agent.poll()
+    errors = [msg for _client, msg in srv.sent if msg.get("event") == "error"]
+    assert len(errors) == 1
+    assert gs.state.name == "IDLE"
+
+
+def test_bit_completed_event_carries_bit_name_and_version():
+    class ScoringBit(TestBit):
+        def result(self):
+            return {"score": 99}
+
+    gs = GameServer(bit_registry={"scoring_bit": ScoringBit})
+    srv = FakeConsoleServer()
+    ConsoleAgent(gs, srv)
+    gs.load_bit("scoring_bit")
+    gs.run()
+    gs.tick(3.0)  # crosses TestBit's default 2.0s completion threshold
+
+    completed = [m for m in srv.broadcasts if m.get("event") == "bit_completed"]
+    assert completed == [{"event": "bit_completed", "result": {"score": 99},
+                          "bit": {"name": "scoring_bit", "version": "0.1"}}]
