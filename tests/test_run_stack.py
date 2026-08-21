@@ -758,6 +758,49 @@ def test_ci_refuses_open():
         parse_args(["--ci", "--open"])
 
 
+def test_ci_refuses_serve():
+    """Mirrors --ci --open: a headless CI run has nothing to serve for."""
+    from harness.run_stack import parse_args
+
+    with pytest.raises(SystemExit):
+        parse_args(["--ci", "--serve"])
+
+
+def test_serve_is_forwarded_when_console_requested_without_ci():
+    """A console requested outside --ci implies --serve on the child, even
+    without the caller passing --serve explicitly -- an operator who asked
+    for a console has nowhere else to look at it from."""
+    from harness.run_stack import config_from_args, control_command, parse_args
+
+    cfg = config_from_args(parse_args(["--console-port", "8772"]))
+
+    assert "--serve" in control_command(cfg, ppid=1)
+
+
+def test_serve_is_not_forwarded_under_ci_even_with_a_console():
+    from harness.run_stack import config_from_args, control_command, parse_args
+
+    cfg = config_from_args(parse_args(["--ci", "--console-port", "8772"]))
+
+    assert "--serve" not in control_command(cfg, ppid=1)
+
+
+def test_serve_flag_is_forwarded_explicitly_without_a_console():
+    from harness.run_stack import config_from_args, control_command, parse_args
+
+    cfg = config_from_args(parse_args(["--serve"]))
+
+    assert "--serve" in control_command(cfg, ppid=1)
+
+
+def test_serve_is_omitted_by_default():
+    from harness.run_stack import config_from_args, control_command, parse_args
+
+    cfg = config_from_args(parse_args([]))
+
+    assert "--serve" not in control_command(cfg, ppid=1)
+
+
 def test_arco_path_fallback_is_a_noop_when_o2litepy_imports():
     from harness.run_stack import _ensure_o2litepy
 
