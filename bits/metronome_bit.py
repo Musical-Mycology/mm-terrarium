@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 
 from control.bit import Bit
-from control.cues import TARGET
+from control.cues import ROOM, TARGET, LightCue
 from control.roles import Role, RoleClass, RoleTable
 from control.rooms import RoomType, room_role
 from control.triggers import (
@@ -78,6 +78,22 @@ RAINBOW_LEVEL_CC = 21        # room rainbow's level lane (finale only)
 class MetronomeBit(Bit):
     version = "0.1"
     room_types = {RoomType.DEMO}
+
+    BEAT_S = BEAT_S
+    BEATS_PER_CYCLE = BEATS_PER_CYCLE
+    CYCLES = CYCLES
+    LEAD_IN_S = LEAD_IN_S
+    TOLERANCE_S = TOLERANCE_S
+    INPUT_OFFSET_S = INPUT_OFFSET_S
+    JUDGE_SLACK_S = JUDGE_SLACK_S
+    FINALE_S = FINALE_S
+    CLICK_KEY, HARD_VEL, SOFT_VEL = CLICK_KEY, HARD_VEL, SOFT_VEL
+    FAIL_KEY, FAIL_VEL = FAIL_KEY, FAIL_VEL
+    PROG_CLICK, PROG_FAIL, PROG_PAD = PROG_CLICK, PROG_FAIL, PROG_PAD
+    GREEN_CC, RED_CC = GREEN_CC, RED_CC
+    LEVEL_BASE, LEVEL_PULSE = LEVEL_BASE, LEVEL_PULSE
+    BLOOM_HUE_CC = BLOOM_HUE_CC
+    RAINBOW_LEVEL_CC = RAINBOW_LEVEL_CC
 
     def __init__(self):
         self._players: list[str] = []
@@ -236,3 +252,43 @@ class MetronomeBit(Bit):
 
     def verb_handlers(self) -> dict:
         return {}
+
+    def _grid(self, k: int) -> float:
+        """Absolute O2 time of global beat index `k` (0..31)."""
+        return self._t0 + k * self.BEAT_S
+
+    def _beat_cues(self, k: int) -> list:
+        """All absolutely-timed LightCues for global beat `k`."""
+        t = self._grid(k)
+        pos = k % self.BEATS_PER_CYCLE
+        out = []
+
+        # Every beat: level pulse on ROOM and every player, then decay back
+        # to the neutral level.
+        for dev in [ROOM, *self._rotation]:
+            out.append(LightCue(dev, 0xB0, 11, self.LEVEL_PULSE, when=t))
+            out.append(LightCue(dev, 0xB0, 11, self.LEVEL_BASE, when=t + 0.15))
+
+        # Call beats (0-3): click note pair on ROOM, hard on the downbeat.
+        if pos in (0, 1, 2, 3):
+            vel = self.HARD_VEL if pos == 0 else self.SOFT_VEL
+            out.append(LightCue(ROOM, 0x90, self.CLICK_KEY, vel, when=t))
+            out.append(LightCue(ROOM, 0x80, self.CLICK_KEY, 0, when=t + 0.1))
+
+        if pos == 0:
+            pass  # recovery: Task 7
+
+        return out
+
+    def cues(self, at: float) -> list:
+        out = []
+        if self._t0 is None:
+            self._t0 = at + self.LEAD_IN_S
+        # Emit each beat's cues once, when its gridpoint enters the horizon
+        # one beat ahead of `at`. TimedQueue holds them until `when`.
+        total = self.BEATS_PER_CYCLE * self.CYCLES
+        while (self._next_beat < total
+               and self._grid(self._next_beat) <= at + self.BEAT_S):
+            out.extend(self._beat_cues(self._next_beat))
+            self._next_beat += 1
+        return out
