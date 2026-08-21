@@ -867,6 +867,17 @@ def test_main_forwards_bit_flag_to_boot_config(monkeypatch):
     assert "MetronomeBit" in captured["bit_registry"]
 
 
+def test_main_hands_build_every_discovered_bit_name(monkeypatch):
+    """main() now wires the full registry (via lazy_class_map()) into
+    build(), not just the one bit named on the command line -- the Console
+    can load_bit() any discovered package, not only the boot-time default."""
+    from control.bit_registry import BitRegistry
+
+    captured = _run_main_capturing_build(monkeypatch, [])
+    all_names = set(BitRegistry.discover().packages)
+    assert set(captured["bit_registry"]) == all_names
+
+
 def test_list_bits_prints_every_discovered_package(monkeypatch, capsys):
     """--bit is discovery-driven now (bits/*/bit.toml), not a hardcoded
     choices= list -- --list-bits is how an operator finds out what's

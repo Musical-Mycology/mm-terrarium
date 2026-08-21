@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import sys
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +30,29 @@ class BitPackage:
 class PackageError:
     path: str
     message: str
+
+
+class _LazyClassMap(Mapping):
+    """A Mapping view over a BitRegistry's packages that imports a Bit's
+    class only when it is actually accessed (`registry.bit_class(name)`
+    on `__getitem__`), not when the map is built or iterated. Unknown
+    names raise KeyError (from the underlying dict lookup); a failing
+    import raises the registry's existing ManifestError. Both propagate
+    unchanged -- the engine's load_bit already wraps whatever bit_class
+    raises in BitLoadError, so this class adds no error handling of its
+    own."""
+
+    def __init__(self, registry: "BitRegistry"):
+        self._registry = registry
+
+    def __getitem__(self, name: str) -> type:
+        return self._registry.bit_class(name)
+
+    def __iter__(self):
+        return iter(self._registry.packages)
+
+    def __len__(self) -> int:
+        return len(self._registry.packages)
 
 
 class BitRegistry:
@@ -97,6 +121,13 @@ class BitRegistry:
             raise ManifestError(
                 source=source, key="bit.entry",
                 message=f"failed to load entry {entry!r}: {exc}") from exc
+
+    def lazy_class_map(self) -> Mapping[str, type]:
+        """A Mapping over every discovered Bit name whose values import
+        lazily on access, suitable to hand straight to build()/GameServer
+        so the Console can load_bit() any discovered package, not just
+        the one named at boot time."""
+        return _LazyClassMap(self)
 
     def resolve_config(self, name: str, overrides: dict | None = None) -> BitConfig:
         pkg = self.packages[name]

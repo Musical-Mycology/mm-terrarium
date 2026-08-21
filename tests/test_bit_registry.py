@@ -67,6 +67,33 @@ def test_list_view_shape_and_hidden_filter(tmp_path):
     assert row["room_types"] == ["TEST"]
 
 
+def test_lazy_class_map_imports_only_on_access(tmp_path):
+    make_pkg(tmp_path, "good", GOOD, MODULE)
+    make_pkg(tmp_path, "boom", GOOD.replace("GoodBit", "BoomBit"),
+             "raise RuntimeError('imported')\n")
+    reg = BitRegistry.discover(tmp_path)
+    m = reg.lazy_class_map()
+    assert set(m) == {"GoodBit", "BoomBit"}      # no import yet
+    assert m["GoodBit"].__name__ == "GoodBit"
+    with pytest.raises(Exception):               # ManifestError on access
+        m["BoomBit"]
+
+
+def test_lazy_class_map_unknown_name_is_keyerror(tmp_path):
+    make_pkg(tmp_path, "good", GOOD, MODULE)
+    with pytest.raises(KeyError):
+        BitRegistry.discover(tmp_path).lazy_class_map()["Nope"]
+
+
+def test_gameserver_loads_a_real_packaged_bit_through_the_lazy_map():
+    from control.engine import GameServer
+
+    reg = BitRegistry.discover()
+    server = GameServer(reg.lazy_class_map())
+    server.load_bit("TestBit")
+    assert server.bit.__class__.__name__ == "TestBit"
+
+
 def test_real_bits_tree_discovers_cleanly():
     reg = BitRegistry.discover()
     assert reg.errors == []

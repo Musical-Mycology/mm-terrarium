@@ -736,7 +736,7 @@ def main() -> None:
         return proc
 
     gs, server, agent, arco, teardown = build(
-        config, {bit: registry.bit_class(bit)},
+        config, registry.lazy_class_map(),
         arco_command=[args.arco_command],
         room_binding=room_binding, host=args.host, port=args.port,
         transport=transport, clock=clock,
