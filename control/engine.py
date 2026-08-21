@@ -100,14 +100,14 @@ class GameServer:
         self.devices.hello(dev, name, protoversion)
         self._notify("on_devices_change")
 
-    def load_bit(self, name: str) -> None:
+    def load_bit(self, name: str, config=None) -> None:
         if self.state != State.IDLE:
             raise InvalidTransition(
                 f"load_bit requires IDLE, current state is {self.state}")
         self._set_state(State.LOADING)
         try:
             bit_cls = self.bit_registry[name]
-            bit = bit_cls()
+            bit = bit_cls(config) if config is not None else bit_cls()
             role_table = bit.role_table
             validate_role_declarations(role_table)
             validate_trigger_table(bit.trigger_table, set(bit.verb_handlers()))
