@@ -1067,6 +1067,21 @@ prevented the ordering from disagreeing with itself again, and it had.
   exits during the hold**, and a failure prints the stage that failed, the
   process, its log path, and the log's tail.
 
+  **`--open` (2026-08-20) makes it the one-command simulator test
+  environment.** Every browser-facing surface -- the Terrarium Console,
+  each Room fixture canvas, each simulated Tuneshroom canvas -- prints its
+  URL behind a new `markers.BROWSE_URL` prefix, and `run_stack` collects
+  each one as it appears (a `ProcTee(on_line=...)` hook, readiness-driven,
+  not sleep-and-guess) and opens it in the default browser via
+  `webbrowser.open`. `--open` implies `--console-port 0` when no port was
+  given (`ConsoleServer` already binds an ephemeral port and
+  `terrarium_boot` prints the real URL, so the implied Console cannot
+  collide); `--ci --open` is refused at argument parsing. Without
+  `--open`, behavior is unchanged except the collected URLs are echoed,
+  one labelled line each, in the success summary. The Room simulators'
+  URLs arrive on Control's own tee because `SimulatorProcess` spawns them
+  with inherited stdout; each player device's URL arrives on its own tee.
+
   That second condition is worth stating separately because its absence was
   the one real correctness gap the whole-branch review found. `_hold()`
   originally took the Control tee and never read it, and nothing polled any
@@ -1109,7 +1124,12 @@ prevented the ordering from disagreeing with itself again, and it had.
   broken test; promoting the strings to constants is what makes
   stdout-watching honest. Failure markers (`JOIN DENIED:`, `FATAL: service`)
   are matched too, so a failure the child has already diagnosed ends the run
-  immediately rather than sitting out the full timeout.
+  immediately rather than sitting out the full timeout. A third kind,
+  `BROWSE_URL` (2026-08-20), marks a line carrying a URL worth a browser
+  tab; it is collected rather than waited on (a run has a variable number
+  of them), so it lives outside both marker dicts, emitted by
+  `terrarium_boot`, `room_simulator`, and `o2_shroom` and pinned to all
+  three emit sites by `tests/test_markers.py`.
 - **`harness/signals.py`** -- one copy of the SIGTERM-skips-`finally`
   gotcha: Python's `finally` blocks do not run on a bare SIGTERM, so a
   process whose cleanup (an exit report, a `WebSimBackend.close()`) lives in
