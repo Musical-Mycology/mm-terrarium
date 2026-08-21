@@ -325,6 +325,25 @@ def test_device_command_carries_join_retry_and_samples_out(tmp_path):
     assert "TEST_PLAYER_NODE" in command
 
 
+def test_device_command_defaults_node_from_test_bit(tmp_path):
+    command = device_command(_cfg(tmp_path, bit="TestBit"), 1, 99)
+
+    assert command[command.index("--node") + 1] == "TEST_PLAYER_NODE"
+
+
+def test_device_command_derives_node_from_metronome_bit(tmp_path):
+    command = device_command(_cfg(tmp_path, bit="MetronomeBit"), 1, 99)
+
+    assert command[command.index("--node") + 1] == "METRO_PLAYER_NODE"
+
+
+def test_device_command_explicit_node_overrides_bit_mapping(tmp_path):
+    command = device_command(
+        _cfg(tmp_path, bit="MetronomeBit", node="SOME_OTHER_NODE"), 1, 99)
+
+    assert command[command.index("--node") + 1] == "SOME_OTHER_NODE"
+
+
 def test_more_than_one_device_gets_distinct_dev_names(tmp_path):
     popen = ScriptedPopen([_CONTROL_OK, _DEVICE_OK, _DEVICE_OK])
     run(_cfg(tmp_path, devices=2), popen=popen, sleep=lambda _s: None)
@@ -496,6 +515,18 @@ def test_config_from_args_defaults_bit_to_test_bit():
     from harness.run_stack import config_from_args, parse_args
     args = parse_args([])
     assert config_from_args(args).bit == "TestBit"
+
+
+def test_config_from_args_node_defaults_to_none():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args([])
+    assert config_from_args(args).node is None
+
+
+def test_config_from_args_forwards_node():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--node", "SOME_OTHER_NODE"])
+    assert config_from_args(args).node == "SOME_OTHER_NODE"
 
 
 _CONTROL_OK_WITH_URLS = (
