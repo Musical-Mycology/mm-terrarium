@@ -1,5 +1,5 @@
 """tests/test_metronome_bit_declarations.py"""
-from bits.metronome_bit import MetronomeBit
+from bits.metronome.metronome_bit import MetronomeBit
 from control.engine import GameServer
 from control.rooms import RoomType, room_role_name
 

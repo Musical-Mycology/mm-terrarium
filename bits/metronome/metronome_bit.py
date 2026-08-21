@@ -95,7 +95,15 @@ class MetronomeBit(Bit):
     BLOOM_HUE_CC = BLOOM_HUE_CC
     RAINBOW_LEVEL_CC = RAINBOW_LEVEL_CC
 
-    def __init__(self):
+    def __init__(self, config=None):
+        super().__init__(config)
+        if config and config.rhythm:
+            r = config.rhythm
+            self.BEAT_S = 60.0 / r.bpm
+            self.BEATS_PER_CYCLE = r.beats_per_cycle
+            self.CYCLES = r.cycles
+            self.TOLERANCE_S = r.grading_window_ms / 1000.0
+            self.INPUT_OFFSET_S = r.input_offset_ms / 1000.0
         self._players: list[str] = []
         self._rotation: list[str] = []
         self._t0 = None
