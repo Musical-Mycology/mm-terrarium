@@ -108,6 +108,7 @@ class MetronomeBit(Bit):
         self._finale_end = None
         self._tap_errors_ms: list[float] = []
         self._pending_fires: list = []
+        self._failed_devs: set = set()
 
     @property
     def role_table(self) -> RoleTable:
@@ -232,6 +233,7 @@ class MetronomeBit(Bit):
         self._finale_end = None
         self._tap_errors_ms = []
         self._pending_fires = []
+        self._failed_devs = set()
 
     def on_join(self, dev: str, role_name: str) -> None:
         if role_name == "player":
@@ -330,6 +332,8 @@ class MetronomeBit(Bit):
         # Every beat: level pulse on ROOM and every player, then decay back
         # to the neutral level.
         for dev in [ROOM, *self._rotation]:
+            if dev in self._failed_devs:
+                continue
             out.append(LightCue(dev, 0xB0, 11, self.LEVEL_PULSE, when=t))
             out.append(LightCue(dev, 0xB0, 11, self.LEVEL_BASE, when=t + 0.15))
 
@@ -343,6 +347,7 @@ class MetronomeBit(Bit):
             out.append(LightCue(ROOM, 0xB0, 74, self.GREEN_CC, when=t))
             dev = self._turn_dev(k // self.BEATS_PER_CYCLE)
             if dev is not None:
+                self._failed_devs.discard(dev)
                 out.append(LightCue(dev, 0xB0, 74, self.GREEN_CC, when=t))
                 out.append(LightCue(dev, 0xB0, 11, self.LEVEL_BASE, when=t))
 
@@ -378,6 +383,7 @@ class MetronomeBit(Bit):
                     out.append(FireTrigger("fireworks_room"))
                     self._successes[dev] = self._successes.get(dev, 0) + 1
                 else:
+                    self._failed_devs.add(dev)
                     out.append(FireTrigger("fail_player", dev))
                     out.append(FireTrigger("fail_room"))
             self._judged_cycles += 1

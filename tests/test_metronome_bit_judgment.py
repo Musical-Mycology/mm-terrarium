@@ -1,6 +1,6 @@
 """tests/test_metronome_bit_judgment.py"""
 from bits.metronome_bit import MetronomeBit
-from control.cues import FireTrigger
+from control.cues import FireTrigger, ROOM
 
 B = MetronomeBit.BEAT_S
 
@@ -105,6 +105,36 @@ def test_multi_cycle_jump_judges_every_pending_cycle():
     assert ("fireworks_player", "ie1") in names
     assert ("fireworks_player", "ie2") in names
     assert sum(f.name == "fireworks_room" for f in fires) == 2
+
+
+def test_failed_dev_stays_dark_until_next_turn():
+    bit = _started(players=("ie1", "ie2"))
+    # cycle 0 is ie1's turn; never tap, so it fails the phrase.
+    end = _wait_grid(bit, 0, 3) + 0.2
+    fires = _drain_until(bit, end)
+    assert ("fail_player", "ie1") in [(f.name, f.dev) for f in fires]
+    assert "ie1" in bit._failed_devs
+
+    # Beats 8..15 belong to ie2 (cycle 1); ie1 must get no cc:11 pulses,
+    # while ROOM and ie2 keep pulsing.
+    for k in range(8, 16):
+        cues = bit._beat_cues(k)
+        level_cues = [c for c in cues if c.status == 0xB0 and c.data1 == 11]
+        assert not any(c.dev == "ie1" for c in level_cues)
+        assert any(c.dev == ROOM for c in level_cues)
+
+    # Beat 16 (cycle 2, pos 0) is ie1's turn again; recovery cues relight it.
+    recovery = bit._beat_cues(16)
+    assert any(c.dev == "ie1" and c.status == 0xB0 and c.data1 == 74
+               and c.data2 == bit.GREEN_CC for c in recovery)
+    assert any(c.dev == "ie1" and c.status == 0xB0 and c.data1 == 11
+               and c.data2 == bit.LEVEL_BASE for c in recovery)
+    assert "ie1" not in bit._failed_devs
+
+    # Subsequent beats pulse ie1 again.
+    later = bit._beat_cues(17)
+    level_cues = [c for c in later if c.status == 0xB0 and c.data1 == 11]
+    assert any(c.dev == "ie1" and c.data2 == bit.LEVEL_PULSE for c in level_cues)
 
 
 def test_call_beat_tap_spoils_phrase():
