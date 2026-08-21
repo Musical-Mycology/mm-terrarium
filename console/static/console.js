@@ -18,7 +18,6 @@ function send(command, extra) {
   }
 }
 
-$("loadBtn").onclick = () => send("load_bit", { name: $("bitPicker").value });
 $("runBtn").onclick = () => send("run");
 $("abortBtn").onclick = () => send("abort");
 
@@ -49,15 +48,6 @@ function renderDevices(devs) {
 }
 function renderStatus(status) {
   rows("#bitStatus", Object.entries(status || {}), (kv) => [kv[0], kv[1]]);
-}
-function populateBits(bits) {
-  const sel = $("bitPicker");
-  sel.innerHTML = "";
-  for (const b of bits) {
-    const opt = document.createElement("option");
-    opt.value = b; opt.textContent = b;
-    sel.appendChild(opt);
-  }
 }
 // Bits panel: one card per discovered package plus an error row per disabled
 // one. Rebuilt ONLY when the declared table changes -- bits_listed fires once
@@ -154,7 +144,6 @@ function handle(msg) {
     case "snapshot":
       $("state").textContent = msg.state;
       $("loaded").textContent = msg.loaded_bit ?? "—";
-      populateBits(msg.installed_bits);
       renderRegistration(msg.registration);
       renderRoles(msg.roles);
       renderDevices(msg.devices);

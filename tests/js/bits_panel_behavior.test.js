@@ -267,6 +267,73 @@ scenario("an unchanged bit list does not rebuild the cards", `
     "an unchanged bits table must not rebuild individual cards");
 `);
 
+// ---- merged top control bar (Task 4) --------------------------------------
+// The console used to ship two separate load/run/abort surfaces: a crude
+// <select>+"Load Bit" button "Controls" block near the top of index.html,
+// and this Bits panel's per-card Load buttons further down. That duplication
+// is the operator complaint this task fixes: one Bits section, at the top of
+// the page, owns load/run/abort.
+
+const indexHtmlPath = path.join(__dirname, "..", "..", "console", "static", "index.html");
+const indexHtml = fs.readFileSync(indexHtmlPath, "utf8");
+
+{
+  const legacySelectCount = (indexHtml.match(/id="bitPicker"/g) || []).length;
+  assert(legacySelectCount === 0,
+    "expected the legacy bitPicker <select> to be gone, found " + legacySelectCount);
+  const legacyLoadBtnCount = (indexHtml.match(/id="loadBtn"/g) || []).length;
+  assert(legacyLoadBtnCount === 0,
+    "expected the legacy standalone loadBtn button to be gone, found " + legacyLoadBtnCount);
+  const runBtnCount = (indexHtml.match(/id="runBtn"/g) || []).length;
+  assert(runBtnCount === 1, "expected exactly one runBtn, found " + runBtnCount);
+  const abortBtnCount = (indexHtml.match(/id="abortBtn"/g) || []).length;
+  assert(abortBtnCount === 1, "expected exactly one abortBtn, found " + abortBtnCount);
+}
+
+{
+  // The Bits section (its "Bits" <h2> heading and the #bits div) must be the
+  // first panel in document order -- ahead of Room, Triggers, Registration,
+  // etc. Locate the first <h2> after <h1> and confirm it is "Bits".
+  const h1At = indexHtml.indexOf("<h1");
+  const firstH2At = indexHtml.indexOf("<h2>", h1At);
+  const firstH2Text = /<h2>([^<]+)<\/h2>/.exec(indexHtml.slice(firstH2At, firstH2At + 40));
+  assert(firstH2Text && firstH2Text[1] === "Bits",
+    "expected the first panel heading after <h1> to be \"Bits\", got " +
+    (firstH2Text ? firstH2Text[1] : "(none found)"));
+  const bitsHeadingAt = indexHtml.indexOf(">Bits<");
+  const bitsDivAt = indexHtml.indexOf('id="bits"');
+  const roomHeadingAt = indexHtml.indexOf(">Room<");
+  assert(bitsHeadingAt >= 0 && bitsDivAt > bitsHeadingAt && roomHeadingAt > bitsDivAt,
+    "expected Bits heading, then #bits div, then Room heading, in that order");
+}
+
+scenario("a state_changed event updates the header text but preserves bit-card identity", `
+  renderBits([METRONOME, HIDDEN_BIT], ERRORS);
+  const list = document.getElementById("bitCards");
+  const first = list.children[0];
+  const childrenBefore = list.children.length;
+
+  handle({ event: "state_changed", state: "RUNNING" });
+
+  assert(document.getElementById("state").textContent === "RUNNING",
+    "state_changed should update the state header text, got " +
+    document.getElementById("state").textContent);
+  assert(document.getElementById("bitCards") === list,
+    "state_changed must not replace the bits card list node");
+  assert(list.children.length === childrenBefore,
+    "state_changed must not rebuild the bits cards");
+  assert(list.children[0] === first,
+    "state_changed must not rebuild individual bit cards");
+`);
+
+scenario("Run and Abort send the run/abort commands", `
+  document.getElementById("runBtn").onclick();
+  document.getElementById("abortBtn").onclick();
+  assert(sent.length === 2, "expected two sends, got " + sent.length);
+  assert(sent[0].command === "run", "expected run, got " + JSON.stringify(sent[0]));
+  assert(sent[1].command === "abort", "expected abort, got " + JSON.stringify(sent[1]));
+`);
+
 // ---- report --------------------------------------------------------------
 
 if (failures > 0) {
