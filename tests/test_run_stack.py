@@ -472,6 +472,32 @@ def test_config_from_args_forwards_room_type():
     assert config_from_args(args).room_type == "DEMO"
 
 
+def test_control_command_defaults_bit_to_test_bit():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x")
+    cmd = control_command(cfg, ppid=1)
+    assert cmd[cmd.index("--bit") + 1] == "TestBit"
+
+
+def test_control_command_passes_bit_when_set():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x", bit="MetronomeBit")
+    cmd = control_command(cfg, ppid=1)
+    assert cmd[cmd.index("--bit") + 1] == "MetronomeBit"
+
+
+def test_config_from_args_forwards_bit():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit"])
+    assert config_from_args(args).bit == "MetronomeBit"
+
+
+def test_config_from_args_defaults_bit_to_test_bit():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args([])
+    assert config_from_args(args).bit == "TestBit"
+
+
 _CONTROL_OK_WITH_URLS = (
     f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
     f"{markers.BROWSE_URL} Terrarium Console at http://127.0.0.1:8901/\n"
