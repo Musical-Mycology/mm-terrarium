@@ -139,7 +139,7 @@ def _get(table: dict, key: str, expected: type, default: Any, *, source: str,
         ok = isinstance(value, expected)
     if not ok:
         raise ManifestError(
-            source=source, key=f"{prefix}.{key}",
+            source=source, key=f"{prefix}.{key}" if prefix else key,
             message=f"expected {expected.__name__}, got {type(value).__name__}")
     return value
 
@@ -367,15 +367,34 @@ def parse_manifest(text: str, *, source: str) -> BitConfig:
     )
 
 
-# Map of override table name -> (dataclass field name on BitConfig, parser).
+# Map of override table name -> (dataclass field name on BitConfig, parser,
+# default-instance factory used when the current field is None).
 _OVERRIDE_TABLES = {
-    "bit": ("identity", _parse_identity),
-    "launch": ("launch", _parse_launch),
-    "start": ("start", _parse_start),
-    "console": ("console", _parse_console),
-    "rhythm": ("rhythm", _parse_rhythm),
-    "ambient": ("ambient", _parse_ambient),
+    "bit": ("identity", _parse_identity, None),
+    "launch": ("launch", _parse_launch, None),
+    "start": ("start", _parse_start, None),
+    "console": ("console", _parse_console, None),
+    "rhythm": ("rhythm", _parse_rhythm, RhythmConfig),
+    "ambient": ("ambient", _parse_ambient, AmbientConfig),
 }
+
+
+def _to_raw(table_name: str, obj: Any) -> dict:
+    """Convert a parsed dataclass instance back into the raw TOML-shaped
+    dict its parser function expects, so overrides can be re-validated
+    through the exact same rules the manifest parser uses."""
+    if table_name == "launch":
+        return {
+            "room_types": list(obj.room_types),
+            "default_room_type": obj.default_room_type,
+            "default_devices": obj.default_devices,
+            "setup_seconds": obj.setup_seconds,
+            "expected_run_seconds": obj.expected_run_seconds,
+            "transport": obj.transport,
+            "nodes": dict(obj.nodes),
+            "default_join_role": obj.default_join_role,
+        }
+    return {f.name: getattr(obj, f.name) for f in fields(obj)}
 
 
 def merge_overrides(config: BitConfig, overrides: dict, *, source: str) -> BitConfig:
@@ -395,6 +414,11 @@ def merge_overrides(config: BitConfig, overrides: dict, *, source: str) -> BitCo
             if not isinstance(table_value, dict) or "keys" not in table_value:
                 raise ManifestError(source=source, key="results",
                                      message="expected a table with 'keys'")
+            unknown = set(table_value) - {"keys"}
+            if unknown:
+                bad = sorted(unknown)[0]
+                raise ManifestError(source=source, key=f"results.{bad}",
+                                     message="unknown override key")
             changes["results_keys"] = tuple(table_value["keys"])
             continue
 
@@ -405,18 +429,14 @@ def merge_overrides(config: BitConfig, overrides: dict, *, source: str) -> BitCo
             raise ManifestError(source=source, key=table_name,
                                  message="expected a table")
 
-        field_name, _parser = _OVERRIDE_TABLES[table_name]
+        field_name, parser, default_factory = _OVERRIDE_TABLES[table_name]
         current = getattr(config, field_name)
 
         # Determine the dataclass whose field names bound valid keys. When
         # the current value is None (e.g. rhythm/ambient not present), we
         # still need a schema to validate against -- build a default instance.
         if current is None:
-            defaults_by_table = {
-                "rhythm": RhythmConfig,
-                "ambient": AmbientConfig,
-            }
-            current = defaults_by_table[table_name]()
+            current = default_factory()
 
         valid_keys = {f.name for f in fields(current)}
         for key in table_value:
@@ -425,6 +445,12 @@ def merge_overrides(config: BitConfig, overrides: dict, *, source: str) -> BitCo
                     source=source, key=f"{table_name}.{key}",
                     message="unknown override key")
 
-        changes[field_name] = replace(current, **table_value)
+        # Re-validate the merged values through the same parser the manifest
+        # itself uses, so semantic/type errors (e.g. start.when="scheduled",
+        # a bool where a number is required) raise here too, not just on
+        # unknown key names.
+        raw = _to_raw(table_name, current)
+        raw.update(table_value)
+        changes[field_name] = parser(raw, source=source)
 
     return replace(config, **changes)

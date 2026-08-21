@@ -113,3 +113,35 @@ def test_merge_overrides_precedence_and_strictness():
     assert cfg.launch.setup_seconds == 20  # original untouched (frozen)
     with pytest.raises(ManifestError):
         merge_overrides(cfg, {"launch": {"no_such_key": 1}}, source="cli")
+
+
+def test_merge_overrides_revalidates_semantic_values():
+    cfg = parse_manifest(FULL, source="s")
+    with pytest.raises(ManifestError) as exc:
+        merge_overrides(cfg, {"start": {"when": "scheduled"}}, source="cli")
+    assert exc.value.key == "start.when"
+
+    with pytest.raises(ManifestError) as exc:
+        merge_overrides(cfg, {"launch": {"transport": "udp"}}, source="cli")
+    assert exc.value.key == "launch.transport"
+
+
+def test_merge_overrides_rejects_bool_as_numeric():
+    cfg = parse_manifest(FULL, source="s")
+    with pytest.raises(ManifestError) as exc:
+        merge_overrides(cfg, {"launch": {"setup_seconds": True}}, source="cli")
+    assert exc.value.key == "launch.setup_seconds"
+
+
+def test_merge_overrides_results_unknown_key_strict():
+    cfg = parse_manifest(FULL, source="s")
+    with pytest.raises(ManifestError) as exc:
+        merge_overrides(
+            cfg, {"results": {"keys": ["a"], "typo": 1}}, source="cli")
+    assert exc.value.key == "results.typo"
+
+
+def test_bad_assets_table_error_key_has_no_leading_dot():
+    with pytest.raises(ManifestError) as exc:
+        parse_manifest("assets = 1\n" + MINIMAL, source="s")
+    assert exc.value.key == "assets"
