@@ -28,6 +28,13 @@ CONTROL_TRANSPORT_READY = "DeviceLink running on o2lite ensemble"
 # Registration is open. Devices must join scored roles inside this window.
 CONTROL_SETUP_HOLD = "Holding in SETUP"
 
+# The Bit signalled done from update(dt) and terrarium_boot is unwinding on
+# purpose. A control child that exits ZERO after this line is the run
+# ending on its own -- run_stack treats it as success, not child-exited.
+# (TestBit under --hold never emits this; self-completing Bits like
+# MetronomeBit always do.)
+CONTROL_BIT_COMPLETED = "Bit completed; tearing down"
+
 # --- Device (harness/o2_shroom.py) -------------------------------------
 
 # o2lite.time_get() went non-negative. Until this, the device has no clock
@@ -61,6 +68,7 @@ BROWSE_URL = "BROWSE_URL:"
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,
+    "CONTROL_BIT_COMPLETED": CONTROL_BIT_COMPLETED,
     "DEVICE_CLOCK_SYNCED": DEVICE_CLOCK_SYNCED,
     "DEVICE_ROLE_GRANTED": DEVICE_ROLE_GRANTED,
 }
