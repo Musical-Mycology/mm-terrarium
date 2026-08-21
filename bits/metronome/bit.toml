@@ -20,7 +20,7 @@ player = "METRO_PLAYER_NODE"
 
 [start]
 when = "players"
-min_scored = 1
+min_scored = 2
 timeout_seconds = 120
 on_timeout = "start"
 

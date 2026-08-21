@@ -1713,7 +1713,11 @@ enumerate, configure, and launch Bits without importing their code first.
   errors); when `--room-type`/`--node`/`--devices` are omitted they come
   from the manifest's `[launch]` defaults, not a CLI default or a hardcoded
   dict. The CI timeout bound is `max(manifest setup_seconds, --setup-seconds)
-  + expected_run_seconds + 15`.
+  + expected_run_seconds + 15`. A manifest's `[launch] setup_seconds` governs
+  the actual SETUP hold only for a bare `terrarium_boot` launch; `run_stack`
+  always forwards its own `--setup-seconds` (default 90.0), so when launching
+  via `run_stack` the manifest value only feeds the CI-bound formula above,
+  not the hold itself.
 - **`control/run_profile.py` + `--profile`.** A profile (e.g.
   `profiles/dev-metronome.toml`) names a bit and can override any of its
   manifest fields (`[bit.overrides.*]`); precedence is
