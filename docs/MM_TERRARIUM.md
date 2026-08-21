@@ -1719,7 +1719,17 @@ yet**; the box does not exist.
   `control/` may import it**, and `devicelink/o2_transport.py` does not either
   (the caller injects an already-connected object), which is what keeps the
   whole suite runnable with no Arco, no pyarco and no O2. That rule is the
-  same one `control/audio.py` has always followed for pyarco.
+  same one `control/audio.py` has always followed for pyarco. As of
+  2026-08-20, `harness/run_stack.py` no longer requires the PYTHONPATH to
+  be set by hand: when o2litepy is not importable it falls back to the
+  same hardcoded checkout (`ARCO_PYTHONPATH`), appending it to `sys.path`
+  and to the spawned children's `PYTHONPATH`; an explicit PYTHONPATH
+  still wins. Upstream note, same day: o2litepy's canonical home is now
+  the `rbdannenberg/o2` repo's reworked package (`o2litepy/src/o2litepy`),
+  with the `arco/o2litepy/` copy Roger describes as a downstream copy he
+  may remove -- the two are byte-identical today, but if the arco copy
+  disappears, `ARCO_PYTHONPATH` and every `PYTHONPATH=` recipe in this
+  doc must repoint at the o2 checkout.
 - **mm-tuneshroom** — the instrument app and browser simulator. Its web build
   deploys into the Terrarium's `www/` as an artifact; it never contains
   Terrarium-side logic. (The legacy M1a / Sensor-Check harness stays in
