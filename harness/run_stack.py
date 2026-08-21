@@ -499,12 +499,17 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         "runs", time.strftime("%Y%m%d-%H%M%S"))
     seconds = args.seconds
     if seconds is None and args.ci:
-        # An unbounded CI run is a hung job. The bound is the manifest's
-        # own setup + expected-run window, plus a 15s grace that covers
-        # teardown and the closing fades -- run_stack's OWN
-        # --setup-seconds default (90s) is unrelated and is forwarded to
-        # terrarium_boot unchanged regardless of this calculation.
-        seconds = (bit_cfg.launch.setup_seconds
+        # An unbounded CI run is a hung job. The bound is the setup window
+        # that actually governs the hold -- max(manifest setup_seconds,
+        # forwarded --setup-seconds) -- plus the expected-run window, plus
+        # a 15s grace that covers teardown and the closing fades. The
+        # max() matters: --setup-seconds keeps its own 90s default
+        # regardless of the manifest (see its argparse default above), so
+        # a manifest with a shorter setup_seconds (e.g. TestBit's 0s)
+        # never governs the actual hold -- deriving the bound from the
+        # manifest alone would undercut a run that Control legitimately
+        # holds open for the full forwarded --setup-seconds.
+        seconds = (max(bit_cfg.launch.setup_seconds, args.setup_seconds)
                   + (bit_cfg.launch.expected_run_seconds or CI_DEFAULT_SECONDS)
                   + 15.0)
     console_port = args.console_port
