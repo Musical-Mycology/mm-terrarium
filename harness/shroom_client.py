@@ -22,6 +22,7 @@ The wire, from devicelink/protocol.py and devicelink/agent.py:
     down  /<dev>/play    ss   [name, params]
     down  /<dev>/release ""   []
     down  /<dev>/error   ss   [context, message]
+    down  /<dev>/room    b    [blob]   (informational; ignored here)
 
 The gesture and play rows are implemented by the Flutter simulator today;
 this client sends tilt and tap and ignores /<dev>/play. Design Rule 2 requires

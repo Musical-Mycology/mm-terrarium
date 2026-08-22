@@ -1154,3 +1154,63 @@ def test_unloading_clears_queues_even_with_no_room_audio_injected():
                            now=agent._clock())
     agent.on_state_change(State.RUNNING, State.UNLOADING)
     assert agent._light_cues.pending() == 0
+
+
+def _room_msgs(server, dev="ie1"):
+    return [m for d, m in server.sent if d == dev and m["address"] == f"/{dev}/room"]
+
+
+def test_hello_is_answered_with_an_idle_room_snapshot(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    rooms = _room_msgs(server)
+    assert len(rooms) == 1
+    blob = rooms[0]["args"][0]
+    assert blob == {"state": "IDLE", "bit": None, "version": None, "nodes": []}
+
+
+def test_load_bit_broadcasts_setup_with_tappable_nodes_only(rig):
+    gs, server, agent = rig
+    _hello(server, agent, client="c1", dev="ie1")
+    _hello(server, agent, client="c2", dev="ie2")
+    gs.load_bit("test_bit")
+    for dev in ("ie1", "ie2"):
+        blob = _room_msgs(server, dev)[-1]["args"][0]
+        assert blob["state"] == "SETUP"
+        assert blob["bit"] == "test_bit"
+        assert blob["version"] == TestBit.version
+        ids = [n["id"] for n in blob["nodes"]]
+        assert ids == ["TEST_PLAYER_NODE", "TEST_JAM_NODE"]
+        player, jam = blob["nodes"]
+        assert player == {"id": "TEST_PLAYER_NODE", "roles": ["player"],
+                          "scored": True, "count": 0,
+                          "capacity": gs.bit.role_table.roles["player"].capacity}
+        assert jam["scored"] is False
+        assert jam["count"] == 0
+
+
+def test_join_broadcasts_updated_count(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    gs.load_bit("test_bit")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    blob = _room_msgs(server)[-1]["args"][0]
+    player = next(n for n in blob["nodes"] if n["id"] == "TEST_PLAYER_NODE")
+    assert player["count"] == 1
+
+
+def test_run_broadcasts_running(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    gs.load_bit("test_bit")
+    gs.run()
+    assert _room_msgs(server)[-1]["args"][0]["state"] == "RUNNING"
+
+
+def test_room_broadcast_skips_unbound_devices_without_raising(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    server.drop_dev("ie1")
+    gs.load_bit("test_bit")   # must not raise; FakeServer.send is a no-op for unbound
+    assert _room_msgs(server)[-1]["args"][0]["state"] == "IDLE"

@@ -17,6 +17,7 @@ import time
 from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
 from control.role_config import compose_role_config
+from control.roles import RoleClass
 from control.room_profile import RoomProfile, room_profile
 from control.rooms import room_role_name
 from control.state import State
@@ -447,6 +448,7 @@ class DeviceLinkAgent:
         protoversion = args[2] if len(args) > 2 else ""
         self.server.bind_dev(dev, client)
         self.game_server.hello(dev, name, protoversion)
+        self._send(dev, protocol.room_event(dev, self._room_blob()))
 
     def _on_join(self, client, dev: str, args: list) -> None:
         if len(args) < 2:
@@ -504,6 +506,7 @@ class DeviceLinkAgent:
         returns early once _finish_release has cleared the bridge. Dropped
         rather than drained: these are cues for a Bit that no longer exists.
         """
+        self._broadcast_room()
         gs = self.game_server
         if new_state == State.UNLOADING:
             self._room_cues = TimedQueue()
@@ -621,6 +624,42 @@ class DeviceLinkAgent:
         path there is no session to consult: the device owns its samples, and
         Control only names one. An unknown name is the device's business."""
         self._send(dev, protocol.play_event(dev, name, params))
+
+    def on_registration_change(self) -> None:
+        self._broadcast_room()
+
+    # --- room snapshot (informational push) ---------------------------------
+    def _room_blob(self) -> dict:
+        gs = self.game_server
+        nodes: list[dict] = []
+        reg = gs.registration
+        if reg is not None and gs.bit is not None:
+            table = reg.role_table
+            counts = {name: (count, cap) for name, count, cap in reg.counts()}
+            for node_id, role_names in table.node_map.items():
+                roles = [table.roles[n] for n in role_names if n in table.roles]
+                if not roles or any(r.role_class == RoleClass.ROOM for r in roles):
+                    continue
+                first = roles[0]
+                count, capacity = counts.get(first.name, (0, None))
+                nodes.append({
+                    "id": node_id,
+                    "roles": [r.name for r in roles],
+                    "scored": bool(first.scored),
+                    "count": count,
+                    "capacity": capacity,
+                })
+        return {
+            "state": gs.state.name,
+            "bit": gs.bit_name if gs.bit is not None else None,
+            "version": getattr(gs.bit, "version", None) if gs.bit is not None else None,
+            "nodes": nodes,
+        }
+
+    def _broadcast_room(self) -> None:
+        blob = self._room_blob()
+        for info in self.game_server.devices.all():
+            self._send(info.dev, protocol.room_event(info.dev, blob))
 
     # --- outbound -----------------------------------------------------------
     def _send(self, dev: str, msg: dict) -> None:

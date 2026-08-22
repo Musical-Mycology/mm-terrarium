@@ -122,3 +122,11 @@ def test_play_event_typespec_matches_arg_count():
     from devicelink.protocol import play_event
     msg = play_event("ie1", "click", "soft")
     assert len(msg["typespec"]) == len(msg["args"])
+
+
+def test_room_event_wraps_blob_as_single_b_arg():
+    blob = {"state": "IDLE", "bit": None, "version": None, "nodes": []}
+    msg = protocol.room_event("ie1", blob)
+    assert msg["address"] == "/ie1/room"
+    assert msg["typespec"] == "b"
+    assert msg["args"] == [blob]
