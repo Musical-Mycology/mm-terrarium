@@ -23,8 +23,10 @@ from __future__ import annotations
 import math
 import os
 import queue
+import sys
 
 from harness import markers
+from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.shroom_client import LED_CHANNELS, ShroomClient
 from harness.signals import sigterm_as_keyboard_interrupt
 
@@ -399,7 +401,16 @@ def main() -> None:
     sigterm_as_keyboard_interrupt()
 
     # Lazy, exactly like harness/arco_synth.py: this module must import with
-    # no o2litepy on the path.
+    # no o2litepy on the path. When run by hand (outside run_stack, which
+    # already ran this same fallback for its children), fall back to the
+    # hardcoded arco checkout before giving up.
+    if not ensure_o2litepy():
+        print(f"o2_shroom needs o2litepy and could not find it, even after "
+              f"falling back to {ARCO_PYTHONPATH}. Is the arco checkout "
+              f"present there? Otherwise re-run with PYTHONPATH pointing "
+              f"at it.", file=sys.stderr)
+        raise SystemExit(1)
+
     from o2litepy import o2lite
 
     from devicelink.o2_transport import pull_args

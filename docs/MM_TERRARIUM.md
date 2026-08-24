@@ -1176,7 +1176,8 @@ passed, 1 skipped as of the N-fixture Room slice ; 1076 passed, 1 skipped
 as of the wire-JSON and Console-script-isolation slice; 1099 passed, 1
 skipped as of the operator/harness handoff slice; 1254 passed, 1 skipped
 as of the Bit packaging and launch slice; 1267 passed, 1 skipped as of
-the console-operator-rounds slice.**
+the console-operator-rounds slice; 1284 passed, 1 skipped as of the
+per-round device respawn slice.**
 
 ### The Room panel and the Room's own fixtures (`control/room_profile.py`, `control/room_view.py`, `harness/room_surface.py`, `console/static/`)
 The Room stops being shaped like a Tuneshroom, and the Console becomes an
@@ -1788,10 +1789,41 @@ full run evidence):
 > and SIGTERMing a healthy Control; Control's normal teardown then took
 > Arco down (`Arco_engine: finish called` is the room-bridge teardown
 > step, not a failure). Serve mode now tolerates clean device exits;
-> control death and non-zero device exits still fail loud. Consequence:
-> round 2+ under `run_stack` runs device-less until Tuneshroom
-> reconnection lands -- drive later rounds from the Console, or start an
-> `o2_shroom` by hand.
+> control death and non-zero device exits still fail loud.
+>
+> **Per-round device respawn, live 2026-08-24:** the device-less-round-2
+> consequence above is gone. `run_stack` watches its Control tee for
+> `markers.CONTROL_ROUND_LOADED` ("round loaded: `<Bit>`", emitted once
+> per round including round 1) and, from round 2 on, spawns a fresh set
+> of simulated devices for the just-loaded Bit -- `_hold` drains a queue
+> fed by the tee's `on_line` hook once per tick, so the respawn never
+> races the main thread's teardown-stack pushes. Node and device count
+> come from the loaded Bit's own manifest (`launch.nodes` /
+> `launch.default_devices`) unless `--node`/`--devices` were passed
+> explicitly on the CLI, in which case those pin every round, not only
+> round 1. Respawned children are named `ie<k>-r<N>` (`N` = round
+> number, e.g. `ie1-r2`, `ie2-r2` for a two-device round 2, `ie1-r3` for
+> a one-device round 3) so their logs and `runs/<run-id>/` sample files
+> never collide with round 1's `ie<k>`. The spawn is best-effort: no
+> DEVICE_CLOCK_SYNCED/DEVICE_ROLE_GRANTED gating like round 1's launch
+> path, no readiness wait -- `_hold`'s own polling is what notices a
+> respawned device's eventual exit, and a manifest with no
+> `launch.nodes` (or an unknown Bit name) just skips the respawn with a
+> stderr note rather than failing the round. Live-verified headlessly
+> (`run_stack --console-port 0 --room-type DEMO`, driven over the
+> console `/ws`): round 2 (`load_bit MetronomeBit`, 2-device manifest)
+> spawned `ie1-r2` and `ie2-r2`, both clock-synced and join-granted on
+> `METRO_PLAYER_NODE`; round 3 (`load_bit TestBit`) spawned `ie1-r3`,
+> which clock-synced and attempted to join `TEST_PLAYER_NODE` -- the
+> join itself raced TestBit's short SETUP window and was denied ("no
+> Bit accepting registrations"), the same documented per-round
+> `setup_seconds` race noted below, but the respawn, naming, and node
+> resolution all landed correctly. `SIGINT` on the process group still
+> tears the whole stack down cleanly (`pgrep -f "o2_shroom|
+> terrarium_boot|room_simulator"` empty afterward). **Real-device
+> reconnection is still deferred** -- this closes the simulated-device
+> gap only; a physical Tuneshroom reconnecting mid-session across
+> rounds is unbuilt.
 Design:
 [`.../2026-08-21-console-operator-rounds-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-21-console-operator-rounds-design.md).
 Before this slice, `run_stack`/`terrarium_boot` ran exactly one Bit and
@@ -1971,7 +2003,14 @@ yet**; the box does not exist.
   be set by hand: when o2litepy is not importable it falls back to the
   same hardcoded checkout (`ARCO_PYTHONPATH`), appending it to `sys.path`
   and to the spawned children's `PYTHONPATH`; an explicit PYTHONPATH
-  still wins. Upstream note, same day: o2litepy's canonical home is now
+  still wins. As of 2026-08-21 this fallback lives in one place,
+  `harness/arco_paths.ensure_o2litepy()`, and `harness/o2_shroom.py`
+  calls the same function rather than duplicating the `sys.path` append
+  -- a hand-run `o2_shroom --dev probe` with no `PYTHONPATH` set gets
+  past the o2litepy import the same way `run_stack` does (live-verified
+  2026-08-24: no stack running, `PYTHONPATH` unset, the probe reached
+  its `BROWSE_URL`/frame-summary output with no `ModuleNotFoundError`).
+  Upstream note, same day: o2litepy's canonical home is now
   the `rbdannenberg/o2` repo's reworked package (`o2litepy/src/o2litepy`),
   with the `arco/o2litepy/` copy Roger describes as a downstream copy he
   may remove -- the two are byte-identical today, but if the arco copy

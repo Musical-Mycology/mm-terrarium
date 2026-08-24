@@ -242,7 +242,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
                    console_agent=None, arco=None, gs=None,
                    condition: StartCondition | None = None,
-                   game_server=None) -> str:
+                   game_server=None, announce_swaps: bool = False) -> str:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
@@ -285,11 +285,24 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     same instant as this function's own deadline, so "expired" always wins
     that race; a "players"/"operator" condition never produces "expired".
 
+    announce_swaps, when true, prints `markers.CONTROL_ROUND_LOADED` for a
+    Bit swapped in mid-hold by one console_agent.poll() carrying both an
+    Abort and a LoadBit (SETUP -> IDLE -> SETUP with a new bit_name, never
+    visible as a state change from outside). `_serve_rounds` always passes
+    True (every serve-mode round announces itself); main()'s own round-1
+    call passes `effective_serve` (a --console-port one-shot run still
+    constructs a console_agent, so the swap can still happen there, but
+    one-shot mode must announce nothing -- same gating as the other two
+    CONTROL_ROUND_LOADED emit sites). The "state-changed" return itself
+    always fires either way regardless of the flag, so the caller's
+    handoff handling (gs.run() or hand off) is unaffected by it.
+
     Returns "expired", "parent-gone", "state-changed", "players-met",
     "timeout-start", or "timeout-abort".
     """
     if setup_seconds <= 0:
         return "expired"
+    initial_bit_name = getattr(gs, "bit_name", None) if gs is not None else None
     start = clock()
     deadline = start + setup_seconds
     next_countdown = start + 15.0
@@ -305,6 +318,29 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
         if console_agent is not None:
             console_agent.poll()
         if gs is not None and gs.state is not State.SETUP:
+            return "state-changed"
+        if gs is not None and getattr(gs, "bit_name", None) != initial_bit_name:
+            # A mid-hold operator Abort+LoadBit both queued for this single
+            # console_agent.poll() lands gs back in SETUP with a NEW
+            # bit_name in one step -- the state check just above never
+            # observes SETUP leave SETUP, so it alone would let the
+            # swapped-in Bit run with no "round loaded:" line at all
+            # (round-review 2026-08-24 finding). This is the one place
+            # that ever sees both the old and new bit_name, so it is the
+            # handoff site: print the single line main()/`_serve_rounds`
+            # would otherwise have missed for this round, then hand off
+            # exactly like any other state-changed exit. The detection
+            # itself runs unconditionally -- the swap is real and the
+            # handoff still has to happen in one-shot mode too -- but the
+            # print is gated on announce_swaps, same as the two other
+            # CONTROL_ROUND_LOADED emit sites (main()'s round-1 line and
+            # `_serve_rounds`'s own), so a --console-port one-shot run
+            # (effective_serve False, but still with a console_agent)
+            # never gets a "round loaded:" line one-shot mode never
+            # promised.
+            if announce_swaps:
+                print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}",
+                     flush=True)
             return "state-changed"
         if condition is not None and game_server is not None:
             scored = scored_count(game_server)
@@ -437,10 +473,18 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
     covers both concerns for.
     """
     while True:
+        was_idle = gs.state is State.IDLE
         reason = _wait_for_load(gs, agent, arco, parent_pid=parent_pid,
                                 console_agent=console_agent)
         if reason != "loaded":
             return reason
+        if was_idle:
+            # Only a round _wait_for_load actually watched leave IDLE gets
+            # announced here -- the immediate-return case (state already
+            # out of IDLE on entry) is round 1's CLI-selected Bit, which
+            # main() has already announced once before calling in here.
+            print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}",
+                 flush=True)
 
         cfg = getattr(gs.bit, "config", None)
         cond = cfg.start if cfg else None
@@ -448,7 +492,8 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
 
         reason = _wait_in_setup(agent, setup, parent_pid=parent_pid,
                                 console_agent=console_agent, arco=arco,
-                                gs=gs, condition=cond, game_server=gs)
+                                gs=gs, condition=cond, game_server=gs,
+                                announce_swaps=True)
         if reason == "parent-gone":
             return reason
         if reason == "timeout-abort":
@@ -886,6 +931,14 @@ def main() -> None:
     # production wiring uses it rather than reaching past it.
     gs.add_observer(_LifecycleLogger(gs))
 
+    # Round 1's own marker, printed exactly once here -- before any of the
+    # round machinery (setup hold, run, _serve_rounds) runs at all -- so
+    # every round (including this CLI-selected one) announces itself
+    # exactly once. Gated on effective_serve because one-shot mode has no
+    # "rounds" to announce; see _serve_rounds for every later round's line.
+    if effective_serve:
+        print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}", flush=True)
+
     # Once build() has returned, Arco and the simulator are live
     # subprocesses and room_audio's ArcoSynthPool is running -- everything
     # from here on must go through shutdown() on the way out, including a
@@ -949,7 +1002,8 @@ def main() -> None:
                                 parent_pid=args.exit_with_parent,
                                 console_agent=console_agent,
                                 arco=arco, gs=gs,
-                                condition=cfg.start, game_server=gs)
+                                condition=cfg.start, game_server=gs,
+                                announce_swaps=effective_serve)
         if reason == "parent-gone":
             print("parent is gone; tearing down", file=sys.stderr)
         elif reason == "timeout-abort":
