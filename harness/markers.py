@@ -35,6 +35,13 @@ CONTROL_SETUP_HOLD = "Holding in SETUP"
 # MetronomeBit always do.)
 CONTROL_BIT_COMPLETED = "Bit completed; tearing down"
 
+# A Bit is loaded and about to run -- round 1's CLI-selected Bit (printed
+# once by main() before the round machinery starts) and, under --serve,
+# every later round's Console-loaded Bit (printed by _serve_rounds only for
+# a round it watched _wait_for_load actually observe leave IDLE, never for
+# the immediate-return case on entry). One line per round, always.
+CONTROL_ROUND_LOADED = "round loaded:"
+
 # --- Device (harness/o2_shroom.py) -------------------------------------
 
 # o2lite.time_get() went non-negative. Until this, the device has no clock
@@ -69,6 +76,7 @@ READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,
     "CONTROL_BIT_COMPLETED": CONTROL_BIT_COMPLETED,
+    "CONTROL_ROUND_LOADED": CONTROL_ROUND_LOADED,
     "DEVICE_CLOCK_SYNCED": DEVICE_CLOCK_SYNCED,
     "DEVICE_ROLE_GRANTED": DEVICE_ROLE_GRANTED,
 }

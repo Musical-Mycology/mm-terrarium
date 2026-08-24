@@ -437,10 +437,18 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
     covers both concerns for.
     """
     while True:
+        was_idle = gs.state is State.IDLE
         reason = _wait_for_load(gs, agent, arco, parent_pid=parent_pid,
                                 console_agent=console_agent)
         if reason != "loaded":
             return reason
+        if was_idle:
+            # Only a round _wait_for_load actually watched leave IDLE gets
+            # announced here -- the immediate-return case (state already
+            # out of IDLE on entry) is round 1's CLI-selected Bit, which
+            # main() has already announced once before calling in here.
+            print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}",
+                 flush=True)
 
         cfg = getattr(gs.bit, "config", None)
         cond = cfg.start if cfg else None
@@ -885,6 +893,14 @@ def main() -> None:
     # took an on_room_frame parameter), but on_join_denied has one, so
     # production wiring uses it rather than reaching past it.
     gs.add_observer(_LifecycleLogger(gs))
+
+    # Round 1's own marker, printed exactly once here -- before any of the
+    # round machinery (setup hold, run, _serve_rounds) runs at all -- so
+    # every round (including this CLI-selected one) announces itself
+    # exactly once. Gated on effective_serve because one-shot mode has no
+    # "rounds" to announce; see _serve_rounds for every later round's line.
+    if effective_serve:
+        print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}", flush=True)
 
     # Once build() has returned, Arco and the simulator are live
     # subprocesses and room_audio's ArcoSynthPool is running -- everything
