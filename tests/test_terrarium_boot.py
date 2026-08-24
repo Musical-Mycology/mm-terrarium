@@ -568,6 +568,25 @@ def test_wait_in_setup_yields_on_abort_too():
     assert reason == "state-changed"
 
 
+def _make_fake_swap_console_agent(gs, State):
+    """Shared fixture for the mid-hold swap tests below: a console_agent
+    whose first poll() lands both a queued Abort and a queued LoadBit(
+    NewBit) inside that one call -- SETUP -> IDLE -> SETUP with a new
+    bit_name, never visible as a state change from outside."""
+    class FakeConsoleAgent:
+        def __init__(self):
+            self.polled = False
+
+        def poll(self):
+            if not self.polled:
+                self.polled = True
+                gs.state = State.IDLE
+                gs.bit_name = "NewBit"
+                gs.state = State.SETUP
+
+    return FakeConsoleAgent()
+
+
 def test_wait_in_setup_announces_a_bit_swapped_in_by_one_console_poll(
         capsys):
     """Round-review 2026-08-24 finding: if an Abort and a LoadBit are both
@@ -576,7 +595,9 @@ def test_wait_in_setup_announces_a_bit_swapped_in_by_one_console_poll(
     check never observes the mid-poll dip, so it alone would let the
     swapped-in Bit run with no `round loaded:` line and no "state-changed"
     handoff at all. bit_name changing while state reads SETUP both times
-    is the only signal available, so it has to be watched too."""
+    is the only signal available, so it has to be watched too. serve mode
+    (announce_swaps=True, as `_serve_rounds` always passes) must print the
+    line."""
     from control.state import State
     from harness.terrarium_boot import _wait_in_setup
     from harness import markers
@@ -592,28 +613,50 @@ def test_wait_in_setup_announces_a_bit_swapped_in_by_one_console_poll(
 
     gs = FakeGs()
 
-    class FakeConsoleAgent:
-        def __init__(self):
-            self.polled = False
-
-        def poll(self):
-            if not self.polled:
-                self.polled = True
-                # Abort + LoadBit(NewBit) both landed in this one poll --
-                # SETUP -> IDLE -> SETUP, never visible from outside.
-                gs.state = State.IDLE
-                gs.bit_name = "NewBit"
-                gs.state = State.SETUP
-
     reason = _wait_in_setup(FakeAgent(), 10.0, clock=iter(
         [0.0, 0.1]).__next__, sleep=lambda s: None, gs=gs,
-        console_agent=FakeConsoleAgent())
+        console_agent=_make_fake_swap_console_agent(gs, State),
+        announce_swaps=True)
 
     assert reason == "state-changed"
     out = capsys.readouterr().out
     lines = [l for l in out.splitlines()
              if l.startswith(markers.CONTROL_ROUND_LOADED)]
     assert lines == [f"{markers.CONTROL_ROUND_LOADED} NewBit"]
+
+
+def test_wait_in_setup_swap_detection_is_silent_in_one_shot_mode(capsys):
+    """Round-review 2026-08-24 fix-round-2 finding: the swap-detection
+    print above must not fire for a one-shot run (--console-port combined
+    with --seconds/--hold makes effective_serve False but still
+    constructs a console_agent). The handoff itself ("state-changed")
+    must still fire -- only the print is gated -- so main() still calls
+    gs.run() (or hands off) correctly for the swapped-in Bit; it just
+    never gets a "round loaded:" line, matching one-shot mode's other two
+    emit sites."""
+    from control.state import State
+    from harness.terrarium_boot import _wait_in_setup
+    from harness import markers
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class FakeGs:
+        def __init__(self):
+            self.state = State.SETUP
+            self.bit_name = "OldBit"
+
+    gs = FakeGs()
+
+    reason = _wait_in_setup(FakeAgent(), 10.0, clock=iter(
+        [0.0, 0.1]).__next__, sleep=lambda s: None, gs=gs,
+        console_agent=_make_fake_swap_console_agent(gs, State),
+        announce_swaps=False)
+
+    assert reason == "state-changed"
+    out = capsys.readouterr().out
+    assert markers.CONTROL_ROUND_LOADED not in out
 
 
 def test_wait_in_setup_prints_a_countdown(capsys):
