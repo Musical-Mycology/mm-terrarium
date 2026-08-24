@@ -568,6 +568,54 @@ def test_wait_in_setup_yields_on_abort_too():
     assert reason == "state-changed"
 
 
+def test_wait_in_setup_announces_a_bit_swapped_in_by_one_console_poll(
+        capsys):
+    """Round-review 2026-08-24 finding: if an Abort and a LoadBit are both
+    queued when console_agent.poll() runs, gs goes SETUP -> IDLE -> SETUP
+    inside that single poll call. The plain `gs.state is not State.SETUP`
+    check never observes the mid-poll dip, so it alone would let the
+    swapped-in Bit run with no `round loaded:` line and no "state-changed"
+    handoff at all. bit_name changing while state reads SETUP both times
+    is the only signal available, so it has to be watched too."""
+    from control.state import State
+    from harness.terrarium_boot import _wait_in_setup
+    from harness import markers
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class FakeGs:
+        def __init__(self):
+            self.state = State.SETUP
+            self.bit_name = "OldBit"
+
+    gs = FakeGs()
+
+    class FakeConsoleAgent:
+        def __init__(self):
+            self.polled = False
+
+        def poll(self):
+            if not self.polled:
+                self.polled = True
+                # Abort + LoadBit(NewBit) both landed in this one poll --
+                # SETUP -> IDLE -> SETUP, never visible from outside.
+                gs.state = State.IDLE
+                gs.bit_name = "NewBit"
+                gs.state = State.SETUP
+
+    reason = _wait_in_setup(FakeAgent(), 10.0, clock=iter(
+        [0.0, 0.1]).__next__, sleep=lambda s: None, gs=gs,
+        console_agent=FakeConsoleAgent())
+
+    assert reason == "state-changed"
+    out = capsys.readouterr().out
+    lines = [l for l in out.splitlines()
+             if l.startswith(markers.CONTROL_ROUND_LOADED)]
+    assert lines == [f"{markers.CONTROL_ROUND_LOADED} NewBit"]
+
+
 def test_wait_in_setup_prints_a_countdown(capsys):
     from harness.terrarium_boot import _wait_in_setup
 

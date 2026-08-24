@@ -290,6 +290,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     """
     if setup_seconds <= 0:
         return "expired"
+    initial_bit_name = getattr(gs, "bit_name", None) if gs is not None else None
     start = clock()
     deadline = start + setup_seconds
     next_countdown = start + 15.0
@@ -305,6 +306,20 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
         if console_agent is not None:
             console_agent.poll()
         if gs is not None and gs.state is not State.SETUP:
+            return "state-changed"
+        if gs is not None and getattr(gs, "bit_name", None) != initial_bit_name:
+            # A mid-hold operator Abort+LoadBit both queued for this single
+            # console_agent.poll() lands gs back in SETUP with a NEW
+            # bit_name in one step -- the state check just above never
+            # observes SETUP leave SETUP, so it alone would let the
+            # swapped-in Bit run with no "round loaded:" line at all
+            # (round-review 2026-08-24 finding). This is the one place
+            # that ever sees both the old and new bit_name, so it is the
+            # handoff site: print the single line main()/`_serve_rounds`
+            # would otherwise have missed for this round, then hand off
+            # exactly like any other state-changed exit.
+            print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}",
+                 flush=True)
             return "state-changed"
         if condition is not None and game_server is not None:
             scored = scored_count(game_server)
