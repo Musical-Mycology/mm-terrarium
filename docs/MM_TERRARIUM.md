@@ -500,6 +500,9 @@ is not, so the later swap to o2ws is mechanical. **Arco is not in this path**,
 so nothing here may be read as a hop count or a latency figure. Same trust
 model as the console: trusted LAN, no auth, `127.0.0.1` by default.
 
+- `/ie<N>/room` is pushed on hello and on state/registration change; devices
+  never request it.
+
 `DeviceLinkAgent` also ticks `control/breath.py` now, feeding every joined,
 non-closing device's `cc:11` on change. The Tuneshroom audio design originally
 scoped devicelink out entirely, but that was wrong for the light half: once
@@ -1085,6 +1088,13 @@ prevented the ordering from disagreeing with itself again, and it had.
   URL behind a new `markers.BROWSE_URL` prefix, and `run_stack` collects
   each one as it appears (a `ProcTee(on_line=...)` hook, readiness-driven,
   not sleep-and-guess) and opens it in the default browser via
+  **Flutter simulators ride the same harvester:** `--flutter-sim PATH
+  --flutter-devices N` spawns mm-tuneshroom's `PATH/tool/sim serve --devices
+  N --link ws://127.0.0.1:8771/ws --no-open` as one more child after
+  Control reports SETUP. It prints one `BROWSE_URL:` line per device (the
+  colon is the contract -- `markers.BROWSE_URL`), is a websocket client
+  rather than o2lite so it is **excluded** from the `DEVICE_CLOCK_SYNCED`
+  wait, and its clean exit never fails a hold in any mode.
   `webbrowser.open`. `--open` implies `--console-port 0` when no port was
   given (`ConsoleServer` already binds an ephemeral port and
   `terrarium_boot` prints the real URL, so the implied Console cannot
