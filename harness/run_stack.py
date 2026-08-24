@@ -42,6 +42,7 @@ that the failure is BOUNDED and NAMED rather than a hang.
 from __future__ import annotations
 
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -88,6 +89,8 @@ class StackConfig:
     room_type: str = "TEST"
     bit: str = "TestBit"
     node: str | None = None
+    node_explicit: bool = False       # True iff --node was passed on the CLI
+    devices_explicit: bool = False    # True iff --devices was passed
     open_urls: bool = False           # open each BROWSE_URL in the browser
     profile: str | None = None        # forwarded to terrarium_boot verbatim
     serve: bool = False               # forward --serve to terrarium_boot
@@ -143,12 +146,18 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
     return command
 
 
-def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
+def device_command(cfg: StackConfig, index: int, ppid: int, *,
+                   dev: str | None = None, node: str | None = None
+                   ) -> list[str]:
     """cfg.node is expected to already be resolved (config_from_args does
     that once, via args.node or BitRegistry.resolve_config(cfg.bit)
-    .join_node()) -- this just forwards it."""
-    dev = f"ie{index}"
-    node = cfg.node
+    .join_node()) -- this just forwards it.
+
+    `dev` and `node` let a round-2+ respawn override the o2lite dev id and
+    join node without mutating cfg -- cfg.node stays round 1's resolution,
+    and a respawn resolves its own node fresh from the just-loaded bit."""
+    dev = dev if dev is not None else f"ie{index}"
+    node = node if node is not None else cfg.node
     return [
         sys.executable, "-u", "-m", "harness.o2_shroom",
         "--dev", dev,
@@ -166,7 +175,8 @@ _URL_PATTERN = re.compile(r"http://\S+")
 
 def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, getpid=os.getpid,
-        opener=webbrowser.open) -> RunResult:
+        opener=webbrowser.open, registry: BitRegistry | None = None
+        ) -> RunResult:
     """Bring the stack up, hold it, and tear it down in order.
 
     Every process is registered on the TeardownStack at the moment it is
@@ -180,6 +190,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
     processes: dict[str, object] = {}
     logs = {}
     urls: list[str] = []
+    round_loads: "queue.Queue[str]" = queue.Queue()
 
     def collect_url(line: str) -> None:
         """Record (and under --open, open) a child's BROWSE_URL line.
@@ -198,7 +209,28 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         if cfg.open_urls:
             opener(match.group())
 
-    def spawn(name: str, command: list[str], watch) -> ProcTee:
+    def on_control_line(line: str) -> None:
+        """Enqueue a round-loaded bit name for on_round to pick up.
+
+        Runs on the control tee's reader thread -- ENQUEUE ONLY. Spawning a
+        respawn child from this thread would make it race the main
+        thread's teardown-stack pushes and _hold's own polling; on_round
+        (invoked from _hold, on the main thread) is what actually spawns.
+        """
+        if markers.CONTROL_ROUND_LOADED not in line:
+            return
+        bit_name = line.split(markers.CONTROL_ROUND_LOADED, 1)[1].strip()
+        round_loads.put(bit_name)
+
+    def control_on_line(line: str) -> None:
+        """Fan-out for the control tee only: URL collection stays intact,
+        and round-loaded detection is added alongside it, not instead of
+        it."""
+        collect_url(line)
+        on_control_line(line)
+
+    def spawn(name: str, command: list[str], watch, *,
+             on_line=None) -> ProcTee:
         process = popen(command, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True,
                         start_new_session=True)
@@ -207,14 +239,67 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         log_path = os.path.join(cfg.log_dir, f"{name}.log")
         logs[name] = log_path
         tee = ProcTee(name, process.stdout, log_path, markers=watch,
-                      echo=cfg.echo, on_line=collect_url)
+                      echo=cfg.echo,
+                      on_line=on_line if on_line is not None else collect_url)
         tee.start()
         tees[name] = tee
         return tee
 
+    round_number = 1              # round 1's devices: the launch path below
+    first_round_load_seen = False  # round 1 also emits CONTROL_ROUND_LOADED
+
+    def spawn_round_devices(bit_name: str) -> None:
+        """The on_round(bit_name) closure: resolves round 2+'s node/device
+        count from the just-loaded bit's manifest (unless the CLI pinned
+        them explicitly) and spawns that many `ie<k>-r<N>` children.
+
+        No readiness gating here -- unlike round 1's device loop in run(),
+        this does not wait for DEVICE_CLOCK_SYNCED/DEVICE_ROLE_GRANTED
+        before returning. _hold's own polling loop is what notices a
+        respawned device's eventual exit.
+        """
+        nonlocal round_number, first_round_load_seen
+        if not first_round_load_seen:
+            first_round_load_seen = True
+            return
+        round_number += 1
+        n = round_number
+        reg = registry if registry is not None else BitRegistry.discover()
+        if bit_name not in reg.packages:
+            print(f"round loaded: unknown Bit {bit_name!r}; no devices "
+                 f"respawned for round {n}", file=sys.stderr)
+            return
+        bit_cfg = reg.resolve_config(bit_name)
+        node = cfg.node if cfg.node_explicit else bit_cfg.join_node()
+        if node is None:
+            print(f"round loaded: Bit {bit_name!r} defines no launch.nodes "
+                 f"and no --node was given -- no devices respawned for "
+                 f"round {n}.", file=sys.stderr)
+            return
+        count = (cfg.devices if cfg.devices_explicit
+                else bit_cfg.launch.default_devices)
+        for index in range(1, count + 1):
+            name = f"ie{index}-r{n}"
+            spawn(name, device_command(cfg, index, getpid(), dev=name,
+                                       node=node),
+                 _watch_list("DEVICE_"))
+
+    def drain_rounds() -> None:
+        """What _hold calls each tick: drains every CONTROL_ROUND_LOADED
+        name queued since the last tick, invoking spawn_round_devices once
+        per entry -- never more than one queue drain per tick, but never
+        less either, so a burst of rounds between two slow ticks is not
+        collapsed to just the last one."""
+        while True:
+            try:
+                bit_name = round_loads.get_nowait()
+            except queue.Empty:
+                return
+            spawn_round_devices(bit_name)
+
     try:
         control = spawn("control", control_command(cfg, getpid()),
-                        _watch_list("CONTROL_"))
+                        _watch_list("CONTROL_"), on_line=control_on_line)
 
         for stage, marker, detail in (
             ("control-ready", markers.CONTROL_TRANSPORT_READY,
@@ -260,7 +345,8 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                     f"Control still in SETUP? `player` is a scored role "
                     f"and is refused once RUNNING.", logs, urls)
 
-        dead = _hold(cfg, processes, clock, sleep)
+        dead = _hold(cfg, processes, clock, sleep,
+                    on_round=drain_rounds if cfg.serve else None)
         if dead is not None:
             name, code = dead
             # A control child that exits ZERO after announcing the Bit
@@ -376,7 +462,7 @@ def _wait_for_marker(tee: ProcTee, target: str, timeout: float, clock,
 
 
 def _hold(cfg: StackConfig, children: dict[str, object], clock,
-         sleep) -> tuple[str, int] | None:
+         sleep, on_round=None) -> tuple[str, int] | None:
     """Run for --seconds, or until Ctrl-C when no duration was asked for.
 
     Polls every spawned child on each tick and returns as soon as one has
@@ -389,6 +475,12 @@ def _hold(cfg: StackConfig, children: dict[str, object], clock,
     Arco (`arco.poll() is not None`) on every tick of its own loop for the
     same reason: a dead child is news the instant it happens, not news
     worth waiting out the rest of the hold for.
+
+    on_round, when given, is called once per tick (both loops below) and
+    is the hook serve mode uses to react to a queued CONTROL_ROUND_LOADED
+    name -- the queue is drained, and any devices it implies are spawned,
+    entirely on this thread, never on the control tee's reader thread.
+    None (the default) keeps every non-serve caller's behavior unchanged.
     """
     tolerate = cfg.serve
     if cfg.seconds is None:
@@ -396,12 +488,16 @@ def _hold(cfg: StackConfig, children: dict[str, object], clock,
             dead = _dead_child(children, tolerate_clean_devices=tolerate)
             if dead is not None:
                 return dead
+            if on_round is not None:
+                on_round()
             sleep(0.5)
     deadline = clock() + cfg.seconds
     while clock() < deadline:
         dead = _dead_child(children, tolerate_clean_devices=tolerate)
         if dead is not None:
             return dead
+        if on_round is not None:
+            on_round()
         sleep(0.1)
     return None
 
@@ -601,7 +697,9 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         setup_seconds=args.setup_seconds, seconds=seconds,
         horizon=args.horizon, echo=not args.ci,
         console_port=console_port, room_type=room_type,
-        bit=bit, node=node, open_urls=args.open, profile=args.profile,
+        bit=bit, node=node, node_explicit=args.node is not None,
+        devices_explicit=args.devices is not None,
+        open_urls=args.open, profile=args.profile,
         serve=serve)
 
 
