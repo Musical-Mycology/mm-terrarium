@@ -54,14 +54,14 @@ from control.process import stop_process
 from control.run_profile import RunProfile, parse_profile
 from control.teardown import TeardownStack
 from harness import markers
+from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.proc_tee import ProcTee
 from harness.signals import sigterm_as_keyboard_interrupt
 
 DEFAULT_ARCO_COMMAND = "/Users/chris/projects/arco/apps/pytest/server"
-# The checkout o2litepy and pyarco live in -- the same one
-# DEFAULT_ARCO_COMMAND already hardcodes, so falling back to it adds no
-# new assumption about the dev box.
-ARCO_PYTHONPATH = "/Users/chris/projects/arco"
+# ARCO_PYTHONPATH -- the checkout o2litepy and pyarco live in, the same one
+# DEFAULT_ARCO_COMMAND already hardcodes -- lives in harness/arco_paths.py,
+# shared with harness/o2_shroom.py.
 
 
 @dataclass
@@ -652,37 +652,6 @@ def format_failure(result: RunResult, tail_lines: int = 20) -> str:
     return "\n".join(lines)
 
 
-def _import_o2litepy() -> None:
-    from o2litepy import o2lite      # noqa: F401, PLC0415 (import is the check)
-
-
-def _ensure_o2litepy(*, importer=_import_o2litepy, syspath=sys.path,
-                     environ=os.environ) -> bool:
-    """True once o2litepy is importable, falling back to the hardcoded
-    arco checkout when no PYTHONPATH was set.
-
-    The fallback covers both halves of the stack: sys.path for this
-    process, and PYTHONPATH for every child it spawns (terrarium_boot and
-    the devices all need o2litepy too, and they inherit the environment).
-    An explicit PYTHONPATH still wins -- the fallback only runs when the
-    import already failed, and it appends rather than replaces.
-    """
-    try:
-        importer()
-        return True
-    except ImportError:
-        pass
-    syspath.append(ARCO_PYTHONPATH)
-    existing = environ.get("PYTHONPATH")
-    environ["PYTHONPATH"] = (f"{existing}:{ARCO_PYTHONPATH}" if existing
-                             else ARCO_PYTHONPATH)
-    try:
-        importer()
-        return True
-    except ImportError:
-        return False
-
-
 def main() -> None:
     sigterm_as_keyboard_interrupt()
     args = parse_args()
@@ -699,7 +668,7 @@ def main() -> None:
 
     cfg = config_from_args(args)
 
-    if not _ensure_o2litepy():
+    if not ensure_o2litepy():
         print(f"run_stack needs o2litepy and could not find it, even after "
               f"falling back to {ARCO_PYTHONPATH}. Is the arco checkout "
               f"present there? Otherwise re-run with PYTHONPATH pointing "

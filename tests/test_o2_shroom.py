@@ -339,3 +339,54 @@ def test_main_has_exactly_one_backend_close():
         f"than one means per-exit-path cleanup has crept back into "
         f"main() -- the same defect that let the SIGTERM path go "
         f"uncovered.")
+
+
+def test_main_consults_ensure_o2litepy_before_importing_o2litepy():
+    """When run by hand (outside run_stack, which already ran this same
+    fallback for its children), main() must fall back to the hardcoded
+    arco checkout before giving up -- exactly like run_stack.main() does.
+
+    Asserted by source inspection rather than by running main(), for the
+    same reason as test_main_has_exactly_one_backend_close: main() imports
+    o2litepy, which is absent from this offline suite by design.
+
+    Walks main()'s top-level statements for the ensure_o2litepy() Call and
+    the `from o2litepy import o2lite` ImportFrom, and asserts the former
+    comes first -- so a caller can never reach the production import
+    without having given the fallback a chance to run first.
+    """
+    import ast
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    # Compared by lineno, not by walk() order: walk() is breadth-first, so
+    # a Call nested inside an `if` (one level deeper than a top-level
+    # ImportFrom) can surface after it in walk() even when it appears
+    # earlier in the source.
+    ensure_call_linenos = [
+        node.lineno for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "ensure_o2litepy"
+    ]
+    import_linenos = [
+        node.lineno for node in ast.walk(main)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "o2litepy"
+    ]
+
+    assert ensure_call_linenos, (
+        "main() never calls ensure_o2litepy() -- the fallback to the "
+        "hardcoded arco checkout is only consulted by run_stack's "
+        "children, not by a hand-run o2_shroom.")
+    assert import_linenos, "main() no longer imports o2litepy directly."
+    assert min(ensure_call_linenos) < min(import_linenos), (
+        "main() imports o2litepy before consulting ensure_o2litepy() -- "
+        "the fallback must run first so a hand-run o2_shroom without "
+        "PYTHONPATH set still finds o2litepy in the arco checkout.")
