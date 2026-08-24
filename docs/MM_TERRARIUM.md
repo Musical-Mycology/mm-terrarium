@@ -302,7 +302,12 @@ exercisable with no live Arco. It is the lone exemplar of the `ugen_manifest` /
 `light_manifest` / `status()` seams — and as of PR #5 its `player` role carries
 a **real light-manifest v2 declaration** (one instrument, one `cc:74 → hue` lane)
 plus a welcome pair, the declaration that formally froze the v2 schema; `jammer`
-keeps the empty defaults so the no-light path stays exercised.
+glows too since PR #50 — a dim green aurora (hue 0.33 / level 0.18) on its own
+`cc:1` (level) / `cc:2` (hue) lanes, tilt brightening it and bending hue toward
+yellow (negative gamma) or purple (positive). It deliberately does NOT share the
+player's `cc:74` lane, whose plain full-rainbow mapping is the wrong shape.
+`jammer` keeps an empty `ugen_manifest` (no-audio path); the no-light session
+path it used to pin lives in luxaeterna's empty-manifest director test now.
 
 Both of its light instruments are luxaeterna **field-rate** gestures that render
 without a note — deliberately, after the note-triggered `bloom` proved wrong for
@@ -1583,7 +1588,8 @@ and operator surface, none in the engine. Design:
   forever while fifteen Control replies were dropped hub-side), passes
   `surface_id=dev` so the canvas header stops calling every device `ie0`,
   prints `role has no light declaration -- canvas stays dark by design`
-  for a light-less role (TestBit's `jammer` is deliberately such), and
+  for a light-less role (TestBit's `jammer` was such until PR #50 gave it
+  a glow; the message still fires for any role without a declaration), and
   its unanswered-join hint now names the lost-service cause and the hub
   log line to check instead of pointing at a healthy Control.
 - **Control's stdout narrates the device lifecycle**: `device hello:`,
