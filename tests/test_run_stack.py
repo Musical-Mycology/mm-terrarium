@@ -1064,3 +1064,20 @@ def test_dead_child_tolerates_a_respawned_devices_clean_exit_in_serve_mode():
     tolerated as round 1's ie1."""
     children = {"control": _Proc(None), "ie1-r2": _Proc(0)}
     assert _dead_child(children, tolerate_clean_devices=True) is None
+
+def test_flutter_sim_is_spawned_after_control_with_serve_args(tmp_path):
+    popen = ScriptedPopen(
+        [_CONTROL_OK,
+         f"{markers.BROWSE_URL} http://127.0.0.1:8780/?dev=ie1\n"])
+    cfg = _cfg(tmp_path, devices=0, flutter_sim="/repo/tuneshroom", flutter_devices=1)
+    result = run(cfg, popen=popen, sleep=lambda _s: None)
+    assert result.ok, result.detail
+    assert popen.commands[1] == ["/repo/tuneshroom/tool/sim", "serve", "--devices", "1",
+                                 "--link", "ws://127.0.0.1:8771/ws", "--no-open"]
+    assert "http://127.0.0.1:8780/?dev=ie1" in result.urls
+
+
+def test_no_flutter_flags_spawns_nothing_extra(tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK])
+    run(_cfg(tmp_path, devices=0), popen=popen, sleep=lambda _s: None)
+    assert len(popen.commands) == 1

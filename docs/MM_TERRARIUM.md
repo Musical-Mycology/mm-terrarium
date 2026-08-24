@@ -302,7 +302,12 @@ exercisable with no live Arco. It is the lone exemplar of the `ugen_manifest` /
 `light_manifest` / `status()` seams — and as of PR #5 its `player` role carries
 a **real light-manifest v2 declaration** (one instrument, one `cc:74 → hue` lane)
 plus a welcome pair, the declaration that formally froze the v2 schema; `jammer`
-keeps the empty defaults so the no-light path stays exercised.
+glows too since PR #50 — a dim green aurora (hue 0.33 / level 0.18) on its own
+`cc:1` (level) / `cc:2` (hue) lanes, tilt brightening it and bending hue toward
+yellow (negative gamma) or purple (positive). It deliberately does NOT share the
+player's `cc:74` lane, whose plain full-rainbow mapping is the wrong shape.
+`jammer` keeps an empty `ugen_manifest` (no-audio path); the no-light session
+path it used to pin lives in luxaeterna's empty-manifest director test now.
 
 Both of its light instruments are luxaeterna **field-rate** gestures that render
 without a note — deliberately, after the note-triggered `bloom` proved wrong for
@@ -499,6 +504,9 @@ Messages are **JSON envelopes mirroring o2ws field-for-field**
 is not, so the later swap to o2ws is mechanical. **Arco is not in this path**,
 so nothing here may be read as a hop count or a latency figure. Same trust
 model as the console: trusted LAN, no auth, `127.0.0.1` by default.
+
+- `/ie<N>/room` is pushed on hello and on state/registration change; devices
+  never request it.
 
 `DeviceLinkAgent` also ticks `control/breath.py` now, feeding every joined,
 non-closing device's `cc:11` on change. The Tuneshroom audio design originally
@@ -1085,6 +1093,13 @@ prevented the ordering from disagreeing with itself again, and it had.
   URL behind a new `markers.BROWSE_URL` prefix, and `run_stack` collects
   each one as it appears (a `ProcTee(on_line=...)` hook, readiness-driven,
   not sleep-and-guess) and opens it in the default browser via
+  **Flutter simulators ride the same harvester:** `--flutter-sim PATH
+  --flutter-devices N` spawns mm-tuneshroom's `PATH/tool/sim serve --devices
+  N --link ws://127.0.0.1:8771/ws --no-open` as one more child after
+  Control reports SETUP. It prints one `BROWSE_URL:` line per device (the
+  colon is the contract -- `markers.BROWSE_URL`), is a websocket client
+  rather than o2lite so it is **excluded** from the `DEVICE_CLOCK_SYNCED`
+  wait, and its clean exit never fails a hold in any mode.
   `webbrowser.open`. `--open` implies `--console-port 0` when no port was
   given (`ConsoleServer` already binds an ephemeral port and
   `terrarium_boot` prints the real URL, so the implied Console cannot
@@ -1574,7 +1589,8 @@ and operator surface, none in the engine. Design:
   forever while fifteen Control replies were dropped hub-side), passes
   `surface_id=dev` so the canvas header stops calling every device `ie0`,
   prints `role has no light declaration -- canvas stays dark by design`
-  for a light-less role (TestBit's `jammer` is deliberately such), and
+  for a light-less role (TestBit's `jammer` was such until PR #50 gave it
+  a glow; the message still fires for any role without a declaration), and
   its unanswered-join hint now names the lost-service cause and the hub
   log line to check instead of pointing at a healthy Control.
 - **Control's stdout narrates the device lifecycle**: `device hello:`,

@@ -19,6 +19,14 @@ from control.triggers import (
 
 RUN_DURATION_SECONDS = 2.0
 
+# The jammer's glow palette, hue in [0,1] and level in [0,1] as aurora reads
+# them. Green at rest, yellow at full negative tilt, purple at full positive.
+JAMMER_HUE_GREEN = 0.33
+JAMMER_HUE_YELLOW = 0.15
+JAMMER_HUE_PURPLE = 0.78
+JAMMER_LEVEL_REST = 0.18
+JAMMER_LEVEL_FULL = 0.80
+
 
 class TestBit(Bit):
     version = "0.1"
@@ -108,8 +116,24 @@ class TestBit(Bit):
                 "audio": {"instrument": "chime", "duration": 1.5},
             },
         )
-        jammer = Role(name="jammer", role_class=RoleClass.JAM,
-                      capacity=None, scored=False, uses=["tilt"])
+        # The jammer glows: a dim green aurora at rest. Its lanes are cc:1
+        # (level) and cc:2 (hue), NOT the player's cc:74 -- that lane is a
+        # plain full-rainbow sweep, and the jammer's green-centred
+        # yellow/purple shape needs its own controller pair (_on_tilt emits
+        # both; roles without these lanes simply ignore them).
+        jammer = Role(
+            name="jammer", role_class=RoleClass.JAM,
+            capacity=None, scored=False, uses=["tilt"],
+            light_manifest={
+                "instruments": [
+                    {"instrument": "aurora", "target": "primary",
+                     "params": {"hue": JAMMER_HUE_GREEN,
+                                "level": JAMMER_LEVEL_REST},
+                     "lanes": [{"source": "cc:2", "dest": "hue"},
+                               {"source": "cc:1", "dest": "level"}]},
+                ],
+            },
+        )
         # The Room's own role. Its cc:74 lane is driven two ways now: by any
         # player's tilt (see _on_tilt) and by this Bit's own cues() drift, so
         # the Room animates whether or not anyone has joined.
@@ -279,12 +303,23 @@ class TestBit(Bit):
         gamma = float(args[1]) if len(args) > 1 else 0.0
         gamma = max(-90.0, min(90.0, gamma))
         cc = int(round((gamma + 90.0) / 180.0 * 127.0))
+        # The jammer's glow pair, device-targeted only (the Room has no
+        # cc:1/cc:2 lanes and must not be fed them anyway). Brightness rises
+        # with |tilt| in either direction; hue leaves green toward yellow
+        # (gamma < 0) or purple (gamma > 0).
+        level = JAMMER_LEVEL_REST + abs(gamma) / 90.0 * (
+            JAMMER_LEVEL_FULL - JAMMER_LEVEL_REST)
+        edge = JAMMER_HUE_PURPLE if gamma >= 0 else JAMMER_HUE_YELLOW
+        hue = JAMMER_HUE_GREEN + abs(gamma) / 90.0 * (edge - JAMMER_HUE_GREEN)
+        level_cc = int(round(level * 127.0))
+        hue_cc = int(round(hue * 127.0))
         if cc >= 127:
             self._full_tilts += 1
             if self._full_tilts >= self.ROUND_TILTS:
                 self._full_tilts = 0
                 self._round_won = True
-        return [(dev, 0xB0, 74, cc), (ROOM, 0xB0, 74, cc)]
+        return [(dev, 0xB0, 74, cc), (ROOM, 0xB0, 74, cc),
+                (dev, 0xB0, 1, level_cc), (dev, 0xB0, 2, hue_cc)]
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, count]. A single tap clicks, a

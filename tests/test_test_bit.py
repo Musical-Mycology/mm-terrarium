@@ -14,11 +14,12 @@ def test_role_table_has_one_scored_and_one_jam_role():
     assert table.roles["jammer"].role_class == RoleClass.JAM
 
 
-def test_jammer_keeps_empty_media_defaults():
-    # The no-light, no-audio path stays exercised.
+def test_jammer_keeps_empty_audio_defaults():
+    # The no-audio path stays exercised here; the no-light path moved to
+    # luxaeterna's director tests when the jammer gained its glow (the
+    # empty-manifest session behavior is pinned there).
     table = TestBit().role_table
     assert table.roles["jammer"].ugen_manifest == {}
-    assert table.roles["jammer"].light_manifest == {}
 
 
 def test_player_declares_a_flsyn_instrument_with_a_drone():
@@ -122,11 +123,10 @@ def test_player_role_declares_v2_light_manifest_and_welcome():
     }
 
 
-def test_jammer_role_keeps_empty_light_defaults():
-    bit = TestBit()
-    table = bit.role_table
-    assert table.roles["jammer"].light_manifest == {}
-    assert table.roles["jammer"].welcome is None
+def test_jammer_role_has_no_welcome():
+    # The glow manifest is asserted in detail further down; welcome stays
+    # absent so joining jam is quiet.
+    assert TestBit().role_table.roles["jammer"].welcome is None
 
 
 def test_test_bit_declares_a_version():
@@ -228,7 +228,8 @@ def test_tilt_drives_the_calling_device_and_the_room_at_one_time():
     from control.cues import ROOM
     bit = TestBit()
     cues = bit._on_tilt("ie1", ["ie1", 0.0], at=1000.06)
-    assert cues == [("ie1", 0xB0, 74, 64), (ROOM, 0xB0, 74, 64)]
+    assert cues == [("ie1", 0xB0, 74, 64), (ROOM, 0xB0, 74, 64),
+                    ("ie1", 0xB0, 1, 23), ("ie1", 0xB0, 2, 42)]
 
 
 def test_room_drift_is_a_deterministic_triangle():
@@ -336,3 +337,46 @@ def test_the_ambient_drift_is_unchanged_when_no_round_has_been_won():
     bit.on_run_start()
     bit.update(0.0)
     assert bit.cues(100.0) == [(ROOM, 0xB0, 74, 0)]
+
+
+def test_jammer_declares_a_low_green_aurora_on_its_own_lanes():
+    """The jammer glows: a dim green aurora at rest, driven by cc:1 (level)
+    and cc:2 (hue) -- NOT the player's cc:74, whose plain full-rainbow sweep
+    is the wrong shape for green-centred yellow/purple tilt."""
+    jammer = TestBit().role_table.roles["jammer"]
+    manifest = jammer.light_manifest
+    (decl,) = manifest["instruments"]
+    assert decl["instrument"] == "aurora"
+    assert decl["params"] == {"hue": 0.33, "level": 0.18}
+    assert decl["lanes"] == [{"source": "cc:2", "dest": "hue"},
+                             {"source": "cc:1", "dest": "level"}]
+
+
+def test_tilt_emits_jammer_glow_ccs_alongside_the_player_lanes():
+    """Every device gets the shaped cc:1/cc:2 pair; only a role declaring
+    those lanes (jammer) reacts. gamma=0: rest -- green hue, dim level.
+    gamma=+90: full purple, bright. gamma=-90: full yellow, bright."""
+    from control.cues import ROOM
+    bit = TestBit()
+
+    def glow(cues):
+        return [(c[2], c[3]) for c in cues
+                if isinstance(c, tuple) and c[1] == 0xB0 and c[2] in (1, 2)]
+
+    rest = bit._on_tilt("ie1", ["ie1", 0.0], at=0.0)
+    assert rest[:2] == [("ie1", 0xB0, 74, 64), (ROOM, 0xB0, 74, 64)]
+    assert glow(rest) == [(1, 23), (2, 42)]        # level 0.18, hue 0.33
+
+    purple = bit._on_tilt("ie1", ["ie1", 90.0], at=0.0)
+    assert glow(purple) == [(1, 102), (2, 99)]     # level 0.80, hue 0.78
+
+    yellow = bit._on_tilt("ie1", ["ie1", -90.0], at=0.0)
+    assert glow(yellow) == [(1, 102), (2, 19)]     # level 0.80, hue 0.15
+
+
+def test_jammer_glow_ccs_target_only_the_calling_device():
+    from control.cues import ROOM
+    cues = TestBit()._on_tilt("ie1", ["ie1", 45.0], at=0.0)
+    for cue in cues:
+        if isinstance(cue, tuple) and cue[2] in (1, 2):
+            assert cue[0] == "ie1" and cue[0] != ROOM
