@@ -1006,7 +1006,17 @@ Design: [`.../2026-08-25-device-liveness-detection-design.md`](https://github.co
   until now -- not even by a graceful Bit-unload release -- is now wired
   into both `_finish_release` (the faded-release path) and `_on_release`'s
   no-bridge early return (the immediate-release path, e.g. a device whose
-  `on_grant` failed).
+  `on_grant` failed). **Guarded against a reconnect race the whole-branch
+  review caught before merge, not while a task was in flight**: a device
+  that sends a fresh message (a heartbeat, or a hello-only reconnect --
+  exactly how the Room simulator behaves) while a PRIOR release's closing
+  fade is still finishing must not have that stale fade's later
+  `_finish_release` call `drop_dev` on its just-re-established connection.
+  `_handle()` marks the dev revived on any inbound traffic while it is
+  still in `_closing`, and `_finish_release` skips `drop_dev` (but still
+  tears down the old bridge/universe/frame/breath state, which genuinely
+  is finished) when that mark is set -- mirroring the existing precedent
+  `_on_join` already set for the equivalent rejoin-mid-fade race.
 - **The heartbeat itself is `/game/hello`, resent, not a new verb.**
   `harness/o2_shroom.py --heartbeat-interval` (default 5s; 0 disables) and
   `harness/room_simulator.py --heartbeat-interval` both gained the resend.
@@ -1017,7 +1027,16 @@ Design: [`.../2026-08-25-device-liveness-detection-design.md`](https://github.co
 - `harness/terrarium_boot.py`'s `_LifecycleLogger` gained a "device timed
   out: `<dev>`" line, unambiguous by construction: `reap_stale` is the
   only thing that ever removes a `DevicePool` entry, so a dev leaving
-  `gs.devices.all()` between ticks can only mean this.
+  `gs.devices.all()` between ticks can only mean this. A reaped device
+  that held a role prints **both** lines -- "device released" from the
+  assignments diff and "device timed out" from the devices diff -- which
+  depends on `reap_stale` notifying `on_devices_change` **before**
+  `on_registration_change`: the logger's registration-change handler
+  overwrites the assignments snapshot the devices-change handler's release
+  diff reads, so the wrong order silently drops the "released" line. Also
+  caught by the whole-branch review, not a task review -- the only
+  existing test for this logger exercised an un-joined device, where
+  `on_registration_change` never fires at all.
 
 ### `control/teardown.py`, `control/process.py`, `harness/signals.py`, `harness/markers.py`, `harness/run_stack.py` -- teardown order, structurally, and a one-command Arco stack runner
 Closes the ordering gap the previous section's "third bug" investigation
