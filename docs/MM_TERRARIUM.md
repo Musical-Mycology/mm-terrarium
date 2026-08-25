@@ -1002,7 +1002,7 @@ Design: [`.../2026-08-25-device-liveness-detection-design.md`](https://github.co
   keep feeding whatever fixture-to-dev binding `RoomBindingRegistry` still
   holds, which is deliberate -- see *Not yet built* below.
 - **`drop_dev()`**, defined on both `DeviceLinkServer` and
-  `O2LiteTransport` since PR #24 (o2lite) but called from **nowhere**
+  `O2LiteTransport` since PR #20 (o2lite) but called from **nowhere**
   until now -- not even by a graceful Bit-unload release -- is now wired
   into both `_finish_release` (the faded-release path) and `_on_release`'s
   no-bridge early return (the immediate-release path, e.g. a device whose
