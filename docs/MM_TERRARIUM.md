@@ -982,6 +982,43 @@ retuning. See the *Control on o2lite, and timed cues* status callout above.
 ```
 <!-- /diagram:cue-path -->
 
+### `control/device_pool.py`, `control/engine.py`'s `reap_stale`, and the harness heartbeat clients -- device liveness detection
+Closes the "stale device entry survives an ungraceful disconnect" gap.
+Design: [`.../2026-08-25-device-liveness-detection-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-25-device-liveness-detection-design.md).
+
+- **`DevicePool`** gained `last_seen` per device, updated by
+  `DeviceLinkAgent._handle()` on every inbound message (not just hello --
+  a device mid-gesture-stream is obviously alive) plus `touch()`/
+  `stale()`/`remove()`. `stale()` is a pure query; nothing removes an
+  entry except the reaper below.
+- **`GameServer.reap_stale(timeout)`**, called every tick from
+  `DeviceLinkAgent.poll()` (the one loop that already runs unconditionally
+  across every engine state, including the SETUP-hold wait). A stale
+  device that held a role has its slot freed synchronously via
+  `RegistrationState.release()` before the existing `on_release` sink
+  fires -- a new player can join the freed slot immediately, without
+  waiting for the departed device's closing fade to finish playing out.
+  Room-bound devices are skipped entirely: `RoomBridge`/`AudioBridge`
+  keep feeding whatever fixture-to-dev binding `RoomBindingRegistry` still
+  holds, which is deliberate -- see *Not yet built* below.
+- **`drop_dev()`**, defined on both `DeviceLinkServer` and
+  `O2LiteTransport` since PR #24 (o2lite) but called from **nowhere**
+  until now -- not even by a graceful Bit-unload release -- is now wired
+  into both `_finish_release` (the faded-release path) and `_on_release`'s
+  no-bridge early return (the immediate-release path, e.g. a device whose
+  `on_grant` failed).
+- **The heartbeat itself is `/game/hello`, resent, not a new verb.**
+  `harness/o2_shroom.py --heartbeat-interval` (default 5s; 0 disables) and
+  `harness/room_simulator.py --heartbeat-interval` both gained the resend.
+  `mm-tuneshroom`'s Dart client has not, yet -- the real-hardware path
+  stays open until that cross-repo change lands, same relationship
+  `devicelink/protocol.py`'s docstring already documents for its Dart
+  counterpart contract.
+- `harness/terrarium_boot.py`'s `_LifecycleLogger` gained a "device timed
+  out: `<dev>`" line, unambiguous by construction: `reap_stale` is the
+  only thing that ever removes a `DevicePool` entry, so a dev leaving
+  `gs.devices.all()` between ticks can only mean this.
+
 ### `control/teardown.py`, `control/process.py`, `harness/signals.py`, `harness/markers.py`, `harness/run_stack.py` -- teardown order, structurally, and a one-command Arco stack runner
 Closes the ordering gap the previous section's "third bug" investigation
 left open: every individual guard there was correct and the ordering they
@@ -2077,13 +2114,26 @@ Kept explicit so the doc doesn't over-claim:
   sharing a `time.monotonic` epoch, and that only holds because
   `harness/room_simulator.py` is always spawned as a local subprocess of
   Control; it would not hold for an over-network websocket device.
-- **A stale device entry survives an ungraceful disconnect**, and this
-  architecture cannot fix it as-is. Control is an o2lite **client**, not the O2
-  host, so devices connect to Arco and Control never holds a socket to one.
-  o2litepy exposes no per-peer liveness at all: its API is `set_services`,
-  `bridge_id` (Control's own link to the host) and `tcp_close`. Closing this
-  needs an application heartbeat or a registration expiry, which is a design
-  question rather than a bug fix.
+- ~~**A stale device entry survives an ungraceful disconnect.**~~ **Closed
+  2026-08-25.** A device-initiated heartbeat riding the existing
+  `/game/hello` verb (no new wire message): `DevicePool` tracks
+  `last_seen` off every inbound message, `GameServer.reap_stale()` runs
+  every tick from `DeviceLinkAgent.poll()` and removes any device silent
+  past `BootConfig.stale_timeout` (default 15s), freeing its role slot
+  immediately and reusing the existing closing-fade release path. One
+  mechanism for both transports, not two: reading `devicelink/server.py`
+  during this design found that the websocket transport did not actually
+  propagate a disconnect into engine state either -- `drop_dev()` was
+  defined on both transports and called from neither, which this slice
+  also fixed. `harness/o2_shroom.py` and `harness/room_simulator.py`
+  resend hello on a timer (`--heartbeat-interval`, default 5s); the real
+  `mm-tuneshroom` Dart client needs the same change and does not have it
+  yet -- a cross-repo follow-up, not a gap in this repo. Room-class
+  devices are explicitly excluded from reaping (Room liveness is a
+  separate, not-yet-designed question -- see `RoomBindingRegistry.save()/
+  load()` a few entries below, which is the same kind of open question).
+  See `docs/superpowers/specs/
+  2026-08-25-device-liveness-detection-design.md`.
 - **`cue_horizon` is measured as of 2026-08-14, and 60 ms turned out to be
   right. The belief that it was far too small was an artifact.** This
   supersedes the earlier claim here that the live 2026-08-13 run proved the
