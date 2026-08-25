@@ -138,10 +138,22 @@ class GameServer:
                             "continuing", dev)
             self.devices.remove(dev)
             reaped.append(dev)
-        if released_any:
-            self._notify("on_registration_change")
+        # on_devices_change BEFORE on_registration_change, deliberately: see
+        # harness/terrarium_boot.py's _LifecycleLogger. Its "device
+        # released" line runs in on_devices_change, diffed against the
+        # registration.assignments snapshot on_registration_change last
+        # left behind -- if on_registration_change fired first, its "join
+        # granted" bookkeeping would overwrite that snapshot to the
+        # post-release state before the devices-diff ever ran, and the
+        # released line would silently never print for a reaped
+        # role-holding device. This order is what makes a timed-out role
+        # holder print BOTH "released" and "timed out" (design spec section
+        # 7), matching a graceful release/rejoin, where the two hooks never
+        # race like this in the first place.
         if reaped:
             self._notify("on_devices_change")
+        if released_any:
+            self._notify("on_registration_change")
         return reaped
 
     def load_bit(self, name: str, config=None) -> None:

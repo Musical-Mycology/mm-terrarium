@@ -1565,3 +1565,41 @@ def test_device_timed_out_line(capsys):
 
     out = capsys.readouterr().out
     assert "device timed out: ie1\n" in out
+
+
+def test_timed_out_role_holder_prints_both_released_and_timed_out_lines(capsys):
+    """Final-review Finding 1 regression. reap_stale() notified
+    on_registration_change BEFORE on_devices_change, and
+    on_registration_change unconditionally overwrites _LifecycleLogger.
+    _last_assignments as a side effect of printing "join granted" lines --
+    so by the time on_devices_change's "device released" diff ran (against
+    that just-clobbered snapshot), there was nothing left to diff and the
+    line silently never printed for a reaped role-holding device. This
+    contradicts both the design spec (docs/superpowers/specs/
+    2026-08-25-device-liveness-detection-design.md section 7: "a timed-out
+    player that held a role prints BOTH lines") and _LifecycleLogger's own
+    docstring above. test_device_timed_out_line above never caught this: an
+    un-joined device never sets released_any, so on_registration_change
+    never even fires for it."""
+    from control.engine import GameServer
+    from devicelink.agent import DeviceLinkAgent
+    from tests.test_devicelink_agent import FakeServer, _Clock
+
+    clk = _Clock()
+    # gs and agent MUST share the same clock instance -- see
+    # test_device_timed_out_line above.
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk, stale_timeout=10.0)
+    gs.add_observer(_LifecycleLogger(gs))
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    _deliver_join(server, agent, "ie1", "TEST_PLAYER_NODE")
+    capsys.readouterr()   # discard the hello/join-granted lines
+
+    clk.advance(11.0)
+    agent.poll()
+
+    out = capsys.readouterr().out
+    assert "device released: ie1\n" in out
+    assert "device timed out: ie1\n" in out
