@@ -65,29 +65,31 @@ const ROOM = {
   assert.strictEqual(surface._bindCtlFor("main"), bindCtlBefore);
 
   // rule 3: a shape change on ONE fixture must not touch a sibling fixture
-  // whose shape is unchanged -- its binding-controls node identity (the
-  // only stable per-fixture handle available for an unbound fixture) must
-  // survive, and main's canvas (whose shape DID change) must not.
-  const mainStripBeforeShapeChange = surface._canvasFor("sim-room-main");
-  const accentBindCtlBefore = surface._bindCtlFor("accent");
+  // whose shape is unchanged. main (bound, has a dev) is the unchanged
+  // fixture here so its CANVAS identity (via _canvasFor) can actually be
+  // checked -- an unbound fixture has no canvasesByDev entry at all, so
+  // that check is only meaningful for a bound sibling. accent (unbound)
+  // is the one whose shape changes; its binding-controls node identity is
+  // checked too, as an extra (not a substitute) assertion.
+  const mainCanvasBeforeAccentShapeChange = surface._canvasFor("sim-room-main");
+  const mainBindCtlBefore = surface._bindCtlFor("main");
   send({
     event: "room_changed",
     room: {
       ...ROOM,
       fixtures: [
-        { ...ROOM.fixtures[0], pixel_count: 75,
-          zones: [{ name: "main.left", start: 0, count: 25 },
-                  { name: "main.center", start: 25, count: 25 },
-                  { name: "main.right", start: 50, count: 25 }] },
-        ROOM.fixtures[1],
+        ROOM.fixtures[0],
+        { ...ROOM.fixtures[1], pixel_count: 40,
+          zones: [{ name: "accent.low", start: 0, count: 20 },
+                  { name: "accent.high", start: 20, count: 20 }] },
       ],
     },
   });
-  // main's shape changed -> its canvas is a new node.
-  assert.notStrictEqual(surface._canvasFor("sim-room-main"), mainStripBeforeShapeChange);
-  assert.ok(card.innerHTML.includes("main.center (25..49)"));
-  // accent's shape did not change -> its binding controls node survives.
-  assert.strictEqual(surface._bindCtlFor("accent"), accentBindCtlBefore);
+  // accent's shape changed; main's did not -> main's canvas is the SAME node.
+  assert.strictEqual(surface._canvasFor("sim-room-main"), mainCanvasBeforeAccentShapeChange);
+  // main's shape did not change -> its binding controls node survives too.
+  assert.strictEqual(surface._bindCtlFor("main"), mainBindCtlBefore);
+  assert.ok(card.innerHTML.includes("accent.high (20..39)"));
 
   // rule 4: rebuilding a NON-LAST fixture must reinsert it in place, not
   // append it after later surviving fixtures -- declaration order stays
