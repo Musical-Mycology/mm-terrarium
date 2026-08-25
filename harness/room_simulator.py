@@ -123,6 +123,12 @@ def main() -> None:
                         help="The horizon Control was run with, used only to "
                              "report absolute frame latency on exit. Same "
                              "flag and same meaning as harness/o2_shroom.py's.")
+    parser.add_argument("--heartbeat-interval", type=float, default=5.0,
+                        help="Resend /game/hello every N seconds while "
+                             "connected, so Control's GameServer.reap_stale "
+                             "does not time this device out. Same flag and "
+                             "meaning as harness/o2_shroom.py's. 0 disables "
+                             "the resend.")
     parser.add_argument("--samples-out", default=None,
                         help="Write raw per-frame lateness samples here as "
                              "JSON, for python -m harness.sync_bench.")
@@ -169,7 +175,22 @@ def main() -> None:
                 async for raw in ws:
                     client.handle(json.loads(raw))
 
-            await asyncio.gather(pump_down(), pump_tick(client))
+            async def pump_heartbeat() -> None:
+                """Resend /game/hello on a timer so Control's
+                GameServer.reap_stale (docs/superpowers/specs/
+                2026-08-25-device-liveness-detection-design.md) never
+                times this Room device out for going quiet -- it only
+                ever sends hello, never join, so it has no gesture
+                traffic of its own to prove it is still alive."""
+                if args.heartbeat_interval <= 0:
+                    return
+                while not client.released:
+                    await asyncio.sleep(args.heartbeat_interval)
+                    if not client.released:
+                        await ws.send(json.dumps(client.hello()))
+
+            await asyncio.gather(pump_down(), pump_tick(client),
+                                 pump_heartbeat())
 
     try:
         asyncio.run(run())

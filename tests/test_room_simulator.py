@@ -92,3 +92,44 @@ def test_identify_blocks_frame_works_for_a_single_block_fixture():
     r, g, b = BLOCK_PALETTE[0]
     assert frame[:3] == bytes((g, r, b))
     assert frame == frame[:3] * 30
+
+
+def test_main_has_a_heartbeat_interval_flag_wired_to_a_pump():
+    """room_simulator.py's main() is asyncio + a real websocket connect,
+    same untestable-end-to-end shape as o2_shroom.py's main() (see that
+    module's test_main_has_exactly_one_backend_close for the precedent).
+    Source-inspection: assert the CLI flag exists AND that main()'s run()
+    gathers a coroutine call named pump_heartbeat alongside the existing
+    pump_down/pump_tick, proving the resend is actually wired into the
+    connection rather than just parsed and discarded."""
+    import ast
+    import inspect
+
+    import harness.room_simulator
+
+    source = inspect.getsource(harness.room_simulator)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    add_argument_flags = [
+        node.args[0].value for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_argument"
+        and node.args and isinstance(node.args[0], ast.Constant)
+    ]
+    assert "--heartbeat-interval" in add_argument_flags
+
+    gather_calls = [
+        node for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "gather"
+    ]
+    assert gather_calls, "main() must still gather its pump coroutines"
+    gathered_names = [
+        arg.func.id for call in gather_calls for arg in call.args
+        if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
+    ]
+    assert "pump_heartbeat" in gathered_names
