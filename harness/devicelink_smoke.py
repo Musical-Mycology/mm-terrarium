@@ -34,8 +34,16 @@ def build(host: str = HOST, port: int = PORT,
     Returns (game_server, server, agent). The server is already started and
     bound; pass port=0 for an ephemeral port in tests. `clock` is a pure test
     seam -- DeviceLinkAgent/DeviceBridge already expose it, and the default
-    keeps main()'s production path byte-identical."""
-    gs = GameServer({"test_bit": lambda: TestBit(run_duration=run_duration)})
+    keeps main()'s production path byte-identical.
+
+    gs shares `clock` with the agent -- control/boot.py's own comment on
+    this ("cue_horizon and clock go in together and MUST match the ones
+    DeviceLinkAgent is built with... Two clock bases is the 2026-08-13
+    live-run bug") applies here too: GameServer.reap_stale(), now called
+    every poll(), reads its own clock against DevicePool.last_seen, which
+    DeviceLinkAgent writes using ITS clock on every touch() call."""
+    gs = GameServer({"test_bit": lambda: TestBit(run_duration=run_duration)},
+                    clock=clock)
     server = DeviceLinkServer(host=host, port=port)
     server.start()
     agent = DeviceLinkAgent(gs, server, clock=clock)

@@ -77,7 +77,8 @@ class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
                  capability=None, clock=time.monotonic,
                  room_bridge=None, room_audio=None, horizon: float = 0.0,
-                 room_profile=None, on_room_frame=None, on_join_denied=None):
+                 room_profile=None, on_room_frame=None, on_join_denied=None,
+                 stale_timeout: float = 15.0):
         self.game_server = game_server
         self.server = server
         self._capability = capability
@@ -88,6 +89,11 @@ class DeviceLinkAgent:
         # is deferred to at - horizon when that is still in the future, so a
         # far-future state cannot leak into an intervening breath frame.
         self._horizon = horizon
+        # Control-side reap threshold: a device silent this many seconds
+        # is removed by GameServer.reap_stale(), called from poll() below.
+        # See docs/superpowers/specs/
+        # 2026-08-25-device-liveness-detection-design.md.
+        self._stale_timeout = stale_timeout
         self._room_cues = TimedQueue()
         # Deferred light-session feeds: (dev, status, d1, d2, at). ONLY a
         # Bit-declared cue further out than one horizon lands here. A gesture
@@ -242,6 +248,7 @@ class DeviceLinkAgent:
             except Exception:
                 logger.exception("devicelink inbound handling failed; "
                                  "dropping frame")
+        self.game_server.reap_stale(self._stale_timeout)
         self._feed_breath()
         # Before both renders: a feed released this tick must be reflected in
         # the frame rendered this tick, not the next one. Draining after would
@@ -436,6 +443,7 @@ class DeviceLinkAgent:
             logger.warning("dropping /game/%s with no dev argument", verb)
             return
         dev = env.args[0]
+        self.game_server.devices.touch(dev, self._clock())
         if verb == "hello":
             self._on_hello(client, dev, env.args)
         elif verb == "join":
@@ -528,13 +536,20 @@ class DeviceLinkAgent:
 
         A device can be released with no bridge at all (e.g. its on_grant
         failed earlier -- see test_failing_on_grant_sends_error_not_role...):
-        nothing to fade in that case, so release immediately."""
+        nothing to fade in that case, so release immediately -- including
+        forgetting the transport's connection mapping, the same cleanup
+        _finish_release does for the faded case below."""
         bridge = self.bridges.get(dev)
         if bridge is None:
+            # Send BEFORE drop_dev: both transports' send() treats an
+            # unbound dev as a silent no-op (see devicelink/server.py and
+            # devicelink/o2_transport.py), so dropping the connection
+            # mapping first would swallow this very notification.
             try:
                 self._send(dev, protocol.release_event(dev))
             except Exception:
                 logger.exception("release notify for %s failed", dev)
+            self.server.drop_dev(dev)
             return
         try:
             bridge.on_release(dev)   # -> session.clear(): enqueues the fade
@@ -550,10 +565,14 @@ class DeviceLinkAgent:
         self._last_frames.pop(dev, None)
         self._closing.pop(dev, None)
         self._last_breath.pop(dev, None)
+        # Send BEFORE drop_dev, same reasoning as _on_release's no-bridge
+        # branch above: dropping the connection mapping first would make
+        # this very send a silent no-op.
         try:
             self._send(dev, protocol.release_event(dev))
         except Exception:
             logger.exception("release notify for %s failed", dev)
+        self.server.drop_dev(dev)
 
     def _is_room_dev(self, dev: str) -> bool:
         gs = self.game_server

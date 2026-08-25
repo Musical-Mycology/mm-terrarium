@@ -125,9 +125,17 @@ def _agent_with_joined_device(dev="ie1"):
     existing clock=clk convention) rather than real time, since the join
     poll() itself already sends the device's first breath -- the tests need
     to move time deliberately to observe a change from there, not rely on
-    however many microseconds elapse between two Python statements."""
+    however many microseconds elapse between two Python statements.
+
+    gs shares this SAME clk with the agent -- control/engine.py's own
+    comment on GameServer.__init__'s clock= param ("MUST be the same
+    callable DeviceLinkAgent was built with") is not just about frame
+    timestamps: GameServer.reap_stale() (poll()'s stale-device check) reads
+    its own clock against DevicePool.last_seen, which DeviceLinkAgent
+    writes using ITS clock on every touch() call. Two unsynced clocks here
+    would make every device look enormously stale on the very next poll()."""
     clk = _Clock()
-    gs = GameServer({"test_bit": TestBit})
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
@@ -274,9 +282,12 @@ def test_release_sends_release_and_clears_the_bridge():
     which now plays the device's closing fade before dropping it -- see
     tests/test_devicelink_frames.py for the detailed fade-then-release test.
     A fake clock (rather than the `rig` fixture's real one) is needed so the
-    fade actually finishes within a bounded number of poll()s here."""
+    fade actually finishes within a bounded number of poll()s here. gs
+    shares the SAME clk as the agent -- see _agent_with_joined_device's
+    docstring for why an unsynced GameServer clock now makes poll()'s
+    reap_stale() reap the device immediately."""
     clk = iter(_CLOSING_CLOCK_SCHEDULE).__next__
-    gs = GameServer({"test_bit": TestBit})
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
@@ -311,9 +322,10 @@ def test_a_raising_transport_does_not_strand_any_device_on_release():
     eventual /<dev>/release send can fail (RaisingSendServer always raises)
     without preventing the fade from finishing or the bridge from being
     dropped -- _finish_release's map cleanup does not depend on the send
-    succeeding, see devicelink/agent.py."""
+    succeeding, see devicelink/agent.py. gs shares the SAME clk as the
+    agent -- see _agent_with_joined_device's docstring."""
     clk = iter(_CLOSING_CLOCK_SCHEDULE).__next__
-    gs = GameServer({"test_bit": TestBit})
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
     server = RaisingSendServer()
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
@@ -1214,3 +1226,108 @@ def test_room_broadcast_skips_unbound_devices_without_raising(rig):
     server.drop_dev("ie1")
     gs.load_bit("test_bit")   # must not raise; FakeServer.send is a no-op for unbound
     assert _room_msgs(server)[-1]["args"][0]["state"] == "IDLE"
+
+
+# --- Stale-device reaping and drop_dev cleanup: DeviceLinkAgent.poll() now
+# calls GameServer.reap_stale() every tick, and _handle() touches last_seen
+# on every inbound message (not just hello), so a device that stays quiet
+# past stale_timeout is reaped even though it never sends another /game/hello.
+# See docs/superpowers/specs/2026-08-25-device-liveness-detection-design.md.
+
+def test_handle_touches_last_seen_on_every_inbound_message():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    clk.advance(3.0)
+    server.deliver("c1", "/game/tilt", "sf", [dev, 10.0])
+    agent.poll()
+    assert gs.devices.get(dev).last_seen == clk.t
+
+
+def test_poll_reaps_a_device_silent_past_stale_timeout():
+    # gs shares clk with the agent -- see _agent_with_joined_device's
+    # docstring for why an unsynced GameServer clock breaks reap_stale.
+    clk = _Clock()
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk, stale_timeout=10.0)
+    gs.load_bit("test_bit")
+    _hello(server, agent, client="c1", dev="ie1")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    assert "ie1" in agent.bridges
+
+    clk.advance(11.0)
+    agent.poll()   # no inbound traffic this tick -- ie1 has gone silent
+
+    assert gs.devices.known("ie1") is False
+    counts = dict((n, c) for n, c, _ in gs.registration.counts())
+    assert counts["player"] == 0
+    # Reaped through the SAME graceful path a normal release takes
+    # (GameServer.reap_stale fires the on_release sink, exactly like
+    # _unload does), not some separate hard-drop code path: the closing
+    # fade started _and_ finished, sending /ie1/release and forgetting the
+    # transport's connection mapping. It resolves within this one poll()
+    # rather than staying mid-fade (contrast test_finish_release_calls_
+    # drop_dev's fine-grained clock schedule) because the single 11s clock
+    # jump is itself the render's dt on the next frame -- far past the
+    # ~0.6s sys:closing signature's own duration -- so the same call that
+    # starts CLOSING also renders it to completion (see
+    # luxaeterna's synth/director.py StatusDirector.frame()).
+    assert "ie1" not in agent._closing
+    assert "ie1" not in agent.bridges
+    assert server.addressed("/ie1/release")
+    assert "ie1" not in server._devs
+
+
+def test_a_fresh_heartbeat_prevents_reaping():
+    # gs shares clk with the agent -- see _agent_with_joined_device's
+    # docstring for why an unsynced GameServer clock breaks reap_stale.
+    clk = _Clock()
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk, stale_timeout=10.0)
+    gs.load_bit("test_bit")
+    _hello(server, agent, client="c1", dev="ie1")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+
+    clk.advance(8.0)
+    server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
+    agent.poll()   # heartbeat lands before the 10s timeout
+
+    clk.advance(8.0)   # 16s since join, but only 8s since the heartbeat
+    agent.poll()
+
+    assert gs.devices.known("ie1") is True
+    assert "ie1" in agent.bridges
+
+
+def test_finish_release_calls_drop_dev():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    assert dev in server._devs
+    gs.abort()          # -> _unload -> on_release -> fade -> _finish_release
+    # drive the closing fade to completion
+    for _ in range(250):
+        agent.poll()
+        clk.advance(1.0 / 44.0)
+    assert dev not in server._devs
+
+
+def test_on_release_with_no_bridge_calls_drop_dev():
+    """Mirrors test_failing_on_grant_sends_error_not_role... -- a device
+    whose on_grant failed never got a bridge, so _on_release takes the
+    early-return branch, not the fade. That branch must still forget the
+    transport's connection mapping."""
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server)
+    gs.load_bit("test_bit")
+    _hello(server, agent, client="c1", dev="ie1")
+    assert "ie1" in server._devs
+
+    # Simulate a grant with no bridge ever created, exactly what
+    # devicelink/agent.py's _on_join does on a failing on_grant: the
+    # engine-level assignment exists, but self.bridges never got an entry.
+    gs.join("ie1", "TEST_PLAYER_NODE")
+    agent._on_release("ie1")
+
+    assert "ie1" not in server._devs
