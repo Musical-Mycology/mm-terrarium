@@ -31,11 +31,11 @@ def _find_node() -> str | None:
 NODE = _find_node()
 
 
+JS_TESTS = sorted(p.name for p in (ROOT / "tests" / "js").glob("*.test.js"))
+
+
 @pytest.mark.skipif(NODE is None, reason="node not found on this box")
-@pytest.mark.parametrize("script", [
-    "console_script_isolation.test.js",
-    "console_full_stack.test.js",
-])
+@pytest.mark.parametrize("script", JS_TESTS)
 def test_console_scripts(script):
     result = subprocess.run(
         [NODE, str(ROOT / "tests" / "js" / script)],
