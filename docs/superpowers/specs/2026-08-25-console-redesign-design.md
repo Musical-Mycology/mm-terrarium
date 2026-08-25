@@ -83,18 +83,18 @@ bindings and deviations.
 +----------------+--------------------------------+----------------+
 | SIDEBAR        | MAIN                           | RIGHT RAIL     |
 |                |                                |                |
-| Loaded-Bit     | Surface (Room) card            | Registration   |
-|  card          |   per fixture: LED canvas,     | Devices        |
-|  art / name    |   zone bar, binding chip       | Roles &        |
-|  phase chip    |   instrument cards             |  manifests (▾) |
-|  details       |                                | Event log      |
-|  Run / Abort   | Bit status card (when loaded)  |                |
-|  Load →picker  |                                |                |
-|                | Triggers card                  |                |
+| Loaded Bit     | Room card ("DEMO")             | Registration   |
+|  icon + name   |   per fixture: LED dot rows    | Devices        |
+|  Run/Abort/    |   (per block), zone bar,       | Roles &        |
+|   Load         |   binding chip                 |  manifests (▾) |
+|  phase chip    |   Instruments ⌄ (accordion)    | Event log      |
+|  details       |   Triggers ⌄ (accordion)       |                |
+|                |                                |                |
+|                | Bit status card (when loaded)  |                |
 +----------------+--------------------------------+----------------+
 ```
 
-Widths ≥1200px: sidebar 280px fixed, rail 320px fixed, main fluid.
+Sidebar ~248px fixed, rail 320px fixed, main fluid.
 
 ### 4.1 Top bar
 
@@ -107,14 +107,21 @@ Widths ≥1200px: sidebar 280px fixed, rail 320px fixed, main fluid.
 
 ### 4.2 Sidebar — the Loaded-Bit card
 
-State when nothing is loaded: an empty-state card ("No Bit loaded") with the
-Load button. When loaded:
+The sidebar is a full-height nav panel on the darkest surface, flush to the
+viewport's left edge under the top bar, separated from the content by a
+clearly visible 2px warm-tan vertical divider. It is compact: an operator
+scans it, the content area gets the space.
 
-- **Cover art slot**: square, 18px radius. Ships rendering a default brand
-  mushroom mark; reserves an optional `bit.toml [console]` art/icon field
-  for later (declaring that field is NOT part of this slice — only the slot).
-- **Identity**: `display_name` (Londrina), `name` + `vversion` (mono),
-  kind chip (`R_GAME` / `TOOL`).
+State when nothing is loaded: an empty state ("No Bit loaded") with the Load
+button. When loaded, top to bottom:
+
+- **Identity row**: a SMALL cover-art slot (~38px square, 10px radius,
+  default brand mark) sitting LEFT of `display_name` (Londrina, ~21px),
+  with `name` + `vversion` (mono) and the kind chip (`R_GAME` / `TOOL`)
+  tucked under the name. The art field in `bit.toml [console]` is reserved,
+  not declared, this slice.
+- **Run / Abort / Load buttons** directly under the identity row (small
+  pill sizing, one row).
 - **Phase chip** (the card's centerpiece), driven by `state_changed`:
 
   | Engine state | Chip | Color |
@@ -131,7 +138,7 @@ Load button. When loaded:
 - **Details**: supported rooms (active one highlighted), scored/jam role
   summary ("2 scored · jam open", from the loaded role table), description,
   `[console] notes`.
-- **Buttons** — all overrides, never state-hidden:
+- Button semantics — all overrides, never state-hidden:
   - **Run** (gold, primary): sends `run`.
   - **Abort** (rose, outline): two-tap confirm — becomes "Confirm abort?"
     for 4s, no modal — then sends `abort`.
@@ -153,19 +160,32 @@ Error rows (rose, path + message) list after the cards. Each card has:
   located message. No client-side schema validation — the server is the
   validator and its errors are already good.
 
-### 4.4 Main — Surface card
+### 4.4 Main — the Room card
 
-Header: "Surface" + `DEMO · 864 px · GRB`, and a **frames chip**: sage
-`LIVE` while `room_frame`s arrived in the last 2s, dim `NO FRAMES`
-otherwise. "No Room configured" empty state when `room` is null.
+ONE card carries everything an operator tests against: the live surface,
+the instruments, and the triggers — so firing a trigger and watching the
+array happen without scrolling between cards.
+
+Header: the **room name as the title** ("DEMO", with a small "Room"
+qualifier) + `864 px · GRB`, and a **frames chip**: sage `LIVE` while
+`room_frame`s arrived in the last 2s, dim `NO FRAMES` otherwise. "No Room
+configured" empty state when `room` is null.
 
 Per fixture, in declaration order:
 
-- **LED strip as one `<canvas>`** — full-width, borderless, height ~28px.
-  Paints from `room_frame` (GRB decode). Replaces the per-pixel divs
-  (864 DOM nodes → 1 canvas per fixture).
-- **Zone bar**: proportional spans, `name (start..end)`, exactly today's
-  data.
+- **LED surface as DISCRETE per-pixel dots, one canvas row per declared
+  `RoomBlock`** (DEMO: six rows of 144, labels `m1 0..143` … `m6 720..863`;
+  TEST fixtures: one row each). Each pixel is a distinct dot with a visible
+  gap, and a pixel whose frame value is dark renders as a dim ring — a
+  "socket" — never an empty gap, so a single dead LED is findable by eye
+  and by position. A block row maps to one physical LED device, the unit a
+  venue tech would replace. Purely a rendering choice: `room_frame` still
+  carries the whole fixture slice; blocks come from the room profile
+  already in `room_changed`. (The console displays what the frame says; it
+  cannot distinguish "commanded off" from "burned out" — no such feedback
+  exists on the wire.) GRB decode. Replaces the per-pixel divs.
+- **Zone bar**: proportional spans, `name (start..end)`, aligned with the
+  dot area.
 - **Binding chip + controls**: bound → dev id chip in sage, **Release**
   behind the same two-tap confirm, sends `release_room {room_type,
   fixture}`. Unbound → terracotta `NOT BOUND` chip + **Arm** button
@@ -175,36 +195,49 @@ Per fixture, in declaration order:
   best-effort from the arm action + subsequent `room_changed`; the wire
   does not push window expiry.)
 
-Below the fixtures, **instrument cards**: one list discriminated by
-LIGHT/AUDIO badge (light: instrument, target zone, params; audio: program,
-drone, extra keys copied through), each lane one row —
-`cc:74 → hue` with the live controller value in gold mono, updating from
-`room_changed`. "No instruments declared (no Bit loaded)" empty state.
+Below the fixtures, two **accordion sections** (native `<details>`,
+independently collapsible, both open by default; collapsing Instruments
+puts the trigger Fire buttons directly under the live array):
 
-### 4.5 Main — Bit status card
+- **"Instruments ⌄"** — deliberately NOT named "Controls": these are
+  read-only declarations plus live telemetry, and a header that implies
+  actionability invites clicking cards that do nothing (see section 9 for
+  the actionable follow-up). Compact cards in a responsive grid, one list
+  discriminated by LIGHT/AUDIO badge (light: instrument, target zone,
+  params; audio: program, drone, extra keys copied through), each lane one
+  row — `cc:74 → hue` with the live controller value in gold mono,
+  updating from `room_changed`. Summary line: `4 declared · live values`.
+  "No instruments declared (no Bit loaded)" empty state.
+- **"Triggers ⌄"** — section 4.6's content, inside this card.
+
+### 4.5 Main — Bit status card (follows the Room card)
 
 Rendered only when `bit_status` is non-empty: a compact JetBrains Mono
 key/value board (MetronomeBit: turn, cycle, elapsed…). Values render via a
 small typed formatter: scalars plain, lists joined, nested objects
 pretty-printed one level — never `[object Object]`.
 
-### 4.6 Main — Triggers card
+### 4.6 Triggers (accordion inside the Room card)
 
-"No triggers declared" empty state. Per declared trigger, one row-card:
+"No triggers declared" empty state. **Compact cards at the same scale as
+the instrument cards, in the same responsive grid pattern** — not
+full-width rows. Per declared trigger:
 
-- Name (Londrina), target chip (`DEVICE`/`ROOM`), description.
+- Name (Londrina, ~16px), target chip (`DEVICE`/`ROOM`), description.
 - Condition line: `description · (source[: verb])`, dim.
 - **Script collapsed by default**: summary `N steps · X.Xs` (total = max
   offset); "Show script" expands the mono step list (today's
   `+0.36s  @target  cc:70 = 125` / play-cue lines).
-- DEVICE targets: device picker (from live device list, selection
-  preserved across re-renders) + **Fire** (gold pill). ROOM targets: Fire
-  only. Sends `fire_trigger {name[, dev]}`.
+- **Action row pinned to the card bottom** so Fire buttons align across
+  the grid: DEVICE targets get the device picker (live device list,
+  selection preserved across re-renders) + **Fire** (gold pill); ROOM
+  targets Fire only. Sends `fire_trigger {name[, dev]}`.
 - Last-fired line: `fired_by → devs (n cues)`; `ADMIN MANUAL` tag in
-  terracotta bold; a brief sage flash on the row when a `trigger_fired`
-  arrives; `never fired` dim otherwise. (Fire history is still
-  broadcast-only — a late-joining browser shows `never fired`; fixing that
-  is a wire change and out of scope.)
+  terracotta bold; fired-state left edge (sage = bit-adjudicated,
+  terracotta = admin-manual) plus a brief sage flash when a
+  `trigger_fired` arrives; `never fired` dim otherwise. (Fire history is
+  still broadcast-only — a late-joining browser shows `never fired`;
+  fixing that is a wire change and out of scope.)
 
 ### 4.7 Right rail
 
@@ -320,8 +353,17 @@ on an instance. Additive fix, no schema break:
   (1 scored shared + 1 jam) and `roles: null` for a constructor-raising
   fake, and never a ROOM role.
 
-## 9. Non-goals
+## 9. Non-goals and named follow-ups
 
+- **Instrument "test lane" mechanism (named follow-up, own slice).** The
+  Instruments section is read-only this slice. The follow-up: a per-lane
+  operator poke (slider or nudge) sending a new console command
+  (`feed_room_cc` → `RoomBridge.feed_midi`) so a tech can sweep e.g.
+  `cc:74` and watch hue move and hear the filter track it during venue
+  bring-up. Needs its own small design pass: a new wire command plus an
+  engine-side guard so an operator poke cannot fight a running Bit's cue
+  stream (likely gated to non-RUNNING states). Pull forward if hardware
+  bring-up needs lane-poking before this redesign ships.
 - Any other wire/protocol change: fire history in `snapshot`, device
   last-seen display, armed-window expiry push — all deferred.
 - Authentication, or any trust-model change. Trusted LAN, `127.0.0.1`
@@ -333,10 +375,15 @@ on an instance. Additive fix, no schema break:
 
 ## 10. Responsive
 
-- **≥1200px**: three columns (280 / fluid / 320).
-- **760–1200px**: sidebar collapses to a top strip (art, name, phase chip,
-  Run/Abort/Load); rail stacks below main; picker overlay unchanged.
-- **<760px**: single column, functional, out of design scope.
+The left nav is the design's anchor and survives down to phone width; the
+rail folds first. (Found the hard way: an earlier breakpoint collapsed the
+nav to a top strip at ~1000px, which is exactly the width of a review panel
+or portrait tablet — the primary operator widths.)
+
+- **≥1400px**: three columns (~248 / fluid / 320).
+- **800–1400px**: rail folds under the main column; **nav and divider stay**.
+- **<800px**: nav becomes a top strip; single column; functional, out of
+  design scope.
 
 ## 11. Verification
 
