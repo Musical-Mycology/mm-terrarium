@@ -1312,6 +1312,45 @@ def test_finish_release_calls_drop_dev():
     assert dev not in server._devs
 
 
+def test_a_hello_mid_fade_survives_finish_release():
+    """Final-review Finding 2 regression. A device that reconnects
+    (hello-only, no rejoin -- exactly how the Room simulator's heartbeat
+    resend behaves) while a PRIOR release's closing fade is still in
+    flight must not have that FRESH connection severed once the STALE
+    fade finishes. _on_hello rebinds server._devs[dev] to the new client
+    but never touches self._closing (unlike _on_join, which already pops
+    self._closing on a rejoin); left unguarded, _finish_release's
+    unconditional drop_dev(dev) would drop the connection that just
+    proved dev is alive, not the stale one."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    old_client = server._devs[dev]
+    gs.abort()   # -> _unload -> on_release -> fade starts, self._closing[dev] = 0
+
+    # A fresh connection re-hellos mid-fade -- never rejoins. Queued here,
+    # BEFORE the fade is driven at all: in this fixture the very next
+    # poll() is what both delivers this hello AND can finish the stale
+    # fade in the same call, which is exactly the race Finding 2 describes
+    # -- so the assertion below must hold no matter how many poll()s it
+    # actually takes.
+    new_client = "c2"
+    assert new_client != old_client
+    server.arrive(new_client)
+    server.deliver(new_client, "/game/hello", "sss", [dev, "sim", "1"])
+
+    # Drive the closing fade to completion -- same bounded tick-by-tick
+    # pattern as test_finish_release_calls_drop_dev above.
+    for _ in range(250):
+        agent.poll()
+        clk.advance(1.0 / 44.0)
+
+    # The fade itself still finished and cleaned up the OLD session state.
+    assert dev not in agent.bridges
+    assert dev not in agent._closing
+    # But the FRESH connection must survive _finish_release's drop_dev.
+    assert dev in server._devs
+    assert server._devs[dev] == new_client
+
+
 def test_on_release_with_no_bridge_calls_drop_dev():
     """Mirrors test_failing_on_grant_sends_error_not_role... -- a device
     whose on_grant failed never got a bridge, so _on_release takes the
