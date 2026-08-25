@@ -33,3 +33,8 @@ def test_cue_horizon_has_a_conservative_default():
     config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
     assert config.cue_horizon >= 0.0227
     assert config.o2_ensemble == "arco"
+
+
+def test_stale_timeout_default():
+    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    assert config.stale_timeout == 15.0

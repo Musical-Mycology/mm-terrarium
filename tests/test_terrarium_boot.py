@@ -1538,3 +1538,68 @@ def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply(capsys):
 
     denies = server.addressed("/ie1/deny")
     assert denies[0]["args"][0] == "no such node"
+
+
+def test_device_timed_out_line(capsys):
+    from control.engine import GameServer
+    from devicelink.agent import DeviceLinkAgent
+    from tests.test_devicelink_agent import FakeServer, _Clock
+
+    clk = _Clock()
+    # gs and agent MUST share the same clock instance -- see control/
+    # engine.py's comment on GameServer.__init__'s clock= param and
+    # tests/test_devicelink_agent.py's _agent_with_joined_device(). An
+    # unsynced pair (e.g. GameServer's default time.monotonic alongside
+    # this agent's hand-advanced _Clock) makes GameServer.reap_stale()
+    # see DevicePool.last_seen as enormously stale on the very next poll()
+    # and reap the device before this test can observe a timeout at 11s.
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk, stale_timeout=10.0)
+    gs.add_observer(_LifecycleLogger(gs))
+    _deliver_hello(server, agent, dev="ie1")
+    capsys.readouterr()   # discard the hello line
+
+    clk.advance(11.0)
+    agent.poll()
+
+    out = capsys.readouterr().out
+    assert "device timed out: ie1\n" in out
+
+
+def test_timed_out_role_holder_prints_both_released_and_timed_out_lines(capsys):
+    """Final-review Finding 1 regression. reap_stale() notified
+    on_registration_change BEFORE on_devices_change, and
+    on_registration_change unconditionally overwrites _LifecycleLogger.
+    _last_assignments as a side effect of printing "join granted" lines --
+    so by the time on_devices_change's "device released" diff ran (against
+    that just-clobbered snapshot), there was nothing left to diff and the
+    line silently never printed for a reaped role-holding device. This
+    contradicts both the design spec (docs/superpowers/specs/
+    2026-08-25-device-liveness-detection-design.md section 7: "a timed-out
+    player that held a role prints BOTH lines") and _LifecycleLogger's own
+    docstring above. test_device_timed_out_line above never caught this: an
+    un-joined device never sets released_any, so on_registration_change
+    never even fires for it."""
+    from control.engine import GameServer
+    from devicelink.agent import DeviceLinkAgent
+    from tests.test_devicelink_agent import FakeServer, _Clock
+
+    clk = _Clock()
+    # gs and agent MUST share the same clock instance -- see
+    # test_device_timed_out_line above.
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk, stale_timeout=10.0)
+    gs.add_observer(_LifecycleLogger(gs))
+    gs.load_bit("test_bit")
+    _deliver_hello(server, agent, dev="ie1")
+    _deliver_join(server, agent, "ie1", "TEST_PLAYER_NODE")
+    capsys.readouterr()   # discard the hello/join-granted lines
+
+    clk.advance(11.0)
+    agent.poll()
+
+    out = capsys.readouterr().out
+    assert "device released: ie1\n" in out
+    assert "device timed out: ie1\n" in out

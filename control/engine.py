@@ -97,8 +97,64 @@ class GameServer:
         self._warned_no_room = False     # once-per-Bit-load ROOM drop warning
 
     def hello(self, dev: str, name: str, protoversion: str) -> None:
-        self.devices.hello(dev, name, protoversion)
+        self.devices.hello(dev, name, protoversion, self._clock())
         self._notify("on_devices_change")
+
+    def reap_stale(self, timeout: float) -> list[str]:
+        """Remove every DevicePool entry silent for `timeout` seconds,
+        freeing any role slot it held. See docs/superpowers/specs/
+        2026-08-25-device-liveness-detection-design.md sections 4-5.
+
+        A dev currently bound to a Room fixture is left untouched
+        entirely -- Room liveness is a separate, not-yet-designed
+        question (section 5 of that spec): reaping it would clear
+        registration.assignments but not room.bound, leaving RoomBridge
+        feeding a fixture whose device no longer exists.
+
+        Never raises: on_release is guarded exactly like _unload()
+        already guards it, so a failing transport cannot wedge this call
+        or strand the remaining stale devices. Notifications are batched
+        once per call, not once per device, matching _unload()'s existing
+        shape.
+        """
+        now = self._clock()
+        room_devs = (set(self.room.bound.values())
+                    if self.room is not None else set())
+        reaped: list[str] = []
+        released_any = False
+        for dev in self.devices.stale(now, timeout):
+            if dev in room_devs:
+                continue
+            if self.registration is not None and \
+                    dev in self.registration.assignments:
+                self.registration.release(dev)
+                released_any = True
+                if self.on_release:
+                    try:
+                        self.on_release(dev)
+                    except Exception:
+                        logger.exception(
+                            "on_release raised for %s during reap; "
+                            "continuing", dev)
+            self.devices.remove(dev)
+            reaped.append(dev)
+        # on_devices_change BEFORE on_registration_change, deliberately: see
+        # harness/terrarium_boot.py's _LifecycleLogger. Its "device
+        # released" line runs in on_devices_change, diffed against the
+        # registration.assignments snapshot on_registration_change last
+        # left behind -- if on_registration_change fired first, its "join
+        # granted" bookkeeping would overwrite that snapshot to the
+        # post-release state before the devices-diff ever ran, and the
+        # released line would silently never print for a reaped
+        # role-holding device. This order is what makes a timed-out role
+        # holder print BOTH "released" and "timed out" (design spec section
+        # 7), matching a graceful release/rejoin, where the two hooks never
+        # race like this in the first place.
+        if reaped:
+            self._notify("on_devices_change")
+        if released_any:
+            self._notify("on_registration_change")
+        return reaped
 
     def load_bit(self, name: str, config=None) -> None:
         if self.state != State.IDLE:

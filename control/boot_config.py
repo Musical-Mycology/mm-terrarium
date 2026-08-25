@@ -65,6 +65,15 @@ class BootConfig:
     # exists, and none of these numbers carry from a dev box to the venue box.
     cue_horizon: float = 0.060
 
+    # Control-side reap threshold (seconds of silence before a device is
+    # removed from DevicePool and, if it held one, its role slot freed).
+    # Default is three missed heartbeats at the harness clients' own
+    # default --heartbeat-interval (5.0s) -- the same generous-multiple
+    # shape _MAX_CLOSING_FRAMES already uses relative to a session's fade
+    # time. See docs/superpowers/specs/
+    # 2026-08-25-device-liveness-detection-design.md.
+    stale_timeout: float = 15.0
+
     @property
     def array_backend_configured(self) -> bool:
         return self.array_backend is not None

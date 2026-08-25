@@ -51,6 +51,18 @@ def tilt_sweep(elapsed: float) -> float:
     return SWEEP_DEGREES * (triangle - 1.0)
 
 
+def next_heartbeat_time(now: float, interval: float) -> float:
+    """The next O2 time a heartbeat /game/hello should be resent.
+
+    interval <= 0 disables the heartbeat: returns float('inf') so a
+    `now >= next_heartbeat_time(...)` check in main()'s tick loop never
+    fires again, mirroring --join-retry's own "0 keeps send-once" contract.
+    """
+    if interval <= 0:
+        return float("inf")
+    return now + interval
+
+
 # Seconds after the operator's last drag-tilt before the synthetic sweep
 # resumes. Long enough that hue does not snap back mid-exploration, short
 # enough that an unattended run still animates.
@@ -359,6 +371,16 @@ def main() -> None:
                              "which is the only reliable ordering while the "
                              "upstream /host/clear defect stands (see "
                              "terrarium_boot's --arco-start-audio).")
+    parser.add_argument("--heartbeat-interval", type=float, default=5.0,
+                        help="Resend /game/hello every N seconds while "
+                             "connected, so Control's GameServer.reap_stale "
+                             "does not time this device out for going "
+                             "quiet between gestures. 0 disables the "
+                             "resend (pre-liveness-detection behavior). "
+                             "Applies with or without --no-join: a Room "
+                             "device needs it too, even though "
+                             "reap_stale() never actually reaps a "
+                             "Room-bound dev today.")
     parser.add_argument("--control-horizon", type=float, default=None,
                         help="The horizon Control was run with (its "
                              "--horizon). Used ONLY to turn this device's "
@@ -498,6 +520,7 @@ def main() -> None:
             o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
 
         start = o2lite.time_get()
+        next_heartbeat = next_heartbeat_time(start, args.heartbeat_interval)
         interval = 1.0 / args.tilt_hz
         # Deferred rather than started at `start`: gestures are held off until
         # _gestures_ready(client) -- see that function's docstring for why --
@@ -547,6 +570,9 @@ def main() -> None:
                     if joins_sent % 5 == 0:
                         print(f"{joins_sent} joins unanswered. "
                               f"{join_stall_hint(args.dev)}")
+            if now >= next_heartbeat:
+                o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+                next_heartbeat = next_heartbeat_time(now, args.heartbeat_interval)
             if not deny_printed and client.last_deny is not None:
                 reason, hint = client.last_deny
                 print(f"{markers.DEVICE_JOIN_DENIED} {reason} ({hint})",

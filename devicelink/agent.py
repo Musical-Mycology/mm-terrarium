@@ -77,7 +77,8 @@ class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
                  capability=None, clock=time.monotonic,
                  room_bridge=None, room_audio=None, horizon: float = 0.0,
-                 room_profile=None, on_room_frame=None, on_join_denied=None):
+                 room_profile=None, on_room_frame=None, on_join_denied=None,
+                 stale_timeout: float = 15.0):
         self.game_server = game_server
         self.server = server
         self._capability = capability
@@ -88,6 +89,11 @@ class DeviceLinkAgent:
         # is deferred to at - horizon when that is still in the future, so a
         # far-future state cannot leak into an intervening breath frame.
         self._horizon = horizon
+        # Control-side reap threshold: a device silent this many seconds
+        # is removed by GameServer.reap_stale(), called from poll() below.
+        # See docs/superpowers/specs/
+        # 2026-08-25-device-liveness-detection-design.md.
+        self._stale_timeout = stale_timeout
         self._room_cues = TimedQueue()
         # Deferred light-session feeds: (dev, status, d1, d2, at). ONLY a
         # Bit-declared cue further out than one horizon lands here. A gesture
@@ -109,6 +115,23 @@ class DeviceLinkAgent:
         # self.bridges, is the source of truth for "closing" (a device can
         # legitimately have no bridge at all -- see _on_release).
         self._closing: dict[str, int] = {}
+        # devs proven alive -- by ANY inbound message, not just hello, same
+        # "any traffic is proof of life" rule DevicePool.stale() already
+        # applies -- since their entry in self._closing was created. Only
+        # ever populated for a dev currently mid-fade (set in _handle()
+        # below) and always cleared by _finish_release, so it can never
+        # outlive the fade it was recorded for. Exists because _on_hello has
+        # no equivalent of _on_join's `self._closing.pop(dev, None)`: a
+        # rejoin already rebuilds self.bridges[dev] from scratch, so a
+        # stale fade's later _finish_release finds no matching entry in
+        # self._closing to act on and is a no-op for that dev, but a
+        # hello-only reconnect (a bare heartbeat resend, or a genuine
+        # reconnect that never rejoins -- exactly how the Room simulator
+        # behaves) only rebinds the transport connection and leaves the
+        # stale fade running untouched. Without this, _finish_release would
+        # later call self.server.drop_dev(dev) unconditionally and sever
+        # the FRESH connection it just rebound, not the stale one.
+        self._closing_revived: set[str] = set()
         # Control owns the breath now (control/breath.py): a role declaring
         # aurora's `level` param no longer breathes on its own clock, so every
         # renderer has to be fed cc:11 or it renders a static surface.
@@ -242,6 +265,7 @@ class DeviceLinkAgent:
             except Exception:
                 logger.exception("devicelink inbound handling failed; "
                                  "dropping frame")
+        self.game_server.reap_stale(self._stale_timeout)
         self._feed_breath()
         # Before both renders: a feed released this tick must be reflected in
         # the frame rendered this tick, not the next one. Draining after would
@@ -436,6 +460,13 @@ class DeviceLinkAgent:
             logger.warning("dropping /game/%s with no dev argument", verb)
             return
         dev = env.args[0]
+        self.game_server.devices.touch(dev, self._clock())
+        if dev in self._closing:
+            # Proof of life on ANY inbound message (hello, join, or a plain
+            # gesture) while dev's prior release fade is still draining --
+            # see self._closing_revived's docstring above and
+            # _finish_release below, which is what actually reads this.
+            self._closing_revived.add(dev)
         if verb == "hello":
             self._on_hello(client, dev, env.args)
         elif verb == "join":
@@ -475,6 +506,14 @@ class DeviceLinkAgent:
         # A rejoining device must not be starved of its first breath by a
         # stale entry from its previous session.
         self._last_breath.pop(dev, None)
+        # This rejoin is itself the "proof of life" that made _handle() add
+        # dev to _closing_revived a moment ago (dev was still in _closing
+        # when that check ran, just above the pop() this same rejoin just
+        # did). Nothing will ever pop it now that _closing no longer has
+        # this dev -- _render_frames only calls _finish_release for a dev
+        # in _closing -- so drop it explicitly rather than leave a stale
+        # entry sitting around for a dev that may never be released again.
+        self._closing_revived.discard(dev)
         self._send(dev, protocol.role_event(dev, result.config))
 
     def _on_verb(self, dev: str, verb: str, args: list,
@@ -528,32 +567,66 @@ class DeviceLinkAgent:
 
         A device can be released with no bridge at all (e.g. its on_grant
         failed earlier -- see test_failing_on_grant_sends_error_not_role...):
-        nothing to fade in that case, so release immediately."""
+        nothing to fade in that case, so release immediately -- including
+        forgetting the transport's connection mapping, the same cleanup
+        _finish_release does for the faded case below."""
         bridge = self.bridges.get(dev)
         if bridge is None:
+            # Send BEFORE drop_dev: both transports' send() treats an
+            # unbound dev as a silent no-op (see devicelink/server.py and
+            # devicelink/o2_transport.py), so dropping the connection
+            # mapping first would swallow this very notification.
             try:
                 self._send(dev, protocol.release_event(dev))
             except Exception:
                 logger.exception("release notify for %s failed", dev)
+            self.server.drop_dev(dev)
             return
         try:
             bridge.on_release(dev)   # -> session.clear(): enqueues the fade
         except Exception:
             logger.exception("session clear for %s failed", dev)
         self._closing[dev] = 0
+        # Defensive: this fade's window is just starting, so nothing should
+        # have been able to mark dev revived yet. Discarding here keeps that
+        # invariant true even if some future caller re-releases a dev whose
+        # prior fade's _finish_release was, for whatever reason, skipped.
+        self._closing_revived.discard(dev)
 
     def _finish_release(self, dev: str) -> None:
         """The closing fade (or the stuck-session guard) is done: drop the
-        device from every map and send /<dev>/release."""
+        device from every map and send /<dev>/release.
+
+        self.server.drop_dev(dev) is skipped when dev has been proven alive
+        (see self._closing_revived, set in _handle()) since THIS fade
+        began: a hello-only reconnect -- a bare heartbeat resend, or a
+        genuine reconnect that never rejoins -- can land while a prior
+        release's fade is still draining, and _on_hello has no equivalent
+        of _on_join's `self._closing.pop(dev, None)` rejoin guard. Left
+        unconditional, this call would drop the FRESH connection _on_hello
+        just rebound, not the stale one the fade actually belongs to.
+        Everything else here still runs unconditionally, including the
+        /<dev>/release send: that state (the OLD bridge/session/frame/
+        breath) really did finish, and the device -- on whichever
+        connection it is using right now -- really did lose its role and
+        needs to know, so its own display resets instead of showing a
+        session that no longer exists on Control's side."""
+        revived = dev in self._closing_revived
+        self._closing_revived.discard(dev)
         self.bridges.pop(dev, None)
         self._universes.pop(dev, None)
         self._last_frames.pop(dev, None)
         self._closing.pop(dev, None)
         self._last_breath.pop(dev, None)
+        # Send BEFORE drop_dev, same reasoning as _on_release's no-bridge
+        # branch above: dropping the connection mapping first would make
+        # this very send a silent no-op.
         try:
             self._send(dev, protocol.release_event(dev))
         except Exception:
             logger.exception("release notify for %s failed", dev)
+        if not revived:
+            self.server.drop_dev(dev)
 
     def _is_room_dev(self, dev: str) -> bool:
         gs = self.game_server

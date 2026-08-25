@@ -573,3 +573,119 @@ def test_raising_bit_cues_does_not_wedge_the_tick():
     gs.run()
     gs.tick(0.02)                    # must not raise
     assert gs.state == State.RUNNING
+
+
+def test_reap_stale_removes_a_silent_unjoined_device():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.hello("ie1", "sim", "1")
+    changes = []
+    gs.add_observer(SimpleNamespace(
+        on_devices_change=lambda: changes.append("devices"),
+        on_registration_change=lambda: changes.append("registration")))
+
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)
+
+    assert reaped == ["ie1"]
+    assert [d.dev for d in gs.devices.all()] == []
+    assert changes == ["devices"]   # no registration_change: it never joined
+
+
+def test_reap_stale_leaves_a_fresh_device_alone():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.hello("ie1", "sim", "1")
+    clk.t = 3.0
+    reaped = gs.reap_stale(timeout=50.0)
+    assert reaped == []
+    assert gs.devices.known("ie1") is True
+
+
+def test_reap_stale_frees_a_scored_roles_slot_immediately():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.load_bit("test_bit")
+    gs.hello("ie1", "sim", "1")
+    gs.join("ie1", "TEST_PLAYER_NODE")
+    released = []
+    gs.on_release = released.append
+    counts_before = dict((n, c) for n, c, _ in gs.registration.counts())
+    assert counts_before["player"] == 1
+
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)
+
+    assert reaped == ["ie1"]
+    counts_after = dict((n, c) for n, c, _ in gs.registration.counts())
+    assert counts_after["player"] == 0
+    assert released == ["ie1"]
+    assert gs.devices.known("ie1") is False
+
+
+def test_reap_stale_batches_observer_notifications_once():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.load_bit("test_bit")
+    for dev in ("ie1", "ie2"):
+        gs.hello(dev, "sim", "1")
+        gs.join(dev, "TEST_PLAYER_NODE")
+    calls = []
+    gs.add_observer(SimpleNamespace(
+        on_devices_change=lambda: calls.append("devices"),
+        on_registration_change=lambda: calls.append("registration")))
+
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)
+
+    assert sorted(reaped) == ["ie1", "ie2"]
+    assert calls == ["devices", "registration"] or calls == ["registration", "devices"]
+    assert len(calls) == 2   # not 2 per device
+
+
+def test_reap_stale_never_reaps_a_room_bound_device():
+    from control.room_binding import RoomBindingRegistry
+    from control.rooms import Room, RoomType
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    binding = RoomBindingRegistry()
+    gs = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding,
+                    clock=lambda: clk.t)
+    gs.room = Room(room_type=RoomType.TEST)
+    gs.load_bit("RoomCapableBit")
+    gs.hello("sim-room", "room", "1")
+    binding.arm(RoomType.TEST, "main", window_seconds=10.0)
+    gs.join("sim-room", "ROOM_TEST_NODE")
+    assert gs.room.bound == {"main": "sim-room"}
+
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)
+
+    assert reaped == []
+    assert gs.devices.known("sim-room") is True
+    assert gs.room.bound == {"main": "sim-room"}
+    assert "sim-room" in gs.registration.assignments
+
+
+def test_reap_stale_on_release_exception_does_not_stop_the_rest():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.load_bit("test_bit")
+    for dev in ("ie1", "ie2"):
+        gs.hello(dev, "sim", "1")
+        gs.join(dev, "TEST_PLAYER_NODE")
+
+    def boom(dev):
+        raise RuntimeError("transport exploded")
+
+    gs.on_release = boom
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)   # must not raise
+    assert sorted(reaped) == ["ie1", "ie2"]
+    assert gs.devices.known("ie1") is False
+    assert gs.devices.known("ie2") is False
