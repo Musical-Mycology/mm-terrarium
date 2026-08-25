@@ -79,7 +79,61 @@ globalThis.WebSocket = FakeSocket;
   assert.strictEqual(cbtn.dataset.armed, undefined);
 
   console.log("confirmTap arm/confirm: ok");
-  // Timeout-revert half (button reverts to original text if not confirmed
-  // within timeoutMs) is implemented but not independently exercised here
-  // with real timers; see task-3-report.md for the note.
+
+  // timeout-revert: click once to arm, then let the timer fire with no
+  // second click -- button should revert and onConfirm must NOT fire.
+  {
+    const realSetTimeout = globalThis.setTimeout;
+    let capturedFn = null;
+    let capturedMs = null;
+    globalThis.setTimeout = (fn, ms) => { capturedFn = fn; capturedMs = ms; return 0; };
+
+    const tbtn = el();
+    tbtn.textContent = "Release";
+    let tconfirmed = 0;
+    wire.confirmTap(tbtn, { armLabel: "Confirm Release?", timeoutMs: 4000 }, () => { tconfirmed += 1; });
+
+    assert.strictEqual(tbtn.dataset.armed, "1");
+    assert.strictEqual(tbtn.textContent, "Confirm Release?");
+    assert.strictEqual(capturedMs, 4000);
+    assert.ok(typeof capturedFn === "function");
+
+    globalThis.setTimeout = realSetTimeout;
+
+    // simulate the timeout firing with no second click in between
+    capturedFn();
+
+    assert.strictEqual(tbtn.dataset.armed, undefined);
+    assert.strictEqual(tbtn.textContent, "Release");
+    assert.strictEqual(tconfirmed, 0);
+
+    console.log("confirmTap timeout-revert: ok");
+  }
+
+  // timeout-revert guard: a confirm that lands before the timer fires
+  // clears dataset.armed, so the (now-stale) timer callback becomes a
+  // no-op -- it must not revert the button text or double-fire onConfirm.
+  {
+    const realSetTimeout = globalThis.setTimeout;
+    let capturedFn = null;
+    globalThis.setTimeout = (fn) => { capturedFn = fn; return 0; };
+
+    const gbtn = el();
+    gbtn.textContent = "Release";
+    let gconfirmed = 0;
+    wire.confirmTap(gbtn, { armLabel: "Confirm Release?" }, () => { gconfirmed += 1; });
+    globalThis.setTimeout = realSetTimeout;
+
+    // second tap arrives before the timer would have fired
+    wire.confirmTap(gbtn, { armLabel: "Confirm Release?" }, () => { gconfirmed += 1; });
+    assert.strictEqual(gconfirmed, 1);
+    assert.strictEqual(gbtn.dataset.armed, undefined);
+
+    // now the stale timer fires -- must be a no-op (guard checks armed==="1")
+    capturedFn();
+    assert.strictEqual(gconfirmed, 1);
+    assert.strictEqual(gbtn.dataset.armed, undefined);
+
+    console.log("confirmTap stale-timer-after-confirm: ok");
+  }
 })().catch((e) => { console.error(e); process.exit(1); });
