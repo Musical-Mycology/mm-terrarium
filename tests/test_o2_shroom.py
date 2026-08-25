@@ -390,3 +390,56 @@ def test_main_consults_ensure_o2litepy_before_importing_o2litepy():
         "main() imports o2litepy before consulting ensure_o2litepy() -- "
         "the fallback must run first so a hand-run o2_shroom without "
         "PYTHONPATH set still finds o2litepy in the arco checkout.")
+
+
+def test_next_heartbeat_time_advances_by_the_interval():
+    from harness.o2_shroom import next_heartbeat_time
+    assert next_heartbeat_time(now=10.0, interval=5.0) == 15.0
+
+
+def test_next_heartbeat_time_disabled_by_a_non_positive_interval():
+    from harness.o2_shroom import next_heartbeat_time
+    assert next_heartbeat_time(now=10.0, interval=0.0) == float("inf")
+    assert next_heartbeat_time(now=10.0, interval=-1.0) == float("inf")
+
+
+def test_main_resends_hello_inside_a_while_loop():
+    """Source-inspection, same technique and reason as
+    test_main_has_exactly_one_backend_close: main() imports o2litepy,
+    absent from this offline suite by design. main() has TWO while loops
+    (the clock-sync wait, then the tick loop), and ast.walk's traversal
+    order across sibling subtrees is not a documented guarantee -- so
+    this deliberately does not index into "the first While found".
+    Instead it walks EVERY While node's own subtree for a
+    send_cmd("/game/hello", ...) Call and sums across all of them: since
+    the two loops' subtrees are disjoint, this is equivalent to "how many
+    hello sends live inside some while loop" without needing to identify
+    which loop is which. There must be at least 2 (the join-retry block's
+    existing one, inside the tick loop; plus the heartbeat's own) -- the
+    clock-sync loop has none. That proves the resend is wired into a loop
+    body rather than only sent once at startup."""
+    import ast
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+    while_nodes = [node for node in ast.walk(main)
+                  if isinstance(node, ast.While)]
+    assert while_nodes, "main() must have at least one while loop"
+
+    hello_call_count = sum(
+        1 for w in while_nodes for node in ast.walk(w)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "send_cmd"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "/game/hello")
+    assert hello_call_count >= 2, (
+        f"expected at least 2 /game/hello send_cmd calls inside some "
+        f"while loop in main() (join-retry's existing one plus the "
+        f"heartbeat's own), found {hello_call_count}")
