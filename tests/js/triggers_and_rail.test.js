@@ -60,5 +60,57 @@ const TRIGGERS = [
   send({ event: "bit_completed", result: { phrases: 4 }, bit_name: "MetronomeBit" });
   assert.ok(byId.get("logCard").innerHTML.includes("phrases"));
 
+  // rail: Roles & manifests renderer -- light + audio instrument kinds and
+  // the welcome-line formatting transform. Shape modeled on test_bit.py's
+  // `player` role (real light_manifest cc:74->hue lane, ugen_manifest, and
+  // a welcome dict) via console/protocol.py's role_view().
+  const PLAYER_ROLE = {
+    role: "player", class: "PLAYER", capacity: 2, scored: true,
+    light_manifest: {
+      instruments: [
+        { instrument: "aurora", target: "primary",
+          params: { hue: 0.33, level: 0.55 },
+          lanes: [{ source: "cc:74", dest: "hue" },
+                  { source: "cc:11", dest: "level" }] },
+      ],
+    },
+    ugen_manifest: {
+      instruments: [
+        { instrument: "flsyn", program: 89,
+          drone: { key: 45, velocity: 90 },
+          lanes: [{ source: "cc:74", dest: "cc:74" },
+                  { source: "cc:11", dest: "cc:11" }] },
+      ],
+    },
+    welcome: {
+      light: { instrument: "glow", params: { hue: 0.33 }, duration: 1.5 },
+      audio: { instrument: "chime", duration: 1.5 },
+    },
+  };
+  send({ event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
+         roles: [PLAYER_ROLE], registration: [{ role: "player", count: 2, capacity: 2 }],
+         devices: [{ dev: "ie1", name: "Tuneshroom 1", role: "player" }],
+         bit_status: {}, triggers: TRIGGERS,
+         room: { room_type: "DEMO", capability: { pixel_count: 864,
+                 color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
+                 controllers: {} } });
+
+  const rolesHtml = byId.get("rolesCard").innerHTML;
+  assert.ok(rolesHtml.includes("player"), "role name should render");
+  assert.ok(rolesHtml.includes("PLAYER"), "role class should render");
+  // light instrument path: kind-tagged "Light" and delegated to buildInstrumentCard
+  assert.ok(rolesHtml.includes("Light"), "light instrument kind should render");
+  assert.ok(rolesHtml.includes("aurora"), "light instrument name should render");
+  assert.ok(rolesHtml.includes("primary"), "light instrument target should render");
+  // audio instrument path: kind-tagged "Audio" and delegated to buildInstrumentCard
+  assert.ok(rolesHtml.includes("Audio"), "audio instrument kind should render");
+  assert.ok(rolesHtml.includes("flsyn"), "audio instrument name should render");
+  // welcome-line formatting: `${k}: ${v.instrument}` joined with " · "
+  assert.ok(rolesHtml.includes("light: glow"), "welcome light entry should render");
+  assert.ok(rolesHtml.includes("audio: chime"), "welcome audio entry should render");
+  assert.ok(rolesHtml.includes("light: glow · audio: chime") ||
+            rolesHtml.includes("audio: chime · light: glow"),
+            "welcome entries should be joined with ·");
+
   console.log("triggers_and_rail: ok");
 })().catch((e) => { console.error(e); process.exit(1); });
