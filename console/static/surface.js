@@ -32,6 +32,7 @@ let instSummaryMetaEl = null;
 let instMountEl = null;
 let triggersAccEl = null;            // created once, outside the per-fixture rebuild path
 let fixtureElByName = new Map();     // fixture name -> its .fixture wrapper element
+let bindStateByName = new Map();     // fixture name -> last-rendered binding-state key
 
 function clear(node) {
   node.textContent = "";
@@ -73,6 +74,16 @@ export function _canvasFor(dev) {
 
 export function _lastPaint(dev) {
   return lastPaintByDev[dev];
+}
+
+// Binding-controls span (the chip + Release/Arm button) for a fixture, so
+// tests can assert its DOM node identity survives a controllers-only
+// room_changed (rule 1) instead of being silently replaced.
+export function _bindCtlFor(name) {
+  const wrap = fixtureElByName.get(name);
+  if (!wrap) return undefined;
+  const head = wrap.children[0];
+  return head && head.children[1];
 }
 
 // -------------------------------------------------------------- painting
@@ -232,6 +243,18 @@ function buildFixture(fixture) {
   return { wrap, canvases };
 }
 
+// Key summarizing the binding-relevant state that bindingControls() renders
+// off of. Only when this actually changes should the chip/button DOM node
+// be discarded and rebuilt -- otherwise a controllers-only room_changed
+// would mint a fresh Release button on every tick, silently discarding any
+// in-progress confirm-tap arm state (wire.confirmTap keys its timer/armed
+// flag off the specific button element).
+function bindStateKey(fixture) {
+  if (fixture.dev) return `dev:${fixture.dev}`;
+  if (armedFixtures.has(fixture.name)) return "armed";
+  return "unbound";
+}
+
 function fixtureShapeMatches(prev, next) {
   if (!prev) return false;
   if (prev.pixel_count !== next.pixel_count) return false;
@@ -322,6 +345,7 @@ function resetStructure() {
   instMountEl = null;
   triggersAccEl = null;
   fixtureElByName = new Map();
+  bindStateByName = new Map();
 }
 
 function render() {
@@ -403,12 +427,19 @@ function render() {
       // In-place updates: binding chip/controls and header text only.
       const existing = fixtureElByName.get(fixture.name);
       if (existing) {
-        // Rebuild just the head's binding controls (cheap; not the strip).
-        const oldHead = existing.children[0];
-        if (oldHead) {
-          clear(oldHead);
-          oldHead.appendChild(mk("span", "fixname", fixture.name));
-          oldHead.appendChild(bindingControls(fixture));
+        // Rebuild the head's binding controls only when binding-relevant
+        // state actually changed -- not on every "unchanged" render pass,
+        // since that would mint a fresh chip/Release button (with a fresh
+        // confirm-tap closure) on every controllers-only room_changed.
+        const nextBindKey = bindStateKey(fixture);
+        if (bindStateByName.get(fixture.name) !== nextBindKey) {
+          const oldHead = existing.children[0];
+          if (oldHead) {
+            clear(oldHead);
+            oldHead.appendChild(mk("span", "fixname", fixture.name));
+            oldHead.appendChild(bindingControls(fixture));
+          }
+          bindStateByName.set(fixture.name, nextBindKey);
         }
         // Preserve the canvas list under the existing dev key(s).
         for (const [dev, name] of Object.entries(fixtureNameByDev)) {
@@ -437,6 +468,7 @@ function render() {
       fixturesMount.appendChild(wrap);
     }
     fixtureElByName.set(fixture.name, wrap);
+    bindStateByName.set(fixture.name, bindStateKey(fixture));
     if (fixture.dev) newCanvasesByDev[fixture.dev] = canvases;
     fixtureShapes[fixture.name] = nextShape;
   }

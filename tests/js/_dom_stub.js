@@ -38,6 +38,7 @@ function el(tagName) {
   const node = {
     tagName: tagName || "div",
     children: [],
+    parentNode: null,
     _attrs: {},
     _text: "",
     className: "",
@@ -55,10 +56,33 @@ function el(tagName) {
         toggle: (c, v) => (v === undefined ? (s.has(c) ? s.delete(c) : s.add(c)) : (v ? s.add(c) : s.delete(c))),
       };
     })(),
-    appendChild(child) { node.children.push(child); node._text = ""; return child; },
-    insertBefore(child) { node.children.unshift(child); return child; },
-    removeChild(child) { node.children = node.children.filter((c) => c !== child); return child; },
-    remove() {},
+    appendChild(child) {
+      if (child.parentNode) child.parentNode.removeChild(child);
+      node.children.push(child);
+      node._text = "";
+      child.parentNode = node;
+      return child;
+    },
+    insertBefore(child, refNode) {
+      if (child.parentNode) child.parentNode.removeChild(child);
+      if (refNode) {
+        const idx = node.children.indexOf(refNode);
+        if (idx === -1) node.children.push(child);
+        else node.children.splice(idx, 0, child);
+      } else {
+        node.children.push(child);
+      }
+      child.parentNode = node;
+      return child;
+    },
+    removeChild(child) {
+      node.children = node.children.filter((c) => c !== child);
+      child.parentNode = null;
+      return child;
+    },
+    remove() {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    },
     setAttribute(k, v) { node._attrs[k] = v; },
     addEventListener() {},
     removeEventListener() {},
