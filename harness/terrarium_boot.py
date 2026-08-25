@@ -204,7 +204,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
                                 room_audio=room_audio,
                                 horizon=config.cue_horizon, clock=clock,
-                                on_join_denied=on_join_denied)
+                                on_join_denied=on_join_denied,
+                                stale_timeout=config.stale_timeout)
     except BaseException:
         # _boot() has already spawned Arco AND the simulator by this point,
         # and main() cannot clean either up: build() never returns, so its
@@ -540,9 +541,18 @@ class _LifecycleLogger:
 
     Derivation:
       - "device hello: <dev>" -- a dev appearing in gs.devices.all() that
-        was not there the last time on_devices_change fired. DevicePool
-        never drops a device (control/device_pool.py), so this set only
-        grows.
+        was not there the last time on_devices_change fired.
+      - "device timed out: <dev>" -- the reverse: a dev that WAS in
+        gs.devices.all() last time and is gone now. The only thing that
+        removes a DevicePool entry is GameServer.reap_stale() (control/
+        device_pool.py, control/engine.py), called every tick from
+        DeviceLinkAgent.poll() -- so this line is unambiguous: it always
+        means a device went silent past BootConfig.stale_timeout, never a
+        graceful release (that only ever empties gs.registration.
+        assignments, diffed separately below as "device released"). A
+        timed-out player that held a role prints BOTH lines: "released"
+        from the assignments diff and "timed out" from this one, which is
+        accurate -- both things happened.
       - "join granted: <dev> -> <role> (<category>) via <node>" -- a dev
         whose (node, role, role_class) tuple in gs.registration.assignments
         is new or changed since the last on_registration_change (a role
@@ -579,6 +589,8 @@ class _LifecycleLogger:
         current_devs = {info.dev for info in self._gs.devices.all()}
         for dev in current_devs - self._last_devices:
             print(f"device hello: {dev}", flush=True)
+        for dev in self._last_devices - current_devs:
+            print(f"device timed out: {dev}", flush=True)
         self._last_devices = current_devs
 
         current_assignments = self._current_assignments()
@@ -724,6 +736,14 @@ def _build_arg_parser():
                     help="Cue scheduling horizon in seconds. Default: "
                          "BootConfig.cue_horizon. Measure with "
                          "python -m harness.sync_bench.")
+    ap.add_argument("--stale-timeout", type=float, default=None,
+                    help="Override BootConfig.stale_timeout (15 s). A "
+                         "device silent this long -- no /game/hello, no "
+                         "gesture, nothing -- is removed from DevicePool "
+                         "and, if it held one, its role slot freed. Paired "
+                         "with the harness device clients' own "
+                         "--heartbeat-interval (default 5 s each): three "
+                         "missed heartbeats before a reap.")
     ap.add_argument("--transport", choices=("websocket", "o2lite"),
                     default="websocket",
                     help="websocket: the JSON devicelink shim, no Arco in "
@@ -881,6 +901,8 @@ def main() -> None:
         config.cue_horizon = args.horizon
     if args.arco_ready_timeout is not None:
         config.arco_ready_timeout = args.arco_ready_timeout
+    if args.stale_timeout is not None:
+        config.stale_timeout = args.stale_timeout
     room_binding = RoomBindingRegistry()
 
     # boot() constructs the process with a single positional argument, so
