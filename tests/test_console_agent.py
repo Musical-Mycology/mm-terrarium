@@ -311,7 +311,7 @@ def test_devices_view_hides_the_room_assignment():
     assert ie9["role"] is None    # device is listed, but not as "room_test"
 
 
-def _room_console(bit_name="TestBit"):
+def _room_console(bit_name="TestBit", canvas_urls=None):
     """A GameServer with a bound TEST Room and a loaded Bit, plus a
     ConsoleAgent wired to a RoomBridge carrying a live cc value.
 
@@ -330,7 +330,7 @@ def _room_console(bit_name="TestBit"):
     bridge.bind("sim-room-main")
     bridge.feed_light(0xB0, 74, 93)
     srv = FakeConsoleServer()
-    agent = ConsoleAgent(gs, srv, room_bridge=bridge)
+    agent = ConsoleAgent(gs, srv, room_bridge=bridge, canvas_urls=canvas_urls)
     return gs, srv, agent
 
 
@@ -362,6 +362,30 @@ def test_snapshot_room_carries_live_controller_values():
     agent.poll()
     _, msg = srv.sent[0]
     assert msg["room"]["controllers"] == {74: 93}
+
+
+def test_room_payload_carries_fixture_urls():
+    gs, srv, agent = _room_console(
+        canvas_urls=lambda: {"sim-room-main": "http://h:9/"})
+    room = agent.snapshot()["room"]
+    by_name = {f["name"]: f for f in room["fixtures"]}
+    assert by_name["main"]["url"] == "http://h:9/"
+
+
+def test_device_view_carries_url_when_known():
+    binding = RoomBindingRegistry()
+    gs = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
+    gs.hello("ie1", "Shroom One", "1")
+    gs.hello("ie2", "Shroom Two", "1")
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv,
+                          canvas_urls=lambda: {"ie1": "http://h:9/"})
+
+    devices = agent.snapshot()["devices"]
+
+    by_dev = {d["dev"]: d for d in devices}
+    assert by_dev["ie1"]["url"] == "http://h:9/"
+    assert by_dev["ie2"]["url"] is None
 
 
 def test_room_changed_broadcasts_only_when_it_changes():

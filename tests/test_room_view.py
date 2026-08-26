@@ -142,6 +142,24 @@ def test_the_node_id_never_appears_anywhere_in_the_view():
     assert ROOM_NODE_IDS[RoomType.TEST] not in blob
 
 
+def test_bound_fixture_with_reported_canvas_gets_url():
+    view = room_view(_room(), room_profile(RoomType.TEST), _role(), {},
+                      canvas_urls={"sim-room-main": "http://h:9/"})
+    by_name = {f["name"]: f for f in view["fixtures"]}
+    assert by_name["main"]["url"] == "http://h:9/"
+
+
+def test_unbound_or_unreported_fixture_url_is_none():
+    view = room_view(_room(), room_profile(RoomType.TEST), _role(), {},
+                      canvas_urls={})
+    assert all(f["url"] is None for f in view["fixtures"])
+
+
+def test_omitting_canvas_urls_still_works():
+    view = room_view(_room(), room_profile(RoomType.TEST), _role(), {})
+    assert all(f["url"] is None for f in view["fixtures"])
+
+
 def test_the_room_role_name_never_appears_in_the_view():
     """room_role_name(TEST) == "room_test", and RoomProfile(TEST).surface_id
     == "room_test" too -- two independently authored, already-locked-in facts

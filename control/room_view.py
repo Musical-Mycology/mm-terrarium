@@ -61,7 +61,7 @@ def capability_view(profile) -> dict:
     }
 
 
-def fixtures_view(profile, room) -> list[dict]:
+def fixtures_view(profile, room, canvas_urls=None) -> list[dict]:
     """One entry per fixture: its own pixel count, its zones (already
     namespaced <fixture>.<zone> by RoomProfile.zones), its channel offset
     into the concatenated frame, and which dev is bound (None if not yet).
@@ -69,10 +69,17 @@ def fixtures_view(profile, room) -> list[dict]:
     the whole Room (the old single bound_dev field): it is not the
     Registration Node id, the role name, or a registration count, so it is
     not covered by the hiding rule in this module's docstring.
+
+    `canvas_urls` is a plain dev -> url dict (DeviceLinkAgent.canvas_urls()'s
+    shape, passed in rather than imported so this module stays engine-free).
+    A fixture with no bound dev, or a bound dev with no reported canvas yet,
+    gets `"url": None`.
     """
+    urls = canvas_urls or {}
     out = []
     for name, start, count in profile.fixture_slices():
         fixture = next(f for f in profile.fixtures if f.name == name)
+        dev = room.bound.get(name)
         out.append({
             "name": name,
             "pixel_count": fixture.pixel_count,
@@ -80,12 +87,13 @@ def fixtures_view(profile, room) -> list[dict]:
             "channel_count": count,
             "zones": [{"name": f"{name}.{z.name}", "start": z.start, "count": z.count}
                       for z in fixture.zones],
-            "dev": room.bound.get(name),
+            "dev": dev,
+            "url": urls.get(dev) if dev else None,
         })
     return out
 
 
-def room_view(room, profile, role, controllers: dict) -> dict | None:
+def room_view(room, profile, role, controllers: dict, canvas_urls=None) -> dict | None:
     """Build the Console's whole Room panel payload.
 
     Returns None when no Room is configured, which the panel renders as
@@ -107,7 +115,7 @@ def room_view(room, profile, role, controllers: dict) -> dict | None:
                        + _audio_instruments(role.ugen_manifest or {}))
     return {
         "room_type": room.room_type.name,
-        "fixtures": fixtures_view(profile, room),
+        "fixtures": fixtures_view(profile, room, canvas_urls),
         "capability": capability_view(profile),
         "instruments": instruments,
         "controllers": dict(controllers),
