@@ -73,11 +73,16 @@ class ShroomClient:
 
     def __init__(self, dev: str, node: str, leds=None,
                  on_role: Callable[[dict], None] | None = None,
+                 on_play: Callable[[str, str], None] | None = None,
                  expected_channels: int = LED_CHANNELS) -> None:
         self.dev = dev
         self.node = node
         self.leds = leds
         self.on_role = on_role
+        # /<dev>/play sink, called (name, params) per PlayCue. Optional so
+        # every existing caller is unchanged; a raising sink is logged and
+        # never propagates -- a broken speaker must not kill the session.
+        self.on_play = on_play
         # Frame width this client will accept, in channels. Defaults to the
         # 12 px x GRB Tuneshroom wire, so every existing caller is unchanged.
         # The Room simulator passes its RoomProfile.channel_count instead: a
@@ -88,6 +93,12 @@ class ShroomClient:
         self.released = False
         self.last_deny: tuple[str, str] | None = None
         self.last_error: tuple[str, str] | None = None
+        self.last_play: tuple[str, str] | None = None
+        # Latest informational room snapshot (see protocol.room_event).
+        # Stored, not acted on: this client has no node tiles to draw, but
+        # handling the kind keeps the o2lite wire quiet and the data
+        # inspectable.
+        self.last_room: dict | None = None
         # Frames wait here until their declared display time. Control
         # renders; this client only decides WHEN to light up.
         self._frames = TimedQueue()
@@ -163,7 +174,29 @@ class ShroomClient:
         if kind == "error":
             self.last_error = (env.args[0], env.args[1])
             return env.address
+        if kind == "play":
+            return self._on_play(env)
+        if kind == "room":
+            if not env.args or not isinstance(env.args[0], dict):
+                logger.debug("dropping /room with a non-dict payload")
+                return ""
+            self.last_room = env.args[0]
+            return env.address
         return ""
+
+    def _on_play(self, env) -> str:
+        name = env.args[0] if env.args else ""
+        params = env.args[1] if len(env.args) > 1 else ""
+        if not isinstance(name, str) or not isinstance(params, str):
+            logger.debug("dropping /play with non-string arguments")
+            return ""
+        self.last_play = (name, params)
+        if self.on_play is not None:
+            try:
+                self.on_play(name, params)
+            except Exception:
+                logger.exception("on_play sink raised; sample dropped")
+        return env.address
 
     def _on_role(self, env) -> str:
         if not env.args or not isinstance(env.args[0], dict):

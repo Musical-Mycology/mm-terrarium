@@ -280,7 +280,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
           serve: bool = True, room_type: str | None = None,
           fixture: str | None = None,
           input_queue: "queue.Queue | None" = None,
-          clock=None):
+          clock=None, on_play=None):
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
@@ -343,7 +343,8 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
                   "by design")
 
     client = ShroomClient(dev, node, leds=WebSimLeds(backend, channels),
-                          on_role=_on_role, expected_channels=channels)
+                          on_role=_on_role, on_play=on_play,
+                          expected_channels=channels)
     return client, backend
 
 
@@ -437,12 +438,19 @@ def main() -> None:
 
     from devicelink.o2_transport import pull_args
 
+    from harness.sim_audio import build_sim_player
+
     operator_input = queue.Queue(maxsize=INPUT_QUEUE_MAX)
+    # /<dev>/play sink: generated tones through afplay (degrades to a
+    # printed line off-Mac). Without this every PlayCue died on the wire
+    # as an o2lite "no match" drop and the sim was silent by accident.
+    player = build_sim_player()
     client, backend = build(args.dev, args.node,
                             args.sim_host, args.sim_port,
                             room_type=args.room_type, fixture=args.fixture,
                             input_queue=operator_input,
-                            clock=o2lite.time_get)
+                            clock=o2lite.time_get,
+                            on_play=lambda name, params: player.play(name))
     backend.open()
     canvas_url = f"http://{args.sim_host}:{backend.port}/"
     url_marker = markers.ROOM_URL if args.no_join else markers.BROWSE_URL
@@ -497,7 +505,8 @@ def main() -> None:
                            "address": f"/{address}",
                            "typespec": typespec or "", "args": values})
 
-        for kind in ("role", "leds", "release", "deny", "error"):
+        for kind in ("role", "leds", "release", "deny", "error",
+                     "room", "play"):
             o2lite.method_new(f"/{args.dev}/{kind}", None, True, on_down, None)
 
         while o2lite.time_get() < 0:       # block until clock sync
