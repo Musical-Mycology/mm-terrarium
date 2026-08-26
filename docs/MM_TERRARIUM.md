@@ -1717,10 +1717,22 @@ handlers. `ShroomClient` also gained the `tap()` encoder its docstring's
 wire table had documented but never implemented. Live-verified
 2026-08-20 against a real Arco via `run_stack --ci --devices 1`: taps
 sent over ie1's WebSim socket came back as `/ie1/play` cues (click,
-chime, and the `flash_device` trigger), teardown clean. Note the device
-still ignores `/<dev>/play` by design, so the sample plays nowhere on the
-simulator yet -- local sample playback on the sim is a separate, later
-slice.
+chime, and the `flash_device` trigger), teardown clean. That later
+slice landed 2026-08-26 (PR #55): the sim no longer ignores
+`/<dev>/play`. `ShroomClient` handles it through an optional injected
+`on_play(name, params)` sink (raising sinks are logged and never
+propagate) and stores the informational `/room` snapshot as
+`last_room`, and `o2_shroom` registers both kinds with o2lite -- before
+that, every PlayCue and room push died as a noisy
+`O2lite: no match, dropping msg` line, which made `flash_device` look
+broken when it was firing all along (the click was dropped device-side).
+The sound itself comes from `harness/sim_audio.py`: click/chime
+sine-blip WAVs generated in memory at preload (stdlib `wave`, no asset
+files) and played fire-and-forget through macOS `afplay` via the
+existing `SamplePlayer`, degrading to a printed `play: <name>` line
+where afplay is missing. Deliberately NOT the sub-20 ms hardware path
+-- afplay spawns a subprocess per play; do not lift this sink onto a
+device.
 
 ### `bits/metronome/metronome_bit.py` -- MetronomeBit, the first production game Bit
 A call-and-response rhythm game for `RoomType.DEMO`, built entirely on
