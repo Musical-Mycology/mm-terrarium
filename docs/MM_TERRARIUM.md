@@ -1281,7 +1281,10 @@ see the Design docs list below).
   picture and changes nothing else.
 - **`console/static/` is a directory now**, split into `index.html` /
   `style.css` / `console.js` / `room.js` and served from an allowlisted asset
-  map, still with **no build step** (a venue box must never need npm). Path
+  map, still with **no build step** (a venue box must never need npm).
+  (This split was later superseded by the ES-module front-end rewrite — see
+  the dated section near the end of this file for the shipped six-module
+  layout.) Path
   handling takes the request's **basename only**, so the server has no code
   path that touches the filesystem after construction and no request can
   escape `console/static/` or the extension allowlist.
@@ -1584,7 +1587,13 @@ PR #38.
   `tests/test_wire_json.py` and `tests/test_wire_json_boundaries.py` do
   this throughout.
 - **Console scripts are IIFE-isolated now, exporting only their entry
-  points.** `room.js` and `triggers.js` both declared a global
+  points.** (This plain-`<script>`-tag, shared-global-scope mechanism no
+  longer exists: the front-end rewrite documented in the dated section near
+  the end of this file replaced it with ES modules, which structurally
+  cannot collide on a global function name the way this defect did. The
+  historical account below is kept for the defect's own lesson — never
+  validate browser JS with a source-text grep — which still applies.)
+  `room.js` and `triggers.js` both declared a global
   `function buildCard`; loaded as plain scripts, triggers.js silently won,
   and `renderRoom` called the trigger version with a room instrument and
   threw on every `room_changed` -- 222 throws in 2.5 s live -- aborting
@@ -1806,8 +1815,9 @@ enumerate, configure, and launch Bits without importing their code first.
   one-off tweak.
 - **Uplink/console.** `uplink/protocol.py` gained `list_bits` and a
   `load_bit` override path; `console/agent.py`/`uplink/link.py` stamp
-  `bit_completed` with the active bit's name. The Console's Bits panel
-  (`renderBits` in `console/static/console.js`) renders the same
+  `bit_completed` with the active bit's name. The Console's Load picker
+  (in `console/static/bit.js` since the ES-module front-end rewrite — see
+  the dated section near the end of this file) renders the same
   `bits_listed` snapshot sent at connect time.
 
 **Load-bearing:** the engine boundary rule holds — `GameServer.load_bit`
@@ -1944,6 +1954,75 @@ config lookup working as designed, not a bug — see its docstring in
 `harness/terrarium_boot.py`. Real-browser click-through of the merged
 control bar remains for a human: see the spec's Status section for the
 exact split of what ran here versus what's still unverified.
+
+### Terrarium Console front-end rewrite: six ES modules replace `console.js`/`room.js`/`triggers.js`/`style.css` (2026-08-25)
+The plain-`<script>`-tag front end (`console/static/{console.js,room.js,
+triggers.js,style.css}`) described in earlier entries above is **gone**,
+deleted whole and replaced by six ES modules under `console/static/`, each
+with its own node test file plus a shared test DOM stub. The
+plain-scripts/shared-global-scope mechanism that produced the `buildCard`
+collision defect (see the wire-json/Console-script-isolation entry above) no
+longer exists — ES modules have their own scope by construction, so that
+whole defect class is structurally unreachable now, not merely guarded
+against.
+
+- **`wire.js`** — the sole WebSocket owner. Exports `on`/`send`/
+  `flashRefusal`/`connect`, plus the shared `confirmTap` two-tap-confirm
+  helper: arm on first tap, revert on timeout, fire the real action on a
+  second tap within the window. `confirmTap` keys its armed/timer state off
+  the specific button element passed in — this is why every other module's
+  render path is under the same discipline described below: minting a fresh
+  button node on a tick that shouldn't have touched it silently drops an
+  in-progress confirm arm.
+- **`shell.js`** — the entry point (what `index.html` loads) and the top
+  bar (connection state, room/bit summary chips).
+- **`bit.js`** — the sidebar: the Loaded-Bit panel, the Load picker (reads
+  the same `bits_listed` snapshot `console/agent.py` has always sent at
+  connect time), and the Bit status card. Its Abort button uses
+  `wire.confirmTap`.
+- **`surface.js`** — the Room card: the LED array rendered as one `<canvas>`
+  dot-row per physical block (never DOM nodes per pixel), the zone bar, each
+  fixture's binding controls (chip + Release/Arm, also on `confirmTap`), and
+  the Instruments accordion. Exports `buildInstrumentCard`, reused by
+  `rail.js`. The file's own header comment states the rule its render path
+  is built around: **a controllers-only `room_changed` must repaint nothing
+  but live lane values** — no DOM subtree with node-identity-dependent state
+  may be rebuilt just because a live CC value ticked. Fixtures, their
+  binding controls, and Instruments-grid cards are each keyed by a stable
+  identity and gated on a signature of their own declaration
+  (`fixtureShapeMatches`/`bindStateKey` for fixtures and binding controls,
+  the equivalent instrument-declaration key for Instruments cards); only a
+  card/fixture whose own declaration actually changed is torn down and
+  rebuilt, everything else gets its live values patched in place.
+- **`triggers.js`** — compact trigger cards, one per declared trigger,
+  updated in place on `trigger_fired` (rebuilding the whole list on every
+  fire was the discipline this panel needed from day one; see the
+  triggers-and-cue-scripts entry above).
+- **`rail.js`** — registration, devices, roles, and the event log. Its
+  Roles & Manifests panel imports `buildInstrumentCard` from `surface.js`
+  rather than duplicating instrument-card rendering.
+
+**The standing rule is front-end-wide now, not scoped to one file:** every
+high-frequency wire event (`room_changed`, `devices_changed`,
+`trigger_fired`) must never rebuild a DOM subtree whose underlying
+declaration has not changed, because DOM-identity-dependent state — most
+concretely an armed `wire.confirmTap` button — is silently lost the moment
+its element is discarded and replaced. This is the same defect shape as the
+old `renderRoom` strip-rebuild bug (see the Room-panel entry above), now
+enforced structurally across all six modules rather than fixed once in one
+file.
+
+**Test infrastructure:** `tests/js/_dom_stub.js` is the one shared DOM stub
+behind six per-module test files (`wire_and_shell.test.js`,
+`bit_panel.test.js`, `surface_panel.test.js`, `triggers_and_rail.test.js`,
+plus the ones named above) and a whole-graph `tests/js/full_stack.test.js`
+that loads every module together — the combination the browser actually
+runs, the same lesson the old `console_full_stack.test.js` existed to teach
+(see the wire-json entry above).
+
+**The one backend addition this rewrite needed:** `control/bit_registry.py`'s
+`list_view()` now includes a best-effort `roles` summary per Bit, so the
+Load picker can show what a Bit will grant without loading it first.
 
 ## Boundary rules (the load-bearing invariants)
 

@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrarium Console Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;700&family=Londrina+Solid:wght@300;400;900&display=swap">
+<style>
+/* ============================================================
+   Terrarium Console mockup — Stitch DESIGN.md tokens, real data.
+   Mockup only: fonts from Google (implementation self-hosts).
+   ============================================================ */
+:root {
+  --bg:        #220e05;
+  --s-lowest:  #1b0903;
+  --s-low:     #2b160c;
+  --s:         #301a10;
+  --s-high:    #3c2419;
+  --s-highest: #482f23;
+  --ink:       #ffdbcc;
+  --ink-var:   #d2c5b1;
+  --ink-dim:   rgba(255,219,204,0.55);
+  --gold:      #f2c35b;
+  --gold-deep: #d4a843;
+  --on-gold:   #402d00;
+  --sage:      #7a9e6e;
+  --rose:      #d96680;
+  --terra:     #c07850;
+  --tan-edge:  #f0c9a0;
+  --hair:      rgba(212,168,67,0.15);
+  --hair-tan:  rgba(240,201,160,0.20);
+  --shadow-top:0 12px 48px rgba(58,35,24,0.4);
+
+  --f-disp: "Londrina Solid", system-ui, sans-serif;
+  --f-body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --r-organic: 18px;
+  --r-input: 8px;
+  --r-xs: 4px;
+}
+* { box-sizing: border-box; }
+html { height: 100%; }
+body {
+  margin: 0; min-height: 100%;
+  background: var(--bg); color: var(--ink);
+  font-family: var(--f-body); font-size: 15px; line-height: 1.5;
+}
+button { font: inherit; cursor: pointer; }
+button:focus-visible, [tabindex]:focus-visible { outline: 2.5px solid var(--gold); outline-offset: 2px; }
+
+/* ---------- shared bits ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--f-disp); font-weight: 400; font-size: 12px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  border-radius: 9999px; padding: 3px 12px; white-space: nowrap;
+}
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.chip.sage  { color: var(--sage);  border: 1.5px solid var(--sage); }
+.chip.rose  { color: var(--rose);  border: 1.5px solid var(--rose); }
+.chip.gold  { color: var(--gold);  border: 1.5px solid var(--gold); }
+.chip.terra { color: var(--terra); border: 1.5px solid var(--terra); }
+.chip.dim   { color: var(--ink-dim); border: 1.5px solid var(--hair-tan); }
+.chip.solid-sage  { background: var(--sage);  color: var(--bg); border: none; }
+.chip.solid-rose  { background: var(--rose);  color: var(--bg); border: none; }
+.chip.solid-gold  { background: var(--gold-deep); color: var(--on-gold); border: none; }
+.chip.solid-terra { background: var(--terra); color: var(--bg); border: none; }
+
+.tag { /* subtitle-bar style: 4px, high contrast */
+  display: inline-block; font-family: var(--f-disp); font-size: 11px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  background: var(--s-lowest); color: var(--tan-edge);
+  border-radius: var(--r-xs); padding: 2px 8px;
+}
+.eyebrow {
+  font-family: var(--f-disp); font-size: 12px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--terra); margin: 0 0 6px;
+}
+.mono { font-family: var(--f-mono); font-size: 12.5px; }
+.dim { color: var(--ink-dim); }
+
+.btn {
+  font-family: var(--f-disp); font-weight: 400; letter-spacing: 0.04em;
+  border-radius: 9999px; padding: 8px 22px; font-size: 15px;
+  border: none; transition: transform 0.2s cubic-bezier(0.4,0,0.2,1);
+}
+.btn:hover { transform: translateY(-2px); }
+.btn:active { transform: translateY(0) scale(0.99); }
+.btn.primary { background: var(--gold-deep); color: var(--on-gold); }
+.btn.outline { background: none; color: var(--gold); border: 2.5px solid var(--gold-deep); }
+.btn.danger  { background: none; color: var(--rose); border: 2.5px solid var(--rose); }
+.btn.small { padding: 4px 14px; font-size: 13px; }
+
+.card {
+  background: var(--s); border-radius: var(--r-organic);
+  border: 1.5px solid var(--hair); padding: 18px 20px;
+}
+.card h2 {
+  font-family: var(--f-disp); font-weight: 400; font-size: 21px;
+  margin: 0; color: var(--ink); display: flex; align-items: center; gap: 10px;
+}
+.card h2 svg { color: var(--gold); }
+.cardhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+
+/* ---------- layout ---------- */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 20px; background: var(--s-lowest);
+  border-bottom: 1.5px solid var(--hair);
+  position: sticky; top: 0; z-index: 5;
+}
+.wordmark { font-family: var(--f-disp); font-weight: 900; font-size: 24px; color: var(--gold); }
+.wordmark .orn { color: var(--terra); font-size: 16px; vertical-align: 2px; }
+.topbar .spacer { flex: 1; }
+
+.shell {
+  display: grid; grid-template-columns: 248px 1fr;
+  min-height: calc(100vh - 57px);
+}
+.sidebar {
+  background: var(--s-lowest);
+  border-right: 2px solid rgba(240,201,160,0.35);
+  padding: 20px 18px 28px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.sidebar .navlabel {
+  font-family: var(--f-disp); font-size: 12px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--terra); margin: 0;
+}
+.content {
+  display: grid; grid-template-columns: 1fr 320px;
+  gap: 16px; padding: 16px; align-items: start;
+  max-width: 1460px; width: 100%;
+}
+.maincol, .rail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+/* The rail folds under main FIRST; the left nav survives down to phone
+   width. The nav is the design's anchor -- it must not collapse into a
+   top strip at artifact-panel / tablet widths. */
+@media (max-width: 1400px) {
+  .content { grid-template-columns: 1fr; }
+}
+@media (max-width: 800px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar { border-right: none; border-bottom: 2px solid rgba(240,201,160,0.35); }
+  .bitcard { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 14px; }
+}
+
+/* ---------- sidebar: loaded bit (compact) ---------- */
+.bitcard { display: flex; flex-direction: column; gap: 11px; }
+.sidebar .bitcard { background: none; border: none; padding: 0; }
+.identrow { display: flex; align-items: center; gap: 10px; }
+.art {
+  width: 38px; height: 38px; flex: none;
+  border-radius: 10px;
+  background: radial-gradient(ellipse at 30% 25%, var(--s-highest), var(--s-lowest) 75%);
+  border: 1.5px solid var(--hair-tan);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--terra); font-size: 17px;
+}
+.bitname { font-family: var(--f-disp); font-weight: 400; font-size: 21px; line-height: 1.05; margin: 0; }
+.bitmeta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.bitmeta .mono { font-size: 11px; }
+.phase {
+  border-radius: 12px; padding: 8px 12px;
+  background: var(--s-high); border-left: 4px solid var(--sage);
+}
+.phase .p-label { font-family: var(--f-disp); font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sage); display: flex; gap: 8px; align-items: center; }
+.phase .p-label .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sage); animation: pulse 2.5s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+.phase .p-sub { font-size: 11.5px; color: var(--ink-var); margin-top: 2px; }
+.detail { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12.5px; }
+.detail dt { color: var(--ink-dim); }
+.detail dd { margin: 0; }
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap; }
+.btnrow .btn { padding: 5px 16px; font-size: 13.5px; }
+
+/* ---------- surface ---------- */
+.fixture { margin-bottom: 14px; }
+.fixhead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.fixname { font-family: var(--f-disp); font-size: 16px; letter-spacing: 0.06em; }
+.blockrows { display: flex; flex-direction: column; gap: 3px; }
+.blockrow { display: flex; align-items: center; gap: 10px; }
+.blockrow .blk {
+  font-family: var(--f-mono); font-size: 10px; color: var(--ink-dim);
+  width: 86px; text-align: right; flex: none;
+}
+.strip { display: block; flex: 1; height: 12px; min-width: 0; }
+.zones { display: flex; margin-top: 6px; gap: 2px; margin-left: 96px; }
+.zones span {
+  text-align: center; font-family: var(--f-mono); font-size: 11px;
+  color: var(--ink-dim); border-top: 2px solid var(--terra);
+  padding-top: 3px;
+}
+.instgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 10px; margin-top: 16px; }
+.inst {
+  background: var(--s-high); border-radius: 12px; padding: 10px 13px;
+  border: 1.5px solid var(--hair);
+}
+.inst h4 { margin: 0 0 6px; font-family: var(--f-disp); font-weight: 400; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.kind { font-family: var(--f-disp); font-size: 10px; letter-spacing: 0.16em; border-radius: var(--r-xs); padding: 1.5px 7px; }
+.kind.light { background: var(--gold-deep); color: var(--on-gold); }
+.kind.audio { background: var(--terra); color: var(--bg); }
+.inst .rows { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-family: var(--f-mono); font-size: 11.5px; }
+.inst .rows dt { color: var(--ink-dim); }
+.inst .rows dd { margin: 0; overflow-wrap: anywhere; }
+.live { color: var(--gold); font-weight: 700; }
+
+/* ---------- room card accordions ---------- */
+details.acc { border-top: 1.5px solid var(--hair); margin-top: 14px; padding-top: 10px; }
+details.acc > summary {
+  cursor: pointer; list-style: none;
+  font-family: var(--f-disp); font-weight: 400; font-size: 17px;
+  color: var(--ink); display: flex; align-items: center; gap: 9px;
+}
+details.acc > summary::-webkit-details-marker { display: none; }
+details.acc > summary .tri { color: var(--gold); font-size: 12px; transition: transform 0.2s; }
+details.acc[open] > summary .tri { transform: rotate(90deg); }
+details.acc > summary .summeta { margin-left: auto; }
+details.acc > .accbody { margin-top: 10px; }
+
+/* ---------- bit status ---------- */
+.statusgrid { display: flex; gap: 22px; flex-wrap: wrap; font-family: var(--f-mono); }
+.stat .k { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-dim); }
+.stat .v { font-size: 19px; color: var(--gold); font-variant-numeric: tabular-nums; }
+.stat .v.plain { color: var(--ink); }
+
+/* ---------- triggers ---------- */
+.triggrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.trig {
+  background: var(--s-high); border-radius: 12px; border: 1.5px solid var(--hair);
+  border-left: 4px solid var(--hair-tan);
+  padding: 10px 13px; margin: 0;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.trig.fired-admin { border-left-color: var(--terra); }
+.trig.fired { border-left-color: var(--sage); }
+.trighead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trighead h3 { font-family: var(--f-disp); font-weight: 400; font-size: 16px; margin: 0; }
+.trighead .grow { flex: 1; }
+.trig .desc { margin: 0; font-size: 12px; }
+.trig .cond { font-size: 11px; color: var(--ink-dim); margin: 0; }
+.trig .firerow { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 4px; }
+.trig .firerow .grow { flex: 1; }
+.scriptbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.expander {
+  background: none; border: none; color: var(--gold);
+  font-family: var(--f-mono); font-size: 11px; padding: 2px 4px;
+  display: inline-flex; gap: 6px; align-items: center;
+}
+.expander .tri { transition: transform 0.2s; display: inline-block; }
+.expander[aria-expanded="true"] .tri { transform: rotate(90deg); }
+.scriptbar .mono { font-size: 11px; }
+.script {
+  display: none; margin: 2px 0; padding: 8px 10px;
+  background: var(--s-lowest); border-radius: var(--r-input);
+  font-family: var(--f-mono); font-size: 11.5px; line-height: 1.6;
+  white-space: pre; overflow-x: auto; color: var(--ink-var);
+}
+.script.open { display: block; }
+select {
+  background: var(--s-lowest); color: var(--ink); font-family: var(--f-mono);
+  font-size: 12.5px; border: 1.5px solid var(--hair-tan);
+  border-radius: var(--r-input); padding: 5px 8px;
+}
+.fired-line { font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-dim); margin: 0; overflow-wrap: anywhere; }
+.fired-line .admin { color: var(--terra); font-weight: 700; }
+
+/* ---------- rail ---------- */
+.rolerow { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--hair); }
+.rolerow:last-child { border-bottom: none; }
+.rolename { font-family: var(--f-disp); font-size: 16px; flex: 1; }
+.meter { width: 84px; height: 7px; border-radius: 4px; background: var(--s-lowest); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--sage); border-radius: 4px; }
+.count { font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.devrow { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--hair); font-size: 13.5px; }
+.devrow:last-child { border-bottom: none; }
+.devrow .id { font-family: var(--f-mono); font-size: 12px; color: var(--gold); min-width: 110px; }
+.devrow .nm { flex: 1; }
+
+.log {
+  font-family: var(--f-mono); font-size: 11.5px; line-height: 1.55;
+  background: var(--s-lowest); border-radius: var(--r-input);
+  padding: 10px 12px; max-height: 330px; overflow: auto;
+}
+.log .row { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; padding: 2px 4px; border-radius: 4px; }
+.log .ts { color: var(--ink-dim); }
+.log .lv-info { color: var(--ink-dim); }
+.log .lv-warn { color: var(--terra); }
+.log .lv-err  { color: var(--rose); font-weight: 700; }
+.log .row.err { background: rgba(217,102,128,0.12); }
+.log .msg { color: var(--ink-var); overflow-wrap: anywhere; }
+
+details.refcard > summary {
+  cursor: pointer; font-family: var(--f-disp); font-size: 21px;
+  display: flex; align-items: center; gap: 10px; list-style: none;
+}
+details.refcard > summary::-webkit-details-marker { display: none; }
+details.refcard > summary .tri { color: var(--gold); transition: transform 0.2s; font-size: 14px; }
+details.refcard[open] > summary .tri { transform: rotate(90deg); }
+details.refcard .body { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+/* ---------- load picker overlay ---------- */
+.overlay {
+  position: fixed; inset: 0; background: rgba(27,9,3,0.75);
+  display: none; align-items: flex-start; justify-content: center;
+  padding: 6vh 16px; z-index: 20; overflow: auto;
+}
+.overlay.open { display: flex; }
+.picker {
+  background: var(--s); border-radius: var(--r-organic);
+  border: 1.5px solid var(--hair-tan); box-shadow: var(--shadow-top);
+  max-width: 760px; width: 100%; padding: 22px 24px;
+}
+.pickhead { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.pickhead h2 { font-family: var(--f-disp); font-weight: 400; font-size: 26px; margin: 0; flex: 1; }
+.xbtn { background: none; border: none; color: var(--ink-dim); font-size: 22px; line-height: 1; padding: 4px 8px; }
+.pick {
+  display: grid; grid-template-columns: 64px 1fr auto; gap: 4px 14px;
+  background: var(--s-high); border: 1.5px solid var(--hair);
+  border-radius: 12px; padding: 13px 15px; margin-bottom: 10px;
+  align-items: start;
+}
+.pick.hiddenbit { opacity: 0.5; }
+.pick .part { width: 64px; height: 64px; border-radius: 12px; grid-row: span 3;
+  background: radial-gradient(ellipse at 30% 25%, var(--s-highest), var(--s-lowest) 75%);
+  border: 1.5px solid var(--hair-tan); display: flex; align-items: center; justify-content: center;
+  color: var(--terra); font-size: 22px; }
+.pick h3 { font-family: var(--f-disp); font-weight: 400; font-size: 19px; margin: 0; display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.pick .meta { font-family: var(--f-mono); font-size: 11.5px; color: var(--ink-dim); }
+.pick .pdesc { font-size: 13px; margin: 2px 0 0; grid-column: 2; }
+.pick .actions { grid-row: span 3; display: flex; flex-direction: column; gap: 8px; align-items: end; }
+.pick.err { border-color: var(--rose); grid-template-columns: 1fr; }
+.pick.err h3 { color: var(--rose); font-family: var(--f-mono); font-size: 13px; }
+.ovr { grid-column: 2; }
+.ovr summary { cursor: pointer; color: var(--gold); font-family: var(--f-mono); font-size: 12px; list-style: none; }
+.ovr summary::-webkit-details-marker { display: none; }
+.ovr .form { display: grid; grid-template-columns: auto 90px; gap: 6px 10px; margin-top: 8px; align-items: center; font-family: var(--f-mono); font-size: 12px; }
+.ovr input {
+  background: var(--s-lowest); color: var(--ink); border: 1.5px solid var(--hair-tan);
+  border-radius: var(--r-input); padding: 4px 8px; font-family: var(--f-mono); font-size: 12.5px; width: 90px;
+}
+.ovr input:focus { outline: 2px solid var(--gold); border-color: transparent; }
+
+/* ---------- reference strip ---------- */
+.refstrip { border-top: 1.5px dashed var(--hair-tan); margin: 28px 0 0; padding: 22px 20px 40px; }
+.refstrip h2 { font-family: var(--f-disp); font-weight: 400; font-size: 20px; color: var(--ink-dim); margin: 0 0 4px; }
+.refstrip .note { font-size: 12.5px; color: var(--ink-dim); margin: 0 0 16px; }
+.refrow { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.reflabel { font-family: var(--f-mono); font-size: 11px; color: var(--ink-dim); width: 150px; }
+.errflash { animation: none; box-shadow: 0 0 0 2.5px var(--rose); }
+.inline-err { font-family: var(--f-mono); font-size: 11.5px; color: var(--rose); }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<!-- ================= TOP BAR ================= -->
+<div class="topbar">
+  <span class="wordmark"><span class="orn">&#10022;</span> Terrarium Console</span>
+  <span class="chip sage"><span class="dot"></span>Connected</span>
+  <span class="spacer"></span>
+  <span class="chip gold">DEMO &middot; 1/1 fixtures bound</span>
+</div>
+
+<div class="shell">
+
+  <!-- ================= SIDEBAR (full-height nav) ================= -->
+  <div class="sidebar">
+    <p class="navlabel">Loaded Bit</p>
+    <div class="bitcard">
+      <div class="identrow">
+        <div class="art">&#10022;</div>
+        <div>
+          <h1 class="bitname">Metronome</h1>
+          <div class="bitmeta">
+            <span class="mono dim">metronome &middot; v1.0.0</span>
+            <span class="tag">R_GAME</span>
+          </div>
+        </div>
+      </div>
+      <div class="btnrow">
+        <button class="btn primary">Run</button>
+        <button class="btn danger">Abort</button>
+        <button class="btn outline" id="loadBtn">Load</button>
+      </div>
+      <div class="phase">
+        <div class="p-label"><span class="dot"></span>Running</div>
+        <div class="p-sub">started via: 2 players joined</div>
+      </div>
+      <dl class="detail">
+        <dt>Rooms</dt><dd><b style="color:var(--gold)">DEMO</b></dd>
+        <dt>Roles</dt><dd>2 scored &middot; no jam</dd>
+        <dt>About</dt><dd>Call-and-response rhythm game</dd>
+        <dt>Notes</dt><dd class="dim">Players tap back the 4-beat call.</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="content">
+
+  <!-- ================= MAIN ================= -->
+  <div class="maincol">
+
+    <!-- Surface -->
+    <div class="card">
+      <div class="cardhead">
+        <h2><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="9" width="20" height="6" rx="2"/><path d="M6 12h.01M10 12h.01M14 12h.01M18 12h.01"/></svg>DEMO <span class="dim" style="font-size:14px; font-family:var(--f-body)">Room</span></h2>
+        <div style="display:flex; gap:10px; align-items:center">
+          <span class="mono dim">864 px &middot; GRB</span>
+          <span class="chip sage"><span class="dot"></span>Live</span>
+        </div>
+      </div>
+
+      <div class="fixture">
+        <div class="fixhead">
+          <span class="fixname">array</span>
+          <span class="chip sage">sim-room-array</span>
+          <button class="btn outline small">Release</button>
+        </div>
+        <div class="blockrows" id="ledArray">
+          <div class="blockrow"><span class="blk">m1 0..143</span><canvas class="strip" data-block="0"></canvas></div>
+          <div class="blockrow"><span class="blk">m2 144..287</span><canvas class="strip" data-block="1"></canvas></div>
+          <div class="blockrow"><span class="blk">m3 288..431</span><canvas class="strip" data-block="2"></canvas></div>
+          <div class="blockrow"><span class="blk">m4 432..575</span><canvas class="strip" data-block="3"></canvas></div>
+          <div class="blockrow"><span class="blk">m5 576..719</span><canvas class="strip" data-block="4"></canvas></div>
+          <div class="blockrow"><span class="blk">m6 720..863</span><canvas class="strip" data-block="5"></canvas></div>
+        </div>
+        <div class="zones">
+          <span style="flex:288">left (0..287)</span>
+          <span style="flex:288">center (288..575)</span>
+          <span style="flex:288">right (576..863)</span>
+        </div>
+      </div>
+
+      <details class="acc" open>
+        <summary><span class="tri">&#9656;</span>Instruments<span class="summeta mono dim">4 declared &middot; live values</span></summary>
+        <div class="accbody">
+      <div class="instgrid">
+        <div class="inst">
+          <h4><span class="kind light">Light</span>aurora</h4>
+          <dl class="rows">
+            <dt>target</dt><dd>primary</dd>
+            <dt>params</dt><dd>hue 0.33 &middot; level 0.47</dd>
+            <dt>cc:74</dt><dd>&rarr; hue <span class="live">= 93</span></dd>
+            <dt>cc:11</dt><dd>&rarr; level <span class="live">= 71</span></dd>
+          </dl>
+        </div>
+        <div class="inst">
+          <h4><span class="kind light">Light</span>bloom</h4>
+          <dl class="rows">
+            <dt>target</dt><dd>primary</dd>
+            <dt>params</dt><dd>hue 0.33</dd>
+            <dt>note</dt><dd>&rarr; trigger</dd>
+            <dt>cc:70</dt><dd>&rarr; hue</dd>
+          </dl>
+        </div>
+        <div class="inst">
+          <h4><span class="kind light">Light</span>rainbow</h4>
+          <dl class="rows">
+            <dt>target</dt><dd>primary</dd>
+            <dt>params</dt><dd>span 1 &middot; speed 0.05</dd>
+            <dt>cc:21</dt><dd>&rarr; level <span class="live">= 40</span></dd>
+          </dl>
+        </div>
+        <div class="inst">
+          <h4><span class="kind audio">Audio</span>flsyn</h4>
+          <dl class="rows">
+            <dt>program</dt><dd>115</dd>
+            <dt>cc:74</dt><dd>&rarr; cc:74 <span class="live">= 93</span></dd>
+            <dt>cc:11</dt><dd>&rarr; cc:11 <span class="live">= 71</span></dd>
+          </dl>
+        </div>
+      </div>
+        </div>
+      </details>
+
+      <details class="acc" open>
+        <summary><span class="tri">&#9656;</span>Triggers<span class="summeta mono dim">5 declared by Metronome</span></summary>
+        <div class="accbody">
+          <div class="triggrid">
+
+      <div class="trig">
+        <div class="trighead">
+          <h3>fireworks_player</h3><span class="tag">Device</span>
+        </div>
+        <p class="desc">Celebratory flashes on the player who nailed it</p>
+        <p class="cond">Player matches the call phrase &middot; bit-adjudicated</p>
+        <div class="scriptbar">
+          <button class="expander" aria-expanded="false" data-target="s1"><span class="tri">&#9656;</span>Show script</button>
+          <span class="mono dim">36 steps &middot; 1.4s</span>
+        </div>
+        <div class="firerow"><select><option>ie1</option><option selected>ie2</option></select><span class="grow"></span><button class="btn primary small">Fire</button></div>
+        <div class="script" id="s1">+0.00s   @target   cc:70 = 81
++0.00s   @target   cc:55 = 100
++0.08s   @target   cc:55 = 0
++0.12s   @target   cc:70 = 26
++0.12s   @target   cc:80 = 100
++0.20s   @target   cc:80 = 0
+&hellip; 30 more steps &hellip;</div>
+        <div class="fired-line">never fired</div>
+      </div>
+
+      <div class="trig fired-admin">
+        <div class="trighead">
+          <h3>fireworks_room</h3><span class="tag">Room</span>
+        </div>
+        <p class="desc">Celebratory flashes across the Room</p>
+        <p class="cond">Player matches the call phrase &middot; bit-adjudicated</p>
+        <div class="scriptbar">
+          <button class="expander" aria-expanded="false" data-target="s2"><span class="tri">&#9656;</span>Show script</button>
+          <span class="mono dim">36 steps &middot; 1.4s</span>
+        </div>
+        <div class="firerow"><span class="grow"></span><button class="btn primary small">Fire</button></div>
+        <div class="script" id="s2">+0.00s   @target   cc:70 = 81
++0.00s   @target   cc:55 = 100
+&hellip; 34 more steps &hellip;</div>
+        <div class="fired-line">last fired by admin-manual &rarr; sim-room-array (36 cues) <span class="admin">Admin manual</span></div>
+      </div>
+
+      <div class="trig fired">
+        <div class="trighead">
+          <h3>fail_player</h3><span class="tag">Device</span>
+        </div>
+        <p class="desc">Player's light goes red and dark on a miss</p>
+        <p class="cond">Player misses the call phrase &middot; bit-adjudicated</p>
+        <div class="scriptbar">
+          <button class="expander" aria-expanded="false" data-target="s3"><span class="tri">&#9656;</span>Show script</button>
+          <span class="mono dim">2 steps &middot; 1.0s</span>
+        </div>
+        <div class="firerow"><select><option selected>ie1</option><option>ie2</option></select><span class="grow"></span><button class="btn primary small">Fire</button></div>
+        <div class="script" id="s3">+0.00s   @target   cc:74 = 0
++1.00s   @target   cc:11 = 0</div>
+        <div class="fired-line">last fired by phrase_fail &rarr; ie1 (2 cues)</div>
+      </div>
+
+      <div class="trig">
+        <div class="trighead">
+          <h3>fail_room</h3><span class="tag">Room</span>
+        </div>
+        <p class="desc">Room flashes a fail cue and restores the click</p>
+        <p class="cond">Player misses the call phrase &middot; bit-adjudicated</p>
+        <div class="scriptbar">
+          <button class="expander" aria-expanded="false" data-target="s4"><span class="tri">&#9656;</span>Show script</button>
+          <span class="mono dim">5 steps &middot; 1.0s</span>
+        </div>
+        <div class="firerow"><span class="grow"></span><button class="btn primary small">Fire</button></div>
+        <div class="script" id="s4">+0.00s   @target   prog = 38
++0.00s   @target   cc:74 = 0
++0.05s   @target   note 33 on = 110
++0.90s   @target   note 33 off
++1.00s   @target   prog = 115</div>
+        <div class="fired-line">never fired</div>
+      </div>
+
+      <div class="trig">
+        <div class="trighead">
+          <h3>finale</h3><span class="tag">Room</span>
+        </div>
+        <p class="desc">Closing rainbow sweep and pad after the last cycle</p>
+        <p class="cond">All cycles finished &middot; bit-adjudicated</p>
+        <div class="scriptbar">
+          <button class="expander" aria-expanded="false" data-target="s5"><span class="tri">&#9656;</span>Show script</button>
+          <span class="mono dim">24 steps &middot; 10.0s</span>
+        </div>
+        <div class="firerow"><span class="grow"></span><button class="btn primary small">Fire</button></div>
+        <div class="script" id="s5">+0.00s   @target   cc:89 = 0
++0.00s   @target   cc:21 = 127
++0.10s   @target   cc:57 = 100
+&hellip; 21 more steps &hellip;</div>
+        <div class="fired-line">never fired</div>
+      </div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- Bit status -->
+    <div class="card">
+      <div class="cardhead">
+        <h2><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="M7 13l4-4 4 3 5-6"/></svg>Bit Status</h2>
+      </div>
+      <div class="statusgrid">
+        <div class="stat"><div class="k">turn</div><div class="v plain">ie2</div></div>
+        <div class="stat"><div class="k">cycle</div><div class="v">2</div></div>
+        <div class="stat"><div class="k">judged</div><div class="v">2</div></div>
+        <div class="stat"><div class="k">elapsed</div><div class="v">50.15</div></div>
+        <div class="stat"><div class="k">done</div><div class="v plain">false</div></div>
+        <div class="stat"><div class="k">tap errors ms</div><div class="v plain" style="font-size:14px">+12.4 &minus;8.1 +3.0</div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ================= RIGHT RAIL ================= -->
+  <div class="rail">
+
+    <div class="card">
+      <div class="cardhead"><h2><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Registration</h2></div>
+      <div class="rolerow">
+        <span class="rolename">player</span>
+        <span class="tag">Unique</span>
+        <span class="chip gold" style="font-size:10px; padding:1px 8px">Scored</span>
+        <span class="meter"><i style="width:100%"></i></span>
+        <span class="count">2/2</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="cardhead"><h2><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg>Devices</h2></div>
+      <div class="devrow"><span class="id">sim-room-array</span><span class="nm">Room array (sim)</span><span class="dim">&mdash;</span></div>
+      <div class="devrow"><span class="id">ie1</span><span class="nm">Tuneshroom 1</span><span class="tag">player</span></div>
+      <div class="devrow"><span class="id">ie2</span><span class="nm">Tuneshroom 2</span><span class="tag">player</span></div>
+      <div class="devrow"><span class="id">ui7</span><span class="nm">Phone (Pixel 8)</span><span class="dim">&mdash;</span></div>
+    </div>
+
+    <div class="card">
+      <details class="refcard">
+        <summary><span class="tri">&#9656;</span>Roles &amp; Manifests</summary>
+        <div class="body">
+          <div class="inst">
+            <h4>player <span class="tag">Unique &middot; cap 2 &middot; scored</span></h4>
+            <dl class="rows">
+              <dt>light</dt><dd>aurora + bloom (2 instruments)</dd>
+              <dt>audio</dt><dd>&mdash;</dd>
+              <dt>uses</dt><dd>tap</dd>
+            </dl>
+          </div>
+          <p class="dim" style="font-size:12px; margin:0">Expands to full instrument cards per role &mdash; same component as the Surface card, never raw JSON.</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="card">
+      <div class="cardhead">
+        <h2><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Event Log</h2>
+        <span class="chip sage" style="font-size:10px">Live</span>
+      </div>
+      <div class="log">
+        <div class="row"><span class="ts">[14:31:02]</span><span class="lv-info">INFO</span><span class="msg">state &rarr; SETUP</span></div>
+        <div class="row"><span class="ts">[14:31:18]</span><span class="lv-info">INFO</span><span class="msg">ie1 joined player via METRO_PLAYER_NODE</span></div>
+        <div class="row"><span class="ts">[14:31:44]</span><span class="lv-info">INFO</span><span class="msg">ie2 joined player via METRO_PLAYER_NODE</span></div>
+        <div class="row"><span class="ts">[14:31:44]</span><span class="lv-info">INFO</span><span class="msg">start condition met: 2 players</span></div>
+        <div class="row"><span class="ts">[14:31:45]</span><span class="lv-info">INFO</span><span class="msg">state &rarr; RUNNING</span></div>
+        <div class="row"><span class="ts">[14:32:10]</span><span class="lv-warn">WARN</span><span class="msg">ui7 join refused: scored roles closed during RUNNING</span></div>
+        <div class="row err"><span class="ts">[14:32:31]</span><span class="lv-err">ERR</span><span class="msg">run: invalid transition from RUNNING</span></div>
+        <div class="row"><span class="ts">[14:32:58]</span><span class="lv-info">INFO</span><span class="msg">trigger fireworks_room fired by admin-manual &rarr; sim-room-array (36 cues)</span></div>
+        <div class="row"><span class="ts">[14:33:12]</span><span class="lv-info">INFO</span><span class="msg">trigger fail_player fired by phrase_fail &rarr; ie1 (2 cues)</span></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</div>
+
+<!-- ================= LOAD PICKER (click Load) ================= -->
+<div class="overlay" id="overlay">
+  <div class="picker">
+    <div class="pickhead">
+      <h2>Load a Bit</h2>
+      <button class="xbtn" id="closeBtn" aria-label="Close">&#10005;</button>
+    </div>
+
+    <div class="pick">
+      <div class="part">&#10022;</div>
+      <h3>Capture <span class="tag">Tool</span></h3>
+      <div class="meta">capture &middot; v0.1 &middot; rooms: TEST &middot; starts: operator &middot; 0 scored &middot; jam open</div>
+      <p class="pdesc">Records labelled sensor telemetry from a real phone</p>
+      <div class="actions"><button class="btn primary small">Load</button></div>
+      <details class="ovr"><summary>Overrides &#9656;</summary></details>
+    </div>
+
+    <div class="pick" style="border-color: var(--gold-deep)">
+      <div class="part">&#10022;</div>
+      <h3>Metronome <span class="tag">R_Game</span> <span class="chip gold" style="font-size:10px; padding:1px 8px">Loaded</span></h3>
+      <div class="meta">metronome &middot; v1.0.0 &middot; rooms: DEMO &middot; starts: 2 players, 120s &middot; 2 scored &middot; no jam</div>
+      <p class="pdesc">Call-and-response rhythm game</p>
+      <div class="actions"><button class="btn primary small">Load</button></div>
+      <details class="ovr" open>
+        <summary>Overrides &#9662;</summary>
+        <div class="form">
+          <label for="ov1">rhythm.bpm</label><input id="ov1" value="80">
+          <label for="ov2">rhythm.cycles</label><input id="ov2" value="4">
+          <label for="ov3">start.min_scored</label><input id="ov3" value="2">
+        </div>
+      </details>
+    </div>
+
+    <div class="pick">
+      <div class="part">&#10022;</div>
+      <h3>Test Bit <span class="tag">Tool</span></h3>
+      <div class="meta">test_bit &middot; v1.0.0 &middot; rooms: TEST, DEMO &middot; starts: immediately &middot; 1 scored &middot; jam open</div>
+      <p class="pdesc">Durable reference/regression fixture: scored player + jam jammer</p>
+      <div class="actions"><button class="btn primary small">Load</button></div>
+      <details class="ovr"><summary>Overrides &#9656;</summary></details>
+    </div>
+
+    <div class="pick err">
+      <h3>bits/broken/bit.toml</h3>
+      <p class="pdesc" style="color:var(--rose)">[launch] room_types: unknown room type "GARDEN"</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================= COMPONENT STATES (reference) ================= -->
+<div class="refstrip">
+  <h2>Component states &mdash; design reference</h2>
+  <p class="note">Not part of the console page. Shows the states the single mocked scene above cannot: phase chips, binding, and refusal feedback.</p>
+
+  <div class="refrow">
+    <span class="reflabel">phase chip states</span>
+    <span class="chip dim">No Bit loaded</span>
+    <span class="chip gold">Loaded</span>
+    <span class="chip sage"><span class="dot"></span>Waiting Room &mdash; registration open</span>
+    <span class="chip sage"><span class="dot"></span>Running</span>
+    <span class="chip gold">Wrapping up</span>
+  </div>
+
+  <div class="refrow">
+    <span class="reflabel">binding states</span>
+    <span class="chip sage">sim-room-array</span>
+    <span class="chip terra">Not bound</span>
+    <button class="btn outline small">Arm</button>
+    <span class="mono dim">window: <input style="width:52px; background:var(--s-lowest); color:var(--ink); border:1.5px solid var(--hair-tan); border-radius:8px; padding:2px 6px; font-family:var(--f-mono)" value="30">s</span>
+    <span class="chip gold"><span class="dot"></span>Armed</span>
+  </div>
+
+  <div class="refrow">
+    <span class="reflabel">confirm + refusal</span>
+    <button class="btn danger small">Confirm abort?</button>
+    <button class="btn primary small errflash">Run</button>
+    <span class="inline-err">run: invalid transition from RUNNING</span>
+  </div>
+
+  <div class="refrow">
+    <span class="reflabel">frames chip states</span>
+    <span class="chip sage"><span class="dot"></span>Live</span>
+    <span class="chip dim">No frames</span>
+  </div>
+</div>
+
+<script>
+// LED array: one row of 144 DISCRETE dots per physical block (m1..m6),
+// so a single dead LED is findable by eye. Two dead pixels are demoed in
+// m4 (global 470 and 505) rendering as dark sockets, not gaps.
+const PIX_PER_BLOCK = 144, TOTAL = 864;
+const DEAD = new Set([470, 505]);
+const strips = [...document.querySelectorAll("#ledArray .strip")];
+const dpr = window.devicePixelRatio || 1;
+let t = 0;
+function size() {
+  for (const cv of strips) {
+    const w = cv.clientWidth, h = cv.clientHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+  }
+}
+function paint() {
+  for (const cv of strips) {
+    const cx = cv.getContext("2d");
+    const block = +cv.dataset.block;
+    const w = cv.width, h = cv.height;
+    cx.clearRect(0, 0, w, h);
+    const pitch = w / PIX_PER_BLOCK;
+    const r = Math.min(h / 2, pitch / 2 * 0.72);
+    for (let i = 0; i < PIX_PER_BLOCK; i++) {
+      const g = block * PIX_PER_BLOCK + i;           // global pixel index
+      const cxp = pitch * (i + 0.5), cyp = h / 2;
+      if (DEAD.has(g)) {                             // dead socket: dark ring
+        cx.strokeStyle = "rgba(255,219,204,0.25)";
+        cx.lineWidth = dpr;
+        cx.beginPath(); cx.arc(cxp, cyp, r * 0.8, 0, 6.283); cx.stroke();
+        continue;
+      }
+      const hue = ((g / TOTAL) * 0.6 + t * 0.03) % 1;
+      const v = 46 + 22 * Math.sin(t * 1.2 + (g / TOTAL) * 6.283);
+      cx.fillStyle = `hsl(${hue * 360} 78% ${Math.max(16, v)}%)`;
+      cx.beginPath(); cx.arc(cxp, cyp, r, 0, 6.283); cx.fill();
+    }
+  }
+}
+size(); paint();
+addEventListener("resize", () => { size(); paint(); });
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  setInterval(() => { t += 0.1; paint(); }, 100);
+}
+
+// Script expanders
+for (const b of document.querySelectorAll(".expander")) {
+  b.onclick = () => {
+    const s = document.getElementById(b.dataset.target);
+    const open = s.classList.toggle("open");
+    b.setAttribute("aria-expanded", open);
+    b.childNodes[1].textContent = open ? "Hide script" : "Show script";
+  };
+}
+
+// Load picker
+const ov = document.getElementById("overlay");
+document.getElementById("loadBtn").onclick = () => ov.classList.add("open");
+document.getElementById("closeBtn").onclick = () => ov.classList.remove("open");
+ov.onclick = (e) => { if (e.target === ov) ov.classList.remove("open"); };
+addEventListener("keydown", (e) => { if (e.key === "Escape") ov.classList.remove("open"); });
+</script>
+</body>
+</html>

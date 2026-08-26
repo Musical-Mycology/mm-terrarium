@@ -136,6 +136,39 @@ class BitRegistry:
         return merge_overrides(pkg.config, overrides,
                                 source=str(pkg.path / "bit.toml"))
 
+    def _role_summary(self, name: str, config) -> dict | None:
+        """Best-effort scored/jam summary for the Load picker. Instantiates
+        the Bit class (first console connect pays the import); any failure
+        yields None rather than breaking discovery -- a broken Bit already
+        fails loudly at load_bit. ROOM-class roles are never counted: they
+        bind a fixture's rendering backend, not a player."""
+        from control.roles import RoleClass
+        try:
+            bit = self.bit_class(name)(config=config)
+            table = bit.role_table
+        except Exception:
+            return None
+        scored = 0
+        shared_open = False
+        jam_open = False
+        for role in table.roles.values():
+            if role.role_class == RoleClass.ROOM:
+                continue                     # never leak the Room role
+            if role.role_class == RoleClass.JAM:
+                jam_open = True
+                continue
+            if not role.scored:
+                continue
+            if role.capacity is None:
+                # Unbounded scored capacity (SHARED): count as one open
+                # slot rather than an unknowable total.
+                scored += 1
+                if role.role_class == RoleClass.SHARED:
+                    shared_open = True
+            else:
+                scored += role.capacity
+        return {"scored": scored, "shared_open": shared_open, "jam_open": jam_open}
+
     def list_view(self, *, include_hidden: bool = True) -> list[dict]:
         rows = []
         for name in sorted(self.packages):
@@ -158,6 +191,7 @@ class BitRegistry:
                     "on_timeout": config.start.on_timeout,
                 },
                 "notes": config.console.notes,
+                "roles": self._role_summary(name, config),
             })
         return rows
 

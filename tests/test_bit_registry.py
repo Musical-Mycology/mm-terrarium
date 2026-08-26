@@ -98,3 +98,33 @@ def test_real_bits_tree_discovers_cleanly():
     reg = BitRegistry.discover()
     assert reg.errors == []
     assert {"TestBit", "MetronomeBit", "CaptureBit"} <= set(reg.packages)
+
+
+class _RaisingBit:
+    """Constructor raises: list_view must degrade to roles=None, never
+    propagate."""
+    def __init__(self, config=None):
+        raise RuntimeError("boom")
+
+
+def test_list_view_carries_a_role_summary_for_testbit():
+    registry = BitRegistry.discover()
+    row = next(r for r in registry.list_view() if r["name"] == "TestBit")
+    # TestBit: scored SHARED 'player' (capacity=None, unbounded -- counts as
+    # 1 open scored slot) + unscored JAM 'jammer' (+ hidden ROOM roles, which
+    # must NOT be counted).
+    assert row["roles"] == {"scored": 1, "shared_open": True, "jam_open": True}
+
+
+def test_list_view_role_summary_counts_unique_capacity():
+    registry = BitRegistry.discover()
+    row = next(r for r in registry.list_view() if r["name"] == "MetronomeBit")
+    # MetronomeBit: one UNIQUE scored role, capacity 2, no jam.
+    assert row["roles"] == {"scored": 2, "shared_open": False, "jam_open": False}
+
+
+def test_list_view_role_summary_is_none_when_the_bit_raises(monkeypatch):
+    registry = BitRegistry.discover()
+    monkeypatch.setattr(registry, "bit_class", lambda name: _RaisingBit)
+    for row in registry.list_view():
+        assert row["roles"] is None

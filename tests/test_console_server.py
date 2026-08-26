@@ -25,6 +25,18 @@ def test_get_root_serves_index_html():
         server.stop()
 
 
+def test_get_font_serves_from_fonts_subdirectory():
+    server = ConsoleServer(port=0)
+    server.start()
+    try:
+        resp = urlopen(
+            f"http://127.0.0.1:{server.port}/fonts/JetBrainsMono-Regular.ttf")
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "font/ttf"
+    finally:
+        server.stop()
+
+
 def test_client_gets_snapshot_and_command_round_trips():
     gs = GameServer({"TestBit": TestBit})
     server = ConsoleServer(port=0)
@@ -82,9 +94,9 @@ def test_css_and_js_are_served_with_their_own_content_types():
     server.start()
     try:
         base = f"http://127.0.0.1:{server.port}"
-        with urllib.request.urlopen(f"{base}/style.css") as r:
+        with urllib.request.urlopen(f"{base}/terrarium.css") as r:
             assert r.headers["Content-Type"].startswith("text/css")
-        with urllib.request.urlopen(f"{base}/console.js") as r:
+        with urllib.request.urlopen(f"{base}/shell.js") as r:
             assert r.headers["Content-Type"].startswith("text/javascript")
     finally:
         server.stop()
