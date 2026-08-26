@@ -190,9 +190,24 @@ def test_main_sends_canvas_immediately_after_every_hello():
                 assert i + 1 < len(stmts), (
                     "a client.hello() send has no following statement to "
                     "carry the canvas send")
-                assert _client_method_calls(stmts[i + 1], "canvas"), (
+                canvas_calls = _client_method_calls(stmts[i + 1], "canvas")
+                assert canvas_calls, (
                     "a client.hello() send must be immediately followed "
                     "by a client.canvas(...) send")
+                # Pin the canvas call's own argument, not just its
+                # presence: a regression sending client.canvas() with a
+                # hardcoded string, the wrong variable, or no argument at
+                # all would still pass a presence-only check.
+                (canvas_call,) = canvas_calls
+                assert len(canvas_call.args) == 1, (
+                    f"expected client.canvas(canvas_url) with exactly one "
+                    f"positional arg, found {len(canvas_call.args)}")
+                (url_arg,) = canvas_call.args
+                assert isinstance(url_arg, ast.Name) and \
+                    url_arg.id == "canvas_url", (
+                    "client.canvas(...)'s argument must be the computed "
+                    "canvas_url name, not a literal or a different "
+                    "expression")
                 hello_canvas_pairs += 1
 
     assert hello_canvas_pairs >= 2, (

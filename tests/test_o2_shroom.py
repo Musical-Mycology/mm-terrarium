@@ -500,12 +500,44 @@ def test_main_follows_every_hello_send_with_a_canvas_send():
             return None
         return node.args[0].value
 
+    helper_send_cmd_calls = [
+        node for node in ast.walk(send_hello_def)
+        if _send_cmd_address(node) is not None]
     helper_addresses = [
-        _send_cmd_address(node) for node in ast.walk(send_hello_def)]
-    helper_addresses = [a for a in helper_addresses if a is not None]
+        _send_cmd_address(node) for node in helper_send_cmd_calls]
     assert helper_addresses == ["/game/hello", "/game/canvas"], (
         f"send_hello() must send /game/hello then /game/canvas, found "
         f"{helper_addresses}")
+
+    # Pin the canvas call's own arguments, not just its address: a
+    # regression sending /game/canvas with the wrong typespec, the wrong
+    # dev, or a hardcoded string instead of the computed canvas_url would
+    # still pass the address-only check above.
+    canvas_call = helper_send_cmd_calls[1]
+
+    def _is_args_dev(node):
+        return (isinstance(node, ast.Attribute) and node.attr == "dev"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "args")
+
+    def _is_canvas_url_name(node):
+        return isinstance(node, ast.Name) and node.id == "canvas_url"
+
+    assert len(canvas_call.args) == 5, (
+        f"expected send_cmd(\"/game/canvas\", 0, \"ss\", args.dev, "
+        f"canvas_url), found {len(canvas_call.args)} positional args")
+    address_arg, seq_arg, typespec_arg, dev_arg, url_arg = canvas_call.args
+    assert isinstance(seq_arg, ast.Constant) and seq_arg.value == 0, (
+        "the canvas send_cmd's sequence-number arg must be the literal 0")
+    assert isinstance(typespec_arg, ast.Constant) and \
+        typespec_arg.value == "ss", (
+        "the canvas send_cmd's typespec must be the literal \"ss\"")
+    assert _is_args_dev(dev_arg), (
+        "the canvas send_cmd's dev arg must be args.dev, not a different "
+        "expression")
+    assert _is_canvas_url_name(url_arg), (
+        "the canvas send_cmd's url arg must be the computed canvas_url "
+        "name, not a literal or a different expression")
 
     helper_node_ids = {id(n) for n in ast.walk(send_hello_def)}
     bare_hello_calls = [
