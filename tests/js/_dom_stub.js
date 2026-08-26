@@ -16,9 +16,36 @@
 // as a side effect of being required, so every panel test just needs
 // `const { byId, FakeSocket } = require("./_dom_stub.js");` before
 // importing the module under test.
+//
+// getElementById fidelity: reassigning .id, and removing a node via
+// removeChild/remove/`node.textContent = ""`, unregisters the node's old
+// byId entries, so a stale or detached id stops resolving -- matching real
+// getElementById, which only finds nodes attached to the live tree.
+// Residual gap: document.getElementById auto-vivifies (and permanently
+// registers) an empty placeholder div for any id it has not seen yet, so
+// probing an id nothing ever rendered silently succeeds instead of
+// returning null the way a real DOM would. Don't lean on that null-check
+// behavior in a new test; assert on the rendered node's shape instead.
 
 function escapeText(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Drops byId's mapping for `node` and everything under it, but only where
+// the entry still points at that exact node -- a later reassignment of the
+// same id to a different node (or a fallback placeholder document.getElementById
+// minted for a not-yet-rendered id) must not be clobbered by an unrelated
+// removal.
+// Called from genuine removal paths (removeChild/remove, and the
+// textContent="" clear the panels use to empty a mount) so a detached or
+// stale id can no longer be resolved -- real getElementById only finds
+// nodes attached to the live tree. NOT called from the internal reparent
+// path (_detach, used by appendChild/insertBefore moving a node that is
+// already someone's child), since a same-tick move keeps the node "in the
+// tree" the whole time, same as the real DOM.
+function unregisterIdTree(n) {
+  if (n._id && byId.get(n._id) === n) byId.delete(n._id);
+  for (const c of n.children) unregisterIdTree(c);
 }
 
 function serialize(node) {
@@ -56,15 +83,24 @@ function el(tagName) {
         toggle: (c, v) => (v === undefined ? (s.has(c) ? s.delete(c) : s.add(c)) : (v ? s.add(c) : s.delete(c))),
       };
     })(),
+    // Internal move helper: detaches `child` from its current parent without
+    // unregistering its id(s) -- a reparent within the same tick never makes
+    // the node unresolvable in the real DOM either. Only the public
+    // removeChild/remove (a genuine removal) does that.
+    _detach(child) {
+      node.children = node.children.filter((c) => c !== child);
+      child.parentNode = null;
+      return child;
+    },
     appendChild(child) {
-      if (child.parentNode) child.parentNode.removeChild(child);
+      if (child.parentNode) child.parentNode._detach(child);
       node.children.push(child);
       node._text = "";
       child.parentNode = node;
       return child;
     },
     insertBefore(child, refNode) {
-      if (child.parentNode) child.parentNode.removeChild(child);
+      if (child.parentNode) child.parentNode._detach(child);
       if (refNode) {
         const idx = node.children.indexOf(refNode);
         if (idx === -1) node.children.push(child);
@@ -76,8 +112,8 @@ function el(tagName) {
       return child;
     },
     removeChild(child) {
-      node.children = node.children.filter((c) => c !== child);
-      child.parentNode = null;
+      node._detach(child);
+      unregisterIdTree(child);
       return child;
     },
     remove() {
@@ -90,9 +126,34 @@ function el(tagName) {
     querySelectorAll: () => [],
     getContext: () => ({ clearRect() {}, beginPath() {}, arc() {}, fill() {}, stroke() {}, fillRect() {} }),
   };
+  Object.defineProperty(node, "options", {
+    // Real <select>.options only ever lists <option> children; filtering
+    // matches that instead of assuming a picker's children are all options.
+    get() { return node.children.filter((c) => c.tagName === "option"); },
+  });
+  Object.defineProperty(node, "id", {
+    get() { return node._id || ""; },
+    // Mirrors real DOM: assigning .id makes the node findable by
+    // document.getElementById, same as setting the id attribute. Drop
+    // the old mapping first so a reassigned id can't leave a stale entry
+    // pointing at this node under its previous id.
+    set(v) {
+      if (node._id && byId.get(node._id) === node) byId.delete(node._id);
+      node._id = v;
+      byId.set(v, node);
+    },
+  });
   Object.defineProperty(node, "textContent", {
     get() { return node.children.length ? node.children.map((c) => c.textContent).join("") : node._text; },
-    set(v) { node._text = v == null ? "" : String(v); node.children = []; },
+    // `clear(node)` (node.textContent = "") is how the panels empty a mount
+    // before rebuilding it -- unregister every id under the discarded
+    // subtree so a stale picker/card id can't still resolve via
+    // getElementById after its card was rebuilt.
+    set(v) {
+      for (const c of node.children) unregisterIdTree(c);
+      node._text = v == null ? "" : String(v);
+      node.children = [];
+    },
   });
   Object.defineProperty(node, "innerHTML", {
     get() { return node.children.map(serialize).join("") + (node.children.length ? "" : escapeText(node._text)); },

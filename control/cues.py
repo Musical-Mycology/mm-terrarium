@@ -79,3 +79,29 @@ class FireTrigger:
     """
     name: str
     dev: str | None = None
+
+
+@dataclass(frozen=True)
+class SolidCue:
+    """A solid-color override applied ON TOP of a device's rendered session
+    frame, bypassing instruments entirely -- so it works on every surface,
+    including roles with empty light manifests. Applied Control-side at the
+    frame-building seam (DeviceLinkAgent); nothing on the device wire changes.
+
+    `duration` is seconds from `when`; None means latched until explicitly
+    cleared (the mute blackout). `when=None` follows LightCue's convention:
+    apply at the dispatch-supplied presentation time.
+    """
+    dev: str
+    rgb: tuple[int, int, int]
+    level: float
+    duration: float | None
+    when: float | None = None
+
+
+@dataclass(frozen=True)
+class MuteCue:
+    """Latch a surface dark and silent (the Stop trigger). Distinct type for
+    the same identity-dispatch reason as every cue here. Un-latching is not a
+    cue: any non-mute trigger fired at the surface clears it (engine rule)."""
+    dev: str

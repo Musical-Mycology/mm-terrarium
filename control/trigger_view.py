@@ -11,7 +11,7 @@ list discriminates light from audio.
 
 from __future__ import annotations
 
-from control.cues import PlayCue
+from control.cues import MuteCue, PlayCue, SolidCue
 from control.triggers import SOURCE_WIRE
 
 
@@ -20,6 +20,12 @@ def _step_view(step) -> dict:
     if isinstance(cue, PlayCue):
         return {"offset": float(step.offset), "kind": "play",
                 "dev": cue.dev, "name": cue.name, "params": cue.params}
+    if isinstance(cue, SolidCue):
+        return {"offset": float(step.offset), "kind": "solid", "dev": cue.dev,
+                "rgb": list(cue.rgb), "level": cue.level,
+                "duration": cue.duration}
+    if isinstance(cue, MuteCue):
+        return {"offset": float(step.offset), "kind": "mute", "dev": cue.dev}
     dev, status, data1, data2 = cue
     return {"offset": float(step.offset), "kind": "light", "dev": dev,
             "status": status, "data1": data1, "data2": data2}

@@ -1467,3 +1467,98 @@ def test_on_release_with_no_bridge_calls_drop_dev():
 
     assert "ie1" not in server._devs
     assert agent.canvas_urls() == {}
+
+
+# --- solid-override rendering, expiry, and mute suppression ----------------
+# See docs/superpowers/specs/2026-08-26-trigger-cards-and-surface-triggers-
+# design.md section 2. These exercise the two send seams (_render_frames,
+# _render_room) plus mute suppression at the transport boundary; PlayCue
+# suppression itself is already engine-side (control/engine.py's data()).
+
+def _last_leds_payload(server, dev):
+    frames = [m for d, m in server.sent
+              if d == dev and m["address"] == f"/{dev}/leds"]
+    assert frames, f"no /{dev}/leds frame was sent"
+    return frames[-1]["args"][0]
+
+
+def test_solid_override_replaces_outgoing_frame():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    agent._on_solid_cue(dev, (255, 255, 255), 0.9, 5.0, when=clk())
+    agent.poll()
+    frame = _last_leds_payload(server, dev)
+    assert set(frame) == {round(255 * 0.9)}
+
+
+def test_solid_override_expires_back_to_session():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    agent._on_solid_cue(dev, (255, 255, 255), 0.9, 0.5, when=clk())
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) == {round(255 * 0.9)}
+    clk.advance(1.0)
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) != {round(255 * 0.9)}
+
+
+def test_mute_blackout_is_latched_and_suppresses_cues():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    agent._on_mute_change(dev, True)
+    agent._on_light_cue(dev, 0xB0, 74, 127)     # must be dropped, not raise
+    clk.advance(10.0)
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) == {0}
+
+
+def test_unmute_restores_session_rendering():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    clk.advance(1.0)   # off t=0, or the breath's own value is 0 too
+    agent._on_mute_change(dev, True)
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) == {0}
+    agent._on_mute_change(dev, False)
+    clk.advance(1.0)   # let the resumed breath actually move the frame
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) != {0}
+
+
+def test_mute_purges_a_pending_timed_cue_so_unmute_does_not_replay_it():
+    """A cue queued before the Stop that muted this surface must not still
+    drain into its LightSession under the blackout override -- otherwise
+    un-mute reveals stale mid-script state instead of the session's own
+    idle/breath frame. See docs/superpowers/specs/
+    2026-08-26-trigger-cards-and-surface-triggers-design.md section 4."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+
+    # Beyond the horizon, so it lands on _light_cues rather than feeding now.
+    agent._on_light_cue(dev, 0xB0, 74, 99, when=clk() + agent._horizon + 5.0)
+    assert agent._light_cues.pending() == 1
+
+    agent._on_mute_change(dev, True)
+    assert agent._light_cues.pending() == 0
+
+    clk.advance(agent._horizon + 5.0)
+    agent.poll()
+    agent._on_mute_change(dev, False)
+
+    assert (0xB0, 74, 99) not in seen
+
+
+def test_room_override_covers_every_fixture_slice():
+    gs = _room_ready_game_server(
+        bound={"main": "sim-room-main", "accent": "sim-room-accent"})
+    server = FakeServer()
+    server.bind_dev("sim-room-main", "c-main")
+    server.bind_dev("sim-room-accent", "c-accent")
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge())
+    agent.poll()   # settle the initial render
+
+    canonical = agent._canonical_room_dev()
+    assert canonical == "sim-room-main"
+    agent._on_solid_cue(canonical, (255, 255, 255), 0.9, 5.0,
+                        when=agent._clock())
+    agent.poll()
+
+    for dev in ("sim-room-main", "sim-room-accent"):
+        assert set(_last_leds_payload(server, dev)) == {round(255 * 0.9)}

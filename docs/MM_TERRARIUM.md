@@ -1370,10 +1370,15 @@ now. Design:
   `DEVICE`-target trigger). A `trigger_fired` event updates only that one
   card's status line; the panel does not rebuild on every fire, the same
   discipline the Room panel needed retroactively after its own strip-rebuild
-  defect (see above). `tests/js/trigger_panel_behavior.test.js` asserts this
+  defect (see above). `tests/js/triggers_and_rail.test.js` asserts this
   directly: the card list survives a `trigger_fired` re-render with its
-  children intact.
-- **`TestBit` declares two reference triggers.** `play_aurora`
+  children intact. (This paragraph used to name a
+  `trigger_panel_behavior.test.js` that never existed; the assertion always
+  lived in the file named here.)
+- **`TestBit` declares two reference triggers.** *(Superseded 2026-08-26:
+  four SURFACE-target operator triggers now — see the SolidCue/SURFACE slice
+  below. Read this entry as history of the two-trigger first slice.)*
+  `play_aurora`
   (bit-adjudicated, latched after three full-deflection tilts, targets the
   Room) and `flash_device` (gesture-verb on the existing `tap` handler,
   targets the firing device) -- one per fire source, so both paths are
@@ -2054,6 +2059,51 @@ runs, the same lesson the old `console_full_stack.test.js` existed to teach
 **The one backend addition this rewrite needed:** `control/bit_registry.py`'s
 `list_view()` now includes a best-effort `roles` summary per Bit, so the
 Load picker can show what a Bit will grant without loading it first.
+
+### SolidCue overrides, SURFACE targeting, per-surface mute, and the four operator triggers (2026-08-26)
+The Triggers panel becomes a real operator control surface. Design:
+[`.../2026-08-26-trigger-cards-and-surface-triggers-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-26-trigger-cards-and-surface-triggers-design.md)
+(PR #56). **Live Arco verification is pending** — the spec carries the
+operator checklist; nothing below has been confirmed against real hardware.
+
+- **`SolidCue(dev, rgb, level, duration, when=None)`** (`control/cues.py`) —
+  a solid-color override applied ON TOP of a surface's rendered session
+  frame, bypassing instruments entirely, so it works on roles with empty
+  light manifests. Implemented wholly Control-side at `DeviceLinkAgent`'s
+  two send seams (`_render_frames` per device, `_render_room` on the whole
+  frame before slicing) — **no device-wire change**; devices stay dumb pixel
+  sinks. `duration` seconds from `when`, then the override expires and the
+  session frame force-resends (`_last_frames` invalidated, per-fixture for
+  the Room); `duration=None` latches until cleared.
+- **`MuteCue(dev)` + the per-surface mute latch** — Stop's mechanism.
+  `GameServer.muted: set[str]` (resolved dev ids; the Room by its canonical
+  dev). Muting purges that surface's pending timed cues (new payload-generic
+  `TimedQueue.purge(predicate)` — spec section 4 step 1; the drain also
+  guards on the mute as a second line of defense), silences the Room voice
+  (expression 0, guarded), installs a latched blackout override, and skips
+  breath/light/play cues for the surface. **Any non-mute trigger fire at a
+  muted surface un-mutes it first** — there is no dedicated un-mute control.
+  Mute state rides `devices_changed` (`muted` flag per device row) and
+  clears at UNLOADING.
+- **`TriggerTarget.SURFACE`** — third target kind: the Console card renders
+  a picker listing the Room first (sentinel value `@room`, resolved exactly
+  as ROOM cues are) plus every connected device (muted ones labelled). The
+  fire command reuses `FireTriggerCommand.dev` unchanged.
+- **TestBit now declares four SURFACE triggers** (supersedes the
+  two-trigger entry above): `flash_device` (chime `PlayCue` + 5 s solid
+  white at 90%, then back to ambient), `play_aurora` (script unchanged; the
+  three-tilt latch still fires it at the Room via
+  `FireTrigger("play_aurora", ROOM)`), `stop` (single `MuteCue`), and `win`
+  (new `"win"` sample + a cc:74 flourish). Gotcha: a Room-targeted
+  Flash/Win has **no sound half** — the Room has no local-sample player;
+  per-device Arco audio streaming (`o2audioio`-out) was assessed and
+  deliberately deferred as its own future slice (the upstream ugen is
+  bidirectional, but no device-side receiver exists anywhere in the stack).
+- **Trigger cards compacted to the Instrument form factor** (~3 across,
+  `minmax(215px,1fr)`): `triggers.js` markup reconciled to the 2026-08-25
+  redesign classes — which also fixed a latent `trigrid`→`.triggrid`
+  class-name mismatch that had left the redesign's grid CSS entirely
+  unapplied to this panel.
 
 ## Boundary rules (the load-bearing invariants)
 

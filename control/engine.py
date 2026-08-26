@@ -12,7 +12,7 @@ import logging
 import time
 
 from control.bit import Bit
-from control.cues import ROOM, FireTrigger, LightCue, PlayCue
+from control.cues import ROOM, FireTrigger, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
@@ -75,6 +75,19 @@ class GameServer:
         # Device-local sample cue, as on_play_cue(dev, name, params). Same
         # boundary rule as on_light_cue: set by a transport, never by a Bit.
         self.on_play_cue = None
+        # Device-local solid-color override, as on_solid_cue(dev, rgb, level,
+        # duration, when). Same boundary rule as on_light_cue/on_play_cue:
+        # set by a transport, applied at the frame-building seam, never by a
+        # Bit directly.
+        self.on_solid_cue = None
+        # Called whenever a device's mute latch changes, as
+        # on_mute_change(dev, muted). Set by a transport; the Console reads
+        # `muted` (below) to learn latch state.
+        self.on_mute_change = None
+        # Resolved dev ids currently latched dark/silent by a MuteCue (the
+        # Stop trigger). Cleared per-dev by any non-mute fire at that surface
+        # (see fire_trigger/_clear_mutes) and wholesale on _unload.
+        self.muted: set[str] = set()
         # Observers registered via add_observer(). Each may implement any of
         # on_state_change(old, new), on_registration_change(),
         # on_devices_change(); missing methods are skipped. Both the uplink
@@ -344,12 +357,14 @@ class GameServer:
         """
         if target is TriggerTarget.DEVICE:
             return [dev] if dev else []
+        if target is TriggerTarget.SURFACE and dev != ROOM:
+            return [dev] if dev else []
         room_devs: list[str] = []
         if self.room is not None and self.room.bound:
             profile = room_profile(self.room.room_type)
             room_devs = [self.room.bound[f.name] for f in profile.fixtures
                         if f.name in self.room.bound]
-        if target is TriggerTarget.ROOM:
+        if target in (TriggerTarget.ROOM, TriggerTarget.SURFACE):
             return room_devs
         out = list(room_devs)
         assignments = (self.registration.assignments
@@ -415,13 +430,19 @@ class GameServer:
             trigger = table.triggers.get(name)
             if trigger is None:
                 return f"unknown trigger {name!r}"
-            if trigger.target is TriggerTarget.DEVICE and not dev:
-                return (f"trigger {name!r} targets the firing device; "
-                        f"no device given")
+            if trigger.target in (TriggerTarget.DEVICE,
+                                  TriggerTarget.SURFACE) and not dev:
+                if trigger.target is TriggerTarget.DEVICE:
+                    return (f"trigger {name!r} targets the firing device; "
+                            f"no device given")
+                return (f"trigger {name!r} targets a surface; "
+                        f"no surface given")
             if at is None:
                 at = self._clock() + self._horizon
             devs = self._resolve_target(trigger.target, dev)
             cues = expand_script(trigger, at, self._collapse_room_fanout(devs))
+            if not any(isinstance(c, MuteCue) for c in cues):
+                self._clear_mutes(devs)
         except Exception:
             # trigger_table is a property: load_bit validated whatever it
             # returned on THAT one call, and the validated object is never
@@ -450,6 +471,21 @@ class GameServer:
             steps=len(cues),
         ))
         return None
+
+    def _clear_mutes(self, devs) -> None:
+        """Any non-mute fire at a surface un-latches it (spec section 4)."""
+        cleared_any = False
+        for d in devs:
+            if d in self.muted:
+                self.muted.discard(d)
+                cleared_any = True
+                if self.on_mute_change is not None:
+                    try:
+                        self.on_mute_change(d, False)
+                    except Exception:
+                        logger.exception("on_mute_change failed for %s", d)
+        if cleared_any:
+            self._notify("on_devices_change")
 
     def _dispatch_cues(self, cues, at: float | None,
                        fired_by: str | None = None) -> None:
@@ -485,9 +521,25 @@ class GameServer:
                         logger.warning("Bit fired trigger %r: %s",
                                        cue.name, reason)
                     continue
-                if isinstance(cue, PlayCue):
+                if isinstance(cue, SolidCue):
                     dev = self._resolve_dev(cue.dev)
                     if dev is None:
+                        continue
+                    when = at if cue.when is None else cue.when
+                    sink, args = self.on_solid_cue, (dev, cue.rgb, cue.level,
+                                                     cue.duration, when)
+                elif isinstance(cue, MuteCue):
+                    dev = self._resolve_dev(cue.dev)
+                    if dev is None:
+                        continue
+                    self.muted.add(dev)
+                    self._notify("on_devices_change")
+                    sink, args = self.on_mute_change, (dev, True)
+                elif isinstance(cue, PlayCue):
+                    dev = self._resolve_dev(cue.dev)
+                    if dev is None:
+                        continue
+                    if dev in self.muted:
                         continue
                     sink, args = self.on_play_cue, (dev, cue.name, cue.params)
                 elif isinstance(cue, LightCue):
@@ -562,6 +614,7 @@ class GameServer:
 
     def _unload(self) -> None:
         self._set_state(State.UNLOADING)
+        self._clear_mutes(list(self.muted))
         released = self.registration.release_all()
         if self.on_release:
             for dev in released:
