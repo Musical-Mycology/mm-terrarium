@@ -95,50 +95,63 @@ function firedText(fired) {
   return `${fired.fired_by} → ${where} (${fired.steps} cue${fired.steps === 1 ? "" : "s"})`;
 }
 
-function applyFired(line, fired) {
+function applyFired(card, line, fired) {
   clear(line);
+  card.classList.remove("fired", "fired-admin");
   if (!fired) {
-    line.className = "fired dim";
     line.textContent = "never fired";
     return;
   }
   const isAdmin = fired.fired_by === "admin-manual";
-  line.className = isAdmin ? "fired fired-admin" : "fired fired-bit";
+  card.classList.add(isAdmin ? "fired-admin" : "fired");
   line.appendChild(document.createTextNode(firedText(fired)));
   if (isAdmin) {
     line.appendChild(document.createTextNode(" "));
-    line.appendChild(mk("span", "admintag", "Admin manual"));
+    line.appendChild(mk("span", "admin", "Admin manual"));
   }
 }
 
 function buildCard(trigger) {
   const card = document.createElement("div");
-  card.className = "card trigger";
+  card.className = "trig";
 
   const head = mk("div", "trighead");
   head.appendChild(mk("h3", null, trigger.name));
+  head.appendChild(mk("span", "grow"));
   head.appendChild(mk("span", "chip dim kind", trigger.target));
   card.appendChild(head);
 
-  card.appendChild(mk("p", null, trigger.description));
+  card.appendChild(mk("p", "desc", trigger.description));
 
   const cond = trigger.condition;
   const condText = cond.description + "   (" + cond.source
     + (cond.verb ? ": " + cond.verb : "") + ")";
-  card.appendChild(mk("p", "muted", condText));
+  card.appendChild(mk("p", "cond", condText));
 
-  const scriptDetails = document.createElement("details");
-  scriptDetails.className = "script";
-  const summary = document.createElement("summary");
+  const scriptbar = mk("div", "scriptbar");
   const n = trigger.script.length;
-  summary.textContent = `${n} step${n === 1 ? "" : "s"} · ${maxOffset(trigger.script).toFixed(1)}s`;
-  scriptDetails.appendChild(summary);
-  const steps = mk("div", "steps mono");
+  const expander = mk("button", "expander", null);
+  expander.type = "button";
+  expander.setAttribute("aria-expanded", "false");
+  const tri = mk("span", "tri", "▸");
+  const label = mk("span", "mono",
+    `${n} step${n === 1 ? "" : "s"} · ${maxOffset(trigger.script).toFixed(1)}s`);
+  expander.appendChild(tri);
+  expander.appendChild(label);
+  scriptbar.appendChild(expander);
+  card.appendChild(scriptbar);
+
+  const script = mk("div", "script mono");
   for (const step of trigger.script) {
-    steps.appendChild(mk("div", "step", stepText(step)));
+    script.appendChild(mk("div", "step", stepText(step)));
   }
-  scriptDetails.appendChild(steps);
-  card.appendChild(scriptDetails);
+  card.appendChild(script);
+
+  expander.onclick = () => {
+    const open = !script.classList.contains("open");
+    script.classList.toggle("open", open);
+    expander.setAttribute("aria-expanded", open ? "true" : "false");
+  };
 
   const firerow = mk("div", "firerow");
   let picker = null;
@@ -148,6 +161,7 @@ function buildCard(trigger) {
     firerow.appendChild(picker);
     fillDevicePicker(picker, trigger.target === "SURFACE");
   }
+  firerow.appendChild(mk("span", "grow"));
   const fireBtn = mk("button", "btn solid-gold", "Fire");
   fireBtn.onclick = () => {
     const extra = { name: trigger.name };
@@ -157,8 +171,8 @@ function buildCard(trigger) {
   firerow.appendChild(fireBtn);
   card.appendChild(firerow);
 
-  const firedLine = document.createElement("div");
-  applyFired(firedLine, lastFired[trigger.name]);
+  const firedLine = mk("div", "fired-line");
+  applyFired(card, firedLine, lastFired[trigger.name]);
   card.appendChild(firedLine);
   card._firedLine = firedLine;
 
@@ -176,7 +190,7 @@ function render(list) {
     return;
   }
 
-  const grid = mk("div", "trigrid");
+  const grid = mk("div", "triggrid");
   mount.appendChild(grid);
   currentDeviceTargets = new Map();
   for (const trigger of list) {
@@ -201,7 +215,7 @@ function onTriggerFired(fired) {
   if (!fired || !fired.name) return;
   lastFired[fired.name] = fired;
   const card = cardByName.get(fired.name);
-  if (card && card._firedLine) applyFired(card._firedLine, fired);
+  if (card && card._firedLine) applyFired(card, card._firedLine, fired);
 }
 
 // ---------------------------------------------------------------------- init

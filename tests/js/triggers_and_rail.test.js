@@ -45,6 +45,22 @@ const TRIGGERS = [
   // device picker only on DEVICE targets, offering live devices
   assert.ok(mount.innerHTML.includes("ie1"));
 
+  // redesign markup: grid + card classes reconciled to terrarium.css
+  const grid = mount.children.find((c) => c.className === "triggrid");
+  assert.ok(grid, "expected a .triggrid container");
+  const fireworksCard = triggers._cardFor("fireworks_player");
+  assert.ok(fireworksCard.className.includes("trig"), "card should carry the trig class");
+  assert.ok(fireworksCard.children.some((c) => c.className === "desc"));
+  assert.ok(fireworksCard.children.some((c) => c.className === "cond"));
+  assert.ok(fireworksCard.children.some((c) => c.className === "fired-line"));
+  // collapsed script block toggles via the expander, not a bare <details>
+  const scriptEl = fireworksCard.children.find((c) => c.className.split(" ")[0] === "script");
+  assert.ok(scriptEl && !scriptEl.classList.contains("open"), "script starts collapsed");
+  const scriptbar = fireworksCard.children.find((c) => c.className === "scriptbar");
+  const expander = scriptbar.children.find((c) => c.className === "expander");
+  expander.onclick();
+  assert.ok(scriptEl.classList.contains("open"), "expander opens the script block");
+
   // SURFACE card: picker offers "Room" first, then live devices
   const pickerFor = (name) =>
     triggers._cardFor(name).children.find((c) => c.className === "firerow").children[0];

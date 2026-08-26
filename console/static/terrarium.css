@@ -233,7 +233,7 @@ details.acc > .accbody { margin-top: 10px; }
 .stat .v.plain { color: var(--ink); }
 
 /* ---------- triggers ---------- */
-.triggrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.triggrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 10px; }
 .trig {
   background: var(--s-high); border-radius: 12px; border: 1.5px solid var(--hair);
   border-left: 4px solid var(--hair-tan);
@@ -243,12 +243,13 @@ details.acc > .accbody { margin-top: 10px; }
 .trig.fired-admin { border-left-color: var(--terra); }
 .trig.fired { border-left-color: var(--sage); }
 .trighead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.trighead h3 { font-family: var(--f-disp); font-weight: 400; font-size: 16px; margin: 0; }
+.trighead h3 { font-family: var(--f-disp); font-weight: 400; font-size: 14px; margin: 0; overflow-wrap: anywhere; }
 .trighead .grow { flex: 1; }
-.trig .desc { margin: 0; font-size: 12px; }
+.trig .desc { margin: 0; font-size: 11.5px; }
 .trig .cond { font-size: 11px; color: var(--ink-dim); margin: 0; }
-.trig .firerow { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 4px; }
+.trig .firerow { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 4px; flex-wrap: wrap; }
 .trig .firerow .grow { flex: 1; }
+.trig select { min-width: 0; flex: 1; max-width: 100%; }
 .scriptbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .expander {
   background: none; border: none; color: var(--gold);
