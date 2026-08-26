@@ -445,7 +445,8 @@ def main() -> None:
                             clock=o2lite.time_get)
     backend.open()
     canvas_url = f"http://{args.sim_host}:{backend.port}/"
-    print(f"{markers.BROWSE_URL} Watch the Shroom at "
+    url_marker = markers.ROOM_URL if args.no_join else markers.BROWSE_URL
+    print(f"{url_marker} Watch the Shroom at "
           f"{canvas_url}", flush=True)
 
     def send_hello() -> None:

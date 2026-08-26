@@ -72,6 +72,11 @@ DEVICE_SERVICE_CONFLICT = "FATAL: service"
 # variable number of them per run -- so it lives outside both dicts.
 BROWSE_URL = "BROWSE_URL:"
 
+# A line carrying a URL worth knowing but NOT worth an automatic browser
+# tab: a Room fixture canvas, opened on demand from the Console's Room
+# card instead. run_stack collects and echoes these, never opens them.
+ROOM_URL = "ROOM_URL:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,

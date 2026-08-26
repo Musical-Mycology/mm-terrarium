@@ -146,7 +146,7 @@ def main() -> None:
                             room_type=args.room_type, fixture=args.fixture)
     backend.open()
     canvas_url = f"http://{args.sim_host}:{backend.port}/"
-    print(f"{markers.BROWSE_URL} Watch the Room at "
+    print(f"{markers.ROOM_URL} Watch the Room at "
           f"{canvas_url}", flush=True)
 
     if args.identify_blocks:
