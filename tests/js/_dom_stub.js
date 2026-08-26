@@ -90,6 +90,15 @@ function el(tagName) {
     querySelectorAll: () => [],
     getContext: () => ({ clearRect() {}, beginPath() {}, arc() {}, fill() {}, stroke() {}, fillRect() {} }),
   };
+  Object.defineProperty(node, "options", {
+    get() { return node.children; },
+  });
+  Object.defineProperty(node, "id", {
+    get() { return node._id || ""; },
+    // Mirrors real DOM: assigning .id makes the node findable by
+    // document.getElementById, same as setting the id attribute.
+    set(v) { node._id = v; byId.set(v, node); },
+  });
   Object.defineProperty(node, "textContent", {
     get() { return node.children.length ? node.children.map((c) => c.textContent).join("") : node._text; },
     set(v) { node._text = v == null ? "" : String(v); node.children = []; },

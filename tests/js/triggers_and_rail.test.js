@@ -12,6 +12,10 @@ const TRIGGERS = [
     condition: { name: "run_complete", description: "All cycles finished",
                  source: "bit-adjudicated", verb: null },
     script: [{ offset: 0.0, kind: "play", dev: "@target", name: "sweep", params: {} }] },
+  { name: "flash_device", description: "Operator-chosen flash", target: "SURFACE",
+    condition: { name: "admin_fire", description: "Fired by an operator",
+                 source: "admin-manual", verb: null },
+    script: [{ offset: 0.0, kind: "light", dev: "@target", status: 176, data1: 70, data2: 81 }] },
 ];
 
 (async () => {
@@ -41,10 +45,28 @@ const TRIGGERS = [
   // device picker only on DEVICE targets, offering live devices
   assert.ok(mount.innerHTML.includes("ie1"));
 
+  // SURFACE card: picker offers "Room" first, then live devices
+  const pickerFor = (name) =>
+    triggers._cardFor(name).children.find((c) => c.className === "firerow").children[0];
+  const surfacePicker = pickerFor("flash_device");
+  assert.strictEqual(surfacePicker.options[0].value, "@room");
+  assert.strictEqual(surfacePicker.options[0].textContent, "Room");
+  assert.deepStrictEqual(
+    [...surfacePicker.options].map((o) => o.value), ["@room", "ie1", "sim-room"]);
+
   // a repeat triggers_changed with identical content must not rebuild (rule 1)
   const before = triggers._cardFor("fireworks_player");
   send({ event: "triggers_changed", triggers: TRIGGERS });
   assert.strictEqual(triggers._cardFor("fireworks_player"), before);
+
+  // devices_changed refreshes SURFACE pickers in place, without rebuilding cards
+  const surfaceCardBefore = triggers._cardFor("flash_device");
+  send({ event: "devices_changed",
+         devices: [{ dev: "ie1", name: "Tuneshroom 1", role: "player", muted: true }] });
+  assert.strictEqual(triggers._cardFor("flash_device"), surfaceCardBefore);
+  const refreshedPicker = pickerFor("flash_device");
+  assert.strictEqual(refreshedPicker.options[0].value, "@room");
+  assert.strictEqual(refreshedPicker.options[1].textContent, "ie1 (muted)");
 
   // trigger_fired updates the one line, tags admin-manual
   send({ event: "trigger_fired", fired: { name: "finale", fired_by: "admin-manual",
