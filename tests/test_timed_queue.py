@@ -94,6 +94,23 @@ def test_an_undeclared_time_contributes_no_lateness_sample():
     assert list(q.lateness) == []
 
 
+def test_purge_removes_only_payloads_matching_the_predicate():
+    """A mute must cancel one device's pending cues without disturbing
+    anyone else's -- see devicelink/agent.py's _on_mute_change."""
+    q = TimedQueue()
+    q.push(10.0, ("devA", "cue1"), now=0.0)
+    q.push(20.0, ("devB", "cue2"), now=0.0)
+    q.push(30.0, ("devA", "cue3"), now=0.0)
+    q.purge(lambda payload: payload[0] == "devA")
+    assert q.due(100.0) == [("devB", "cue2")]
+
+
+def test_purge_on_an_empty_queue_does_nothing():
+    q = TimedQueue()
+    q.purge(lambda payload: True)     # must not raise
+    assert q.due(0.0) == []
+
+
 def test_lateness_is_bounded_so_a_long_installation_cannot_leak():
     """This runs on a Radxa for as long as the room is up."""
     from control.timed_queue import _MAX_LATENESS_SAMPLES

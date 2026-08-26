@@ -348,7 +348,18 @@ class DeviceLinkAgent:
             self._muted.add(dev)
             self._overrides[dev] = ((0, 0, 0), 0.0, None)
             self._last_frames.pop(dev, None)
+            # Drop cues already queued for this dev -- otherwise they drain
+            # into the LightSession under the blackout override while
+            # muted, and un-mute reveals stale mid-script state instead of
+            # the session's own idle/breath frame. _drain_light_cues also
+            # guards on self._muted as a second line of defense, but the
+            # purge here is what keeps the queue itself from growing stale.
+            self._light_cues.purge(lambda payload: payload[0] == dev)
             if dev == self._canonical_room_dev() and self._room_bridge is not None:
+                # The Room mutes by its canonical dev, and _room_cues holds
+                # only Room audio tuples -- purge it outright rather than by
+                # predicate.
+                self._room_cues.purge(lambda payload: True)
                 try:
                     self._room_bridge.feed_audio(0xB0, 11, 0)
                 except Exception:
@@ -776,8 +787,15 @@ class DeviceLinkAgent:
             self._pending_at[dev] = at
 
     def _drain_light_cues(self) -> None:
-        """Release deferred light-session feeds whose moment has come."""
+        """Release deferred light-session feeds whose moment has come.
+
+        `dev in self._muted` is a second line of defense: _on_mute_change
+        already purges this dev's pending cues when the mute lands, but a
+        cue that arrives (or a mute that lands) between purge and drain
+        must not feed a muted session either."""
         for (dev, status, d1, d2, at) in self._light_cues.due(self._clock()):
+            if dev in self._muted:
+                continue
             self._feed_light_now(dev, status, d1, d2, at)
 
     def _on_light_cue(self, dev: str, status: int,
