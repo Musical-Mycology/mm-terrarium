@@ -1164,6 +1164,12 @@ prevented the ordering from disagreeing with itself again, and it had.
   one labelled line each, in the success summary. The Room simulators'
   URLs arrive on Control's own tee because `SimulatorProcess` spawns them
   with inherited stdout; each player device's URL arrives on its own tee.
+  **Room fixture canvases are never opened, under `--open` or otherwise**:
+  they arrive as `ROOM_URL` lines, not `BROWSE_URL`, so `--open` only ever
+  auto-opens the Console and each simulated device; a Room surface is
+  echoed in the summary as `room surface (open from the Console): <url>`
+  and reached from the Room card's own pop-out links instead, one per
+  bound fixture.
 
   That second condition is worth stating separately because its absence was
   the one real correctness gap the whole-branch review found. `_hold()`
@@ -1212,7 +1218,11 @@ prevented the ordering from disagreeing with itself again, and it had.
   tab; it is collected rather than waited on (a run has a variable number
   of them), so it lives outside both marker dicts, emitted by
   `terrarium_boot`, `room_simulator`, and `o2_shroom` and pinned to all
-  three emit sites by `tests/test_markers.py`.
+  three emit sites by `tests/test_markers.py`. `ROOM_URL` is the sibling
+  marker for a URL worth knowing but not worth an automatic tab: a Room
+  fixture canvas, reached from the Console's Room card instead. `run_stack`
+  collects and echoes `ROOM_URL` lines the same way, but never hands them to
+  the opener.
 - **`harness/signals.py`** -- one copy of the SIGTERM-skips-`finally`
   gotcha: Python's `finally` blocks do not run on a bare SIGTERM, so a
   process whose cleanup (an exit report, a `WebSimBackend.close()`) lives in
@@ -1984,7 +1994,16 @@ against.
   dot-row per physical block (never DOM nodes per pixel), the zone bar, each
   fixture's binding controls (chip + Release/Arm, also on `confirmTap`), and
   the Instruments accordion. Exports `buildInstrumentCard`, reused by
-  `rail.js`. The file's own header comment states the rule its render path
+  `rail.js`. Each bound fixture also gets a pop-out link (a plain `<a
+  target="_blank" rel="noopener">`), one per fixture, sourced from the
+  `/game/canvas` messages the Console has collected keyed by device; a
+  fixture with no reported canvas URL gets no link. The URL a device reports
+  travels the `["ss", [dev, url]]` `/game/canvas` message and is validated at
+  the decode boundary in `devicelink/protocol.py`'s `parse_canvas_url`,
+  which enforces the `http://`/`https://` scheme allowlist so a hostile
+  device cannot plant a `javascript:` link in an operator's browser.
+
+  The file's own header comment states the rule its render path
   is built around: **a controllers-only `room_changed` must repaint nothing
   but live lane values** — no DOM subtree with node-identity-dependent state
   may be rebuilt just because a live CC value ticked. Fixtures, their
