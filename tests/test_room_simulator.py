@@ -133,3 +133,84 @@ def test_main_has_a_heartbeat_interval_flag_wired_to_a_pump():
         if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
     ]
     assert "pump_heartbeat" in gathered_names
+
+
+def test_main_sends_canvas_immediately_after_every_hello():
+    """The rule under test for this task: wherever client.hello() is sent
+    over the websocket, client.canvas(canvas_url) must be sent right
+    after, so a Control restart -- which re-hellos this Room via the
+    heartbeat -- re-learns its canvas URL too. Same source-inspection
+    technique as test_main_has_a_heartbeat_interval_flag_wired_to_a_pump,
+    for the same reason: main() opens a real websocket connection and
+    can't be run in this offline suite.
+
+    Walks every statement list in main() for an `await
+    ws.send(json.dumps(client.hello()))` statement and asserts the very
+    next statement in the same block is the matching canvas send. There
+    must be at least two such pairs: the connect-time hello and the
+    heartbeat resend."""
+    import ast
+    import inspect
+
+    import harness.room_simulator
+
+    source = inspect.getsource(harness.room_simulator)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    def _client_method_calls(stmt, method):
+        return [
+            node for node in ast.walk(stmt)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == method
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "client"
+        ]
+
+    def _stmt_lists(node):
+        for field in ("body", "orelse", "finalbody"):
+            value = getattr(node, field, None)
+            if isinstance(value, list):
+                yield value
+
+    hello_canvas_pairs = 0
+    for node in ast.walk(main):
+        for stmts in _stmt_lists(node):
+            for i, stmt in enumerate(stmts):
+                # Only direct expression statements -- not e.g. a whole
+                # nested FunctionDef, which ast.walk(stmt) would otherwise
+                # search into, matching a hello() call buried arbitrarily
+                # deep inside an unrelated sibling def.
+                if not isinstance(stmt, ast.Expr):
+                    continue
+                if not _client_method_calls(stmt, "hello"):
+                    continue
+                assert i + 1 < len(stmts), (
+                    "a client.hello() send has no following statement to "
+                    "carry the canvas send")
+                canvas_calls = _client_method_calls(stmts[i + 1], "canvas")
+                assert canvas_calls, (
+                    "a client.hello() send must be immediately followed "
+                    "by a client.canvas(...) send")
+                # Pin the canvas call's own argument, not just its
+                # presence: a regression sending client.canvas() with a
+                # hardcoded string, the wrong variable, or no argument at
+                # all would still pass a presence-only check.
+                (canvas_call,) = canvas_calls
+                assert len(canvas_call.args) == 1, (
+                    f"expected client.canvas(canvas_url) with exactly one "
+                    f"positional arg, found {len(canvas_call.args)}")
+                (url_arg,) = canvas_call.args
+                assert isinstance(url_arg, ast.Name) and \
+                    url_arg.id == "canvas_url", (
+                    "client.canvas(...)'s argument must be the computed "
+                    "canvas_url name, not a literal or a different "
+                    "expression")
+                hello_canvas_pairs += 1
+
+    assert hello_canvas_pairs >= 2, (
+        f"expected at least 2 hello-then-canvas send pairs in main() "
+        f"(the connect-time send and the heartbeat resend), found "
+        f"{hello_canvas_pairs}")

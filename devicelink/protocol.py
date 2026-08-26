@@ -71,6 +71,26 @@ def parse_game_address(address: str) -> str | None:
     return verb or None
 
 
+# Schemes a device-reported canvas URL may carry. The URL becomes a link
+# in the operator's admin panel, so this is enforced at the decode
+# boundary (same reasoning as the capture-label restriction below): a
+# hostile device must not be able to plant a javascript: link.
+CANVAS_SCHEMES = ("http://", "https://")
+
+
+def parse_canvas_url(args: list) -> str:
+    """Validate a /game/canvas message's args ([dev, url]) and return the
+    URL. Raises ValueError on anything malformed; callers treat that as
+    'refuse and log', never as an engine error."""
+    if len(args) < 2 or not isinstance(args[1], str):
+        raise ValueError("canvas needs a string url argument")
+    url = args[1]
+    if not url.startswith(CANVAS_SCHEMES):
+        raise ValueError(f"canvas url must start with one of "
+                         f"{CANVAS_SCHEMES}, got {url!r}")
+    return url
+
+
 def _event(address: str, typespec: str, args: list,
            timestamp: float = 0.0) -> dict:
     return encode(Envelope(timestamp=timestamp, address=address,

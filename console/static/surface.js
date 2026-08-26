@@ -164,6 +164,14 @@ function bindingControls(fixture) {
     armedFixtures.delete(fixture.name);
     const chip = mk("span", "chip sage", fixture.dev);
     wrap.appendChild(chip);
+    if (fixture.url) {
+      const popout = mk("a", "popout", "↗");
+      popout.href = fixture.url;
+      popout.target = "_blank";
+      popout.rel = "noopener";
+      popout.title = `Open ${fixture.name} surface`;
+      wrap.appendChild(popout);
+    }
     const releaseBtn = mk("button", "btn outline small", "Release");
     releaseBtn.onclick = () => {
       wire.confirmTap(releaseBtn, { armLabel: "Confirm release?" }, () => {
@@ -259,7 +267,7 @@ function buildFixture(fixture) {
 // in-progress confirm-tap arm state (wire.confirmTap keys its timer/armed
 // flag off the specific button element).
 function bindStateKey(fixture) {
-  if (fixture.dev) return `dev:${fixture.dev}`;
+  if (fixture.dev) return `dev:${fixture.dev}:${fixture.url || ""}`;
   if (armedFixtures.has(fixture.name)) return "armed";
   return "unbound";
 }

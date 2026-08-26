@@ -993,7 +993,8 @@ def main() -> None:
             # for the two-clocks bug this guards against.
             console_agent = ConsoleAgent(gs, console_server,
                                          room_bridge=agent.room_bridge,
-                                         clock=clock, registry=registry)
+                                         clock=clock, registry=registry,
+                                         canvas_urls=agent.canvas_urls)
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)

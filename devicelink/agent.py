@@ -110,6 +110,11 @@ class DeviceLinkAgent:
         self.bridges: dict[str, DeviceBridge] = {}
         self._universes: dict[str, Universe] = {}
         self._last_frames: dict[str, bytes] = {}
+        # dev -> the URL of that device's own browser canvas, reported by
+        # /game/canvas (simulators only; hardware and phones never send
+        # it). No persistence: an ephemeral port is stale the moment its
+        # process dies. Read by the Console through canvas_urls().
+        self._canvas_urls: dict[str, str] = {}
         # dev -> render-attempt count, for devices released but still being
         # driven through their closing fade. Presence in this dict, not in
         # self.bridges, is the source of truth for "closing" (a device can
@@ -471,8 +476,33 @@ class DeviceLinkAgent:
             self._on_hello(client, dev, env.args)
         elif verb == "join":
             self._on_join(client, dev, env.args)
+        elif verb == "canvas":
+            self._on_canvas(dev, env.args)
         else:
             self._on_verb(dev, verb, env.args, env.timestamp)
+
+    def _on_canvas(self, dev: str, args: list) -> None:
+        try:
+            url = protocol.parse_canvas_url(args)
+        except ValueError as exc:
+            logger.warning("refusing canvas url from %s: %s", dev, exc)
+            return
+        if self._canvas_urls.get(dev) == url:
+            return
+        self._canvas_urls[dev] = url
+        # hello's own devices_changed broadcast already went out with this
+        # dev's url still null, since canvas always arrives after hello --
+        # nothing else re-fires devices_changed for a non-fixture dev, so
+        # Console tabs would otherwise show url null until an unrelated
+        # device event. Room-fixture devs need no poke: poll()'s room diff
+        # already covers them. GameServer exposes no public single-event
+        # notify, only add_observer for registration, so this reaches into
+        # its private _notify -- see control/engine.py's add_observer.
+        self.game_server._notify("on_devices_change")
+
+    def canvas_urls(self) -> dict:
+        """A copy of the live dev -> canvas-url map, for the Console."""
+        return dict(self._canvas_urls)
 
     def _on_hello(self, client, dev: str, args: list) -> None:
         name = args[1] if len(args) > 1 else ""
@@ -581,6 +611,7 @@ class DeviceLinkAgent:
             except Exception:
                 logger.exception("release notify for %s failed", dev)
             self.server.drop_dev(dev)
+            self._canvas_urls.pop(dev, None)
             return
         try:
             bridge.on_release(dev)   # -> session.clear(): enqueues the fade
@@ -618,6 +649,7 @@ class DeviceLinkAgent:
         self._last_frames.pop(dev, None)
         self._closing.pop(dev, None)
         self._last_breath.pop(dev, None)
+        self._canvas_urls.pop(dev, None)
         # Send BEFORE drop_dev, same reasoning as _on_release's no-bridge
         # branch above: dropping the connection mapping first would make
         # this very send a silent no-op.

@@ -730,6 +730,72 @@ def test_a_marker_line_without_a_url_is_ignored_not_crashed(tmp_path):
     assert result.urls == []
 
 
+_CONTROL_OK_WITH_ROOM_URL = (
+    f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
+    f"{markers.BROWSE_URL} Terrarium Console at http://127.0.0.1:8901/\n"
+    f"{markers.ROOM_URL} Watch the Room at http://127.0.0.1:8902/\n"
+    f"{markers.CONTROL_SETUP_HOLD} for 20s\n")
+
+
+def test_room_url_is_collected_but_the_opener_is_never_called_without_open(
+        tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK_WITH_ROOM_URL, _DEVICE_OK])
+    opened = []
+    result = run(_cfg(tmp_path), popen=popen, sleep=lambda _s: None,
+                 opener=opened.append)
+
+    assert result.ok is True
+    assert result.room_urls == ["http://127.0.0.1:8902/"]
+    assert result.urls == ["http://127.0.0.1:8901/"]
+    assert opened == []
+
+
+def test_room_url_is_collected_but_the_opener_is_never_called_with_open(
+        tmp_path):
+    """Under --open (open_urls=True), BROWSE_URL lines are still opened,
+    but a ROOM_URL line is collected for the summary and never handed to
+    the opener -- the whole point of splitting the marker."""
+    popen = ScriptedPopen([_CONTROL_OK_WITH_ROOM_URL, _DEVICE_OK])
+    opened = []
+    result = run(_cfg(tmp_path, open_urls=True), popen=popen,
+                 sleep=lambda _s: None, opener=opened.append)
+
+    assert result.ok is True
+    assert result.room_urls == ["http://127.0.0.1:8902/"]
+    assert opened == ["http://127.0.0.1:8901/"]
+
+
+def test_success_summary_labels_browse_and_room_urls_distinctly(
+        tmp_path, capsys, monkeypatch):
+    """main()'s success summary echoes BROWSE_URL results under the
+    existing 'browser surface' label and ROOM_URL results under the new
+    'room surface (open from the Console)' label, so the Room URL is
+    still visible from the terminal even though run_stack never opens
+    it."""
+    import harness.run_stack as run_stack_module
+    import sys as _sys
+    from harness.run_stack import RunResult
+
+    fake_result = RunResult(
+        True, "complete", "", {}, ["http://127.0.0.1:8901/"],
+        ["http://127.0.0.1:8902/"])
+    monkeypatch.setattr(run_stack_module, "run", lambda cfg: fake_result)
+    monkeypatch.setattr(run_stack_module, "ensure_o2litepy", lambda: True)
+
+    argv = ["run_stack.py", "--log-dir", str(tmp_path)]
+    old_argv = _sys.argv
+    _sys.argv = argv
+    try:
+        run_stack_module.main()
+    finally:
+        _sys.argv = old_argv
+
+    out = capsys.readouterr().out
+    assert "browser surface: http://127.0.0.1:8901/" in out
+    assert ("room surface (open from the Console): "
+            "http://127.0.0.1:8902/") in out
+
+
 def test_open_flag_sets_open_urls_and_implies_a_console():
     """--open with no --console-port asks for port 0: ConsoleServer binds
     an ephemeral port and terrarium_boot prints the real URL, so the

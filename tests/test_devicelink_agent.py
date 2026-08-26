@@ -301,6 +301,94 @@ def test_release_sends_release_and_clears_the_bridge():
     assert "ie1" not in agent.bridges
 
 
+def test_hello_then_canvas_is_stored(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+
+
+def test_bad_scheme_canvas_url_is_refused_not_stored(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "javascript:x"])
+    agent.poll()
+    assert agent.canvas_urls() == {}
+
+
+def test_canvas_urls_returns_a_copy(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    agent.canvas_urls().clear()
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+
+
+class _RecordingObserver:
+    """Records every on_devices_change() call -- see control/engine.py's
+    GameServer.add_observer for the observer protocol this mimics."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def on_devices_change(self):
+        self.calls += 1
+
+
+def test_canvas_for_non_fixture_dev_fires_devices_changed(rig):
+    """A canvas url for a non-fixture dev arrives strictly after hello's own
+    devices_changed broadcast (which went out with url still null), and
+    nothing else re-fires devices_changed for it -- so _on_canvas has to poke
+    the engine's observers itself. Room-fixture devs need no such poke:
+    poll()'s _broadcast_room_if_changed diff already covers them (see
+    docs/MM_TERRARIUM.md and this file's other canvas tests)."""
+    gs, server, agent = rig
+    observer = _RecordingObserver()
+    gs.add_observer(observer)
+    _hello(server, agent)
+    before = observer.calls
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    assert observer.calls == before + 1
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+
+
+def test_repeat_canvas_with_same_url_does_not_refire(rig):
+    gs, server, agent = rig
+    observer = _RecordingObserver()
+    gs.add_observer(observer)
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    after_first = observer.calls
+
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    assert observer.calls == after_first
+
+
+def test_release_clears_the_canvas_url():
+    """Same release path as test_release_sends_release_and_clears_the_bridge
+    above: gs.abort() starts the closing fade, and _finish_release is what
+    actually pops per-dev state once it completes."""
+    clk = iter(_CLOSING_CLOCK_SCHEDULE).__next__
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+    gs.load_bit("test_bit")
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    gs.run()
+    gs.abort()
+    _drain_releases(agent, ["ie1"])
+    assert agent.canvas_urls() == {}
+
+
 def test_light_cue_reaches_the_devices_session(rig):
     gs, server, agent = rig
     gs.load_bit("test_bit")
@@ -1367,6 +1455,15 @@ def test_on_release_with_no_bridge_calls_drop_dev():
     # devicelink/agent.py's _on_join does on a failing on_grant: the
     # engine-level assignment exists, but self.bridges never got an entry.
     gs.join("ie1", "TEST_PLAYER_NODE")
+    # A canvas url can land for this dev before its release ever runs (the
+    # protocol makes no ordering guarantee here); the no-bridge branch must
+    # clear it just like _finish_release does for the faded path, or it
+    # leaks in agent._canvas_urls forever.
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+
     agent._on_release("ie1")
 
     assert "ie1" not in server._devs
+    assert agent.canvas_urls() == {}

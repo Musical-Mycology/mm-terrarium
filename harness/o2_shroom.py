@@ -444,8 +444,14 @@ def main() -> None:
                             input_queue=operator_input,
                             clock=o2lite.time_get)
     backend.open()
-    print(f"{markers.BROWSE_URL} Watch the Shroom at "
-          f"http://{args.sim_host}:{backend.port}/", flush=True)
+    canvas_url = f"http://{args.sim_host}:{backend.port}/"
+    url_marker = markers.ROOM_URL if args.no_join else markers.BROWSE_URL
+    print(f"{url_marker} Watch the Shroom at "
+          f"{canvas_url}", flush=True)
+
+    def send_hello() -> None:
+        o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+        o2lite.send_cmd("/game/canvas", 0, "ss", args.dev, canvas_url)
 
     # ONE cleanup path, covering everything after backend.open(). The guard
     # starts here and not at the tick loop because every step between is
@@ -515,7 +521,7 @@ def main() -> None:
             # cleanup from the finally now instead of by hand.
             raise SystemExit(1)
 
-        o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+        send_hello()
         if not args.no_join:
             o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
 
@@ -563,7 +569,7 @@ def main() -> None:
                     # this device in the DevicePool -- a join from a device
                     # Control has never heard of goes nowhere. Retrying only
                     # the join reconnects nothing.
-                    o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+                    send_hello()
                     o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
                     joins_sent += 1
                     next_join = now + args.join_retry
@@ -571,7 +577,7 @@ def main() -> None:
                         print(f"{joins_sent} joins unanswered. "
                               f"{join_stall_hint(args.dev)}")
             if now >= next_heartbeat:
-                o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+                send_hello()
                 next_heartbeat = next_heartbeat_time(now, args.heartbeat_interval)
             if not deny_printed and client.last_deny is not None:
                 reason, hint = client.last_deny

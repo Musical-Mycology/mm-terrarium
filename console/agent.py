@@ -30,10 +30,14 @@ ROOM_FRAME_INTERVAL = 0.1
 
 class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_bridge=None,
-                 clock=time.monotonic, registry=None):
+                 clock=time.monotonic, registry=None, canvas_urls=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
+        # Optional Callable[[], dict] of dev -> reported canvas URL, from
+        # DeviceLinkAgent.canvas_urls(). None (a GameServer built without a
+        # DeviceLinkAgent) yields no URLs anywhere in the Console's views.
+        self._canvas_urls = canvas_urls
         # The Room's live MIDI fan-out, for its controllers read-out. Optional:
         # a GameServer built the pre-Room way has none, and the panel then
         # shows the Room's declarations with no live values rather than
@@ -185,7 +189,8 @@ class ConsoleAgent:
         if gs.bit is not None:
             role = gs.bit.role_table.roles.get(room_role_name(gs.room.room_type))
         controllers = getattr(self._room_bridge, "controllers", {}) or {}
-        return room_view(gs.room, profile, role, controllers)
+        urls = self._canvas_urls() if self._canvas_urls else {}
+        return room_view(gs.room, profile, role, controllers, urls)
 
     def _broadcast_room_if_changed(self) -> None:
         room = self._current_room()
@@ -239,13 +244,14 @@ class ConsoleAgent:
     def _devices_view(self) -> list:
         gs = self.game_server
         assignments = gs.registration.assignments if gs.registration else {}
+        urls = self._canvas_urls() if self._canvas_urls else {}
         out = []
         for info in gs.devices.all():
             assigned = assignments.get(info.dev)
             role_name = None
             if assigned is not None and assigned[2] != RoleClass.ROOM:
                 role_name = assigned[1]
-            out.append(protocol.device_view(info, role_name))
+            out.append(protocol.device_view(info, role_name, urls.get(info.dev)))
         return out
 
     def _current_status(self) -> dict:

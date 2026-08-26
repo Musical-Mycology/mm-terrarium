@@ -105,6 +105,7 @@ class RunResult:
     detail: str
     logs: dict = field(default_factory=dict)
     urls: list = field(default_factory=list)
+    room_urls: list = field(default_factory=list)
 
 
 def control_command(cfg: StackConfig, ppid: int) -> list[str]:
@@ -205,20 +206,28 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
     processes: dict[str, object] = {}
     logs = {}
     urls: list[str] = []
+    room_urls: list[str] = []
     round_loads: "queue.Queue[str]" = queue.Queue()
 
     def collect_url(line: str) -> None:
-        """Record (and under --open, open) a child's BROWSE_URL line.
+        """Record a child's BROWSE_URL or ROOM_URL line.
 
         Runs on the child's tee thread. A marker line whose URL cannot be
         parsed degrades to a missing tab, never a crashed stack -- a
         future emit site that garbles its URL is a cosmetic bug, not a
-        run-ending one.
+        run-ending one. ROOM_URL lines are collected for the summary but
+        never handed to the opener -- a Room fixture canvas is reached
+        from the Console's Room card, not an automatic browser tab.
         """
-        if markers.BROWSE_URL not in line:
+        is_browse = markers.BROWSE_URL in line
+        is_room = markers.ROOM_URL in line
+        if not (is_browse or is_room):
             return
         match = _URL_PATTERN.search(line)
         if match is None:
+            return
+        if is_room:
+            room_urls.append(match.group())
             return
         urls.append(match.group())
         if cfg.open_urls:
@@ -324,7 +333,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
              "Control came up but never opened registration."),
         ):
             if not control.wait_for(marker, cfg.ready_timeout, clock, sleep):
-                return RunResult(False, stage, detail, logs, urls)
+                return RunResult(False, stage, detail, logs, urls, room_urls)
 
         devices = []
         for index in range(1, cfg.devices + 1):
@@ -342,7 +351,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
             ok, failed = _wait_for_marker(tee, markers.DEVICE_CLOCK_SYNCED,
                                           cfg.join_timeout, clock, sleep)
             if failed is not None:
-                return RunResult(False, "device-join", failed, logs, urls)
+                return RunResult(False, "device-join", failed, logs, urls, room_urls)
             if not ok:
                 return RunResult(
                     False, "device-sync",
@@ -354,17 +363,17 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                     f"message because service was not found' means Control "
                     f"was not up yet, and total silence means the socket is "
                     f"dead. See docs/MM_TERRARIUM.md 'Not yet built'.", logs,
-                    urls)
+                    urls, room_urls)
             ok, failed = _wait_for_marker(tee, markers.DEVICE_ROLE_GRANTED,
                                           cfg.join_timeout, clock, sleep)
             if failed is not None:
-                return RunResult(False, "device-join", failed, logs, urls)
+                return RunResult(False, "device-join", failed, logs, urls, room_urls)
             if not ok:
                 return RunResult(
                     False, "device-join",
                     f"{tee.name} synced but was never granted a role. Is "
                     f"Control still in SETUP? `player` is a scored role "
-                    f"and is refused once RUNNING.", logs, urls)
+                    f"and is refused once RUNNING.", logs, urls, room_urls)
 
         dead = _hold(cfg, processes, clock, sleep,
                     on_round=drain_rounds if cfg.serve else None)
@@ -378,16 +387,16 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
             if (name == "control" and code == 0
                     and tees["control"].wait_for(
                         markers.CONTROL_BIT_COMPLETED, 5.0, clock, sleep)):
-                return RunResult(True, "bit-completed", "", logs, urls)
+                return RunResult(True, "bit-completed", "", logs, urls, room_urls)
             return RunResult(
                 False, "child-exited",
                 f"{name} exited (code {code!r}) during the hold, before "
                 f"the run ended on its own. Check {name}.log for what "
-                f"happened.", logs, urls)
-        return RunResult(True, "complete", "", logs, urls)
+                f"happened.", logs, urls, room_urls)
+        return RunResult(True, "complete", "", logs, urls, room_urls)
     except KeyboardInterrupt:
         return RunResult(True, "interrupted", "stopped by Ctrl-C",
-                         logs, urls)
+                         logs, urls, room_urls)
     finally:
         for name, exc in teardown.close():
             print(f"teardown step {name!r} failed: {exc!r}", file=sys.stderr)
@@ -815,6 +824,8 @@ def main() -> None:
     if result.ok:
         for url in result.urls:
             print(f"  browser surface: {url}")
+        for url in result.room_urls:
+            print(f"  room surface (open from the Console): {url}")
         print(f"stack run {result.stage}; logs in {cfg.log_dir}")
         return
     print(format_failure(result), file=sys.stderr)

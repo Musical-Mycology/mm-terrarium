@@ -66,6 +66,13 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2.5px solid var(--gold
 .chip.solid-gold  { background: var(--gold-deep); color: var(--on-gold); border: none; }
 .chip.solid-terra { background: var(--terra); color: var(--bg); border: none; }
 
+.popout {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; line-height: 1;
+  color: var(--sage); text-decoration: none; font-size: 13px;
+}
+.popout:hover, .popout:focus-visible { color: var(--gold); }
+
 .tag { /* subtitle-bar style: 4px, high contrast */
   display: inline-block; font-family: var(--f-disp); font-size: 11px;
   letter-spacing: 0.14em; text-transform: uppercase;
