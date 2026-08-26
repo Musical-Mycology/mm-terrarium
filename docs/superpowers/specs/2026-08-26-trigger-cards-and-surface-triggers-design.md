@@ -150,3 +150,19 @@ All four are SURFACE-target, declared in `bits/test/test_bit.py`'s
   all four from the panel at both the Room and a simulated device;
   confirm white-90%-5s-then-ambient off the canvas, mute latch dark and
   silent until a Play, and card layout at 3-across.
+
+## Live verification (pending)
+
+Offline gates passed 2026-08-26: Python suite 1379 passed, 1 skipped, 0
+failures (`.venv/bin/python -m pytest tests -q`); JS suite 5 files, 0
+failures (`node --test tests/js/*.test.js`). No live verification has been
+performed. The checklist below is recorded for the operator/session to run
+against a real Arco, per the house pattern.
+
+- [ ] `python -m harness.run_stack` (TEST room), open the Console.
+- [ ] Triggers panel shows 4 cards, 3-across at full width, nothing overflowing.
+- [ ] Fire `flash_device` at the Room: both sim canvases go solid white ~90% for 5 s, then resume ambient drift; at a joined sim device: its canvas flashes and (if the client has a `chime` asset) sounds.
+- [ ] Fire `stop` at the Room: canvases go dark, drone silent; stays dark >10 s.
+- [ ] Fire `play_aurora` at the stopped Room: un-mutes, aurora script runs.
+- [ ] Fire `win` at a device: hue flourish visible; `win` PlayCue observable in the device client log even if no asset.
+- [ ] Card status lines update in place (no list rebuild).
