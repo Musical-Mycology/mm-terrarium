@@ -1,8 +1,8 @@
 from bits.test.test_bit import TestBit
-from control.cues import ROOM, FireTrigger
+from control.cues import ROOM, FireTrigger, MuteCue
 from control.roles import RoleClass
 from control.rooms import room_role_name, RoomType
-from control.triggers import validate_trigger_table
+from control.triggers import TriggerTarget, validate_trigger_table
 
 
 def test_role_table_has_one_scored_and_one_jam_role():
@@ -137,7 +137,7 @@ def test_player_declares_surfaces_and_samples():
     from bits.test.test_bit import TestBit
     player = TestBit().role_table.roles["player"]
     assert player.uses == ["tilt", "tap", "shake", "speaker"]
-    assert player.samples == ["click", "chime"]
+    assert player.samples == ["click", "chime", "win"]
 
 
 def test_jammer_declares_only_tilt():
@@ -263,10 +263,41 @@ def test_room_animates_with_no_device_joined():
     assert bit.cues(at=0.0), "the Room must animate with nobody joined"
 
 
-def test_test_bit_declares_both_triggers():
-    bit = TestBit()
-    names = sorted(bit.trigger_table.triggers)
-    assert names == ["flash_device", "play_aurora"]
+def test_testbit_declares_four_surface_triggers():
+    table = TestBit().trigger_table
+    assert set(table.triggers) == {"flash_device", "play_aurora", "stop", "win"}
+    assert all(t.target is TriggerTarget.SURFACE
+               for t in table.triggers.values())
+
+
+def test_flash_script_is_chime_plus_white_5s():
+    from control.cues import SolidCue
+    trig = TestBit().trigger_table.triggers["flash_device"]
+    kinds = [type(s.cue).__name__ for s in trig.script]
+    assert kinds == ["PlayCue", "SolidCue"]
+    solid = trig.script[1].cue
+    assert isinstance(solid, SolidCue)
+    assert solid.rgb == (255, 255, 255) and solid.level == 0.9 and solid.duration == 5.0
+
+
+def test_stop_script_is_single_mute():
+    trig = TestBit().trigger_table.triggers["stop"]
+    assert len(trig.script) == 1 and isinstance(trig.script[0].cue, MuteCue)
+
+
+def test_win_sample_declared_on_player_role():
+    role = TestBit().role_table.roles["player"]
+    assert "win" in role.samples
+
+
+def test_tilt_latch_fires_play_aurora_at_room():
+    bit = TestBit(run_duration=30.0)
+    bit.on_run_start()
+    for _ in range(TestBit.ROUND_TILTS):
+        bit.verb_handlers()["tilt"]("ie1", ["ie1", 90.0], 100.0)
+    bit.update(0.01)
+    fires = [c for c in bit.cues(100.0) if isinstance(c, FireTrigger)]
+    assert [(f.name, f.dev) for f in fires] == [("play_aurora", ROOM)]
 
 
 def test_test_bits_trigger_table_validates_against_its_own_verbs():
