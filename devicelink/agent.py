@@ -110,6 +110,19 @@ class DeviceLinkAgent:
         self.bridges: dict[str, DeviceBridge] = {}
         self._universes: dict[str, Universe] = {}
         self._last_frames: dict[str, bytes] = {}
+        # dev -> (rgb, level, expires_at-or-None): a SolidCue's outgoing-frame
+        # override, applied at the two send seams (_render_frames,
+        # _render_room) ahead of the changed-frame comparison. A latched mute
+        # blackout is just an entry with rgb=(0,0,0), level=0.0, expires=None
+        # -- see _on_mute_change. Keyed by canonical dev for the Room, same
+        # as self._pending_at.
+        self._overrides: dict[str, tuple[tuple[int, int, int], float,
+                                         float | None]] = {}
+        # devs currently latched mute-blackout. Checked by _feed_breath (skip
+        # feeding cc:11) and _on_light_cue (drop the cue) -- transport-seam
+        # suppression; PlayCue is already suppressed engine-side via
+        # GameServer.muted.
+        self._muted: set[str] = set()
         # dev -> the URL of that device's own browser canvas, reported by
         # /game/canvas (simulators only; hardware and phones never send
         # it). No persistence: an ephemeral port is stale the moment its
@@ -173,6 +186,8 @@ class DeviceLinkAgent:
         game_server.on_release = self._on_release
         game_server.on_light_cue = self._on_light_cue
         game_server.on_play_cue = self._on_play_cue
+        game_server.on_solid_cue = self._on_solid_cue
+        game_server.on_mute_change = self._on_mute_change
 
     def _setup_room(self) -> None:
         """Build the Room's real LightSession over the WHOLE concatenated
@@ -271,6 +286,7 @@ class DeviceLinkAgent:
                 logger.exception("devicelink inbound handling failed; "
                                  "dropping frame")
         self.game_server.reap_stale(self._stale_timeout)
+        self._tick_overrides()
         self._feed_breath()
         # Before both renders: a feed released this tick must be reflected in
         # the frame rendered this tick, not the next one. Draining after would
@@ -280,6 +296,68 @@ class DeviceLinkAgent:
         self._render_frames()
         self._render_room()
         self._tick_audio()
+
+    def _tick_overrides(self) -> None:
+        """Drop any solid override whose duration has elapsed, before this
+        tick's renders run -- so the very next render for `dev` falls back to
+        its session frame instead of the stale override. `_last_frames.pop`
+        forces a resend even if the session's own frame happens to be
+        unchanged from before the override started. A Room override is keyed
+        by the canonical dev but was fanned out per-fixture on the wire, so
+        its expiry has to clear every bound fixture dev's cache entry too, or
+        only the canonical dev's own slice would re-send."""
+        now = self._clock()
+        for dev, (_rgb, _lvl, expires) in list(self._overrides.items()):
+            if expires is None or now < expires:
+                continue
+            del self._overrides[dev]
+            self._last_frames.pop(dev, None)
+            if dev == self._canonical_room_dev():
+                gs = self.game_server
+                bound = gs.room.bound if gs.room is not None else {}
+                for fixture_dev in bound.values():
+                    self._last_frames.pop(fixture_dev, None)
+
+    def _apply_override(self, dev: str, frame: bytes) -> bytes:
+        entry = self._overrides.get(dev)
+        if entry is None:
+            return frame
+        rgb, level, _expires = entry
+        pixel = bytes(max(0, min(255, round(ch * level))) for ch in rgb)
+        reps = len(frame) // 3 + 1
+        return (pixel * reps)[:len(frame)]
+
+    def _on_solid_cue(self, dev: str, rgb: tuple[int, int, int],
+                      level: float, duration: float | None,
+                      when: float | None) -> None:
+        """A Bit's SolidCue reached the engine sink. Store the override and
+        force a resend this tick (see _apply_override's use at both send
+        seams) so it goes out immediately, stamped with the cue's own `when`
+        rather than this tick's stream-frame origin."""
+        expires = None if duration is None else when + duration
+        self._overrides[dev] = (rgb, level, expires)
+        self._last_frames.pop(dev, None)
+
+    def _on_mute_change(self, dev: str, muted: bool) -> None:
+        """Latch (or lift) a blackout override at the transport seam. While
+        muted, _feed_breath skips `dev` and _on_light_cue drops its cues --
+        PlayCue suppression already happened engine-side (GameServer.muted).
+        Guarded like every other engine sink here: a failing Room-audio
+        silence must not propagate into the engine tick (boundary rule 2)."""
+        if muted:
+            self._muted.add(dev)
+            self._overrides[dev] = ((0, 0, 0), 0.0, None)
+            self._last_frames.pop(dev, None)
+            if dev == self._canonical_room_dev() and self._room_bridge is not None:
+                try:
+                    self._room_bridge.feed_audio(0xB0, 11, 0)
+                except Exception:
+                    logger.exception("mute silence of Room audio failed for %s",
+                                     dev)
+        else:
+            self._muted.discard(dev)
+            self._overrides.pop(dev, None)
+            self._last_frames.pop(dev, None)
 
     def _tick_audio(self) -> None:
         """Drive AudioBridge.tick() once per poll(): the only place the
@@ -334,6 +412,7 @@ class DeviceLinkAgent:
             logger.exception("Room render failed; skipping frame")
             return
         frame = bytes(universe.get_frame()[:self._room_profile.channel_count])
+        frame = self._apply_override(canonical, frame)
         when = at if at is not None else self._clock() + self._horizon
         for name, start, count in self._room_profile.fixture_slices():
             dev = bound.get(name)
@@ -375,6 +454,8 @@ class DeviceLinkAgent:
         value = breath_cc(self._clock() - self._breath_origin)
         for dev, bridge in list(self.bridges.items()):
             if dev in self._closing or bridge.session is None:
+                continue
+            if dev in self._muted:
                 continue
             if self._last_breath.get(dev) == value:
                 continue
@@ -419,6 +500,7 @@ class DeviceLinkAgent:
                     self._check_closing_bound(dev)
                 continue
             frame = bytes(universe.get_frame()[:36])
+            frame = self._apply_override(dev, frame)
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame
                 # The cue's own time when a cue produced this frame, else
@@ -710,7 +792,14 @@ class DeviceLinkAgent:
         Room audio waits until `when` on _room_cues, because it reaches Arco
         from here with no wire in between. See docs/superpowers/specs/
         2026-08-14-load-bearing-timed-cues-design.md section 2.
+
+        A muted dev's light cues are dropped here, at the transport seam:
+        its session must not keep advancing under a latched blackout
+        override, or the override's own frame comparison would be racing a
+        session state the device can never actually see.
         """
+        if dev in self._muted:
+            return
         now = self._clock()
         if self._is_room_dev(dev) and self._room_bridge is not None:
             self._room_cues.push(when, (status, data1, data2), now=now)
