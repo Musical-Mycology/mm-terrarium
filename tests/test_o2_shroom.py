@@ -558,3 +558,35 @@ def test_main_follows_every_hello_send_with_a_canvas_send():
         f"expected send_hello() to be called at all three hello sites "
         f"(initial, join-retry resend, heartbeat resend), found "
         f"{send_hello_call_count} call(s)")
+
+
+def test_main_registers_room_and_play_o2lite_handlers():
+    """Source-inspection, same technique and reason as the tests above:
+    o2lite dispatches only to registered addresses and prints a noisy
+    "no match" drop for everything else. Control legitimately sends
+    /<dev>/room (informational snapshot) and /<dev>/play (PlayCue), so
+    both kinds must be in the method_new registration tuple alongside
+    the original five."""
+    import ast
+    import inspect
+
+    from harness import o2_shroom
+
+    tree = ast.parse(inspect.getsource(o2_shroom.main))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Tuple)
+                and {getattr(el, "value", None) for el in node.elts}
+                >= {"role", "leds", "release"}):
+            kinds = {el.value for el in node.elts}
+            assert "room" in kinds
+            assert "play" in kinds
+            return
+    raise AssertionError("kinds registration tuple not found in main()")
+
+
+def test_build_passes_on_play_through_to_the_client():
+    pytest.importorskip("luxaeterna")
+    client, backend = build(
+        "ie1", "TEST_PLAYER_NODE", "127.0.0.1", 0, serve=False,
+        on_play=lambda name, params: None)
+    assert client.on_play is not None
