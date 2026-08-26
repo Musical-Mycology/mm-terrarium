@@ -145,8 +145,9 @@ def main() -> None:
     client, backend = build(args.dev, args.sim_host, args.sim_port,
                             room_type=args.room_type, fixture=args.fixture)
     backend.open()
+    canvas_url = f"http://{args.sim_host}:{backend.port}/"
     print(f"{markers.BROWSE_URL} Watch the Room at "
-          f"http://{args.sim_host}:{backend.port}/", flush=True)
+          f"{canvas_url}", flush=True)
 
     if args.identify_blocks:
         import time
@@ -170,6 +171,7 @@ def main() -> None:
     async def run() -> None:
         async with websockets.connect(args.server) as ws:
             await ws.send(json.dumps(client.hello()))
+            await ws.send(json.dumps(client.canvas(canvas_url)))
 
             async def pump_down() -> None:
                 async for raw in ws:
@@ -188,6 +190,7 @@ def main() -> None:
                     await asyncio.sleep(args.heartbeat_interval)
                     if not client.released:
                         await ws.send(json.dumps(client.hello()))
+                        await ws.send(json.dumps(client.canvas(canvas_url)))
 
             await asyncio.gather(pump_down(), pump_tick(client),
                                  pump_heartbeat())

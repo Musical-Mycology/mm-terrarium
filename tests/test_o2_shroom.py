@@ -417,7 +417,12 @@ def test_main_resends_hello_inside_a_while_loop():
     which loop is which. There must be at least 2 (the join-retry block's
     existing one, inside the tick loop; plus the heartbeat's own) -- the
     clock-sync loop has none. That proves the resend is wired into a loop
-    body rather than only sent once at startup."""
+    body rather than only sent once at startup.
+
+    Both hello resend sites now go through the local send_hello() helper
+    (so the matching /game/canvas always follows), so this also counts
+    bare send_hello() Call nodes -- a raw send_cmd("/game/hello", ...)
+    inside a while loop no longer exists once both sites are converted."""
     import ast
     import inspect
 
@@ -431,15 +436,93 @@ def test_main_resends_hello_inside_a_while_loop():
                   if isinstance(node, ast.While)]
     assert while_nodes, "main() must have at least one while loop"
 
+    def _is_hello_send_cmd(node):
+        return (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "send_cmd"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "/game/hello")
+
+    def _is_send_hello_helper(node):
+        return (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "send_hello")
+
     hello_call_count = sum(
         1 for w in while_nodes for node in ast.walk(w)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "send_cmd"
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and node.args[0].value == "/game/hello")
+        if _is_hello_send_cmd(node) or _is_send_hello_helper(node))
     assert hello_call_count >= 2, (
-        f"expected at least 2 /game/hello send_cmd calls inside some "
-        f"while loop in main() (join-retry's existing one plus the "
-        f"heartbeat's own), found {hello_call_count}")
+        f"expected at least 2 hello resends (send_cmd(\"/game/hello\", ...) "
+        f"or send_hello()) inside some while loop in main() (join-retry's "
+        f"existing one plus the heartbeat's own), found {hello_call_count}")
+
+
+def test_main_follows_every_hello_send_with_a_canvas_send():
+    """The rule under test for this task: wherever /game/hello goes out,
+    /game/canvas must follow immediately after with the device's own
+    watch URL -- so a Control restart (which re-hellos via the heartbeat)
+    re-learns every device's canvas URL, not just the one sent at
+    startup. Source-inspection, same reason as the sibling tests in this
+    file: main() imports o2litepy, absent from this offline suite.
+
+    Checks two things:
+    1. The local send_hello() helper sends /game/hello then /game/canvas,
+       in that order.
+    2. No bare send_cmd("/game/hello", ...) call remains in main() outside
+       the helper's own body -- proving all three hello sites (initial,
+       join-retry resend, heartbeat resend) were converted to go through
+       the helper rather than just some of them.
+    """
+    import ast
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    send_hello_def = next(
+        (node for node in ast.walk(main)
+         if isinstance(node, ast.FunctionDef) and node.name == "send_hello"),
+        None)
+    assert send_hello_def is not None, (
+        "main() must define a local send_hello() helper")
+
+    def _send_cmd_address(node):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "send_cmd"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)):
+            return None
+        return node.args[0].value
+
+    helper_addresses = [
+        _send_cmd_address(node) for node in ast.walk(send_hello_def)]
+    helper_addresses = [a for a in helper_addresses if a is not None]
+    assert helper_addresses == ["/game/hello", "/game/canvas"], (
+        f"send_hello() must send /game/hello then /game/canvas, found "
+        f"{helper_addresses}")
+
+    helper_node_ids = {id(n) for n in ast.walk(send_hello_def)}
+    bare_hello_calls = [
+        node for node in ast.walk(main)
+        if id(node) not in helper_node_ids
+        and _send_cmd_address(node) == "/game/hello"]
+    assert bare_hello_calls == [], (
+        "found a send_cmd(\"/game/hello\", ...) call in main() outside "
+        "the send_hello() helper -- every hello site must go through "
+        "send_hello() so the canvas send always follows")
+
+    send_hello_call_count = sum(
+        1 for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "send_hello")
+    assert send_hello_call_count >= 3, (
+        f"expected send_hello() to be called at all three hello sites "
+        f"(initial, join-retry resend, heartbeat resend), found "
+        f"{send_hello_call_count} call(s)")
