@@ -171,6 +171,12 @@ class ScriptBit(_BaseBit):
                 condition=Condition(name="manual", description="Operator asks",
                                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, MuteCue(TARGET)),)),
+            "spot": Trigger(
+                name="spot", description="Light an operator-chosen surface",
+                target=TriggerTarget.SURFACE,
+                condition=Condition(name="manual", description="Operator asks",
+                                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 100)),)),
         })
 
 
@@ -318,6 +324,31 @@ def test_a_device_target_with_no_device_is_refused_not_silently_empty():
     assert reason is not None
     assert "no device given" in reason
     assert light == []
+
+
+def test_surface_resolves_device():
+    gs, _, _ = _running()
+    assert gs._resolve_target(TriggerTarget.SURFACE, "ie1") == ["ie1"]
+
+
+def test_surface_resolves_room_sentinel():
+    gs, _, _ = _running()
+    assert (gs._resolve_target(TriggerTarget.SURFACE, ROOM) ==
+            gs._resolve_target(TriggerTarget.ROOM, None))
+
+
+def test_surface_fire_without_dev_refused():
+    gs, light, _ = _running()
+    reason = gs.fire_trigger("spot", fired_by="admin-manual", dev=None)
+    assert reason is not None
+    assert "no surface given" in reason
+    assert light == []
+
+
+def test_surface_fire_with_room_sentinel_lights_the_room():
+    gs, light, _ = _running()
+    assert gs.fire_trigger("spot", fired_by="admin-manual", dev=ROOM) is None
+    assert [c[0] for c in light] == ["sim-room-main"]
 
 
 def test_an_unknown_trigger_is_refused():

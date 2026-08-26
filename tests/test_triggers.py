@@ -150,7 +150,7 @@ def test_a_fire_trigger_in_a_script_is_refused_so_chaining_cannot_cycle():
 
 
 def test_target_is_used_by_name_not_by_value():
-    assert {t.name for t in TriggerTarget} == {"ROOM", "DEVICE", "ALL"}
+    assert {t.name for t in TriggerTarget} == {"ROOM", "DEVICE", "ALL", "SURFACE"}
 
 
 def test_fire_trigger_defaults_its_dev_to_none():

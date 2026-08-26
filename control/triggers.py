@@ -35,6 +35,7 @@ class TriggerTarget(Enum):
     ROOM = auto()      # every Room fixture
     DEVICE = auto()    # the device that fired, when there was one
     ALL = auto()       # Room fixtures plus every registered non-ROOM device
+    SURFACE = auto()   # operator-chosen: one device, or the Room
 
 
 class ConditionSource(Enum):

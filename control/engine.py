@@ -357,12 +357,14 @@ class GameServer:
         """
         if target is TriggerTarget.DEVICE:
             return [dev] if dev else []
+        if target is TriggerTarget.SURFACE and dev != ROOM:
+            return [dev] if dev else []
         room_devs: list[str] = []
         if self.room is not None and self.room.bound:
             profile = room_profile(self.room.room_type)
             room_devs = [self.room.bound[f.name] for f in profile.fixtures
                         if f.name in self.room.bound]
-        if target is TriggerTarget.ROOM:
+        if target in (TriggerTarget.ROOM, TriggerTarget.SURFACE):
             return room_devs
         out = list(room_devs)
         assignments = (self.registration.assignments
@@ -428,9 +430,13 @@ class GameServer:
             trigger = table.triggers.get(name)
             if trigger is None:
                 return f"unknown trigger {name!r}"
-            if trigger.target is TriggerTarget.DEVICE and not dev:
-                return (f"trigger {name!r} targets the firing device; "
-                        f"no device given")
+            if trigger.target in (TriggerTarget.DEVICE,
+                                  TriggerTarget.SURFACE) and not dev:
+                if trigger.target is TriggerTarget.DEVICE:
+                    return (f"trigger {name!r} targets the firing device; "
+                            f"no device given")
+                return (f"trigger {name!r} targets a surface; "
+                        f"no surface given")
             if at is None:
                 at = self._clock() + self._horizon
             devs = self._resolve_target(trigger.target, dev)
