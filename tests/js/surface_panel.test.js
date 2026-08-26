@@ -10,10 +10,11 @@ const ROOM = {
     { name: "main", pixel_count: 60, channel_start: 0, channel_count: 180,
       zones: [{ name: "main.left", start: 0, count: 20 },
               { name: "main.center", start: 20, count: 20 },
-              { name: "main.right", start: 40, count: 20 }], dev: "sim-room-main" },
+              { name: "main.right", start: 40, count: 20 }], dev: "sim-room-main",
+      url: "http://sim-room-main.local/surface" },
     { name: "accent", pixel_count: 30, channel_start: 180, channel_count: 90,
       zones: [{ name: "accent.low", start: 0, count: 15 },
-              { name: "accent.high", start: 15, count: 15 }], dev: null },
+              { name: "accent.high", start: 15, count: 15 }], dev: null, url: null },
   ],
   instruments: [
     { kind: "light", instrument: "aurora", target: "primary",
@@ -109,6 +110,46 @@ const ROOM = {
 
   // restore shapes back to the original baseline for the remaining assertions
   send({ event: "room_changed", room: ROOM });
+
+  // pop-out anchor: dev+url renders exactly one .popout anchor with the
+  // right attributes; dev with url:null renders none; a url arriving (or
+  // leaving) rebuilds the binding controls (bindStateKey folds in url), but
+  // an unrelated controllers-only tick must NOT recreate the anchor node.
+  {
+    const bindCtlWithUrl = surface._bindCtlFor("main");
+    const popoutsWithUrl = bindCtlWithUrl.children.filter((c) => c.className === "popout");
+    assert.strictEqual(popoutsWithUrl.length, 1);
+    const anchor = popoutsWithUrl[0];
+    assert.strictEqual(anchor.tagName, "a");
+    assert.strictEqual(anchor.href, "http://sim-room-main.local/surface");
+    assert.strictEqual(anchor.target, "_blank");
+    assert.strictEqual(anchor.rel, "noopener");
+
+    // dev set, url: null -> no anchor, and the rebuild replaces the node
+    // (bindStateKey folds the url in, so its disappearance is a state change)
+    send({ event: "room_changed",
+           room: { ...ROOM, fixtures: [{ ...ROOM.fixtures[0], url: null }, ROOM.fixtures[1]] } });
+    const bindCtlNoUrl = surface._bindCtlFor("main");
+    assert.notStrictEqual(bindCtlNoUrl, bindCtlWithUrl);
+    assert.ok(!bindCtlNoUrl.children.some((c) => c.className === "popout"));
+
+    // url null -> value: rebuilds again and the anchor reappears
+    send({ event: "room_changed", room: ROOM });
+    const bindCtlUrlBack = surface._bindCtlFor("main");
+    assert.notStrictEqual(bindCtlUrlBack, bindCtlNoUrl);
+    const anchorBack = bindCtlUrlBack.children.find((c) => c.className === "popout");
+    assert.ok(anchorBack);
+
+    // a controllers-only room_changed must NOT recreate the anchor (rule 1)
+    send({ event: "room_changed", room: { ...ROOM, controllers: { 74: 55 } } });
+    const bindCtlAfterCtl = surface._bindCtlFor("main");
+    assert.strictEqual(bindCtlAfterCtl, bindCtlUrlBack);
+    const anchorAfterCtl = bindCtlAfterCtl.children.find((c) => c.className === "popout");
+    assert.strictEqual(anchorAfterCtl, anchorBack);
+
+    // restore baseline controllers value for the remaining assertions
+    send({ event: "room_changed", room: ROOM });
+  }
 
   // frames: GRB decode; unknown dev is a no-op (rule 9)
   send({ event: "room_frame", dev: "sim-room-main",
