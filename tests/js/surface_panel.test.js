@@ -55,6 +55,10 @@ const ROOM = {
   // a controllers-only change must NOT rebuild fixture strips (rule 1/3):
   const stripBefore = surface._canvasFor("sim-room-main");
   const bindCtlBefore = surface._bindCtlFor("main");
+  // ...and must NOT rebuild the Instruments grid's cards either -- same bug
+  // class as the binding-controls chip/button above, just recurring in the
+  // Instruments accordion instead.
+  const instCardBefore = surface._instCardFor("light", "aurora", "primary");
   send({ event: "room_changed",
          room: { ...ROOM, controllers: { 74: 12 } } });
   assert.strictEqual(surface._canvasFor("sim-room-main"), stripBefore);
@@ -63,6 +67,11 @@ const ROOM = {
   // a fresh button on every controllers-only tick would silently discard
   // wire.confirmTap's armed state, breaking the two-tap Release confirm.
   assert.strictEqual(surface._bindCtlFor("main"), bindCtlBefore);
+  // instrument card node identity survives too, while its live value text
+  // updates in place.
+  assert.strictEqual(surface._instCardFor("light", "aurora", "primary"), instCardBefore);
+  assert.ok(instCardBefore.innerHTML.includes("= 12"));
+  assert.ok(!instCardBefore.innerHTML.includes("= 93"));
 
   // rule 3: a shape change on ONE fixture must not touch a sibling fixture
   // whose shape is unchanged. main (bound, has a dev) is the unchanged

@@ -33,6 +33,9 @@ let instMountEl = null;
 let triggersAccEl = null;            // created once, outside the per-fixture rebuild path
 let fixtureElByName = new Map();     // fixture name -> its .fixture wrapper element
 let bindStateByName = new Map();     // fixture name -> last-rendered binding-state key
+let instGridEl = null;               // .instgrid wrapper inside instMountEl
+let instCardByKey = new Map();       // instKey(inst) -> its .inst card element
+let instShapeByKey = new Map();      // instKey(inst) -> last-rendered JSON.stringify(inst)
 
 function clear(node) {
   node.textContent = "";
@@ -84,6 +87,12 @@ export function _bindCtlFor(name) {
   if (!wrap) return undefined;
   const head = wrap.children[0];
   return head && head.children[1];
+}
+
+// Instrument card element for a given instrument declaration, so tests can
+// assert its DOM node identity survives a controllers-only room_changed.
+export function _instCardFor(kind, instrument, target) {
+  return instCardByKey.get(`${kind}:${instrument}:${target || ""}`);
 }
 
 // -------------------------------------------------------------- painting
@@ -288,31 +297,129 @@ export function buildInstrumentCard(inst, controllers) {
     addRow(k, typeof v === "object" ? JSON.stringify(v) : String(v));
   }
 
+  // Live lane rows, tracked directly on the card rather than re-located via
+  // querySelector -- the shared node test DOM stub's querySelector(All) are
+  // no-ops (see tests/js/_dom_stub.js), matching the same reasoning this
+  // file already gives (line ~23) for caching structural elements as module
+  // state instead of re-fetching them.
+  const liveRows = [];
   for (const lane of inst.lanes || []) {
     const cc = lane.source.startsWith("cc:") ? lane.source.slice(3) : null;
     const dt = mk("dt", null, lane.source);
     const dd = document.createElement("dd");
     dd.appendChild(document.createTextNode(`→ ${lane.dest} `));
+    let liveSpan = null;
     if (cc !== null && controllers && controllers[cc] !== undefined) {
-      dd.appendChild(mk("span", "live", `= ${controllers[cc]}`));
+      liveSpan = mk("span", "live", `= ${controllers[cc]}`);
+      dd.appendChild(liveSpan);
     }
+    if (cc !== null) liveRows.push({ cc, dd, span: liveSpan });
     dl.appendChild(dt);
     dl.appendChild(dd);
   }
+  card._liveRows = liveRows;
 
   card.appendChild(dl);
   return card;
 }
 
+// In-place update of an unchanged instrument card's live lane values only --
+// mirrors the fixture in-place-update path above. Never touches the rest of
+// the card's DOM, so any future interactive per-node state within a card
+// would survive a controllers-only room_changed the same way binding
+// controls already do.
+function updateInstrumentLive(card, controllers) {
+  for (const row of card._liveRows || []) {
+    const value = controllers && controllers[row.cc];
+    if (value !== undefined) {
+      const text = `= ${value}`;
+      if (!row.span) {
+        row.span = mk("span", "live", text);
+        row.dd.appendChild(row.span);
+      } else if (row.span.textContent !== text) {
+        row.span.textContent = text;
+      }
+    } else if (row.span) {
+      row.span.remove();
+      row.span = null;
+    }
+  }
+}
+
+// Key uniquely identifying an instrument declaration within one Room's
+// instrument list. `instrument` alone isn't unique -- room_view.py's
+// _light_instruments defaults `target` to "primary" per declaration, so two
+// light instruments can share a name while differing by target; audio
+// entries carry no `target` at all, so the empty-string fallback still
+// distinguishes them from a same-named light entry.
+function instKey(inst) {
+  return `${inst.kind}:${inst.instrument}:${inst.target || ""}`;
+}
+
 function renderInstruments(container, instruments, controllers) {
-  clear(container);
   if (!instruments || instruments.length === 0) {
+    clear(container);
+    instCardByKey = new Map();
+    instShapeByKey = new Map();
     container.appendChild(mk("p", "muted", "No instruments declared (no Bit loaded)."));
     return;
   }
-  const grid = mk("div", "instgrid");
-  for (const inst of instruments) grid.appendChild(buildInstrumentCard(inst, controllers));
-  container.appendChild(grid);
+
+  if (!instGridEl || instGridEl.parentNode !== container) {
+    // First paint (or recovering from the empty-state branch above, which
+    // replaced the grid with a "no instruments" <p>).
+    clear(container);
+    instGridEl = mk("div", "instgrid");
+    container.appendChild(instGridEl);
+    instCardByKey = new Map();
+    instShapeByKey = new Map();
+  }
+  const grid = instGridEl;
+
+  // Drop instruments no longer declared.
+  const currentKeys = new Set(instruments.map(instKey));
+  for (const oldKey of Array.from(instCardByKey.keys())) {
+    if (!currentKeys.has(oldKey)) {
+      const oldEl = instCardByKey.get(oldKey);
+      if (oldEl) oldEl.remove();
+      instCardByKey.delete(oldKey);
+      instShapeByKey.delete(oldKey);
+    }
+  }
+
+  // Rebuild only cards whose own declaration changed; update everyone
+  // else's live lane values in place. Reinsert before the nearest later
+  // surviving card so declaration order is preserved.
+  for (let i = 0; i < instruments.length; i++) {
+    const inst = instruments[i];
+    const key = instKey(inst);
+    const nextShape = JSON.stringify(inst);
+    const unchanged = instShapeByKey.get(key) === nextShape;
+
+    if (unchanged) {
+      const existing = instCardByKey.get(key);
+      if (existing) updateInstrumentLive(existing, controllers);
+      continue;
+    }
+
+    const oldEl = instCardByKey.get(key);
+    if (oldEl) oldEl.remove();
+
+    let anchor = null;
+    for (let j = i + 1; j < instruments.length; j++) {
+      const nextEl = instCardByKey.get(instKey(instruments[j]));
+      if (nextEl) { anchor = nextEl; break; }
+    }
+
+    const card = buildInstrumentCard(inst, controllers);
+    if (anchor) {
+      grid.insertBefore(card, anchor);
+    } else {
+      grid.appendChild(card);
+    }
+    instCardByKey.set(key, card);
+    instShapeByKey.set(key, nextShape);
+  }
 }
 
 // -------------------------------------------------------------------- frame
@@ -346,6 +453,9 @@ function resetStructure() {
   triggersAccEl = null;
   fixtureElByName = new Map();
   bindStateByName = new Map();
+  instGridEl = null;
+  instCardByKey = new Map();
+  instShapeByKey = new Map();
 }
 
 function render() {
