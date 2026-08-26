@@ -363,3 +363,11 @@ def test_a_default_client_drops_a_one_eighty_channel_frame():
     client = ShroomClient("ie1", "node-a")
 
     assert client.handle(protocol.leds_event("ie1", list(range(180)))) == ""
+
+
+def test_canvas_message_shape():
+    client = ShroomClient("ie1", "TEST_PLAYER_NODE")
+    msg = client.canvas("http://127.0.0.1:8123/")
+    assert msg["address"] == "/game/canvas"
+    assert msg["typespec"] == "ss"
+    assert msg["args"] == ["ie1", "http://127.0.0.1:8123/"]

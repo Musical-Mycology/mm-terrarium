@@ -115,6 +115,11 @@ class ShroomClient:
     def hello(self) -> dict:
         return self._up("hello", "s", [self.dev])
 
+    def canvas(self, url: str) -> dict:
+        """Report the URL of this device's own browser canvas, sent once
+        right after hello. Devices with no canvas simply never send it."""
+        return self._up("canvas", "ss", [self.dev, url])
+
     def join(self) -> dict:
         self.released = False
         return self._up("join", "ss", [self.dev, self.node])
