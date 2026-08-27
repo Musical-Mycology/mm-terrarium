@@ -2091,7 +2091,15 @@ behind six per-module test files (`wire_and_shell.test.js`,
 plus the ones named above) and a whole-graph `tests/js/full_stack.test.js`
 that loads every module together — the combination the browser actually
 runs, the same lesson the old `console_full_stack.test.js` existed to teach
-(see the wire-json entry above).
+(see the wire-json entry above). **Those node files only run when a node
+process executes them**, and the rewrite retired the old
+`tests/test_room_panel_behavior.py` wrapper without a replacement — so from
+2026-08-25 until 2026-08-27 pytest and CI were green while none of the
+front-end tests ever ran. `tests/test_console_js.py` closes that: one
+parametrized pytest test globbing `tests/js/*.test.js` (a newly added test
+file is picked up with no wrapper change), running each under subprocess
+node, skipping cleanly when node is absent, plus a guard asserting the glob
+is non-empty.
 
 **The one backend addition this rewrite needed:** `control/bit_registry.py`'s
 `list_view()` now includes a best-effort `roles` summary per Bit, so the
