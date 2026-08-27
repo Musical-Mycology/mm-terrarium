@@ -14,6 +14,7 @@ import time
 from control.bit import Bit
 from control.cues import ROOM, FireFunction, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
+from control.generator_runner import GeneratorRunner
 from control.instrument import (TUNESHROOM, InstrumentRequirement, cue_kind,
                                  satisfies)
 from control.registration import JoinResult, RegistrationState
@@ -26,6 +27,7 @@ from control.functions import (
     FIRED_BY_GESTURE_VERB,
     SOURCE_WIRE,
     FunctionFired,
+    FunctionKind,
     FunctionTarget,
     expand_script,
     validate_function_table,
@@ -149,6 +151,17 @@ class GameServer:
         # join() to gate a Role.requires slot against its resolved
         # requirement (see spec section 4) -- empty outside a loaded Bit.
         self._slot_requirements: dict[str, InstrumentRequirement] = {}
+        # This Bit's declared GENERATOR functions, evaluated once per
+        # RUNNING tick by _dispatch_generator_cues. Built in load_bit from
+        # the validated table (per-lane uniqueness already enforced there);
+        # None outside a loaded Bit. See control/generator_runner.py.
+        self._generators: GeneratorRunner | None = None
+        # Seconds elapsed since run() started, accumulated in tick() and
+        # reset there. The clock GeneratorRunner.cues() samples -- distinct
+        # from self._clock() (wall/O2 time, used for `at`) so a generator's
+        # phase is deterministic in how long the Bit has been RUNNING, not
+        # in wall-clock time.
+        self._run_elapsed: float = 0.0
 
     def slot_requirement(self, slot: str) -> "InstrumentRequirement | None":
         """Public read of the loaded Bit's requirement for `slot`, or None
@@ -266,7 +279,8 @@ class GameServer:
                         f"role {role.name!r} requires undeclared slot "
                         f"{role.requires!r}; declared: {sorted(known_slots)}")
             validate_role_declarations(role_table)
-            validate_function_table(bit.function_table, set(bit.verb_handlers()))
+            function_table = bit.function_table
+            validate_function_table(function_table, set(bit.verb_handlers()))
             registration = RegistrationState(role_table)
         except Exception as exc:
             self._set_state(State.IDLE)
@@ -276,6 +290,15 @@ class GameServer:
         self.bit_name = name
         self.registration = registration
         self._slot_requirements = {r.slot: r for r in requirements}
+        # Built from the SAME table object validate_function_table just
+        # checked, not a fresh read of the property -- function_table is a
+        # property (see the class below), so a Bit that builds a new object
+        # per access could otherwise hand this an unvalidated table, exactly
+        # the hazard fire_function's own re-read already has to guard
+        # against (see _FlipFunctionTableBit in tests/test_engine_functions.py).
+        self._generators = GeneratorRunner(
+            [f for f in function_table.functions.values()
+             if f.kind is FunctionKind.GENERATOR])
         self._set_state(State.LOADED)
         self._enter_setup()
 
@@ -287,6 +310,7 @@ class GameServer:
         if self.state != State.SETUP:
             raise InvalidTransition(
                 f"run requires SETUP, current state is {self.state}")
+        self._run_elapsed = 0.0
         self._set_state(State.RUNNING)
         self.bit.on_run_start()
 
@@ -583,6 +607,8 @@ class GameServer:
             function_decl = table.functions.get(name)
             if function_decl is None:
                 return f"unknown function {name!r}"
+            if function_decl.kind is not FunctionKind.SCRIPTED:
+                return f"function {name!r} is not scripted"
             if function_decl.target in (FunctionTarget.DEVICE,
                                   FunctionTarget.SURFACE) and not dev:
                 if function_decl.target is FunctionTarget.DEVICE:
@@ -615,6 +641,8 @@ class GameServer:
         # cannot chain into another. The guard above already contains
         # anything a divergent function_table could throw while producing
         # `cues`, so this call sees only well-formed cues.
+        if self._generators is not None:
+            self._suppress_generator_lanes(function_decl, cues, at)
         self._dispatch_cues(cues, at)
         self._notify("on_function_fired", FunctionFired(
             name=function_decl.name,
@@ -628,6 +656,40 @@ class GameServer:
             room_name=self.provenance.get("room_name"),
         ))
         return None
+
+    def _suppress_generator_lanes(self, function_decl, cues, at: float) -> None:
+        """After a scripted fire's cues are expanded, overlay-suppress any
+        generator lane the script itself writes, until at + span (span =
+        the script's last step offset). Never kills the generator -- its
+        phase keeps advancing underneath (spec section 4)."""
+        if not function_decl.script:
+            return
+        span = float(function_decl.script[-1].offset)
+        canonical_room = self._canonical_room_dev()
+        lanes = set()
+        for cue in cues:
+            if isinstance(cue, LightCue):
+                dev, status, data1 = cue.dev, cue.status, cue.data1
+            elif isinstance(cue, tuple) and len(cue) == 4:
+                dev, status, data1, _ = cue
+            else:
+                continue
+            # A GENERATOR's own dev is always the ROOM sentinel or the
+            # unresolved TARGET sentinel (control/functions.py's
+            # _LEGAL_GENERATOR_DEVS) -- it never names a concrete device.
+            # A script step written literally as cues.ROOM stays that
+            # sentinel through expand_script and matches directly; a step
+            # written as cues.TARGET at a Room-targeting Function has
+            # already fanned out to the Room's actual canonical dev by the
+            # time it reaches here (_collapse_room_fanout), so it is folded
+            # back to the same sentinel for lane comparison -- otherwise a
+            # TARGET-authored script could never overlay a ROOM generator on
+            # the shared lane it visibly writes.
+            if canonical_room is not None and dev == canonical_room:
+                dev = ROOM
+            lanes.add((dev, status, data1))
+        if lanes:
+            self._generators.suppress(lanes, at + span)
 
     def _clear_mutes(self, devs) -> None:
         """Any non-mute fire at a surface un-latches it (spec section 4)."""
@@ -725,25 +787,47 @@ class GameServer:
     def tick(self, dt: float) -> None:
         if self.state != State.RUNNING:
             return
+        self._run_elapsed += dt
         if self.bit.update(dt):
             self._complete()
             return
-        self._dispatch_bit_cues()
+        self._dispatch_generator_cues()
+        self._dispatch_bit_fires()
 
-    def _dispatch_bit_cues(self) -> None:
-        """Drain Bit.cues() once per RUNNING tick. A self-driven cue has no
-        gesture behind it, so its origin is Control's own clock.
+    def _dispatch_generator_cues(self) -> None:
+        """Evaluate the loaded Bit's declared GENERATOR functions once per
+        RUNNING tick, in elapsed-run time, and dispatch their non-suppressed
+        lanes exactly where _dispatch_bit_cues used to drain Bit.cues()."""
+        if self._generators is None:
+            return
+        at = self._clock() + self._horizon
+        cues = self._generators.cues(self._run_elapsed, at)
+        self._dispatch_cues(cues, at, FIRED_BY_BIT_ADJUDICATED)
 
-        Guarded exactly like every other Bit hook: a raising cues() must not
-        stop this Bit reaching COMPLETING.
+    def _dispatch_bit_fires(self) -> None:
+        """Drain Bit.fires() once per RUNNING tick. A self-reported fire has
+        no gesture behind it, so its origin is Control's own clock.
+
+        Guarded exactly like _dispatch_bit_cues was: a raising fires() must
+        not stop this Bit reaching COMPLETING. Anything other than a
+        FireFunction is logged and dropped -- fires() may only report fires,
+        never drive a lane directly (that is what generators are for).
         """
         at = self._clock() + self._horizon
         try:
-            cues = self.bit.cues(at)
+            fires = self.bit.fires(at)
         except Exception:
-            logger.exception("Bit.cues raised; ignoring this tick")
+            logger.exception("Bit.fires raised; ignoring this tick")
             return
-        self._dispatch_cues(cues, at, FIRED_BY_BIT_ADJUDICATED)
+        clean = []
+        for item in fires or ():
+            if isinstance(item, FireFunction):
+                clean.append(item)
+            else:
+                logger.warning(
+                    "Bit.fires returned a non-FireFunction %r; dropping",
+                    item)
+        self._dispatch_cues(clean, at, FIRED_BY_BIT_ADJUDICATED)
 
     def abort(self) -> None:
         """Force an early end to the current Bit from any non-IDLE state.
@@ -789,6 +873,8 @@ class GameServer:
         self.bit_name = None
         self.registration = None
         self._slot_requirements = {}
+        self._generators = None
+        self._run_elapsed = 0.0
         self._set_state(State.IDLE)
 
     def add_observer(self, observer) -> None:

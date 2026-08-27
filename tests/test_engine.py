@@ -490,26 +490,36 @@ def test_join_without_room_configured_ignores_room_gating():
     assert result.granted is True
 
 
-def test_bit_cues_are_dispatched_once_per_running_tick():
-    """update(dt) answers 'am I done'; cues(at) answers 'what should happen'.
-    Without this hook nothing in a Bit can animate the Room on its own."""
+def test_a_declared_generator_is_dispatched_once_per_running_tick():
+    """update(dt) answers 'am I done'; a declared GENERATOR function answers
+    'what should happen' without any device doing something. Without this a
+    Bit could not animate the Room on its own -- Bit.cues(at) used to be
+    that hook; a declared generator, engine-run every RUNNING tick, replaces
+    it (see control/generator_runner.py)."""
     from control.bit import Bit
     from control.cues import ROOM
+    from control.functions import (Function, FunctionKind, FunctionTable,
+                                    GeneratorSpec)
     from control.roles import Role, RoleClass, RoleTable
-    
+
     class AmbientBit(Bit):
         version = "0.1"
-        def __init__(self):
-            self.at_seen = []
         @property
         def role_table(self):
             player = Role(name="player", role_class=RoleClass.SHARED,
                           capacity=None, scored=False)
             return RoleTable(roles={"player": player},
                              node_map={"NODE_A": ["player"]})
-        def cues(self, at):
-            self.at_seen.append(at)
-            return [(ROOM, 0xB0, 74, 42)]
+        @property
+        def function_table(self):
+            return FunctionTable(functions={
+                "drift": Function(
+                    name="drift", description="Ambient drift",
+                    kind=FunctionKind.GENERATOR,
+                    generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                            waveform="triangle", period=12.0,
+                                            lo=0, hi=254)),
+            })
 
     bit = AmbientBit()
     gs = GameServer({"ab": lambda: bit}, cue_horizon=0.06,
@@ -520,14 +530,13 @@ def test_bit_cues_are_dispatched_once_per_running_tick():
     gs.on_light_cue = lambda *a: seen.append(a)
     gs.load_bit("ab")
     gs.run()
-    gs.tick(0.02)
+    gs.tick(3.0)   # elapsed=3.0 of a 12s triangle from lo=0 hi=254 -> 127
 
-    assert bit.at_seen == [pytest.approx(1000.06)]
-    assert seen == [("sim-room", 0xB0, 74, 42, pytest.approx(1000.06))]
+    assert seen == [("sim-room", 0xB0, 74, 127, pytest.approx(1000.06))]
 
 
-def test_bit_cues_are_not_dispatched_on_the_completing_tick():
-    """A Bit that just signalled done is tearing down; dispatching a cue for
+def test_bit_fires_are_not_dispatched_on_the_completing_tick():
+    """A Bit that just signalled done is tearing down; dispatching a fire for
     it would put light on a device the engine is about to release."""
     from control.bit import Bit
     from control.roles import Role, RoleClass, RoleTable
@@ -535,7 +544,7 @@ def test_bit_cues_are_not_dispatched_on_the_completing_tick():
     class DoneBit(Bit):
         version = "0.1"
         def __init__(self):
-            self.cue_calls = 0
+            self.fires_calls = 0
         @property
         def role_table(self):
             player = Role(name="player", role_class=RoleClass.SHARED,
@@ -544,8 +553,8 @@ def test_bit_cues_are_not_dispatched_on_the_completing_tick():
                              node_map={"NODE_A": ["player"]})
         def update(self, dt):
             return True
-        def cues(self, at):
-            self.cue_calls += 1
+        def fires(self, at):
+            self.fires_calls += 1
             return []
 
     bit = DoneBit()
@@ -553,10 +562,10 @@ def test_bit_cues_are_not_dispatched_on_the_completing_tick():
     gs.load_bit("db")
     gs.run()
     gs.tick(0.02)
-    assert bit.cue_calls == 0
+    assert bit.fires_calls == 0
 
 
-def test_raising_bit_cues_does_not_wedge_the_tick():
+def test_raising_bit_fires_does_not_wedge_the_tick():
     """Same guarantee every other Bit hook has: a misbehaving Bit must never
     stop Control reaching COMPLETING."""
     from control.bit import Bit
@@ -570,7 +579,7 @@ def test_raising_bit_cues_does_not_wedge_the_tick():
                           capacity=None, scored=False)
             return RoleTable(roles={"player": player},
                              node_map={"NODE_A": ["player"]})
-        def cues(self, at):
+        def fires(self, at):
             raise RuntimeError("boom")
 
     gs = GameServer({"bb": BadBit})

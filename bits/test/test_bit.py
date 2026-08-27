@@ -13,8 +13,10 @@ from control.functions import (
     ConditionSource,
     ScriptStep,
     Function,
+    FunctionKind,
     FunctionTable,
     FunctionTarget,
+    GeneratorSpec,
 )
 
 RUN_DURATION_SECONDS = 2.0
@@ -43,13 +45,6 @@ class TestBit(Bit):
     # game: it exists to be deterministic and assertable at an exact tick.
     ROUND_TILTS = 3
 
-    # How long this Bit stops driving the Room's cc:74 after firing
-    # play_aurora. The drift below runs at 44 Hz and shares that lane with the
-    # script, so without yielding it the very next tick would overwrite step 0
-    # and the declared sweep would never be visible. A Bit yielding a lane it
-    # shares with its own script is the general shape here, not a TestBit quirk.
-    SCRIPT_QUIET_SECONDS = 2.0
-
     def __init__(self, config=None, run_duration: float | None = None):
         super().__init__(config)
         self._run_duration = (
@@ -65,7 +60,6 @@ class TestBit(Bit):
         self._full_tilts = 0
         self._round_won = False
         self._rounds_won = 0
-        self._quiet_until = 0.0
 
     @property
     def run_duration(self) -> float:
@@ -139,8 +133,9 @@ class TestBit(Bit):
             },
         )
         # The Room's own role. Its cc:74 lane is driven two ways now: by any
-        # player's tilt (see _on_tilt) and by this Bit's own cues() drift, so
-        # the Room animates whether or not anyone has joined.
+        # player's tilt (see _on_tilt) and by this Bit's own declared "drift"
+        # GENERATOR function, so the Room animates whether or not anyone has
+        # joined.
         # A field-rate gesture, like player's aurora -- no note lane, so it
         # renders continuously under cc:74 without the note-triggered strobe
         # TestBit's own docstring already explains. Deliberately no cc:11/
@@ -194,7 +189,6 @@ class TestBit(Bit):
         self._elapsed = 0.0
         self._full_tilts = 0
         self._round_won = False
-        self._quiet_until = 0.0
 
     def update(self, dt: float) -> bool:
         self._elapsed += dt
@@ -211,6 +205,15 @@ class TestBit(Bit):
         keeps condition evaluation inside the Bit.
         """
         return FunctionTable(functions={
+            "drift": Function(
+                name="drift",
+                description="Ambient hue drift across the Room, whether or "
+                            "not anyone has joined",
+                kind=FunctionKind.GENERATOR,
+                generator=GeneratorSpec(
+                    dev=ROOM, status=0xB0, data1=74, waveform="triangle",
+                    period=self.ROOM_DRIFT_PERIOD, lo=0, hi=127),
+            ),
             "play_aurora": Function(
                 name="play_aurora",
                 description="A slow rainbow sweep across the Room",
@@ -270,38 +273,32 @@ class TestBit(Bit):
             ),
         })
 
-    def cues(self, at: float) -> list:
-        """Self-driven Room animation, plus this Bit's own adjudication report.
+    def fires(self, at: float) -> list:
+        """This Bit's own bit-adjudicated report: a won round.
 
-        verb_handlers() can only ever react to a device, so without the drift
-        the Room's rainbow would still scroll on its own -- its `speed` param
-        advances the gradient every tick with no input at all -- but its base
-        hue would sit fixed at the declared value for a whole run rather than
-        sweeping. Deterministic in self._elapsed, which update(dt) already
-        accumulates, so a test can assert the exact value at a given elapsed
-        time.
+        The Room's ambient hue drift used to be reported from this same
+        hook (as a plain cc:74 cue, self-driven with no device doing
+        anything), yielding the lane for SCRIPT_QUIET_SECONDS while
+        play_aurora's script played. Both now live in the engine instead:
+        the drift is the declared "drift" GENERATOR function above, run
+        every RUNNING tick by GameServer's GeneratorRunner, and the
+        yield-while-scripted-playing behavior is the engine's generic
+        per-lane overlay suppression (control/generator_runner.py; see
+        docs/superpowers/specs/2026-08-27-functions-and-trigger-rename-
+        design.md section 4) -- this Bit no longer tracks a quiet window
+        itself.
 
-        Triangle rather than sawtooth: a sawtooth snaps from 127 back to 0 once
-        per period, and rainbow GLIDES to its target, so the snap reads as a
-        visible lurch rather than a wrap.
-
-        A won round is reported here rather than from update(dt) because a fire
-        is returned in the cue vocabulary, and this is the hook that carries it
-        with a presentation time already computed. It latches, so a round fires
-        exactly once however many ticks pass before it is drained.
+        A won round is reported here, rather than from update(dt), because a
+        fire is returned in the vocabulary this hook exists for, with a
+        presentation time already computed by the engine. It latches, so a
+        round fires exactly once however many ticks pass before it is
+        drained.
         """
         if self._round_won:
             self._round_won = False
             self._rounds_won += 1
-            self._quiet_until = self._elapsed + self.SCRIPT_QUIET_SECONDS
             return [FireFunction("play_aurora", ROOM)]
-        if self._elapsed < self._quiet_until:
-            # play_aurora owns cc:74 until its script finishes. See
-            # SCRIPT_QUIET_SECONDS.
-            return []
-        phase = (self._elapsed % self.ROOM_DRIFT_PERIOD) / self.ROOM_DRIFT_PERIOD
-        cc = int(round(254 * (phase if phase < 0.5 else 1.0 - phase)))
-        return [(ROOM, 0xB0, 74, cc)]
+        return []
 
     def on_complete(self) -> None:
         self._completed = True

@@ -89,21 +89,21 @@ class Bit(ABC):
         """
         return False
 
-    def cues(self, at: float) -> list:
-        """Self-driven cues for this tick, in the same vocabulary a verb
-        handler returns: plain (dev, status, data1, data2) tuples,
-        control.cues.LightCue, control.cues.PlayCue, and the
-        control.cues.ROOM target.
+    def fires(self, at: float) -> list:
+        """Self-reported bit-adjudicated function fires for this tick.
 
         Called once per RUNNING tick, after update(dt), and skipped on the
         tick update() signals completion. `at` is the absolute time at which
-        these cues should be PRESENTED; Control has already added the
-        installation's cue_horizon to its own clock.
+        a fire reported here should be PRESENTED; Control has already added
+        the installation's cue_horizon to its own clock.
 
-        This is the only way a Bit can animate anything without a device
-        doing something: verb_handlers() can only ever react to a gesture,
-        which is why the Room's light used to reach its declared static hue
-        once and hold it for a whole run. Default: nothing to emit.
+        May return only control.cues.FireFunction -- this is a Bit's only
+        way to report a condition it evaluated itself (no gesture, no verb)
+        without an operator's manual fire. Anything else in the returned
+        list is logged and dropped by the engine: continuous lane-driving
+        without a device doing something is exactly what a declared
+        GENERATOR Function exists to do instead (see control/
+        generator_runner.py). Default: nothing to report.
         """
         return []
 

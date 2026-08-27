@@ -19,8 +19,10 @@ from control.functions import (
     ConditionSource,
     ScriptStep,
     Function,
+    FunctionKind,
     FunctionTable,
     FunctionTarget,
+    GeneratorSpec,
 )
 
 
@@ -134,7 +136,7 @@ class ScriptBit(_BaseBit):
         from control.cues import FireFunction
         return [(dev, 0xB0, 74, 1), FireFunction("flash", dev)]
 
-    def cues(self, at):
+    def fires(self, at):
         from control.cues import FireFunction
         if self.fire_next is None:
             return []
@@ -231,13 +233,97 @@ def test_a_verb_handler_fire_shares_the_gestures_presentation_time():
     assert {c[4] for c in light} == {100.0}
 
 
-def test_a_cues_fire_is_recorded_as_bit_adjudicated():
+def test_a_fires_fire_is_recorded_as_bit_adjudicated():
+    """Bit.fires(at) replaces Bit.cues(at)'s FireFunction-reporting job:
+    drained once per RUNNING tick, in the same place, the same way."""
     gs, _, _ = _running()
     observer = Recorder()
     gs.add_observer(observer)
     gs.bit.fire_next = "sweep"
     gs.tick(0.01)
     assert [r.fired_by for r in observer.fired] == ["bit-adjudicated"]
+
+
+def test_fires_returning_a_plain_cue_tuple_is_dropped_not_dispatched():
+    """Bit.fires may return only FireFunctions -- lane-driving from this
+    hook is exactly what generators exist to replace. A non-FireFunction
+    element is logged and dropped, dispatching nothing."""
+    class BadFiresBit(_BaseBit):
+        def fires(self, at):
+            return [(ROOM, 0xB0, 74, 5)]
+
+    gs, light, _ = _running(bit_cls=BadFiresBit)
+    gs.tick(0.01)
+    assert light == []
+
+
+def test_firing_a_generator_function_is_refused_not_scripted():
+    class DriftBit(_BaseBit):
+        @property
+        def function_table(self) -> FunctionTable:
+            return FunctionTable(functions={
+                "drift": Function(
+                    name="drift", description="Ambient drift",
+                    kind=FunctionKind.GENERATOR,
+                    generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                            waveform="triangle", period=12.0)),
+            })
+
+    gs, _, _ = _running(bit_cls=DriftBit)
+    reason = gs.fire_function("drift", fired_by="admin-manual")
+    assert reason == "function 'drift' is not scripted"
+
+
+class GeneratorBit(_BaseBit):
+    @property
+    def function_table(self) -> FunctionTable:
+        return FunctionTable(functions={
+            "drift": Function(
+                name="drift", description="Ambient drift",
+                kind=FunctionKind.GENERATOR,
+                generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                        waveform="triangle", period=12.0,
+                                        lo=0, hi=254)),
+            "flash": Function(
+                name="flash", description="Flash cc:74 on the Room",
+                target=FunctionTarget.ROOM,
+                condition=Condition(name="manual", description="Operator asks",
+                                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
+                        ScriptStep(2.0, (TARGET, 0xB0, 74, 0)))),
+        })
+
+
+def test_generator_cues_dispatch_once_per_running_tick():
+    """load_bit builds the GeneratorRunner from the validated table's
+    GENERATOR functions; tick() dispatches its non-suppressed lanes through
+    on_light_cue, exactly like a scripted fire's steps."""
+    gs, light, _ = _running(bit_cls=GeneratorBit)
+    gs.tick(3.0)
+    assert light == [("sim-room-main", 0xB0, 74, 127, pytest.approx(100.0))]
+
+
+def test_scripted_fire_suppresses_the_generator_lane_it_writes_and_it_resumes():
+    """Overlay, not kill (spec section 4): a scripted fire on the same lane
+    a generator drives suppresses that generator's emissions until
+    at + span, and the generator resumes -- with its phase having kept
+    advancing underneath -- once the window closes."""
+    gs, light, _ = _running(bit_cls=GeneratorBit, clock=lambda: 100.0)
+    assert gs.fire_function("flash", fired_by="admin-manual") is None
+    light.clear()
+    gs.tick(0.5)   # elapsed=0.5, at=100.0: inside the flash's 100..102 window
+    assert light == []
+    gs.tick(2.0)   # elapsed=2.5, at=100.0: still inside the window
+    assert light == []
+
+
+def test_generator_resumes_emitting_once_the_suppression_window_closes():
+    gs, light, _ = _running(bit_cls=GeneratorBit, clock=lambda: 100.0)
+    assert gs.fire_function("flash", fired_by="admin-manual") is None
+    light.clear()
+    gs._clock = lambda: 102.5   # past at(100.0) + span(2.0)
+    gs.tick(0.1)
+    assert [c for c in light if c[2] == 74 and c[0] == "sim-room-main"]
 
 
 def test_fired_by_never_inherits_declared_source():

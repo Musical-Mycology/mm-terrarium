@@ -1,8 +1,9 @@
 from bits.test.test_bit import TestBit
 from control.cues import ROOM, FireFunction, MuteCue
+from control.generator_runner import GeneratorRunner
 from control.instrument import InstrumentRequirement
 from control.roles import RoleClass
-from control.functions import FunctionTarget, validate_function_table
+from control.functions import FunctionKind, FunctionTarget, validate_function_table
 
 
 def test_role_table_has_one_scored_and_one_jam_role():
@@ -236,41 +237,29 @@ def test_tilt_drives_the_calling_device_and_the_room_at_one_time():
 
 
 def test_room_drift_is_a_deterministic_triangle():
-    """Deterministic in _elapsed, which update(dt) already accumulates, so a
-    test can assert the exact value. Triangle rather than sawtooth: a
-    sawtooth snaps from 127 back to 0 once a period and aurora glides to its
-    target, so the snap reads as a visible lurch."""
-    from control.cues import ROOM
-    bit = TestBit(run_duration=1000.0)
-    bit.on_run_start()
+    """Deterministic in elapsed time, so a test can assert the exact value.
+    Triangle rather than sawtooth: a sawtooth snaps from 127 back to 0 once
+    a period and aurora glides to its target, so the snap reads as a
+    visible lurch. Engine-run now (control/generator_runner.py); this pins
+    the declared GeneratorSpec's own math, with no engine involved."""
+    spec = TestBit().function_table.functions["drift"].generator
+    assert spec.dev == ROOM and spec.status == 0xB0 and spec.data1 == 74
 
-    assert bit.cues(at=0.0) == [(ROOM, 0xB0, 74, 0)]
-
-    bit.update(TestBit.ROOM_DRIFT_PERIOD / 2)          # half a period
-    assert bit.cues(at=0.0) == [(ROOM, 0xB0, 74, 127)]
-
-    bit.update(TestBit.ROOM_DRIFT_PERIOD / 2)          # a full period
-    assert bit.cues(at=0.0) == [(ROOM, 0xB0, 74, 0)]
-
-    bit.update(TestBit.ROOM_DRIFT_PERIOD * 3 / 4)       # three-quarters through the next period
-    assert bit.cues(at=0.0) == [(ROOM, 0xB0, 74, 64)]
+    assert GeneratorRunner.value(spec, 0.0) == 0
+    assert GeneratorRunner.value(spec, TestBit.ROOM_DRIFT_PERIOD / 2) == 127
+    assert GeneratorRunner.value(spec, TestBit.ROOM_DRIFT_PERIOD) == 0
+    assert GeneratorRunner.value(
+        spec, TestBit.ROOM_DRIFT_PERIOD * 3 / 4) == 64
 
 
-def test_room_animates_with_no_device_joined():
-    """verb_handlers() can only react to a gesture. Without cues(), the
-    Room's aurora reached its declared static hue once and held it for the
-    whole run."""
-    bit = TestBit(run_duration=1000.0)
-    bit.on_run_start()
-    bit.update(1.0)
-    assert bit.cues(at=0.0), "the Room must animate with nobody joined"
-
-
-def test_testbit_declares_four_surface_triggers():
+def test_testbit_declares_a_room_drift_generator_and_four_surface_triggers():
     table = TestBit().function_table
-    assert set(table.functions) == {"flash_device", "play_aurora", "stop", "win"}
-    assert all(t.target is FunctionTarget.SURFACE
-               for t in table.functions.values())
+    assert set(table.functions) == {
+        "drift", "flash_device", "play_aurora", "stop", "win"}
+    assert table.functions["drift"].kind is FunctionKind.GENERATOR
+    scripted = {name: fn for name, fn in table.functions.items()
+                if name != "drift"}
+    assert all(t.target is FunctionTarget.SURFACE for t in scripted.values())
 
 
 def test_flash_script_is_chime_plus_white_5s():
@@ -299,7 +288,7 @@ def test_tilt_latch_fires_play_aurora_at_room():
     for _ in range(TestBit.ROUND_TILTS):
         bit.verb_handlers()["tilt"]("ie1", ["ie1", 90.0], 100.0)
     bit.update(0.01)
-    fires = [c for c in bit.cues(100.0) if isinstance(c, FireFunction)]
+    fires = [c for c in bit.fires(100.0) if isinstance(c, FireFunction)]
     assert [(f.name, f.dev) for f in fires] == [("play_aurora", ROOM)]
 
 
@@ -323,7 +312,7 @@ def test_full_deflection_tilts_win_a_round_and_fire_play_aurora():
     for _ in range(TestBit.ROUND_TILTS):
         bit.verb_handlers()["tilt"]("ie1", ["ie1", 90.0], 100.0)
     bit.update(0.01)
-    fires = [c for c in bit.cues(100.0) if isinstance(c, FireFunction)]
+    fires = [c for c in bit.fires(100.0) if isinstance(c, FireFunction)]
     assert [f.name for f in fires] == ["play_aurora"]
 
 
@@ -335,7 +324,7 @@ def test_a_partial_tilt_does_not_count_toward_the_round():
     for _ in range(TestBit.ROUND_TILTS):
         bit.verb_handlers()["tilt"]("ie1", ["ie1", 10.0], 100.0)
     bit.update(0.01)
-    assert not [c for c in bit.cues(100.0) if isinstance(c, FireFunction)]
+    assert not [c for c in bit.fires(100.0) if isinstance(c, FireFunction)]
 
 
 def test_the_round_fires_once_not_every_tick():
@@ -344,33 +333,17 @@ def test_the_round_fires_once_not_every_tick():
     for _ in range(TestBit.ROUND_TILTS):
         bit.verb_handlers()["tilt"]("ie1", ["ie1", 90.0], 100.0)
     bit.update(0.01)
-    first = [c for c in bit.cues(100.0) if isinstance(c, FireFunction)]
+    first = [c for c in bit.fires(100.0) if isinstance(c, FireFunction)]
     bit.update(0.01)
-    second = [c for c in bit.cues(100.0) if isinstance(c, FireFunction)]
+    second = [c for c in bit.fires(100.0) if isinstance(c, FireFunction)]
     assert len(first) == 1 and second == []
 
 
-def test_the_ambient_drift_yields_the_lane_while_the_script_plays():
-    """The drift and play_aurora's script both drive the Room's cc:74. Without
-    this the 44 Hz drift would overwrite every script step within one tick and
-    the declared sweep would never be visible."""
-    bit = TestBit(run_duration=30.0)
-    bit.on_run_start()
-    for _ in range(TestBit.ROUND_TILTS):
-        bit.verb_handlers()["tilt"]("ie1", ["ie1", 90.0], 100.0)
-    bit.update(0.01)
-    bit.cues(100.0)                       # the fire tick
-    bit.update(0.5)
-    assert bit.cues(100.5) == []          # still inside the script
-    bit.update(TestBit.SCRIPT_QUIET_SECONDS)
-    assert bit.cues(103.0)                # drift resumes afterwards
-
-
-def test_the_ambient_drift_is_unchanged_when_no_round_has_been_won():
+def test_fires_reports_nothing_when_no_round_has_been_won():
     bit = TestBit(run_duration=30.0)
     bit.on_run_start()
     bit.update(0.0)
-    assert bit.cues(100.0) == [(ROOM, 0xB0, 74, 0)]
+    assert bit.fires(100.0) == []
 
 
 def test_jammer_declares_a_low_green_aurora_on_its_own_lanes():

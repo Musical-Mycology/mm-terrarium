@@ -12,7 +12,7 @@ list discriminates light from audio.
 from __future__ import annotations
 
 from control.cues import MuteCue, PlayCue, SolidCue
-from control.functions import SOURCE_WIRE
+from control.functions import SOURCE_WIRE, FunctionKind
 
 
 def _step_view(step) -> dict:
@@ -48,11 +48,20 @@ def function_view(function_decl) -> dict:
 
 
 def functions_view(function_table) -> list[dict]:
-    """Every declared function, in declaration order. Empty when no Bit is
-    loaded, which the panel renders as "No functions declared"."""
+    """Every declared SCRIPTED function, in declaration order. Empty when no
+    Bit is loaded, which the panel renders as "No functions declared".
+
+    GENERATOR and STREAM functions are not yet rendered here -- the Console
+    only understands the SCRIPTED card shape (target/condition/script) today.
+    Kind-tagged cards for the other kinds are a later Console slice (see
+    docs/superpowers/specs/2026-08-27-functions-and-trigger-rename-design.md
+    section 10 item 6); skipping them here rather than crashing is what lets
+    a Bit declare one without losing its Console panel meanwhile.
+    """
     if function_table is None:
         return []
-    return [function_view(fn) for fn in function_table.functions.values()]
+    return [function_view(fn) for fn in function_table.functions.values()
+            if fn.kind is FunctionKind.SCRIPTED]
 
 
 def function_fired_view(record) -> dict:
