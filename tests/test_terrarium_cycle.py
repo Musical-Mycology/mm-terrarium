@@ -23,6 +23,7 @@ from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.boot_config import BootConfig
 from control.engine import GameServer
+from control.audio import AudioBridge, FakePool
 from control.instrument import Instrument
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile
@@ -105,7 +106,13 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     # GameServer state this agent observes, not anything this test pokes
     # directly.
     from tests.test_devicelink_agent import FakeServer
-    dl_agent = DeviceLinkAgent(gs, FakeServer())
+    # room_audio wires a real AudioBridge (over a FakePool) so the ambient
+    # leg below can assert on the voice-pool/drone state after unload_room --
+    # final review's Important finding (unwire_room leaking the ambient
+    # Room's audio grant) is only visible through this seam.
+    audio_pool = FakePool()
+    room_audio = AudioBridge(audio_pool)
+    dl_agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
     terrarium.add_observer(_RoomWiring(dl_agent, terrarium))
 
     # Spy on every manifest _setup_room actually parses, so the ambient leg
@@ -194,6 +201,13 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     # Room renders that instead of going unbuilt. ---
     assert dl_agent._room_light is not None
     assert "aurora" in _last_instruments()
+    # Ambient audio grants a voice and starts its drone the moment the Room
+    # reaches ROOM_READY with no Bit loaded -- see devicelink/agent.py's
+    # _setup_room(). This is the exact state final review flagged as
+    # reachable by unload_room (gs.state == IDLE, no Bit) with the grant
+    # still outstanding.
+    ambient_voice = audio_pool.acquired[-1]
+    assert any(call[0] == "note_on" for call in ambient_voice.sent)
 
     srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
     agent.poll()
@@ -209,6 +223,12 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     assert gs.bit is None
     assert dl_agent._room_light is not None
     assert "aurora" in _last_instruments()   # ambient again once the Bit unloads
+    # The ambient drone re-grants a FRESH voice on the swap back (mirrors
+    # test_ambient_audio_swaps_to_the_bits_drone_at_load's pool-count check);
+    # this is the voice unload_room below must release.
+    reambient_voice = audio_pool.acquired[-1]
+    assert reambient_voice is not ambient_voice
+    assert any(call[0] == "note_on" for call in reambient_voice.sent)
 
     # --- console: unload_room -- clean end ---
     srv.deliver("c1", {"command": "unload_room"})
@@ -217,6 +237,11 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     assert gs.room is None
     assert len(gs.devices) == 0
     assert terrarium.room_stack is None
+    # Final review's Important finding, pinned: unload_room of an
+    # ambient-audio Room must not leak the voice back to the pool or leave
+    # its drone sounding.
+    assert reambient_voice in audio_pool.released
+    assert reambient_voice.sent[-1][0] in ("note_off", "all_off")
     assert first_arco.events == ["start", "wait_ready", "shutdown"]
     assert second_arco.events == ["start", "wait_ready", "shutdown"]
     unloaded = [m for m in srv.broadcasts if m.get("event") == "room_unloaded"]

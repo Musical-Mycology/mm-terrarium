@@ -171,6 +171,13 @@ class DeviceLinkAgent:
         # Room is exactly the confusion this slice removes.
         self._room_profile: RoomProfile | None = room_profile
         self._room_light = None
+        # The dev _setup_room() last granted Room audio to (None if no
+        # grant is outstanding). Cached here rather than recomputed from
+        # gs.room at release time because unwire_room() runs AFTER
+        # Terrarium.unload_room() has already set gs.room = None (see
+        # unwire_room's own docstring) -- by then _canonical_room_dev()
+        # can no longer see which dev held the grant.
+        self._room_audio_dev: str | None = None
         # Display-only copy of each changed Room frame, for the Terrarium
         # Console. Optional and best-effort: None is the default, so a run
         # without a console constructs and behaves exactly as before.
@@ -246,6 +253,7 @@ class DeviceLinkAgent:
             # AudioBridge.on_release) before granting the new declaration,
             # so an ambient<->Bit swap never leaks the old voice.
             self._room_audio.on_release(canonical)
+            self._room_audio_dev = None
             audio_role = role
             if audio_role is None and ambient_ugen:
                 # Ambient has no Role of its own -- on_grant only ever
@@ -258,6 +266,7 @@ class DeviceLinkAgent:
                                   ugen_manifest=ambient_ugen)
             if audio_role is not None:
                 self._room_audio.on_grant(canonical, audio_role)
+                self._room_audio_dev = canonical
                 audio_sink = _RoomAudioSink(self._room_audio, canonical)
                 if role is None:
                     # Ambient has no RUNNING transition of its own to start
@@ -328,7 +337,29 @@ class DeviceLinkAgent:
         agent's Room session/bridge/profile so nothing stale renders or
         reports controllers once the Room that produced them is gone.
         Called by the same Terrarium observer that calls rewire_room(), on
-        the transition INTO NO_ROOM (a Console `unload_room`)."""
+        the transition INTO NO_ROOM (a Console `unload_room`).
+
+        Also stops any ambient drone and releases the Room's audio grant
+        (the same `stop_drone`/`on_release` calls _setup_room() makes
+        before a re-grant): `unload_room` only requires gs.state == IDLE
+        (no Bit loaded), which is exactly the state ambient audio -- granted
+        at ROOM_READY with no Bit -- leaves outstanding. Left unreleased,
+        the AudioBridge's finite voice pool leaks a voice (and a drone note
+        can be left sounding) on every ambient-Room unload cycle. Both
+        calls are no-ops when nothing was granted/no drone is running -- see
+        AudioBridge.on_release/stop_drone -- so this is safe to call
+        unconditionally, mirroring _setup_room()'s own guarded call.
+
+        Uses self._room_audio_dev rather than _canonical_room_dev(): by the
+        time the Terrarium observer calls unwire_room(), Terrarium.unload_room
+        has already set gs.room = None (see control/terrarium.py), so
+        _canonical_room_dev() can no longer see which dev held the grant --
+        _room_audio_dev is the cached record _setup_room() left behind at
+        grant time."""
+        if self._room_audio is not None and self._room_audio_dev is not None:
+            self._room_audio.stop_drone(self._room_audio_dev)
+            self._room_audio.on_release(self._room_audio_dev)
+            self._room_audio_dev = None
         self._room_light = None
         self._room_bridge = None
         self._room_profile = None

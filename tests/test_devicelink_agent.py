@@ -828,6 +828,33 @@ def test_ambient_audio_swaps_to_the_bits_drone_at_load(monkeypatch):
     assert ambient_voice.sent[-1][0] in ("note_off", "all_off")
 
 
+def test_unwire_room_releases_the_ambient_audio_grant_and_stops_the_drone():
+    """Final-review Important finding: unload_room only requires gs.state ==
+    IDLE, which ambient audio (granted at ROOM_READY with no Bit loaded)
+    routinely satisfies. unwire_room() -- the NO_ROOM-entry counterpart Console
+    `unload_room` triggers -- must release the Room's outstanding audio grant
+    and stop its drone the same way _setup_room()'s own ambient<->Bit swap
+    does, or the AudioBridge's finite voice pool leaks a voice and the drone
+    note is left sounding on every ambient-Room unload cycle."""
+    gs = _demo_room_no_bit_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+    voice = pool.acquired[0]
+    assert any(call[0] == "note_on" for call in voice.sent)   # drone is live
+
+    # Mirror control/terrarium.py's unload_room(): it clears gs.room to None
+    # BEFORE the ROOM_READY -> NO_ROOM observer notification fires
+    # unwire_room(), so unwire_room cannot recover the canonical dev from
+    # gs.room -- it must have cached it at grant time.
+    gs.room = None
+    agent.unwire_room()
+
+    assert voice in pool.released
+    assert voice.sent[-1][0] in ("note_off", "all_off")
+
+
 # --- Room cue timing: the Room branch of _on_light_cue queues on
 # self._room_cues (a TimedQueue) instead of feeding immediately, so the
 # Room's light waits for its declared time the same way Task 7's per-device
