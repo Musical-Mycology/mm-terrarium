@@ -9,6 +9,7 @@ See docs/superpowers/specs/
 from __future__ import annotations
 
 import os
+import time
 from enum import Enum
 
 from control.arco_process import ArcoProcess
@@ -123,10 +124,9 @@ class Terrarium:
         recorder = self._run_recorder
 
         def _record(pid: int) -> None:
-            import time as _time
             spawn_time = _default_spawn_time(pid)
             if spawn_time is None:
-                spawn_time = _time.time()
+                spawn_time = time.time()
             recorder.record(pid, role, spawn_time=spawn_time)
         return _record
 

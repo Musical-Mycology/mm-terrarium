@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import subprocess
 import time
@@ -22,6 +23,8 @@ from dataclasses import dataclass
 
 from control.process import stop_process
 from control.wire_json import dumps
+
+logger = logging.getLogger(__name__)
 
 # Pid reuse guard: how far a live pid's current spawn time may drift from
 # the recorded one before we refuse to treat it as the process we started.
@@ -175,7 +178,19 @@ def sweep_stale(runs_dir: str, *, stop=_default_stop,
             if current is None or abs(current - rec.spawn_time) > _SPAWN_TIME_TOLERANCE:
                 all_handled = False           # pid reuse guard: not ours (or unproven)
                 continue
-            stop(rec.pid)
+            try:
+                stop(rec.pid)
+            except Exception:
+                # A failed stop (e.g. PermissionError against a foreign-
+                # owned pid that happened to pass the spawn-time check)
+                # must not abandon the remaining records/files in this
+                # sweep -- one unkillable pid should not fail the whole
+                # room load. Leave the record in place and move on.
+                logger.exception(
+                    "sweep_stale: failed to stop pid %d (role=%r); leaving "
+                    "its record in place", rec.pid, rec.role)
+                all_handled = False
+                continue
             acted.append(rec)
         if all_handled:
             os.remove(path)

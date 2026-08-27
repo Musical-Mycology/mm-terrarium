@@ -125,6 +125,31 @@ def test_sweep_consumes_record_file_after_clean_sweep(tmp_path):
     assert not os.path.exists(path)
 
 
+def test_sweep_continues_past_a_stop_that_raises(tmp_path):
+    path_a = tmp_path / "run-1" / "procs.jsonl"
+    RunRecorder(str(path_a)).record(107, "arco", spawn_time=500.0)
+    path_b = tmp_path / "run-2" / "procs.jsonl"
+    RunRecorder(str(path_b)).record(108, "arco", spawn_time=500.0)
+    table = _FakeProcessTable({107: 500.0, 108: 500.0})
+
+    def flaky_stop(pid):
+        if pid == 107:
+            raise PermissionError("not ours after all")
+        table.stop(pid)
+
+    acted = sweep_stale(
+        str(tmp_path), stop=flaky_stop,
+        process_spawn_time=table.spawn_time, is_alive=table.is_alive)
+
+    # The raising stop must not abandon the rest of the sweep: pid 108 in
+    # the other record file is still handled, and sweep_stale itself must
+    # not raise.
+    assert acted == [SpawnRecord(pid=108, spawn_time=500.0, role="arco")]
+    assert table.stopped == [108]
+    assert os.path.exists(path_a)      # 107's file kept: not handled
+    assert not os.path.exists(path_b)  # 108's file consumed: handled
+
+
 def test_sweep_keeps_record_file_when_a_pid_is_not_handled(tmp_path):
     path = tmp_path / "run-1" / "procs.jsonl"
     recorder = RunRecorder(str(path))
