@@ -3,7 +3,7 @@ import pytest
 from control.instrument import (
     CAPABILITY_VOCABULARY, CUE_KINDS, CarriedInstrument, Instrument,
     InstrumentError, InstrumentRequirement, TUNESHROOM, satisfies,
-    validate_instrument,
+    validate_instrument, validate_instrument_manifests,
 )
 
 
@@ -64,3 +64,21 @@ def test_vocabulary_and_cue_kinds_are_the_documented_sets():
         "light.pixels", "light.surface", "audio.flsyn", "audio.samples",
         "gesture.tap", "gesture.tilt"})
     assert CUE_KINDS == ("midi", "play", "solid", "mute")
+
+
+def test_instrument_ambient_light_manifest_is_validated():
+    inst = Instrument(name="arr", light_manifest={
+        "instruments": [{"target": "primary"}]})  # missing "instrument"
+    with pytest.raises(InstrumentError, match="arr"):
+        validate_instrument_manifests(inst)
+
+
+def test_instrument_ambient_ugen_manifest_is_validated():
+    inst = Instrument(name="arr", ugen_manifest={
+        "instruments": [{"program": 89}]})  # missing "instrument"
+    with pytest.raises(InstrumentError, match="arr"):
+        validate_instrument_manifests(inst)
+
+
+def test_empty_ambient_manifests_validate():
+    validate_instrument_manifests(TUNESHROOM)

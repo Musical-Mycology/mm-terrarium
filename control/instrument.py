@@ -81,6 +81,23 @@ def satisfies(instrument: Instrument, requirement: InstrumentRequirement,
     return None
 
 
+def validate_instrument_manifests(instrument: Instrument) -> None:
+    """Validate an instrument's light_manifest/ugen_manifest with the same
+    shallow structural checks role_config applies to Roles, located by the
+    instrument's own name rather than a role name."""
+    from control import role_config
+    where = f"instrument {instrument.name!r}"
+    try:
+        if instrument.light_manifest:
+            role_config.validate_light_manifest(
+                instrument.light_manifest, f"{where} light_manifest")
+        if instrument.ugen_manifest:
+            role_config.validate_ugen_manifest(
+                instrument.ugen_manifest, f"{where} ugen_manifest")
+    except Exception as exc:
+        raise InstrumentError(str(exc)) from exc
+
+
 TUNESHROOM = Instrument(
     name="tuneshroom",
     description="Handheld 12-LED Tuneshroom (8-ring + 4-stem)",
