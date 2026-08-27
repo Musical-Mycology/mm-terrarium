@@ -310,22 +310,57 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     return gs, server, agent, terrarium.arco, teardown, terrarium
 
 
-def shutdown(teardown, terrarium=None) -> None:
+def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
     """Unwind everything, in reverse registration order, and report.
 
-    Two stacks now, unwound in this order: `terrarium.room_stack` first
-    (via terrarium.unload_room(force=True), only if a Room is actually
-    loaded -- ROOM_READY), THEN the process-level `teardown` this module
-    owns (the devicelink server, the console, the o2lite transport). That
-    ordering is what keeps client-before-hub true: unload_room's own
-    sequence already tears down the Bit, then the Room bridge (which frees
-    the Room's Arco voice), then the Room simulator subprocess, then Arco --
-    all clients of the devicelink server/o2lite hub `teardown` stops last.
+    THREE unwind phases now, in this order:
 
-    force=True on unload_room mirrors the old single-stack shutdown()'s
-    behavior: a still-RUNNING Bit is aborted on the way down rather than
-    refusing to tear down.
+      1. `pre_room_teardown`, if given -- in o2lite mode this is the o2lite
+         transport ONLY. It must close BEFORE Arco: it is Control's own
+         o2lite client connection to the SAME Arco hub the Room simulator
+         also talks to, and the repo's actual invariant (see
+         control/teardown.py's own docstring) is "no client outlives the
+         hub it is a guest on", not "Arco last". A client that outlives its
+         hub is exactly the PR #24 defect that invariant exists to
+         prevent, and the transport is unambiguously a client of Arco here
+         -- it must go first, ahead of `terrarium.room_stack` (which is
+         where Arco itself lives). None in websocket mode: there is no
+         o2lite transport, and the devicelink server (websocket mode's own
+         hub, the Room simulator's client target there) belongs on
+         `teardown` below, which already closes AFTER the room stack.
+
+         STEADY STATE EXCEPTION: a mid-run `unload_room` (a Console
+         `unload_room`, or `_serve_rounds`'/`_serve_roomless`'s own
+         "no-room" handling) does NOT close the o2lite transport -- only
+         this function, at final process shutdown, does. That is safe
+         specifically because the transport is Control's OWN long-lived
+         connection to Arco, not scoped to any one Room: pyarco's
+         o2lite connection dies with Arco regardless of whether a Room is
+         currently loaded, so there is nothing for an intermediate
+         unload_room to orphan by leaving the transport running across a
+         Room cycle -- it simply keeps serving Control's own o2lite
+         traffic (registration, non-Room devices) until the next
+         load_room, or until this function finally stops it.
+
+      2. `terrarium.room_stack`, via terrarium.unload_room(force=True) --
+         only if a Room is actually loaded (ROOM_READY). Its own sequence
+         tears down the Bit, then the Room bridge (which frees the Room's
+         Arco voice), then the Room simulator subprocess, then Arco.
+         force=True mirrors the old single-stack shutdown()'s behavior: a
+         still-RUNNING Bit is aborted on the way down rather than refusing
+         to tear down.
+
+      3. The process-level `teardown` this module owns (the devicelink
+         server in websocket mode, the console) -- neither has a hub
+         dependency on the room stack (the devicelink server IS websocket
+         mode's hub, and closes after its own clients precisely because it
+         was pushed onto `teardown` first, at build() time, and torn down
+         last by this stack's own LIFO order), so ordering it after phase 2
+         is safe either way.
     """
+    if pre_room_teardown is not None:
+        for name, exc in pre_room_teardown.close():
+            print(f"teardown step {name!r} failed: {exc!r}", file=sys.stderr)
     if terrarium is not None and terrarium.state is TerrariumState.ROOM_READY:
         reason = terrarium.unload_room(force=True)
         if reason is not None:
@@ -811,6 +846,34 @@ class _TerrariumLogger:
                  flush=True)
 
 
+class _RoomWiring:
+    """Keeps `agent` (a devicelink.agent.DeviceLinkAgent) in sync with
+    Terrarium's Room lifecycle for every load/unload AFTER construction.
+
+    build() already wires a CLI-selected round-1 Room (--room) correctly:
+    it loads the Room (and the Bit) before ever constructing `agent`, so
+    DeviceLinkAgent's own __init__-time _setup_room() sees a live gs.room
+    and needs no help. This observer exists for the case build() cannot
+    cover -- a NO_ROOM boot, where `agent` is constructed with
+    room_bridge=None because no Room exists yet. Left unwired, a Room that
+    loads later (a Console `load_room`) would never get a light session,
+    an audio grant, or a bound MIDI bridge, and console.agent.ConsoleAgent's
+    own controllers read-out (which now reads terrarium.room_bridge live,
+    see its _current_room()) would have nothing live to read either --
+    see devicelink.agent.DeviceLinkAgent.rewire_room's own docstring for
+    the full picture."""
+
+    def __init__(self, agent, terrarium) -> None:
+        self._agent = agent
+        self._terrarium = terrarium
+
+    def on_terrarium_state_change(self, old_state, new_state) -> None:
+        if new_state is TerrariumState.ROOM_READY:
+            self._agent.rewire_room(self._terrarium.room_bridge)
+        elif new_state is TerrariumState.NO_ROOM:
+            self._agent.unwire_room()
+
+
 def _print_join_denied(dev: str, node: str, reason: str) -> None:
     """DeviceLinkAgent's on_join_denied sink (see devicelink/agent.py's
     _notify_join_denied, called at the deny reply's send site and guarded
@@ -1168,12 +1231,23 @@ def main() -> None:
         host=args.host, port=args.port,
         transport=transport, clock=clock,
         arco_process_cls=arco_process_cls, on_join_denied=_print_join_denied)
+    # A SEPARATE stack from `teardown` -- see shutdown()'s docstring for
+    # why the o2lite transport must close before terrarium.room_stack
+    # (Arco) rather than with the rest of the process-level steps.
+    pre_room_teardown = TeardownStack()
     # Live from here on: a Console `load_room`/`unload_room` after this
     # point prints via the two markers.CONTROL_ROOM_* lines. The round-1
     # CLI-selected Room (if --room was given) loaded INSIDE build(), before
     # this observer existed to see it -- seeded from `terrarium.room` at
     # construction and announced explicitly just below instead.
     terrarium.add_observer(_TerrariumLogger(terrarium))
+    # Keeps `agent`'s Room session/bridge live across a NO_ROOM boot's
+    # later Console `load_room`/`unload_room` -- see _RoomWiring's own
+    # docstring. Harmless to also register for the --room CLI path: build()
+    # already wired `agent` correctly for round 1, so this observer's first
+    # call (a later Console load/unload, if any) is the first time it does
+    # anything.
+    terrarium.add_observer(_RoomWiring(agent, terrarium))
 
     # Device lifecycle on Control's stdout (2026-08-20 UAT: a denial was
     # invisible anywhere but the denied device's own terminal). Unconditional
@@ -1245,7 +1319,7 @@ def main() -> None:
                   f"http://{args.host}:{console_server.port}/", flush=True)
         if transport is not None:
             transport.start(o2lite)            # raises if the clock is unsynced
-            _register_o2lite_transport(teardown, transport)
+            _register_o2lite_transport(pre_room_teardown, transport)
             print(f"{markers.CONTROL_TRANSPORT_READY} "
                   f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)
         else:
@@ -1315,7 +1389,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        shutdown(teardown, terrarium)
+        shutdown(teardown, terrarium, pre_room_teardown=pre_room_teardown)
 
 
 if __name__ == "__main__":

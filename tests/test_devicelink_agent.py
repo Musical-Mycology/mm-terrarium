@@ -1153,6 +1153,47 @@ def test_no_room_configured_leaves_the_profile_unset():
     assert agent._room_light is None
 
 
+def test_rewire_room_builds_the_session_after_a_no_room_boot():
+    """harness/terrarium_boot.py's NO_ROOM boot constructs this agent
+    BEFORE any Room exists (room_bridge=None): _setup_room() at __init__
+    time is a no-op then, same as test_no_room_configured_leaves_the_profile
+    _unset above. rewire_room() is what a later Console `load_room` drives
+    (via the harness's own Terrarium observer) -- re-running Room setup now
+    that gs.room/gs.bit both actually exist, exactly as if boot() had
+    always known about them."""
+    gs = GameServer({"TestBit": TestBit})
+    agent = DeviceLinkAgent(gs, FakeServer())
+    assert agent._room_light is None
+    assert agent.room_bridge is None
+
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    gs.room.bound["main"] = "sim-room-main"
+    gs.load_bit("TestBit")
+    room_bridge = RoomBridge()
+
+    agent.rewire_room(room_bridge)
+
+    assert agent.room_bridge is room_bridge
+    assert agent._room_light is not None
+    assert agent._room_profile is not None
+    assert room_bridge.dev == "sim-room-main"
+
+
+def test_unwire_room_clears_a_previously_wired_session():
+    """The NO_ROOM-entry counterpart: a Console `unload_room` must not
+    leave a stale session/bridge/profile behind for the next NO_ROOM wait
+    (or a subsequent, differently-shaped Room) to render against."""
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+    assert agent._room_light is not None
+
+    agent.unwire_room()
+
+    assert agent._room_light is None
+    assert agent.room_bridge is None
+    assert agent._room_profile is None
+
+
 # --- Room frame relay to the Console: an optional, guarded, best-effort
 # sink (see this task's brief and boundary rule 2). --------------------------
 

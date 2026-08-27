@@ -818,6 +818,29 @@ def test_load_room_command_drives_terrarium_and_broadcasts_room_loaded():
     assert loaded == [{"event": "room_loaded", "name": "TEST"}]
 
 
+def test_room_panel_controllers_read_terrarium_room_bridge_live():
+    """ConsoleAgent constructed with no room_bridge= at all (the NO_ROOM
+    boot shape: harness/terrarium_boot.py's main() builds ConsoleAgent
+    before any Room exists) must still show live controller values once a
+    Room loads THROUGH terrarium -- this panel cannot be reading a frozen
+    __init__-time snapshot (there wasn't one to freeze), only
+    `terrarium.room_bridge` fresh on every render."""
+    terrarium = make_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+
+    reason = terrarium.load_room("TEST")
+    assert reason is None
+    terrarium.room_bridge.feed_light(0xB0, 74, 93)
+
+    srv.connect("c1")
+    agent.poll()
+
+    _, msg = srv.sent[0]
+    assert msg["room"] is not None
+    assert msg["room"]["controllers"] == {74: 93}
+
+
 def test_load_room_refusal_is_error_event_and_broadcasts_room_load_failed():
     terrarium = make_terrarium(
         ownership_probe=lambda: "another Console owns this room")

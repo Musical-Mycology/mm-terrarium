@@ -221,19 +221,19 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
     after build() returns and after transport.start(). That is the one
     step build()-level tests could not reach on their own.
 
-    TWO STACKS NOW, not one: shutdown(teardown, terrarium) unwinds
-    terrarium.room_stack -- via unload_room(force=True): bit, room-bridge,
-    simulator, arco, in that order -- BEFORE the process-level `teardown`
-    this test's own _register_o2lite_transport call pushed onto (o2lite-
-    transport), per this Task's teardown split (see shutdown()'s
-    docstring). o2lite-transport is therefore torn down LAST here, not
-    first -- the old single-stack order this test used to pin (registered
-    last = torn down first, across BOTH what build() spawned and what
-    main() registered afterward) no longer applies once those are two
-    stacks: hub-safety (arco last) is what actually matters, and it holds
-    either way."""
+    THREE unwind phases now (see shutdown()'s own docstring): the o2lite
+    transport (registered on its own `pre_room_teardown` stack, exactly as
+    main() does -- NOT on the process-level `teardown`) closes FIRST,
+    because it is Control's own o2lite CLIENT of the same Arco hub the Room
+    simulator also talks to -- "no client outlives the hub it is a guest
+    on" (control/teardown.py's own invariant) applies to it just as much
+    as to the simulator. Then terrarium.room_stack (bit, room-bridge,
+    simulator, arco). Then the remaining process-level `teardown` (empty
+    here: o2lite mode pushes no devicelink-server, and this test gives no
+    console)."""
     from control.engine import GameServer
     from control.room_bridge import RoomBridge
+    from control.teardown import TeardownStack
     from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
     from harness.terrarium_boot import _register_o2lite_transport
 
@@ -271,12 +271,13 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
         simulator_popen=sim_popen, room_audio=_fake_room_audio(),
         transport=transport)
 
-    _register_o2lite_transport(teardown, transport)
+    pre_room_teardown = TeardownStack()
+    _register_o2lite_transport(pre_room_teardown, transport)
 
-    shutdown(teardown, terrarium)
+    shutdown(teardown, terrarium, pre_room_teardown=pre_room_teardown)
 
-    assert order == ["bit", "room-bridge", "simulator", "arco",
-                     "o2lite-transport"]
+    assert order == ["o2lite-transport", "bit", "room-bridge", "simulator",
+                     "arco"]
 
 
 def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
@@ -1857,3 +1858,59 @@ def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
     reason = _wait_for_load(FakeGS(), FakeAgent(), FakeArco(),
                             terrarium=FakeTerrarium())
     assert reason == "no-room"
+
+
+def test_console_load_room_after_a_no_room_boot_wires_room_rendering():
+    """The full path a NO_ROOM boot's Console `load_room` actually takes:
+    build() with no room_spec parks `agent` at room_bridge=None (nothing
+    to render yet), main()'s own _RoomWiring observer is what has to pick
+    that back up once a Room finally loads THROUGH terrarium -- this test
+    drives terrarium.load_room("TEST") directly (the same call
+    console.agent.ConsoleAgent's own _load_room makes) rather than a
+    scripted console message, since the Terrarium-level wiring is what is
+    under test here, not the console wire protocol (see
+    tests/test_console_agent.py's own
+    test_room_panel_controllers_read_terrarium_room_bridge_live for that
+    side)."""
+    from console.agent import ConsoleAgent
+    from control.terrarium import TerrariumState
+    from control.terrarium_config import TerrariumConfig
+    from harness.terrarium_boot import _RoomWiring
+    from tests.test_console_agent import FakeConsoleServer
+
+    config = BootConfig(room_name=None, bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(),
+        terrarium_config=TerrariumConfig(
+            schema=1, name="test", bit_paths=(), rooms={"TEST": TEST_SPEC},
+            version="test"),
+        host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio())
+
+    assert terrarium.state is TerrariumState.NO_ROOM
+    assert arco is None
+    assert agent._room_light is None
+    assert agent.room_bridge is None
+
+    terrarium.add_observer(_RoomWiring(agent, terrarium))
+    fake_srv = FakeConsoleServer()
+    console_agent = ConsoleAgent(gs, fake_srv, terrarium=terrarium)
+
+    reason = terrarium.load_room("TEST")
+    assert reason is None
+    gs.load_bit("TestBit")
+
+    # The devicelink agent's own Room session/bridge, wired live by
+    # _RoomWiring -- not what a snapshot alone can prove.
+    assert agent.room_bridge is terrarium.room_bridge
+    assert agent._room_light is not None
+
+    # The Console's own view: a room payload that is no longer None.
+    fake_srv.connect("c1")
+    console_agent.poll()
+    _, msg = fake_srv.sent[0]
+    assert msg["room"] is not None
+    assert msg["room"]["room_type"] == "TEST"
+
+    shutdown(teardown, terrarium)

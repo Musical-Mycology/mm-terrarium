@@ -241,7 +241,16 @@ class ConsoleAgent:
         role = None
         if gs.bit is not None and gs.registration is not None:
             role = gs.registration.role_table.roles.get(room_role_name(gs.room.name))
-        controllers = getattr(self._room_bridge, "controllers", {}) or {}
+        # Live off `terrarium.room_bridge` when a Terrarium is wired, not
+        # the frozen `self._room_bridge` snapshot from __init__: a Room
+        # loaded AFTER construction (a NO_ROOM boot's Console `load_room`)
+        # leaves `self._room_bridge` at whatever it was then -- None, for a
+        # NO_ROOM boot -- and this panel's controllers read-out would stay
+        # permanently empty otherwise. Falls back to the __init__ snapshot
+        # for a caller with no Terrarium (pre-Task-6 construction shape).
+        room_bridge = (self.terrarium.room_bridge if self.terrarium is not None
+                      else self._room_bridge)
+        controllers = getattr(room_bridge, "controllers", {}) or {}
         urls = self._canvas_urls() if self._canvas_urls else {}
         return room_view(gs.room, profile, role, controllers, urls)
 
