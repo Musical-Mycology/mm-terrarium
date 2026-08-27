@@ -17,7 +17,7 @@ accepted_triggers = ["midi", "play", "solid", "mute"]
 
 [instruments.dev_strip]
 description = "Simulated dev strip, no ambient"
-capabilities = ["light.surface"]
+capabilities = ["light.surface", "audio.flsyn"]
 functions = []
 accepted_triggers = ["midi", "play", "solid", "mute"]
 

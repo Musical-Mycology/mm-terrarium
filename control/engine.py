@@ -14,6 +14,7 @@ import time
 from control.bit import Bit
 from control.cues import ROOM, FireTrigger, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
+from control.instrument import InstrumentRequirement, satisfies
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
@@ -45,6 +46,32 @@ class InvalidTransition(Exception):
 
 class BitLoadError(Exception):
     """Raised when load_bit fails to construct the named Bit."""
+
+
+def _resolve_room_requirements(requirements, room) -> None:
+    """Check each non-optional requirement against the active Room's whole
+    profile, aggregated across fixtures (spec section 4): a requirement's
+    capabilities may be satisfied by DIFFERENT fixtures, not just one, and
+    min_pixels checks the profile's total pixel_count, not any one fixture's.
+    Raises ValueError (wrapped by load_bit into BitLoadError) naming the
+    unmet slot and every fixture's own satisfies() reason."""
+    profile = room.profile
+    for req in requirements:
+        if req.optional:
+            continue
+        reasons = []
+        advertised: set = set()
+        for fixture in profile.fixtures:
+            advertised |= fixture.instrument.capabilities
+            reason = satisfies(fixture.instrument, req,
+                                pixel_count=profile.pixel_count)
+            if reason is not None:
+                reasons.append(reason)
+        missing = req.capabilities - advertised
+        if missing or req.min_pixels > profile.pixel_count:
+            raise ValueError(
+                f"no fixture satisfies slot {req.slot!r}: "
+                + "; ".join(reasons))
 
 
 class GameServer:
@@ -115,6 +142,12 @@ class GameServer:
         # terrarium_config_version without GameServer knowing anything about
         # TerrariumConfig itself.
         self.provenance: dict = {}
+        # Snapshot of the loaded Bit's declared instrument-requirement slots
+        # (control/instrument.py's InstrumentRequirement), keyed by slot
+        # name. Set in load_bit on success, cleared on _unload. Consumed by
+        # join() to gate a Role.requires slot against its resolved
+        # requirement (see spec section 4) -- empty outside a loaded Bit.
+        self._slot_requirements: dict[str, InstrumentRequirement] = {}
 
     def hello(self, dev: str, name: str, protoversion: str) -> None:
         self.devices.hello(dev, name, protoversion, self._clock())
@@ -185,6 +218,8 @@ class GameServer:
             bit_cls = self.bit_registry[name]
             bit = bit_cls(config) if config is not None else bit_cls()
             role_table = bit.role_table
+            requirements = tuple(bit.instrument_requirements())
+            declared_slots = {r.slot for r in requirements}
             if self.room is not None:
                 light_m, ugen_m = bit.room_manifests()
                 if light_m or ugen_m:
@@ -192,6 +227,26 @@ class GameServer:
                                                   light_manifest=light_m)
                     role_table.roles[rname] = role
                     role_table.node_map[node] = [rname]
+                room_reqs = list(requirements)
+                if (light_m or ugen_m) and "room" not in declared_slots:
+                    caps = set()
+                    if light_m:
+                        caps.add("light.surface")
+                    if ugen_m:
+                        caps.add("audio.flsyn")
+                    room_reqs.append(InstrumentRequirement(
+                        slot="room", capabilities=frozenset(caps)))
+                _resolve_room_requirements(room_reqs, self.room)
+            # "room" always counts as a declared slot for Role.requires,
+            # whether resolved just above (an active Room) or not (a
+            # roomless boot / a Bit with no Room manifests) -- this is a
+            # static naming check, not a resolution check.
+            known_slots = declared_slots | {"room"}
+            for role in role_table.roles.values():
+                if role.requires is not None and role.requires not in known_slots:
+                    raise ValueError(
+                        f"role {role.name!r} requires undeclared slot "
+                        f"{role.requires!r}; declared: {sorted(known_slots)}")
             validate_role_declarations(role_table)
             validate_trigger_table(bit.trigger_table, set(bit.verb_handlers()))
             registration = RegistrationState(role_table)
@@ -202,6 +257,7 @@ class GameServer:
         self._warned_no_room = False
         self.bit_name = name
         self.registration = registration
+        self._slot_requirements = {r.slot: r for r in requirements}
         self._set_state(State.LOADED)
         self._enter_setup()
 
@@ -657,6 +713,7 @@ class GameServer:
         self.bit = None
         self.bit_name = None
         self.registration = None
+        self._slot_requirements = {}
         self._set_state(State.IDLE)
 
     def add_observer(self, observer) -> None:

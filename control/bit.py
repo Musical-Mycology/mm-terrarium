@@ -50,6 +50,12 @@ class Bit(ABC):
         data the engine holds, not something a Bit can know."""
         return ({}, {})
 
+    def instrument_requirements(self) -> tuple:
+        """Capability contracts this Bit demands (spec section 4). Room slots
+        resolve at load_bit; a Role names a slot via Role.requires and the
+        join gates on it. Base default: no demands."""
+        return ()
+
     @property
     def trigger_table(self) -> TriggerTable:
         """This Bit's declared triggers: the named things an operator can see
