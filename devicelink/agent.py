@@ -196,7 +196,7 @@ class DeviceLinkAgent:
         blob = compose_role_config(gs.bit_name, gs.bit.version, role)
         manifest = LightManifest.from_dict(blob["light_manifest"])
         if self._room_profile is None:
-            self._room_profile = room_profile(room.room_type)
+            self._room_profile = room.profile or room_profile(room.room_type)
         cap = to_capability(self._room_profile)
         session = build_session(manifest, cap, clock=self._clock)
         self._room_light = _RoomLightSink(

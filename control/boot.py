@@ -18,7 +18,8 @@ from control.engine import BitLoadError, GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_bridge import RoomBridge
 from control.room_profile import room_profile
-from control.rooms import Room, RoomResolutionError, resolve_room_type
+from control.rooms import (ROOM_NODE_IDS, Room, RoomResolutionError,
+                           resolve_room_type)
 from control.teardown import TeardownStack
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,12 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
             array_backend_configured=config.array_backend_configured)
     except RoomResolutionError as exc:
         raise BootFailure(str(exc)) from exc
-    room = Room(room_type=room_type)
+    try:
+        profile = room_profile(room_type)
+    except NotImplementedError:
+        profile = None
+    room = Room(room_type=room_type, profile=profile,
+               node_id=ROOM_NODE_IDS[room_type])
 
     arco = arco_process_cls(arco_command)
     try:

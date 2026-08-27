@@ -14,6 +14,7 @@ from control.roles import Role, RoleClass
 
 if TYPE_CHECKING:
     from control.registration import RegistrationState
+    from control.room_profile import RoomProfile
 
 
 class RoomType(Enum):
@@ -67,10 +68,13 @@ class Room:
     yet; a Room with SOME but not all fixtures bound renders to the ones it
     has (see design spec section 6)."""
     room_type: RoomType
+    profile: "RoomProfile | None" = None
+    node_id: str = ""
     bound: dict[str, str] = field(default_factory=dict)
 
-    def fully_bound(self, profile) -> bool:
-        return all(fixture.name in self.bound for fixture in profile.fixtures)
+    def fully_bound(self, profile=None) -> bool:
+        p = profile if profile is not None else self.profile
+        return all(fixture.name in self.bound for fixture in p.fixtures)
 
 
 def room_role_name(room_type: RoomType) -> str:

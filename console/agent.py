@@ -179,12 +179,15 @@ class ConsoleAgent:
         gs = self.game_server
         if gs.room is None:
             return None
-        try:
-            profile = room_profile(gs.room.room_type)
-        except NotImplementedError:
-            logger.warning("no room profile for %s; Room panel disabled",
-                           gs.room.room_type.name)
-            return None
+        if gs.room.profile is not None:
+            profile = gs.room.profile
+        else:
+            try:
+                profile = room_profile(gs.room.room_type)
+            except NotImplementedError:
+                logger.warning("no room profile for %s; Room panel disabled",
+                               gs.room.room_type.name)
+                return None
         role = None
         if gs.bit is not None:
             role = gs.bit.role_table.roles.get(room_role_name(gs.room.room_type))

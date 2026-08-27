@@ -172,6 +172,7 @@ class _Room:
     def __init__(self, bound):
         from control.rooms import RoomType
         self.room_type = RoomType.TEST
+        self.profile = None
         self.bound = bound   # dict[str, str], fixture name -> dev
 
 

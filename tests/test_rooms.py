@@ -69,3 +69,14 @@ def test_room_role_name_matches_room_role_helper():
 def test_room_role_name_is_deterministic_per_type():
     assert room_role_name(RoomType.TEST) == "room_test"
     assert room_role_name(RoomType.DEMO) == "room_demo"
+
+
+def test_room_carries_profile_and_node_id():
+    room = Room(room_type=RoomType.TEST,
+                profile=room_profile(RoomType.TEST),
+                node_id="ROOM_TEST_NODE")
+    assert room.profile.pixel_count == 90
+    assert not room.fully_bound()
+    room.bound["main"] = "d1"
+    room.bound["accent"] = "d2"
+    assert room.fully_bound()

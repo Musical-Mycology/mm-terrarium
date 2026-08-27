@@ -307,7 +307,7 @@ class GameServer:
         happened to bind first or most recently."""
         if self.room is None or not self.room.bound:
             return None
-        profile = room_profile(self.room.room_type)
+        profile = self.room.profile or room_profile(self.room.room_type)
         for fixture in profile.fixtures:
             dev = self.room.bound.get(fixture.name)
             if dev is not None:
@@ -346,7 +346,7 @@ class GameServer:
             return [dev] if dev else []
         room_devs: list[str] = []
         if self.room is not None and self.room.bound:
-            profile = room_profile(self.room.room_type)
+            profile = self.room.profile or room_profile(self.room.room_type)
             room_devs = [self.room.bound[f.name] for f in profile.fixtures
                         if f.name in self.room.bound]
         if target is TriggerTarget.ROOM:
