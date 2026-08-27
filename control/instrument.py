@@ -20,6 +20,22 @@ CAPABILITY_VOCABULARY: frozenset[str] = frozenset({
 CUE_KINDS: tuple[str, ...] = ("midi", "play", "solid", "mute")
 
 
+def cue_kind(cue) -> str:
+    """Classify an expanded cue (control/triggers.py's expand_script output)
+    by the accepted_triggers vocabulary: SolidCue -> "solid", PlayCue ->
+    "play", MuteCue -> "mute", everything else (plain 4-tuples, LightCue)
+    -> "midi". Imported lazily to avoid control.cues <-> control.instrument
+    becoming a cycle if control.cues ever needs an Instrument."""
+    from control.cues import MuteCue, PlayCue, SolidCue
+    if isinstance(cue, SolidCue):
+        return "solid"
+    if isinstance(cue, PlayCue):
+        return "play"
+    if isinstance(cue, MuteCue):
+        return "mute"
+    return "midi"
+
+
 class InstrumentError(ValueError):
     pass
 

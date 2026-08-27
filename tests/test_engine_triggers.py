@@ -10,8 +10,10 @@ import pytest
 from control.bit import Bit
 from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue
 from control.engine import BitLoadError, GameServer
+from control.instrument import CUE_KINDS, TUNESHROOM, Instrument
 from control.roles import Role, RoleClass, RoleTable
 from control.state import State
+from control.terrarium_config import load_terrarium_config
 from control.triggers import (
     Condition,
     ConditionSource,
@@ -541,3 +543,47 @@ def test_a_trigger_table_that_turns_invalid_after_load_is_refused_not_crashed():
     reason = gs.fire_trigger("bad", fired_by="admin-manual")
     assert reason is not None
     assert isinstance(reason, str)
+
+
+class SolidSurfaceBit(_BaseBit):
+    @property
+    def trigger_table(self) -> TriggerTable:
+        return TriggerTable(triggers={
+            "glow": Trigger(
+                name="glow", description="Solid glow on a surface",
+                target=TriggerTarget.SURFACE,
+                condition=Condition(name="manual", description="Operator asks",
+                                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(
+                    0.0, SolidCue(TARGET, (255, 0, 0), 1.0, None)),)),
+        })
+
+
+def test_fire_refused_when_target_instrument_rejects_cue_kind():
+    """spec section 7: a SolidCue fired at a device carrying an instrument
+    whose accepted_triggers is midi-only must refuse the whole fire, naming
+    the rejected kind, and dispatch nothing."""
+    narrow = Instrument(name="narrow_midi_only", accepted_triggers=("midi",))
+    gs = _server(SolidSurfaceBit)
+    light = []
+    gs.on_light_cue = lambda *a: light.append(a)
+    gs.load_bit("bit")
+    info = gs.devices.hello("dev1", "Dev1", "1.0")
+    info.carried = narrow
+
+    reason = gs.fire_trigger("glow", fired_by="admin-manual", dev="dev1")
+
+    assert reason is not None
+    assert "solid" in reason
+    assert light == []
+
+
+def test_shipped_instruments_accept_every_cue_kind():
+    """Pin: TUNESHROOM (every hello'd device's default carried instrument)
+    and every instrument parsed from the repo terrarium.toml accept all of
+    CUE_KINDS -- nothing shipped today should ever trip the new gate."""
+    assert set(TUNESHROOM.accepted_triggers) == set(CUE_KINDS)
+    config = load_terrarium_config("terrarium.toml")
+    assert config.instruments, "expected at least one declared instrument"
+    for name, instrument in config.instruments.items():
+        assert set(instrument.accepted_triggers) == set(CUE_KINDS), name

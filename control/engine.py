@@ -14,7 +14,8 @@ import time
 from control.bit import Bit
 from control.cues import ROOM, FireTrigger, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
-from control.instrument import TUNESHROOM, InstrumentRequirement, satisfies
+from control.instrument import (TUNESHROOM, InstrumentRequirement, cue_kind,
+                                 satisfies)
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
@@ -496,6 +497,42 @@ class GameServer:
                 seen_room = True
         return out
 
+    def _check_cue_kinds(self, cues) -> str | None:
+        """Refuse the whole fire, all-or-nothing (spec section 7), if any
+        expanded cue's kind is not in its destination's instrument's
+        accepted_triggers.
+
+        A device dev is checked against DeviceInfo.carried (TUNESHROOM by
+        default). A dev the Room owns is checked against every Room fixture's
+        instrument -- the Room is one logical surface, so any fixture
+        accepting the kind is enough (the canonical fixture is named in the
+        refusal when none do). An unknown dev (no pool entry, e.g. the Room
+        simulator path) is treated as accepting, matching today's behavior:
+        this gate must never invent a refusal for a dev nothing declared an
+        instrument for."""
+        room_devs = (set(self.room.bound.values())
+                     if self.room is not None and self.room.bound else set())
+        for cue in cues:
+            resolved = self._resolve_dev(cue.dev)
+            if resolved is None:
+                continue
+            kind = cue_kind(cue)
+            if resolved in room_devs:
+                fixtures = self.room.profile.fixtures
+                if any(kind in f.instrument.accepted_triggers
+                       for f in fixtures):
+                    continue
+                return (f"instrument {fixtures[0].instrument.name!r} does "
+                        f"not accept {kind!r} cues")
+            info = self.devices.get(resolved)
+            if info is None:
+                continue
+            carried = getattr(info, "carried", None) or TUNESHROOM
+            if kind not in carried.accepted_triggers:
+                return (f"instrument {carried.name!r} does not accept "
+                        f"{kind!r} cues")
+        return None
+
     def fire_trigger(self, name: str, *, fired_by: str,
                      dev: str | None = None,
                      at: float | None = None) -> str | None:
@@ -540,6 +577,9 @@ class GameServer:
                 at = self._clock() + self._horizon
             devs = self._resolve_target(trigger.target, dev)
             cues = expand_script(trigger, at, self._collapse_room_fanout(devs))
+            refusal = self._check_cue_kinds(cues)
+            if refusal is not None:
+                return refusal
             if not any(isinstance(c, MuteCue) for c in cues):
                 self._clear_mutes(devs)
         except Exception:
