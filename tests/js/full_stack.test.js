@@ -1,6 +1,6 @@
 "use strict";
 // Whole-graph collision-class guard: the ONLY test file that imports all
-// six real console modules together in one process. Every other panel
+// seven real console modules together in one process. Every other panel
 // test only imports the two-to-three modules it needs. This file replays
 // a realistic session sequence across the whole graph and asserts nothing
 // throws, plus a couple of specific end-to-end (cross-module) behaviors:
@@ -37,6 +37,8 @@ function snapshotMsg() {
     devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" },
               { dev: "sim-room-main", name: "Room", role: null }],
     bit_status: {}, triggers: TRIGGERS, room: ROOM,
+    terrarium_state: "ROOM_READY",
+    rooms: [{ name: "DEMO", description: "", status: null, active: true }],
   };
 }
 
@@ -47,8 +49,9 @@ function snapshotMsg() {
   const surface = await import("../../console/static/surface.js");
   const triggers = await import("../../console/static/triggers.js");
   const rail = await import("../../console/static/rail.js");
+  const rooms = await import("../../console/static/rooms.js");
 
-  bit.init(); surface.init(); triggers.init(); rail.init();
+  bit.init(); surface.init(); triggers.init(); rail.init(); rooms.init();
   // small retryMs so the auto-reconnect this test relies on fires quickly
   // instead of leaving a 1s timer hanging the process.
   wire.connect({ WebSocketImpl: FakeSocket, retryMs: 5 });

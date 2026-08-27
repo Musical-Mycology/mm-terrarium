@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 import sys
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -62,43 +62,60 @@ class BitRegistry:
 
     @classmethod
     def discover(cls, root: Path | None = None) -> "BitRegistry":
-        is_default_root = root is None
-        root = root if root is not None else _DEFAULT_ROOT
+        """Single-root convenience wrapper over scan(), kept for existing
+        callers/tests that pass (or omit) exactly one root. root=None
+        keeps scan()'s own default (_DEFAULT_ROOT,)."""
+        return cls.scan((root,) if root is not None else None)
+
+    @classmethod
+    def scan(cls, roots: Iterable[Path] | None = None) -> "BitRegistry":
+        """Scan an ordered sequence of roots, default (_DEFAULT_ROOT,).
+        A package name already claimed by an earlier root is a located
+        PackageError for the later root -- first root wins. A root that
+        does not exist (or is not a directory) is a located PackageError
+        too, not a crash; the remaining roots still scan."""
+        roots = tuple(roots) if roots is not None else (_DEFAULT_ROOT,)
         registry = cls()
 
-        if not root.is_dir():
-            return registry
+        for root in roots:
+            is_default_root = root == _DEFAULT_ROOT
 
-        for pkg_dir in sorted(root.iterdir()):
-            manifest_path = pkg_dir / "bit.toml"
-            if not pkg_dir.is_dir() or not manifest_path.is_file():
-                continue
-
-            source = str(manifest_path)
-            try:
-                text = manifest_path.read_text()
-                config = parse_manifest(text, source=source)
-            except ManifestError as exc:
-                registry.errors.append(PackageError(path=source, message=str(exc)))
-                continue
-            except tomllib.TOMLDecodeError as exc:
-                registry.errors.append(PackageError(path=source, message=str(exc)))
-                continue
-
-            import_root = (
-                f"bits.{pkg_dir.name}" if is_default_root else pkg_dir.name
-            )
-            name = config.identity.name
-            if name in registry.packages:
+            if not root.is_dir():
                 registry.errors.append(PackageError(
-                    path=source,
-                    message=f"duplicate bit name {name!r} (already provided by "
-                             f"{registry.packages[name].path})",
-                ))
+                    path=str(root),
+                    message=f"bit search root not found: {root}"))
                 continue
 
-            registry.packages[name] = BitPackage(
-                name=name, config=config, path=pkg_dir, import_root=import_root)
+            for pkg_dir in sorted(root.iterdir()):
+                manifest_path = pkg_dir / "bit.toml"
+                if not pkg_dir.is_dir() or not manifest_path.is_file():
+                    continue
+
+                source = str(manifest_path)
+                try:
+                    text = manifest_path.read_text()
+                    config = parse_manifest(text, source=source)
+                except ManifestError as exc:
+                    registry.errors.append(PackageError(path=source, message=str(exc)))
+                    continue
+                except tomllib.TOMLDecodeError as exc:
+                    registry.errors.append(PackageError(path=source, message=str(exc)))
+                    continue
+
+                import_root = (
+                    f"bits.{pkg_dir.name}" if is_default_root else pkg_dir.name
+                )
+                name = config.identity.name
+                if name in registry.packages:
+                    registry.errors.append(PackageError(
+                        path=source,
+                        message=f"duplicate bit name {name!r} (already provided by "
+                                 f"{registry.packages[name].path})",
+                    ))
+                    continue
+
+                registry.packages[name] = BitPackage(
+                    name=name, config=config, path=pkg_dir, import_root=import_root)
 
         return registry
 

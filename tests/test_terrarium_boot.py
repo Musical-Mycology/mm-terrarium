@@ -9,17 +9,34 @@ from control.arco_process import FakePopen
 from control.audio import AudioBridge, FakePool
 from control.boot_config import BootConfig
 from control.room_binding import RoomBindingRegistry
-from control.rooms import RoomType
+from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.state import State
 from control.teardown import TeardownStack
+from control.terrarium_config import RoomSpec
 from devicelink.server import DeviceLinkServer
 from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
-                                    _run_duration, build, main, shutdown)
+                                    _run_duration, build, main,
+                                    resolve_room_spec, shutdown)
+
+TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
+    RoomFixture(name="main", color_order="GRB",
+               blocks=(RoomBlock("main", 0, 60),),
+               zones=(RoomZone("left", 0, 20),
+                     RoomZone("center", 20, 20),
+                     RoomZone("right", 40, 20))),
+    RoomFixture(name="accent", color_order="GRB",
+               blocks=(RoomBlock("accent", 0, 30),),
+               zones=(RoomZone("low", 0, 15),
+                     RoomZone("high", 15, 15))),
+))
+TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
+                     node_id="ROOM_TEST_NODE", profile=TEST_PROFILE)
 
 
-def _fake_arco(command, popen=None):
+def _fake_arco(command, popen=None, record=None):
     from control.arco_process import ArcoProcess
-    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda: True)
+    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda: True,
+                       record=record)
 
 
 def _fake_room_audio():
@@ -35,20 +52,40 @@ def _build_with_fakes(config, *, transport=None, clock=time.monotonic):
     return build(
         config, {"TestBit": TestBit},
         arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC,
         host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
         simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
         transport=transport, clock=clock)
 
 
+def test_resolve_room_spec_raises_a_located_error_for_an_unknown_room():
+    """resolve_room_spec is the successor to the deleted resolve_room_type's
+    fail-hard semantics: an unknown room name must raise, with a message
+    naming the bad value and listing the valid ones, rather than silently
+    falling through."""
+    with pytest.raises(SystemExit) as exc:
+        resolve_room_spec("NOPE")
+    message = str(exc.value)
+    assert "unknown room" in message
+    assert "NOPE" in message
+    assert "DEMO" in message and "TEST" in message
+
+
+def test_resolve_room_spec_returns_the_named_rooms_spec():
+    spec = resolve_room_spec("TEST")
+    assert spec.name == "TEST"
+    assert spec.node_id == "ROOM_TEST_NODE"
+
+
 def test_build_wires_devicelink_room_bridge_and_simulator():
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = _build_with_fakes(config)
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config)
 
     assert gs.room.bound == {"main": "sim-room-main", "accent": "sim-room-accent"}
     assert agent._room_light is not None
     assert server.port != 0   # devicelink server actually bound before boot() ran
 
-    shutdown(teardown)
+    shutdown(teardown, terrarium)
 
 
 def test_devicelink_server_starts_before_boot_spawns_the_simulator():
@@ -56,33 +93,35 @@ def test_devicelink_server_starts_before_boot_spawns_the_simulator():
     6): by the time boot()'s simulator_factory spawns the subprocess, the
     server it needs to connect to already exists. Assert the ordering
     directly via the fake simulator Popen's recorded launch args."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     sim_popen = FakePopen()
 
-    gs, server, agent, arco, teardown = build(
+    gs, server, agent, arco, teardown, terrarium = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=_fake_arco, simulator_popen=sim_popen,
         room_audio=_fake_room_audio())
 
     launched_command = sim_popen.commands[0]
     assert f"ws://127.0.0.1:{server.port}/ws" in launched_command
-    shutdown(teardown)
+    shutdown(teardown, terrarium)
 
 
 def test_shutdown_tears_down_arco_and_simulator():
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     fake_arco_popen = FakePopen()
     sim_popen = FakePopen()
 
-    gs, server, agent, arco, teardown = build(
+    gs, server, agent, arco, teardown, terrarium = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=fake_arco_popen),
         simulator_popen=sim_popen, room_audio=_fake_room_audio())
     gs.run()
 
-    shutdown(teardown)
+    shutdown(teardown, terrarium)
 
     assert gs.state == State.IDLE
     assert fake_arco_popen.signals
@@ -111,14 +150,15 @@ def test_shutdown_stops_the_simulator_before_arco():
     arco_popen = _RecordingPopen("arco")
     sim_popen = _RecordingPopen("simulator")
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = build(
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
         simulator_popen=sim_popen, room_audio=_fake_room_audio())
 
-    shutdown(teardown)
+    shutdown(teardown, terrarium)
 
     assert order == ["simulator", "arco"]
 
@@ -156,14 +196,15 @@ def test_shutdown_stops_the_devicelink_server_last(monkeypatch):
                 order.append("arco")
             super().send_signal(sig)
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = build(
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=_RecordingPopen()),
         simulator_popen=FakePopen(), room_audio=_fake_room_audio())
 
-    shutdown(teardown)
+    shutdown(teardown, terrarium)
 
     assert order == ["arco", "server"]
 
@@ -181,19 +222,19 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
     after build() returns and after transport.start(). That is the one
     step build()-level tests could not reach on their own.
 
-    NOTE ON "SIX STAGES": the final review's finding described this as a
-    six-stage unwind ending in devicelink-server. Checked directly (see
-    final-fix-report.md): build() only pushes "devicelink-server" when
-    transport is None (websocket mode); in o2lite mode server = transport
-    and that step is never pushed at all (confirmed by inspecting
-    teardown._steps after a real build(transport=...) call). o2lite-
-    transport and devicelink-server are mutually exclusive within one
-    run -- one is o2lite mode's own teardown step, the other is what it
-    replaces. This test asserts the five steps that actually coexist
-    under --transport o2lite, which is the only mode run_stack.py ever
-    drives and the one this whole branch is about."""
+    THREE unwind phases now (see shutdown()'s own docstring): the o2lite
+    transport (registered on its own `pre_room_teardown` stack, exactly as
+    main() does -- NOT on the process-level `teardown`) closes FIRST,
+    because it is Control's own o2lite CLIENT of the same Arco hub the Room
+    simulator also talks to -- "no client outlives the hub it is a guest
+    on" (control/teardown.py's own invariant) applies to it just as much
+    as to the simulator. Then terrarium.room_stack (bit, room-bridge,
+    simulator, arco). Then the remaining process-level `teardown` (empty
+    here: o2lite mode pushes no devicelink-server, and this test gives no
+    console)."""
     from control.engine import GameServer
     from control.room_bridge import RoomBridge
+    from control.teardown import TeardownStack
     from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
     from harness.terrarium_boot import _register_o2lite_transport
 
@@ -222,17 +263,19 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
     transport = O2LiteTransport()
     transport.start(fake_o2)
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = build(
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
         simulator_popen=sim_popen, room_audio=_fake_room_audio(),
         transport=transport)
 
-    _register_o2lite_transport(teardown, transport)
+    pre_room_teardown = TeardownStack()
+    _register_o2lite_transport(pre_room_teardown, transport)
 
-    shutdown(teardown)
+    shutdown(teardown, terrarium, pre_room_teardown=pre_room_teardown)
 
     assert order == ["o2lite-transport", "bit", "room-bridge", "simulator",
                      "arco"]
@@ -241,16 +284,17 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
 def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
     """A guarded stack: one broken teardown step must not orphan Arco."""
     arco_popen = FakePopen()
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = build(
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
         simulator_popen=FakePopen(), room_audio=_fake_room_audio())
 
     teardown.push("broken", _boom)
 
-    shutdown(teardown)
+    shutdown(teardown, terrarium)
 
     assert arco_popen.signals            # Arco still stopped
 
@@ -258,13 +302,13 @@ def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
 def test_build_passes_the_configured_horizon_to_the_agent():
     """The horizon lives in one place. An agent built with its own default
     would silently disagree with the audio path's scheduling."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit",
+    config = BootConfig(room_name="TEST", bit_name="TestBit",
                         cue_horizon=0.075)
-    gs, server, agent, arco, teardown = _build_with_fakes(config)
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config)
     try:
         assert agent._horizon == 0.075
     finally:
-        shutdown(teardown)
+        shutdown(teardown, terrarium)
 
 
 def test_build_can_run_the_agent_on_the_o2lite_transport():
@@ -277,14 +321,14 @@ def test_build_can_run_the_agent_on_the_o2lite_transport():
     transport = O2LiteTransport()
     transport.start(fake)
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = _build_with_fakes(config,
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config,
                                                      transport=transport)
     try:
         assert agent.server is transport
         assert fake.services == "actl,game"
     finally:
-        shutdown(teardown)
+        shutdown(teardown, terrarium)
 
 
 def test_build_passes_the_supplied_clock_to_the_agent():
@@ -292,13 +336,13 @@ def test_build_passes_the_supplied_clock_to_the_agent():
     stamps frames on the same clock the device ticks against -- see
     build()'s clock= docstring. This is the wiring seam that fix depends
     on; assert it directly rather than only through end-to-end behavior."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     fake_clock = lambda: 45.0
-    gs, server, agent, arco, teardown = _build_with_fakes(config, clock=fake_clock)
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config, clock=fake_clock)
     try:
         assert agent._clock is fake_clock
     finally:
-        shutdown(teardown)
+        shutdown(teardown, terrarium)
 
 
 def test_build_gives_the_engine_and_the_agent_one_clock_and_one_horizon():
@@ -311,31 +355,32 @@ def test_build_gives_the_engine_and_the_agent_one_clock_and_one_horizon():
     callable.
     """
     clk = lambda: 4242.0
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit",
+    config = BootConfig(room_name="TEST", bit_name="TestBit",
                         cue_horizon=0.111)
-    gs, server, agent, arco, teardown = _build_with_fakes(config, clock=clk)
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config, clock=clk)
     try:
         assert gs._clock is agent._clock is clk
         assert gs._horizon == 0.111
         assert agent._horizon == 0.111
     finally:
-        shutdown(teardown)
+        shutdown(teardown, terrarium)
 
 
 def test_build_omitting_clock_keeps_the_existing_default():
     """The websocket path (and every existing caller) must see no change:
     omitting clock= leaves build() -- and therefore the agent -- on
     time.monotonic, exactly as before this parameter existed."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = build(
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
         room_audio=_fake_room_audio())
     try:
         assert agent._clock is time.monotonic
     finally:
-        shutdown(teardown)
+        shutdown(teardown, terrarium)
 
 
 def test_build_threads_its_clock_into_the_default_room_audio(monkeypatch):
@@ -370,16 +415,17 @@ def test_build_threads_its_clock_into_the_default_room_audio(monkeypatch):
     monkeypatch.setattr("control.audio.AudioBridge", _capturing_audio_bridge)
     fake_clock = lambda: 45.0
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = build(
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
         clock=fake_clock)   # room_audio omitted: exercises the default branch
     try:
         assert captured["clock"] is fake_clock
     finally:
-        shutdown(teardown)
+        shutdown(teardown, terrarium)
 
 
 def test_o2lite_frame_is_released_across_the_shared_clock():
@@ -409,8 +455,8 @@ def test_o2lite_frame_is_released_across_the_shared_clock():
     transport = O2LiteTransport()
     transport.start(fake_o2)
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = _build_with_fakes(
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(
         config, transport=transport, clock=fake_o2.time_get)
     try:
         fake_o2.deliver("/game/hello", "s", ("ie1",))
@@ -459,7 +505,7 @@ def test_o2lite_frame_is_released_across_the_shared_clock():
             "because the agent's default clock (time.monotonic) never "
             "comes near the O2 clock's small values")
     finally:
-        shutdown(teardown)
+        shutdown(teardown, terrarium)
 
 
 def test_wait_in_setup_polls_for_the_requested_window():
@@ -1238,15 +1284,110 @@ def _run_main_capturing_build(monkeypatch, argv):
     return captured
 
 
+def test_build_records_supervisor_and_spawns_when_runs_dir_given(tmp_path):
+    """Wiring for design spec section 5: build() forwards runs_dir/run_id
+    straight into Terrarium (already the case), which records its own
+    supervisor entry at construction and one entry per spawned Arco/
+    simulator during load_room -- this is the "dead code in production"
+    finding, verified end to end through build() rather than only at the
+    Terrarium unit level."""
+    import os
+
+    from control.run_record import RunRecorder
+
+    class _FakePopenWithPid(FakePopen):
+        """FakePopen (control/arco_process.py) never sets .pid -- it is a
+        pure boundary-rule-5 double for poll/send_signal/wait, and real
+        subprocess.Popen instances always have .pid. ArcoProcess/
+        SimulatorProcess.start() both read `getattr(self._process, "pid",
+        None)` to feed the record callback, so a pid is needed here to
+        actually exercise that path."""
+
+        def __init__(self, pid: int, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.pid = pid
+
+        def __call__(self, command, **kwargs):
+            super().__call__(command, **kwargs)
+            return self
+
+    def _fake_arco_with_pid(command, popen=None, record=None):
+        from control.arco_process import ArcoProcess
+        return ArcoProcess(command, popen=popen or _FakePopenWithPid(9001),
+                           probe=lambda: True, record=record)
+
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit},
+        arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0, arco_process_cls=_fake_arco_with_pid,
+        simulator_popen=_FakePopenWithPid(9002), room_audio=_fake_room_audio(),
+        runs_dir=str(tmp_path), run_id="run-1")
+    shutdown(teardown, terrarium)
+
+    records = RunRecorder.load_all(str(tmp_path))
+    roles = {r.role for r in records}
+    assert "supervisor" in roles
+    assert any(r.pid == os.getpid() and r.role == "supervisor" for r in records)
+    assert "arco" in roles
+    assert any(role.startswith("simulator:") for role in roles)
+
+
+def test_main_forwards_runs_dir_and_run_id_to_build(monkeypatch):
+    """main() must derive a run_id (the same runs/<timestamp> convention
+    harness/run_stack.py already uses for --log-dir) and forward it, plus
+    --runs-dir (default "runs"), into build() -- without this the sweep
+    guardrail is never wired and every live load_room runs with sweep=None
+    (the Critical finding this Task fixes)."""
+    captured_kwargs = {}
+
+    def fake_build(config, bit_registry, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise SystemExit(0)
+
+    import harness.terrarium_boot as terrarium_boot_module
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--room", "TEST"])
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs["runs_dir"] == "runs"
+    run_id = captured_kwargs["run_id"]
+    assert run_id is not None
+    time.strptime(run_id, "%Y%m%d-%H%M%S")   # raises if the shape is wrong
+
+
+def test_main_no_run_records_disables_runs_dir_and_run_id(monkeypatch):
+    captured_kwargs = {}
+
+    def fake_build(config, bit_registry, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise SystemExit(0)
+
+    import harness.terrarium_boot as terrarium_boot_module
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["terrarium_boot.py", "--room", "TEST", "--no-run-records"])
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs["runs_dir"] is None
+    assert captured_kwargs["run_id"] is None
+
+
 def test_main_defaults_bit_to_test_bit(monkeypatch):
-    captured = _run_main_capturing_build(monkeypatch, [])
+    captured = _run_main_capturing_build(monkeypatch, ["--room", "TEST"])
     assert captured["config"].bit_name == "TestBit"
     assert "TestBit" in captured["bit_registry"]
 
 
 def test_main_forwards_bit_flag_to_boot_config(monkeypatch):
     captured = _run_main_capturing_build(
-        monkeypatch, ["--bit", "MetronomeBit", "--room-type", "DEMO"])
+        monkeypatch, ["--bit", "MetronomeBit", "--room", "DEMO"])
     assert captured["config"].bit_name == "MetronomeBit"
     assert "MetronomeBit" in captured["bit_registry"]
 
@@ -1257,7 +1398,7 @@ def test_main_hands_build_every_discovered_bit_name(monkeypatch):
     can load_bit() any discovered package, not only the boot-time default."""
     from control.bit_registry import BitRegistry
 
-    captured = _run_main_capturing_build(monkeypatch, [])
+    captured = _run_main_capturing_build(monkeypatch, ["--room", "TEST"])
     all_names = set(BitRegistry.discover().packages)
     assert set(captured["bit_registry"]) == all_names
 
@@ -1364,11 +1505,12 @@ def test_build_tears_down_both_subprocesses_if_room_audio_fails(monkeypatch):
 
     arco_popen = FakePopen()
     sim_popen = FakePopen()
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
 
     with pytest.raises(TimeoutError):
         build(config, {"TestBit": TestBit}, arco_command=["arco-server"],
-              room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+              room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
               arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
               simulator_popen=sim_popen)   # room_audio omitted: real branch
 
@@ -1384,8 +1526,8 @@ def test_agent_exposes_its_room_bridge():
     """main() reaches the bridge through the agent, since build() does not
     return it and its signature is deliberately unchanged."""
     from control.room_bridge import RoomBridge
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = _build_with_fakes(config)
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config)
     try:
         assert isinstance(agent.room_bridge, RoomBridge)
     finally:
@@ -1394,8 +1536,8 @@ def test_agent_exposes_its_room_bridge():
 
 def test_console_is_off_by_default():
     """Every existing invocation must be byte-identical."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = _build_with_fakes(config)
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config)
     try:
         assert agent._on_room_frame is None
     finally:
@@ -1495,10 +1637,11 @@ def test_build_wires_on_join_denied_to_the_agent_constructor():
     FakeServer the agent test fixtures already use, not just an attribute
     check on the built agent."""
     calls = []
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
-    gs, server, agent, arco, teardown = build(
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
         config, {"TestBit": TestBit},
         arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC,
         host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
         simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
         clock=time.monotonic,
@@ -1514,7 +1657,7 @@ def test_build_wires_on_join_denied_to_the_agent_constructor():
 
         assert calls == [("ie1", "NO_SUCH_NODE", "no such node")]
     finally:
-        shutdown(teardown)
+        shutdown(teardown, terrarium)
 
 
 def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply(capsys):
@@ -1603,3 +1746,267 @@ def test_timed_out_role_holder_prints_both_released_and_timed_out_lines(capsys):
     out = capsys.readouterr().out
     assert "device released: ie1\n" in out
     assert "device timed out: ie1\n" in out
+
+
+# --- Task 7: --room (CLI shorthand for --room-type), NO_ROOM idle -------
+
+
+def test_unknown_room_flag_exits_naming_test_and_demo(monkeypatch, capsys):
+    """--room BOGUS is the CLI-level version of
+    test_resolve_room_spec_raises_a_located_error_for_an_unknown_room
+    above: main() must fail the exact same way, before ever calling
+    build()."""
+    monkeypatch.setattr(sys, "argv",
+                        ["terrarium_boot.py", "--room", "BOGUS"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code != 0
+    message = str(exc_info.value)
+    assert "BOGUS" in message
+    assert "TEST" in message and "DEMO" in message
+
+
+def test_no_room_and_no_console_port_is_refused(monkeypatch, capsys):
+    """Omitting --room only makes sense if the Console is going to load a
+    Room later -- with no console port either, nothing would ever load
+    one, so this is refused up front rather than booting into a NO_ROOM
+    idle nothing can ever leave."""
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code != 0
+    err = capsys.readouterr().err
+    assert "no --room" in err
+
+
+def test_wait_for_room_ready_returns_immediately_when_already_ready():
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _wait_for_room_ready
+
+    class FakeTerrarium:
+        state = TerrariumState.ROOM_READY
+
+    class FakeAgent:
+        def poll(self):
+            raise AssertionError("must not poll when already ready")
+
+    reason = _wait_for_room_ready(FakeAgent(), FakeTerrarium())
+    assert reason == "ready"
+
+
+def test_wait_for_room_ready_polls_until_a_console_load_room_lands():
+    """The NO_ROOM idle loop: main() falls in here with no --room given
+    and a console port. Ticks the transport and the console each lap,
+    exactly like a scripted console `load_room` command would drive it --
+    landing ROOM_READY on the console_agent's own poll() call (its
+    _handle_command dispatch is what would actually run terrarium
+    .load_room in production; this fake stands in for that side effect
+    directly, matching how console.agent.ConsoleAgent's own tests fake a
+    scripted inbound command)."""
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _wait_for_room_ready
+
+    class FakeTerrarium:
+        def __init__(self):
+            self.state = TerrariumState.NO_ROOM
+
+    terrarium = FakeTerrarium()
+
+    class FakeAgent:
+        def __init__(self):
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+
+    class FakeConsoleAgent:
+        """Stands in for a scripted console `load_room` command: on its
+        third poll() (as if a client had just sent load_room), it drives
+        terrarium to ROOM_READY -- console.agent.ConsoleAgent's own
+        _load_room does exactly this in production, via
+        terrarium.load_room()."""
+
+        def __init__(self, terrarium):
+            self._terrarium = terrarium
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            if self.polls == 3:
+                self._terrarium.state = TerrariumState.ROOM_READY
+
+    agent = FakeAgent()
+    console_agent = FakeConsoleAgent(terrarium)
+
+    reason = _wait_for_room_ready(agent, terrarium, console_agent=console_agent,
+                                  sleep=lambda _s: None)
+
+    assert reason == "ready"
+    assert console_agent.polls == 3
+    assert agent.polls == 3
+
+
+def test_wait_for_room_ready_exits_when_the_parent_is_gone(monkeypatch):
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _wait_for_room_ready
+
+    class FakeTerrarium:
+        state = TerrariumState.NO_ROOM
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
+                        lambda pid: True)
+
+    reason = _wait_for_room_ready(FakeAgent(), FakeTerrarium(),
+                                  parent_pid=999, sleep=lambda _s: None)
+    assert reason == "parent-gone"
+
+
+def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
+        monkeypatch):
+    """main()'s top-level loop for a NO_ROOM boot: wait for a Room, serve
+    rounds against it, and -- the behavior this Task's brief calls out by
+    name -- return to the NO_ROOM wait rather than stopping outright when
+    `_serve_rounds` reports "no-room" (a Console `unload_room` mid-serve).
+    A second lap then runs to "parent-gone" so this test terminates."""
+    import harness.terrarium_boot as terrarium_boot_module
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _serve_roomless
+
+    class FakeTerrarium:
+        def __init__(self):
+            self.state = TerrariumState.ROOM_READY
+            self.arco = _FakeArco()
+
+    class FakeGS:
+        state = State.IDLE
+
+        def tick(self, dt):
+            pass
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    terrarium = FakeTerrarium()
+    serve_rounds_calls = []
+
+    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
+                          console_agent=None, terrarium=None, **_kw):
+        serve_rounds_calls.append(terrarium.state)
+        if len(serve_rounds_calls) == 1:
+            terrarium.state = TerrariumState.NO_ROOM
+            return "no-room"
+        return "parent-gone"
+
+    def fake_wait_for_room_ready(agent, terr, **kwargs):
+        # A fresh Console load_room would leave terrarium ROOM_READY again
+        # -- fake_serve_rounds above only flips it to NO_ROOM for the first
+        # lap's "no-room" return, so this stands in for that next load.
+        terr.state = TerrariumState.ROOM_READY
+        return "ready"
+
+    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
+                        fake_serve_rounds)
+    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
+                        fake_wait_for_room_ready)
+
+    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium)
+
+    assert reason == "parent-gone"
+    assert len(serve_rounds_calls) == 2
+
+
+def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
+    """`_serve_rounds` threads `terrarium` straight into `_wait_for_load`
+    so a Console `unload_room` landing while a round waits in IDLE (no Bit
+    loaded yet) is noticed as "no-room", not misreported as "arco-exited"
+    -- checked FIRST, ahead of the arco liveness check, exactly because
+    unload_room(force=True) has already shut arco down by the time this
+    would otherwise notice (see _wait_for_load's own docstring)."""
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _wait_for_load
+
+    class FakeTerrarium:
+        state = TerrariumState.NO_ROOM
+
+    class FakeGS:
+        state = State.IDLE
+
+        def tick(self, dt):
+            raise AssertionError("must not tick past the no-room check")
+
+    class FakeArco:
+        def poll(self):
+            raise AssertionError("must not poll arco past the no-room check")
+
+    class FakeAgent:
+        def poll(self):
+            raise AssertionError("must not poll past the no-room check")
+
+    reason = _wait_for_load(FakeGS(), FakeAgent(), FakeArco(),
+                            terrarium=FakeTerrarium())
+    assert reason == "no-room"
+
+
+def test_console_load_room_after_a_no_room_boot_wires_room_rendering():
+    """The full path a NO_ROOM boot's Console `load_room` actually takes:
+    build() with no room_spec parks `agent` at room_bridge=None (nothing
+    to render yet), main()'s own _RoomWiring observer is what has to pick
+    that back up once a Room finally loads THROUGH terrarium -- this test
+    drives terrarium.load_room("TEST") directly (the same call
+    console.agent.ConsoleAgent's own _load_room makes) rather than a
+    scripted console message, since the Terrarium-level wiring is what is
+    under test here, not the console wire protocol (see
+    tests/test_console_agent.py's own
+    test_room_panel_controllers_read_terrarium_room_bridge_live for that
+    side)."""
+    from console.agent import ConsoleAgent
+    from control.terrarium import TerrariumState
+    from control.terrarium_config import TerrariumConfig
+    from harness.terrarium_boot import _RoomWiring
+    from tests.test_console_agent import FakeConsoleServer
+
+    config = BootConfig(room_name=None, bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(),
+        terrarium_config=TerrariumConfig(
+            schema=1, name="test", bit_paths=(), rooms={"TEST": TEST_SPEC},
+            version="test"),
+        host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio())
+
+    assert terrarium.state is TerrariumState.NO_ROOM
+    assert arco is None
+    assert agent._room_light is None
+    assert agent.room_bridge is None
+
+    terrarium.add_observer(_RoomWiring(agent, terrarium))
+    fake_srv = FakeConsoleServer()
+    console_agent = ConsoleAgent(gs, fake_srv, terrarium=terrarium)
+
+    reason = terrarium.load_room("TEST")
+    assert reason is None
+    gs.load_bit("TestBit")
+
+    # The devicelink agent's own Room session/bridge, wired live by
+    # _RoomWiring -- not what a snapshot alone can prove.
+    assert agent.room_bridge is terrarium.room_bridge
+    assert agent._room_light is not None
+
+    # The Console's own view: a room payload that is no longer None.
+    fake_srv.connect("c1")
+    console_agent.poll()
+    _, msg = fake_srv.sent[0]
+    assert msg["room"] is not None
+    assert msg["room"]["room_type"] == "TEST"
+
+    shutdown(teardown, terrarium)

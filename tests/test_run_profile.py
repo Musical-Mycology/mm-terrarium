@@ -204,7 +204,7 @@ def test_terrarium_boot_profile_bpm_reaches_the_resolved_bit_config(
         '[run]\nbit = "MetronomeBit"\n\n[bit.overrides.rhythm]\nbpm = 80\n')
 
     captured = _run_main_capturing_build(
-        monkeypatch, ["--profile", str(profile_path)])
+        monkeypatch, ["--profile", str(profile_path), "--room", "DEMO"])
     assert captured["config"].bit_config.rhythm.bpm == 80
     assert captured["config"].bit_name == "MetronomeBit"
 
@@ -215,7 +215,7 @@ def test_terrarium_boot_profile_bit_wins_when_no_cli_bit_given(
     profile_path.write_text('[run]\nbit = "MetronomeBit"\n')
 
     captured = _run_main_capturing_build(
-        monkeypatch, ["--profile", str(profile_path)])
+        monkeypatch, ["--profile", str(profile_path), "--room", "DEMO"])
     assert captured["config"].bit_name == "MetronomeBit"
 
 
@@ -224,7 +224,8 @@ def test_terrarium_boot_cli_bit_beats_profile_bit(monkeypatch, tmp_path):
     profile_path.write_text('[run]\nbit = "MetronomeBit"\n')
 
     captured = _run_main_capturing_build(
-        monkeypatch, ["--profile", str(profile_path), "--bit", "TestBit"])
+        monkeypatch, ["--profile", str(profile_path), "--bit", "TestBit",
+                     "--room", "TEST"])
     assert captured["config"].bit_name == "TestBit"
 
 
@@ -238,12 +239,12 @@ def test_terrarium_boot_profile_room_type_wins_over_the_manifest_default(
 
     captured = _run_main_capturing_build(
         monkeypatch, ["--profile", str(profile_path)])
-    assert captured["config"].room_type.name == "DEMO"
+    assert captured["config"].room_name == "DEMO"
 
 
 def test_terrarium_boot_without_a_profile_still_defaults_bit_to_test_bit(
         monkeypatch):
-    captured = _run_main_capturing_build(monkeypatch, [])
+    captured = _run_main_capturing_build(monkeypatch, ["--room", "TEST"])
     assert captured["config"].bit_name == "TestBit"
 
 
@@ -261,5 +262,6 @@ def test_terrarium_boot_cli_rhythm_override_would_beat_the_profile(
 
     captured = _run_main_capturing_build(
         monkeypatch,
-        ["--profile", str(profile_path), "--setup-seconds", "7"])
+        ["--profile", str(profile_path), "--setup-seconds", "7",
+         "--room", "DEMO"])
     assert captured["config"].bit_config.launch.setup_seconds == 7

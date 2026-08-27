@@ -16,6 +16,11 @@ let errors = [];          // last bits_listed manifest errors
 let bitsSignature = null; // rule 1: bits_listed gated by signature
 let state = "IDLE";
 let loadedName = null;
+let terrariumState = null; // gates Load/Run/Abort: only enabled in ROOM_READY
+
+function roomReady() {
+  return terrariumState === "ROOM_READY";
+}
 
 function startText(start) {
   if (!start) return "—";
@@ -60,6 +65,7 @@ function render() {
     const wrap = mk("div", "bitcard empty");
     wrap.appendChild(mk("p", "muted", "No Bit loaded"));
     const loadBtn = mk("button", "btn solid-gold", "Load");
+    loadBtn.disabled = !roomReady();
     loadBtn.onclick = openPicker;
     wrap.appendChild(loadBtn);
     panel.appendChild(wrap);
@@ -80,14 +86,18 @@ function render() {
   if (bit) idrow.appendChild(mk("span", "kind", bit.kind));
   wrap.appendChild(idrow);
 
-  // button row -- Run/Abort/Load, never disabled
+  // button row -- Run/Abort/Load, disabled outside ROOM_READY (spec: a Bit
+  // cannot run, abort, or be (re)loaded without a Room bound and ready).
   const btnrow = mk("div", "btnrow");
+  const gated = !roomReady();
 
   const runBtn = mk("button", "btn solid-gold", "Run");
+  runBtn.disabled = gated;
   runBtn.onclick = () => wire.send("run", {}, runBtn);
   btnrow.appendChild(runBtn);
 
   const abortBtn = mk("button", "btn solid-rose", "Abort");
+  abortBtn.disabled = gated;
   abortBtn.onclick = () => {
     wire.confirmTap(abortBtn, { armLabel: "Confirm abort?" }, () => {
       wire.send("abort", {}, abortBtn);
@@ -96,6 +106,7 @@ function render() {
   btnrow.appendChild(abortBtn);
 
   const loadBtn = mk("button", "btn", "Load");
+  loadBtn.disabled = gated;
   loadBtn.onclick = openPicker;
   btnrow.appendChild(loadBtn);
 
@@ -273,6 +284,7 @@ export function init() {
   wire.on("snapshot", (m) => {
     state = m.state;
     loadedName = m.loaded_bit;
+    terrariumState = m.terrarium_state;
     render();
     renderStatus(m.bit_status || {});
   });
@@ -287,6 +299,7 @@ export function init() {
   wire.on("state_changed", (m) => {
     state = m.state;
     loadedName = m.loaded_bit;
+    terrariumState = m.terrarium_state;
     render();
   });
   wire.on("bit_status", (m) => renderStatus(m.status || {}));

@@ -271,16 +271,24 @@ class _PtyProcess:
 class ArcoProcess:
     def __init__(self, command: list[str], *, popen=subprocess.Popen,
                  probe=_default_probe, clock=time.monotonic,
-                 sleep=time.sleep) -> None:
+                 sleep=time.sleep, record=None) -> None:
         self._command = command
         self._popen = popen
         self._probe = probe
         self._clock = clock
         self._sleep = sleep
+        # Called with the spawned pid at spawn time (control/run_record.py's
+        # RunRecorder.record, threaded in by Terrarium) -- never imported
+        # here, only invoked, so this module stays free of run_record.
+        self._record = record
         self._process = None
 
     def start(self) -> None:
         self._process = self._popen(self._command)
+        if self._record is not None:
+            pid = getattr(self._process, "pid", None)
+            if pid is not None:
+                self._record(pid)
 
     def wait_ready(self, timeout: float) -> None:
         deadline = self._clock() + timeout

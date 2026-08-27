@@ -1,0 +1,137 @@
+from pathlib import Path
+
+import pytest
+
+from control.terrarium_config import (
+    TerrariumConfigError, load_terrarium_config, parse_terrarium_config,
+    resolve_bit_roots, validate_rooms,
+)
+
+MINIMAL = """
+schema = 1
+[terrarium]
+name = "t"
+[rooms.ONE]
+backends = ["devicelink"]
+[[rooms.ONE.fixtures]]
+name = "main"
+color_order = "GRB"
+[[rooms.ONE.fixtures.blocks]]
+name = "b1"
+start = 0
+count = 10
+[[rooms.ONE.fixtures.zones]]
+name = "all"
+start = 0
+count = 10
+"""
+
+
+def test_resolve_bit_roots_relative_paths_anchor_at_config_dir(tmp_path):
+    subdir = tmp_path / "sub"
+    subdir.mkdir()
+    config_path = subdir / "terrarium.toml"
+    cfg = parse_terrarium_config(MINIMAL, source=str(config_path))
+    roots = resolve_bit_roots(cfg, str(config_path))
+    assert roots == [subdir / "bits"]
+
+
+def test_resolve_bit_roots_absolute_paths_pass_through(tmp_path):
+    config_path = tmp_path / "terrarium.toml"
+    text = MINIMAL.replace(
+        '[terrarium]\nname = "t"',
+        f'[terrarium]\nname = "t"\nbit_paths = ["{tmp_path.as_posix()}/abs_bits", "rel_bits"]',
+    )
+    cfg = parse_terrarium_config(text, source=str(config_path))
+    roots = resolve_bit_roots(cfg, str(config_path))
+    assert roots == [tmp_path / "abs_bits", tmp_path / "rel_bits"]
+
+
+def test_minimal_config_parses():
+    cfg = parse_terrarium_config(MINIMAL, source="inline")
+    assert cfg.schema == 1
+    assert cfg.name == "t"
+    assert cfg.bit_paths == ("bits",)          # default
+    spec = cfg.rooms["ONE"]
+    assert spec.name == "ONE"
+    assert spec.node_id == "ROOM_ONE_NODE"     # default shape
+    assert spec.backends == ("devicelink",)
+    assert spec.profile.pixel_count == 10
+    assert spec.profile.fixtures[0].zones[0].name == "all"
+
+
+def test_version_is_schema_plus_content_hash():
+    a = parse_terrarium_config(MINIMAL, source="inline")
+    b = parse_terrarium_config(MINIMAL + "\n# comment\n", source="inline")
+    assert a.version.startswith("1-") and len(a.version) == 2 + 12
+    assert a.version != b.version              # content-addressed
+
+
+def test_unknown_backend_is_a_located_error():
+    bad = MINIMAL.replace('backends = ["devicelink"]',
+                          'backends = ["hologram"]')
+    with pytest.raises(TerrariumConfigError) as exc:
+        parse_terrarium_config(bad, source="inline")
+    assert "rooms.ONE" in str(exc.value) and "hologram" in str(exc.value)
+
+
+def test_profile_validation_errors_are_located():
+    # zone overruns the 10 px fixture -> RoomProfile's own ValueError,
+    # wrapped with the room's config location.
+    bad = MINIMAL.replace(
+        '[[rooms.ONE.fixtures.zones]]\nname = "all"\nstart = 0\ncount = 10',
+        '[[rooms.ONE.fixtures.zones]]\nname = "all"\nstart = 0\ncount = 99')
+    with pytest.raises(TerrariumConfigError) as exc:
+        parse_terrarium_config(bad, source="inline")
+    assert "rooms.ONE" in str(exc.value)
+
+
+def test_shipped_config_matches_code_profiles_golden():
+    # The shipped terrarium.toml is now the single source of truth for
+    # these rooms' shapes (the old ROOM_PROFILES registry is deleted), so
+    # this pins the exact fixture/block/zone literals the file declares.
+    cfg = load_terrarium_config("terrarium.toml")
+    assert set(cfg.rooms) == {"TEST", "DEMO"}
+
+    test_room = cfg.rooms["TEST"]
+    assert test_room.backends == ("devicelink",)
+    assert test_room.node_id == "ROOM_TEST_NODE"
+    assert test_room.profile.surface_id == "room_test"
+    assert [f.name for f in test_room.profile.fixtures] == ["main", "accent"]
+    main, accent = test_room.profile.fixtures
+    assert main.color_order == "GRB"
+    assert [(b.name, b.start, b.count) for b in main.blocks] == \
+        [("main", 0, 60)]
+    assert [(z.name, z.start, z.count) for z in main.zones] == \
+        [("left", 0, 20), ("center", 20, 20), ("right", 40, 20)]
+    assert accent.color_order == "GRB"
+    assert [(b.name, b.start, b.count) for b in accent.blocks] == \
+        [("accent", 0, 30)]
+    assert [(z.name, z.start, z.count) for z in accent.zones] == \
+        [("low", 0, 15), ("high", 15, 15)]
+    assert test_room.profile.pixel_count == 90
+
+    demo_room = cfg.rooms["DEMO"]
+    assert demo_room.backends == ("devicelink", "array")
+    assert demo_room.node_id == "ROOM_DEMO_NODE"
+    assert demo_room.profile.surface_id == "room_demo"
+    assert [f.name for f in demo_room.profile.fixtures] == ["array"]
+    array = demo_room.profile.fixtures[0]
+    assert array.color_order == "GRB"
+    assert [(b.name, b.start, b.count) for b in array.blocks] == [
+        ("m1", 0, 144), ("m2", 144, 144), ("m3", 288, 144),
+        ("m4", 432, 144), ("m5", 576, 144), ("m6", 720, 144),
+    ]
+    assert [(z.name, z.start, z.count) for z in array.zones] == [
+        ("left", 0, 288), ("center", 288, 288), ("right", 576, 288),
+    ]
+    assert demo_room.profile.pixel_count == 864
+
+
+def test_validate_rooms_reports_per_room():
+    cfg = load_terrarium_config("terrarium.toml")
+    status = validate_rooms(cfg, array_backend_configured=False)
+    assert status["TEST"] is None
+    assert "array" in status["DEMO"]           # reason names the missing backend
+    status = validate_rooms(cfg, array_backend_configured=True)
+    assert status["DEMO"] is None

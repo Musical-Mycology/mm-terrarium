@@ -66,10 +66,15 @@ def wav_bytes(pcm: bytes, rate: int, channels: int = 1) -> bytes:
 
 class CaptureStore:
     def __init__(self, root, session_id: str, bit: dict,
-                 clock=time.monotonic):
+                 clock=time.monotonic, provenance: dict | None = None):
         self.root = Path(root)
         self.session_id = session_id
         self.bit = dict(bit)
+        # Room provenance (room_name/terrarium_config_version), stamped into
+        # every trace this store writes when non-empty. Threaded in from
+        # whoever constructs the store -- see bits/capture/capture_bit.py's
+        # CaptureBit.__init__ for the (currently gs-less) seam.
+        self.provenance = dict(provenance) if provenance else {}
         self._clock = clock
         self._open: dict = {}          # dev -> Trace
         self._last_seen: dict = {}     # dev -> clock reading
@@ -191,7 +196,10 @@ class CaptureStore:
             return
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            body = _json_dumps(trace.to_dict(audio_file), separators=(",", ":"))
+            trace_dict = trace.to_dict(audio_file)
+            if self.provenance:
+                trace_dict.update(self.provenance)
+            body = _json_dumps(trace_dict, separators=(",", ":"))
             (directory / f"{stem}.json").write_text(body)
             self.bytes_written += len(body)
             if audio_file is not None:

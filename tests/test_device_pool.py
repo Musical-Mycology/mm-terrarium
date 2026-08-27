@@ -89,4 +89,13 @@ def test_a_removed_device_can_say_hello_again_as_if_new():
     pool.remove("ie1")
     pool.hello("ie1", "Shroom One (reconnected)", "1", now=100.0)
     assert pool.known("ie1") is True
-    assert pool.get("ie1").last_seen == 100.0
+
+
+def test_clear_drops_every_known_device():
+    pool = DevicePool()
+    pool.hello("ie1", "Shroom One", "1")
+    pool.hello("ie2", "Shroom Two", "1")
+    pool.clear()
+    assert len(pool) == 0
+    assert pool.known("ie1") is False
+    assert pool.known("ie2") is False

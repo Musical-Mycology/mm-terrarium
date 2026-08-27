@@ -182,8 +182,17 @@ class ScriptBit(_BaseBit):
 
 class _Room:
     def __init__(self, bound):
-        from control.rooms import RoomType
-        self.room_type = RoomType.TEST
+        from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
+                                          RoomZone)
+        self.name = "TEST"
+        self.profile = RoomProfile(surface_id="room_test", fixtures=(
+            RoomFixture(name="main", color_order="GRB",
+                       blocks=(RoomBlock("main", 0, 10),),
+                       zones=(RoomZone("all", 0, 10),)),
+            RoomFixture(name="accent", color_order="GRB",
+                       blocks=(RoomBlock("accent", 0, 10),),
+                       zones=(RoomZone("all", 0, 10),)),
+        ))
         self.bound = bound   # dict[str, str], fixture name -> dev
 
 
@@ -251,6 +260,24 @@ def test_the_record_reports_what_the_fire_resolved_to():
     assert record.at == 100.0
 
 
+def test_trigger_fired_room_name_is_none_without_a_room():
+    gs, _, _ = _running()
+    observer = Recorder()
+    gs.add_observer(observer)
+    gs.fire_trigger("sweep", fired_by="admin-manual")
+    assert observer.fired[0].room_name is None
+
+
+def test_trigger_fired_carries_room_name_from_gs_provenance():
+    gs, _, _ = _running()
+    gs.provenance = {"room_name": "atrium",
+                     "terrarium_config_version": "1-abcdef012345"}
+    observer = Recorder()
+    gs.add_observer(observer)
+    gs.fire_trigger("sweep", fired_by="admin-manual")
+    assert observer.fired[0].room_name == "atrium"
+
+
 def test_a_target_fanout_across_two_bound_fixtures_feeds_the_room_once_per_step():
     """The Room's TARGET-fanout would double-feed the shared session once per
     bound fixture if not collapsed -- see control/engine.py's
@@ -285,24 +312,15 @@ def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
     assert [c[0] for c in light] == ["sim-room-main"] * 3
 
 
-def test_resolve_target_on_an_unbound_room_never_calls_room_profile(monkeypatch):
+def test_resolve_target_on_an_unbound_room_returns_nothing():
     """_resolve_target's room_devs block must short-circuit on "is anything
-    bound" before ever calling room_profile(), exactly like its sibling
-    _canonical_room_dev does. DEMO now has a real ROOM_PROFILES entry (see
-    control/room_profile.py), so room_profile(RoomType.DEMO) no longer raises
-    -- this can no longer prove the short-circuit by relying on that raise.
-    Instead, patch control.engine.room_profile to raise on any call: an
-    empty, DEMO-typed Room must never reach that call at all, the same way
-    it never would through _canonical_room_dev."""
-    import control.engine as engine_module
-    from control.rooms import Room, RoomType
+    bound" before ever walking the profile's fixtures, exactly like its
+    sibling _canonical_room_dev does -- an empty Room must never reach a
+    profile that happens to be misshapen for its own gate."""
+    from control.rooms import Room
 
-    def _boom(room_type):
-        raise AssertionError("room_profile() must not be called for an unbound Room")
-
-    monkeypatch.setattr(engine_module, "room_profile", _boom)
     gs = GameServer({}, clock=lambda: 0.0)
-    gs.room = Room(room_type=RoomType.DEMO)
+    gs.room = Room(name="DEMO", profile=_Room({}).profile, node_id="ROOM_DEMO_NODE")
     assert gs._resolve_target(TriggerTarget.ROOM, None) == []
 
 

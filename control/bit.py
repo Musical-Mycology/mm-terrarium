@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from control.roles import RoleTable
-from control.rooms import RoomType
 from control.triggers import TriggerTable
 
 if TYPE_CHECKING:
@@ -30,18 +29,26 @@ class Bit(ABC):
     # an attribute here, so there is nothing for an author to keep in sync.
     version: str = ""
 
-    # Which RoomTypes this Bit can run in. Every Bit supports at least
-    # RoomType.TEST (the universal baseline); a Bit declares more by
+    # Which Room config names this Bit can run in. Every Bit supports at
+    # least "TEST" (the universal baseline); a Bit declares more by
     # overriding this class attribute. Read off the class (not an instance)
     # by control/boot.py's Bit-gating check, before the Bit is constructed.
     # Treat as override-only -- do not mutate this set in place, since it is
     # shared across every instance of a Bit that doesn't override it.
-    room_types: set[RoomType] = {RoomType.TEST}
+    room_types: set[str] = {"TEST"}
 
     @property
     @abstractmethod
     def role_table(self) -> RoleTable:
         """This Bit's static role declarations (control.roles.RoleTable)."""
+
+    def room_manifests(self) -> tuple[dict, dict]:
+        """(light_manifest, ugen_manifest) for the active Room's synthesized
+        ROOM-class role. Empty dicts (the default) mean this Bit declares no
+        Room instruments and no ROOM role is merged. The Bit no longer builds
+        the Role itself: capacity (fixture count) and the node id are config
+        data the engine holds, not something a Bit can know."""
+        return ({}, {})
 
     @property
     def trigger_table(self) -> TriggerTable:

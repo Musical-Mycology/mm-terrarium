@@ -99,6 +99,22 @@ def test_a_fired_record_keeps_fired_by_and_declared_source_apart():
     json.dumps(view)
 
 
+def test_a_fired_record_view_carries_room_name_when_the_record_has_one():
+    record = TriggerFired(
+        name="flash_device", condition="tapped", fired_by="admin-manual",
+        declared_source="gesture-verb", dev="ie1", devs=("ie1",),
+        at=100.0, steps=2, room_name="atrium")
+    assert trigger_fired_view(record)["room_name"] == "atrium"
+
+
+def test_a_fired_record_view_room_name_is_none_without_a_room():
+    record = TriggerFired(
+        name="flash_device", condition="tapped", fired_by="admin-manual",
+        declared_source="gesture-verb", dev="ie1", devs=("ie1",),
+        at=100.0, steps=2)
+    assert trigger_fired_view(record)["room_name"] is None
+
+
 def test_step_view_solid_and_mute():
     solid = _step_view(ScriptStep(1.0, SolidCue(TARGET, (255, 255, 255), 0.9, 5.0)))
     assert solid == {"offset": 1.0, "kind": "solid", "dev": TARGET,

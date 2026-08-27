@@ -107,6 +107,29 @@ def test_a_closed_capture_lands_on_disk_with_its_wav(tmp_path):
     assert (tmp_path / "SESSION" / "shake" / "003.wav").exists()
 
 
+def test_trace_carries_no_room_provenance_when_store_has_none(tmp_path):
+    store = make_store(tmp_path)
+    store.open_capture("ie1", open_cmd())
+    store.append("ie1", batch())
+    store.close_capture("ie1", close_cmd().meta)
+    body = json.loads((tmp_path / "SESSION" / "shake" / "003.json").read_text())
+    assert "room_name" not in body
+    assert "terrarium_config_version" not in body
+
+
+def test_trace_carries_room_provenance_when_store_has_it(tmp_path):
+    store = CaptureStore(root=tmp_path, session_id="SESSION", bit=BIT,
+                         clock=FakeClock(),
+                         provenance={"room_name": "atrium",
+                                     "terrarium_config_version": "1-abcdef012345"})
+    store.open_capture("ie1", open_cmd())
+    store.append("ie1", batch())
+    store.close_capture("ie1", close_cmd().meta)
+    body = json.loads((tmp_path / "SESSION" / "shake" / "003.json").read_text())
+    assert body["room_name"] == "atrium"
+    assert body["terrarium_config_version"] == "1-abcdef012345"
+
+
 def test_t0_device_comes_from_the_open_command_not_a_default(tmp_path):
     """Design Rule 4, timestamps at the source: t0_device must be the
     device's own clock reading, or every trace's offsets would silently
