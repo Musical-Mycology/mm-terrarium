@@ -34,116 +34,68 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
          arco_process_cls=ArcoProcess,
          simulator_factory=None, known_device_connected=lambda dev: False,
          tick=None, teardown=None, clock=time.monotonic):
-    """Run the full load sequence. Returns (game_server, room_bridge,
-    arco_process, teardown) once the Bit is loaded and either the Room is
-    already bound (fast path) or a fresh tap has bound it.
+    """Compat wrapper over control.terrarium.Terrarium: one-shot load_room
+    + load_bit, returning the old 4-tuple. Deleted in Task 7, once
+    harness/terrarium_boot.py drives Terrarium directly instead.
 
-    TEARDOWN IS THE RETURNED STACK. There is no boot.shutdown() any more:
-    the caller closes the stack, and every step this function registered
-    unwinds in reverse. That deleted function's docstring used to say "Arco
-    last since everything else may still want to address it during
-    teardown", which was true within this module's scope and wrong composed
-    with harness/terrarium_boot.py, which owns o2lite CLIENT subprocesses
-    that talk to that hub. Reverse-of-registration gets it right in both
-    scopes without either having to know about the other.
+    `teardown`, if given, is ignored for registration purposes (Terrarium
+    owns its own room-scoped stack); it is accepted only so existing
+    callers that pass one don't break -- see harness/terrarium_boot.py.
 
-    Push order here is deliberate, and unwinds as: the Bit, then the Room
-    bridge (which frees the Room's Arco voice), then any simulator
-    subprocess, then Arco. The Bit goes before the bridge because its
-    on_unload may still cue into it.
-
-    `teardown` lets a caller that started something BEFORE boot() register
-    it first and have it torn down last. harness/terrarium_boot.py starts
-    its DeviceLinkServer before calling boot(), deliberately, because the
-    simulator this function spawns connects immediately.
-
-    `simulator_factory` is Callable[[TeardownStack, str], str]: (teardown,
-    fixture_name) -> dev, called once per fixture. A factory that spawns a
-    process registers its own teardown on the stack it is handed.
-
-    `clock` is threaded into GameServer and must be the same callable the
-    caller hands DeviceLinkAgent (harness/terrarium_boot.py's build() does
-    exactly that). On the o2lite transport it is o2lite.time_get.
-
-    Raises BootFailure on any stage failure. Once Arco has actually
-    started, EVERY failure -- wait_ready timing out, an unknown or
-    unsupported Bit, a Bit load error, a Ctrl-C, or anything unanticipated
-    -- closes the stack before propagating, so nothing this function
-    started is orphaned and no cleanup exception masks the real one.
+    Raises BootFailure on any stage failure, exactly as before: load_room
+    refusals, an unknown/unsupported Bit, or a Bit load error.
     """
-    if teardown is None:
-        teardown = TeardownStack()
+    # Local imports: control.terrarium imports this module, so importing it
+    # at module level here would be circular.
+    from control.terrarium import Terrarium
+    from control.terrarium_config import RoomSpec as _RoomSpec  # noqa: F401
+    from control.terrarium_config import TerrariumConfig
 
-    if "array" in room_spec.backends and not config.array_backend_configured:
-        raise BootFailure(
-            f"{room_spec.name} requires an array backend, none configured")
-    room = Room(name=room_spec.name, profile=room_spec.profile,
-               node_id=room_spec.node_id)
+    terrarium_config = TerrariumConfig(
+        schema=1, name="boot-compat", bit_paths=(),
+        rooms={room_spec.name: room_spec}, version="boot-compat")
 
-    arco = arco_process_cls(arco_command)
+    stack_factory = (lambda: teardown) if teardown is not None else TeardownStack
+
+    terrarium = Terrarium(
+        terrarium_config, GameServer(bit_registry, room_binding=room_binding,
+                                     cue_horizon=config.cue_horizon,
+                                     clock=clock),
+        room_binding, boot_config=config, arco_command=arco_command,
+        arco_process_cls=arco_process_cls, simulator_factory=simulator_factory,
+        known_device_connected=known_device_connected, tick=tick,
+        stack_factory=stack_factory)
+
+    reason = terrarium.load_room(room_spec.name)
+    if reason is not None:
+        raise BootFailure(reason)
+
+    gs = terrarium.gs
     try:
-        arco.start()
-    except Exception as exc:
-        # Nothing was actually spawned, so there's nothing to shut down.
-        raise BootFailure(f"Arco failed to start: {exc}") from exc
-    teardown.push("arco", arco.shutdown)
-
-    try:
-        try:
-            arco.wait_ready(config.arco_ready_timeout)
-        except Exception as exc:
-            raise BootFailure(f"Arco failed to start: {exc}") from exc
-
-        _bind_room_fast_path(room, room_binding, simulator_factory,
-                             known_device_connected, teardown)
-
         bit_cls = bit_registry.get(config.bit_name)
         if bit_cls is None:
             raise BootFailure(f"unknown Bit {config.bit_name!r}")
-        if room.name not in bit_cls.room_types:
+        if terrarium.room.name not in bit_cls.room_types:
             raise BootFailure(
-                f"Bit {config.bit_name!r} does not support {room.name}")
-
-        # cue_horizon and clock go in together and MUST match the ones
-        # DeviceLinkAgent is built with: GameServer computes every cue's
-        # target time (origin + horizon) and reads this clock for a
-        # self-driven cue's origin and for the no-stamp fallback. Two clock
-        # bases is the 2026-08-13 live-run bug.
-        gs = GameServer(bit_registry, room_binding=room_binding,
-                        cue_horizon=config.cue_horizon, clock=clock)
-        gs.room = room
+                f"Bit {config.bit_name!r} does not support {terrarium.room.name}")
         try:
             gs.load_bit(config.bit_name, config=config.bit_config)
         except BitLoadError as exc:
             raise BootFailure(f"Bit load failed: {exc}") from exc
-
-        profile_for_wait = room.profile
-        if not room.fully_bound(profile_for_wait):
-            try:
-                wait_for_room_binding(
-                    gs, room_binding, config.room_setup_timeout,
-                    tick=tick or (lambda: gs.tick(0.05)))
-            except RoomBindingTimeout as exc:
-                gs.abort()
-                raise BootFailure(str(exc)) from exc
-
-        room_bridge = RoomBridge()
-        canonical = _canonical_room_dev(profile_for_wait, room.bound)
-        if canonical is not None:
-            room_bridge.bind(canonical)
-        teardown.push("room-bridge", room_bridge.shutdown)
-        teardown.push("bit", lambda: _abort_if_running(gs))
     except BaseException:
-        # Arco is a live subprocess by this point, and _bind_room_fast_path
-        # may have spawned a simulator subprocess too. Closing the stack
-        # unwinds whatever got as far as being registered, in the right
-        # order, with each step guarded so cleanup cannot mask this
-        # failure. Re-raise unchanged: the inner handlers above already
-        # produced a well-labeled BootFailure for every stage.
-        teardown.close()
+        # Mirrors the old boot()'s outer handler: once Arco/the Room are up,
+        # ANY failure here (a bad Bit name, a Bit load error, a
+        # KeyboardInterrupt raised while constructing the Bit -- see
+        # control/engine.py's load_bit, whose own `except Exception` does
+        # not catch KeyboardInterrupt) must unwind the room stack before
+        # propagating.
+        terrarium.room_stack.close()
+        gs.room = None
         raise
 
-    return gs, room_bridge, arco, teardown
+    terrarium.room_stack.push("bit", lambda: _abort_if_running(gs))
+
+    return gs, terrarium.room_bridge, terrarium.arco, terrarium.room_stack
 
 
 def _abort_if_running(gs) -> None:

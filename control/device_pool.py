@@ -64,6 +64,12 @@ class DevicePool:
         return [dev for dev, info in self._devices.items()
                 if now - info.last_seen > timeout]
 
+    def clear(self) -> None:
+        """Drop every known device. Called on unload_room -- every device's
+        clock died with the hub (design spec section 6), so the whole pool
+        is stale, not just the ones bound to the departed Room."""
+        self._devices.clear()
+
     def remove(self, dev: str) -> None:
         """Drop the entry outright, not a tombstone -- a device that
         reconnects later says hello again and is indistinguishable from a
