@@ -96,6 +96,17 @@ def test_both_fixtures_bound_report_their_own_dev():
     assert fixtures[1]["dev"] == "sim-room-accent"
 
 
+def test_fixtures_carry_their_instrument():
+    fixtures = _view()["fixtures"]
+    for fixture in fixtures:
+        assert fixture["instrument"] == {
+            "name": "generic_surface",
+            "capabilities": ["audio.flsyn", "light.surface"],
+            "functions": [],
+            "accepted_triggers": ["midi", "play", "solid", "mute"],
+        }
+
+
 def test_capability_carries_the_whole_concatenated_surface():
     view = _view()
     assert view["capability"]["surface_id"] == "room_test"
@@ -115,6 +126,14 @@ def test_light_and_audio_appear_in_one_list_discriminated_by_kind():
     assert instruments[0]["instrument"] == "rainbow"
     assert instruments[0]["target"] == "primary"
     assert instruments[1]["instrument"] == "flsyn"
+
+
+def test_instrument_entries_carry_the_owning_instrument_name():
+    """The room's first fixture's Instrument name -- see room_view's
+    comment on the ambiguity-breaking simplification."""
+    instruments = _view()["instruments"]
+    assert [i["instrument_name"] for i in instruments] == \
+        ["generic_surface", "generic_surface"]
 
 
 def test_lanes_carry_across_for_both_kinds():

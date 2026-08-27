@@ -106,6 +106,11 @@ function buildRefCard(role) {
   details.appendChild(summary);
 
   const body = mk("div", "accbody");
+  if (role.requires) {
+    const caps = (role.requires.capabilities || []).join(", ");
+    const reqText = caps ? `${role.requires.slot} (${caps})` : role.requires.slot;
+    body.appendChild(mk("p", "muted requires", `requires — ${reqText}`));
+  }
   if (role.welcome) {
     const welcomeText = Object.entries(role.welcome)
       .map(([k, v]) => `${k}: ${v && v.instrument ? v.instrument : JSON.stringify(v)}`)

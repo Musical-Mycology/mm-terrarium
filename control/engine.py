@@ -150,6 +150,14 @@ class GameServer:
         # requirement (see spec section 4) -- empty outside a loaded Bit.
         self._slot_requirements: dict[str, InstrumentRequirement] = {}
 
+    def slot_requirement(self, slot: str) -> "InstrumentRequirement | None":
+        """Public read of the loaded Bit's requirement for `slot`, or None
+        (no such slot, or no Bit loaded). Exists so callers outside this
+        module (the Console's role_view) can show a role's `requires`
+        contract without reaching into the private `_slot_requirements`
+        snapshot directly."""
+        return self._slot_requirements.get(slot)
+
     def hello(self, dev: str, name: str, protoversion: str) -> None:
         self.devices.hello(dev, name, protoversion, self._clock())
         self._notify("on_devices_change")

@@ -61,6 +61,15 @@ def capability_view(profile) -> dict:
     }
 
 
+def _instrument_view(instrument) -> dict:
+    return {
+        "name": instrument.name,
+        "capabilities": sorted(instrument.capabilities),
+        "functions": list(instrument.functions),
+        "accepted_triggers": list(instrument.accepted_triggers),
+    }
+
+
 def fixtures_view(profile, room, canvas_urls=None) -> list[dict]:
     """One entry per fixture: its own pixel count, its zones (already
     namespaced <fixture>.<zone> by RoomProfile.zones), its channel offset
@@ -89,6 +98,7 @@ def fixtures_view(profile, room, canvas_urls=None) -> list[dict]:
                       for z in fixture.zones],
             "dev": dev,
             "url": urls.get(dev) if dev else None,
+            "instrument": _instrument_view(fixture.instrument),
         })
     return out
 
@@ -113,6 +123,18 @@ def room_view(room, profile, role, controllers: dict, canvas_urls=None) -> dict 
     if role is not None:
         instruments = (_light_instruments(role.light_manifest or {})
                        + _audio_instruments(role.ugen_manifest or {}))
+    # Each manifest entry names an instrument *declaration* (e.g. "rainbow"),
+    # not a physical Instrument object -- the room-level Instrument that
+    # backs the fixture(s) it plays on isn't threaded through the manifest.
+    # Rather than guess per-entry, every entry gets the same
+    # `instrument_name`: the room's first fixture's Instrument name. This is
+    # a deliberate ambiguity-breaking simplification (a multi-fixture Room
+    # with per-fixture Instruments would need real per-entry attribution;
+    # nothing in this codebase needs that yet).
+    instrument_name = (profile.fixtures[0].instrument.name
+                        if profile.fixtures else None)
+    for entry in instruments:
+        entry["instrument_name"] = instrument_name
     return {
         "room_type": room.name,
         "fixtures": fixtures_view(profile, room, canvas_urls),

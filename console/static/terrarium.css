@@ -212,6 +212,14 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2.5px solid var(--gold
 .inst .rows dt { color: var(--ink-dim); }
 .inst .rows dd { margin: 0; overflow-wrap: anywhere; }
 .live { color: var(--gold); font-weight: 700; }
+.insttags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+.insttag {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.04em;
+  border-radius: var(--r-xs); padding: 1.5px 7px;
+  color: var(--ink-dim); border: 1.5px solid var(--hair-tan);
+}
+.insttag.instname { color: var(--ink); border-color: var(--hair); }
+.requires { font-family: var(--f-mono); font-size: 11px; }
 
 /* ---------- room card accordions ---------- */
 details.acc { border-top: 1.5px solid var(--hair); margin-top: 14px; padding-top: 10px; }

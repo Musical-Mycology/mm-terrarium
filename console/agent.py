@@ -188,7 +188,8 @@ class ConsoleAgent:
         registration: list = []
         if gs.registration is not None:
             loaded_bit = self._loaded_bit_name()
-            roles = [protocol.role_view(r)
+            roles = [protocol.role_view(
+                        r, gs.slot_requirement(r.requires) if r.requires else None)
                      for r in gs.registration.role_table.roles.values()
                      if r.role_class != RoleClass.ROOM]
             registration = protocol.registration_changed_event(

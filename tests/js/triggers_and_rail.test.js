@@ -124,6 +124,7 @@ const TRIGGERS = [
       light: { instrument: "glow", params: { hue: 0.33 }, duration: 1.5 },
       audio: { instrument: "chime", duration: 1.5 },
     },
+    requires: { slot: "fixture", capabilities: ["light.pixels", "light.surface"] },
   };
   send({ event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
          roles: [PLAYER_ROLE], registration: [{ role: "player", count: 2, capacity: 2 }],
@@ -149,6 +150,23 @@ const TRIGGERS = [
   assert.ok(rolesHtml.includes("light: glow · audio: chime") ||
             rolesHtml.includes("audio: chime · light: glow"),
             "welcome entries should be joined with ·");
+  // requires: slot + capabilities should render on the role card so an
+  // operator can see why a join was refused.
+  assert.ok(rolesHtml.includes("requires"), "requires label should render");
+  assert.ok(rolesHtml.includes("fixture"), "requires slot should render");
+  assert.ok(rolesHtml.includes("light.pixels"), "requires capabilities should render");
+
+  // a role with no `requires` slot renders no requires line at all.
+  const NO_REQUIRES_ROLE = { ...PLAYER_ROLE, role: "watcher", requires: null };
+  send({ event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
+         roles: [NO_REQUIRES_ROLE],
+         registration: [{ role: "watcher", count: 0, capacity: null }],
+         devices: [], bit_status: {}, triggers: TRIGGERS,
+         room: { room_type: "DEMO", capability: { pixel_count: 864,
+                 color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
+                 controllers: {} } });
+  const noReqHtml = byId.get("rolesCard").innerHTML;
+  assert.ok(!noReqHtml.includes("requires —"), "no requires line without a requires slot");
 
   console.log("triggers_and_rail: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

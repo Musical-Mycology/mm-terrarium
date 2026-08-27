@@ -41,7 +41,17 @@ __all__ = [
 ]
 
 
-def role_view(role) -> dict:
+def role_view(role, requirement=None) -> dict:
+    """`requirement` is the loaded Bit's InstrumentRequirement for
+    `role.requires` (GameServer.slot_requirement), or None when the role has
+    no `requires` slot or no Bit is loaded. Surfaced as `requires` so the
+    rail can show an operator why a join was refused: {"slot", "capabilities"}
+    with capabilities sorted for a stable wire shape, or None."""
+    requires = None
+    if role.requires is not None:
+        requires = {"slot": role.requires,
+                    "capabilities": (sorted(requirement.capabilities)
+                                      if requirement is not None else [])}
     return {
         "role": role.name,
         "class": role.role_class.name,
@@ -50,6 +60,7 @@ def role_view(role) -> dict:
         "ugen_manifest": role.ugen_manifest,
         "light_manifest": role.light_manifest,
         "welcome": role.welcome,
+        "requires": requires,
     }
 
 
