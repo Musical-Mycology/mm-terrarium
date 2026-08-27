@@ -1,8 +1,10 @@
+from pathlib import Path
+
 import pytest
 
 from control.terrarium_config import (
     TerrariumConfigError, load_terrarium_config, parse_terrarium_config,
-    validate_rooms,
+    resolve_bit_roots, validate_rooms,
 )
 
 MINIMAL = """
@@ -23,6 +25,26 @@ name = "all"
 start = 0
 count = 10
 """
+
+
+def test_resolve_bit_roots_relative_paths_anchor_at_config_dir(tmp_path):
+    subdir = tmp_path / "sub"
+    subdir.mkdir()
+    config_path = subdir / "terrarium.toml"
+    cfg = parse_terrarium_config(MINIMAL, source=str(config_path))
+    roots = resolve_bit_roots(cfg, str(config_path))
+    assert roots == [subdir / "bits"]
+
+
+def test_resolve_bit_roots_absolute_paths_pass_through(tmp_path):
+    config_path = tmp_path / "terrarium.toml"
+    text = MINIMAL.replace(
+        '[terrarium]\nname = "t"',
+        f'[terrarium]\nname = "t"\nbit_paths = ["{tmp_path.as_posix()}/abs_bits", "rel_bits"]',
+    )
+    cfg = parse_terrarium_config(text, source=str(config_path))
+    roots = resolve_bit_roots(cfg, str(config_path))
+    assert roots == [tmp_path / "abs_bits", tmp_path / "rel_bits"]
 
 
 def test_minimal_config_parses():

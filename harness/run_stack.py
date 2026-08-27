@@ -54,6 +54,7 @@ from control.bit_registry import BitRegistry
 from control.process import stop_process
 from control.run_profile import RunProfile, parse_profile
 from control.teardown import TeardownStack
+from control.terrarium_config import load_terrarium_config, resolve_bit_roots
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.proc_tee import ProcTee
@@ -107,6 +108,16 @@ class RunResult:
     logs: dict = field(default_factory=dict)
     urls: list = field(default_factory=list)
     room_urls: list = field(default_factory=list)
+
+
+def discover_registry(config_path: str | None) -> BitRegistry:
+    """BitRegistry.scan() over the roots named by config_path's own
+    bit_paths (default terrarium.toml in the CWD -- terrarium_boot's own
+    default, mirrored here since this process forwards --config verbatim
+    rather than defaulting it itself)."""
+    terrarium_config = load_terrarium_config(config_path or "terrarium.toml")
+    roots = resolve_bit_roots(terrarium_config, config_path or "terrarium.toml")
+    return BitRegistry.scan(roots)
 
 
 def control_command(cfg: StackConfig, ppid: int) -> list[str]:
@@ -291,7 +302,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
             return
         round_number += 1
         n = round_number
-        reg = registry if registry is not None else BitRegistry.discover()
+        reg = registry if registry is not None else discover_registry(cfg.config)
         if bit_name not in reg.packages:
             print(f"round loaded: unknown Bit {bit_name!r}; no devices "
                  f"respawned for round {n}", file=sys.stderr)
@@ -696,7 +707,7 @@ def parse_args(argv=None):
 
 
 def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
-    registry = registry if registry is not None else BitRegistry.discover()
+    registry = registry if registry is not None else discover_registry(args.config)
 
     profile = RunProfile()
     if args.profile is not None:
@@ -819,7 +830,7 @@ def main() -> None:
     args = parse_args()
 
     if args.list_bits:
-        registry = BitRegistry.discover()
+        registry = discover_registry(args.config)
         for row in registry.list_view(include_hidden=True):
             rooms = ",".join(row["room_types"])
             print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"

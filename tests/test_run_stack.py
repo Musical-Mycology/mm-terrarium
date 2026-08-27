@@ -503,9 +503,15 @@ def test_control_command_passes_config_when_set():
 
 
 def test_config_from_args_forwards_config_path():
+    from control.bit_registry import BitRegistry
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--config", "venue.toml"])
-    assert config_from_args(args).config == "venue.toml"
+    # --config here names a venue TOML that config_from_args forwards
+    # verbatim to terrarium_boot's own --config; it need not exist in this
+    # process, since a registry is supplied explicitly rather than
+    # discovered from it (discover_registry() is what loads it for real).
+    assert config_from_args(
+        args, registry=BitRegistry.discover()).config == "venue.toml"
 
 
 def test_control_command_defaults_bit_to_test_bit():

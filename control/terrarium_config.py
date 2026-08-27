@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
@@ -109,6 +110,18 @@ def _parse_room(rname: str, rraw: dict, *, source: str) -> RoomSpec:
         arco_ready_timeout=float(arco.get("ready_timeout", 15.0)),
         arco_settle_seconds=float(arco.get("settle_seconds", 0.0)),
     )
+
+
+def resolve_bit_roots(config: TerrariumConfig, config_path: str) -> list[Path]:
+    """config.bit_paths, resolved to filesystem roots for BitRegistry.scan().
+    A relative entry is anchored at config_path's own directory (not the
+    process CWD); an absolute entry passes through unchanged."""
+    base = Path(config_path).resolve().parent
+    roots = []
+    for raw in config.bit_paths:
+        path = Path(raw)
+        roots.append(path if path.is_absolute() else base / path)
+    return roots
 
 
 def validate_rooms(config: TerrariumConfig, *,

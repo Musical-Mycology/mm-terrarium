@@ -100,6 +100,45 @@ def test_real_bits_tree_discovers_cleanly():
     assert {"TestBit", "MetronomeBit", "CaptureBit"} <= set(reg.packages)
 
 
+def test_scan_multiple_roots_discovers_both(tmp_path):
+    root_a = tmp_path / "a_root"
+    root_b = tmp_path / "b_root"
+    make_pkg(root_a, "one", GOOD, MODULE)
+    make_pkg(root_b, "two", HIDDEN, MODULE)
+    reg = BitRegistry.scan((root_a, root_b))
+    assert set(reg.packages) == {"GoodBit", "HiddenBit"}
+    assert reg.errors == []
+
+
+def test_scan_duplicate_name_across_roots_first_root_wins(tmp_path):
+    root_a = tmp_path / "a_root"
+    root_b = tmp_path / "b_root"
+    a_dir = make_pkg(root_a, "pkg", GOOD, MODULE)
+    make_pkg(root_b, "pkg", GOOD, MODULE)
+    reg = BitRegistry.scan((root_a, root_b))
+    assert len(reg.packages) == 1
+    assert reg.packages["GoodBit"].path == a_dir
+    assert len(reg.errors) == 1
+    assert "duplicate" in reg.errors[0].message
+    assert "b_root" in reg.errors[0].path
+
+
+def test_scan_missing_root_is_a_located_error_other_roots_still_scanned(tmp_path):
+    root_a = tmp_path / "does_not_exist"
+    root_b = tmp_path / "b_root"
+    make_pkg(root_b, "two", GOOD, MODULE)
+    reg = BitRegistry.scan((root_a, root_b))
+    assert set(reg.packages) == {"GoodBit"}
+    assert len(reg.errors) == 1
+    assert str(root_a) in reg.errors[0].path
+
+
+def test_scan_default_roots_matches_discover_default():
+    reg = BitRegistry.scan()
+    assert reg.errors == []
+    assert {"TestBit", "MetronomeBit", "CaptureBit"} <= set(reg.packages)
+
+
 class _RaisingBit:
     """Constructor raises: list_view must degrade to roles=None, never
     propagate."""

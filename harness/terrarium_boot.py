@@ -29,7 +29,8 @@ from control.start_condition import scored_count, start_decision
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium import Terrarium, TerrariumState
-from control.terrarium_config import TerrariumConfig, load_terrarium_config
+from control.terrarium_config import (TerrariumConfig, load_terrarium_config,
+                                      resolve_bit_roots)
 from devicelink.agent import DeviceLinkAgent
 from devicelink.server import DeviceLinkServer
 from harness import markers
@@ -1084,7 +1085,9 @@ def main() -> None:
     args = ap.parse_args()
     effective_serve = _effective_serve(args)
 
-    registry = BitRegistry.discover()
+    terrarium_config = load_terrarium_config(args.config)
+    bit_roots = resolve_bit_roots(terrarium_config, args.config)
+    registry = BitRegistry.scan(bit_roots)
 
     if args.list_bits:
         for row in registry.list_view(include_hidden=True):
@@ -1159,7 +1162,6 @@ def main() -> None:
     console_port = (args.console_port if args.console_port is not None
                     else profile.console_port)
 
-    terrarium_config = load_terrarium_config(args.config)
     # --room replaces --room-type: its value is a name in --config's own
     # [rooms.<NAME>] tables now, not a Bit manifest's launch.default_room_type
     # -- Rooms are Terrarium-level config (design spec 2026-08-26), so
