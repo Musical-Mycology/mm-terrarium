@@ -1,10 +1,25 @@
 """tests/test_instrument.py"""
+from dataclasses import dataclass
+
 import pytest
 from control.instrument import (
     CAPABILITY_VOCABULARY, CUE_KINDS, CarriedInstrument, Instrument,
-    InstrumentError, InstrumentRequirement, TUNESHROOM, satisfies,
-    validate_instrument, validate_instrument_manifests,
+    InstrumentError, InstrumentRequirement, TUNESHROOM, ambient_manifests,
+    satisfies, validate_instrument, validate_instrument_manifests,
 )
+
+
+@dataclass(frozen=True)
+class _FakeFixture:
+    """A bare stand-in for control.room_profile.RoomFixture: ambient_
+    manifests() only ever reads `.instrument` off a fixture, so a full
+    RoomFixture (blocks, zones, color_order) would just be noise here."""
+    instrument: Instrument
+
+
+@dataclass(frozen=True)
+class _FakeProfile:
+    fixtures: tuple
 
 
 def test_tuneshroom_is_the_standard_carrier_instrument():
@@ -82,3 +97,44 @@ def test_instrument_ambient_ugen_manifest_is_validated():
 
 def test_empty_ambient_manifests_validate():
     validate_instrument_manifests(TUNESHROOM)
+
+
+def test_ambient_manifests_concatenates_in_fixture_order():
+    first = Instrument(name="first",
+                       light_manifest={"instruments": [{"instrument": "a"}]},
+                       ugen_manifest={"instruments": [{"instrument": "flsyn",
+                                                        "program": 1}]})
+    second = Instrument(name="second",
+                        light_manifest={"instruments": [{"instrument": "b"}]},
+                        ugen_manifest={"instruments": [{"instrument": "flsyn",
+                                                         "program": 2}]})
+    profile = _FakeProfile(fixtures=(_FakeFixture(first),
+                                     _FakeFixture(second)))
+
+    light, ugen = ambient_manifests(profile)
+
+    assert light == {"instruments": [{"instrument": "a"},
+                                     {"instrument": "b"}]}
+    assert ugen == {"instruments": [{"instrument": "flsyn", "program": 1},
+                                    {"instrument": "flsyn", "program": 2}]}
+
+
+def test_ambient_manifests_empty_when_nothing_declares_anything():
+    profile = _FakeProfile(fixtures=(_FakeFixture(TUNESHROOM),
+                                     _FakeFixture(TUNESHROOM)))
+
+    light, ugen = ambient_manifests(profile)
+
+    assert light == {}
+    assert ugen == {}
+
+
+def test_ambient_manifests_deep_copies_entries():
+    entry = {"instrument": "a", "params": {"key": 1}}
+    inst = Instrument(name="only", light_manifest={"instruments": [entry]})
+    profile = _FakeProfile(fixtures=(_FakeFixture(inst),))
+
+    light, _ = ambient_manifests(profile)
+    light["instruments"][0]["params"]["key"] = 999
+
+    assert entry["params"]["key"] == 1   # the config-held dict is untouched

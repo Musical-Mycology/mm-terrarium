@@ -5,6 +5,7 @@ Spec: docs/superpowers/specs/2026-08-27-instruments-and-fixtures-design.md.
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 CAPABILITY_VOCABULARY: frozenset[str] = frozenset({
@@ -96,6 +97,37 @@ def validate_instrument_manifests(instrument: Instrument) -> None:
                 instrument.ugen_manifest, f"{where} ugen_manifest")
     except Exception as exc:
         raise InstrumentError(str(exc)) from exc
+
+
+def ambient_manifests(profile) -> tuple[dict, dict]:
+    """Concatenate every fixture's instrument's declared ambient manifests,
+    in fixture (declaration) order, into one (light, ugen) manifest pair
+    shaped like a LightManifest/ugen manifest input --
+    ``{"instruments": [...]}`` -- ready to feed the same
+    LightManifest.from_dict pipeline a Bit's declared ROOM role manifest
+    goes through (see devicelink/agent.py's _setup_room).
+
+    Returns ({}, {}) when no fixture's instrument declares anything, so a
+    caller can tell "nothing to render ambient" apart from "render an empty
+    surface" -- an empty dict is falsy, a `{"instruments": []}` manifest is
+    not.
+
+    Entries are deep-copied on the way out: these dicts are lifted straight
+    off Instrument.light_manifest/ugen_manifest, which are themselves held
+    by the loaded RoomProfile/terrarium config -- nothing downstream (a
+    LightManifest.from_dict, a caller mutating in place) may be allowed to
+    corrupt the config's own copy."""
+    light_instruments = []
+    ugen_instruments = []
+    for fixture in profile.fixtures:
+        instrument = fixture.instrument
+        light_instruments.extend(
+            instrument.light_manifest.get("instruments", []))
+        ugen_instruments.extend(
+            instrument.ugen_manifest.get("instruments", []))
+    light = {"instruments": light_instruments} if light_instruments else {}
+    ugen = {"instruments": ugen_instruments} if ugen_instruments else {}
+    return copy.deepcopy(light), copy.deepcopy(ugen)
 
 
 TUNESHROOM = Instrument(
