@@ -15,7 +15,8 @@ from control.teardown import TeardownStack
 from control.terrarium_config import RoomSpec
 from devicelink.server import DeviceLinkServer
 from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
-                                    _run_duration, build, main, shutdown)
+                                    _run_duration, build, main,
+                                    resolve_room_spec, shutdown)
 
 TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
     RoomFixture(name="main", color_order="GRB",
@@ -54,6 +55,25 @@ def _build_with_fakes(config, *, transport=None, clock=time.monotonic):
         host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
         simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
         transport=transport, clock=clock)
+
+
+def test_resolve_room_spec_raises_a_located_error_for_an_unknown_room():
+    """resolve_room_spec is the successor to the deleted resolve_room_type's
+    fail-hard semantics: an unknown room name must raise, with a message
+    naming the bad value and listing the valid ones, rather than silently
+    falling through."""
+    with pytest.raises(SystemExit) as exc:
+        resolve_room_spec("NOPE")
+    message = str(exc.value)
+    assert "unknown room" in message
+    assert "NOPE" in message
+    assert "DEMO" in message and "TEST" in message
+
+
+def test_resolve_room_spec_returns_the_named_rooms_spec():
+    spec = resolve_room_spec("TEST")
+    assert spec.name == "TEST"
+    assert spec.node_id == "ROOM_TEST_NODE"
 
 
 def test_build_wires_devicelink_room_bridge_and_simulator():
