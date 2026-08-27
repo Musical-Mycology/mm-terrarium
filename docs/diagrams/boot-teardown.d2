@@ -1,8 +1,9 @@
 direction: down
 
-p1: "1. devicelink server (pop 5th, no o2lite)"
-p2: 2. Arco (pop 4th)
-p3: 3. Room simulators, one per fixture (pop 3rd)
-p4: 4. Room bridge (pop 2nd)
-p5: 5. Bit (pop 1st)
-p1 -> p2 -> p3 -> p4 -> p5
+p1: "1. pre-room stack: o2lite transport"
+p2: "2. room stack: Bit"
+p3: "3. room stack: Room bridge"
+p4: "4. room stack: Room simulators"
+p5: "5. room stack: Arco"
+p6: "6. process stack: devicelink server, console"
+p1 -> p2 -> p3 -> p4 -> p5 -> p6

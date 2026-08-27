@@ -5,12 +5,12 @@
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "boot-teardown",
       "outputs": {
-        "out/boot-teardown.svg": "db3016cee69943a4446b3aefe3fb460a0b6e582931ea0998c8aa0f7caa34ff46",
-        "out/boot-teardown.txt": "c938e6c37d5683a243fd2226ba6c880199860d168203033d9f5f784d95c98472"
+        "out/boot-teardown.svg": "1f752940839e9e7f2eea714bb1c120e66985e0e31203522482be03af3258e3e3",
+        "out/boot-teardown.txt": "503f46f4ab27d58fde64a4564340b0ed1bb226d1d411c5ed7e914a3bdc4ebd5f"
       },
       "renderer": "d2",
       "source": "boot-teardown.d2",
-      "source_sha256": "25c9f4e6aea9196054653100b2cdc0e0174a110c10c8c4e0503b55791edb1922"
+      "source_sha256": "229b9b69eb8a0ff2b44d6d70336a76706d97405bb9d5954d2ec5c1ab3569fcad"
     },
     "cue-path": {
       "inject_into": "docs/MM_TERRARIUM.md",
@@ -43,6 +43,17 @@
       "renderer": "seq",
       "source": "player-flow.seq",
       "source_sha256": "883b44913216b945e36dba8d82da6971bb92db58dad6a352ed4ed95636664499"
+    },
+    "terrarium-state": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "terrarium-state",
+      "outputs": {
+        "out/terrarium-state.svg": "3b08330877f57be6112212e12639a01ebf97785e27573fc4178bd09e31eecb7d",
+        "out/terrarium-state.txt": "e3a925c1df30c5cf5cb89306ace07c15766e19e1d5fd496849ee2eb1bac44fca"
+      },
+      "renderer": "d2",
+      "source": "terrarium-state.d2",
+      "source_sha256": "76a715b6e961b109e2c193d9358b7bce1c91944dcd36756140cdaf3bdb290e1a"
     }
   }
 }
