@@ -223,6 +223,26 @@ function bindingControls(fixture) {
 
 // -------------------------------------------------------------- fixtures
 
+// A small tag row for an Instrument's static declaration -- name plus its
+// capabilities/functions/accepted_triggers. Used by both the per-fixture
+// card and the per-declaration instrument cards below; these fields never
+// carry a live value (no controller/lane), so a plain tag row (no <dl>
+// live-update machinery) is enough.
+function instrumentTags(instrument) {
+  const row = mk("div", "insttags");
+  row.appendChild(mk("span", "insttag instname", instrument.name));
+  for (const cap of instrument.capabilities || []) {
+    row.appendChild(mk("span", "insttag cap", cap));
+  }
+  for (const fn of instrument.functions || []) {
+    row.appendChild(mk("span", "insttag fn", fn));
+  }
+  for (const trig of instrument.accepted_triggers || []) {
+    row.appendChild(mk("span", "insttag trig", trig));
+  }
+  return row;
+}
+
 function buildFixture(fixture) {
   const wrap = document.createElement("div");
   wrap.className = "fixture";
@@ -232,6 +252,8 @@ function buildFixture(fixture) {
   head.appendChild(mk("span", "fixname", fixture.name));
   head.appendChild(bindingControls(fixture));
   wrap.appendChild(head);
+
+  if (fixture.instrument) wrap.appendChild(instrumentTags(fixture.instrument));
 
   const blockrows = mk("div", "blockrows");
   const rows = _blockRowsFor(fixture);
@@ -275,6 +297,7 @@ function bindStateKey(fixture) {
 function fixtureShapeMatches(prev, next) {
   if (!prev) return false;
   if (prev.pixel_count !== next.pixel_count) return false;
+  if (JSON.stringify(prev.instrument) !== JSON.stringify(next.instrument)) return false;
   return JSON.stringify(prev.zones) === JSON.stringify(next.zones);
 }
 
@@ -538,7 +561,8 @@ function render() {
   const newCanvasesByDev = {};
   for (let i = 0; i < room.fixtures.length; i++) {
     const fixture = room.fixtures[i];
-    const nextShape = { pixel_count: fixture.pixel_count, zones: fixture.zones };
+    const nextShape = { pixel_count: fixture.pixel_count, zones: fixture.zones,
+                        instrument: fixture.instrument };
     const unchanged = fixtureShapeMatches(fixtureShapes[fixture.name], nextShape);
 
     if (unchanged) {

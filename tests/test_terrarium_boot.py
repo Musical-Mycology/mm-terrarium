@@ -10,6 +10,7 @@ from control.audio import AudioBridge, FakePool
 from control.boot_config import BootConfig
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from tests.instrument_fixtures import GENERIC_SURFACE
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium_config import RoomSpec
@@ -23,11 +24,11 @@ TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
                blocks=(RoomBlock("main", 0, 60),),
                zones=(RoomZone("left", 0, 20),
                      RoomZone("center", 20, 20),
-                     RoomZone("right", 40, 20))),
+                     RoomZone("right", 40, 20)), instrument=GENERIC_SURFACE),
     RoomFixture(name="accent", color_order="GRB",
                blocks=(RoomBlock("accent", 0, 30),),
                zones=(RoomZone("low", 0, 15),
-                     RoomZone("high", 15, 15))),
+                     RoomZone("high", 15, 15)), instrument=GENERIC_SURFACE),
 ))
 TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
                      node_id="ROOM_TEST_NODE", profile=TEST_PROFILE)

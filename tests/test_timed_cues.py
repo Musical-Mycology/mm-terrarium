@@ -17,6 +17,7 @@ from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_bridge import RoomBridge
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room
 from devicelink.agent import DeviceLinkAgent
 from tests.test_devicelink_agent import FakeServer
@@ -79,7 +80,7 @@ def _stack(now):
     profile = RoomProfile(surface_id="room_test", fixtures=(
         RoomFixture(name="main", color_order="GRB",
                    blocks=(RoomBlock("main", 0, 10),),
-                   zones=(RoomZone("all", 0, 10),)),))
+                   zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),))
     gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
     gs.room.bound["main"] = "sim-room"
     binding.bind("TEST", "main", "sim-room")

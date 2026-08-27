@@ -2,7 +2,9 @@
 and docs/superpowers/specs/2026-08-25-device-liveness-detection-design.md
 sections 3-4 for last_seen/touch/stale/remove."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from control.instrument import TUNESHROOM, Instrument
 
 
 @dataclass
@@ -14,6 +16,11 @@ class DeviceInfo:
     # See devicelink/agent.py's _handle(), which touches this on every
     # inbound message, and GameServer.reap_stale(), the only reader.
     last_seen: float = 0.0
+    # The Instrument this device physically is. Every hello'd device is a
+    # standard Tuneshroom today; this field is the seam for future kinds
+    # (a fixed default rather than a per-hello parameter, since nothing yet
+    # negotiates instrument kind at hello time).
+    carried: Instrument = field(default=TUNESHROOM)
 
 
 class DevicePool:

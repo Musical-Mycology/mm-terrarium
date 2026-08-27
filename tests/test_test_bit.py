@@ -1,5 +1,6 @@
 from bits.test.test_bit import TestBit
 from control.cues import ROOM, FireTrigger, MuteCue
+from control.instrument import InstrumentRequirement
 from control.roles import RoleClass
 from control.triggers import TriggerTarget, validate_trigger_table
 
@@ -52,6 +53,21 @@ def test_player_light_still_declares_no_note_lane():
     # keep ignoring it.
     inst = TestBit().role_table.roles["player"].light_manifest["instruments"][0]
     assert not [lane for lane in inst["lanes"] if lane["source"] == "note"]
+
+
+def test_instrument_requirements_declares_the_player_slot():
+    assert TestBit().instrument_requirements() == (
+        InstrumentRequirement(
+            slot="player",
+            capabilities=frozenset({"light.pixels", "gesture.tilt"})),)
+
+
+def test_player_role_requires_the_player_slot():
+    assert TestBit().role_table.roles["player"].requires == "player"
+
+
+def test_jammer_role_stays_requirement_free():
+    assert TestBit().role_table.roles["jammer"].requires is None
 
 
 def test_node_map_grants_each_role_from_its_own_node():

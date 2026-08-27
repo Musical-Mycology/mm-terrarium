@@ -8,6 +8,7 @@ from control.device_pool import DevicePool
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from tests.instrument_fixtures import GENERIC_SURFACE
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium import Terrarium, TerrariumState
@@ -17,10 +18,10 @@ from tests.test_engine import RoomCapableBit
 TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
     RoomFixture(name="main", color_order="GRB",
                blocks=(RoomBlock("main", 0, 10),),
-               zones=(RoomZone("all", 0, 10),)),
+               zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),
     RoomFixture(name="accent", color_order="GRB",
                blocks=(RoomBlock("accent", 0, 10),),
-               zones=(RoomZone("all", 0, 10),)),
+               zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),
 ))
 TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
                      node_id="ROOM_TEST_NODE", profile=TEST_PROFILE)
@@ -28,7 +29,7 @@ TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
 DEMO_PROFILE = RoomProfile(surface_id="room_demo", fixtures=(
     RoomFixture(name="array", color_order="GRB",
                blocks=(RoomBlock("array", 0, 10),),
-               zones=(RoomZone("all", 0, 10),)),
+               zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),
 ))
 DEMO_SPEC = RoomSpec(name="DEMO", description="",
                      backends=("devicelink", "array"),

@@ -11,7 +11,25 @@ def test_role_view_shape():
     assert protocol.role_view(role) == {
         "role": "player", "class": "SHARED", "capacity": None,
         "scored": True, "ugen_manifest": {}, "light_manifest": {},
-        "welcome": None}
+        "welcome": None, "requires": None}
+
+
+def test_role_view_requires_with_requirement():
+    from control.instrument import InstrumentRequirement
+    role = Role(name="player", role_class=RoleClass.SHARED,
+                capacity=None, scored=True, requires="fixture")
+    requirement = InstrumentRequirement(
+        slot="fixture", capabilities=frozenset({"light.pixels", "light.surface"}))
+    view = protocol.role_view(role, requirement)
+    assert view["requires"] == {
+        "slot": "fixture", "capabilities": ["light.pixels", "light.surface"]}
+
+
+def test_role_view_requires_without_resolved_requirement():
+    role = Role(name="player", role_class=RoleClass.SHARED,
+                capacity=None, scored=True, requires="fixture")
+    view = protocol.role_view(role)
+    assert view["requires"] == {"slot": "fixture", "capabilities": []}
 
 
 def test_role_view_carries_v2_manifest_and_welcome():

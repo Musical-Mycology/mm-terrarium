@@ -11,10 +11,16 @@ const ROOM = {
       zones: [{ name: "main.left", start: 0, count: 20 },
               { name: "main.center", start: 20, count: 20 },
               { name: "main.right", start: 40, count: 20 }], dev: "sim-room-main",
-      url: "http://sim-room-main.local/surface" },
+      url: "http://sim-room-main.local/surface",
+      instrument: { name: "generic_surface",
+                    capabilities: ["audio.flsyn", "light.surface"],
+                    functions: [], accepted_triggers: ["midi", "solid"] } },
     { name: "accent", pixel_count: 30, channel_start: 180, channel_count: 90,
       zones: [{ name: "accent.low", start: 0, count: 15 },
-              { name: "accent.high", start: 15, count: 15 }], dev: null, url: null },
+              { name: "accent.high", start: 15, count: 15 }], dev: null, url: null,
+      instrument: { name: "generic_surface",
+                    capabilities: ["audio.flsyn", "light.surface"],
+                    functions: [], accepted_triggers: ["midi", "solid"] } },
   ],
   instruments: [
     { kind: "light", instrument: "aurora", target: "primary",
@@ -52,6 +58,11 @@ const ROOM = {
   assert.ok(card.innerHTML.includes("aurora"));
   assert.ok(card.innerHTML.includes("= 93"));            // live lane value
   assert.ok(card.innerHTML.includes("Instruments"));     // accordion, not Controls
+  // fixture cards show the fixture's own Instrument as a small tag row
+  // (name + capabilities + accepted triggers).
+  assert.ok(card.innerHTML.includes("light.surface"));
+  assert.ok(card.innerHTML.includes("audio.flsyn"));
+  assert.ok(card.innerHTML.includes("generic_surface"));
 
   // a controllers-only change must NOT rebuild fixture strips (rule 1/3):
   const stripBefore = surface._canvasFor("sim-room-main");
@@ -148,6 +159,41 @@ const ROOM = {
     assert.strictEqual(anchorAfterCtl, anchorBack);
 
     // restore baseline controllers value for the remaining assertions
+    send({ event: "room_changed", room: ROOM });
+  }
+
+  // instrument fields join the fixture card's declaration signature: a
+  // changed instrument (e.g. a new capability) rebuilds the card, but a
+  // controllers-only tick must not.
+  {
+    const bindCtlBaseline = surface._bindCtlFor("main");
+    send({
+      event: "room_changed",
+      room: {
+        ...ROOM,
+        fixtures: [
+          { ...ROOM.fixtures[0],
+            instrument: { ...ROOM.fixtures[0].instrument,
+                          capabilities: ["audio.flsyn", "gesture.tap", "light.surface"] } },
+          ROOM.fixtures[1],
+        ],
+      },
+    });
+    assert.notStrictEqual(surface._bindCtlFor("main"), bindCtlBaseline);
+    assert.ok(card.innerHTML.includes("gesture.tap"));
+
+    const bindCtlAfterInstChange = surface._bindCtlFor("main");
+    send({ event: "room_changed",
+           room: { ...ROOM, controllers: { 74: 41 },
+                   fixtures: [
+                     { ...ROOM.fixtures[0],
+                       instrument: { ...ROOM.fixtures[0].instrument,
+                                     capabilities: ["audio.flsyn", "gesture.tap", "light.surface"] } },
+                     ROOM.fixtures[1],
+                   ] } });
+    assert.strictEqual(surface._bindCtlFor("main"), bindCtlAfterInstChange);
+
+    // restore baseline for any subsequent assertions
     send({ event: "room_changed", room: ROOM });
   }
 

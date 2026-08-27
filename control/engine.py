@@ -14,6 +14,8 @@ import time
 from control.bit import Bit
 from control.cues import ROOM, FireTrigger, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
+from control.instrument import (TUNESHROOM, InstrumentRequirement, cue_kind,
+                                 satisfies)
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
@@ -45,6 +47,32 @@ class InvalidTransition(Exception):
 
 class BitLoadError(Exception):
     """Raised when load_bit fails to construct the named Bit."""
+
+
+def _resolve_room_requirements(requirements, room) -> None:
+    """Check each non-optional requirement against the active Room's whole
+    profile, aggregated across fixtures (spec section 4): a requirement's
+    capabilities may be satisfied by DIFFERENT fixtures, not just one, and
+    min_pixels checks the profile's total pixel_count, not any one fixture's.
+    Raises ValueError (wrapped by load_bit into BitLoadError) naming the
+    unmet slot and every fixture's own satisfies() reason."""
+    profile = room.profile
+    for req in requirements:
+        if req.optional:
+            continue
+        reasons = []
+        advertised: set = set()
+        for fixture in profile.fixtures:
+            advertised |= fixture.instrument.capabilities
+            reason = satisfies(fixture.instrument, req,
+                                pixel_count=profile.pixel_count)
+            if reason is not None:
+                reasons.append(reason)
+        missing = req.capabilities - advertised
+        if missing or req.min_pixels > profile.pixel_count:
+            raise ValueError(
+                f"no fixture satisfies slot {req.slot!r}: "
+                + "; ".join(reasons))
 
 
 class GameServer:
@@ -115,6 +143,20 @@ class GameServer:
         # terrarium_config_version without GameServer knowing anything about
         # TerrariumConfig itself.
         self.provenance: dict = {}
+        # Snapshot of the loaded Bit's declared instrument-requirement slots
+        # (control/instrument.py's InstrumentRequirement), keyed by slot
+        # name. Set in load_bit on success, cleared on _unload. Consumed by
+        # join() to gate a Role.requires slot against its resolved
+        # requirement (see spec section 4) -- empty outside a loaded Bit.
+        self._slot_requirements: dict[str, InstrumentRequirement] = {}
+
+    def slot_requirement(self, slot: str) -> "InstrumentRequirement | None":
+        """Public read of the loaded Bit's requirement for `slot`, or None
+        (no such slot, or no Bit loaded). Exists so callers outside this
+        module (the Console's role_view) can show a role's `requires`
+        contract without reaching into the private `_slot_requirements`
+        snapshot directly."""
+        return self._slot_requirements.get(slot)
 
     def hello(self, dev: str, name: str, protoversion: str) -> None:
         self.devices.hello(dev, name, protoversion, self._clock())
@@ -185,6 +227,17 @@ class GameServer:
             bit_cls = self.bit_registry[name]
             bit = bit_cls(config) if config is not None else bit_cls()
             role_table = bit.role_table
+            requirements = tuple(bit.instrument_requirements())
+            declared_slots = {r.slot for r in requirements}
+            # A slot some Role.requires names (other than the reserved
+            # "room" slot) is a role slot (spec section 4): it is resolved
+            # only at join, against the JOINING DEVICE's carried instrument
+            # (see join() below), never against the room's own fixtures --
+            # a fixture has no gestures to offer. "room" itself stays a
+            # room slot even when a Role happens to require it (deviation:
+            # implicit-room-slot join handling, spec Status section).
+            role_slots = {role.requires for role in role_table.roles.values()
+                          if role.requires not in (None, "room")}
             if self.room is not None:
                 light_m, ugen_m = bit.room_manifests()
                 if light_m or ugen_m:
@@ -192,6 +245,26 @@ class GameServer:
                                                   light_manifest=light_m)
                     role_table.roles[rname] = role
                     role_table.node_map[node] = [rname]
+                room_reqs = [r for r in requirements if r.slot not in role_slots]
+                if (light_m or ugen_m) and "room" not in declared_slots:
+                    caps = set()
+                    if light_m:
+                        caps.add("light.surface")
+                    if ugen_m:
+                        caps.add("audio.flsyn")
+                    room_reqs.append(InstrumentRequirement(
+                        slot="room", capabilities=frozenset(caps)))
+                _resolve_room_requirements(room_reqs, self.room)
+            # "room" always counts as a declared slot for Role.requires,
+            # whether resolved just above (an active Room) or not (a
+            # roomless boot / a Bit with no Room manifests) -- this is a
+            # static naming check, not a resolution check.
+            known_slots = declared_slots | {"room"}
+            for role in role_table.roles.values():
+                if role.requires is not None and role.requires not in known_slots:
+                    raise ValueError(
+                        f"role {role.name!r} requires undeclared slot "
+                        f"{role.requires!r}; declared: {sorted(known_slots)}")
             validate_role_declarations(role_table)
             validate_trigger_table(bit.trigger_table, set(bit.verb_handlers()))
             registration = RegistrationState(role_table)
@@ -202,6 +275,7 @@ class GameServer:
         self._warned_no_room = False
         self.bit_name = name
         self.registration = registration
+        self._slot_requirements = {r.slot: r for r in requirements}
         self._set_state(State.LOADED)
         self._enter_setup()
 
@@ -231,11 +305,29 @@ class GameServer:
             # build role_table per property access, so a fresh call could
             # return different Role objects than the ones counts track.
             role = self.registration.role_table.roles[result.role]
+            if role.requires is not None:
+                # requires names a declared or implicit slot (Task 5's
+                # load-time validation guarantees this). The implicit
+                # "room" slot has no entry in _slot_requirements -- it's
+                # deliberately excluded there because it binds the room's
+                # own fixtures (already resolved at load_bit), not the
+                # carrier device joining this role. req is None means
+                # exactly that case, so treat it as satisfied.
+                req = self._slot_requirements.get(role.requires)
+                info = self.devices.get(dev)
+                carried = getattr(info, "carried", None) or TUNESHROOM
+                reason = satisfies(carried, req) if req is not None else None
+                if req is not None and reason is not None:
+                    self.registration.release(dev)
+                    return JoinResult(granted=False, reason=reason)
+                result.slot = role.requires
+                result.instrument = carried.name
             result.config = compose_role_config(
                 self.bit_name, self.bit.version, role,
                 room_name=self.provenance.get("room_name"),
                 terrarium_config_version=self.provenance.get(
-                    "terrarium_config_version"))
+                    "terrarium_config_version"),
+                slot=result.slot, instrument=result.instrument)
             try:
                 self.bit.on_join(dev, result.role)
             except Exception:
@@ -422,6 +514,42 @@ class GameServer:
                 seen_room = True
         return out
 
+    def _check_cue_kinds(self, cues) -> str | None:
+        """Refuse the whole fire, all-or-nothing (spec section 7), if any
+        expanded cue's kind is not in its destination's instrument's
+        accepted_triggers.
+
+        A device dev is checked against DeviceInfo.carried (TUNESHROOM by
+        default). A dev the Room owns is checked against every Room fixture's
+        instrument -- the Room is one logical surface, so any fixture
+        accepting the kind is enough (the canonical fixture is named in the
+        refusal when none do). An unknown dev (no pool entry, e.g. the Room
+        simulator path) is treated as accepting, matching today's behavior:
+        this gate must never invent a refusal for a dev nothing declared an
+        instrument for."""
+        room_devs = (set(self.room.bound.values())
+                     if self.room is not None and self.room.bound else set())
+        for cue in cues:
+            resolved = self._resolve_dev(cue.dev)
+            if resolved is None:
+                continue
+            kind = cue_kind(cue)
+            if resolved in room_devs:
+                fixtures = self.room.profile.fixtures
+                if any(kind in f.instrument.accepted_triggers
+                       for f in fixtures):
+                    continue
+                return (f"instrument {fixtures[0].instrument.name!r} does "
+                        f"not accept {kind!r} cues")
+            info = self.devices.get(resolved)
+            if info is None:
+                continue
+            carried = getattr(info, "carried", None) or TUNESHROOM
+            if kind not in carried.accepted_triggers:
+                return (f"instrument {carried.name!r} does not accept "
+                        f"{kind!r} cues")
+        return None
+
     def fire_trigger(self, name: str, *, fired_by: str,
                      dev: str | None = None,
                      at: float | None = None) -> str | None:
@@ -466,6 +594,9 @@ class GameServer:
                 at = self._clock() + self._horizon
             devs = self._resolve_target(trigger.target, dev)
             cues = expand_script(trigger, at, self._collapse_room_fanout(devs))
+            refusal = self._check_cue_kinds(cues)
+            if refusal is not None:
+                return refusal
             if not any(isinstance(c, MuteCue) for c in cues):
                 self._clear_mutes(devs)
         except Exception:
@@ -657,6 +788,7 @@ class GameServer:
         self.bit = None
         self.bit_name = None
         self.registration = None
+        self._slot_requirements = {}
         self._set_state(State.IDLE)
 
     def add_observer(self, observer) -> None:

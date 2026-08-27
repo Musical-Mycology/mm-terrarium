@@ -11,11 +11,17 @@ MINIMAL = """
 schema = 1
 [terrarium]
 name = "t"
+
+[instruments.dev_strip]
+capabilities = ["light.surface"]
+accepted_triggers = ["midi", "play", "solid", "mute"]
+
 [rooms.ONE]
 backends = ["devicelink"]
 [[rooms.ONE.fixtures]]
 name = "main"
 color_order = "GRB"
+instrument = "dev_strip"
 [[rooms.ONE.fixtures.blocks]]
 name = "b1"
 start = 0
@@ -135,3 +141,124 @@ def test_validate_rooms_reports_per_room():
     assert "array" in status["DEMO"]           # reason names the missing backend
     status = validate_rooms(cfg, array_backend_configured=True)
     assert status["DEMO"] is None
+
+
+CONFIG_WITH_INSTRUMENTS = """
+schema = 1
+[terrarium]
+name = "t"
+
+[instruments.venue_array]
+description = "6 m SK6812 venue array"
+capabilities = ["light.surface", "audio.flsyn"]
+functions = []
+accepted_triggers = ["midi", "play", "solid", "mute"]
+  [instruments.venue_array.ambient]
+  [instruments.venue_array.ambient.light]
+  instruments = [ { instrument = "aurora", target = "primary" } ]
+  [instruments.venue_array.ambient.ugen]
+  instruments = [ { instrument = "flsyn", program = 89, drone = { key = 48, velocity = 80 } } ]
+
+[rooms.DEMO]
+backends = ["devicelink"]
+[[rooms.DEMO.fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "venue_array"
+[[rooms.DEMO.fixtures.blocks]]
+name = "b1"
+start = 0
+count = 10
+[[rooms.DEMO.fixtures.zones]]
+name = "all"
+start = 0
+count = 10
+"""
+
+CONFIG_MISSING_INSTRUMENT_KEY = """
+schema = 1
+[terrarium]
+name = "t"
+[rooms.ONE]
+backends = ["devicelink"]
+[[rooms.ONE.fixtures]]
+name = "main"
+color_order = "GRB"
+[[rooms.ONE.fixtures.blocks]]
+name = "b1"
+start = 0
+count = 10
+[[rooms.ONE.fixtures.zones]]
+name = "all"
+start = 0
+count = 10
+"""
+
+CONFIG_BAD_REFERENCE = """
+schema = 1
+[terrarium]
+name = "t"
+[rooms.ONE]
+backends = ["devicelink"]
+[[rooms.ONE.fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "no_such"
+[[rooms.ONE.fixtures.blocks]]
+name = "b1"
+start = 0
+count = 10
+[[rooms.ONE.fixtures.zones]]
+name = "all"
+start = 0
+count = 10
+"""
+
+CONFIG_BAD_TAG = """
+schema = 1
+[terrarium]
+name = "t"
+
+[instruments.bad_one]
+capabilities = ["light.warp"]
+accepted_triggers = ["midi"]
+
+[rooms.ONE]
+backends = ["devicelink"]
+[[rooms.ONE.fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "bad_one"
+[[rooms.ONE.fixtures.blocks]]
+name = "b1"
+start = 0
+count = 10
+[[rooms.ONE.fixtures.zones]]
+name = "all"
+start = 0
+count = 10
+"""
+
+
+def test_instruments_parse_and_resolve_onto_fixtures():
+    cfg = parse_terrarium_config(CONFIG_WITH_INSTRUMENTS, "terrarium.toml")
+    inst = cfg.instruments["venue_array"]
+    assert inst.capabilities == frozenset({"light.surface", "audio.flsyn"})
+    assert inst.light_manifest["instruments"][0]["instrument"] == "aurora"
+    room = cfg.rooms["DEMO"]
+    assert room.profile.fixtures[0].instrument is inst
+
+
+def test_fixture_without_instrument_key_is_rejected():
+    with pytest.raises(TerrariumConfigError, match="instrument"):
+        parse_terrarium_config(CONFIG_MISSING_INSTRUMENT_KEY, "t.toml")
+
+
+def test_unknown_instrument_reference_is_rejected():
+    with pytest.raises(TerrariumConfigError, match="no_such"):
+        parse_terrarium_config(CONFIG_BAD_REFERENCE, "t.toml")
+
+
+def test_unknown_capability_tag_in_config_is_rejected():
+    with pytest.raises(TerrariumConfigError, match="light.warp"):
+        parse_terrarium_config(CONFIG_BAD_TAG, "t.toml")

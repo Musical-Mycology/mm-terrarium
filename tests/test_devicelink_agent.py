@@ -710,6 +710,151 @@ def test_no_room_configured_leaves_room_wiring_inert():
     agent._render_room()   # must not raise
 
 
+# --- Ambient rendering (Task 7, spec section 6): a Room with no Bit's ROOM
+# role renders each fixture's own instrument's ambient declaration instead of
+# going unbuilt -- DEMO's `array` fixture declares venue_array (aurora light
+# + flsyn drone); TEST's fixtures declare dev_strip (no ambient). -----------
+
+def _instrument_names(manifest_calls):
+    """The `instrument` name of every LightInstrumentDecl LightManifest.
+    from_dict actually parsed, across every call recorded by the spy below
+    -- what matters for these tests is WHICH declaration reached the
+    session factory, not any other manifest detail."""
+    return [decl.instrument for call in manifest_calls
+            for decl in call.instruments]
+
+
+def _spy_on_light_manifest(monkeypatch):
+    """Wrap LightManifest.from_dict so every parsed manifest -- the actual
+    input _setup_room fed it, ambient or role-composed -- is recorded, in
+    call order. This is the file's existing spy-on-a-collaborator pattern
+    (see test_failing_on_grant_sends_error_not_role_and_omits_the_bridge),
+    applied to the seam Task 7's brief calls out: assert on the manifest
+    fed to the session factory."""
+    from luxaeterna.synth.manifest import LightManifest
+    calls = []
+    orig = LightManifest.from_dict
+
+    def spy(d):
+        manifest = orig(d)
+        calls.append(manifest)
+        return manifest
+
+    monkeypatch.setattr(LightManifest, "from_dict", staticmethod(spy))
+    return calls
+
+
+def _demo_room_no_bit_game_server():
+    """A GameServer with a DEMO Room already set but NO Bit loaded -- the
+    state ambient rendering exists to cover (spec section 6). `array` is
+    bound so the audio tests below have a canonical dev to grant against,
+    mirroring _demo_room_ready_game_server()'s own default binding."""
+    gs = GameServer({"TestBit": TestBit})
+    gs.room = Room(name="DEMO", profile=DEMO_PROFILE, node_id="ROOM_DEMO_NODE")
+    gs.room.bound["array"] = "sim-room-array"
+    return gs
+
+
+def test_ambient_session_built_with_no_bit_loaded(monkeypatch):
+    calls = _spy_on_light_manifest(monkeypatch)
+    gs = _demo_room_no_bit_game_server()
+
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    assert agent._room_light is not None
+    assert "aurora" in _instrument_names(calls)
+
+
+def test_ambient_session_renders_nothing_when_fixtures_declare_no_ambient():
+    """TEST's fixtures are dev_strip, which declares no ambient -- today's
+    no-session behavior must be unchanged when there is nothing to render."""
+    gs = GameServer({"TestBit": TestBit})
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    assert agent._room_light is None
+
+
+def test_load_bit_swaps_ambient_for_the_bits_room_declaration(monkeypatch):
+    calls = _spy_on_light_manifest(monkeypatch)
+    gs = _demo_room_no_bit_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+    assert "aurora" in _instrument_names([calls[-1]])
+
+    gs.load_bit("TestBit")   # TestBit declares DEMO room_manifests -> ROOM role
+
+    assert agent._room_light is not None
+    assert "rainbow" in _instrument_names([calls[-1]])
+
+
+def test_unload_bit_swaps_back_to_ambient(monkeypatch):
+    calls = _spy_on_light_manifest(monkeypatch)
+    gs = _demo_room_no_bit_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+    gs.load_bit("TestBit")
+    assert "rainbow" in _instrument_names([calls[-1]])
+
+    gs.abort()   # -> UNLOADING -> IDLE; no Bit, no ROOM role any more
+
+    assert agent._room_light is not None
+    assert "aurora" in _instrument_names([calls[-1]])
+
+
+def test_ambient_audio_drone_starts_at_room_ready():
+    gs = _demo_room_no_bit_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+
+    assert len(pool.acquired) == 1
+    voice = pool.acquired[0]
+    assert any(call[0] == "note_on" for call in voice.sent)
+
+
+def test_ambient_audio_swaps_to_the_bits_drone_at_load(monkeypatch):
+    gs = _demo_room_no_bit_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+    ambient_voice = pool.acquired[0]
+
+    gs.load_bit("TestBit")
+
+    assert len(pool.acquired) == 2   # ambient voice released, Bit's granted fresh
+    assert ambient_voice.sent[-1][0] in ("note_off", "all_off")
+
+
+def test_unwire_room_releases_the_ambient_audio_grant_and_stops_the_drone():
+    """Final-review Important finding: unload_room only requires gs.state ==
+    IDLE, which ambient audio (granted at ROOM_READY with no Bit loaded)
+    routinely satisfies. unwire_room() -- the NO_ROOM-entry counterpart Console
+    `unload_room` triggers -- must release the Room's outstanding audio grant
+    and stop its drone the same way _setup_room()'s own ambient<->Bit swap
+    does, or the AudioBridge's finite voice pool leaks a voice and the drone
+    note is left sounding on every ambient-Room unload cycle."""
+    gs = _demo_room_no_bit_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+    voice = pool.acquired[0]
+    assert any(call[0] == "note_on" for call in voice.sent)   # drone is live
+
+    # Mirror control/terrarium.py's unload_room(): it clears gs.room to None
+    # BEFORE the ROOM_READY -> NO_ROOM observer notification fires
+    # unwire_room(), so unwire_room cannot recover the canonical dev from
+    # gs.room -- it must have cached it at grant time.
+    gs.room = None
+    agent.unwire_room()
+
+    assert voice in pool.released
+    assert voice.sent[-1][0] in ("note_off", "all_off")
+
+
 # --- Room cue timing: the Room branch of _on_light_cue queues on
 # self._room_cues (a TimedQueue) instead of feeding immediately, so the
 # Room's light waits for its declared time the same way Task 7's per-device
@@ -865,6 +1010,9 @@ class _RaisingAudioBridge:
     is ever reached, and only the tick() failure is under test here."""
 
     def on_grant(self, dev, role) -> None:
+        pass
+
+    def on_release(self, dev) -> None:
         pass
 
     def tick(self, now=None) -> None:
@@ -1134,10 +1282,12 @@ def test_setup_room_builds_the_session_even_with_nothing_bound_yet():
 
 def test_an_explicit_room_profile_overrides_the_resolved_one():
     from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+    from tests.instrument_fixtures import GENERIC_SURFACE
     profile = RoomProfile(surface_id="custom", fixtures=(
         RoomFixture(name="only", color_order="GRB",
                    blocks=(RoomBlock("only", 0, 24),),
-                   zones=(RoomZone("all", 0, 24),)),))
+                   zones=(RoomZone("all", 0, 24),),
+                   instrument=GENERIC_SURFACE),))
     gs = _room_ready_game_server()
     agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
                             room_profile=profile)

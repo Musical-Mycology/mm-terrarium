@@ -16,8 +16,9 @@ import time
 
 from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
+from control.instrument import ambient_manifests
 from control.role_config import compose_role_config
-from control.roles import RoleClass
+from control.roles import Role, RoleClass
 from control.room_profile import RoomProfile
 from control.rooms import room_role_name
 from control.state import State
@@ -170,6 +171,13 @@ class DeviceLinkAgent:
         # Room is exactly the confusion this slice removes.
         self._room_profile: RoomProfile | None = room_profile
         self._room_light = None
+        # The dev _setup_room() last granted Room audio to (None if no
+        # grant is outstanding). Cached here rather than recomputed from
+        # gs.room at release time because unwire_room() runs AFTER
+        # Terrarium.unload_room() has already set gs.room = None (see
+        # unwire_room's own docstring) -- by then _canonical_room_dev()
+        # can no longer see which dev held the grant.
+        self._room_audio_dev: str | None = None
         # Display-only copy of each changed Room frame, for the Terrarium
         # Console. Optional and best-effort: None is the default, so a run
         # without a console constructs and behaves exactly as before.
@@ -194,7 +202,19 @@ class DeviceLinkAgent:
         profile (every fixture, bound or not -- see design spec section 2)
         and, if room_audio was injected, wire its Arco voice. The
         declare-then-compose pattern every per-role device already uses,
-        just without a JoinResult (there is no join for this path).
+        just without a JoinResult (there is no join for this path) -- on
+        the Bit-declaration branch, below.
+
+        When no Bit with a ROOM role is loaded (no registration at all, or
+        the loaded Bit's role table has no ROOM role for this Room), the
+        fixtures render their own ambient declaration instead
+        (control.instrument.ambient_manifests, spec section 6) -- fed
+        straight to the same LightManifest.from_dict/build_session
+        pipeline, with no compose_role_config step (there is no Role to
+        compose against). An entirely empty ambient declaration (no
+        fixture in the profile declares light or audio -- e.g. the TEST
+        profile's dev_strip fixtures) keeps today's behavior: no session
+        at all until a Bit's ROOM role declaration arrives.
 
         Construction happens eagerly here, at agent-construction time, and
         _render_room() below is what scopes SENDING to whichever fixtures
@@ -203,15 +223,24 @@ class DeviceLinkAgent:
         admin tap) is picked up on its next tick with no rebuild."""
         gs = self.game_server
         room = gs.room
-        if room is None or gs.bit is None:
+        if room is None:
             return
-        role = gs.registration.role_table.roles.get(room_role_name(room.name))
-        if role is None:
-            return
-        blob = compose_role_config(gs.bit_name, gs.bit.version, role)
-        manifest = LightManifest.from_dict(blob["light_manifest"])
         if self._room_profile is None:
             self._room_profile = room.profile
+        role = None
+        if gs.registration is not None:
+            role = gs.registration.role_table.roles.get(
+                room_role_name(room.name))
+        ambient_ugen: dict = {}
+        if role is not None:
+            blob = compose_role_config(gs.bit_name, gs.bit.version, role)
+            manifest = LightManifest.from_dict(blob["light_manifest"])
+        else:
+            ambient_light, ambient_ugen = ambient_manifests(self._room_profile)
+            if not ambient_light and not ambient_ugen:
+                return
+            manifest = LightManifest.from_dict(
+                ambient_light or {"instruments": []})
         cap = to_capability(self._room_profile)
         session = build_session(manifest, cap, clock=self._clock)
         self._room_light = _RoomLightSink(
@@ -219,8 +248,34 @@ class DeviceLinkAgent:
         audio_sink = None
         canonical = self._canonical_room_dev()
         if self._room_audio is not None and canonical is not None:
-            self._room_audio.on_grant(canonical, role)
-            audio_sink = _RoomAudioSink(self._room_audio, canonical)
+            # Release whatever was previously granted for this dev (a
+            # no-op the first time, or when nothing was granted -- see
+            # AudioBridge.on_release) before granting the new declaration,
+            # so an ambient<->Bit swap never leaks the old voice.
+            self._room_audio.on_release(canonical)
+            self._room_audio_dev = None
+            audio_role = role
+            if audio_role is None and ambient_ugen:
+                # Ambient has no Role of its own -- on_grant only ever
+                # reads .ugen_manifest and .welcome off the one it is
+                # given, so a bare stand-in carries the ambient declaration
+                # through the same API rather than widening it for one
+                # caller. See spec section 6.
+                audio_role = Role(name="ambient", role_class=RoleClass.ROOM,
+                                  capacity=None, scored=False,
+                                  ugen_manifest=ambient_ugen)
+            if audio_role is not None:
+                self._room_audio.on_grant(canonical, audio_role)
+                self._room_audio_dev = canonical
+                audio_sink = _RoomAudioSink(self._room_audio, canonical)
+                if role is None:
+                    # Ambient has no RUNNING transition of its own to start
+                    # the drone from (on_state_change's RUNNING/UNLOADING
+                    # branch is scoped to a loaded Bit) -- ambient sound
+                    # starts the moment the Room is ready, mirroring the
+                    # light side, which likewise renders immediately here
+                    # with no further gate.
+                    self._room_audio.start_drone(canonical)
         if self._room_bridge is not None:
             self._room_bridge.bind(canonical, light=self._room_light,
                                    audio=audio_sink)
@@ -282,7 +337,29 @@ class DeviceLinkAgent:
         agent's Room session/bridge/profile so nothing stale renders or
         reports controllers once the Room that produced them is gone.
         Called by the same Terrarium observer that calls rewire_room(), on
-        the transition INTO NO_ROOM (a Console `unload_room`)."""
+        the transition INTO NO_ROOM (a Console `unload_room`).
+
+        Also stops any ambient drone and releases the Room's audio grant
+        (the same `stop_drone`/`on_release` calls _setup_room() makes
+        before a re-grant): `unload_room` only requires gs.state == IDLE
+        (no Bit loaded), which is exactly the state ambient audio -- granted
+        at ROOM_READY with no Bit -- leaves outstanding. Left unreleased,
+        the AudioBridge's finite voice pool leaks a voice (and a drone note
+        can be left sounding) on every ambient-Room unload cycle. Both
+        calls are no-ops when nothing was granted/no drone is running -- see
+        AudioBridge.on_release/stop_drone -- so this is safe to call
+        unconditionally, mirroring _setup_room()'s own guarded call.
+
+        Uses self._room_audio_dev rather than _canonical_room_dev(): by the
+        time the Terrarium observer calls unwire_room(), Terrarium.unload_room
+        has already set gs.room = None (see control/terrarium.py), so
+        _canonical_room_dev() can no longer see which dev held the grant --
+        _room_audio_dev is the cached record _setup_room() left behind at
+        grant time."""
+        if self._room_audio is not None and self._room_audio_dev is not None:
+            self._room_audio.stop_drone(self._room_audio_dev)
+            self._room_audio.on_release(self._room_audio_dev)
+            self._room_audio_dev = None
         self._room_light = None
         self._room_bridge = None
         self._room_profile = None
@@ -713,19 +790,41 @@ class DeviceLinkAgent:
         SETUP -- the state load_bit() always lands in -- also re-runs
         _setup_room() if it never built a session: harness/terrarium_boot
         .py's own NO_ROOM boot can reach ROOM_READY (a Console `load_room`,
-        rewire_room()'d in) BEFORE any Bit is loaded, and _setup_room()'s
-        own gate needs gs.bit too (the light manifest comes from the Bit's
-        role table) -- so the room session stays unbuilt until whichever of
-        {load_room, load_bit} happens SECOND. rewire_room() covers the
-        load_room-second case; this covers load_bit-second, the order the
-        Console's own ROOM_READY gate on LoadBitCommand actually produces
-        in practice (load_room always first). Guarded on `_room_light is
-        None` so an already-wired session (the CLI --room path, or a
-        same-Room Bit swap) is never rebuilt out from under a live render.
+        rewire_room()'d in) BEFORE any Bit is loaded, and (pre-ambient)
+        _setup_room()'s own gate needed gs.bit too (the light manifest came
+        from the Bit's role table) -- so the room session stayed unbuilt
+        until whichever of {load_room, load_bit} happened SECOND.
+        rewire_room() covers the load_room-second case; this covers
+        load_bit-second, the order the Console's own ROOM_READY gate on
+        LoadBitCommand actually produces in practice (load_room always
+        first). Guarded on `_room_light is None` so an already-wired
+        session (the CLI --room path, an ambient session already standing,
+        or a same-Room Bit swap) is never rebuilt out from under a live
+        render -- LOADED, below, is what rebuilds an ambient session into
+        a Bit's declared one.
+
+        LOADED/IDLE swap the Room's light+audio declaration between a
+        Bit's ROOM role and the fixtures' own ambient declaration (spec
+        section 6): LOADED is reached exactly once a Bit's registration
+        exists (control/engine.py's load_bit sets `self.registration`
+        before `_set_state(State.LOADED)`), so resetting `_room_light` and
+        re-running `_setup_room()` here is what makes it pick up the ROOM
+        role instead of ambient. IDLE (arrived at only via `_unload()`,
+        which clears `self.registration` back to None before
+        `_set_state(State.IDLE)`) is the mirror: the same reset+rebuild
+        finds no ROOM role any more and falls back to ambient.
+        `_setup_room()` itself is what handles the light rebuild AND the
+        audio re-grant (releasing whatever voice was previously granted to
+        the Room's canonical dev before granting the new declaration), so
+        this is the single seam both directions swap through -- no new
+        engine coupling, just the observer hook this agent already holds.
         """
         self._broadcast_room()
         gs = self.game_server
         if new_state == State.SETUP and self._room_light is None:
+            self._setup_room()
+        if new_state in (State.LOADED, State.IDLE):
+            self._room_light = None
             self._setup_room()
         if new_state == State.UNLOADING:
             self._room_cues = TimedQueue()
