@@ -243,6 +243,14 @@ class GameServer:
             self.room.bound[fixture] = dev
         self._notify("on_devices_change")
 
+    def clear_devices(self) -> None:
+        """Drop every known device and notify observers. Called by
+        control/terrarium.py's unload_room -- every device's clock died
+        with the hub (design spec section 6), so the whole pool is stale,
+        not just the ones bound to the departed Room."""
+        self.devices.clear()
+        self._notify("on_devices_change")
+
     def _origin(self, gesture_time: float | None) -> float:
         """Resolve a cue's origin time: the device's own stamp when it is
         usable, else Control's clock.

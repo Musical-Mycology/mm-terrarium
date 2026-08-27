@@ -48,7 +48,6 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
     # Local imports: control.terrarium imports this module, so importing it
     # at module level here would be circular.
     from control.terrarium import Terrarium
-    from control.terrarium_config import RoomSpec as _RoomSpec  # noqa: F401
     from control.terrarium_config import TerrariumConfig
 
     terrarium_config = TerrariumConfig(

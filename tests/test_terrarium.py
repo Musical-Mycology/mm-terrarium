@@ -216,6 +216,19 @@ def test_unload_room_closes_stack_saves_bindings_and_clears_device_pool(tmp_path
     assert reloaded.bound_device("TEST", "accent") == "sim-accent-dev"
 
 
+def test_unload_room_notifies_on_devices_change_with_empty_pool():
+    events = []
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    terrarium.gs.devices.hello("dev1", "some-device", "1.0")
+    terrarium.gs.add_observer(SimpleNamespace(
+        on_devices_change=lambda: events.append(len(terrarium.gs.devices))))
+
+    reason = terrarium.unload_room()
+    assert reason is None
+    assert events == [0]
+
+
 def test_progress_stages_are_observed_in_order():
     stages = []
     terrarium = make_terrarium(sweep=lambda: None)

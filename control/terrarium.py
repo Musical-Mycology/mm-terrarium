@@ -207,7 +207,7 @@ class Terrarium:
             self.room_binding.save(self.binding_store_path)
         if self.room_stack is not None:
             self.room_stack.close()
-        self.gs.devices.clear()
+        self.gs.clear_devices()
         self.gs.room = None
         self.room = None
         self.room_bridge = None
