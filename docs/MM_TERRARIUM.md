@@ -627,7 +627,11 @@ renderer** — the concrete simulator/hardware backend is deferred, see
   counts) must be available for Terrarium to resolve as that type. `TEST`
   needs only devicelink capability; `DEMO` additionally needs an array output
   backend configured. `resolve_room_type()` is boot-time, deterministic, and
-  **fails hard** — there is no silent downgrade to a lesser type.
+  **fails hard** — there is no silent downgrade to a lesser type. (Superseded
+  2026-08-27: the `RoomType` enum is deleted; rooms are now plain strings
+  named in `terrarium.toml`, and `validate_rooms()`/`control/terrarium_config.
+  py` play the same fails-hard-at-load-time role `resolve_room_type()` used
+  to. See the *Terrarium lifecycle and config-defined rooms* entry below.)
 - **`RoleClass.ROOM`** (`control/roles.py`) — a fourth role class (capacity 1)
   reusing the existing Registration Node/role machinery unchanged: a Bit
   merges a `room_role()`-built `Role` (its `light_manifest`/`ugen_manifest`
@@ -641,9 +645,13 @@ renderer** — the concrete simulator/hardware backend is deferred, see
   stronger than plain unlisted-node obscurity.
 - **`RoomBindingRegistry`** (`control/room_binding.py`) — Control-global,
   survives Bit load/unload cycles like `DevicePool` does. Tracks which device
-  is bound per `RoomType`, the admin-armed window, and persists just the
-  bound device ID to disk (`save()`/`load()`) — **not yet wired into `boot()`**,
-  see *Not yet built*.
+  is bound per room name (`RoomType` is gone — see the superseded note above),
+  the admin-armed window, and persists just the bound device ID to disk
+  (`save()`/`load()`). (Closed 2026-08-27: now wired into `Terrarium.
+  load_room()`/`unload_room()` — see the *Terrarium lifecycle and
+  config-defined rooms* entry below. This used to say "not yet wired into
+  `boot()`"; `boot()` itself is also gone, replaced by `load_room`/
+  `unload_room`.)
 - **`RoomBridge`** (`control/room_bridge.py`) — the Room-scoped sibling of
   `harness/device_bridge.py`/`control/audio.py`'s `AudioBridge`: backend-
   agnostic by construction (never imports luxaeterna or pyarco), `Protocol`-
@@ -1093,6 +1101,26 @@ composed into was still wrong on the path that matters most. Design:
   subprocess wait must not abandon the remaining steps) and `close()` is
   idempotent, so a failure path and the caller's normal teardown can both
   call it without coordinating.
+
+  **(Superseded 2026-08-27 by config-defined rooms.)** `control/boot.py`'s
+  single boot-time stack described above is gone -- `Terrarium.load_room()`/
+  `unload_room()` (`control/terrarium.py`) now own a *per-room-cycle* stack
+  (`terrarium.room_stack`), rebuilt fresh on every `load_room` and closed on
+  every `unload_room`, not just once at process boot. The client-before-hub
+  invariant this section describes is still exactly what holds, but the
+  o2lite transport's place in it moved out to a **second**, longer-lived
+  stack: `harness/terrarium_boot.py`'s `main()` owns a `pre_room_teardown`
+  stack holding only the o2lite transport (o2lite mode) or nothing
+  (websocket mode), separate from `terrarium.room_stack` where Arco and the
+  Room simulator now live across possibly many room loads. `shutdown()`
+  closes `pre_room_teardown` **first** -- ahead of `terrarium.room_stack` --
+  because the transport is Control's own o2lite client of the same Arco hub
+  the Room simulator talks to, so it must not outlive it; a mid-run
+  `unload_room` (Console-driven or the harness's own no-room handling) does
+  **not** touch `pre_room_teardown` at all, since the transport is scoped to
+  the whole process, not to any one Room. See the *Terrarium lifecycle and
+  config-defined rooms* entry below and `harness/terrarium_boot.py`'s
+  `shutdown()` docstring for the full three-phase order.
 - **`control.boot.shutdown()` was deleted, not reordered.** Its docstring
   said Arco goes last "since everything else may still want to address it
   during teardown," which was correct *within `boot.py`'s own scope* --
@@ -2055,6 +2083,157 @@ runs, the same lesson the old `console_full_stack.test.js` existed to teach
 `list_view()` now includes a best-effort `roles` summary per Bit, so the
 Load picker can show what a Bit will grant without loading it first.
 
+### `control/terrarium.py`, `control/terrarium_config.py`, `terrarium.toml`, config-defined rooms and Room load/unload as a Console-driven cycle (2026-08-27)
+Replaces `control/boot.py`'s one-shot `boot()`/`shutdown()` (described in the
+*Room concept and load sequence* entry above) with a machine that can load
+and unload a Room **repeatedly** within one running process, driven live
+from the Console -- not just once at process start. Design: [`.../
+2026-08-26-terrarium-lifecycle-and-config-rooms-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-26-terrarium-lifecycle-and-config-rooms-design.md).
+
+- **Config-defined rooms replace the `RoomType` enum.** `terrarium.toml`
+  (schema 1, parsed by `control/terrarium_config.py`'s
+  `load_terrarium_config()`/`parse_terrarium_config()`, pure `tomllib`, no
+  third-party dependency) declares an installation's rooms as
+  `[rooms.<NAME>]` tables -- name, description, `backends` (a subset of
+  `{"devicelink", "array"}`), `node_id`, the room's `RoomProfile` (fixtures/
+  blocks/zones), and per-room Arco timing overrides. A room is now
+  whatever string names a table in the file; nothing in the type system
+  limits it to `TEST`/`DEMO` any more, and adding a room is a config edit,
+  not a code change. `TerrariumConfig.version` is
+  `f"{schema}-{sha256(text)[:12]}"`, content-addressed so it changes
+  whenever the file's bytes do -- this is the same value stamped into
+  `gs.provenance["terrarium_config_version"]` (see the provenance bullet
+  below). `validate_rooms()` is `resolve_room_type()`'s fails-hard
+  successor: boot-time, per-room, `None` = loadable else a reason (e.g. a
+  room declaring the `array` backend with no array backend configured) --
+  the room actually being loaded fails hard on its reason, the rest of the
+  set is advisory (surfaced on the Console rooms panel and `--list-bits`).
+- **`control/terrarium.py`'s `Terrarium`** owns the Room-level lifecycle
+  as an explicit state machine -- `TerrariumState`: `NO_ROOM` ->
+  `ROOM_LOADING` -> `ROOM_READY` -> `ROOM_UNLOADING` -> `NO_ROOM`, with its
+  own observer list (`add_observer`, `on_terrarium_state_change`,
+  `on_room_load_progress`) mirroring `GameServer`'s. `load_room(name)` and
+  `unload_room(force=False)` never raise to their caller -- every failure
+  path returns a reason string, exactly `GameServer.fire_trigger`'s
+  never-raises convention, so `console/agent.py`'s command handlers turn a
+  refusal into an `error_event` without a `try/except`. `load_room` walks
+  validate -> sweep -> ownership-probe -> spawn Arco -> bind fixtures ->
+  Room ready, broadcasting a `progress` stage at each step
+  (`"validating"`, `"sweeping"`, `"spawning arco"`, `"binding fixtures"`,
+  `"room ready"`); any `BaseException` mid-sequence closes whatever the
+  room-scoped `TeardownStack` (`terrarium.room_stack`) has registered so
+  far and returns cleanly to `NO_ROOM`, leaving the next `load_room` free
+  to try again with a brand new stack -- proven directly by
+  `tests/test_terrarium.py::test_mid_load_failure_unwinds_room_stack_and_returns_to_no_room`.
+- **The engine-synthesized `ROOM` role replaces a Bit-authored one.**
+  `Bit.room_manifests()` (`control/bit.py`) returns a Bit's
+  `(light_manifest, ugen_manifest)` pair; `GameServer.load_bit()`
+  (`control/engine.py`) calls it and, if either manifest is non-empty,
+  merges a `room_role()`-built `Role` into the Bit's own `role_table`
+  itself -- the Bit no longer declares its own Room role by hand the way
+  the original `RoomType`-era `TestBit`/`MetronomeBit` did. A Bit that
+  wants no Room presence at all (an empty `room_manifests()`, the `Bit`
+  base class default) gets none synthesized.
+- **Two teardown stacks, not one, and the pre-existing client-before-hub
+  invariant now spans both of them.** See the *superseded* note added to
+  the *teardown order* entry above for the full mechanism:
+  `harness/terrarium_boot.py`'s `pre_room_teardown` (o2lite transport
+  only, process-lifetime) closes first, ahead of `terrarium.room_stack`
+  (Arco + Room simulator + Room bridge + Bit, rebuilt fresh every
+  `load_room`), because the transport is a client of the same Arco hub the
+  room stack owns and must never outlive it -- while a **mid-run**
+  `unload_room` (Console-driven, or the harness's own no-room handling)
+  touches only `terrarium.room_stack`, never `pre_room_teardown`, since the
+  transport is scoped to the whole process rather than to any one Room
+  cycle. `DeviceLinkAgent.rewire_room()`/`unwire_room()`
+  (`devicelink/agent.py`) plus a `_RoomWiring` observer keep the
+  o2lite-mode device-link layer's own Room-scoped state (which fixtures are
+  bound, the canonical Room dev) in step with each `load_room`/
+  `unload_room`, since that layer now outlives any single Room the way
+  `pre_room_teardown` does.
+- **Owned-pid run records and load-time stale sweep**
+  (`control/run_record.py`) close the crash-recovery gap a repeatable
+  load/unload cycle opens: a `RunRecorder` appends a `SpawnRecord` (pid,
+  role, spawn time) to `<runs_dir>/<run_id>/procs.jsonl` for every process
+  a `load_room` spawns (Arco, each fixture's simulator) when `Terrarium` is
+  constructed with `runs_dir`/`run_id`; `sweep_stale(runs_dir)` runs at the
+  top of the **next** `load_room` (wired via `Terrarium.sweep`) and stops
+  any record whose pid is still alive and matches its recorded spawn time
+  (pid-reuse-safe -- a pid that has been reassigned to an unrelated process
+  since is left alone), so a Terrarium that crashed mid-Room does not leave
+  orphaned Arco/simulator processes for the next `load_room` to collide
+  with. Per-record stop failures during a sweep are caught individually
+  and do not abort the rest of the sweep.
+- **`DevicePool` is cleared on every room cycle, not just once at process
+  exit.** `unload_room()` calls `gs.clear_devices()` before returning to
+  `NO_ROOM` -- every device's clock died with the Room's own Arco/hub, so
+  the whole pool is stale by construction; `RoomBindingRegistry.save()`/
+  `.load()` (previously implemented and tested but not called from
+  anywhere -- see the *closed* deferred-item note above) are now wired
+  directly into `load_room`/`unload_room`, so a physical device that
+  reconnects before the next `load_room` of the same room rebinds with no
+  fresh admin-armed tap.
+- **Provenance stamping.** `load_room` sets `gs.provenance =
+  {"room_name": name, "terrarium_config_version": config.version}` on
+  success (and clears it to `{}` on any failure or on `unload_room`); this
+  threads through `compose_role_config` (a joining device's granted-role
+  payload now carries which room/config version it joined under) and
+  `control/trigger_view.py`'s `trigger_fired_view`, which surfaces
+  `TriggerFired.room_name` so an operator reading the Console's event log
+  can tell which room a given trigger fired in without cross-referencing
+  timestamps.
+- **`console/agent.py`'s `LoadRoomCommand`/`UnloadRoomCommand`, terrarium-
+  state gating, and the rooms snapshot.** `load_room`/`unload_room` travel
+  the same wire-protocol path as every other console command
+  (`console/protocol.py`); `ConsoleAgent` broadcasts `room_loaded`/
+  `room_unloaded`/`room_load_failed`/`room_load_progress` events and gates
+  `load_bit` behind `TerrariumState.ROOM_READY` when a `Terrarium` is
+  wired in (`terrarium=None`, every pre-this-slice caller, is zero
+  behavior change -- no gating, no room commands). `agent.snapshot()`
+  gained `terrarium_state` and a `rooms` list (name, description,
+  boot-time `status` from `validate_rooms`, and whether it is the
+  currently active room) so a freshly-connected browser sees the full
+  room-loadability picture without a round trip. `console/static/rooms.js`
+  is the front-end panel for this: room chips with load/unload controls,
+  live progress stages, and refusal reasons surfaced as flashed errors.
+  `uplink/link.py` picked up the same room-aware gating and rooms snapshot
+  on its own console-facing side.
+- **Harness rewiring** (`harness/terrarium_boot.py`). `--config PATH`
+  (default `terrarium.toml`) plus `--room NAME` replace the old
+  `--room-type` flag; omitting `--room` boots roomless (`NO_ROOM`) rather
+  than silently falling back to a default room, and the Console's own
+  `load_room`/`unload_room` commands are how an operator brings a room up
+  from there -- `_serve_roomless`'s loop is the NO_ROOM idle shape this
+  falls into, both at a `--room`-less launch and after any later
+  Console-driven `unload_room`. `--list-bits` now **requires** `--config`
+  (a deliberate deviation from the spec's prose -- see below) since a
+  Bit's shown `room_types`/loadability is meaningless without a resolved
+  room set to check it against. New readiness markers
+  `CONTROL_ROOM_LOADED`/`CONTROL_ROOM_UNLOADED` bracket each room cycle for
+  `harness/run_stack.py`'s own marker-driven waits, which now forward the
+  `--config`/`--room` flags through to the child it spawns rather than
+  hard-coding a room shape.
+
+**Deliberate deviations from the spec's prose, recorded during
+execution:** the spec's `start_terrarium()` is realized as
+`harness/terrarium_boot.py`'s existing `build()`/`main()` owning the
+Terrarium-scoped stack, not a new `control/`-level function -- the harness
+already owns transport/console construction and a second constructor
+would duplicate its many-site tuple contract. `--list-bits` requires
+`--config` (above), where the spec's prose did not call that out as a
+hard requirement. `CaptureBit`'s live provenance construction (stamping a
+capture session with the room/config version it ran under, analogous to
+`compose_role_config`'s per-join stamp) is deferred, not built in this
+slice.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1442 passed, 1 skipped** (up from the previous baseline of 1441 passed,
+1 skipped -- `tests/test_terrarium_cycle.py`'s offline full-cycle pin is
+the one new test, driving `Terrarium` + `GameServer` + `ConsoleAgent`
+together through boot -> load_room -> load_bit -> run -> complete ->
+unload_room -> load_room (a second, different room, asserting a fresh
+Arco-process instance) -> unload_room -> a clean, empty-`DevicePool` end).
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -2508,22 +2687,31 @@ Kept explicit so the doc doesn't over-claim:
   Registration Node convention) remains a later decision; the console is the
   first concrete answer for a web panel, and as of 2026-08-17 it is actually
   openable during a run and shows the Room.
-- **A real-hardware Room backend, for either RoomType.** Both TEST and DEMO's
+- **A real-hardware Room backend, for either room.** Both TEST and DEMO's
   only backend today is the browser simulator (`harness/room_simulator.py`,
   `harness/o2_shroom.py`); nothing implements the same seam against actual
   Tuneshroom/array hardware yet. For DEMO specifically, `RoomBlock`
   boundaries are declarative-only (see the *`RoomBlock`, and the DEMO room*
   section above) — no real Art-Net/multi-controller output backend exists;
   `harness/array_smoke.py` drives the real 864 px array standalone but is not
-  wired into `boot()`.
+  wired into `load_room()` (the config-defined-rooms slice's replacement for
+  `boot()` — see the *Terrarium lifecycle and config-defined rooms* entry
+  below).
 - ~~**Nothing drives the Room's light during a live run.**~~ **Closed
   2026-08-14** by `Bit.cues(at)` (see the `Bit` interface bullet above);
   `TestBit`'s implementation and its live confirmation are described in the
   *Control on o2lite, and timed cues* status callout above.
-- **`RoomBindingRegistry.save()`/`.load()` are implemented and tested but not
-  called from `boot()`.** A restarted Terrarium does not yet reconnect a
+- ~~**`RoomBindingRegistry.save()`/`.load()` are implemented and tested but
+  not called from `boot()`.** A restarted Terrarium does not yet reconnect a
   previously-bound physical Room device automatically; every restart
-  currently requires a fresh admin-armed tap.
+  currently requires a fresh admin-armed tap.~~ **Closed 2026-08-27:**
+  `Terrarium.load_room()` now calls `room_binding.load(binding_store_path)`
+  before the fast-bind path runs, and `unload_room()` calls
+  `room_binding.save(binding_store_path)` before closing the room stack --
+  a previously-bound device that is still connected (`known_device_connected`
+  returns true for it) rebinds with no admin tap on the next `load_room` of
+  the same room. See the *Terrarium lifecycle and config-defined rooms*
+  entry below.
 
 ## Design docs (in-repo, authoritative)
 
