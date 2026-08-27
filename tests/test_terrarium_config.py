@@ -240,6 +240,19 @@ count = 10
 """
 
 
+CONFIG_LEGACY_ACCEPTED_TRIGGERS = (
+    "\nschema = 1\n[terrarium]\nname = \"t\"\n\n"
+    "[instruments.bad_one]\n"
+    "capabilities = [\"light.surface\"]\n"
+    "accepted_triggers = [\"midi\"]\n"  # legacy-vocabulary-ok
+)
+
+
+def test_legacy_accepted_cues_key_is_a_located_error():
+    with pytest.raises(TerrariumConfigError, match="accepted_cues"):
+        parse_terrarium_config(CONFIG_LEGACY_ACCEPTED_TRIGGERS, "t.toml")
+
+
 def test_instruments_parse_and_resolve_onto_fixtures():
     cfg = parse_terrarium_config(CONFIG_WITH_INSTRUMENTS, "terrarium.toml")
     inst = cfg.instruments["venue_array"]

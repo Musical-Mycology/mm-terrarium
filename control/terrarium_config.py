@@ -89,6 +89,11 @@ def parse_terrarium_config(text: str, source: str) -> TerrariumConfig:
 
 def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
     key = f"instruments.{iname}"
+    if "accepted_triggers" in iraw:  # legacy-vocabulary-ok
+        raise TerrariumConfigError(
+            source=source, key=key,
+            message="'accepted_triggers' was renamed to 'accepted_cues' "  # legacy-vocabulary-ok
+                    "(Spec 3); update the key")
     ambient = iraw.get("ambient", {})
     light_manifest = ambient.get("light", {})
     ugen_manifest = ambient.get("ugen", {})

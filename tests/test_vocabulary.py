@@ -29,6 +29,14 @@ def test_acting_side_trigger_vocabulary_is_gone():
                 continue
             for i, line in enumerate(
                     path.read_text(encoding="utf-8").splitlines(), 1):
+                # Narrow exemption: control/terrarium_config.py's located
+                # error tells an operator with a stale config to rename
+                # 'accepted_triggers' to 'accepted_cues' (Spec 3). Reporting
+                # the old key name is the whole point of that error, so it
+                # necessarily contains the forbidden text. Use ONLY on the
+                # lines implementing/exercising that one error.
+                if line.rstrip().endswith("# legacy-vocabulary-ok"):
+                    continue
                 if pattern.search(line):
                     hits.append(f"{path.relative_to(ROOT)}:{i}: {line.strip()}")
     assert not hits, "old acting-side vocabulary survives:\n" + "\n".join(hits)
