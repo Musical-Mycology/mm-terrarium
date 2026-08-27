@@ -1,0 +1,89 @@
+schema = 1
+
+[terrarium]
+name = "dev-box"
+bit_paths = ["bits"]
+
+[rooms.TEST]
+description = "Simulated dev room: main + accent strips"
+backends = ["devicelink"]
+
+  [[rooms.TEST.fixtures]]
+  name = "main"
+  color_order = "GRB"
+    [[rooms.TEST.fixtures.blocks]]
+    name = "main"
+    start = 0
+    count = 60
+    [[rooms.TEST.fixtures.zones]]
+    name = "left"
+    start = 0
+    count = 20
+    [[rooms.TEST.fixtures.zones]]
+    name = "center"
+    start = 20
+    count = 20
+    [[rooms.TEST.fixtures.zones]]
+    name = "right"
+    start = 40
+    count = 20
+
+  [[rooms.TEST.fixtures]]
+  name = "accent"
+  color_order = "GRB"
+    [[rooms.TEST.fixtures.blocks]]
+    name = "accent"
+    start = 0
+    count = 30
+    [[rooms.TEST.fixtures.zones]]
+    name = "low"
+    start = 0
+    count = 15
+    [[rooms.TEST.fixtures.zones]]
+    name = "high"
+    start = 15
+    count = 15
+
+[rooms.DEMO]
+description = "Real-scale 6 m / 864 px Terrarium array, simulated backend"
+backends = ["devicelink", "array"]
+
+  [[rooms.DEMO.fixtures]]
+  name = "array"
+  color_order = "GRB"
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m1"
+    start = 0
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m2"
+    start = 144
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m3"
+    start = 288
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m4"
+    start = 432
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m5"
+    start = 576
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m6"
+    start = 720
+    count = 144
+    [[rooms.DEMO.fixtures.zones]]
+    name = "left"
+    start = 0
+    count = 288
+    [[rooms.DEMO.fixtures.zones]]
+    name = "center"
+    start = 288
+    count = 288
+    [[rooms.DEMO.fixtures.zones]]
+    name = "right"
+    start = 576
+    count = 288
