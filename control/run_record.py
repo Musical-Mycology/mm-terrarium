@@ -166,10 +166,28 @@ def sweep_stale(runs_dir: str, *, stop=_default_stop,
     silently forgetting a pid we could not prove is (or isn't) ours.
 
     Never matches by process name -- only by recorded pid + spawn time.
+
+    Cross-run safety: a run dir whose own procs.jsonl carries a "supervisor"
+    record (control/terrarium.py's Terrarium writes one, at construction,
+    when runs_dir/run_id are configured) that is still alive and spawn-time
+    matching is skipped ENTIRELY -- none of its records are even inspected,
+    let alone killed. Without this, on a dev box running two concurrent
+    stacks, stack A's own load-time sweep would glob stack B's runs/*/
+    procs.jsonl too and kill stack B's still-live, still-recorded Arco (its
+    pid is alive and its spawn time matches -- sweep_stale has no other
+    signal to tell "someone else's live run" apart from "a crashed prior
+    run"). A dead or absent supervisor record leaves the dir sweepable
+    exactly as before this guard existed.
     """
     acted: list[SpawnRecord] = []
     for path in _record_files(runs_dir):
         records = _read_records(path)
+        supervisor = next((r for r in records if r.role == "supervisor"), None)
+        if supervisor is not None and is_alive(supervisor.pid):
+            current = process_spawn_time(supervisor.pid)
+            if (current is not None
+                    and abs(current - supervisor.spawn_time) <= _SPAWN_TIME_TOLERANCE):
+                continue          # another run's supervisor is still alive
         all_handled = True
         for rec in records:
             if not is_alive(rec.pid):

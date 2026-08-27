@@ -2163,7 +2163,23 @@ from the Console -- not just once at process start. Design: [`.../
   since is left alone), so a Terrarium that crashed mid-Room does not leave
   orphaned Arco/simulator processes for the next `load_room` to collide
   with. Per-record stop failures during a sweep are caught individually
-  and do not abort the rest of the sweep.
+  and do not abort the rest of the sweep. This is wired ON by default in
+  production: `harness/terrarium_boot.py`'s `main()` derives a `run_id`
+  (the same `runs/<timestamp>` convention `run_stack.py` already uses for
+  `--log-dir`) and passes it, plus `--runs-dir` (default `runs`), straight
+  into `build()` -> `Terrarium(...)`; `--no-run-records` opts back out.
+  Cross-run safety: `Terrarium.__init__` also records a `"supervisor"`
+  entry (this process's own pid) into its own `procs.jsonl` the moment
+  `runs_dir`/`run_id` are given, and `sweep_stale` skips a run dir
+  **entirely** when that dir's own supervisor record is still alive (pid
+  alive, spawn time matching) -- otherwise, on a dev box running two
+  concurrent stacks, stack A's sweep would glob stack B's `runs/*/
+  procs.jsonl` too and kill stack B's still-live, still-recorded Arco. A
+  dead or absent supervisor record leaves that dir sweepable as before.
+  The `ownership_probe` constructor parameter remains an unwired injection
+  seam: no o2lite-path call site currently has a natural way to detect
+  another live claimant without new engine code, so it stays available for
+  a caller to pass but nothing threads it through by default yet.
 - **`DevicePool` is cleared on every room cycle, not just once at process
   exit.** `unload_room()` calls `gs.clear_devices()` before returning to
   `NO_ROOM` -- every device's clock died with the Room's own Arco/hub, so

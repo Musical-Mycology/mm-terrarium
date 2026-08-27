@@ -150,6 +150,40 @@ def test_sweep_continues_past_a_stop_that_raises(tmp_path):
     assert not os.path.exists(path_b)  # 108's file consumed: handled
 
 
+def test_sweep_skips_entire_run_dir_when_its_supervisor_is_alive(tmp_path):
+    """Cross-run safety: another stack's still-running supervisor must make
+    its whole run dir off-limits, including an otherwise-killable Arco
+    record in the same file -- this is what stops stack A's sweep from
+    reaping stack B's live, recorded Arco."""
+    path = tmp_path / "run-1" / "procs.jsonl"
+    recorder = RunRecorder(str(path))
+    recorder.record(200, "supervisor", spawn_time=500.0)
+    recorder.record(201, "arco", spawn_time=500.0)
+    table = _FakeProcessTable({200: 500.0, 201: 500.0})
+
+    acted = _sweep(str(tmp_path), table)
+
+    assert table.stopped == []
+    assert acted == []
+    assert os.path.exists(path)
+
+
+def test_sweep_still_sweeps_a_run_dir_whose_supervisor_is_dead(tmp_path):
+    """A dead (or absent) supervisor record leaves the dir sweepable
+    exactly as before the cross-run guard existed."""
+    path = tmp_path / "run-1" / "procs.jsonl"
+    recorder = RunRecorder(str(path))
+    recorder.record(202, "supervisor", spawn_time=500.0)
+    recorder.record(203, "arco", spawn_time=500.0)
+    table = _FakeProcessTable({203: 500.0})   # 202 (supervisor) not alive
+
+    acted = _sweep(str(tmp_path), table)
+
+    assert table.stopped == [203]
+    assert acted == [SpawnRecord(pid=203, spawn_time=500.0, role="arco")]
+    assert not os.path.exists(path)
+
+
 def test_sweep_keeps_record_file_when_a_pid_is_not_handled(tmp_path):
     path = tmp_path / "run-1" / "procs.jsonl"
     recorder = RunRecorder(str(path))

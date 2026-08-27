@@ -167,6 +167,21 @@ class Terrarium:
         self._run_recorder = (
             RunRecorder(os.path.join(runs_dir, run_id, "procs.jsonl"))
             if runs_dir is not None else None)
+        if self._run_recorder is not None:
+            # Recorded once, here, at construction -- not per load_room --
+            # so this run's own procs.jsonl carries a "supervisor" entry
+            # (this process's own pid) for the entire process lifetime,
+            # before any load_room ever calls sweep_stale. sweep_stale
+            # (control/run_record.py) treats a run dir whose supervisor
+            # record is still alive as off-limits in its entirety: this is
+            # what stops one dev-box stack's sweep from reaping another
+            # concurrent stack's live, recorded Arco/simulators (design
+            # spec section 5, cross-run safety).
+            pid = os.getpid()
+            spawn_time = _default_spawn_time(pid)
+            if spawn_time is None:
+                spawn_time = time.time()
+            self._run_recorder.record(pid, "supervisor", spawn_time=spawn_time)
         self.sweep = sweep
         if self.sweep is None and runs_dir is not None:
             self.sweep = lambda: sweep_stale(runs_dir)

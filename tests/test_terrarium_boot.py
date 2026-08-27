@@ -33,9 +33,10 @@ TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
                      node_id="ROOM_TEST_NODE", profile=TEST_PROFILE)
 
 
-def _fake_arco(command, popen=None):
+def _fake_arco(command, popen=None, record=None):
     from control.arco_process import ArcoProcess
-    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda: True)
+    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda: True,
+                       record=record)
 
 
 def _fake_room_audio():
@@ -1281,6 +1282,101 @@ def _run_main_capturing_build(monkeypatch, argv):
         main()
 
     return captured
+
+
+def test_build_records_supervisor_and_spawns_when_runs_dir_given(tmp_path):
+    """Wiring for design spec section 5: build() forwards runs_dir/run_id
+    straight into Terrarium (already the case), which records its own
+    supervisor entry at construction and one entry per spawned Arco/
+    simulator during load_room -- this is the "dead code in production"
+    finding, verified end to end through build() rather than only at the
+    Terrarium unit level."""
+    import os
+
+    from control.run_record import RunRecorder
+
+    class _FakePopenWithPid(FakePopen):
+        """FakePopen (control/arco_process.py) never sets .pid -- it is a
+        pure boundary-rule-5 double for poll/send_signal/wait, and real
+        subprocess.Popen instances always have .pid. ArcoProcess/
+        SimulatorProcess.start() both read `getattr(self._process, "pid",
+        None)` to feed the record callback, so a pid is needed here to
+        actually exercise that path."""
+
+        def __init__(self, pid: int, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.pid = pid
+
+        def __call__(self, command, **kwargs):
+            super().__call__(command, **kwargs)
+            return self
+
+    def _fake_arco_with_pid(command, popen=None, record=None):
+        from control.arco_process import ArcoProcess
+        return ArcoProcess(command, popen=popen or _FakePopenWithPid(9001),
+                           probe=lambda: True, record=record)
+
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit},
+        arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0, arco_process_cls=_fake_arco_with_pid,
+        simulator_popen=_FakePopenWithPid(9002), room_audio=_fake_room_audio(),
+        runs_dir=str(tmp_path), run_id="run-1")
+    shutdown(teardown, terrarium)
+
+    records = RunRecorder.load_all(str(tmp_path))
+    roles = {r.role for r in records}
+    assert "supervisor" in roles
+    assert any(r.pid == os.getpid() and r.role == "supervisor" for r in records)
+    assert "arco" in roles
+    assert any(role.startswith("simulator:") for role in roles)
+
+
+def test_main_forwards_runs_dir_and_run_id_to_build(monkeypatch):
+    """main() must derive a run_id (the same runs/<timestamp> convention
+    harness/run_stack.py already uses for --log-dir) and forward it, plus
+    --runs-dir (default "runs"), into build() -- without this the sweep
+    guardrail is never wired and every live load_room runs with sweep=None
+    (the Critical finding this Task fixes)."""
+    captured_kwargs = {}
+
+    def fake_build(config, bit_registry, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise SystemExit(0)
+
+    import harness.terrarium_boot as terrarium_boot_module
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--room", "TEST"])
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs["runs_dir"] == "runs"
+    run_id = captured_kwargs["run_id"]
+    assert run_id is not None
+    time.strptime(run_id, "%Y%m%d-%H%M%S")   # raises if the shape is wrong
+
+
+def test_main_no_run_records_disables_runs_dir_and_run_id(monkeypatch):
+    captured_kwargs = {}
+
+    def fake_build(config, bit_registry, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise SystemExit(0)
+
+    import harness.terrarium_boot as terrarium_boot_module
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["terrarium_boot.py", "--room", "TEST", "--no-run-records"])
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs["runs_dir"] is None
+    assert captured_kwargs["run_id"] is None
 
 
 def test_main_defaults_bit_to_test_bit(monkeypatch):

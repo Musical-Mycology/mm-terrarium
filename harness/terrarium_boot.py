@@ -1068,6 +1068,19 @@ def _build_arg_parser():
                     help="Print every discovered Bit package (name, "
                          "version, kind, room types, start condition, "
                          "description) and any manifest errors, then exit.")
+    ap.add_argument("--runs-dir", default="runs", metavar="PATH",
+                    help="Where this run's owned-pid record (procs.jsonl, "
+                         "including its own supervisor entry) is written, "
+                         "and where load_room's stale-sweep guardrail "
+                         "looks for a crashed prior run to clean up "
+                         "(design spec section 5). Same runs/<timestamp> "
+                         "convention as harness/run_stack.py's --log-dir. "
+                         "On by default; pass --no-run-records to disable "
+                         "both the recording and the sweep.")
+    ap.add_argument("--no-run-records", action="store_true",
+                    help="Disable owned-pid run recording and the "
+                         "load-time stale sweep entirely -- the pre-Task "
+                         "behavior. Off by default.")
     ap.add_argument("--serve", action="store_true",
                     help="Loop rounds: load, hold, run, complete, wait for "
                          "the next console load_bit -- rather than tearing "
@@ -1225,6 +1238,15 @@ def main() -> None:
         proc.start = start_then_settle
         return proc
 
+    # Owned-pid run records + the stale-sweep guardrail are ON by default
+    # (design spec section 5, controller ruling 2026-08-27): a run_id is
+    # derived here, matching harness/run_stack.py's own runs/<timestamp>
+    # convention (_run_duration / --log-dir above), so a live-verify
+    # SIGKILL-mid-room-then-relaunch actually has a procs.jsonl to sweep
+    # against. --no-run-records opts back out to pre-Task behavior.
+    runs_dir = None if args.no_run_records else args.runs_dir
+    run_id = None if runs_dir is None else time.strftime("%Y%m%d-%H%M%S")
+
     gs, server, agent, arco, teardown, terrarium = build(
         config, registry.lazy_class_map(),
         arco_command=[args.arco_command],
@@ -1232,7 +1254,8 @@ def main() -> None:
         terrarium_config=terrarium_config,
         host=args.host, port=args.port,
         transport=transport, clock=clock,
-        arco_process_cls=arco_process_cls, on_join_denied=_print_join_denied)
+        arco_process_cls=arco_process_cls, on_join_denied=_print_join_denied,
+        runs_dir=runs_dir, run_id=run_id)
     # A SEPARATE stack from `teardown` -- see shutdown()'s docstring for
     # why the o2lite transport must close before terrarium.room_stack
     # (Arco) rather than with the rest of the process-level steps.

@@ -75,7 +75,8 @@ class FakeArco:
 def make_terrarium(config=None, *, gs=None, room_binding=None,
                    arco_process_cls=None, simulator_factory=None,
                    sweep=None, ownership_probe=None,
-                   binding_store_path=None, boot_config=None):
+                   binding_store_path=None, boot_config=None,
+                   runs_dir=None, run_id=None):
     config = config if config is not None else make_config()
     gs = gs if gs is not None else make_gs()
     room_binding = room_binding if room_binding is not None else RoomBindingRegistry()
@@ -88,7 +89,8 @@ def make_terrarium(config=None, *, gs=None, room_binding=None,
         config, gs, room_binding, boot_config=boot_config,
         arco_command=["arco-server"], arco_process_cls=arco_process_cls,
         simulator_factory=simulator_factory, sweep=sweep,
-        ownership_probe=ownership_probe, binding_store_path=binding_store_path)
+        ownership_probe=ownership_probe, binding_store_path=binding_store_path,
+        runs_dir=runs_dir, run_id=run_id)
 
 
 def test_boots_in_no_room_and_refuses_load_bit_gating():
@@ -311,3 +313,22 @@ def test_a_raising_progress_observer_does_not_break_load_room_or_peers():
     assert terrarium.state == TerrariumState.ROOM_READY
     assert seen == ["validating", "spawning arco", "binding fixtures",
                     "room ready"]
+
+
+def test_construction_with_runs_dir_records_a_supervisor_entry(tmp_path):
+    """The wiring this Task adds: given runs_dir/run_id, Terrarium.__init__
+    itself (not load_room) writes a "supervisor" SpawnRecord for this
+    process's own pid, before any load_room ever runs -- this is what lets
+    sweep_stale (control/run_record.py) tell "another live run's dir" apart
+    from "a crashed prior run's dir" (controller ruling 2026-08-27, design
+    spec section 5)."""
+    import os
+
+    from control.run_record import RunRecorder
+
+    make_terrarium(runs_dir=str(tmp_path), run_id="run-1")
+
+    records = RunRecorder.load_all(str(tmp_path))
+    assert len(records) == 1
+    assert records[0].pid == os.getpid()
+    assert records[0].role == "supervisor"
