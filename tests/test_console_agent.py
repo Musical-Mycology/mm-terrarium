@@ -773,3 +773,205 @@ def test_bit_completed_event_carries_bit_name_and_version():
     completed = [m for m in srv.broadcasts if m.get("event") == "bit_completed"]
     assert completed == [{"event": "bit_completed", "result": {"score": 99},
                           "bit": {"name": "scoring_bit", "version": "0.1"}}]
+
+
+# --- Task 6: room commands, terrarium-state gating, rooms snapshot --------
+
+from control.terrarium import TerrariumState
+from control.wire_json import dumps
+from tests.test_terrarium import make_terrarium
+
+
+def test_load_room_command_without_terrarium_sends_error():
+    gs, srv, agent = _server_with_agent()
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_room", "name": "TEST"})
+    agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors == [{"event": "error", "command": "load_room",
+                       "message": "no terrarium"}]
+
+
+def test_unload_room_command_without_terrarium_sends_error():
+    gs, srv, agent = _server_with_agent()
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "unload_room"})
+    agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors == [{"event": "error", "command": "unload_room",
+                       "message": "no terrarium"}]
+
+
+def test_load_room_command_drives_terrarium_and_broadcasts_room_loaded():
+    terrarium = make_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_room", "name": "TEST"})
+
+    agent.poll()
+
+    assert terrarium.state == TerrariumState.ROOM_READY
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors == []
+    loaded = [m for m in srv.broadcasts if m.get("event") == "room_loaded"]
+    assert loaded == [{"event": "room_loaded", "name": "TEST"}]
+
+
+def test_load_room_refusal_is_error_event_and_broadcasts_room_load_failed():
+    terrarium = make_terrarium(
+        ownership_probe=lambda: "another Console owns this room")
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_room", "name": "TEST"})
+
+    agent.poll()   # must not raise
+
+    assert terrarium.state == TerrariumState.NO_ROOM
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors == [{"event": "error", "command": "load_room",
+                       "message": "another Console owns this room"}]
+    failed = [m for m in srv.broadcasts if m.get("event") == "room_load_failed"]
+    assert failed == [{"event": "room_load_failed", "name": "TEST",
+                       "reason": "another Console owns this room"}]
+    # a load failure must never be reported as room_unloaded
+    assert not [m for m in srv.broadcasts if m.get("event") == "room_unloaded"]
+
+
+def test_unload_room_command_drives_terrarium_and_broadcasts_room_unloaded():
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    srv.broadcasts.clear()
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "unload_room"})
+
+    agent.poll()
+
+    assert terrarium.state == TerrariumState.NO_ROOM
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors == []
+    unloaded = [m for m in srv.broadcasts if m.get("event") == "room_unloaded"]
+    assert unloaded == [{"event": "room_unloaded", "name": "TEST"}]
+
+
+def test_unload_room_refusal_is_error_event():
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    terrarium.gs.load_bit("RoomCapableBit")
+    terrarium.gs.hello("ie9", "Shroom Nine", "1")
+    terrarium.gs.join("ie9", room_role_name("TEST"))
+    terrarium.gs.run()   # not IDLE -- unload without force should refuse
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "unload_room"})
+
+    agent.poll()
+
+    assert terrarium.state == TerrariumState.ROOM_READY
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert len(errors) == 1
+    assert errors[0]["command"] == "unload_room"
+
+
+def test_load_bit_is_gated_while_room_not_ready():
+    terrarium = make_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "RoomCapableBit"})
+
+    agent.poll()
+
+    assert terrarium.gs.state.name == "IDLE"
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors == [{"event": "error", "command": "load_bit",
+                       "message": "no room loaded"}]
+
+
+def test_load_bit_succeeds_once_room_is_ready():
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "RoomCapableBit"})
+
+    agent.poll()
+
+    assert terrarium.gs.state.name == "SETUP"
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors == []
+
+
+def test_load_bit_without_terrarium_is_never_gated():
+    gs, srv, agent = _server_with_agent()   # terrarium=None
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
+    agent.poll()
+    assert gs.state.name == "SETUP"
+
+
+def test_snapshot_carries_terrarium_state_and_rooms():
+    terrarium = make_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+
+    snap = agent.snapshot()
+    assert snap["terrarium_state"] == "NO_ROOM"
+    assert snap["rooms"] == [
+        {"name": "TEST", "description": "", "status": None, "active": False}]
+
+    terrarium.load_room("TEST")
+    snap = agent.snapshot()
+    assert snap["terrarium_state"] == "ROOM_READY"
+    assert snap["rooms"] == [
+        {"name": "TEST", "description": "", "status": None, "active": True}]
+
+
+def test_snapshot_terrarium_fields_are_none_safe_without_terrarium():
+    gs, srv, agent = _server_with_agent()
+    snap = agent.snapshot()
+    assert snap["terrarium_state"] is None
+    assert snap["rooms"] == []
+
+
+def test_room_lifecycle_event_byte_shapes():
+    terrarium = make_terrarium()
+    srv = FakeConsoleServer()
+    ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    srv.broadcasts.clear()
+
+    terrarium.load_room("TEST")
+    loaded = next(m for m in srv.broadcasts if m["event"] == "room_loaded")
+    assert dumps(loaded) == '{"event": "room_loaded", "name": "TEST"}'
+    state_changed = [m for m in srv.broadcasts if m["event"] == "state_changed"]
+    assert dumps(state_changed[-1]) == (
+        '{"event": "state_changed", "state": "IDLE", "loaded_bit": null, '
+        '"terrarium_state": "ROOM_READY"}')
+
+    srv.broadcasts.clear()
+    terrarium.unload_room()
+    unloaded = next(m for m in srv.broadcasts if m["event"] == "room_unloaded")
+    assert dumps(unloaded) == '{"event": "room_unloaded", "name": "TEST"}'
+
+
+def test_room_load_progress_is_broadcast_per_stage():
+    terrarium = make_terrarium()
+    srv = FakeConsoleServer()
+    ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    srv.broadcasts.clear()
+
+    terrarium.load_room("TEST")
+
+    stages = [m["stage"] for m in srv.broadcasts if m["event"] == "room_load_progress"]
+    assert "validating" in stages
+    assert "spawning arco" in stages
+    assert "room ready" in stages
+    progress_msg = next(m for m in srv.broadcasts
+                        if m["event"] == "room_load_progress")
+    assert dumps(progress_msg) == (
+        '{"event": "room_load_progress", "stage": "validating"}')
