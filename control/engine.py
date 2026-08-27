@@ -229,6 +229,15 @@ class GameServer:
             role_table = bit.role_table
             requirements = tuple(bit.instrument_requirements())
             declared_slots = {r.slot for r in requirements}
+            # A slot some Role.requires names (other than the reserved
+            # "room" slot) is a role slot (spec section 4): it is resolved
+            # only at join, against the JOINING DEVICE's carried instrument
+            # (see join() below), never against the room's own fixtures --
+            # a fixture has no gestures to offer. "room" itself stays a
+            # room slot even when a Role happens to require it (deviation:
+            # implicit-room-slot join handling, spec Status section).
+            role_slots = {role.requires for role in role_table.roles.values()
+                          if role.requires not in (None, "room")}
             if self.room is not None:
                 light_m, ugen_m = bit.room_manifests()
                 if light_m or ugen_m:
@@ -236,7 +245,7 @@ class GameServer:
                                                   light_manifest=light_m)
                     role_table.roles[rname] = role
                     role_table.node_map[node] = [rname]
-                room_reqs = list(requirements)
+                room_reqs = [r for r in requirements if r.slot not in role_slots]
                 if (light_m or ugen_m) and "room" not in declared_slots:
                     caps = set()
                     if light_m:

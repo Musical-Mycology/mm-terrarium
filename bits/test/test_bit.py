@@ -6,6 +6,7 @@ section 4.
 
 from control.bit import Bit
 from control.cues import ROOM, TARGET, FireTrigger, MuteCue, PlayCue, SolidCue
+from control.instrument import InstrumentRequirement
 from control.roles import Role, RoleClass, RoleTable
 from control.triggers import (
     Condition,
@@ -75,6 +76,10 @@ class TestBit(Bit):
         player = Role(
             name="player", role_class=RoleClass.SHARED, capacity=None,
             scored=True,
+            # Gates join on the "player" slot this Bit declares in
+            # instrument_requirements() above -- the reference exemplar for
+            # Role.requires (spec section 4, section 10).
+            requires="player",
             # What this role asks the device for. The simulator draws exactly
             # these as active; jammer below deliberately asks for less, so
             # switching nodes visibly changes the device's control panel.
@@ -150,6 +155,18 @@ class TestBit(Bit):
         node_map = {"TEST_PLAYER_NODE": ["player"],
                     "TEST_JAM_NODE": ["jammer"]}
         return RoleTable(roles=roles, node_map=node_map)
+
+    def instrument_requirements(self) -> tuple:
+        """The reference exemplar for the "player" slot (spec section 4,
+        section 10): the player Role below names this slot via `requires`,
+        so joining TEST_PLAYER_NODE gates on a carried instrument having
+        both light.pixels (the ring/stem pixels the player role's aurora
+        lane drives) and gesture.tilt (the tilt verb the role reads).
+        TUNESHROOM satisfies both, so the ordinary hello/join path is
+        unaffected; a carrier missing either is refused by name."""
+        return (InstrumentRequirement(
+            slot="player",
+            capabilities=frozenset({"light.pixels", "gesture.tilt"})),)
 
     def room_manifests(self) -> tuple[dict, dict]:
         room_light = {

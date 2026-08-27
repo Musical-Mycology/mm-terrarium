@@ -436,4 +436,35 @@ after unload.
 
 ## Status
 
-Spec written 2026-08-27. Not yet implemented.
+Implemented 2026-08-27. `TestBit` (`bits/test/test_bit.py`) is the reference
+exemplar: its `player` Role declares `requires="player"`, matched by an
+`instrument_requirements()` slot demanding `light.pixels` and
+`gesture.tilt`; `jammer` stays requirement-free. Full suite: 1528 passed, 1
+skipped.
+
+Recorded deviations from the spec as written:
+
+- `GameServer.load_bit`'s `_slot_requirements` snapshot excludes the
+  implicit `"room"` slot. `requires="room"` with no matching explicit
+  declaration is treated as satisfied at join -- the implicit room contract
+  binds the room's fixtures at `load_bit` time, and there is nothing left
+  for `join` to check against a carried device.
+- A slot named by some Role's `requires` (other than `"room"`) is resolved
+  only at join, against the joining device's carried instrument -- never
+  against the room's own fixtures at `load_bit`. A room fixture has no
+  gestures to advertise, so checking a role slot's capabilities against the
+  room profile would make any gesture-gated role (like `TestBit`'s
+  `player`) unloadable into a real room. Only the reserved `"room"` slot,
+  and any slot no Role names, resolves against the room's fixtures at load.
+- `dev_strip` in `terrarium.toml` gained `audio.flsyn` -- a pre-existing
+  declaration gap the new enforcement surfaced.
+- `validate_ugen_manifest` kept its existing name, given a dual
+  `Role | (manifest, where)` signature rather than a new function.
+- `cue_kind` lives in `control/instrument.py`, importing `control.cues`
+  lazily to avoid a cycle.
+- The ambient audio grant path (`control/instrument.py`'s
+  `ambient_manifests`) uses a stand-in `Role` internally; the manifests it
+  carries are validated at instrument-definition time, not re-validated
+  there.
+- The spec's drone inline-table example is written flattened to one line,
+  matching how `tomllib` actually renders it (`terrarium.toml` line 16).

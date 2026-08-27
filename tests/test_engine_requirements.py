@@ -50,10 +50,13 @@ class RoomAudioBit(TestBit):
 
 class ExplicitRoomSlotBit(TestBit):
     """Declares its own "room" slot needing only light.surface, overriding
-    the implicit synthesis that would otherwise also demand audio.flsyn."""
+    the implicit synthesis that would otherwise also demand audio.flsyn.
+    Keeps TestBit's own "player" slot declared too (its inherited player
+    Role still names it via `requires`) -- only the "room" slot's contract
+    is being overridden here."""
 
     def instrument_requirements(self):
-        return (InstrumentRequirement(
+        return super().instrument_requirements() + (InstrumentRequirement(
             slot="room", capabilities=frozenset({"light.surface"})),)
 
 
@@ -244,3 +247,32 @@ def test_role_without_requires_is_unchanged():
     assert result.instrument is None
     assert "slot" not in result.config
     assert "instrument" not in result.config
+
+
+# --- Task 10: TestBit as the reference exemplar, through the full engine --
+
+GESTURELESS_INSTRUMENT = Instrument(
+    name="gestureless_widget",
+    capabilities=frozenset({"light.pixels", "audio.samples"}),
+    accepted_triggers=("midi", "play", "solid", "mute"),
+)
+
+
+def test_testbit_player_join_is_granted_with_tuneshroom_carrier():
+    gs = GameServer({"TestBit": TestBit})
+    gs.load_bit("TestBit")
+    gs.devices.hello("dev1", "device-one", "1.0")
+    result = gs.join("dev1", "TEST_PLAYER_NODE")
+    assert result.granted
+    assert result.slot == "player"
+    assert result.instrument == "tuneshroom"
+
+
+def test_testbit_player_join_refused_when_carrier_lacks_gesture_tilt():
+    gs = GameServer({"TestBit": TestBit})
+    gs.load_bit("TestBit")
+    gs.devices.hello("dev1", "device-one", "1.0")
+    gs.devices.get("dev1").carried = GESTURELESS_INSTRUMENT
+    result = gs.join("dev1", "TEST_PLAYER_NODE")
+    assert not result.granted
+    assert "gesture.tilt" in result.reason
