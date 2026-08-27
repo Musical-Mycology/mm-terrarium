@@ -8,6 +8,7 @@ See docs/superpowers/specs/
 
 from __future__ import annotations
 
+import os
 from enum import Enum
 
 from control.arco_process import ArcoProcess
@@ -18,6 +19,7 @@ from control.engine import BitLoadError, GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_bridge import RoomBridge
 from control.rooms import Room
+from control.run_record import RunRecorder, sweep_stale, _default_spawn_time
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium_config import TerrariumConfig, validate_rooms
@@ -51,7 +53,9 @@ class Terrarium:
                  known_device_connected=lambda dev: False, tick=None,
                  sweep=None, ownership_probe=None,
                  binding_store_path: str | None = None,
-                 stack_factory=TeardownStack) -> None:
+                 stack_factory=TeardownStack,
+                 runs_dir: str | None = None,
+                 run_id: str | None = None) -> None:
         self.config = config
         self.gs = game_server
         self.room_binding = room_binding
@@ -61,9 +65,22 @@ class Terrarium:
         self.simulator_factory = simulator_factory
         self.known_device_connected = known_device_connected
         self.tick = tick
-        self.sweep = sweep
         self.ownership_probe = ownership_probe
         self.binding_store_path = binding_store_path
+        self.runs_dir = runs_dir
+        self.run_id = run_id
+
+        # runs_dir=None (every existing caller/test) means no recording and
+        # no default sweep -- zero behavior change. When set, every process
+        # this load spawns is recorded (design spec section 5) so a later
+        # load_room's sweep can prove ownership of anything left running by
+        # a crashed prior run.
+        self._run_recorder = (
+            RunRecorder(os.path.join(runs_dir, run_id, "procs.jsonl"))
+            if runs_dir is not None else None)
+        self.sweep = sweep
+        if self.sweep is None and runs_dir is not None:
+            self.sweep = lambda: sweep_stale(runs_dir)
         # Called with no arguments to produce each load_room's room-scoped
         # stack; defaults to a fresh TeardownStack. control/boot.py's
         # compat wrapper overrides this to hand back a caller-supplied
@@ -94,6 +111,41 @@ class Terrarium:
 
     def _progress(self, stage: str) -> None:
         self._notify("on_room_load_progress", stage)
+
+    def _record_for(self, role: str):
+        """A callable(pid) that appends a SpawnRecord for `role`, or None
+        when no runs_dir was configured (the zero-recording default).
+        Spawn time is re-read via the same helper sweep_stale's default
+        uses, so a later sweep's pid-reuse comparison is apples to apples;
+        falls back to "now" if that probe fails."""
+        if self._run_recorder is None:
+            return None
+        recorder = self._run_recorder
+
+        def _record(pid: int) -> None:
+            import time as _time
+            spawn_time = _default_spawn_time(pid)
+            if spawn_time is None:
+                spawn_time = _time.time()
+            recorder.record(pid, role, spawn_time=spawn_time)
+        return _record
+
+    def _simulator_factory_with_recording(self):
+        """self.simulator_factory, unchanged, when no runs_dir was
+        configured -- the zero-recording default calls it with the exact
+        same (teardown, fixture_name) signature every existing caller
+        already uses. When runs_dir IS configured, wraps it so each
+        fixture's spawn is recorded under its own "simulator:<fixture>"
+        role, via a `record=` keyword the factory is expected to accept and
+        thread into SimulatorProcess (control/simulator_process.py)."""
+        factory = self.simulator_factory
+        if factory is None or self._run_recorder is None:
+            return factory
+
+        def _wrapped(teardown, fixture_name):
+            record = self._record_for(f"simulator:{fixture_name}")
+            return factory(teardown, fixture_name, record=record)
+        return _wrapped
 
     def load_room(self, name: str) -> str | None:
         """Load `name` as the active Room. Returns None on success, else a
@@ -133,7 +185,11 @@ class Terrarium:
             self.room_stack = stack
 
             self._progress("spawning arco")
-            arco = self.arco_process_cls(self.arco_command)
+            arco_record = self._record_for("arco")
+            if arco_record is not None:
+                arco = self.arco_process_cls(self.arco_command, record=arco_record)
+            else:
+                arco = self.arco_process_cls(self.arco_command)
             try:
                 arco.start()
             except Exception as exc:
@@ -153,7 +209,7 @@ class Terrarium:
             if self.binding_store_path is not None:
                 self.room_binding.load(self.binding_store_path)
             _bind_room_fast_path(room, self.room_binding,
-                                 self.simulator_factory,
+                                 self._simulator_factory_with_recording(),
                                  self.known_device_connected, stack)
 
             if not room.fully_bound(room.profile):
