@@ -8,6 +8,7 @@ See docs/superpowers/specs/
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from enum import Enum
@@ -24,6 +25,8 @@ from control.run_record import RunRecorder, sweep_stale, _default_spawn_time
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium_config import TerrariumConfig, validate_rooms
+
+logger = logging.getLogger(__name__)
 
 
 class TerrariumState(Enum):
@@ -100,10 +103,19 @@ class Terrarium:
         self._observers.append(observer)
 
     def _notify(self, method: str, *args) -> None:
+        """Mirrors GameServer._notify (control/engine.py): a raising
+        observer is logged and never interrupts the remaining observers or
+        the load_room/unload_room sequence that triggered the notification.
+        """
         for observer in self._observers:
             fn = getattr(observer, method, None)
-            if fn is not None:
+            if fn is None:
+                continue
+            try:
                 fn(*args)
+            except Exception:
+                logger.exception("observer %r %s raised; continuing",
+                                 observer, method)
 
     def _set_state(self, new_state: TerrariumState) -> None:
         old_state = self.state

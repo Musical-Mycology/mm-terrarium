@@ -275,3 +275,39 @@ def test_second_ctrl_c_style_failure_in_one_step_does_not_abandon_the_rest():
     assert "accent-shutdown" in order
     assert "main-shutdown-attempted" in order
     assert any(name == "sim-main" for name, _ in failures)
+
+
+def test_a_raising_state_observer_does_not_break_load_room_or_peers():
+    """Terrarium._notify mirrors GameServer._notify's per-observer guard:
+    a raising observer is logged and never interrupts the remaining
+    observers or the load_room sequence itself."""
+    seen = []
+    terrarium = make_terrarium()
+    terrarium.add_observer(SimpleNamespace(
+        on_terrarium_state_change=lambda old, new: (_ for _ in ()).throw(
+            RuntimeError("observer blew up"))))
+    terrarium.add_observer(SimpleNamespace(
+        on_terrarium_state_change=lambda old, new: seen.append(new)))
+
+    reason = terrarium.load_room("TEST")
+
+    assert reason is None
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert seen[-1] == TerrariumState.ROOM_READY
+
+
+def test_a_raising_progress_observer_does_not_break_load_room_or_peers():
+    seen = []
+    terrarium = make_terrarium()
+    terrarium.add_observer(SimpleNamespace(
+        on_room_load_progress=lambda stage: (_ for _ in ()).throw(
+            RuntimeError("observer blew up"))))
+    terrarium.add_observer(SimpleNamespace(
+        on_room_load_progress=lambda stage: seen.append(stage)))
+
+    reason = terrarium.load_room("TEST")
+
+    assert reason is None
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert seen == ["validating", "spawning arco", "binding fixtures",
+                    "room ready"]
