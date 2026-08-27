@@ -237,8 +237,8 @@ function instrumentTags(instrument) {
   for (const fn of instrument.functions || []) {
     row.appendChild(mk("span", "insttag fn", fn));
   }
-  for (const trig of instrument.accepted_cues || []) {
-    row.appendChild(mk("span", "insttag trig", trig));
+  for (const cue of instrument.accepted_cues || []) {
+    row.appendChild(mk("span", "insttag cue", cue));
   }
   return row;
 }

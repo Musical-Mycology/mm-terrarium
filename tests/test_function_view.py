@@ -40,7 +40,7 @@ FLASH = Function(
     script=(ScriptStep(0.0, PlayCue(TARGET, "click", "")),))
 
 
-def test_a_trigger_serializes_its_declaration():
+def test_a_function_serializes_its_declaration():
     view = function_view(SWEEP)
     assert view["name"] == "play_aurora"
     assert view["description"] == "A slow aurora sweep across the Room"
