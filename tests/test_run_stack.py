@@ -41,7 +41,8 @@ def _cfg(tmp_path, **kwargs):
                        echo=False, seconds=0.0, **kwargs)
 
 
-_CONTROL_OK = (f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
+_CONTROL_OK = (f"{markers.CONTROL_ROOM_LOADED} TEST\n"
+               f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
                f"{markers.CONTROL_SETUP_HOLD} for 20s\n")
 _DEVICE_OK = (f"{markers.DEVICE_CLOCK_SYNCED} 12.345\n"
               f"{markers.DEVICE_ROLE_GRANTED} 1 join(s)\n")
@@ -187,7 +188,7 @@ def test_control_never_becoming_ready_fails_bounded(tmp_path):
                  sleep=lambda _s: None)
 
     assert result.ok is False
-    assert result.stage == "control-ready"
+    assert result.stage == "control-room-loaded"
 
 
 def test_a_device_that_never_syncs_fails_bounded_and_names_the_defect(tmp_path):
@@ -466,20 +467,51 @@ def test_control_command_defaults_room_type_to_test():
     from harness.run_stack import StackConfig, control_command
     cfg = StackConfig(log_dir="/tmp/x")
     cmd = control_command(cfg, ppid=1)
-    assert cmd[cmd.index("--room-type") + 1] == "TEST"
+    assert cmd[cmd.index("--room") + 1] == "TEST"
 
 
 def test_control_command_passes_room_type_when_set():
     from harness.run_stack import StackConfig, control_command
     cfg = StackConfig(log_dir="/tmp/x", room_type="DEMO")
     cmd = control_command(cfg, ppid=1)
-    assert cmd[cmd.index("--room-type") + 1] == "DEMO"
+    assert cmd[cmd.index("--room") + 1] == "DEMO"
 
 
 def test_config_from_args_forwards_room_type():
     from harness.run_stack import config_from_args, parse_args
-    args = parse_args(["--room-type", "DEMO"])
+    args = parse_args(["--room", "DEMO"])
     assert config_from_args(args).room_type == "DEMO"
+
+
+def test_config_is_none_by_default():
+    from harness.run_stack import StackConfig
+    assert StackConfig(log_dir="/tmp/x").config is None
+
+
+def test_control_command_omits_config_by_default():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x")
+    cmd = control_command(cfg, ppid=1)
+    assert "--config" not in cmd
+
+
+def test_control_command_passes_config_when_set():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x", config="venue.toml")
+    cmd = control_command(cfg, ppid=1)
+    assert cmd[cmd.index("--config") + 1] == "venue.toml"
+
+
+def test_config_from_args_forwards_config_path():
+    from control.bit_registry import BitRegistry
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--config", "venue.toml"])
+    # --config here names a venue TOML that config_from_args forwards
+    # verbatim to terrarium_boot's own --config; it need not exist in this
+    # process, since a registry is supplied explicitly rather than
+    # discovered from it (discover_registry() is what loads it for real).
+    assert config_from_args(
+        args, registry=BitRegistry.discover()).config == "venue.toml"
 
 
 def test_control_command_defaults_bit_to_test_bit():
@@ -560,7 +592,7 @@ def test_config_from_args_room_type_defaults_from_metronome_bit_manifest():
 
 def test_config_from_args_forwards_explicit_room_type_over_the_manifest():
     from harness.run_stack import config_from_args, parse_args
-    args = parse_args(["--bit", "MetronomeBit", "--room-type", "TEST"])
+    args = parse_args(["--bit", "MetronomeBit", "--room", "TEST"])
     assert config_from_args(args).room_type == "TEST"
 
 
@@ -671,6 +703,7 @@ def test_list_bits_prints_every_discovered_bit_and_exits_zero(capsys):
 
 
 _CONTROL_OK_WITH_URLS = (
+    f"{markers.CONTROL_ROOM_LOADED} TEST\n"
     f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
     f"{markers.BROWSE_URL} Terrarium Console at http://127.0.0.1:8901/\n"
     f"{markers.BROWSE_URL} Watch the Room at http://127.0.0.1:8902/\n"
@@ -719,7 +752,8 @@ def test_without_open_urls_no_tab_is_opened(tmp_path):
 def test_a_marker_line_without_a_url_is_ignored_not_crashed(tmp_path):
     """A future emit site that prints the marker but garbles the URL must
     degrade to a missing tab, never take the whole stack down."""
-    control_script = (f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
+    control_script = (f"{markers.CONTROL_ROOM_LOADED} TEST\n"
+                      f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
                       f"{markers.BROWSE_URL} (port not known yet)\n"
                       f"{markers.CONTROL_SETUP_HOLD} for 20s\n")
     popen = ScriptedPopen([control_script, _DEVICE_OK])
@@ -731,6 +765,7 @@ def test_a_marker_line_without_a_url_is_ignored_not_crashed(tmp_path):
 
 
 _CONTROL_OK_WITH_ROOM_URL = (
+    f"{markers.CONTROL_ROOM_LOADED} TEST\n"
     f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
     f"{markers.BROWSE_URL} Terrarium Console at http://127.0.0.1:8901/\n"
     f"{markers.ROOM_URL} Watch the Room at http://127.0.0.1:8902/\n"

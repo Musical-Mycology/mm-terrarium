@@ -1,9 +1,12 @@
 import pytest
 
-from control.room_profile import room_profile
-from control.rooms import RoomType
+from control.terrarium_config import load_terrarium_config
 from harness.room_simulator import BLOCK_PALETTE, WebSimLeds, build, \
     identify_blocks_frame
+
+
+def room_profile(name):
+    return load_terrarium_config("terrarium.toml").rooms[name].profile
 
 
 class FakeBackend:
@@ -67,7 +70,7 @@ def test_clear_sends_a_room_width_all_zero_frame():
 
 
 def test_identify_blocks_frame_paints_demo_blocks_distinctly():
-    profile = room_profile(RoomType.DEMO)
+    profile = room_profile("DEMO")
     frame = identify_blocks_frame(profile, "array")
     (array,) = profile.fixtures
     assert len(frame) == array.pixel_count * 3          # 2592
@@ -86,7 +89,7 @@ def test_identify_blocks_frame_paints_demo_blocks_distinctly():
 
 
 def test_identify_blocks_frame_works_for_a_single_block_fixture():
-    profile = room_profile(RoomType.TEST)
+    profile = room_profile("TEST")
     frame = identify_blocks_frame(profile, "accent")
     assert len(frame) == 30 * 3
     r, g, b = BLOCK_PALETTE[0]

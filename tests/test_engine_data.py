@@ -363,9 +363,14 @@ def test_no_gesture_time_argument_still_works():
 
 
 def _room_bound(bit, cue_horizon=0.06, clock=lambda: 1000.0, bound="sim-room"):
-    from control.rooms import Room, RoomType
+    from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+    from control.rooms import Room
+    profile = RoomProfile(surface_id="room_test", fixtures=(
+        RoomFixture(name="main", color_order="GRB",
+                   blocks=(RoomBlock("main", 0, 10),),
+                   zones=(RoomZone("all", 0, 10),)),))
     gs = GameServer({"vb": lambda: bit}, cue_horizon=cue_horizon, clock=clock)
-    gs.room = Room(room_type=RoomType.TEST)
+    gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
     gs.room.bound = {"main": bound}
     gs.load_bit("vb")
     gs.join("ie1", "NODE_A")

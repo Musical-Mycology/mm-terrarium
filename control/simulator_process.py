@@ -14,13 +14,22 @@ from control.process import stop_process
 
 
 class SimulatorProcess:
-    def __init__(self, command: list[str], *, popen=subprocess.Popen) -> None:
+    def __init__(self, command: list[str], *, popen=subprocess.Popen,
+                 record=None) -> None:
         self._command = command
         self._popen = popen
+        # Called with the spawned pid at spawn time (control/run_record.py's
+        # RunRecorder.record, threaded in by Terrarium) -- never imported
+        # here, only invoked, so this module stays free of run_record.
+        self._record = record
         self._process = None
 
     def start(self) -> None:
         self._process = self._popen(self._command)
+        if self._record is not None:
+            pid = getattr(self._process, "pid", None)
+            if pid is not None:
+                self._record(pid)
 
     def shutdown(self) -> None:
         """SIGTERM, then SIGKILL if that is ignored, then reap.

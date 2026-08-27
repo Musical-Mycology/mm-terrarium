@@ -1,7 +1,6 @@
 """tests/test_metronome_bit_declarations.py"""
 from bits.metronome.metronome_bit import MetronomeBit
 from control.engine import GameServer
-from control.rooms import RoomType, room_role_name
 
 
 def _running_gs(n_players=0):
@@ -18,7 +17,7 @@ def test_loads_and_validates():
 
 
 def test_demo_only():
-    assert MetronomeBit.room_types == {RoomType.DEMO}
+    assert MetronomeBit.room_types == {"DEMO"}
 
 
 def test_third_player_is_denied_by_capacity():
@@ -41,9 +40,8 @@ def test_player_light_manifest_shape():
 
 
 def test_room_declares_rainbow_dark_by_default():
-    table = MetronomeBit().role_table
-    room = table.roles[room_role_name(RoomType.DEMO)]
-    by_name = {i["instrument"]: i for i in room.light_manifest["instruments"]}
+    light, _ugen = MetronomeBit().room_manifests()
+    by_name = {i["instrument"]: i for i in light["instruments"]}
     assert by_name["rainbow"]["params"]["level"] == 0.0
 
 

@@ -54,6 +54,7 @@ from control.bit_registry import BitRegistry
 from control.process import stop_process
 from control.run_profile import RunProfile, parse_profile
 from control.teardown import TeardownStack
+from control.terrarium_config import load_terrarium_config, resolve_bit_roots
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.proc_tee import ProcTee
@@ -87,6 +88,7 @@ class StackConfig:
     arco_ready_timeout: float = 60.0
     console_port: int | None = None   # None = no Terrarium Console
     room_type: str = "TEST"
+    config: str | None = None         # forwarded to terrarium_boot verbatim
     bit: str = "TestBit"
     node: str | None = None
     node_explicit: bool = False       # True iff --node was passed on the CLI
@@ -106,6 +108,16 @@ class RunResult:
     logs: dict = field(default_factory=dict)
     urls: list = field(default_factory=list)
     room_urls: list = field(default_factory=list)
+
+
+def discover_registry(config_path: str | None) -> BitRegistry:
+    """BitRegistry.scan() over the roots named by config_path's own
+    bit_paths (default terrarium.toml in the CWD -- terrarium_boot's own
+    default, mirrored here since this process forwards --config verbatim
+    rather than defaulting it itself)."""
+    terrarium_config = load_terrarium_config(config_path or "terrarium.toml")
+    roots = resolve_bit_roots(terrarium_config, config_path or "terrarium.toml")
+    return BitRegistry.scan(roots)
 
 
 def control_command(cfg: StackConfig, ppid: int) -> list[str]:
@@ -129,7 +141,9 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
     ]
     if cfg.console_port is not None:
         command += ["--console-port", str(cfg.console_port)]
-    command += ["--room-type", cfg.room_type]
+    if cfg.config is not None:
+        command += ["--config", cfg.config]
+    command += ["--room", cfg.room_type]
     command += ["--bit", cfg.bit]
     if cfg.profile is not None:
         # terrarium_boot re-parses the same file and applies the same
@@ -288,7 +302,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
             return
         round_number += 1
         n = round_number
-        reg = registry if registry is not None else BitRegistry.discover()
+        reg = registry if registry is not None else discover_registry(cfg.config)
         if bit_name not in reg.packages:
             print(f"round loaded: unknown Bit {bit_name!r}; no devices "
                  f"respawned for round {n}", file=sys.stderr)
@@ -326,6 +340,14 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                         _watch_list("CONTROL_"), on_line=control_on_line)
 
         for stage, marker, detail in (
+            # Gates on the Room finishing rather than boot completion, which
+            # it now precedes: harness/terrarium_boot.py's build() loads the
+            # Room (Arco, the simulator, the Room bridge) before it even
+            # starts the o2lite transport -- see control/terrarium.py's
+            # Terrarium.load_room.
+            ("control-room-loaded", markers.CONTROL_ROOM_LOADED,
+             "Control never reported its Room loaded. Check arco.log for "
+             "a failed Arco start, and control.log for a load_room refusal."),
             ("control-ready", markers.CONTROL_TRANSPORT_READY,
              "Control never reported its o2lite transport up. Check "
              "arco.log for a failed Arco start, and o2debug.log."),
@@ -626,12 +648,19 @@ def parse_args(argv=None):
                          "canvas, and each simulated Tuneshroom canvas. "
                          "Implies a Console on an ephemeral port unless "
                          "--console-port is given. Refused under --ci.")
-    ap.add_argument("--room-type", default=None, choices=["TEST", "DEMO"],
-                    help="Which RoomType to boot. DEMO configures the "
-                         "simulated array backend (spec 2026-08-19); its "
+    ap.add_argument("--room", default=None,
+                    help="Which Room (a [rooms.<NAME>] table in --config, "
+                         "default terrarium.toml) to boot. DEMO configures "
+                         "the simulated array backend (spec 2026-08-19); its "
                          "864 px canvas is otherwise identical in kind to "
                          "TEST's. Default: the selected Bit manifest's "
-                         "launch.default_room_type.")
+                         "launch.default_room_type. Forwarded verbatim as "
+                         "terrarium_boot's own --room.")
+    ap.add_argument("--config", default=None, metavar="PATH",
+                    help="The terrarium.toml to boot against, forwarded "
+                         "verbatim to terrarium_boot. Default: "
+                         "terrarium_boot's own default (terrarium.toml in "
+                         "the current directory).")
     ap.add_argument("--bit", default=None,
                     help="Which Bit to run, by its discovered manifest name "
                          "(bits/*/bit.toml). See --list-bits for what's "
@@ -678,7 +707,7 @@ def parse_args(argv=None):
 
 
 def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
-    registry = registry if registry is not None else BitRegistry.discover()
+    registry = registry if registry is not None else discover_registry(args.config)
 
     profile = RunProfile()
     if args.profile is not None:
@@ -704,7 +733,7 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
     devices = (args.devices if args.devices is not None
                else profile.devices if profile.devices is not None
                else bit_cfg.launch.default_devices)
-    room_type = args.room_type or profile.room_type or bit_cfg.launch.default_room_type
+    room_type = args.room or profile.room_type or bit_cfg.launch.default_room_type
 
     log_dir = args.log_dir or os.path.join(
         "runs", time.strftime("%Y%m%d-%H%M%S"))
@@ -741,7 +770,7 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         devices=devices, ensemble=args.ensemble,
         setup_seconds=args.setup_seconds, seconds=seconds,
         horizon=args.horizon, echo=not args.ci,
-        console_port=console_port, room_type=room_type,
+        console_port=console_port, room_type=room_type, config=args.config,
         bit=bit, node=node, node_explicit=args.node is not None,
         devices_explicit=args.devices is not None,
         open_urls=args.open, profile=args.profile,
@@ -801,7 +830,7 @@ def main() -> None:
     args = parse_args()
 
     if args.list_bits:
-        registry = BitRegistry.discover()
+        registry = discover_registry(args.config)
         for row in registry.list_view(include_hidden=True):
             rooms = ",".join(row["room_types"])
             print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"

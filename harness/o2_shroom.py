@@ -316,11 +316,10 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     else:
         if fixture is None:
             raise ValueError("room_type requires fixture")
-        from control.room_profile import room_profile
-        from control.rooms import RoomType
+        from control.terrarium_config import load_terrarium_config
         from harness.room_surface import to_fixture_capability
 
-        profile = room_profile(RoomType[room_type])
+        profile = load_terrarium_config("terrarium.toml").rooms[room_type].profile
         capability = to_fixture_capability(profile, fixture)
         channels = capability.pixel_count * 3
 
@@ -401,7 +400,7 @@ def main() -> None:
                              "is spawned, so there is no node to tap "
                              "(harness/room_simulator.py's rule, reused).")
     parser.add_argument("--room-type", default=None,
-                        help="Render this RoomType's surface instead of a "
+                        help="Render this Room's (a name in terrarium.toml) surface instead of a "
                              "Tuneshroom's. Only meaningful with --no-join, "
                              "which is how this module serves as the Room "
                              "simulator on the o2lite path.")

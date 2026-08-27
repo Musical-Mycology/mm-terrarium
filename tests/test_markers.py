@@ -106,6 +106,13 @@ def test_room_url_marker_is_distinct_from_every_other_marker():
         assert not other.startswith(markers.ROOM_URL)
 
 
+def test_control_room_loaded_and_unloaded_marker_values():
+    """Pinned literal values -- a reworded print is a hang, not a test
+    failure, unless this pins the exact string run_stack watches for."""
+    assert markers.CONTROL_ROOM_LOADED == "room loaded:"
+    assert markers.CONTROL_ROOM_UNLOADED == "room unloaded:"
+
+
 def _module_for(name: str):
     import harness.o2_shroom
     import harness.terrarium_boot

@@ -1,7 +1,6 @@
 from bits.test.test_bit import TestBit
 from control.cues import ROOM, FireTrigger, MuteCue
 from control.roles import RoleClass
-from control.rooms import room_role_name, RoomType
 from control.triggers import TriggerTarget, validate_trigger_table
 
 
@@ -183,40 +182,28 @@ def test_gesture_handlers_tolerate_short_args():
     assert bit.verb_handlers()["shake"]("ie1", ["ie1"], 0.0) is not None
 
 
-def test_test_bit_declares_a_room_test_role():
+def test_test_bit_declares_room_manifests():
+    """TestBit's own role_table no longer carries a ROOM role: the engine
+    synthesizes it (control/engine.py's load_bit) from room_manifests()
+    plus whichever Room is active. See control/bit.py's room_manifests
+    docstring."""
     bit = TestBit()
-    name = room_role_name(RoomType.TEST)
-    role = bit.role_table.roles[name]
-    assert role.role_class == RoleClass.ROOM
-    assert role.light_manifest["instruments"]
-    assert role.ugen_manifest["instruments"]
-
-
-def test_test_bit_room_node_is_registered():
-    from control.rooms import ROOM_NODE_IDS
-    bit = TestBit()
-    node = ROOM_NODE_IDS[RoomType.TEST]
-    assert room_role_name(RoomType.TEST) in bit.role_table.node_map[node]
+    light, ugen = bit.room_manifests()
+    assert light["instruments"]
+    assert ugen["instruments"]
 
 
 def test_test_bit_supports_test_and_demo_rooms():
-    assert TestBit.room_types == {RoomType.TEST, RoomType.DEMO}
+    assert TestBit.room_types == {"TEST", "DEMO"}
 
 
-def test_test_bit_declares_a_room_role_per_supported_room_type():
+def test_test_bit_role_table_declares_no_room_role_itself():
+    """capacity and node id are config data the engine holds now (each
+    Room's own fixture count and node_id), not something a Bit builds --
+    see control/rooms.py:room_role and control/engine.py's load_bit."""
     table = TestBit().role_table
-    assert "room_test" in table.roles
-    assert "room_demo" in table.roles
-    assert table.node_map["ROOM_TEST_NODE"] == ["room_test"]
-    assert table.node_map["ROOM_DEMO_NODE"] == ["room_demo"]
-    # Same declared instruments: an instrument targets primary/zones,
-    # never blocks, so nothing about the declaration is room-specific.
-    assert (table.roles["room_test"].light_manifest
-            == table.roles["room_demo"].light_manifest)
-    # capacity is each profile's own fixture count (room_role reads it off
-    # the profile): TEST has 2 fixtures, DEMO has 1.
-    assert table.roles["room_test"].capacity == 2
-    assert table.roles["room_demo"].capacity == 1
+    assert "room_test" not in table.roles
+    assert "room_demo" not in table.roles
 
 
 def test_tilt_drives_the_calling_device_and_the_room_at_one_time():

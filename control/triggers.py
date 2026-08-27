@@ -131,6 +131,7 @@ class TriggerFired:
     devs: tuple[str, ...]
     at: float
     steps: int
+    room_name: str | None = None
 
 
 def validate_trigger_table(trigger_table, verb_names) -> None:

@@ -11,19 +11,28 @@ from uplink.protocol import (  # re-exported: single source of truth
     AbortCommand,
     ListBitsCommand,
     LoadBitCommand,
+    LoadRoomCommand,
     RunCommand,
+    UnloadRoomCommand,
     bit_completed_event,
     bits_listed_event,
     error_event,
     parse_command,
     registration_changed_event,
+    room_load_failed_event,
+    room_load_progress_event,
+    room_loaded_event,
+    room_unloaded_event,
     state_changed_event,
 )
 
 __all__ = [
     "AbortCommand", "ListBitsCommand", "LoadBitCommand", "RunCommand",
+    "LoadRoomCommand", "UnloadRoomCommand",
     "parse_command", "bit_completed_event", "bits_listed_event",
     "error_event", "registration_changed_event",
+    "room_loaded_event", "room_unloaded_event", "room_load_failed_event",
+    "room_load_progress_event",
     "state_changed_event", "role_view", "device_view", "snapshot_event",
     "devices_changed_event", "bit_status_event", "log_event",
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
@@ -51,7 +60,7 @@ def device_view(info, role_name, url=None, muted=False) -> dict:
 
 def snapshot_event(*, state, installed_bits, loaded_bit, roles,
                    registration, devices, bit_status, room=None,
-                   triggers=None) -> dict:
+                   triggers=None, terrarium_state=None, rooms=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
@@ -63,6 +72,8 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "bit_status": bit_status,
         "room": room,
         "triggers": triggers or [],
+        "terrarium_state": terrarium_state,
+        "rooms": rooms or [],
     }
 
 

@@ -5,9 +5,16 @@ import pathlib
 
 import pytest
 
-from control.room_profile import (ROOM_PROFILES, RoomBlock, RoomFixture,
-                                  RoomProfile, RoomZone, room_profile)
-from control.rooms import RoomType
+from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
+                                  RoomZone)
+from control.terrarium_config import load_terrarium_config
+
+
+def room_profile(name: str) -> RoomProfile:
+    """This module's own tests exercise RoomProfile's shape validation
+    plus, for the shipped TEST/DEMO rooms, that terrarium.toml still
+    describes the same fixtures the old code-owned registry used to."""
+    return load_terrarium_config("terrarium.toml").rooms[name].profile
 
 
 def _fixture(name="main", blocks=None, zones=(), color_order="GRB"):
@@ -18,44 +25,44 @@ def _fixture(name="main", blocks=None, zones=(), color_order="GRB"):
 
 
 def test_test_room_declares_two_asymmetric_fixtures():
-    profile = room_profile(RoomType.TEST)
+    profile = room_profile("TEST")
     assert profile.surface_id == "room_test"
     assert [f.name for f in profile.fixtures] == ["main", "accent"]
     assert [f.pixel_count for f in profile.fixtures] == [60, 30]
 
 
 def test_main_fixture_keeps_the_original_three_zones():
-    main = room_profile(RoomType.TEST).fixtures[0]
+    main = room_profile("TEST").fixtures[0]
     assert [z.name for z in main.zones] == ["left", "center", "right"]
     assert [(z.start, z.count) for z in main.zones] == [(0, 20), (20, 20), (40, 20)]
 
 
 def test_accent_fixture_has_its_own_two_zones():
-    accent = room_profile(RoomType.TEST).fixtures[1]
+    accent = room_profile("TEST").fixtures[1]
     assert [z.name for z in accent.zones] == ["low", "high"]
     assert [(z.start, z.count) for z in accent.zones] == [(0, 15), (15, 15)]
 
 
 def test_pixel_count_sums_every_fixture():
-    assert room_profile(RoomType.TEST).pixel_count == 90
+    assert room_profile("TEST").pixel_count == 90
 
 
 def test_channel_count_is_three_per_pixel_of_the_whole_profile():
-    assert room_profile(RoomType.TEST).channel_count == 270
+    assert room_profile("TEST").channel_count == 270
 
 
 def test_color_order_is_the_shared_order():
-    assert room_profile(RoomType.TEST).color_order == "GRB"
+    assert room_profile("TEST").color_order == "GRB"
 
 
 def test_zones_are_namespaced_by_fixture():
-    names = [z.name for z in room_profile(RoomType.TEST).zones]
+    names = [z.name for z in room_profile("TEST").zones]
     assert names == ["main.left", "main.center", "main.right",
                      "accent.low", "accent.high"]
 
 
 def test_zones_are_offset_into_the_concatenated_surface():
-    zones = {z.name: (z.start, z.count) for z in room_profile(RoomType.TEST).zones}
+    zones = {z.name: (z.start, z.count) for z in room_profile("TEST").zones}
     assert zones["main.left"] == (0, 20)
     assert zones["main.right"] == (40, 20)
     assert zones["accent.low"] == (60, 15)   # offset past main's 60 px
@@ -67,7 +74,7 @@ def test_test_rooms_declared_zones_happen_to_tile_gaplessly():
     invariant -- see test_zones_need_not_be_declared_in_position_order_or_
     tile_gaplessly below for what validation actually requires (no overlap,
     no overrun)."""
-    profile = room_profile(RoomType.TEST)
+    profile = room_profile("TEST")
     cursor = 0
     for zone in profile.zones:
         assert zone.start == cursor, f"zone {zone.name} does not abut its predecessor"
@@ -76,7 +83,7 @@ def test_test_rooms_declared_zones_happen_to_tile_gaplessly():
 
 
 def test_fixture_slices_are_channel_offsets_in_declaration_order():
-    slices = room_profile(RoomType.TEST).fixture_slices()
+    slices = room_profile("TEST").fixture_slices()
     assert slices == (("main", 0, 180), ("accent", 180, 90))
 
 
@@ -84,13 +91,13 @@ def test_primary_is_not_declared_here():
     """luxaeterna's SurfaceCapability.zone() synthesizes `primary` on demand,
     and harness/room_surface.py appends it. Declaring it here would make it a
     real zone that the Console would draw on top of every other one."""
-    assert "primary" not in [z.name for z in room_profile(RoomType.TEST).zones]
+    assert "primary" not in [z.name for z in room_profile("TEST").zones]
 
 
 def test_demo_profile_matches_the_real_array_scale():
     """864 px = 6 m x 144 LED/m, the real Terrarium array
     (MM_HARDWARE_DESIGN.md section 7.1), one block per meter run."""
-    profile = room_profile(RoomType.DEMO)
+    profile = room_profile("DEMO")
     assert profile.surface_id == "room_demo"
     (array,) = profile.fixtures
     assert array.name == "array"          # matches tests/test_room_binding.py
@@ -105,28 +112,22 @@ def test_demo_profile_matches_the_real_array_scale():
 def test_demo_zones_and_blocks_are_independent_axes():
     """3 zones over 6 blocks, deliberately not 1:1 -- zones target
     gameplay, blocks describe hardware (spec section 2.1)."""
-    (array,) = room_profile(RoomType.DEMO).fixtures
+    (array,) = room_profile("DEMO").fixtures
     zone_bounds = {(z.start, z.start + z.count) for z in array.zones}
     block_bounds = {(b.start, b.start + b.count) for b in array.blocks}
     assert zone_bounds != block_bounds
 
 
 def test_profile_is_immutable():
-    profile = room_profile(RoomType.TEST)
+    profile = room_profile("TEST")
     with pytest.raises(Exception):
         profile.fixtures = ()
 
 
 def test_fixture_is_immutable():
-    fixture = room_profile(RoomType.TEST).fixtures[0]
+    fixture = room_profile("TEST").fixtures[0]
     with pytest.raises(Exception):
         fixture.pixel_count = 99
-
-
-def test_every_room_type_key_maps_to_a_room_profile():
-    for key, value in ROOM_PROFILES.items():
-        assert isinstance(key, RoomType)
-        assert isinstance(value, RoomProfile)
 
 
 def test_zone_is_a_plain_value():
@@ -234,7 +235,7 @@ def test_zero_or_negative_block_count_is_refused():
 
 
 def test_test_profile_declares_explicit_blocks():
-    profile = room_profile(RoomType.TEST)
+    profile = room_profile("TEST")
     main, accent = profile.fixtures
     assert [b.name for b in main.blocks] == ["main"]
     assert main.pixel_count == 60

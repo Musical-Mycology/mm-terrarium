@@ -51,6 +51,35 @@ def test_snapshot_event_shape():
     assert msg["registration"] == [{"role": "player"}]
     assert msg["devices"] == [{"dev": "ie3"}]
     assert msg["bit_status"] == {"elapsed": 0.0}
+    assert msg["terrarium_state"] is None
+    assert msg["rooms"] == []
+
+
+def test_snapshot_carries_terrarium_state_and_rooms():
+    rooms = [{"name": "greenhouse", "description": "the greenhouse",
+             "status": None, "active": True}]
+    msg = protocol.snapshot_event(
+        state="SETUP", installed_bits=["TestBit"], loaded_bit="TestBit",
+        roles=[], registration=[], devices=[], bit_status={},
+        terrarium_state="ROOM_READY", rooms=rooms)
+    assert msg["terrarium_state"] == "ROOM_READY"
+    assert msg["rooms"] == rooms
+
+
+def test_room_lifecycle_events_are_reused_from_uplink():
+    from uplink.protocol import (
+        room_load_failed_event, room_load_progress_event, room_loaded_event,
+        room_unloaded_event)
+    assert protocol.room_loaded_event is room_loaded_event
+    assert protocol.room_unloaded_event is room_unloaded_event
+    assert protocol.room_load_failed_event is room_load_failed_event
+    assert protocol.room_load_progress_event is room_load_progress_event
+
+
+def test_room_commands_are_reused_from_uplink():
+    from uplink.protocol import LoadRoomCommand, UnloadRoomCommand
+    assert protocol.LoadRoomCommand is LoadRoomCommand
+    assert protocol.UnloadRoomCommand is UnloadRoomCommand
 
 
 def test_incremental_event_shapes():

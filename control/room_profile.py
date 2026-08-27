@@ -13,8 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from control.rooms import RoomType
-
 # A single luxaeterna Universe is 512 DMX channels, so one BLOCK -- one
 # physical LED device / one controller's worth -- caps at 170 px RGB (see
 # RoomBlock). A whole profile may exceed this by declaring more blocks;
@@ -195,67 +193,3 @@ class RoomProfile:
             out.append((fixture.name, offset * 3, fixture.pixel_count * 3))
             offset += fixture.pixel_count
         return tuple(out)
-
-
-# Linear because the real Terrarium array is a single 6 m run, not a ring and
-# a stem. Two fixtures, deliberately asymmetric: the smallest N that
-# exercises fan-out, distinct service names, distinct frame widths and
-# namespaced zones, with asymmetry so same-shape assumptions cannot hide.
-# `main` is the original single-fixture TEST surface, unchanged in shape;
-# `accent` is new.
-ROOM_PROFILES: dict[RoomType, RoomProfile] = {
-    RoomType.TEST: RoomProfile(
-        surface_id="room_test",
-        fixtures=(
-            RoomFixture(
-                name="main", color_order="GRB",
-                blocks=(RoomBlock("main", 0, 60),),
-                zones=(RoomZone("left", 0, 20),
-                      RoomZone("center", 20, 20),
-                      RoomZone("right", 40, 20))),
-            RoomFixture(
-                name="accent", color_order="GRB",
-                blocks=(RoomBlock("accent", 0, 30),),
-                zones=(RoomZone("low", 0, 15),
-                      RoomZone("high", 15, 15))),
-        ),
-    ),
-    RoomType.DEMO: RoomProfile(
-        surface_id="room_demo",
-        fixtures=(
-            RoomFixture(
-                name="array", color_order="GRB",
-                # 144 LED/m x 6 m real array (MM_HARDWARE_DESIGN.md
-                # section 7.1), one block per physical meter run. Synthetic
-                # backend, real scale: unlocked by the per-block cap.
-                blocks=(
-                    RoomBlock("m1", 0, 144), RoomBlock("m2", 144, 144),
-                    RoomBlock("m3", 288, 144), RoomBlock("m4", 432, 144),
-                    RoomBlock("m5", 576, 144), RoomBlock("m6", 720, 144),
-                ),
-                # Gameplay/Console targeting thirds -- deliberately not 1:1
-                # with the 6 blocks: zones and blocks are different axes.
-                zones=(RoomZone("left", 0, 288),
-                      RoomZone("center", 288, 288),
-                      RoomZone("right", 576, 288)),
-            ),
-        ),
-    ),
-}
-
-
-def room_profile(room_type: RoomType) -> RoomProfile:
-    """This Room type's fixture declaration.
-
-    Raises rather than substituting a default, matching
-    control/rooms.py's resolve_room_type(): a Terrarium that cannot render the
-    Room it was configured for must fail at boot, not render the wrong thing
-    all night.
-    """
-    try:
-        return ROOM_PROFILES[room_type]
-    except KeyError:
-        raise NotImplementedError(
-            f"{room_type.name} has no room profile; only "
-            f"{', '.join(t.name for t in ROOM_PROFILES)} is implemented"
-        ) from None

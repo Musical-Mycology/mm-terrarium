@@ -1,4 +1,4 @@
-"""MetronomeBit: a call-and-response metronome game for RoomType.DEMO.
+"""MetronomeBit: a call-and-response metronome game for the DEMO Room.
 
 See docs/superpowers/specs/2026-08-20-metronome-bit-design.md. This module
 carries only the static declarations (roles, manifests, triggers) plus the
@@ -12,7 +12,6 @@ import random
 from control.bit import Bit
 from control.cues import ROOM, TARGET, FireTrigger, LightCue
 from control.roles import Role, RoleClass, RoleTable
-from control.rooms import RoomType, room_role
 from control.triggers import (
     Condition,
     ConditionSource,
@@ -77,7 +76,7 @@ RAINBOW_LEVEL_CC = 21        # room rainbow's level lane (finale only)
 
 class MetronomeBit(Bit):
     version = "0.1"
-    room_types = {RoomType.DEMO}
+    room_types = {"DEMO"}
 
     BEAT_S = BEAT_S
     BEATS_PER_CYCLE = BEATS_PER_CYCLE
@@ -140,6 +139,11 @@ class MetronomeBit(Bit):
                 ],
             },
         )
+        roles = {"player": player}
+        node_map = {"METRO_PLAYER_NODE": ["player"]}
+        return RoleTable(roles=roles, node_map=node_map)
+
+    def room_manifests(self) -> tuple[dict, dict]:
         room_light = {
             "instruments": [
                 {"instrument": "aurora", "target": "primary",
@@ -163,11 +167,7 @@ class MetronomeBit(Bit):
                            {"source": "cc:11", "dest": "cc:11"}]},
             ],
         }
-        room_name, room, room_node = room_role(
-            RoomType.DEMO, light_manifest=room_light, ugen_manifest=room_ugen)
-        roles = {"player": player, room_name: room}
-        node_map = {"METRO_PLAYER_NODE": ["player"], room_node: [room_name]}
-        return RoleTable(roles=roles, node_map=node_map)
+        return room_light, room_ugen
 
     @property
     def trigger_table(self) -> TriggerTable:

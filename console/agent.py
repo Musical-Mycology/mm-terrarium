@@ -12,10 +12,11 @@ from console import protocol
 from control.bit_config import ManifestError
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.roles import RoleClass
-from control.room_profile import room_profile
 from control.room_view import room_view
-from control.rooms import RoomType, non_room_counts, room_role_name
+from control.rooms import non_room_counts, room_role_name
 from control.state import State
+from control.terrarium import TerrariumState
+from control.terrarium_config import validate_rooms
 from control.trigger_view import trigger_fired_view, triggers_view
 from control.triggers import FIRED_BY_ADMIN_MANUAL
 
@@ -30,10 +31,21 @@ ROOM_FRAME_INTERVAL = 0.1
 
 class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_bridge=None,
-                 clock=time.monotonic, registry=None, canvas_urls=None):
+                 clock=time.monotonic, registry=None, canvas_urls=None,
+                 terrarium=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
+        # Optional Terrarium (control/terrarium.py), the room-level lifecycle
+        # sitting above GameServer. None (every pre-Task-6 caller) means no
+        # room commands, no terrarium-state gating, and an all-None/empty
+        # rooms snapshot -- zero behavior change.
+        self.terrarium = terrarium
+        # Set only while a room_load_failed broadcast has already been sent
+        # by _load_room(); on_terrarium_state_change checks this to skip its
+        # own room_unloaded broadcast for that same NO_ROOM entry. See
+        # on_terrarium_state_change's docstring.
+        self._unloading_room_name: str | None = None
         # Optional Callable[[], dict] of dev -> reported canvas URL, from
         # DeviceLinkAgent.canvas_urls(). None (a GameServer built without a
         # DeviceLinkAgent) yields no URLs anywhere in the Console's views.
@@ -56,6 +68,8 @@ class ConsoleAgent:
         self._pending_room_frames: dict[str, bytes] = {}
         self._last_room_frame_at = 0.0
         game_server.add_observer(self)
+        if terrarium is not None:
+            terrarium.add_observer(self)
 
     # --- driven once per tick-loop iteration -------------------------------
     def poll(self) -> None:
@@ -93,8 +107,25 @@ class ConsoleAgent:
                 return protocol.error_event(name, "no registry")
             return protocol.bits_listed_event(
                 self.registry.list_view(), self.registry.errors_view())
+        if isinstance(command, protocol.LoadRoomCommand):
+            if self.terrarium is None:
+                return protocol.error_event(name, "no terrarium")
+            reason = self._load_room(command.name)
+            if reason is not None:
+                return protocol.error_event(name, reason)
+            return None
+        if isinstance(command, protocol.UnloadRoomCommand):
+            if self.terrarium is None:
+                return protocol.error_event(name, "no terrarium")
+            reason = self.terrarium.unload_room(force=command.force)
+            if reason is not None:
+                return protocol.error_event(name, reason)
+            return None
         try:
             if isinstance(command, protocol.LoadBitCommand):
+                if (self.terrarium is not None
+                        and self.terrarium.state is not TerrariumState.ROOM_READY):
+                    return protocol.error_event(name, "no room loaded")
                 if self.registry is None:
                     self.game_server.load_bit(command.name)
                 else:
@@ -112,6 +143,17 @@ class ConsoleAgent:
             return protocol.error_event(name, str(exc))
         return None
 
+    def _load_room(self, name: str) -> str | None:
+        """Drives terrarium.load_room and, on refusal, broadcasts
+        room_load_failed_event itself -- see on_terrarium_state_change's
+        docstring for why this can't be left to the generic observer path.
+        Returns the refusal reason (None on success) for the caller to turn
+        into an error_event sent to the requesting client only."""
+        reason = self.terrarium.load_room(name)
+        if reason is not None:
+            self.server.broadcast(protocol.room_load_failed_event(name, reason))
+        return reason
+
     def _handle_admin_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
         try:
@@ -127,19 +169,15 @@ class ConsoleAgent:
             if reason is not None:
                 return protocol.error_event(name, reason)
             return None
-        try:
-            room_type = RoomType[command.room_type]
-        except KeyError:
-            return protocol.error_event(
-                name, f"unknown room_type {command.room_type!r}")
+        room_name = command.room_type
         gs = self.game_server
-        if gs.room_binding is None or gs.room is None or gs.room.room_type != room_type:
+        if gs.room_binding is None or gs.room is None or gs.room.name != room_name:
             return protocol.error_event(
-                name, f"no {command.room_type} Room configured")
+                name, f"no {room_name} Room configured")
         if isinstance(command, protocol.ArmRoomCommand):
-            gs.room_binding.arm(room_type, command.fixture, command.window_seconds)
+            gs.room_binding.arm(room_name, command.fixture, command.window_seconds)
         elif isinstance(command, protocol.ReleaseRoomCommand):
-            gs.room_binding.release(room_type, command.fixture)
+            gs.room_binding.release(room_name, command.fixture)
         return None
 
     # --- snapshot (connect-time full read model) ---------------------------
@@ -167,7 +205,27 @@ class ConsoleAgent:
             bit_status=self._current_status(),
             room=self._last_room,
             triggers=self._last_triggers,
+            terrarium_state=(
+                self.terrarium.state.name if self.terrarium is not None else None),
+            rooms=self._rooms_view(),
         )
+
+    def _rooms_view(self) -> list:
+        """The rooms panel's read model: every configured room, its
+        boot-time loadability from validate_rooms, and whether it is the
+        one currently active. Empty when no Terrarium is wired up."""
+        if self.terrarium is None:
+            return []
+        reasons = validate_rooms(
+            self.terrarium.config,
+            array_backend_configured=self.terrarium.boot_config.array_backend_configured)
+        active_name = (
+            self.terrarium.room.name if self.terrarium.room is not None else None)
+        return [
+            {"name": name, "description": spec.description,
+             "status": reasons.get(name), "active": name == active_name}
+            for name, spec in self.terrarium.config.rooms.items()
+        ]
 
     def _current_room(self) -> dict | None:
         """Build the Room panel payload, or None when no Room is configured.
@@ -179,16 +237,20 @@ class ConsoleAgent:
         gs = self.game_server
         if gs.room is None:
             return None
-        try:
-            profile = room_profile(gs.room.room_type)
-        except NotImplementedError:
-            logger.warning("no room profile for %s; Room panel disabled",
-                           gs.room.room_type.name)
-            return None
+        profile = gs.room.profile
         role = None
-        if gs.bit is not None:
-            role = gs.bit.role_table.roles.get(room_role_name(gs.room.room_type))
-        controllers = getattr(self._room_bridge, "controllers", {}) or {}
+        if gs.bit is not None and gs.registration is not None:
+            role = gs.registration.role_table.roles.get(room_role_name(gs.room.name))
+        # Live off `terrarium.room_bridge` when a Terrarium is wired, not
+        # the frozen `self._room_bridge` snapshot from __init__: a Room
+        # loaded AFTER construction (a NO_ROOM boot's Console `load_room`)
+        # leaves `self._room_bridge` at whatever it was then -- None, for a
+        # NO_ROOM boot -- and this panel's controllers read-out would stay
+        # permanently empty otherwise. Falls back to the __init__ snapshot
+        # for a caller with no Terrarium (pre-Task-6 construction shape).
+        room_bridge = (self.terrarium.room_bridge if self.terrarium is not None
+                      else self._room_bridge)
+        controllers = getattr(room_bridge, "controllers", {}) or {}
         urls = self._canvas_urls() if self._canvas_urls else {}
         return room_view(gs.room, profile, role, controllers, urls)
 
@@ -273,10 +335,53 @@ class ConsoleAgent:
 
     # --- engine observer callbacks -----------------------------------------
     def on_state_change(self, old_state: State, new_state: State) -> None:
-        self.server.broadcast(
-            protocol.state_changed_event(new_state.name, self.game_server.bit_name))
+        terrarium_state = (
+            self.terrarium.state.name if self.terrarium is not None else None)
+        self.server.broadcast(protocol.state_changed_event(
+            new_state.name, self.game_server.bit_name,
+            terrarium_state=terrarium_state))
         if new_state == State.UNLOADING:
             self._broadcast_bit_completed()
+
+    # --- terrarium observer callbacks ---------------------------------------
+    def on_terrarium_state_change(self, old_state: TerrariumState,
+                                  new_state: TerrariumState) -> None:
+        """Terrarium observer hook (control/terrarium.py). Broadcasts the
+        engine-shaped state_changed_event (stamped with the new terrarium
+        state) plus a room lifecycle event on entering ROOM_READY or
+        NO_ROOM.
+
+        A load FAILURE also lands back in NO_ROOM (ROOM_LOADING ->
+        NO_ROOM), but that must broadcast room_load_failed_event, not
+        room_unloaded_event -- and this callback fires synchronously from
+        inside terrarium.load_room(), before that call has returned the
+        refusal reason to its caller, so it cannot tell load-failure and
+        load-success-then-unload apart from state alone. _load_room()
+        (the command path's only caller of terrarium.load_room) broadcasts
+        room_load_failed_event itself once the reason comes back, so this
+        callback only broadcasts room_unloaded_event for a NO_ROOM entry
+        reached via ROOM_UNLOADING (a normal unload), never via
+        ROOM_LOADING (a load failure)."""
+        gs = self.game_server
+        self.server.broadcast(protocol.state_changed_event(
+            gs.state.name, gs.bit_name, terrarium_state=new_state.name))
+        if new_state == TerrariumState.ROOM_READY:
+            if self.terrarium.room is not None:
+                self.server.broadcast(
+                    protocol.room_loaded_event(self.terrarium.room.name))
+        elif new_state == TerrariumState.ROOM_UNLOADING:
+            self._unloading_room_name = (
+                self.terrarium.room.name if self.terrarium.room is not None else None)
+        elif new_state == TerrariumState.NO_ROOM:
+            if old_state == TerrariumState.ROOM_UNLOADING:
+                name, self._unloading_room_name = self._unloading_room_name, None
+                if name is not None:
+                    self.server.broadcast(protocol.room_unloaded_event(name))
+            else:
+                self._unloading_room_name = None
+
+    def on_room_load_progress(self, stage: str) -> None:
+        self.server.broadcast(protocol.room_load_progress_event(stage))
 
     def on_registration_change(self) -> None:
         self.server.broadcast(
@@ -304,4 +409,7 @@ class ConsoleAgent:
             return
         if result is not None:
             self.server.broadcast(protocol.bit_completed_event(
-                result, self.game_server.bit_name or "", bit.version))
+                result, self.game_server.bit_name or "", bit.version,
+                room_name=self.game_server.provenance.get("room_name"),
+                terrarium_config_version=self.game_server.provenance.get(
+                    "terrarium_config_version")))

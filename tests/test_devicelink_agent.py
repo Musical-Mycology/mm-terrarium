@@ -15,7 +15,11 @@ from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_bridge import FakeRoomAudioSink, FakeRoomLightSink, RoomBridge
-from control.rooms import Room, RoomType
+from control.rooms import Room
+from control.terrarium_config import load_terrarium_config
+
+TEST_PROFILE = load_terrarium_config("terrarium.toml").rooms["TEST"].profile
+DEMO_PROFILE = load_terrarium_config("terrarium.toml").rooms["DEMO"].profile
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
 
@@ -568,11 +572,11 @@ def _room_ready_game_server(bound=None):
         bound = {"main": "sim-room-main"}
     binding = RoomBindingRegistry()
     gs = GameServer({"TestBit": TestBit}, room_binding=binding)
-    gs.room = Room(room_type=RoomType.TEST)
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
     gs.load_bit("TestBit")
     for fixture, dev in bound.items():
         gs.room.bound[fixture] = dev
-        binding.bind(RoomType.TEST, fixture, dev)
+        binding.bind("TEST", fixture, dev)
     return gs
 
 
@@ -586,11 +590,11 @@ def _demo_room_ready_game_server(bound=None):
         bound = {"array": "sim-room-array"}
     binding = RoomBindingRegistry()
     gs = GameServer({"TestBit": TestBit}, room_binding=binding)
-    gs.room = Room(room_type=RoomType.DEMO)
+    gs.room = Room(name="DEMO", profile=DEMO_PROFILE, node_id="ROOM_DEMO_NODE")
     gs.load_bit("TestBit")
     for fixture, dev in bound.items():
         gs.room.bound[fixture] = dev
-        binding.bind(RoomType.DEMO, fixture, dev)
+        binding.bind("DEMO", fixture, dev)
     return gs
 
 
@@ -601,8 +605,6 @@ def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
     hardcoded 512-channel Universe, so every render_into() call raised
     ChannelError -- caught and silently swallowed by _render_room(), so the
     Room's light never rendered a single frame against a real Arco."""
-    from control.room_profile import room_profile
-
     gs = _demo_room_ready_game_server()
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server)
@@ -610,7 +612,7 @@ def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
 
     assert agent._room_light is not None
     universe = agent._room_light.universe
-    assert len(universe) == room_profile(RoomType.DEMO).channel_count
+    assert len(universe) == DEMO_PROFILE.channel_count
 
     agent._render_room()   # must not raise, and must actually send a frame
 
@@ -969,11 +971,10 @@ def test_room_session_is_built_from_the_whole_concatenated_profile():
     SEND is scoped to bound fixtures. This is what lets a spatial instrument
     (e.g. luxaeterna's rainbow) paint one gradient across every fixture from
     one declaration."""
-    from control.room_profile import room_profile
     gs = _room_ready_game_server()
     agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
 
-    assert agent._room_profile == room_profile(RoomType.TEST)
+    assert agent._room_profile == TEST_PROFILE
     assert agent._room_light.session.cap.pixel_count == 90
     assert agent._room_light.session.cap.surface_id == "room_test"
 
@@ -985,7 +986,6 @@ def test_player_devices_still_get_the_shroom_capability():
 
 
 def test_room_frame_is_the_bound_fixtures_own_width_not_the_whole_profile():
-    from control.room_profile import room_profile
     gs = _room_ready_game_server()
     server = FakeServer()
     server.bind_dev("sim-room-main", "c-room")
@@ -996,7 +996,7 @@ def test_room_frame_is_the_bound_fixtures_own_width_not_the_whole_profile():
 
     frames = [m for dev, m in server.sent if m["address"] == "/sim-room-main/leds"]
     assert frames, "the Room emitted no frame for its bound fixture"
-    main = next(f for f in room_profile(RoomType.TEST).fixtures if f.name == "main")
+    main = next(f for f in TEST_PROFILE.fixtures if f.name == "main")
     assert len(frames[-1]["args"][0]) == main.pixel_count * 3
     assert len(frames[-1]["args"][0]) == 180
 
@@ -1151,6 +1151,47 @@ def test_no_room_configured_leaves_the_profile_unset():
     agent = DeviceLinkAgent(gs, FakeServer())
     assert agent._room_profile is None
     assert agent._room_light is None
+
+
+def test_rewire_room_builds_the_session_after_a_no_room_boot():
+    """harness/terrarium_boot.py's NO_ROOM boot constructs this agent
+    BEFORE any Room exists (room_bridge=None): _setup_room() at __init__
+    time is a no-op then, same as test_no_room_configured_leaves_the_profile
+    _unset above. rewire_room() is what a later Console `load_room` drives
+    (via the harness's own Terrarium observer) -- re-running Room setup now
+    that gs.room/gs.bit both actually exist, exactly as if boot() had
+    always known about them."""
+    gs = GameServer({"TestBit": TestBit})
+    agent = DeviceLinkAgent(gs, FakeServer())
+    assert agent._room_light is None
+    assert agent.room_bridge is None
+
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    gs.room.bound["main"] = "sim-room-main"
+    gs.load_bit("TestBit")
+    room_bridge = RoomBridge()
+
+    agent.rewire_room(room_bridge)
+
+    assert agent.room_bridge is room_bridge
+    assert agent._room_light is not None
+    assert agent._room_profile is not None
+    assert room_bridge.dev == "sim-room-main"
+
+
+def test_unwire_room_clears_a_previously_wired_session():
+    """The NO_ROOM-entry counterpart: a Console `unload_room` must not
+    leave a stale session/bridge/profile behind for the next NO_ROOM wait
+    (or a subsequent, differently-shaped Room) to render against."""
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+    assert agent._room_light is not None
+
+    agent.unwire_room()
+
+    assert agent._room_light is None
+    assert agent.room_bridge is None
+    assert agent._room_profile is None
 
 
 # --- Room frame relay to the Console: an optional, guarded, best-effort

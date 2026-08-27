@@ -114,7 +114,7 @@ def room_view(room, profile, role, controllers: dict, canvas_urls=None) -> dict 
         instruments = (_light_instruments(role.light_manifest or {})
                        + _audio_instruments(role.ugen_manifest or {}))
     return {
-        "room_type": room.room_type.name,
+        "room_type": room.name,
         "fixtures": fixtures_view(profile, room, canvas_urls),
         "capability": capability_view(profile),
         "instruments": instruments,

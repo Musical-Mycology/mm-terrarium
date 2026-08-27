@@ -244,6 +244,36 @@ def test_compose_never_aliases_the_authored_declaration():
     assert role.welcome["light"]["params"]["b"] == 2
 
 
+def test_compose_without_provenance_is_byte_identical_to_pre_room_shape():
+    """Pins the pre-Room wire shape via raw wire_json.dumps text: a Bit
+    loaded outside a Room (or before this feature existed) must produce
+    the exact same bytes on the wire, so neither key may appear absent an
+    explicit room_name/terrarium_config_version."""
+    from control.wire_json import dumps
+    config = compose_role_config("test_bit", "", make_role())
+    assert dumps(config, sort_keys=True) == (
+        '{"class": "SHARED", "light_manifest": {"bit_name": "test_bit", '
+        '"bit_version": "", "role": "player"}, "role": "player", '
+        '"samples": [], "scored": true, "uses": []}')
+    assert "room_name" not in config
+    assert "terrarium_config_version" not in config
+
+
+def test_compose_stamps_room_provenance_when_given():
+    config = compose_role_config("test_bit", "", make_role(),
+                                 room_name="atrium",
+                                 terrarium_config_version="1-abcdef012345")
+    assert config["room_name"] == "atrium"
+    assert config["terrarium_config_version"] == "1-abcdef012345"
+
+
+def test_compose_room_provenance_defaults_to_none_and_is_omitted():
+    config = compose_role_config("test_bit", "", make_role(), room_name=None,
+                                 terrarium_config_version=None)
+    assert "room_name" not in config
+    assert "terrarium_config_version" not in config
+
+
 def _role(**kw):
     base = dict(name="player", role_class=RoleClass.SHARED, capacity=None,
                 scored=True)

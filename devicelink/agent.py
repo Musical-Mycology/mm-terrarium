@@ -18,7 +18,7 @@ from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
 from control.role_config import compose_role_config
 from control.roles import RoleClass
-from control.room_profile import RoomProfile, room_profile
+from control.room_profile import RoomProfile
 from control.rooms import room_role_name
 from control.state import State
 from control.timed_queue import TimedQueue
@@ -205,13 +205,13 @@ class DeviceLinkAgent:
         room = gs.room
         if room is None or gs.bit is None:
             return
-        role = gs.bit.role_table.roles.get(room_role_name(room.room_type))
+        role = gs.registration.role_table.roles.get(room_role_name(room.name))
         if role is None:
             return
         blob = compose_role_config(gs.bit_name, gs.bit.version, role)
         manifest = LightManifest.from_dict(blob["light_manifest"])
         if self._room_profile is None:
-            self._room_profile = room_profile(room.room_type)
+            self._room_profile = room.profile
         cap = to_capability(self._room_profile)
         session = build_session(manifest, cap, clock=self._clock)
         self._room_light = _RoomLightSink(
@@ -244,6 +244,48 @@ class DeviceLinkAgent:
             if dev is not None:
                 return dev
         return None
+
+    def rewire_room(self, room_bridge) -> None:
+        """Re-run Room setup against gs.room/gs.bit as they stand NOW, and
+        adopt `room_bridge` as this agent's active Room bridge.
+
+        _setup_room() at __init__ time only ever saw gs.room as of THAT
+        instant -- None, for a NO_ROOM boot (harness/terrarium_boot.py's
+        main() constructs this agent before any Room is chosen when no
+        --room was given and no console command has loaded one yet). Left
+        alone, a Room that loads later -- a Console `load_room` -- would
+        never get a light session, an audio grant, or a bound MIDI bridge:
+        every one of those is built once, at construction, and nothing
+        re-triggers _setup_room() on its own.
+
+        Call this whenever a Room actually finishes loading AFTER
+        construction. `_room_profile` is reset to None first so
+        _setup_room() re-resolves it from the NEW room rather than reusing
+        whatever (nothing, in the NO_ROOM case) was true before -- the same
+        "None means resolve it from the bound Room's type" contract
+        `_room_profile`'s own __init__ comment documents. A no-op, same as
+        _setup_room() itself, if no Bit is loaded yet: the light manifest
+        comes from the Bit's role table, so a `load_room` that lands before
+        any `load_bit` leaves the session unbuilt until one is -- harmless,
+        since gs.room being live is already enough for room_view() to stop
+        returning None (see console.agent.ConsoleAgent._current_room), and
+        _handle_command's own LoadBitCommand gate never allows a Bit to load
+        before ROOM_READY.
+
+        See unwire_room() for the NO_ROOM-entry counterpart."""
+        self._room_bridge = room_bridge
+        self._room_profile = None
+        self._setup_room()
+
+    def unwire_room(self) -> None:
+        """The NO_ROOM-entry counterpart to rewire_room(): drop this
+        agent's Room session/bridge/profile so nothing stale renders or
+        reports controllers once the Room that produced them is gone.
+        Called by the same Terrarium observer that calls rewire_room(), on
+        the transition INTO NO_ROOM (a Console `unload_room`)."""
+        self._room_light = None
+        self._room_bridge = None
+        self._room_profile = None
 
     @property
     def room_bridge(self):
@@ -667,9 +709,24 @@ class DeviceLinkAgent:
         gone. Player devices are already covered, because _feed_light_now
         returns early once _finish_release has cleared the bridge. Dropped
         rather than drained: these are cues for a Bit that no longer exists.
+
+        SETUP -- the state load_bit() always lands in -- also re-runs
+        _setup_room() if it never built a session: harness/terrarium_boot
+        .py's own NO_ROOM boot can reach ROOM_READY (a Console `load_room`,
+        rewire_room()'d in) BEFORE any Bit is loaded, and _setup_room()'s
+        own gate needs gs.bit too (the light manifest comes from the Bit's
+        role table) -- so the room session stays unbuilt until whichever of
+        {load_room, load_bit} happens SECOND. rewire_room() covers the
+        load_room-second case; this covers load_bit-second, the order the
+        Console's own ROOM_READY gate on LoadBitCommand actually produces
+        in practice (load_room always first). Guarded on `_room_light is
+        None` so an already-wired session (the CLI --room path, or a
+        same-Room Bit swap) is never rebuilt out from under a live render.
         """
         self._broadcast_room()
         gs = self.game_server
+        if new_state == State.SETUP and self._room_light is None:
+            self._setup_room()
         if new_state == State.UNLOADING:
             self._room_cues = TimedQueue()
             self._light_cues = TimedQueue()

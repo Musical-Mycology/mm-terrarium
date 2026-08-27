@@ -7,7 +7,6 @@ section 4.
 from control.bit import Bit
 from control.cues import ROOM, TARGET, FireTrigger, MuteCue, PlayCue, SolidCue
 from control.roles import Role, RoleClass, RoleTable
-from control.rooms import RoomType, room_role
 from control.triggers import (
     Condition,
     ConditionSource,
@@ -31,10 +30,10 @@ JAMMER_LEVEL_FULL = 0.80
 class TestBit(Bit):
     version = "0.1"
 
-    # TestBit is the reference fixture for BOTH shipped room types, so the
+    # TestBit is the reference fixture for BOTH shipped rooms, so the
     # Scored/Jam validation loop works in either. control/boot.py reads
     # this off the class before instantiation.
-    room_types = {RoomType.TEST, RoomType.DEMO}
+    room_types = {"TEST", "DEMO"}
 
     # Seconds for one full out-and-back sweep of the Room's ambient hue.
     ROOM_DRIFT_PERIOD = 12.0
@@ -147,6 +146,12 @@ class TestBit(Bit):
         # makes the cross-fixture property -- one declaration, one gradient
         # spanning every fixture -- the thing the reference fixture visibly
         # proves (see design spec section 9).
+        roles = {"player": player, "jammer": jammer}
+        node_map = {"TEST_PLAYER_NODE": ["player"],
+                    "TEST_JAM_NODE": ["jammer"]}
+        return RoleTable(roles=roles, node_map=node_map)
+
+    def room_manifests(self) -> tuple[dict, dict]:
         room_light = {
             "instruments": [
                 {"instrument": "rainbow", "target": "primary",
@@ -162,17 +167,7 @@ class TestBit(Bit):
                  "lanes": [{"source": "cc:74", "dest": "cc:74"}]},
             ],
         }
-        room_entries = [
-            room_role(rt, light_manifest=room_light, ugen_manifest=room_ugen)
-            for rt in sorted(self.room_types, key=lambda t: t.name)
-        ]
-        roles = {"player": player, "jammer": jammer}
-        node_map = {"TEST_PLAYER_NODE": ["player"],
-                    "TEST_JAM_NODE": ["jammer"]}
-        for room_name, room, room_node in room_entries:
-            roles[room_name] = room
-            node_map[room_node] = [room_name]
-        return RoleTable(roles=roles, node_map=node_map)
+        return room_light, room_ugen
 
     def on_setup_enter(self) -> None:
         self._setup_entered = True

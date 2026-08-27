@@ -2,7 +2,6 @@ import pytest
 
 from control.bit import Bit
 from control.roles import RoleTable
-from control.rooms import RoomType
 
 
 class MinimalBit(Bit):
@@ -36,4 +35,8 @@ def test_result_can_be_overridden_to_report_a_payload():
 
 
 def test_bit_defaults_to_test_room_support():
-    assert MinimalBit.room_types == {RoomType.TEST}
+    assert MinimalBit.room_types == {"TEST"}
+
+
+def test_default_room_manifests_are_empty():
+    assert MinimalBit().room_manifests() == ({}, {})
