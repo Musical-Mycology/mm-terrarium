@@ -1,4 +1,4 @@
-"""The trigger read model the Terrarium Console renders.
+"""The function read model the Terrarium Console renders.
 
 Pure dict builders with no engine imports, mirroring control/room_view.py so
 this is testable with no GameServer, no renderer and no socket.
@@ -12,7 +12,7 @@ list discriminates light from audio.
 from __future__ import annotations
 
 from control.cues import MuteCue, PlayCue, SolidCue
-from control.triggers import SOURCE_WIRE
+from control.functions import SOURCE_WIRE
 
 
 def _step_view(step) -> dict:
@@ -31,31 +31,31 @@ def _step_view(step) -> dict:
             "status": status, "data1": data1, "data2": data2}
 
 
-def trigger_view(trigger) -> dict:
-    """One declared trigger, as the Console draws its card."""
+def function_view(function_decl) -> dict:
+    """One declared function, as the Console draws its card."""
     return {
-        "name": trigger.name,
-        "description": trigger.description,
-        "target": trigger.target.name,
+        "name": function_decl.name,
+        "description": function_decl.description,
+        "target": function_decl.target.name,
         "condition": {
-            "name": trigger.condition.name,
-            "description": trigger.condition.description,
-            "source": SOURCE_WIRE[trigger.condition.source],
-            "verb": trigger.condition.verb,
+            "name": function_decl.condition.name,
+            "description": function_decl.condition.description,
+            "source": SOURCE_WIRE[function_decl.condition.source],
+            "verb": function_decl.condition.verb,
         },
-        "script": [_step_view(step) for step in trigger.script],
+        "script": [_step_view(step) for step in function_decl.script],
     }
 
 
-def triggers_view(trigger_table) -> list[dict]:
-    """Every declared trigger, in declaration order. Empty when no Bit is
-    loaded, which the panel renders as "No triggers declared"."""
-    if trigger_table is None:
+def functions_view(function_table) -> list[dict]:
+    """Every declared function, in declaration order. Empty when no Bit is
+    loaded, which the panel renders as "No functions declared"."""
+    if function_table is None:
         return []
-    return [trigger_view(t) for t in trigger_table.triggers.values()]
+    return [function_view(fn) for fn in function_table.functions.values()]
 
 
-def trigger_fired_view(record) -> dict:
+def function_fired_view(record) -> dict:
     """One fire.
 
     fired_by and declared_source are both carried, deliberately: the panel

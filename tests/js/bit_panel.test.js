@@ -14,7 +14,7 @@ const { byId, FakeSocket } = require("./_dom_stub.js");
 
   // empty state
   send({ event: "snapshot", state: "IDLE", loaded_bit: null, roles: [],
-         registration: [], devices: [], bit_status: {}, room: null, triggers: [] });
+         registration: [], devices: [], bit_status: {}, room: null, functions: [] });
   assert.ok(byId.get("bitPanel").innerHTML.includes("No Bit loaded"));
 
   // bits_listed builds the picker data (hidden until Load is clicked)

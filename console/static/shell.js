@@ -2,7 +2,7 @@
 import * as wire from "./wire.js";
 import { init as initBit } from "./bit.js";
 import { init as initSurface } from "./surface.js";
-import { init as initTriggers } from "./triggers.js";
+import { init as initFunctions } from "./functions.js";
 import { init as initRail, logLine } from "./rail.js";
 import { init as initRooms } from "./rooms.js";
 
@@ -37,5 +37,5 @@ wire.on("error", (m) => {
   logLine("error", `${m.command}: ${m.message}`);
 });
 
-initBit(); initSurface(); initTriggers(); initRail(); initRooms();
+initBit(); initSurface(); initFunctions(); initRail(); initRooms();
 wire.connect();

@@ -22,7 +22,7 @@ from tests.instrument_fixtures import GENERIC_SURFACE
 LIGHT_ONLY = Instrument(
     name="light_only_surface",
     capabilities=frozenset({"light.surface"}),
-    accepted_triggers=("midi", "solid"),
+    accepted_cues=("midi", "solid"),
 )
 
 
@@ -254,7 +254,7 @@ def test_role_without_requires_is_unchanged():
 GESTURELESS_INSTRUMENT = Instrument(
     name="gestureless_widget",
     capabilities=frozenset({"light.pixels", "audio.samples"}),
-    accepted_triggers=("midi", "play", "solid", "mute"),
+    accepted_cues=("midi", "play", "solid", "mute"),
 )
 
 

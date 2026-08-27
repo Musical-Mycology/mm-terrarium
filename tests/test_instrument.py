@@ -25,7 +25,7 @@ class _FakeProfile:
 def test_tuneshroom_is_the_standard_carrier_instrument():
     assert TUNESHROOM.name == "tuneshroom"
     assert "gesture.tap" in TUNESHROOM.capabilities
-    assert TUNESHROOM.accepted_triggers == ("midi", "play", "solid", "mute")
+    assert TUNESHROOM.accepted_cues == ("midi", "play", "solid", "mute")
     assert TUNESHROOM.light_manifest == {}
     validate_instrument(TUNESHROOM)  # the shipped standard always validates
 
@@ -36,8 +36,8 @@ def test_unknown_capability_tag_is_a_located_error():
         validate_instrument(inst)
 
 
-def test_unknown_accepted_trigger_kind_is_an_error():
-    inst = Instrument(name="bogus", accepted_triggers=("laser",))
+def test_unknown_accepted_cue_kind_is_an_error():
+    inst = Instrument(name="bogus", accepted_cues=("laser",))
     with pytest.raises(InstrumentError, match="laser"):
         validate_instrument(inst)
 

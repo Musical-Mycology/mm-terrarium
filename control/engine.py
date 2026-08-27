@@ -12,7 +12,7 @@ import logging
 import time
 
 from control.bit import Bit
-from control.cues import ROOM, FireTrigger, LightCue, MuteCue, PlayCue, SolidCue
+from control.cues import ROOM, FireFunction, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
 from control.instrument import (TUNESHROOM, InstrumentRequirement, cue_kind,
                                  satisfies)
@@ -21,14 +21,14 @@ from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
 from control.rooms import room_role
 from control.state import State
-from control.triggers import (
+from control.functions import (
     FIRED_BY_BIT_ADJUDICATED,
     FIRED_BY_GESTURE_VERB,
     SOURCE_WIRE,
-    TriggerFired,
-    TriggerTarget,
+    FunctionFired,
+    FunctionTarget,
     expand_script,
-    validate_trigger_table,
+    validate_function_table,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ _MAX_GESTURE_LEAD = 5.0
 
 
 class InvalidTransition(Exception):
-    """Raised when a trigger is called from a state that doesn't allow it."""
+    """Raised when a function is called from a state that doesn't allow it."""
 
 
 class BitLoadError(Exception):
@@ -113,8 +113,8 @@ class GameServer:
         # `muted` (below) to learn latch state.
         self.on_mute_change = None
         # Resolved dev ids currently latched dark/silent by a MuteCue (the
-        # Stop trigger). Cleared per-dev by any non-mute fire at that surface
-        # (see fire_trigger/_clear_mutes) and wholesale on _unload.
+        # Stop function). Cleared per-dev by any non-mute fire at that surface
+        # (see fire_function/_clear_mutes) and wholesale on _unload.
         self.muted: set[str] = set()
         # Observers registered via add_observer(). Each may implement any of
         # on_state_change(old, new), on_registration_change(),
@@ -138,8 +138,8 @@ class GameServer:
         self._warned_no_room = False     # once-per-Bit-load ROOM drop warning
         # Provenance stamp for the active Room, set by control/terrarium.py's
         # load_room on success and cleared by unload_room (also on a failed
-        # load's unwind). {} outside a Room. join() and fire_trigger() read
-        # this so role blobs and trigger records carry room_name/
+        # load's unwind). {} outside a Room. join() and fire_function() read
+        # this so role blobs and function records carry room_name/
         # terrarium_config_version without GameServer knowing anything about
         # TerrariumConfig itself.
         self.provenance: dict = {}
@@ -266,7 +266,7 @@ class GameServer:
                         f"role {role.name!r} requires undeclared slot "
                         f"{role.requires!r}; declared: {sorted(known_slots)}")
             validate_role_declarations(role_table)
-            validate_trigger_table(bit.trigger_table, set(bit.verb_handlers()))
+            validate_function_table(bit.function_table, set(bit.verb_handlers()))
             registration = RegistrationState(role_table)
         except Exception as exc:
             self._set_state(State.IDLE)
@@ -464,24 +464,24 @@ class GameServer:
         return canonical
 
     def _resolve_target(self, target, dev: str | None) -> list[str]:
-        """A trigger's declared target, resolved to the devs it lands on.
+        """A function's declared target, resolved to the devs it lands on.
 
         Returns every bound Room fixture dev for ROOM, in declaration order
         -- this is the one-method change the N-fixture Room slice makes; no
-        Bit's trigger declaration changes alongside it (design spec section
-        5). This full list is what TriggerFired.devs reports; a script's
+        Bit's function declaration changes alongside it (design spec section
+        5). This full list is what FunctionFired.devs reports; a script's
         TARGET fanout is collapsed separately, see _collapse_room_fanout.
         """
-        if target is TriggerTarget.DEVICE:
+        if target is FunctionTarget.DEVICE:
             return [dev] if dev else []
-        if target is TriggerTarget.SURFACE and dev != ROOM:
+        if target is FunctionTarget.SURFACE and dev != ROOM:
             return [dev] if dev else []
         room_devs: list[str] = []
         if self.room is not None and self.room.bound:
             profile = self.room.profile
             room_devs = [self.room.bound[f.name] for f in profile.fixtures
                         if f.name in self.room.bound]
-        if target in (TriggerTarget.ROOM, TriggerTarget.SURFACE):
+        if target in (FunctionTarget.ROOM, FunctionTarget.SURFACE):
             return room_devs
         out = list(room_devs)
         assignments = (self.registration.assignments
@@ -493,7 +493,7 @@ class GameServer:
 
     def _collapse_room_fanout(self, devs: list[str]) -> list[str]:
         """A script step addressed at cues.TARGET fans out to every dev in
-        `devs` (control/triggers.py's expand_script), one independent cue
+        `devs` (control/functions.py's expand_script), one independent cue
         per dev. That is correct for player devices, each with its own
         LightSession, but wrong for the Room: every Room fixture dev in
         `devs` shares ONE session (design spec section 2), so feeding it
@@ -517,7 +517,7 @@ class GameServer:
     def _check_cue_kinds(self, cues) -> str | None:
         """Refuse the whole fire, all-or-nothing (spec section 7), if any
         expanded cue's kind is not in its destination's instrument's
-        accepted_triggers.
+        accepted_cues.
 
         A device dev is checked against DeviceInfo.carried (TUNESHROOM by
         default). A dev the Room owns is checked against every Room fixture's
@@ -536,7 +536,7 @@ class GameServer:
             kind = cue_kind(cue)
             if resolved in room_devs:
                 fixtures = self.room.profile.fixtures
-                if any(kind in f.instrument.accepted_triggers
+                if any(kind in f.instrument.accepted_cues
                        for f in fixtures):
                     continue
                 return (f"instrument {fixtures[0].instrument.name!r} does "
@@ -545,15 +545,15 @@ class GameServer:
             if info is None:
                 continue
             carried = getattr(info, "carried", None) or TUNESHROOM
-            if kind not in carried.accepted_triggers:
+            if kind not in carried.accepted_cues:
                 return (f"instrument {carried.name!r} does not accept "
                         f"{kind!r} cues")
         return None
 
-    def fire_trigger(self, name: str, *, fired_by: str,
+    def fire_function(self, name: str, *, fired_by: str,
                      dev: str | None = None,
                      at: float | None = None) -> str | None:
-        """Fire one declared trigger: expand its script, dispatch it, and tell
+        """Fire one declared function: expand its script, dispatch it, and tell
         every observer it happened.
 
         Returns None when fired, else a refusal reason, and NEVER raises, for
@@ -562,7 +562,7 @@ class GameServer:
 
         `fired_by` is what actually fired it THIS time, which is deliberately
         not the same field as the condition's declared source: an operator may
-        fire a gesture-verb trigger by hand, and the record has to keep those
+        fire a gesture-verb function by hand, and the record has to keep those
         two distinguishable or a manual action reads as gameplay.
 
         `at` is supplied by _dispatch_cues when a Bit fired this from a verb
@@ -574,53 +574,53 @@ class GameServer:
         if self.state not in (State.SETUP, State.RUNNING):
             return "no Bit running"
         try:
-            table = self.bit.trigger_table
+            table = self.bit.function_table
         except Exception:
-            logger.exception("Bit.trigger_table raised; refusing to fire %r",
+            logger.exception("Bit.function_table raised; refusing to fire %r",
                              name)
-            return "trigger table error"
+            return "function table error"
         try:
-            trigger = table.triggers.get(name)
-            if trigger is None:
-                return f"unknown trigger {name!r}"
-            if trigger.target in (TriggerTarget.DEVICE,
-                                  TriggerTarget.SURFACE) and not dev:
-                if trigger.target is TriggerTarget.DEVICE:
-                    return (f"trigger {name!r} targets the firing device; "
+            function_decl = table.functions.get(name)
+            if function_decl is None:
+                return f"unknown function {name!r}"
+            if function_decl.target in (FunctionTarget.DEVICE,
+                                  FunctionTarget.SURFACE) and not dev:
+                if function_decl.target is FunctionTarget.DEVICE:
+                    return (f"function {name!r} targets the firing device; "
                             f"no device given")
-                return (f"trigger {name!r} targets a surface; "
+                return (f"function {name!r} targets a surface; "
                         f"no surface given")
             if at is None:
                 at = self._clock() + self._horizon
-            devs = self._resolve_target(trigger.target, dev)
-            cues = expand_script(trigger, at, self._collapse_room_fanout(devs))
+            devs = self._resolve_target(function_decl.target, dev)
+            cues = expand_script(function_decl, at, self._collapse_room_fanout(devs))
             refusal = self._check_cue_kinds(cues)
             if refusal is not None:
                 return refusal
             if not any(isinstance(c, MuteCue) for c in cues):
                 self._clear_mutes(devs)
         except Exception:
-            # trigger_table is a property: load_bit validated whatever it
+            # function_table is a property: load_bit validated whatever it
             # returned on THAT one call, and the validated object is never
             # retained (the same hazard RegistrationState's role_table
             # snapshot exists to close for role_table). A later access can
-            # return something else, so everything this trigger touches
+            # return something else, so everything this function touches
             # between lookup and expansion is guarded here, not just the
             # property access above.
-            logger.exception("trigger %r script expansion failed; refusing "
+            logger.exception("function %r script expansion failed; refusing "
                              "to fire", name)
-            return "trigger script error"
+            return "function script error"
         # No fired_by passed on: expand_script only ever yields LightCue and
-        # PlayCue, never FireTrigger, so this cannot recurse and a trigger
+        # PlayCue, never FireFunction, so this cannot recurse and a function
         # cannot chain into another. The guard above already contains
-        # anything a divergent trigger_table could throw while producing
+        # anything a divergent function_table could throw while producing
         # `cues`, so this call sees only well-formed cues.
         self._dispatch_cues(cues, at)
-        self._notify("on_trigger_fired", TriggerFired(
-            name=trigger.name,
-            condition=trigger.condition.name,
+        self._notify("on_function_fired", FunctionFired(
+            name=function_decl.name,
+            condition=function_decl.condition.name,
             fired_by=fired_by,
-            declared_source=SOURCE_WIRE[trigger.condition.source],
+            declared_source=SOURCE_WIRE[function_decl.condition.source],
             dev=dev,
             devs=tuple(devs),
             at=at,
@@ -664,18 +664,18 @@ class GameServer:
         """
         for cue in cues or ():
             try:
-                if isinstance(cue, FireTrigger):
+                if isinstance(cue, FireFunction):
                     # A Bit reporting one of its own conditions satisfied.
-                    # fire_trigger re-enters this method with the expanded
-                    # script, carrying the same `at`, so a trigger fired from a
+                    # fire_function re-enters this method with the expanded
+                    # script, carrying the same `at`, so a function fired from a
                     # gesture lands on the same frame as the ordinary cues
                     # returned beside it.
-                    reason = self.fire_trigger(
+                    reason = self.fire_function(
                         cue.name,
                         fired_by=fired_by or FIRED_BY_BIT_ADJUDICATED,
                         dev=cue.dev, at=at)
                     if reason is not None:
-                        logger.warning("Bit fired trigger %r: %s",
+                        logger.warning("Bit fired function %r: %s",
                                        cue.name, reason)
                     continue
                 if isinstance(cue, SolidCue):

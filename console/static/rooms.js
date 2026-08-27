@@ -2,7 +2,7 @@
 // Read model is snapshot.rooms (Task 6): [{name, description, status,
 // active}], status is null when loadable, else a reason string.
 //
-// Rendering discipline (rule 1, same as triggers.js): the card list is
+// Rendering discipline (rule 1, same as functions.js): the card list is
 // rebuilt only when the declared room table's signature actually changes.
 // A room_load_progress event during a load/unload must update ONLY the
 // active card's status line -- it must never rebuild the card list (that

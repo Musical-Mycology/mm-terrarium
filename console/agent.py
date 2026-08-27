@@ -17,8 +17,8 @@ from control.rooms import non_room_counts, room_role_name
 from control.state import State
 from control.terrarium import TerrariumState
 from control.terrarium_config import validate_rooms
-from control.trigger_view import trigger_fired_view, triggers_view
-from control.triggers import FIRED_BY_ADMIN_MANUAL
+from control.function_view import function_fired_view, functions_view
+from control.functions import FIRED_BY_ADMIN_MANUAL
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class ConsoleAgent:
         self._room_bridge = room_bridge
         self._last_status: dict | None = None
         self._last_room: dict | None = None
-        self._last_triggers: list | None = None
+        self._last_functions: list | None = None
         self._clock = clock
         # The latest not-yet-broadcast frame per dev. Each dev's entry is
         # overwritten, not queued: see _broadcast_room_frame and
@@ -90,12 +90,12 @@ class ConsoleAgent:
         self._broadcast_status_if_changed()
         self._broadcast_room_if_changed()
         self._broadcast_room_frame()
-        self._broadcast_triggers_if_changed()
+        self._broadcast_functions_if_changed()
 
     # --- inbound command dispatch ------------------------------------------
     def _handle_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
-        if name in ("arm_room", "release_room", "fire_trigger"):
+        if name in ("arm_room", "release_room", "fire_function"):
             return self._handle_admin_command(msg)
         try:
             command = protocol.parse_command(msg)
@@ -160,11 +160,11 @@ class ConsoleAgent:
             command = protocol.parse_admin_command(msg)
         except ValueError as exc:
             return protocol.error_event(name, str(exc))
-        if isinstance(command, protocol.FireTriggerCommand):
+        if isinstance(command, protocol.FireFunctionCommand):
             # An operator action, tagged as one so the event log never reads it
-            # as gameplay. GameServer.fire_trigger never raises, so a refusal
+            # as gameplay. GameServer.fire_function never raises, so a refusal
             # comes back as a reason string rather than an exception.
-            reason = self.game_server.fire_trigger(
+            reason = self.game_server.fire_function(
                 command.name, fired_by=FIRED_BY_ADMIN_MANUAL, dev=command.dev)
             if reason is not None:
                 return protocol.error_event(name, reason)
@@ -195,7 +195,7 @@ class ConsoleAgent:
             registration = protocol.registration_changed_event(
                 self._non_room_counts())["roles"]
         self._last_room = self._current_room()
-        self._last_triggers = self._current_triggers()
+        self._last_functions = self._current_functions()
         return protocol.snapshot_event(
             state=gs.state.name,
             installed_bits=list(gs.bit_registry.keys()),
@@ -205,7 +205,7 @@ class ConsoleAgent:
             devices=self._devices_view(),
             bit_status=self._current_status(),
             room=self._last_room,
-            triggers=self._last_triggers,
+            functions=self._last_functions,
             terrarium_state=(
                 self.terrarium.state.name if self.terrarium is not None else None),
             rooms=self._rooms_view(),
@@ -279,21 +279,21 @@ class ConsoleAgent:
         for dev, frame in pending.items():
             self.server.broadcast(protocol.room_frame_event(dev, frame))
 
-    def _current_triggers(self) -> list:
+    def _current_functions(self) -> list:
         bit = self.game_server.bit
         if bit is None:
             return []
         try:
-            return triggers_view(bit.trigger_table)
+            return functions_view(bit.function_table)
         except Exception:
-            logger.exception("Bit.trigger_table raised; reporting no triggers")
+            logger.exception("Bit.function_table raised; reporting no functions")
             return []
 
-    def _broadcast_triggers_if_changed(self) -> None:
-        triggers = self._current_triggers()
-        if triggers != self._last_triggers:
-            self._last_triggers = triggers
-            self.server.broadcast(protocol.triggers_changed_event(triggers))
+    def _broadcast_functions_if_changed(self) -> None:
+        functions = self._current_functions()
+        if functions != self._last_functions:
+            self._last_functions = functions
+            self.server.broadcast(protocol.functions_changed_event(functions))
 
     def _non_room_counts(self):
         """Never surface the Room's occupancy on any Console view -- design
@@ -392,12 +392,12 @@ class ConsoleAgent:
         self.server.broadcast(protocol.devices_changed_event(
             self._devices_view()))
 
-    def on_trigger_fired(self, record) -> None:
+    def on_function_fired(self, record) -> None:
         """Engine observer hook. A fire is engine-produced and has no device
         destination, which is why it rides the multi-observer list rather than
         a transport-owned sink -- see the design spec's section 8.1."""
         self.server.broadcast(
-            protocol.trigger_fired_event(trigger_fired_view(record)))
+            protocol.function_fired_event(function_fired_view(record)))
 
     def _broadcast_bit_completed(self) -> None:
         bit = self.game_server.bit

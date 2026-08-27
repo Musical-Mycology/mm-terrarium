@@ -133,7 +133,7 @@ def error_event(dev: str, context: str, message: str) -> dict:
 
 
 def play_event(dev: str, name: str, params: str = "") -> dict:
-    """Trigger a device-local sample by name.
+    """Fire a device-local sample by name.
 
     The canonical design (docs/control-gameserver-design.md, player flow
     step 4) writes this `/ie<N>/play "tis" time id params`. Two deviations,

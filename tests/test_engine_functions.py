@@ -1,5 +1,5 @@
-"""Engine-side trigger behavior: load-time validation, firing, and the
-on_trigger_fired observer hook.
+"""Engine-side function behavior: load-time validation, firing, and the
+on_function_fired observer hook.
 
 Grouped in one file because they share the Bit fixtures below; split from
 tests/test_engine.py so the existing lifecycle tests stay readable.
@@ -14,13 +14,13 @@ from control.instrument import CUE_KINDS, TUNESHROOM, Instrument
 from control.roles import Role, RoleClass, RoleTable
 from control.state import State
 from control.terrarium_config import load_terrarium_config
-from control.triggers import (
+from control.functions import (
     Condition,
     ConditionSource,
     ScriptStep,
-    Trigger,
-    TriggerTable,
-    TriggerTarget,
+    Function,
+    FunctionTable,
+    FunctionTarget,
 )
 
 
@@ -36,19 +36,19 @@ class _BaseBit(Bit):
 
 
 class PlainBit(_BaseBit):
-    """No trigger_table override at all: the default must keep working."""
+    """No function_table override at all: the default must keep working."""
 
 
-class GoodTriggerBit(_BaseBit):
+class GoodFunctionBit(_BaseBit):
     def verb_handlers(self) -> dict:
         return {"tap": lambda dev, args, at: []}
 
     @property
-    def trigger_table(self) -> TriggerTable:
-        return TriggerTable(triggers={
-            "flash": Trigger(
+    def function_table(self) -> FunctionTable:
+        return FunctionTable(functions={
+            "flash": Function(
                 name="flash", description="Flash the device",
-                target=TriggerTarget.DEVICE,
+                target=FunctionTarget.DEVICE,
                 condition=Condition(name="tapped", description="Player taps",
                                     source=ConditionSource.GESTURE_VERB,
                                     verb="tap"),
@@ -61,11 +61,11 @@ class UnimplementedVerbBit(_BaseBit):
         return {"tap": lambda dev, args, at: []}
 
     @property
-    def trigger_table(self) -> TriggerTable:
-        return TriggerTable(triggers={
-            "flash": Trigger(
+    def function_table(self) -> FunctionTable:
+        return FunctionTable(functions={
+            "flash": Function(
                 name="flash", description="Flash the device",
-                target=TriggerTarget.DEVICE,
+                target=FunctionTarget.DEVICE,
                 condition=Condition(name="wiggled", description="Player wiggles",
                                     source=ConditionSource.GESTURE_VERB,
                                     verb="wiggle"),
@@ -81,14 +81,14 @@ def test_a_bit_declaring_no_triggers_loads_exactly_as_before():
     gs = _server(PlainBit)
     gs.load_bit("bit")
     assert gs.state == State.SETUP
-    assert gs.bit.trigger_table.triggers == {}
+    assert gs.bit.function_table.functions == {}
 
 
-def test_a_valid_trigger_table_loads():
-    gs = _server(GoodTriggerBit)
+def test_a_valid_function_table_loads():
+    gs = _server(GoodFunctionBit)
     gs.load_bit("bit")
     assert gs.state == State.SETUP
-    assert "flash" in gs.bit.trigger_table.triggers
+    assert "flash" in gs.bit.function_table.functions
 
 
 def test_a_trigger_naming_an_unimplemented_verb_fails_load():
@@ -108,7 +108,7 @@ class Recorder:
     def __init__(self):
         self.fired = []
 
-    def on_trigger_fired(self, record):
+    def on_function_fired(self, record):
         self.fired.append(record)
 
 
@@ -116,7 +116,7 @@ class RaisingRecorder:
     def __init__(self):
         self.calls = 0
 
-    def on_trigger_fired(self, record):
+    def on_function_fired(self, record):
         self.calls += 1
         raise RuntimeError("observer exploded")
 
@@ -131,51 +131,51 @@ class ScriptBit(_BaseBit):
         return {"tap": self._on_tap}
 
     def _on_tap(self, dev, args, at):
-        from control.cues import FireTrigger
-        return [(dev, 0xB0, 74, 1), FireTrigger("flash", dev)]
+        from control.cues import FireFunction
+        return [(dev, 0xB0, 74, 1), FireFunction("flash", dev)]
 
     def cues(self, at):
-        from control.cues import FireTrigger
+        from control.cues import FireFunction
         if self.fire_next is None:
             return []
         name, self.fire_next = self.fire_next, None
-        return [FireTrigger(name)]
+        return [FireFunction(name)]
 
     @property
-    def trigger_table(self) -> TriggerTable:
-        return TriggerTable(triggers={
-            "sweep": Trigger(
+    def function_table(self) -> FunctionTable:
+        return FunctionTable(functions={
+            "sweep": Function(
                 name="sweep", description="Sweep the Room",
-                target=TriggerTarget.ROOM,
+                target=FunctionTarget.ROOM,
                 condition=Condition(name="round_won",
                                     description="User wins a round",
                                     source=ConditionSource.BIT_ADJUDICATED),
                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
                         ScriptStep(0.5, (TARGET, 0xB0, 74, 40)),
                         ScriptStep(2.0, (TARGET, 0xB0, 74, 0)))),
-            "flash": Trigger(
+            "flash": Function(
                 name="flash", description="Flash the tapping device",
-                target=TriggerTarget.DEVICE,
+                target=FunctionTarget.DEVICE,
                 condition=Condition(name="tapped", description="Player taps",
                                     source=ConditionSource.GESTURE_VERB,
                                     verb="tap"),
                 script=(ScriptStep(0.0, PlayCue(TARGET, "click", "")),
                         ScriptStep(0.0, (TARGET, 0xB0, 74, 127)))),
-            "everywhere": Trigger(
+            "everywhere": Function(
                 name="everywhere", description="Light the whole room",
-                target=TriggerTarget.ALL,
+                target=FunctionTarget.ALL,
                 condition=Condition(name="manual", description="Operator asks",
                                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 64)),)),
-            "stop": Trigger(
+            "stop": Function(
                 name="stop", description="Mute the tapped device",
-                target=TriggerTarget.DEVICE,
+                target=FunctionTarget.DEVICE,
                 condition=Condition(name="manual", description="Operator asks",
                                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, MuteCue(TARGET)),)),
-            "spot": Trigger(
+            "spot": Function(
                 name="spot", description="Light an operator-chosen surface",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(name="manual", description="Operator asks",
                                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 100)),)),
@@ -217,7 +217,7 @@ def _running(bit_cls=ScriptBit, bound=None, clock=None):
 
 def test_manual_fire_dispatches_every_step_with_its_offset():
     gs, light, _ = _running()
-    assert gs.fire_trigger("sweep", fired_by="admin-manual") is None
+    assert gs.fire_function("sweep", fired_by="admin-manual") is None
     assert [c[0] for c in light] == ["sim-room-main"] * 3
     assert [c[4] for c in light] == [100.0, 100.5, 102.0]
     assert [c[3] for c in light] == [127, 40, 0]
@@ -246,7 +246,7 @@ def test_fired_by_never_inherits_declared_source():
     gs, _, _ = _running()
     observer = Recorder()
     gs.add_observer(observer)
-    gs.fire_trigger("flash", fired_by="admin-manual", dev="ie1")
+    gs.fire_function("flash", fired_by="admin-manual", dev="ie1")
     record = observer.fired[0]
     assert record.fired_by == "admin-manual"
     assert record.declared_source == "gesture-verb"
@@ -256,7 +256,7 @@ def test_the_record_reports_what_the_fire_resolved_to():
     gs, _, _ = _running()
     observer = Recorder()
     gs.add_observer(observer)
-    gs.fire_trigger("sweep", fired_by="admin-manual")
+    gs.fire_function("sweep", fired_by="admin-manual")
     record = observer.fired[0]
     assert record.name == "sweep"
     assert record.condition == "round_won"
@@ -265,21 +265,21 @@ def test_the_record_reports_what_the_fire_resolved_to():
     assert record.at == 100.0
 
 
-def test_trigger_fired_room_name_is_none_without_a_room():
+def test_function_fired_room_name_is_none_without_a_room():
     gs, _, _ = _running()
     observer = Recorder()
     gs.add_observer(observer)
-    gs.fire_trigger("sweep", fired_by="admin-manual")
+    gs.fire_function("sweep", fired_by="admin-manual")
     assert observer.fired[0].room_name is None
 
 
-def test_trigger_fired_carries_room_name_from_gs_provenance():
+def test_function_fired_carries_room_name_from_gs_provenance():
     gs, _, _ = _running()
     gs.provenance = {"room_name": "atrium",
                      "terrarium_config_version": "1-abcdef012345"}
     observer = Recorder()
     gs.add_observer(observer)
-    gs.fire_trigger("sweep", fired_by="admin-manual")
+    gs.fire_function("sweep", fired_by="admin-manual")
     assert observer.fired[0].room_name == "atrium"
 
 
@@ -295,7 +295,7 @@ def test_a_target_fanout_across_two_bound_fixtures_feeds_the_room_once_per_step(
                                    "accent": "sim-room-accent"})
     observer = Recorder()
     gs.add_observer(observer)
-    assert gs.fire_trigger("sweep", fired_by="admin-manual") is None
+    assert gs.fire_function("sweep", fired_by="admin-manual") is None
     assert [c[0] for c in light] == ["sim-room-main"] * 3
     assert observer.fired[0].devs == ("sim-room-main", "sim-room-accent")
     assert observer.fired[0].steps == 3
@@ -312,7 +312,7 @@ def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
                                    "main": "sim-room-main"})
     observer = Recorder()
     gs.add_observer(observer)
-    assert gs.fire_trigger("sweep", fired_by="admin-manual") is None
+    assert gs.fire_function("sweep", fired_by="admin-manual") is None
     assert observer.fired[0].devs == ("sim-room-main", "sim-room-accent")
     assert [c[0] for c in light] == ["sim-room-main"] * 3
 
@@ -326,24 +326,24 @@ def test_resolve_target_on_an_unbound_room_returns_nothing():
 
     gs = GameServer({}, clock=lambda: 0.0)
     gs.room = Room(name="DEMO", profile=_Room({}).profile, node_id="ROOM_DEMO_NODE")
-    assert gs._resolve_target(TriggerTarget.ROOM, None) == []
+    assert gs._resolve_target(FunctionTarget.ROOM, None) == []
 
 
 def test_all_resolves_to_the_room_plus_registered_players_deduped():
     gs, light, _ = _running()
-    gs.fire_trigger("everywhere", fired_by="admin-manual")
+    gs.fire_function("everywhere", fired_by="admin-manual")
     assert [c[0] for c in light] == ["sim-room-main", "ie1"]
 
 
 def test_all_never_lists_a_room_bound_device_twice():
     gs, light, _ = _running(bound={"main": "ie1"})
-    gs.fire_trigger("everywhere", fired_by="admin-manual")
+    gs.fire_function("everywhere", fired_by="admin-manual")
     assert [c[0] for c in light] == ["ie1"]
 
 
 def test_a_device_target_with_no_device_is_refused_not_silently_empty():
     gs, light, _ = _running()
-    reason = gs.fire_trigger("flash", fired_by="admin-manual")
+    reason = gs.fire_function("flash", fired_by="admin-manual")
     assert reason is not None
     assert "no device given" in reason
     assert light == []
@@ -351,18 +351,18 @@ def test_a_device_target_with_no_device_is_refused_not_silently_empty():
 
 def test_surface_resolves_device():
     gs, _, _ = _running()
-    assert gs._resolve_target(TriggerTarget.SURFACE, "ie1") == ["ie1"]
+    assert gs._resolve_target(FunctionTarget.SURFACE, "ie1") == ["ie1"]
 
 
 def test_surface_resolves_room_sentinel():
     gs, _, _ = _running()
-    assert (gs._resolve_target(TriggerTarget.SURFACE, ROOM) ==
-            gs._resolve_target(TriggerTarget.ROOM, None))
+    assert (gs._resolve_target(FunctionTarget.SURFACE, ROOM) ==
+            gs._resolve_target(FunctionTarget.ROOM, None))
 
 
 def test_surface_fire_without_dev_refused():
     gs, light, _ = _running()
-    reason = gs.fire_trigger("spot", fired_by="admin-manual", dev=None)
+    reason = gs.fire_function("spot", fired_by="admin-manual", dev=None)
     assert reason is not None
     assert "no surface given" in reason
     assert light == []
@@ -370,18 +370,18 @@ def test_surface_fire_without_dev_refused():
 
 def test_surface_fire_with_room_sentinel_lights_the_room():
     gs, light, _ = _running()
-    assert gs.fire_trigger("spot", fired_by="admin-manual", dev=ROOM) is None
+    assert gs.fire_function("spot", fired_by="admin-manual", dev=ROOM) is None
     assert [c[0] for c in light] == ["sim-room-main"]
 
 
 def test_an_unknown_trigger_is_refused():
     gs, _, _ = _running()
-    assert "unknown trigger" in gs.fire_trigger("nope", fired_by="admin-manual")
+    assert "unknown function" in gs.fire_function("nope", fired_by="admin-manual")
 
 
 def test_firing_with_no_bit_running_is_refused():
     gs = GameServer({"bit": ScriptBit})
-    assert gs.fire_trigger("sweep", fired_by="admin-manual") == "no Bit running"
+    assert gs.fire_function("sweep", fired_by="admin-manual") == "no Bit running"
 
 
 def test_a_room_target_with_no_room_bound_fires_and_reaches_nothing():
@@ -389,7 +389,7 @@ def test_a_room_target_with_no_room_bound_fires_and_reaches_nothing():
     gs, light, _ = _running(bound={})
     observer = Recorder()
     gs.add_observer(observer)
-    assert gs.fire_trigger("sweep", fired_by="admin-manual") is None
+    assert gs.fire_function("sweep", fired_by="admin-manual") is None
     assert light == []
     assert observer.fired[0].devs == ()
     assert observer.fired[0].steps == 0
@@ -401,35 +401,35 @@ def test_a_raising_observer_does_not_stop_the_cues_or_its_peers():
     raiser, recorder = RaisingRecorder(), Recorder()
     gs.add_observer(raiser)
     gs.add_observer(recorder)
-    assert gs.fire_trigger("sweep", fired_by="admin-manual") is None
+    assert gs.fire_function("sweep", fired_by="admin-manual") is None
     assert len(light) == 3
     assert raiser.calls == 1
     assert len(recorder.fired) == 1
 
 
 def test_an_unknown_trigger_from_a_bit_does_not_break_neighbouring_cues():
-    from control.cues import FireTrigger
+    from control.cues import FireFunction
     gs, light, _ = _running()
-    gs._dispatch_cues([(ROOM, 0xB0, 74, 5), FireTrigger("nope"),
+    gs._dispatch_cues([(ROOM, 0xB0, 74, 5), FireFunction("nope"),
                        (ROOM, 0xB0, 74, 6)], 100.0)
     assert [c[3] for c in light] == [5, 6]
 
 
-def test_a_bit_whose_trigger_table_raises_is_refused_not_crashed():
+def test_a_bit_whose_function_table_raises_is_refused_not_crashed():
     class ExplodingBit(_BaseBit):
         @property
-        def trigger_table(self):
+        def function_table(self):
             raise RuntimeError("boom")
 
     gs = GameServer({"bit": PlainBit})
     gs.load_bit("bit")
     gs.run()
     gs.bit = ExplodingBit()
-    assert gs.fire_trigger("x", fired_by="admin-manual") == "trigger table error"
+    assert gs.fire_function("x", fired_by="admin-manual") == "function table error"
 
 
-class _FlipTriggerTableBit(_BaseBit):
-    """trigger_table is valid on its first read (the one load_bit validates)
+class _FlipFunctionTableBit(_BaseBit):
+    """function_table is valid on its first read (the one load_bit validates)
     and structurally invalid on every read after that, modeling a Bit whose
     property builds a fresh object per access -- the same hazard
     RegistrationState's role_table snapshot exists to close for role_table."""
@@ -441,23 +441,23 @@ class _FlipTriggerTableBit(_BaseBit):
         return {}
 
     @property
-    def trigger_table(self) -> TriggerTable:
+    def function_table(self) -> FunctionTable:
         if not self._read_once:
             self._read_once = True
-            return TriggerTable(triggers={
-                "bad": Trigger(
+            return FunctionTable(functions={
+                "bad": Function(
                     name="bad", description="Valid at load, bad later",
-                    target=TriggerTarget.ROOM,
+                    target=FunctionTarget.ROOM,
                     condition=Condition(name="c", description="d",
                                         source=ConditionSource.ADMIN_MANUAL),
                     script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),)),
             })
         # A 3-tuple cue: legal nowhere, but load-time validation never sees
         # it, because it only ran against the first, valid, access above.
-        return TriggerTable(triggers={
-            "bad": Trigger(
+        return FunctionTable(functions={
+            "bad": Function(
                 name="bad", description="Valid at load, bad later",
-                target=TriggerTarget.ROOM,
+                target=FunctionTarget.ROOM,
                 condition=Condition(name="c", description="d",
                                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74)),)),
@@ -494,13 +494,13 @@ def test_non_mute_fire_clears_mute_first():
     gs.muted.add("ie1")
     events = []
     gs.on_mute_change = lambda dev, m: events.append((dev, m))
-    assert gs.fire_trigger("flash", fired_by="admin-manual", dev="ie1") is None
+    assert gs.fire_function("flash", fired_by="admin-manual", dev="ie1") is None
     assert "ie1" not in gs.muted and ("ie1", False) in events
 
 
 def test_mute_fire_does_not_unmute_itself():
     gs, _, _ = _running()
-    assert gs.fire_trigger("stop", fired_by="admin-manual", dev="ie1") is None
+    assert gs.fire_function("stop", fired_by="admin-manual", dev="ie1") is None
     assert "ie1" in gs.muted
 
 
@@ -523,7 +523,7 @@ def test_unload_clears_mutes():
 
 def test_muted_device_suppresses_play_cue():
     """PlayCue suppression while muted is checked directly against
-    _dispatch_cues, bypassing fire_trigger -- a real fire at the surface
+    _dispatch_cues, bypassing fire_function -- a real fire at the surface
     would itself un-latch the mute first (see
     test_non_mute_fire_clears_mute_first), so this proves the dispatch-time
     guard rather than the un-mute-on-fire rule."""
@@ -533,25 +533,25 @@ def test_muted_device_suppresses_play_cue():
     assert play == []
 
 
-def test_a_trigger_table_that_turns_invalid_after_load_is_refused_not_crashed():
-    """trigger_table is a property: load_bit validates whatever it returns on
-    that one call, and the validated object is never retained. fire_trigger
+def test_a_function_table_that_turns_invalid_after_load_is_refused_not_crashed():
+    """function_table is a property: load_bit validates whatever it returns on
+    that one call, and the validated object is never retained. fire_function
     must guard its own later read of the same property rather than trust
     load-time validation to still apply."""
-    gs = _server(_FlipTriggerTableBit)
+    gs = _server(_FlipFunctionTableBit)
     gs.load_bit("bit")
-    reason = gs.fire_trigger("bad", fired_by="admin-manual")
+    reason = gs.fire_function("bad", fired_by="admin-manual")
     assert reason is not None
     assert isinstance(reason, str)
 
 
 class SolidSurfaceBit(_BaseBit):
     @property
-    def trigger_table(self) -> TriggerTable:
-        return TriggerTable(triggers={
-            "glow": Trigger(
+    def function_table(self) -> FunctionTable:
+        return FunctionTable(functions={
+            "glow": Function(
                 name="glow", description="Solid glow on a surface",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(name="manual", description="Operator asks",
                                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(
@@ -561,9 +561,9 @@ class SolidSurfaceBit(_BaseBit):
 
 def test_fire_refused_when_target_instrument_rejects_cue_kind():
     """spec section 7: a SolidCue fired at a device carrying an instrument
-    whose accepted_triggers is midi-only must refuse the whole fire, naming
+    whose accepted_cues is midi-only must refuse the whole fire, naming
     the rejected kind, and dispatch nothing."""
-    narrow = Instrument(name="narrow_midi_only", accepted_triggers=("midi",))
+    narrow = Instrument(name="narrow_midi_only", accepted_cues=("midi",))
     gs = _server(SolidSurfaceBit)
     light = []
     gs.on_light_cue = lambda *a: light.append(a)
@@ -571,7 +571,7 @@ def test_fire_refused_when_target_instrument_rejects_cue_kind():
     info = gs.devices.hello("dev1", "Dev1", "1.0")
     info.carried = narrow
 
-    reason = gs.fire_trigger("glow", fired_by="admin-manual", dev="dev1")
+    reason = gs.fire_function("glow", fired_by="admin-manual", dev="dev1")
 
     assert reason is not None
     assert "solid" in reason
@@ -582,8 +582,8 @@ def test_shipped_instruments_accept_every_cue_kind():
     """Pin: TUNESHROOM (every hello'd device's default carried instrument)
     and every instrument parsed from the repo terrarium.toml accept all of
     CUE_KINDS -- nothing shipped today should ever trip the new gate."""
-    assert set(TUNESHROOM.accepted_triggers) == set(CUE_KINDS)
+    assert set(TUNESHROOM.accepted_cues) == set(CUE_KINDS)
     config = load_terrarium_config("terrarium.toml")
     assert config.instruments, "expected at least one declared instrument"
     for name, instrument in config.instruments.items():
-        assert set(instrument.accepted_triggers) == set(CUE_KINDS), name
+        assert set(instrument.accepted_cues) == set(CUE_KINDS), name

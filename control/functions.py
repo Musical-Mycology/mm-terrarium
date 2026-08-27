@@ -1,6 +1,6 @@
-"""Bit-declared triggers: the named things an operator can see coming.
+"""Bit-declared functions: the named things an operator can see coming.
 
-A Bit declares a TriggerTable parallel to its RoleTable. Each entry names a
+A Bit declares a FunctionTable parallel to its RoleTable. Each entry names a
 thing that can happen, describes it in words an operator reads, says where it
 lands, names the condition the BIT evaluates, and carries a declarative cue
 script: an ordered list of (offset_seconds, cue).
@@ -31,7 +31,7 @@ from enum import Enum, auto
 from control.cues import ROOM, TARGET, LightCue, MuteCue, PlayCue, SolidCue
 
 
-class TriggerTarget(Enum):
+class FunctionTarget(Enum):
     ROOM = auto()      # every Room fixture
     DEVICE = auto()    # the device that fired, when there was one
     ALL = auto()       # Room fixtures plus every registered non-ROOM device
@@ -52,14 +52,14 @@ SOURCE_WIRE: dict[ConditionSource, str] = {
     ConditionSource.ADMIN_MANUAL: "admin-manual",
 }
 
-# What actually fired a trigger THIS time, which is not the same thing as the
-# source its condition declares: an operator may fire a gesture-verb trigger by
-# hand, and the record has to keep those distinguishable. See TriggerFired.
+# What actually fired a function THIS time, which is not the same thing as the
+# source its condition declares: an operator may fire a gesture-verb function by
+# hand, and the record has to keep those distinguishable. See FunctionFired.
 FIRED_BY_GESTURE_VERB = "gesture-verb"
 FIRED_BY_BIT_ADJUDICATED = "bit-adjudicated"
 FIRED_BY_ADMIN_MANUAL = "admin-manual"
 
-# A trigger name becomes a DOM id in console/static/triggers.js, the same way
+# A function name becomes a DOM id in console/static/functions.js, the same way
 # a capture label becomes a path component in capture/store.py. Restricted at
 # the declaration boundary for the same reason: it is cheaper to refuse an odd
 # name at Bit load than to escape it at every consumer.
@@ -70,13 +70,13 @@ _LEGAL_SCRIPT_DEVS = (TARGET, ROOM)
 
 @dataclass(frozen=True)
 class Condition:
-    """What makes a trigger fire, in the Bit's own words.
+    """What makes a function fire, in the Bit's own words.
 
     `verb` is required exactly when source is GESTURE_VERB, and is metadata
     plus something real for load-time validation to check. It does NOT cause
-    Control to fire the trigger when that verb arrives: a tap that misses or a
+    Control to fire the function when that verb arrives: a tap that misses or a
     tilt below threshold must not fire, so the Bit's handler returns a
-    FireTrigger explicitly or does not. Auto-firing on verb dispatch would put
+    FireFunction explicitly or does not. Auto-firing on verb dispatch would put
     condition evaluation, however trivial, inside Control.
     """
     name: str
@@ -87,7 +87,7 @@ class Condition:
 
 @dataclass(frozen=True)
 class ScriptStep:
-    """One step of a cue script. `offset` is seconds from the trigger's `at`.
+    """One step of a cue script. `offset` is seconds from the function's `at`.
 
     `cue` is a plain (dev, status, data1, data2) tuple or a PlayCue, whose dev
     is cues.TARGET or cues.ROOM. A LightCue is refused: it names its own
@@ -98,25 +98,25 @@ class ScriptStep:
 
 
 @dataclass(frozen=True)
-class Trigger:
+class Function:
     name: str
     description: str
-    target: TriggerTarget
+    target: FunctionTarget
     condition: Condition
     script: tuple[ScriptStep, ...] = ()
 
 
 @dataclass
-class TriggerTable:
-    triggers: dict[str, Trigger] = field(default_factory=dict)
+class FunctionTable:
+    functions: dict[str, Function] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
-class TriggerFired:
+class FunctionFired:
     """One fire, as the Console and any future uplink observer see it.
 
     fired_by and declared_source are separate on purpose. A manual fire of a
-    gesture-verb trigger records fired_by="admin-manual" against
+    gesture-verb function records fired_by="admin-manual" against
     declared_source="gesture-verb"; collapsing them is what would make an
     operator action indistinguishable from real gameplay in the log.
 
@@ -134,50 +134,50 @@ class TriggerFired:
     room_name: str | None = None
 
 
-def validate_trigger_table(trigger_table, verb_names) -> None:
-    """Shallow structural validation of a Bit's authored TriggerTable.
+def validate_function_table(function_table, verb_names) -> None:
+    """Shallow structural validation of a Bit's authored FunctionTable.
 
     Called from GameServer.load_bit alongside validate_role_declarations, and
     raises ValueError with a message locating the offending field, so a typo'd
     Bit fails as a load-time BitLoadError rather than mid-installation.
 
     `verb_names` is the key set of the Bit's verb_handlers(). Cross-referencing
-    it here is what makes a declared-but-unimplemented gesture trigger a load
+    it here is what makes a declared-but-unimplemented gesture function a load
     failure. Deliberately shallow everywhere else, in the same places
     control/role_config.py is: a cue's controller number is not checked against
     any manifest lane, because an undeclared cc is already dropped by design in
     AudioBridge._apply_midi, and the light half's instrument registry belongs
     to luxaeterna, which Control cannot see.
     """
-    if not isinstance(trigger_table, TriggerTable):
+    if not isinstance(function_table, FunctionTable):
         raise ValueError(
-            f"trigger_table: must be a TriggerTable, "
-            f"got {type(trigger_table).__name__}")
-    for key, trigger in trigger_table.triggers.items():
-        where = f"trigger {key!r}"
-        if not isinstance(trigger, Trigger):
+            f"function_table: must be a FunctionTable, "
+            f"got {type(function_table).__name__}")
+    for key, function_decl in function_table.functions.items():
+        where = f"function {key!r}"
+        if not isinstance(function_decl, Function):
             raise ValueError(
-                f"{where}: must be a Trigger, got {type(trigger).__name__}")
-        if trigger.name != key:
+                f"{where}: must be a Function, got {type(function_decl).__name__}")
+        if function_decl.name != key:
             raise ValueError(
-                f"{where}: name {trigger.name!r} does not match its key")
-        if not isinstance(trigger.name, str) or not _NAME_RE.match(trigger.name):
+                f"{where}: name {function_decl.name!r} does not match its key")
+        if not isinstance(function_decl.name, str) or not _NAME_RE.match(function_decl.name):
             raise ValueError(
-                f"{where}: name {trigger.name!r} must match [A-Za-z0-9_-]+ "
+                f"{where}: name {function_decl.name!r} must match [A-Za-z0-9_-]+ "
                 f"(it becomes a DOM id on the Console)")
-        if not isinstance(trigger.description, str) or not trigger.description:
+        if not isinstance(function_decl.description, str) or not function_decl.description:
             raise ValueError(f"{where}: description must be non-empty")
-        if not isinstance(trigger.target, TriggerTarget):
+        if not isinstance(function_decl.target, FunctionTarget):
             raise ValueError(
-                f"{where}: target must be a TriggerTarget, "
-                f"got {trigger.target!r}")
-        _validate_condition(trigger, verb_names)
-        _validate_script(trigger)
+                f"{where}: target must be a FunctionTarget, "
+                f"got {function_decl.target!r}")
+        _validate_condition(function_decl, verb_names)
+        _validate_script(function_decl)
 
 
-def _validate_condition(trigger: Trigger, verb_names) -> None:
-    where = f"trigger {trigger.name!r} condition"
-    condition = trigger.condition
+def _validate_condition(function_decl: Function, verb_names) -> None:
+    where = f"function {function_decl.name!r} condition"
+    condition = function_decl.condition
     if not isinstance(condition, Condition):
         raise ValueError(
             f"{where}: must be a Condition, got {type(condition).__name__}")
@@ -204,15 +204,15 @@ def _validate_condition(trigger: Trigger, verb_names) -> None:
             f"{SOURCE_WIRE[condition.source]}")
 
 
-def _validate_script(trigger: Trigger) -> None:
-    script = trigger.script
+def _validate_script(function_decl: Function) -> None:
+    script = function_decl.script
     if not isinstance(script, tuple):
         raise ValueError(
-            f"trigger {trigger.name!r} script: must be a tuple, "
+            f"function {function_decl.name!r} script: must be a tuple, "
             f"got {type(script).__name__}")
     previous: float | None = None
     for idx, step in enumerate(script):
-        where = f"trigger {trigger.name!r} script[{idx}]"
+        where = f"function {function_decl.name!r} script[{idx}]"
         if not isinstance(step, ScriptStep):
             raise ValueError(
                 f"{where}: must be a ScriptStep, got {type(step).__name__}")
@@ -298,7 +298,7 @@ def _validate_script_dev(dev, where: str) -> None:
             f"a literal in a static declaration can never resolve")
 
 
-def expand_script(trigger: Trigger, at: float, devs) -> list:
+def expand_script(function_decl: Function, at: float, devs) -> list:
     """Turn a declared script into concrete, timed cues for _dispatch_cues.
 
     Every light step becomes a LightCue carrying an explicit when of
@@ -309,13 +309,13 @@ def expand_script(trigger: Trigger, at: float, devs) -> list:
     was written on 2026-08-14 for exactly this case; expansion only supplies
     it with input.
 
-    A step addressed at cues.TARGET fans out to every dev the trigger's target
+    A step addressed at cues.TARGET fans out to every dev the function's target
     resolved to. A step addressed at cues.ROOM is left alone and resolved
     downstream, so one script can address the Room explicitly even when its
     own target is DEVICE.
     """
     out: list = []
-    for step in trigger.script:
+    for step in function_decl.script:
         when = at + float(step.offset)
         cue = step.cue
         if isinstance(cue, PlayCue):

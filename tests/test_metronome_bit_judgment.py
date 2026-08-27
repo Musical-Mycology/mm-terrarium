@@ -1,6 +1,6 @@
 """tests/test_metronome_bit_judgment.py"""
 from bits.metronome.metronome_bit import MetronomeBit
-from control.cues import FireTrigger, ROOM
+from control.cues import FireFunction, ROOM
 
 B = MetronomeBit.BEAT_S
 
@@ -19,11 +19,11 @@ def _wait_grid(bit, cycle, wait_beat):
 
 
 def _drain_until(bit, at, step=0.02):
-    """Advance cues(at) to `at`, returning every FireTrigger seen."""
+    """Advance cues(at) to `at`, returning every FireFunction seen."""
     fires, t = [], bit._last_drained if hasattr(bit, "_last_drained") else 100.0
     while t < at:
         t = min(t + step, at)
-        fires += [c for c in bit.cues(t) if isinstance(c, FireTrigger)]
+        fires += [c for c in bit.cues(t) if isinstance(c, FireFunction)]
     bit._last_drained = t
     return fires
 
@@ -100,7 +100,7 @@ def test_multi_cycle_jump_judges_every_pending_cycle():
     _tap_all_four(bit, 0, dev="ie1")
     _tap_all_four(bit, 1, dev="ie2")
     end = _wait_grid(bit, 1, 3) + 0.2
-    fires = [c for c in bit.cues(end) if isinstance(c, FireTrigger)]
+    fires = [c for c in bit.cues(end) if isinstance(c, FireFunction)]
     names = [(f.name, f.dev) for f in fires]
     assert ("fireworks_player", "ie1") in names
     assert ("fireworks_player", "ie2") in names

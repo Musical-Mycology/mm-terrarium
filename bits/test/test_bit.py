@@ -5,16 +5,16 @@ section 4.
 """
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, FireTrigger, MuteCue, PlayCue, SolidCue
+from control.cues import ROOM, TARGET, FireFunction, MuteCue, PlayCue, SolidCue
 from control.instrument import InstrumentRequirement
 from control.roles import Role, RoleClass, RoleTable
-from control.triggers import (
+from control.functions import (
     Condition,
     ConditionSource,
     ScriptStep,
-    Trigger,
-    TriggerTable,
-    TriggerTarget,
+    Function,
+    FunctionTable,
+    FunctionTarget,
 )
 
 RUN_DURATION_SECONDS = 2.0
@@ -201,20 +201,20 @@ class TestBit(Bit):
         return self._elapsed >= self._run_duration
 
     @property
-    def trigger_table(self) -> TriggerTable:
+    def function_table(self) -> FunctionTable:
         """Two triggers, deliberately: one per fire path.
 
         play_aurora is bit-adjudicated, so nothing outside this Bit decides
         when a round is won. flash_device is reached through the `tap` verb
         this Bit already implements, and Control does NOT fire it just because
-        a tap arrived: _on_tap returns the FireTrigger itself, which is what
+        a tap arrived: _on_tap returns the FireFunction itself, which is what
         keeps condition evaluation inside the Bit.
         """
-        return TriggerTable(triggers={
-            "play_aurora": Trigger(
+        return FunctionTable(functions={
+            "play_aurora": Function(
                 name="play_aurora",
                 description="A slow rainbow sweep across the Room",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(
                     name="round_won",
                     description="User wins a round",
@@ -225,11 +225,11 @@ class TestBit(Bit):
                     ScriptStep(2.0, (TARGET, 0xB0, 74, 0)),
                 ),
             ),
-            "flash_device": Trigger(
+            "flash_device": Function(
                 name="flash_device",
                 description="Identify a surface: chime plus 5 s of solid "
                             "white at 90%.",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(
                     name="tapped",
                     description="Two-tap on the device",
@@ -240,22 +240,22 @@ class TestBit(Bit):
                     ScriptStep(0.0, SolidCue(TARGET, (255, 255, 255), 0.9, 5.0)),
                 ),
             ),
-            "stop": Trigger(
+            "stop": Function(
                 name="stop",
                 description="Latch this surface dark and silent until a "
                             "Play un-mutes it.",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(
                     name="operator-stop",
                     description="Fired by the operator",
                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, MuteCue(TARGET)),),
             ),
-            "win": Trigger(
+            "win": Function(
                 name="win",
                 description="Win celebration: ascending chime plus a hue "
                             "flourish.",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(
                     name="operator-win",
                     description="Fired by the operator",
@@ -294,7 +294,7 @@ class TestBit(Bit):
             self._round_won = False
             self._rounds_won += 1
             self._quiet_until = self._elapsed + self.SCRIPT_QUIET_SECONDS
-            return [FireTrigger("play_aurora", ROOM)]
+            return [FireFunction("play_aurora", ROOM)]
         if self._elapsed < self._quiet_until:
             # play_aurora owns cc:74 until its script finishes. See
             # SCRIPT_QUIET_SECONDS.
@@ -370,7 +370,7 @@ class TestBit(Bit):
         count = int(args[3]) if len(args) > 3 else 1
         name = "chime" if count >= 2 else "click"
         return [PlayCue(dev, name, ""), (dev, 0xB0, 74, 127),
-                FireTrigger("flash_device", dev)]
+                FireFunction("flash_device", dev)]
 
     def _on_shake(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, sweep_deg]. Sweep drives the hue

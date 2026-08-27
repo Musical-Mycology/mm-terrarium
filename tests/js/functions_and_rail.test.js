@@ -2,7 +2,7 @@
 const assert = require("node:assert");
 const { byId, FakeSocket } = require("./_dom_stub.js");
 
-const TRIGGERS = [
+const FUNCTIONS = [
   { name: "fireworks_player", description: "Celebratory flashes", target: "DEVICE",
     condition: { name: "phrase_success", description: "Player matches the call phrase",
                  source: "bit-adjudicated", verb: null },
@@ -21,9 +21,9 @@ const TRIGGERS = [
 (async () => {
   const wire = await import("../../console/static/wire.js");
   const surface = await import("../../console/static/surface.js");
-  const triggers = await import("../../console/static/triggers.js");
+  const functions = await import("../../console/static/functions.js");
   const rail = await import("../../console/static/rail.js");
-  surface.init(); triggers.init(); rail.init();
+  surface.init(); functions.init(); rail.init();
   wire.connect({ WebSocketImpl: FakeSocket });
   const sock = FakeSocket.instances.at(-1);
   sock.onopen();
@@ -33,12 +33,12 @@ const TRIGGERS = [
          roles: [], registration: [{ role: "player", count: 2, capacity: 2 }],
          devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" },
                    { dev: "sim-room", name: "Room", role: null }],
-         bit_status: {}, triggers: TRIGGERS,
+         bit_status: {}, functions: FUNCTIONS,
          room: { room_type: "DEMO", capability: { pixel_count: 864,
                  color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
                  controllers: {} } });
 
-  const mount = byId.get("triggersMount");
+  const mount = byId.get("functionsMount");
   assert.ok(mount.innerHTML.includes("fireworks_player"));
   assert.ok(mount.innerHTML.includes("2 steps · 1.4s"));   // count + span
   assert.ok(mount.innerHTML.includes("never fired"));
@@ -46,10 +46,10 @@ const TRIGGERS = [
   assert.ok(mount.innerHTML.includes("ie1"));
 
   // redesign markup: grid + card classes reconciled to terrarium.css
-  const grid = mount.children.find((c) => c.className === "triggrid");
-  assert.ok(grid, "expected a .triggrid container");
-  const fireworksCard = triggers._cardFor("fireworks_player");
-  assert.ok(fireworksCard.className.includes("trig"), "card should carry the trig class");
+  const grid = mount.children.find((c) => c.className === "fngrid");
+  assert.ok(grid, "expected a .fngrid container");
+  const fireworksCard = functions._cardFor("fireworks_player");
+  assert.ok(fireworksCard.className.includes("fn"), "card should carry the fn class");
   assert.ok(fireworksCard.children.some((c) => c.className === "desc"));
   assert.ok(fireworksCard.children.some((c) => c.className === "cond"));
   assert.ok(fireworksCard.children.some((c) => c.className === "fired-line"));
@@ -63,29 +63,29 @@ const TRIGGERS = [
 
   // SURFACE card: picker offers "Room" first, then live devices
   const pickerFor = (name) =>
-    triggers._cardFor(name).children.find((c) => c.className === "firerow").children[0];
+    functions._cardFor(name).children.find((c) => c.className === "firerow").children[0];
   const surfacePicker = pickerFor("flash_device");
   assert.strictEqual(surfacePicker.options[0].value, "@room");
   assert.strictEqual(surfacePicker.options[0].textContent, "Room");
   assert.deepStrictEqual(
     [...surfacePicker.options].map((o) => o.value), ["@room", "ie1", "sim-room"]);
 
-  // a repeat triggers_changed with identical content must not rebuild (rule 1)
-  const before = triggers._cardFor("fireworks_player");
-  send({ event: "triggers_changed", triggers: TRIGGERS });
-  assert.strictEqual(triggers._cardFor("fireworks_player"), before);
+  // a repeat functions_changed with identical content must not rebuild (rule 1)
+  const before = functions._cardFor("fireworks_player");
+  send({ event: "functions_changed", functions: FUNCTIONS });
+  assert.strictEqual(functions._cardFor("fireworks_player"), before);
 
   // devices_changed refreshes SURFACE pickers in place, without rebuilding cards
-  const surfaceCardBefore = triggers._cardFor("flash_device");
+  const surfaceCardBefore = functions._cardFor("flash_device");
   send({ event: "devices_changed",
          devices: [{ dev: "ie1", name: "Testshroom 1", role: "player", muted: true }] });
-  assert.strictEqual(triggers._cardFor("flash_device"), surfaceCardBefore);
+  assert.strictEqual(functions._cardFor("flash_device"), surfaceCardBefore);
   const refreshedPicker = pickerFor("flash_device");
   assert.strictEqual(refreshedPicker.options[0].value, "@room");
   assert.strictEqual(refreshedPicker.options[1].textContent, "ie1 (muted)");
 
-  // trigger_fired updates the one line, tags admin-manual
-  send({ event: "trigger_fired", fired: { name: "finale", fired_by: "admin-manual",
+  // function_fired updates the one line, tags admin-manual
+  send({ event: "function_fired", fired: { name: "finale", fired_by: "admin-manual",
          declared_source: "bit-adjudicated", dev: null, devs: ["sim-room"],
          at: 12.5, steps: 1 } });
   assert.ok(mount.innerHTML.includes("Admin manual"));
@@ -129,7 +129,7 @@ const TRIGGERS = [
   send({ event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
          roles: [PLAYER_ROLE], registration: [{ role: "player", count: 2, capacity: 2 }],
          devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" }],
-         bit_status: {}, triggers: TRIGGERS,
+         bit_status: {}, functions: FUNCTIONS,
          room: { room_type: "DEMO", capability: { pixel_count: 864,
                  color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
                  controllers: {} } });
@@ -161,12 +161,12 @@ const TRIGGERS = [
   send({ event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
          roles: [NO_REQUIRES_ROLE],
          registration: [{ role: "watcher", count: 0, capacity: null }],
-         devices: [], bit_status: {}, triggers: TRIGGERS,
+         devices: [], bit_status: {}, functions: FUNCTIONS,
          room: { room_type: "DEMO", capability: { pixel_count: 864,
                  color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
                  controllers: {} } });
   const noReqHtml = byId.get("rolesCard").innerHTML;
   assert.ok(!noReqHtml.includes("requires —"), "no requires line without a requires slot");
 
-  console.log("triggers_and_rail: ok");
+  console.log("functions_and_rail: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

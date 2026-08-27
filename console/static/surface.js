@@ -1,5 +1,5 @@
 // Room card: LED surface as discrete per-pixel dot rows (one per physical
-// block), zone bar, binding controls, and the Instruments/Triggers
+// block), zone bar, binding controls, and the Instruments/Functions
 // accordions. Per-fixture rebuild discipline (spec section 6, rules
 // 1/2/3/4/6/9) is the load-bearing part of this file -- a controllers-only
 // room_changed must repaint nothing but live lane values; a room_frame must
@@ -30,7 +30,7 @@ let framesChipEl = null;
 let instAccEl = null;
 let instSummaryMetaEl = null;
 let instMountEl = null;
-let triggersAccEl = null;            // created once, outside the per-fixture rebuild path
+let functionsAccEl = null;           // created once, outside the per-fixture rebuild path
 let fixtureElByName = new Map();     // fixture name -> its .fixture wrapper element
 let bindStateByName = new Map();     // fixture name -> last-rendered binding-state key
 let instGridEl = null;               // .instgrid wrapper inside instMountEl
@@ -224,7 +224,7 @@ function bindingControls(fixture) {
 // -------------------------------------------------------------- fixtures
 
 // A small tag row for an Instrument's static declaration -- name plus its
-// capabilities/functions/accepted_triggers. Used by both the per-fixture
+// capabilities/functions/accepted_cues. Used by both the per-fixture
 // card and the per-declaration instrument cards below; these fields never
 // carry a live value (no controller/lane), so a plain tag row (no <dl>
 // live-update machinery) is enough.
@@ -237,7 +237,7 @@ function instrumentTags(instrument) {
   for (const fn of instrument.functions || []) {
     row.appendChild(mk("span", "insttag fn", fn));
   }
-  for (const trig of instrument.accepted_triggers || []) {
+  for (const trig of instrument.accepted_cues || []) {
     row.appendChild(mk("span", "insttag trig", trig));
   }
   return row;
@@ -481,7 +481,7 @@ function resetStructure() {
   instAccEl = null;
   instSummaryMetaEl = null;
   instMountEl = null;
-  triggersAccEl = null;
+  functionsAccEl = null;
   fixtureElByName = new Map();
   bindStateByName = new Map();
   instGridEl = null;
@@ -634,21 +634,21 @@ function render() {
   instSummaryMetaEl.textContent = `${room.instruments.length} declared · live values`;
   renderInstruments(instMountEl, room.instruments, room.controllers || {});
 
-  // Triggers accordion shell -- created ONCE here; Task 6 renders into
-  // #triggersMount.
-  if (!triggersAccEl) {
-    triggersAccEl = document.createElement("details");
-    triggersAccEl.className = "acc";
-    triggersAccEl.id = "triggersAcc";
-    triggersAccEl.open = true;
+  // Functions accordion shell -- created ONCE here; functions.js renders into
+  // #functionsMount.
+  if (!functionsAccEl) {
+    functionsAccEl = document.createElement("details");
+    functionsAccEl.className = "acc";
+    functionsAccEl.id = "functionsAcc";
+    functionsAccEl.open = true;
     const summary = document.createElement("summary");
     summary.appendChild(mk("span", "tri", "▸"));
-    summary.appendChild(document.createTextNode("Triggers"));
-    triggersAccEl.appendChild(summary);
-    const triggersBody = mk("div", "accbody");
-    triggersBody.id = "triggersMount";
-    triggersAccEl.appendChild(triggersBody);
-    body.appendChild(triggersAccEl);
+    summary.appendChild(document.createTextNode("Functions"));
+    functionsAccEl.appendChild(summary);
+    const functionsBody = mk("div", "accbody");
+    functionsBody.id = "functionsMount";
+    functionsAccEl.appendChild(functionsBody);
+    body.appendChild(functionsAccEl);
   }
 }
 

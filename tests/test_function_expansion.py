@@ -6,20 +6,20 @@ renderer and no GameServer.
 """
 
 from control.cues import ROOM, TARGET, LightCue, PlayCue
-from control.triggers import (
+from control.functions import (
     Condition,
     ConditionSource,
     ScriptStep,
-    Trigger,
-    TriggerTarget,
+    Function,
+    FunctionTarget,
     expand_script,
 )
 
 AT = 100.0
 
 
-def _trigger(script, target=TriggerTarget.ROOM):
-    return Trigger(
+def _trigger(script, target=FunctionTarget.ROOM):
+    return Function(
         name="t", description="d", target=target,
         condition=Condition(name="c", description="cd",
                             source=ConditionSource.BIT_ADJUDICATED),
@@ -50,7 +50,7 @@ def test_target_is_substituted_with_the_resolved_dev():
 
 def test_target_fans_out_to_every_resolved_dev():
     trigger = _trigger((ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),),
-                       target=TriggerTarget.ALL)
+                       target=FunctionTarget.ALL)
     out = expand_script(trigger, AT, ["sim-room", "ie1", "ie2"])
     assert [c.dev for c in out] == ["sim-room", "ie1", "ie2"]
     assert {c.when for c in out} == {100.0}
@@ -58,7 +58,7 @@ def test_target_fans_out_to_every_resolved_dev():
 
 def test_target_with_no_resolved_devs_expands_to_nothing():
     trigger = _trigger((ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),),
-                       target=TriggerTarget.DEVICE)
+                       target=FunctionTarget.DEVICE)
     assert expand_script(trigger, AT, []) == []
 
 
@@ -67,21 +67,21 @@ def test_a_room_addressed_step_is_left_for_resolve_dev_downstream():
     into the Room's bound dev, so this module never needs to know what a Room
     is, and _resolve_dev is not edited by this slice."""
     trigger = _trigger((ScriptStep(0.0, (ROOM, 0xB0, 74, 127)),),
-                       target=TriggerTarget.DEVICE)
+                       target=FunctionTarget.DEVICE)
     out = expand_script(trigger, AT, ["ie1"])
     assert [c.dev for c in out] == [ROOM]
 
 
 def test_a_room_step_does_not_fan_out_even_when_several_devs_resolved():
     trigger = _trigger((ScriptStep(0.0, (ROOM, 0xB0, 74, 127)),),
-                       target=TriggerTarget.ALL)
+                       target=FunctionTarget.ALL)
     out = expand_script(trigger, AT, ["sim-room", "ie1", "ie2"])
     assert [c.dev for c in out] == [ROOM]
 
 
 def test_a_play_cue_step_keeps_its_name_and_params_and_gains_the_dev():
     trigger = _trigger((ScriptStep(0.0, PlayCue(TARGET, "click", "soft")),),
-                       target=TriggerTarget.DEVICE)
+                       target=FunctionTarget.DEVICE)
     out = expand_script(trigger, AT, ["ie1"])
     assert out == [PlayCue("ie1", "click", "soft")]
 
@@ -90,13 +90,13 @@ def test_a_mixed_script_preserves_declaration_order():
     trigger = _trigger((
         ScriptStep(0.0, PlayCue(TARGET, "click", "")),
         ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
-    ), target=TriggerTarget.DEVICE)
+    ), target=FunctionTarget.DEVICE)
     out = expand_script(trigger, AT, ["ie1"])
     assert isinstance(out[0], PlayCue)
     assert isinstance(out[1], LightCue)
 
 
-def test_expansion_never_produces_a_fire_trigger_so_chaining_cannot_cycle():
+def test_expansion_never_produces_a_fire_function_so_chaining_cannot_cycle():
     trigger = _trigger((ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),))
     out = expand_script(trigger, AT, ["sim-room"])
     assert all(isinstance(c, (LightCue, PlayCue)) for c in out)

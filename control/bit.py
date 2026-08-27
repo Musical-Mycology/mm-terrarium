@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from control.roles import RoleTable
-from control.triggers import TriggerTable
+from control.functions import FunctionTable
 
 if TYPE_CHECKING:
     from control.bit_config import BitConfig
@@ -57,18 +57,18 @@ class Bit(ABC):
         return ()
 
     @property
-    def trigger_table(self) -> TriggerTable:
-        """This Bit's declared triggers: the named things an operator can see
+    def function_table(self) -> FunctionTable:
+        """This Bit's declared functions: the named things an operator can see
         coming, each with a description, a target, a condition this Bit
         evaluates itself, and a declarative cue script.
 
         A plain property with an empty default, deliberately not abstract the
-        way role_table is, so every Bit written before triggers existed keeps
-        working untouched. Validated at load_bit (control/triggers.py), so a
-        trigger declared against a verb this Bit does not implement fails as a
+        way role_table is, so every Bit written before functions existed keeps
+        working untouched. Validated at load_bit (control/functions.py), so a
+        function declared against a verb this Bit does not implement fails as a
         BitLoadError rather than mid-installation.
         """
-        return TriggerTable(triggers={})
+        return FunctionTable(functions={})
 
     def on_setup_enter(self) -> None:
         """Called once when Control enters SETUP for this Bit."""

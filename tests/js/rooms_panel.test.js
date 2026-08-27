@@ -1,7 +1,7 @@
 "use strict";
 // Rooms panel: one card per configured room, load/unload with progress
 // updates in place (card list children preserved -- same discipline as
-// triggers.js), Load disabled while a room is active or unloadable, Unload
+// functions.js), Load disabled while a room is active or unloadable, Unload
 // via confirmTap surviving a progress event without losing its armed state.
 const assert = require("node:assert");
 const { byId, FakeSocket } = require("./_dom_stub.js");
@@ -15,7 +15,7 @@ const ROOMS = [
 function snapshotMsg(rooms, terrarium_state) {
   return {
     event: "snapshot", state: "IDLE", loaded_bit: null,
-    roles: [], registration: [], devices: [], bit_status: {}, triggers: [],
+    roles: [], registration: [], devices: [], bit_status: {}, functions: [],
     room: null, terrarium_state, rooms,
   };
 }

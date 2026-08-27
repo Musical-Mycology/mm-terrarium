@@ -1,6 +1,6 @@
 """tests/test_metronome_bit_finale.py"""
 from bits.metronome.metronome_bit import MetronomeBit
-from control.cues import FireTrigger
+from control.cues import FireFunction
 
 B = MetronomeBit.BEAT_S
 
@@ -18,7 +18,7 @@ def _run_through(bit, tap_cycles=()):
     while t < end:
         t += 0.02
         bit.update(0.02)
-        fires += [c for c in bit.cues(t) if isinstance(c, FireTrigger)]
+        fires += [c for c in bit.cues(t) if isinstance(c, FireFunction)]
     return fires, t
 
 

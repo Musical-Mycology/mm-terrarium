@@ -14,13 +14,13 @@ const ROOM = {
       url: "http://sim-room-main.local/surface",
       instrument: { name: "generic_surface",
                     capabilities: ["audio.flsyn", "light.surface"],
-                    functions: [], accepted_triggers: ["midi", "solid"] } },
+                    functions: [], accepted_cues: ["midi", "solid"] } },
     { name: "accent", pixel_count: 30, channel_start: 180, channel_count: 90,
       zones: [{ name: "accent.low", start: 0, count: 15 },
               { name: "accent.high", start: 15, count: 15 }], dev: null, url: null,
       instrument: { name: "generic_surface",
                     capabilities: ["audio.flsyn", "light.surface"],
-                    functions: [], accepted_triggers: ["midi", "solid"] } },
+                    functions: [], accepted_cues: ["midi", "solid"] } },
   ],
   instruments: [
     { kind: "light", instrument: "aurora", target: "primary",
@@ -49,7 +49,7 @@ const ROOM = {
   const send = (m) => sock.onmessage({ data: JSON.stringify(m) });
 
   send({ event: "snapshot", state: "RUNNING", loaded_bit: "TestBit", roles: [],
-         registration: [], devices: [], bit_status: {}, triggers: [], room: ROOM });
+         registration: [], devices: [], bit_status: {}, functions: [], room: ROOM });
   const card = byId.get("roomCard");
   assert.ok(card.innerHTML.includes("TEST"));
   assert.ok(card.innerHTML.includes("main.center (20..39)"));
@@ -59,7 +59,7 @@ const ROOM = {
   assert.ok(card.innerHTML.includes("= 93"));            // live lane value
   assert.ok(card.innerHTML.includes("Instruments"));     // accordion, not Controls
   // fixture cards show the fixture's own Instrument as a small tag row
-  // (name + capabilities + accepted triggers).
+  // (name + capabilities + accepted cues).
   assert.ok(card.innerHTML.includes("light.surface"));
   assert.ok(card.innerHTML.includes("audio.flsyn"));
   assert.ok(card.innerHTML.includes("generic_surface"));

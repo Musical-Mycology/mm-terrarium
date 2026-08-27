@@ -97,7 +97,7 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
         description=iraw.get("description", ""),
         capabilities=frozenset(iraw.get("capabilities", [])),
         functions=tuple(iraw.get("functions", [])),
-        accepted_triggers=tuple(iraw.get("accepted_triggers", [])),
+        accepted_cues=tuple(iraw.get("accepted_cues", [])),
         light_manifest=light_manifest,
         ugen_manifest=ugen_manifest,
     )

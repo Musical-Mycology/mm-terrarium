@@ -103,7 +103,7 @@ def test_fixtures_carry_their_instrument():
             "name": "generic_surface",
             "capabilities": ["audio.flsyn", "light.surface"],
             "functions": [],
-            "accepted_triggers": ["midi", "play", "solid", "mute"],
+            "accepted_cues": ["midi", "play", "solid", "mute"],
         }
 
 

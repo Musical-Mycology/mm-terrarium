@@ -22,7 +22,7 @@ ROOM = "@room"
 
 @dataclass(frozen=True)
 class PlayCue:
-    """Trigger a device-local sample. `name` indexes the role's declared
+    """Function a device-local sample. `name` indexes the role's declared
     `samples` list by value, never by position. `params` is opaque to Control
     and to the transport: the Bit writes it, the device displays it.
 
@@ -54,9 +54,9 @@ class LightCue:
 
 
 # Sentinel dev id for a cue script step addressed at whatever the firing
-# trigger declared as its target. Substituted during expansion
-# (control.triggers.expand_script), before the cue ever reaches
-# GameServer._resolve_dev, so that method is not edited by the trigger slice
+# function declared as its target. Substituted during expansion
+# (control.functions.expand_script), before the cue ever reaches
+# GameServer._resolve_dev, so that method is not edited by the function slice
 # and ROOM resolution keeps working exactly as it does today. See
 # docs/superpowers/specs/
 # 2026-08-17-bit-declared-triggers-and-cue-scripts-design.md section 7.2.
@@ -64,14 +64,14 @@ TARGET = "@target"
 
 
 @dataclass(frozen=True)
-class FireTrigger:
+class FireFunction:
     """A Bit's report that one of its own declared conditions is satisfied.
 
     Returned in the same list a Bit already returns cues in, from a verb
     handler or from cues(at), so a fire inherits that path's single
     presentation time and lands on the same frame as the ordinary cues
     returned beside it. `dev` names the device the fire is about, when there
-    is one; it is what TriggerTarget.DEVICE resolves to.
+    is one; it is what FunctionTarget.DEVICE resolves to.
 
     A distinct type rather than a magic tuple, for the same reason PlayCue and
     LightCue are: GameServer._dispatch_cues tells cue kinds apart by identity,
@@ -101,7 +101,7 @@ class SolidCue:
 
 @dataclass(frozen=True)
 class MuteCue:
-    """Latch a surface dark and silent (the Stop trigger). Distinct type for
+    """Latch a surface dark and silent (the Stop function). Distinct type for
     the same identity-dispatch reason as every cue here. Un-latching is not a
-    cue: any non-mute trigger fired at the surface clears it (engine rule)."""
+    cue: any non-mute function fired at the surface clears it (engine rule)."""
     dev: str

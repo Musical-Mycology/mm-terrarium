@@ -44,7 +44,7 @@ from tests.test_terrarium import DEMO_PROFILE, TEST_SPEC, FakeArco
 _AMBIENT_ARRAY = Instrument(
     name="ambient_array",
     capabilities=frozenset({"light.surface", "audio.flsyn"}),
-    accepted_triggers=("midi", "play", "solid", "mute"),
+    accepted_cues=("midi", "play", "solid", "mute"),
     light_manifest={"instruments": [{"instrument": "aurora",
                                      "target": "primary"}]},
     ugen_manifest={"instruments": [{"instrument": "flsyn", "program": 89,

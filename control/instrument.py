@@ -21,8 +21,8 @@ CUE_KINDS: tuple[str, ...] = ("midi", "play", "solid", "mute")
 
 
 def cue_kind(cue) -> str:
-    """Classify an expanded cue (control/triggers.py's expand_script output)
-    by the accepted_triggers vocabulary: SolidCue -> "solid", PlayCue ->
+    """Classify an expanded cue (control/functions.py's expand_script output)
+    by the accepted_cues vocabulary: SolidCue -> "solid", PlayCue ->
     "play", MuteCue -> "mute", everything else (plain 4-tuples, LightCue)
     -> "midi". Imported lazily to avoid control.cues <-> control.instrument
     becoming a cycle if control.cues ever needs an Instrument."""
@@ -46,7 +46,7 @@ class Instrument:
     description: str = ""
     capabilities: frozenset[str] = frozenset()
     functions: tuple[str, ...] = ()
-    accepted_triggers: tuple[str, ...] = ()
+    accepted_cues: tuple[str, ...] = ()
     light_manifest: dict = field(default_factory=dict)
     ugen_manifest: dict = field(default_factory=dict)
 
@@ -71,10 +71,10 @@ def validate_instrument(instrument: Instrument) -> None:
         raise InstrumentError(
             f"instrument {instrument.name!r}: unknown capability tag(s) "
             f"{sorted(unknown)}; known: {sorted(CAPABILITY_VOCABULARY)}")
-    bad = [k for k in instrument.accepted_triggers if k not in CUE_KINDS]
+    bad = [k for k in instrument.accepted_cues if k not in CUE_KINDS]
     if bad:
         raise InstrumentError(
-            f"instrument {instrument.name!r}: unknown accepted trigger "
+            f"instrument {instrument.name!r}: unknown accepted cue "
             f"kind(s) {bad}; known: {list(CUE_KINDS)}")
 
 
@@ -152,5 +152,5 @@ TUNESHROOM = Instrument(
     capabilities=frozenset({"light.pixels", "audio.samples",
                             "gesture.tap", "gesture.tilt"}),
     functions=("tap", "tilt"),
-    accepted_triggers=("midi", "play", "solid", "mute"),
+    accepted_cues=("midi", "play", "solid", "mute"),
 )

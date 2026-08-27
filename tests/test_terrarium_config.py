@@ -14,7 +14,7 @@ name = "t"
 
 [instruments.dev_strip]
 capabilities = ["light.surface"]
-accepted_triggers = ["midi", "play", "solid", "mute"]
+accepted_cues = ["midi", "play", "solid", "mute"]
 
 [rooms.ONE]
 backends = ["devicelink"]
@@ -152,7 +152,7 @@ name = "t"
 description = "6 m SK6812 venue array"
 capabilities = ["light.surface", "audio.flsyn"]
 functions = []
-accepted_triggers = ["midi", "play", "solid", "mute"]
+accepted_cues = ["midi", "play", "solid", "mute"]
   [instruments.venue_array.ambient]
   [instruments.venue_array.ambient.light]
   instruments = [ { instrument = "aurora", target = "primary" } ]
@@ -221,7 +221,7 @@ name = "t"
 
 [instruments.bad_one]
 capabilities = ["light.warp"]
-accepted_triggers = ["midi"]
+accepted_cues = ["midi"]
 
 [rooms.ONE]
 backends = ["devicelink"]

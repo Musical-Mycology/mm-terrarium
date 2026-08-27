@@ -8,5 +8,5 @@ from control.instrument import Instrument
 GENERIC_SURFACE = Instrument(
     name="generic_surface",
     capabilities=frozenset({"light.surface", "audio.flsyn"}),
-    accepted_triggers=("midi", "play", "solid", "mute"),
+    accepted_cues=("midi", "play", "solid", "mute"),
 )

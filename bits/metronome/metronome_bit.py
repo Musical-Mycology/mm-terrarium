@@ -1,7 +1,7 @@
 """MetronomeBit: a call-and-response metronome game for the DEMO Room.
 
 See docs/superpowers/specs/2026-08-20-metronome-bit-design.md. This module
-carries only the static declarations (roles, manifests, triggers) plus the
+carries only the static declarations (roles, manifests, functions) plus the
 lifecycle scaffolding later tasks fill in -- no gameplay logic yet.
 """
 
@@ -10,15 +10,15 @@ from __future__ import annotations
 import random
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, FireTrigger, LightCue
+from control.cues import ROOM, TARGET, FireFunction, LightCue
 from control.roles import Role, RoleClass, RoleTable
-from control.triggers import (
+from control.functions import (
     Condition,
     ConditionSource,
     ScriptStep,
-    Trigger,
-    TriggerTable,
-    TriggerTarget,
+    Function,
+    FunctionTable,
+    FunctionTarget,
 )
 
 
@@ -170,32 +170,32 @@ class MetronomeBit(Bit):
         return room_light, room_ugen
 
     @property
-    def trigger_table(self) -> TriggerTable:
+    def function_table(self) -> FunctionTable:
         def _adjudicated(name: str, description: str) -> Condition:
             return Condition(name=name, description=description,
                              source=ConditionSource.BIT_ADJUDICATED)
 
-        return TriggerTable(triggers={
-            "fireworks_player": Trigger(
+        return FunctionTable(functions={
+            "fireworks_player": Function(
                 name="fireworks_player",
                 description="Celebratory flashes on the player who nailed it",
-                target=TriggerTarget.DEVICE,
+                target=FunctionTarget.DEVICE,
                 condition=_adjudicated(
                     "phrase_success", "Player matches the call phrase"),
                 script=_fireworks_script(),
             ),
-            "fireworks_room": Trigger(
+            "fireworks_room": Function(
                 name="fireworks_room",
                 description="Celebratory flashes across the Room",
-                target=TriggerTarget.ROOM,
+                target=FunctionTarget.ROOM,
                 condition=_adjudicated(
                     "phrase_success", "Player matches the call phrase"),
                 script=_fireworks_script(),
             ),
-            "fail_player": Trigger(
+            "fail_player": Function(
                 name="fail_player",
                 description="Player's light goes red and dark on a miss",
-                target=TriggerTarget.DEVICE,
+                target=FunctionTarget.DEVICE,
                 condition=_adjudicated(
                     "phrase_fail", "Player misses the call phrase"),
                 script=(
@@ -203,10 +203,10 @@ class MetronomeBit(Bit):
                     ScriptStep(1.0, (TARGET, 0xB0, 11, 0)),
                 ),
             ),
-            "fail_room": Trigger(
+            "fail_room": Function(
                 name="fail_room",
                 description="Room flashes a fail cue and restores the click",
-                target=TriggerTarget.ROOM,
+                target=FunctionTarget.ROOM,
                 condition=_adjudicated(
                     "phrase_fail", "Player misses the call phrase"),
                 script=(
@@ -217,10 +217,10 @@ class MetronomeBit(Bit):
                     ScriptStep(1.0, (TARGET, 0xC0, PROG_CLICK, 0)),
                 ),
             ),
-            "finale": Trigger(
+            "finale": Function(
                 name="finale",
                 description="Closing rainbow sweep and pad after the last cycle",
-                target=TriggerTarget.ROOM,
+                target=FunctionTarget.ROOM,
                 condition=_adjudicated(
                     "run_complete", "All cycles finished"),
                 script=_finale_script(),
@@ -388,18 +388,18 @@ class MetronomeBit(Bit):
                 phrase = self._phrase_for(c)
                 success = phrase["hits"] == {0, 1, 2, 3} and not phrase["spoiled"]
                 if success:
-                    out.append(FireTrigger("fireworks_player", dev))
-                    out.append(FireTrigger("fireworks_room"))
+                    out.append(FireFunction("fireworks_player", dev))
+                    out.append(FireFunction("fireworks_room"))
                     self._successes[dev] = self._successes.get(dev, 0) + 1
                 else:
                     self._failed_devs.add(dev)
-                    out.append(FireTrigger("fail_player", dev))
-                    out.append(FireTrigger("fail_room"))
+                    out.append(FireFunction("fail_player", dev))
+                    out.append(FireFunction("fail_room"))
             self._judged_cycles += 1
             if self._judged_cycles == self.CYCLES:
                 if sum(self._successes.values()) >= 1:
                     if self._finale_end is None:
-                        out.append(FireTrigger("finale"))
+                        out.append(FireFunction("finale"))
                         self._finale_end = at + self.FINALE_S
                 else:
                     self._done = True

@@ -66,7 +66,7 @@ def _instrument_view(instrument) -> dict:
         "name": instrument.name,
         "capabilities": sorted(instrument.capabilities),
         "functions": list(instrument.functions),
-        "accepted_triggers": list(instrument.accepted_triggers),
+        "accepted_cues": list(instrument.accepted_cues),
     }
 
 
