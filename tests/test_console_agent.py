@@ -328,6 +328,17 @@ def test_devices_view_hides_the_room_assignment():
     assert ie9["role"] is None    # device is listed, but not as "room_test"
 
 
+def test_devices_view_carries_muted_flag():
+    gs, srv, agent = _server_with_agent()
+    gs.hello("ie1", "Shroom One", "1")
+    gs.muted.add("ie1")
+
+    view = agent._devices_view()
+
+    ie1 = next(d for d in view if d["dev"] == "ie1")
+    assert ie1["muted"] is True
+
+
 def _room_console(bit_name="TestBit", canvas_urls=None):
     """A GameServer with a bound TEST Room and a loaded Bit, plus a
     ConsoleAgent wired to a RoomBridge carrying a live cc value.
@@ -549,7 +560,7 @@ def test_no_frame_received_broadcasts_nothing():
 def test_snapshot_carries_the_loaded_bits_triggers():
     gs, srv, agent = _room_console()
     names = sorted(t["name"] for t in agent.snapshot()["triggers"])
-    assert names == ["flash_device", "play_aurora"]
+    assert names == ["flash_device", "play_aurora", "stop", "win"]
 
 
 def test_snapshot_triggers_is_empty_with_no_bit_loaded():

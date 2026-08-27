@@ -28,13 +28,14 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from control.cues import ROOM, TARGET, LightCue, PlayCue
+from control.cues import ROOM, TARGET, LightCue, MuteCue, PlayCue, SolidCue
 
 
 class TriggerTarget(Enum):
     ROOM = auto()      # every Room fixture
     DEVICE = auto()    # the device that fired, when there was one
     ALL = auto()       # Room fixtures plus every registered non-ROOM device
+    SURFACE = auto()   # operator-chosen: one device, or the Room
 
 
 class ConditionSource(Enum):
@@ -253,6 +254,28 @@ def _validate_step_cue(step: ScriptStep, where: str) -> None:
                 f"a non-zero offset would be silently ignored")
         _validate_script_dev(cue.dev, where)
         return
+    if isinstance(cue, SolidCue):
+        _validate_script_dev(cue.dev, where)
+        for i, ch in enumerate(cue.rgb):
+            if isinstance(ch, bool) or not isinstance(ch, int) or not 0 <= ch <= 255:
+                raise ValueError(f"{where}: rgb[{i}] {ch!r} is outside 0-255")
+        if not isinstance(cue.level, (int, float)) or not 0.0 <= float(cue.level) <= 1.0:
+            raise ValueError(f"{where}: level {cue.level!r} is outside 0.0-1.0")
+        if cue.duration is not None and (
+                not isinstance(cue.duration, (int, float))
+                or not math.isfinite(float(cue.duration))
+                or float(cue.duration) <= 0):
+            raise ValueError(f"{where}: duration must be > 0 seconds or None")
+        if cue.when is not None:
+            raise ValueError(f"{where}: a script SolidCue's timing is its "
+                             f"offset; leave when=None")
+        return
+    if isinstance(cue, MuteCue):
+        if float(step.offset) != 0.0:
+            raise ValueError(f"{where}: a MuteCue must sit at offset 0; the "
+                             f"latch is immediate, an offset would be ignored")
+        _validate_script_dev(cue.dev, where)
+        return
     if not isinstance(cue, tuple) or len(cue) != 4:
         raise ValueError(
             f"{where}: cue must be a PlayCue or a 4-tuple "
@@ -298,6 +321,15 @@ def expand_script(trigger: Trigger, at: float, devs) -> list:
         if isinstance(cue, PlayCue):
             for dev in _step_devs(cue.dev, devs):
                 out.append(PlayCue(dev, cue.name, cue.params))
+            continue
+        if isinstance(cue, SolidCue):
+            for dev in _step_devs(cue.dev, devs):
+                out.append(SolidCue(dev, cue.rgb, cue.level, cue.duration,
+                                    when=when))
+            continue
+        if isinstance(cue, MuteCue):
+            for dev in _step_devs(cue.dev, devs):
+                out.append(MuteCue(dev))
             continue
         step_dev, status, data1, data2 = cue
         for dev in _step_devs(step_dev, devs):

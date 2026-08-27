@@ -7,7 +7,7 @@ the message and nothing else.
 
 import pytest
 
-from control.cues import ROOM, TARGET, FireTrigger, LightCue, PlayCue
+from control.cues import ROOM, TARGET, FireTrigger, LightCue, MuteCue, PlayCue, SolidCue
 from control.triggers import (
     Condition,
     ConditionSource,
@@ -15,6 +15,7 @@ from control.triggers import (
     Trigger,
     TriggerTable,
     TriggerTarget,
+    expand_script,
     validate_trigger_table,
 )
 
@@ -149,9 +150,40 @@ def test_a_fire_trigger_in_a_script_is_refused_so_chaining_cannot_cycle():
 
 
 def test_target_is_used_by_name_not_by_value():
-    assert {t.name for t in TriggerTarget} == {"ROOM", "DEVICE", "ALL"}
+    assert {t.name for t in TriggerTarget} == {"ROOM", "DEVICE", "ALL", "SURFACE"}
 
 
 def test_fire_trigger_defaults_its_dev_to_none():
     assert FireTrigger("x").dev is None
     assert FireTrigger("x", "ie1").dev == "ie1"
+
+
+def test_solid_cue_step_validates():
+    good = (ScriptStep(1.0, SolidCue(TARGET, (255, 255, 255), 0.9, 5.0)),)
+    validate_trigger_table(_table(_trigger(script=good)), VERBS)
+
+
+def test_solid_cue_bad_level_refused():
+    bad = (ScriptStep(0.0, SolidCue(TARGET, (255, 255, 255), 1.5, 5.0)),)
+    with pytest.raises(ValueError, match="level"):
+        validate_trigger_table(_table(_trigger(script=bad)), VERBS)
+
+
+def test_mute_cue_nonzero_offset_refused():
+    bad = (ScriptStep(0.5, MuteCue(TARGET)),)
+    with pytest.raises(ValueError, match="offset 0"):
+        validate_trigger_table(_table(_trigger(script=bad)), VERBS)
+
+
+def test_expand_solid_cue_fans_out_with_when():
+    trig = _trigger(script=(
+        ScriptStep(2.0, SolidCue(TARGET, (255, 255, 255), 0.9, 5.0)),))
+    out = expand_script(trig, at=100.0, devs=["d1", "d2"])
+    assert [c.dev for c in out] == ["d1", "d2"]
+    assert all(isinstance(c, SolidCue) and c.when == 102.0 for c in out)
+
+
+def test_expand_mute_cue_fans_out():
+    trig = _trigger(script=(ScriptStep(0.0, MuteCue(TARGET)),))
+    out = expand_script(trig, at=100.0, devs=["d1"])
+    assert out == [MuteCue("d1")]

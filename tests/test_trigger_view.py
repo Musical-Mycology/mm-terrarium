@@ -7,8 +7,9 @@ MIDI semantics.
 
 import json
 
-from control.cues import ROOM, TARGET, PlayCue
+from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue
 from control.trigger_view import (
+    _step_view,
     trigger_fired_view,
     trigger_view,
     triggers_view,
@@ -112,3 +113,11 @@ def test_a_fired_record_view_room_name_is_none_without_a_room():
         declared_source="gesture-verb", dev="ie1", devs=("ie1",),
         at=100.0, steps=2)
     assert trigger_fired_view(record)["room_name"] is None
+
+
+def test_step_view_solid_and_mute():
+    solid = _step_view(ScriptStep(1.0, SolidCue(TARGET, (255, 255, 255), 0.9, 5.0)))
+    assert solid == {"offset": 1.0, "kind": "solid", "dev": TARGET,
+                     "rgb": [255, 255, 255], "level": 0.9, "duration": 5.0}
+    mute = _step_view(ScriptStep(0.0, MuteCue(TARGET)))
+    assert mute == {"offset": 0.0, "kind": "mute", "dev": TARGET}

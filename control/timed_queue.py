@@ -90,6 +90,15 @@ class TimedQueue:
         ready.sort(key=lambda item: (item[0], item[1]))
         return [payload for (_, _, payload) in ready]
 
+    def purge(self, predicate) -> None:
+        """Drop every not-yet-released payload for which `predicate(payload)`
+        is true. Payload-generic like the rest of this class: a caller that
+        knows its own payload shape (e.g. devicelink/agent.py's mute handler,
+        matching on the dev a MIDI-cue tuple names) decides what to purge.
+        Silent no-op on an empty or non-matching queue -- there is nothing
+        wrong with muting a device that has no cues in flight."""
+        self._items = [item for item in self._items if not predicate(item[2])]
+
     def pending(self) -> int:
         """How many payloads are still waiting. Used by sync_bench and by
         teardown, which must not drop work still in flight."""

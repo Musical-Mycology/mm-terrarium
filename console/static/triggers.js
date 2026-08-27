@@ -16,9 +16,10 @@ import * as wire from "./wire.js";
 
 let triggerSignature = null;         // JSON of the last-rendered declaration
 const lastFired = {};                // trigger name -> its last fire record (survives rebuilds)
-let triggerDevices = [];             // device ids offered by DEVICE-target pickers
-let currentDeviceTargets = [];       // names of currently-rendered DEVICE-target triggers
+let triggerDevices = [];             // {dev, muted} offered by DEVICE/SURFACE pickers
+let currentDeviceTargets = new Map(); // name -> target ("DEVICE"/"SURFACE") for rendered pickers
 const cardByName = new Map();        // trigger name -> its card element (test hook)
+const ROOM_OPTION = "@room";
 
 function clear(node) {
   node.textContent = "";
@@ -43,24 +44,33 @@ export function _cardFor(name) {
 // operator's current selection when the live device list changes under it,
 // falling back to the first offered device only when the previous
 // selection is no longer available.
-function fillDevicePicker(picker) {
+function fillDevicePicker(picker, withRoom) {
   if (!picker) return;
   const previous = picker.value;
   clear(picker);
-  for (const dev of triggerDevices) {
+  const values = [];
+  if (withRoom) {
+    const option = document.createElement("option");
+    option.value = ROOM_OPTION;
+    option.textContent = "Room";
+    picker.appendChild(option);
+    values.push(ROOM_OPTION);
+  }
+  for (const { dev, muted } of triggerDevices) {
     const option = document.createElement("option");
     option.value = dev;
-    option.textContent = dev;
+    option.textContent = muted ? `${dev} (muted)` : dev;
     picker.appendChild(option);
+    values.push(dev);
   }
-  if (triggerDevices.indexOf(previous) >= 0) picker.value = previous;
-  else if (triggerDevices.length) picker.value = triggerDevices[0];
+  if (values.indexOf(previous) >= 0) picker.value = previous;
+  else if (values.length) picker.value = values[0];
 }
 
 function onDevicesChanged(devices) {
-  triggerDevices = (devices || []).map((d) => d.dev);
-  for (const name of currentDeviceTargets) {
-    fillDevicePicker(document.getElementById("triggerDev_" + name));
+  triggerDevices = (devices || []).map((d) => ({ dev: d.dev, muted: !!d.muted }));
+  for (const [name, target] of currentDeviceTargets) {
+    fillDevicePicker(document.getElementById("triggerDev_" + name), target === "SURFACE");
   }
 }
 
@@ -85,59 +95,73 @@ function firedText(fired) {
   return `${fired.fired_by} → ${where} (${fired.steps} cue${fired.steps === 1 ? "" : "s"})`;
 }
 
-function applyFired(line, fired) {
+function applyFired(card, line, fired) {
   clear(line);
+  card.classList.remove("fired", "fired-admin");
   if (!fired) {
-    line.className = "fired dim";
     line.textContent = "never fired";
     return;
   }
   const isAdmin = fired.fired_by === "admin-manual";
-  line.className = isAdmin ? "fired fired-admin" : "fired fired-bit";
+  card.classList.add(isAdmin ? "fired-admin" : "fired");
   line.appendChild(document.createTextNode(firedText(fired)));
   if (isAdmin) {
     line.appendChild(document.createTextNode(" "));
-    line.appendChild(mk("span", "admintag", "Admin manual"));
+    line.appendChild(mk("span", "admin", "Admin manual"));
   }
 }
 
 function buildCard(trigger) {
   const card = document.createElement("div");
-  card.className = "card trigger";
+  card.className = "trig";
 
   const head = mk("div", "trighead");
   head.appendChild(mk("h3", null, trigger.name));
+  head.appendChild(mk("span", "grow"));
   head.appendChild(mk("span", "chip dim kind", trigger.target));
   card.appendChild(head);
 
-  card.appendChild(mk("p", null, trigger.description));
+  card.appendChild(mk("p", "desc", trigger.description));
 
   const cond = trigger.condition;
   const condText = cond.description + "   (" + cond.source
     + (cond.verb ? ": " + cond.verb : "") + ")";
-  card.appendChild(mk("p", "muted", condText));
+  card.appendChild(mk("p", "cond", condText));
 
-  const scriptDetails = document.createElement("details");
-  scriptDetails.className = "script";
-  const summary = document.createElement("summary");
+  const scriptbar = mk("div", "scriptbar");
   const n = trigger.script.length;
-  summary.textContent = `${n} step${n === 1 ? "" : "s"} · ${maxOffset(trigger.script).toFixed(1)}s`;
-  scriptDetails.appendChild(summary);
-  const steps = mk("div", "steps mono");
+  const expander = mk("button", "expander", null);
+  expander.type = "button";
+  expander.setAttribute("aria-expanded", "false");
+  const tri = mk("span", "tri", "▸");
+  const label = mk("span", "mono",
+    `${n} step${n === 1 ? "" : "s"} · ${maxOffset(trigger.script).toFixed(1)}s`);
+  expander.appendChild(tri);
+  expander.appendChild(label);
+  scriptbar.appendChild(expander);
+  card.appendChild(scriptbar);
+
+  const script = mk("div", "script mono");
   for (const step of trigger.script) {
-    steps.appendChild(mk("div", "step", stepText(step)));
+    script.appendChild(mk("div", "step", stepText(step)));
   }
-  scriptDetails.appendChild(steps);
-  card.appendChild(scriptDetails);
+  card.appendChild(script);
+
+  expander.onclick = () => {
+    const open = !script.classList.contains("open");
+    script.classList.toggle("open", open);
+    expander.setAttribute("aria-expanded", open ? "true" : "false");
+  };
 
   const firerow = mk("div", "firerow");
   let picker = null;
-  if (trigger.target === "DEVICE") {
+  if (trigger.target === "DEVICE" || trigger.target === "SURFACE") {
     picker = document.createElement("select");
     picker.id = "triggerDev_" + trigger.name;
     firerow.appendChild(picker);
-    fillDevicePicker(picker);
+    fillDevicePicker(picker, trigger.target === "SURFACE");
   }
+  firerow.appendChild(mk("span", "grow"));
   const fireBtn = mk("button", "btn solid-gold", "Fire");
   fireBtn.onclick = () => {
     const extra = { name: trigger.name };
@@ -147,8 +171,8 @@ function buildCard(trigger) {
   firerow.appendChild(fireBtn);
   card.appendChild(firerow);
 
-  const firedLine = document.createElement("div");
-  applyFired(firedLine, lastFired[trigger.name]);
+  const firedLine = mk("div", "fired-line");
+  applyFired(card, firedLine, lastFired[trigger.name]);
   card.appendChild(firedLine);
   card._firedLine = firedLine;
 
@@ -161,19 +185,21 @@ function render(list) {
   cardByName.clear();
 
   if (!list.length) {
-    currentDeviceTargets = [];
+    currentDeviceTargets = new Map();
     mount.appendChild(mk("p", "muted", "No triggers declared"));
     return;
   }
 
-  const grid = mk("div", "trigrid");
+  const grid = mk("div", "triggrid");
   mount.appendChild(grid);
-  currentDeviceTargets = [];
+  currentDeviceTargets = new Map();
   for (const trigger of list) {
     const card = buildCard(trigger);
     grid.appendChild(card);
     cardByName.set(trigger.name, card);
-    if (trigger.target === "DEVICE") currentDeviceTargets.push(trigger.name);
+    if (trigger.target === "DEVICE" || trigger.target === "SURFACE") {
+      currentDeviceTargets.set(trigger.name, trigger.target);
+    }
   }
 }
 
@@ -189,7 +215,7 @@ function onTriggerFired(fired) {
   if (!fired || !fired.name) return;
   lastFired[fired.name] = fired;
   const card = cardByName.get(fired.name);
-  if (card && card._firedLine) applyFired(card._firedLine, fired);
+  if (card && card._firedLine) applyFired(card, card._firedLine, fired);
 }
 
 // ---------------------------------------------------------------------- init

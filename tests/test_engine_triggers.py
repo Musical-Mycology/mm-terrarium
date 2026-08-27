@@ -8,7 +8,7 @@ tests/test_engine.py so the existing lifecycle tests stay readable.
 import pytest
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, PlayCue
+from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue
 from control.engine import BitLoadError, GameServer
 from control.roles import Role, RoleClass, RoleTable
 from control.state import State
@@ -165,6 +165,18 @@ class ScriptBit(_BaseBit):
                 condition=Condition(name="manual", description="Operator asks",
                                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 64)),)),
+            "stop": Trigger(
+                name="stop", description="Mute the tapped device",
+                target=TriggerTarget.DEVICE,
+                condition=Condition(name="manual", description="Operator asks",
+                                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(0.0, MuteCue(TARGET)),)),
+            "spot": Trigger(
+                name="spot", description="Light an operator-chosen surface",
+                target=TriggerTarget.SURFACE,
+                condition=Condition(name="manual", description="Operator asks",
+                                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 100)),)),
         })
 
 
@@ -332,6 +344,31 @@ def test_a_device_target_with_no_device_is_refused_not_silently_empty():
     assert light == []
 
 
+def test_surface_resolves_device():
+    gs, _, _ = _running()
+    assert gs._resolve_target(TriggerTarget.SURFACE, "ie1") == ["ie1"]
+
+
+def test_surface_resolves_room_sentinel():
+    gs, _, _ = _running()
+    assert (gs._resolve_target(TriggerTarget.SURFACE, ROOM) ==
+            gs._resolve_target(TriggerTarget.ROOM, None))
+
+
+def test_surface_fire_without_dev_refused():
+    gs, light, _ = _running()
+    reason = gs.fire_trigger("spot", fired_by="admin-manual", dev=None)
+    assert reason is not None
+    assert "no surface given" in reason
+    assert light == []
+
+
+def test_surface_fire_with_room_sentinel_lights_the_room():
+    gs, light, _ = _running()
+    assert gs.fire_trigger("spot", fired_by="admin-manual", dev=ROOM) is None
+    assert [c[0] for c in light] == ["sim-room-main"]
+
+
 def test_an_unknown_trigger_is_refused():
     gs, _, _ = _running()
     assert "unknown trigger" in gs.fire_trigger("nope", fired_by="admin-manual")
@@ -420,6 +457,75 @@ class _FlipTriggerTableBit(_BaseBit):
                                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74)),)),
         })
+
+
+def test_solid_cue_dispatch_reaches_sink():
+    gs, _, _ = _running()
+    got = []
+    gs.on_solid_cue = lambda *a: got.append(a)
+    gs._dispatch_cues([SolidCue("ie1", (255, 255, 255), 0.9, 5.0,
+                                when=123.0)], at=120.0)
+    assert got == [("ie1", (255, 255, 255), 0.9, 5.0, 123.0)]
+
+
+def test_solid_cue_without_when_takes_at():
+    gs, _, _ = _running()
+    got = []
+    gs.on_solid_cue = lambda *a: got.append(a)
+    gs._dispatch_cues([SolidCue("ie1", (0, 0, 0), 0.0, None)], at=120.0)
+    assert got[0][4] == 120.0
+
+
+def test_mute_cue_latches_and_notifies():
+    gs, _, _ = _running()
+    got = []
+    gs.on_mute_change = lambda dev, m: got.append((dev, m))
+    gs._dispatch_cues([MuteCue("ie1")], at=None)
+    assert "ie1" in gs.muted and got == [("ie1", True)]
+
+
+def test_non_mute_fire_clears_mute_first():
+    gs, _, _ = _running()
+    gs.muted.add("ie1")
+    events = []
+    gs.on_mute_change = lambda dev, m: events.append((dev, m))
+    assert gs.fire_trigger("flash", fired_by="admin-manual", dev="ie1") is None
+    assert "ie1" not in gs.muted and ("ie1", False) in events
+
+
+def test_mute_fire_does_not_unmute_itself():
+    gs, _, _ = _running()
+    assert gs.fire_trigger("stop", fired_by="admin-manual", dev="ie1") is None
+    assert "ie1" in gs.muted
+
+
+def test_raising_sinks_never_wedge():
+    gs, _, _ = _running()
+    gs.on_solid_cue = lambda *a: 1 / 0
+    gs.on_mute_change = lambda *a: 1 / 0
+    gs._dispatch_cues([SolidCue("ie1", (1, 1, 1), 1.0, 1.0),
+                       MuteCue("ie1")], at=1.0)   # must not raise
+
+
+def test_unload_clears_mutes():
+    gs, _, _ = _running()
+    gs.muted.add("ie1")
+    events = []
+    gs.on_mute_change = lambda dev, m: events.append((dev, m))
+    gs.abort()
+    assert not gs.muted and ("ie1", False) in events
+
+
+def test_muted_device_suppresses_play_cue():
+    """PlayCue suppression while muted is checked directly against
+    _dispatch_cues, bypassing fire_trigger -- a real fire at the surface
+    would itself un-latch the mute first (see
+    test_non_mute_fire_clears_mute_first), so this proves the dispatch-time
+    guard rather than the un-mute-on-fire rule."""
+    gs, _, play = _running()
+    gs.muted.add("ie1")
+    gs._dispatch_cues([PlayCue("ie1", "click", "")], at=100.0)
+    assert play == []
 
 
 def test_a_trigger_table_that_turns_invalid_after_load_is_refused_not_crashed():

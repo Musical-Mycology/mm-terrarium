@@ -5,7 +5,7 @@ section 4.
 """
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, FireTrigger, PlayCue
+from control.cues import ROOM, TARGET, FireTrigger, MuteCue, PlayCue, SolidCue
 from control.roles import Role, RoleClass, RoleTable
 from control.triggers import (
     Condition,
@@ -79,7 +79,7 @@ class TestBit(Bit):
             # these as active; jammer below deliberately asks for less, so
             # switching nodes visibly changes the device's control panel.
             uses=["tilt", "tap", "shake", "speaker"],
-            samples=["click", "chime"],
+            samples=["click", "chime", "win"],
             # First real light-lane declaration: the act that freezes the
             # light-manifest v2 authored shape (see control/roles.py).
             # Instrument names are opaque to Control; these are luxaeterna
@@ -197,7 +197,7 @@ class TestBit(Bit):
             "play_aurora": Trigger(
                 name="play_aurora",
                 description="A slow rainbow sweep across the Room",
-                target=TriggerTarget.ROOM,
+                target=TriggerTarget.SURFACE,
                 condition=Condition(
                     name="round_won",
                     description="User wins a round",
@@ -210,16 +210,45 @@ class TestBit(Bit):
             ),
             "flash_device": Trigger(
                 name="flash_device",
-                description="Flash the tapping device and click its speaker",
-                target=TriggerTarget.DEVICE,
+                description="Identify a surface: chime plus 5 s of solid "
+                            "white at 90%.",
+                target=TriggerTarget.SURFACE,
                 condition=Condition(
                     name="tapped",
-                    description="Player taps their Shroom",
+                    description="Two-tap on the device",
                     source=ConditionSource.GESTURE_VERB,
                     verb="tap"),
                 script=(
-                    ScriptStep(0.0, PlayCue(TARGET, "click", "")),
+                    ScriptStep(0.0, PlayCue(TARGET, "chime", "")),
+                    ScriptStep(0.0, SolidCue(TARGET, (255, 255, 255), 0.9, 5.0)),
+                ),
+            ),
+            "stop": Trigger(
+                name="stop",
+                description="Latch this surface dark and silent until a "
+                            "Play un-mutes it.",
+                target=TriggerTarget.SURFACE,
+                condition=Condition(
+                    name="operator-stop",
+                    description="Fired by the operator",
+                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(0.0, MuteCue(TARGET)),),
+            ),
+            "win": Trigger(
+                name="win",
+                description="Win celebration: ascending chime plus a hue "
+                            "flourish.",
+                target=TriggerTarget.SURFACE,
+                condition=Condition(
+                    name="operator-win",
+                    description="Fired by the operator",
+                    source=ConditionSource.ADMIN_MANUAL),
+                script=(
+                    ScriptStep(0.0, PlayCue(TARGET, "win", "")),
                     ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
+                    ScriptStep(0.3, (TARGET, 0xB0, 74, 60)),
+                    ScriptStep(0.6, (TARGET, 0xB0, 74, 110)),
+                    ScriptStep(1.2, (TARGET, 0xB0, 74, 0)),
                 ),
             ),
         })
@@ -248,7 +277,7 @@ class TestBit(Bit):
             self._round_won = False
             self._rounds_won += 1
             self._quiet_until = self._elapsed + self.SCRIPT_QUIET_SECONDS
-            return [FireTrigger("play_aurora")]
+            return [FireTrigger("play_aurora", ROOM)]
         if self._elapsed < self._quiet_until:
             # play_aurora owns cc:74 until its script finishes. See
             # SCRIPT_QUIET_SECONDS.
