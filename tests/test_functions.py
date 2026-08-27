@@ -11,7 +11,11 @@ from control.cues import ROOM, TARGET, FireFunction, LightCue, MuteCue, PlayCue,
 from control.functions import (
     Condition,
     ConditionSource,
+    FunctionKind,
+    GeneratorSpec,
     ScriptStep,
+    StreamOutput,
+    StreamSpec,
     Function,
     FunctionTable,
     FunctionTarget,
@@ -187,3 +191,86 @@ def test_expand_mute_cue_fans_out():
     fn = _function(script=(ScriptStep(0.0, MuteCue(TARGET)),))
     out = expand_script(fn, at=100.0, devs=["d1"])
     assert out == [MuteCue("d1")]
+
+
+def _gen(name="drift", dev=ROOM, data1=74, period=12.0, lo=0, hi=254):
+    return Function(name=name, description="d", kind=FunctionKind.GENERATOR,
+                    generator=GeneratorSpec(dev=dev, status=0xB0, data1=data1,
+                                            waveform="triangle",
+                                            period=period, lo=lo, hi=hi))
+
+
+def _stream(name="tilt_hue", verb="tilt", in_lo=-90.0, in_hi=90.0,
+            outputs=None):
+    outputs = outputs or (StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),)
+    return Function(name=name, description="d", kind=FunctionKind.STREAM,
+                    stream=StreamSpec(verb=verb, arg=1, in_lo=in_lo,
+                                      in_hi=in_hi, outputs=outputs))
+
+
+def test_generator_function_validates():
+    validate_function_table(FunctionTable(functions={"drift": _gen()}), set())
+
+
+def test_scripted_function_refuses_generator_field():
+    bad = _function(generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                            waveform="triangle", period=1.0))
+    with pytest.raises(ValueError, match="generator"):
+        validate_function_table(_table(bad), VERBS)
+
+
+def test_generator_refuses_script_and_unknown_waveform():
+    bad_script = _gen()
+    bad_script = Function(name=bad_script.name, description=bad_script.description,
+                          kind=FunctionKind.GENERATOR, generator=bad_script.generator,
+                          script=(ScriptStep(0.0, (ROOM, 0xB0, 74, 127)),))
+    with pytest.raises(ValueError, match="script"):
+        validate_function_table(_table(bad_script), set())
+
+    bad_waveform = Function(
+        name="drift", description="d", kind=FunctionKind.GENERATOR,
+        generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                waveform="sine", period=1.0))
+    with pytest.raises(ValueError, match="waveform"):
+        validate_function_table(_table(bad_waveform), set())
+
+
+def test_two_generators_same_lane_refused():
+    table = FunctionTable(functions={
+        "a": _gen("a"), "b": _gen("b")})
+    with pytest.raises(ValueError, match="lane"):
+        validate_function_table(table, set())
+
+
+def test_streams_same_lane_overlapping_domains_refused():
+    overlapping = FunctionTable(functions={
+        "a": _stream("a", in_lo=-90.0, in_hi=10.0),
+        "b": _stream("b", in_lo=0.0, in_hi=90.0),
+    })
+    with pytest.raises(ValueError, match="overlap"):
+        validate_function_table(overlapping, {"tilt"})
+
+    adjacent = FunctionTable(functions={
+        "a": _stream("a", in_lo=-90.0, in_hi=0.0),
+        "b": _stream("b", in_lo=0.0, in_hi=90.0),
+    })
+    validate_function_table(adjacent, {"tilt"})
+
+
+def test_stream_bad_mode_and_inverted_domain_refused():
+    bad_mode = _stream()
+    bad_mode = Function(
+        name=bad_mode.name, description=bad_mode.description,
+        kind=FunctionKind.STREAM,
+        stream=StreamSpec(verb="tilt", arg=1, in_lo=-90.0, in_hi=90.0,
+                          outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0,
+                                                mode="bogus"),)))
+    with pytest.raises(ValueError, match="mode"):
+        validate_function_table(_table(bad_mode), {"tilt"})
+
+    inverted = Function(
+        name="tilt_hue", description="d", kind=FunctionKind.STREAM,
+        stream=StreamSpec(verb="tilt", arg=1, in_lo=90.0, in_hi=-90.0,
+                          outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),)))
+    with pytest.raises(ValueError, match="in_lo"):
+        validate_function_table(_table(inverted), {"tilt"})

@@ -38,6 +38,18 @@ class FunctionTarget(Enum):
     SURFACE = auto()   # operator-chosen: one device, or the Room
 
 
+class FunctionKind(Enum):
+    SCRIPTED = auto()   # target + condition + cue script, the original shape
+    GENERATOR = auto()  # a continuous free-running waveform on one MIDI lane
+    STREAM = auto()     # a live gesture value mapped onto one or more lanes
+
+
+WAVEFORMS: frozenset[str] = frozenset({"triangle"})
+STREAM_MODES: frozenset[str] = frozenset({"linear", "abs"})
+
+_LEGAL_GENERATOR_DEVS = (ROOM, TARGET)
+
+
 class ConditionSource(Enum):
     GESTURE_VERB = auto()       # a device gesture the Bit adjudicates
     BIT_ADJUDICATED = auto()    # decided inside the Bit, no message behind it
@@ -98,12 +110,71 @@ class ScriptStep:
 
 
 @dataclass(frozen=True)
+class GeneratorSpec:
+    """A continuous free-running waveform written to one MIDI lane.
+
+    `period` is seconds for one full cycle. `lo`/`hi` bound the emitted
+    value (both 0-255, lo <= hi); most lanes will use the MIDI 0-127 range,
+    but the bound is not clamped to it, matching data1/data2 elsewhere in
+    this module.
+    """
+    dev: str
+    status: int
+    data1: int
+    waveform: str
+    period: float
+    lo: int = 0
+    hi: int = 127
+
+
+@dataclass(frozen=True)
+class StreamOutput:
+    """One lane a StreamSpec writes to, with its own output range and mode.
+
+    `out_lo`/`out_hi` are floats and may be inverted (out_lo > out_hi) to
+    reverse the mapping; `mode` selects how the input value is transformed
+    before scaling (see STREAM_MODES).
+    """
+    dev: str
+    status: int
+    data1: int
+    out_lo: float
+    out_hi: float
+    mode: str = "linear"
+
+
+@dataclass(frozen=True)
+class StreamSpec:
+    """A live gesture value mapped onto one or more MIDI lanes.
+
+    `verb` names the gesture whose value drives this stream; `arg` selects
+    which of the gesture's positional values to read. `in_lo`/`in_hi` bound
+    the domain (in_lo < in_hi); each entry in `outputs` maps that domain onto
+    its own output range.
+
+    Two streams may write the same output lane as long as their `in_lo`/
+    `in_hi` domains do not overlap. They may touch at a single shared
+    boundary point (one's in_hi equal to the other's in_lo); at that exact
+    point, the function whose domain is lower (the one for which the shared
+    value is its in_hi) applies.
+    """
+    verb: str
+    arg: int
+    in_lo: float
+    in_hi: float
+    outputs: tuple[StreamOutput, ...]
+
+
+@dataclass(frozen=True)
 class Function:
     name: str
     description: str
-    target: FunctionTarget
-    condition: Condition
+    target: FunctionTarget | None = None
+    condition: Condition | None = None
     script: tuple[ScriptStep, ...] = ()
+    kind: FunctionKind = FunctionKind.SCRIPTED
+    generator: GeneratorSpec | None = None
+    stream: StreamSpec | None = None
 
 
 @dataclass
@@ -134,6 +205,15 @@ class FunctionFired:
     room_name: str | None = None
 
 
+def generator_lane(fn: Function) -> tuple[str, int, int]:
+    """The (dev, status, data1) lane a GENERATOR Function writes to.
+
+    Two GENERATOR functions sharing a lane would fight over the same MIDI
+    value every cycle, so validate_function_table refuses that at load time.
+    """
+    return (fn.generator.dev, fn.generator.status, fn.generator.data1)
+
+
 def validate_function_table(function_table, verb_names) -> None:
     """Shallow structural validation of a Bit's authored FunctionTable.
 
@@ -153,6 +233,8 @@ def validate_function_table(function_table, verb_names) -> None:
         raise ValueError(
             f"function_table: must be a FunctionTable, "
             f"got {type(function_table).__name__}")
+    generator_lanes: dict[tuple[str, int, int], str] = {}
+    streams: list[Function] = []
     for key, function_decl in function_table.functions.items():
         where = f"function {key!r}"
         if not isinstance(function_decl, Function):
@@ -167,12 +249,153 @@ def validate_function_table(function_table, verb_names) -> None:
                 f"(it becomes a DOM id on the Console)")
         if not isinstance(function_decl.description, str) or not function_decl.description:
             raise ValueError(f"{where}: description must be non-empty")
-        if not isinstance(function_decl.target, FunctionTarget):
+        if not isinstance(function_decl.kind, FunctionKind):
             raise ValueError(
-                f"{where}: target must be a FunctionTarget, "
-                f"got {function_decl.target!r}")
-        _validate_condition(function_decl, verb_names)
-        _validate_script(function_decl)
+                f"{where}: kind must be a FunctionKind, got {function_decl.kind!r}")
+        if function_decl.kind is FunctionKind.SCRIPTED:
+            _validate_scripted(function_decl, verb_names)
+        elif function_decl.kind is FunctionKind.GENERATOR:
+            _validate_generator(function_decl)
+            lane = generator_lane(function_decl)
+            if lane in generator_lanes:
+                raise ValueError(
+                    f"{where}: generator lane {lane!r} is already written by "
+                    f"function {generator_lanes[lane]!r}; two generators may "
+                    f"not share a lane")
+            generator_lanes[lane] = function_decl.name
+        elif function_decl.kind is FunctionKind.STREAM:
+            _validate_stream(function_decl)
+            streams.append(function_decl)
+    _validate_stream_lane_overlap(streams)
+
+
+def _validate_scripted(function_decl: Function, verb_names) -> None:
+    where = f"function {function_decl.name!r}"
+    if not isinstance(function_decl.target, FunctionTarget):
+        raise ValueError(
+            f"{where}: target must be a FunctionTarget, "
+            f"got {function_decl.target!r}")
+    if function_decl.generator is not None:
+        raise ValueError(
+            f"{where}: generator is only meaningful on a GENERATOR function, "
+            f"not on SCRIPTED")
+    if function_decl.stream is not None:
+        raise ValueError(
+            f"{where}: stream is only meaningful on a STREAM function, "
+            f"not on SCRIPTED")
+    _validate_condition(function_decl, verb_names)
+    _validate_script(function_decl)
+
+
+def _validate_generator(function_decl: Function) -> None:
+    where = f"function {function_decl.name!r} generator"
+    spec = function_decl.generator
+    if not isinstance(spec, GeneratorSpec):
+        raise ValueError(
+            f"{where}: must be a GeneratorSpec, got {type(spec).__name__}")
+    if function_decl.target is not None:
+        raise ValueError(
+            f"function {function_decl.name!r}: target is only meaningful on "
+            f"a SCRIPTED function, not on GENERATOR")
+    if function_decl.condition is not None:
+        raise ValueError(
+            f"function {function_decl.name!r}: condition is only meaningful "
+            f"on a SCRIPTED function, not on GENERATOR")
+    if function_decl.script:
+        raise ValueError(
+            f"function {function_decl.name!r}: script is only meaningful on "
+            f"a SCRIPTED function, not on GENERATOR")
+    if spec.waveform not in WAVEFORMS:
+        raise ValueError(
+            f"{where}: waveform {spec.waveform!r} must be one of "
+            f"{sorted(WAVEFORMS)}")
+    if (isinstance(spec.period, bool) or not isinstance(spec.period, (int, float))
+            or not math.isfinite(float(spec.period)) or float(spec.period) <= 0):
+        raise ValueError(f"{where}: period must be > 0 and finite, got {spec.period!r}")
+    for label, value in (("lo", spec.lo), ("hi", spec.hi)):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:
+            raise ValueError(f"{where}: {label} {value!r} must be an int in 0-255")
+    if spec.lo > spec.hi:
+        raise ValueError(f"{where}: lo {spec.lo} must be <= hi {spec.hi}")
+    for label, value in (("status", spec.status), ("data1", spec.data1)):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:
+            raise ValueError(f"{where}: {label} {value!r} must be an int in 0-255")
+    if spec.dev not in _LEGAL_GENERATOR_DEVS:
+        raise ValueError(
+            f"{where}: dev must be cues.ROOM ({ROOM!r}) or cues.TARGET "
+            f"({TARGET!r}), got {spec.dev!r}")
+
+
+def _validate_stream(function_decl: Function) -> None:
+    where = f"function {function_decl.name!r} stream"
+    spec = function_decl.stream
+    if not isinstance(spec, StreamSpec):
+        raise ValueError(
+            f"{where}: must be a StreamSpec, got {type(spec).__name__}")
+    if function_decl.target is not None:
+        raise ValueError(
+            f"function {function_decl.name!r}: target is only meaningful on "
+            f"a SCRIPTED function, not on STREAM")
+    if function_decl.condition is not None:
+        raise ValueError(
+            f"function {function_decl.name!r}: condition is only meaningful "
+            f"on a SCRIPTED function, not on STREAM")
+    if function_decl.script:
+        raise ValueError(
+            f"function {function_decl.name!r}: script is only meaningful on "
+            f"a SCRIPTED function, not on STREAM")
+    if not isinstance(spec.verb, str) or not spec.verb:
+        raise ValueError(f"{where}: verb must be non-empty")
+    if isinstance(spec.arg, bool) or not isinstance(spec.arg, int) or spec.arg < 0:
+        raise ValueError(f"{where}: arg must be an int >= 0, got {spec.arg!r}")
+    for label, value in (("in_lo", spec.in_lo), ("in_hi", spec.in_hi)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(float(value)):
+            raise ValueError(f"{where}: {label} must be a finite number, got {value!r}")
+    if not float(spec.in_lo) < float(spec.in_hi):
+        raise ValueError(
+            f"{where}: in_lo {spec.in_lo} must be < in_hi {spec.in_hi}")
+    if not isinstance(spec.outputs, tuple) or not spec.outputs:
+        raise ValueError(f"{where}: outputs must be a non-empty tuple")
+    for idx, output in enumerate(spec.outputs):
+        _validate_stream_output(output, f"{where} outputs[{idx}]")
+
+
+def _validate_stream_output(output: StreamOutput, where: str) -> None:
+    if not isinstance(output, StreamOutput):
+        raise ValueError(f"{where}: must be a StreamOutput, got {type(output).__name__}")
+    if output.dev not in _LEGAL_GENERATOR_DEVS:
+        raise ValueError(
+            f"{where}: dev must be cues.ROOM ({ROOM!r}) or cues.TARGET "
+            f"({TARGET!r}), got {output.dev!r}")
+    for label, value in (("status", output.status), ("data1", output.data1)):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:
+            raise ValueError(f"{where}: {label} {value!r} must be an int in 0-255")
+    for label, value in (("out_lo", output.out_lo), ("out_hi", output.out_hi)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(float(value)):
+            raise ValueError(f"{where}: {label} must be a finite number, got {value!r}")
+    if output.mode not in STREAM_MODES:
+        raise ValueError(
+            f"{where}: mode {output.mode!r} must be one of {sorted(STREAM_MODES)}")
+
+
+def _validate_stream_lane_overlap(streams: list) -> None:
+    lanes: dict[tuple[str, int, int], list[tuple[float, float, str]]] = {}
+    for function_decl in streams:
+        spec = function_decl.stream
+        for output in spec.outputs:
+            lane = (output.dev, output.status, output.data1)
+            lanes.setdefault(lane, []).append(
+                (float(spec.in_lo), float(spec.in_hi), function_decl.name))
+    for lane, intervals in lanes.items():
+        intervals.sort(key=lambda item: item[0])
+        for (_, prev_hi, prev_name), (next_lo, _, next_name) in zip(
+                intervals, intervals[1:]):
+            if prev_hi > next_lo:
+                raise ValueError(
+                    f"stream lane {lane!r}: functions {prev_name!r} and "
+                    f"{next_name!r} overlap on their input domains")
 
 
 def _validate_condition(function_decl: Function, verb_names) -> None:
