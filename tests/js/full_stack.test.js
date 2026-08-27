@@ -34,7 +34,7 @@ function snapshotMsg() {
   return {
     event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
     roles: [], registration: [{ role: "player", count: 2, capacity: 2 }],
-    devices: [{ dev: "ie1", name: "Tuneshroom 1", role: "player" },
+    devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" },
               { dev: "sim-room-main", name: "Room", role: null }],
     bit_status: {}, triggers: TRIGGERS, room: ROOM,
   };
@@ -63,7 +63,7 @@ function snapshotMsg() {
   assert.ok(bitPanel.innerHTML.includes("Metronome"), "bit panel should show loaded bit");
   assert.ok(byId.get("roomCard").innerHTML.includes("DEMO"));
   assert.ok(byId.get("registrationCard").innerHTML.includes("2/2"));
-  assert.ok(byId.get("devicesCard").innerHTML.includes("Tuneshroom 1"));
+  assert.ok(byId.get("devicesCard").innerHTML.includes("Testshroom 1"));
 
   // 2. A few room_frame events for the bound fixture -- must only repaint,
   //    never throw or rebuild.

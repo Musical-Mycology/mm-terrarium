@@ -179,7 +179,7 @@ def test_full_lifecycle_reaches_idle_and_releases_devices():
     released = []
     server.on_release = released.append
 
-    server.hello("ie1", "Tuneshroom 1", "1.0")
+    server.hello("ie1", "Testshroom 1", "1.0")
     server.load_bit("test_bit")
     assert server.state == State.SETUP
 
@@ -290,7 +290,7 @@ def test_abort_from_setup_unloads_and_releases_devices():
     server = make_server()
     released = []
     server.on_release = released.append
-    server.hello("ie1", "Tuneshroom 1", "1.0")
+    server.hello("ie1", "Testshroom 1", "1.0")
     server.load_bit("test_bit")
     server.join("ie1", "TEST_PLAYER_NODE")
 
@@ -314,8 +314,8 @@ def test_a_raising_on_release_does_not_strand_later_devices_or_wedge_unload():
             raise RuntimeError("transport blew up releasing the first device")
 
     server.on_release = raise_on_first
-    server.hello("ie1", "Tuneshroom 1", "1.0")
-    server.hello("ie2", "Tuneshroom 2", "1.0")
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.hello("ie2", "Testshroom 2", "1.0")
     server.load_bit("test_bit")
     server.join("ie1", "TEST_PLAYER_NODE")
     server.join("ie2", "TEST_JAM_NODE")

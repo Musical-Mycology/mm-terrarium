@@ -962,7 +962,7 @@ def test_a_room_audio_cue_already_past_clamps_and_counts():
 
 # --- Room fixture profile: the Room's session is built from its own
 # RoomProfile (control/room_profile.py), not borrowed from the player
-# Tuneshroom's shroom_capability(). See this task's brief. ------------------
+# Testshroom's shroom_capability(). See this task's brief. ------------------
 
 def test_room_session_is_built_from_the_whole_concatenated_profile():
     """The session renders every fixture's pixels, bound or not -- only the
@@ -979,7 +979,7 @@ def test_room_session_is_built_from_the_whole_concatenated_profile():
 
 
 def test_player_devices_still_get_the_shroom_capability():
-    """Players remain Tuneshrooms. Only the Room changed."""
+    """Players remain Testshrooms. Only the Room changed."""
     gs, server, agent, dev, clk = _agent_with_joined_device("ie1")
     assert agent.bridges["ie1"].session.cap.pixel_count == 12
 

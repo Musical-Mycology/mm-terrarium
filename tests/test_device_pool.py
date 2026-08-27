@@ -3,10 +3,10 @@ from control.device_pool import DevicePool
 
 def test_hello_registers_a_device():
     pool = DevicePool()
-    info = pool.hello("ie3", "Tuneshroom 3", "1.0")
+    info = pool.hello("ie3", "Testshroom 3", "1.0")
     assert pool.known("ie3") is True
     assert pool.get("ie3") is info
-    assert info.name == "Tuneshroom 3"
+    assert info.name == "Testshroom 3"
     assert len(pool) == 1
 
 
@@ -18,8 +18,8 @@ def test_unknown_device_is_not_known():
 
 def test_repeated_hello_from_same_device_updates_in_place():
     pool = DevicePool()
-    pool.hello("ie3", "Tuneshroom 3", "1.0")
-    pool.hello("ie3", "Tuneshroom 3", "1.1")
+    pool.hello("ie3", "Testshroom 3", "1.0")
+    pool.hello("ie3", "Testshroom 3", "1.1")
     assert len(pool) == 1
     assert pool.get("ie3").protoversion == "1.1"
 
@@ -38,7 +38,7 @@ def test_all_returns_every_known_device():
 
 def test_touch_updates_last_seen_for_a_known_device():
     pool = DevicePool()
-    pool.hello("ie3", "Tuneshroom 3", "1.0", now=10.0)
+    pool.hello("ie3", "Testshroom 3", "1.0", now=10.0)
     pool.touch("ie3", now=20.0)
     assert pool.get("ie3").last_seen == 20.0
 
@@ -51,7 +51,7 @@ def test_touch_is_a_no_op_for_an_unknown_device():
 
 def test_hello_sets_last_seen():
     pool = DevicePool()
-    pool.hello("ie3", "Tuneshroom 3", "1.0", now=5.0)
+    pool.hello("ie3", "Testshroom 3", "1.0", now=5.0)
     assert pool.get("ie3").last_seen == 5.0
 
 

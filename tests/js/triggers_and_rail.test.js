@@ -31,7 +31,7 @@ const TRIGGERS = [
 
   send({ event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
          roles: [], registration: [{ role: "player", count: 2, capacity: 2 }],
-         devices: [{ dev: "ie1", name: "Tuneshroom 1", role: "player" },
+         devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" },
                    { dev: "sim-room", name: "Room", role: null }],
          bit_status: {}, triggers: TRIGGERS,
          room: { room_type: "DEMO", capability: { pixel_count: 864,
@@ -78,7 +78,7 @@ const TRIGGERS = [
   // devices_changed refreshes SURFACE pickers in place, without rebuilding cards
   const surfaceCardBefore = triggers._cardFor("flash_device");
   send({ event: "devices_changed",
-         devices: [{ dev: "ie1", name: "Tuneshroom 1", role: "player", muted: true }] });
+         devices: [{ dev: "ie1", name: "Testshroom 1", role: "player", muted: true }] });
   assert.strictEqual(triggers._cardFor("flash_device"), surfaceCardBefore);
   const refreshedPicker = pickerFor("flash_device");
   assert.strictEqual(refreshedPicker.options[0].value, "@room");
@@ -92,7 +92,7 @@ const TRIGGERS = [
 
   // rail: registration meter, devices, log severities
   assert.ok(byId.get("registrationCard").innerHTML.includes("2/2"));
-  assert.ok(byId.get("devicesCard").innerHTML.includes("Tuneshroom 1"));
+  assert.ok(byId.get("devicesCard").innerHTML.includes("Testshroom 1"));
   send({ event: "log", level: "error", message: "boom" });
   assert.ok(byId.get("logCard").innerHTML.includes("boom"));
   send({ event: "bit_completed", result: { phrases: 4 }, bit_name: "MetronomeBit" });
@@ -127,7 +127,7 @@ const TRIGGERS = [
   };
   send({ event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
          roles: [PLAYER_ROLE], registration: [{ role: "player", count: 2, capacity: 2 }],
-         devices: [{ dev: "ie1", name: "Tuneshroom 1", role: "player" }],
+         devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" }],
          bit_status: {}, triggers: TRIGGERS,
          room: { room_type: "DEMO", capability: { pixel_count: 864,
                  color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
