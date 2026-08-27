@@ -7,8 +7,8 @@ B = MetronomeBit.BEAT_S
 
 def _run_through(bit, tap_cycles=()):
     """Anchor at 100.0, tap all four wait beats of the given cycles as ie1,
-    and drain cues to the end of the last cycle's judgment."""
-    bit.cues(100.0)
+    and drain fires to the end of the last cycle's judgment."""
+    bit.fires(100.0)
     for c in tap_cycles:
         for w in range(4):
             bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1],
@@ -18,7 +18,7 @@ def _run_through(bit, tap_cycles=()):
     while t < end:
         t += 0.02
         bit.update(0.02)
-        fires += [c for c in bit.cues(t) if isinstance(c, FireFunction)]
+        fires += [c for c in bit.fires(t) if isinstance(c, FireFunction)]
     return fires, t
 
 
@@ -37,7 +37,7 @@ def test_finale_fires_after_any_success_and_completes_after_10s():
     for _ in range(600):                          # ~12 s of ticks
         bit.update(0.02)
         t += 0.02
-        bit.cues(t)
+        bit.fires(t)
     assert bit.update(0.02)
 
 
@@ -57,7 +57,7 @@ def test_result_reports_successes():
 def test_status_is_wire_safe():
     import math
     bit = _started()
-    bit.cues(100.0)
+    bit.fires(100.0)
     status = bit.status()
     assert "turn" in status and "cycle" in status
     for v in status.values():

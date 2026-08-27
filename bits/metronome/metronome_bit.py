@@ -107,7 +107,6 @@ class MetronomeBit(Bit):
         self._players: list[str] = []
         self._rotation: list[str] = []
         self._t0 = None
-        self._next_beat = 0
         self._elapsed = 0.0
         self._done = False
         self._successes: dict[str, int] = {}
@@ -233,7 +232,6 @@ class MetronomeBit(Bit):
     def on_run_start(self) -> None:
         self._rotation = list(self._players)
         self._t0 = None
-        self._next_beat = 0
         self._elapsed = 0.0
         self._done = False
         self._successes = {}
@@ -362,20 +360,34 @@ class MetronomeBit(Bit):
 
         return out
 
-    def cues(self, at: float) -> list:
+    def fires(self, at: float) -> list:
+        """This Bit's own bit-adjudicated report: every cycle's win/fail
+        judgment plus the run's finale.
+
+        Anchoring `self._t0` used to happen on the first `cues(at)` call;
+        `fires(at)` is now the only per-tick hook this Bit gets an absolute
+        `at` through, so the anchor moves here instead. Everything below is
+        pure fire adjudication -- judging a finished cycle's tapped phrase
+        and reporting the win/fail FireFunctions, then the finale once the
+        run's last cycle is judged -- carried verbatim from the old cues(at).
+
+        The per-beat LightCue schedule cues(at) used to also emit (click
+        note pairs, the downbeat green flash, and the level pulse decay
+        across ROOM and every player) is NOT converted: Bit.fires(at) may
+        only return FireFunction, and that schedule is not a periodic
+        waveform a GENERATOR Function could declare either -- each beat's
+        cues depend on runtime state (which dev is on turn, which devs are
+        currently _failed_devs) that a GeneratorSpec has no way to read.
+        _beat_cues(k) is kept as a pure helper (still directly tested) but
+        nothing in the engine drives it anymore; see the design doc's
+        section 4 and this task's DONE_WITH_CONCERNS report.
+        """
         out = []
         if self._t0 is None:
             self._t0 = at + self.LEAD_IN_S
-        # Emit each beat's cues once, when its gridpoint enters the horizon
-        # one beat ahead of `at`. TimedQueue holds them until `when`.
-        total = self.BEATS_PER_CYCLE * self.CYCLES
-        while (self._next_beat < total
-               and self._grid(self._next_beat) <= at + self.BEAT_S):
-            out.extend(self._beat_cues(self._next_beat))
-            self._next_beat += 1
 
         # Judge every unjudged cycle whose slack window has passed. A loop
-        # (not a single check) so a cues(at) call whose `at` jumps past more
+        # (not a single check) so a fires(at) call whose `at` jumps past more
         # than one cycle's judge deadline -- a stalled tick, scheduler
         # catch-up, or the final call -- still judges each of them.
         while self._judged_cycles < self.CYCLES:
