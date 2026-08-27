@@ -156,3 +156,91 @@ def test_bit_with_no_requirements_and_no_room_manifests_loads():
     gs.load_bit("NoRequirementsBit")
     assert gs.state is State.SETUP
     assert gs._slot_requirements == {}
+
+
+# --- Task 6: carrier instruments gate role grants -------------------------
+
+
+class PlayerSlotBit(Bit):
+    """One non-ROOM role, "player", requiring gesture.tap -- TUNESHROOM
+    satisfies this."""
+
+    @property
+    def role_table(self):
+        role = Role(name="player", role_class=RoleClass.SHARED,
+                    capacity=None, scored=False, requires="player")
+        return RoleTable(roles={"player": role},
+                         node_map={"node1": ("player",)})
+
+    def instrument_requirements(self):
+        return (InstrumentRequirement(
+            slot="player", capabilities=frozenset({"gesture.tap"})),)
+
+
+class UnsatisfiableSlotBit(Bit):
+    """One non-ROOM role, "player", requiring light.surface -- TUNESHROOM
+    lacks this, so every join must be refused."""
+
+    @property
+    def role_table(self):
+        role = Role(name="player", role_class=RoleClass.SHARED,
+                    capacity=None, scored=False, requires="player")
+        return RoleTable(roles={"player": role},
+                         node_map={"node1": ("player",)})
+
+    def instrument_requirements(self):
+        return (InstrumentRequirement(
+            slot="player", capabilities=frozenset({"light.surface"})),)
+
+
+class RequiresLessBit(Bit):
+    """One non-ROOM role with no Role.requires at all -- join must behave
+    exactly as before this slice: no slot/instrument gating or stamping."""
+
+    @property
+    def role_table(self):
+        role = Role(name="player", role_class=RoleClass.SHARED,
+                    capacity=None, scored=False)
+        return RoleTable(roles={"player": role},
+                         node_map={"node1": ("player",)})
+
+
+def test_join_granted_when_carried_instrument_satisfies_slot():
+    gs = GameServer({"PlayerSlotBit": PlayerSlotBit})
+    gs.load_bit("PlayerSlotBit")
+    gs.devices.hello("dev1", "device-one", "1.0")
+    result = gs.join("dev1", "node1")
+    assert result.granted
+    assert result.slot == "player"
+    assert result.instrument == "tuneshroom"
+    assert result.config["slot"] == "player"
+    assert result.config["instrument"] == "tuneshroom"
+
+
+def test_join_refused_with_reason_when_contract_unsatisfied():
+    gs = GameServer({"UnsatisfiableSlotBit": UnsatisfiableSlotBit})
+    gs.load_bit("UnsatisfiableSlotBit")
+    gs.devices.hello("dev1", "device-one", "1.0")
+    result = gs.join("dev1", "node1")
+    assert not result.granted
+    assert "light.surface" in result.reason
+
+    # The role's count must not have been consumed by the refused join --
+    # a second (equally incapable, but that's not what's under test here)
+    # device can still attempt and the role is still open, not at capacity.
+    gs.devices.hello("dev2", "device-two", "1.0")
+    result2 = gs.join("dev2", "node1")
+    assert not result2.granted
+    assert result2.reason == result.reason  # same contract reason, not "at capacity"
+
+
+def test_role_without_requires_is_unchanged():
+    gs = GameServer({"RequiresLessBit": RequiresLessBit})
+    gs.load_bit("RequiresLessBit")
+    gs.devices.hello("dev1", "device-one", "1.0")
+    result = gs.join("dev1", "node1")
+    assert result.granted
+    assert result.slot is None
+    assert result.instrument is None
+    assert "slot" not in result.config
+    assert "instrument" not in result.config

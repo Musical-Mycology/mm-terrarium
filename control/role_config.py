@@ -129,7 +129,9 @@ def _validate_string_list(role: Role, field_name: str) -> None:
 
 def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
                         room_name: str | None = None,
-                        terrarium_config_version: str | None = None) -> dict:
+                        terrarium_config_version: str | None = None,
+                        slot: str | None = None,
+                        instrument: str | None = None) -> dict:
     """The per-role config blob shipped in /ie<N>/role at adoption time
     (docs/control-gameserver-design.md, player flow step 3). Deep-copied so
     transport/Console consumers can never alias the Bit's declaration. The
@@ -140,7 +142,12 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
     active Room (see control/terrarium.py's GameServer.provenance); a Bit
     joined outside a Room passes neither, and the two keys are omitted
     entirely so a pre-Room blob stays byte-identical to what always shipped
-    -- never present as null."""
+    -- never present as null.
+
+    slot and instrument stamp the requirement slot a granted join filled
+    and the carried instrument's name that filled it (GameServer.join,
+    Task 6); both are omitted for ROOM joins and requires-less roles, same
+    never-null discipline as the provenance stamps."""
     light = deepcopy(role.light_manifest)
     light["bit_name"] = bit_name
     light["bit_version"] = bit_version
@@ -159,6 +166,10 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
         config["room_name"] = room_name
     if terrarium_config_version is not None:
         config["terrarium_config_version"] = terrarium_config_version
+    if slot is not None:
+        config["slot"] = slot
+    if instrument is not None:
+        config["instrument"] = instrument
     return config
 
 

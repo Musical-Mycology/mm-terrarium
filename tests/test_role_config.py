@@ -1,6 +1,10 @@
 import pytest
 
-from control.role_config import validate_role_declarations, validate_ugen_manifest
+from control.role_config import (
+    compose_role_config,
+    validate_role_declarations,
+    validate_ugen_manifest,
+)
 from control.roles import Role, RoleClass, RoleTable
 
 
@@ -27,6 +31,19 @@ GOOD_WELCOME = {
               "duration": 1.5},
     "audio": {"instrument": "chime", "duration": 1.5},
 }
+
+
+def test_compose_role_config_omits_slot_and_instrument_by_default():
+    config = compose_role_config("Bit", "0.1", make_role())
+    assert "slot" not in config
+    assert "instrument" not in config
+
+
+def test_compose_role_config_stamps_slot_and_instrument_when_given():
+    config = compose_role_config("Bit", "0.1", make_role(),
+                                 slot="player", instrument="tuneshroom")
+    assert config["slot"] == "player"
+    assert config["instrument"] == "tuneshroom"
 
 
 def test_validate_accepts_empty_defaults():

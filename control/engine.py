@@ -14,7 +14,7 @@ import time
 from control.bit import Bit
 from control.cues import ROOM, FireTrigger, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
-from control.instrument import InstrumentRequirement, satisfies
+from control.instrument import TUNESHROOM, InstrumentRequirement, satisfies
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
@@ -287,11 +287,29 @@ class GameServer:
             # build role_table per property access, so a fresh call could
             # return different Role objects than the ones counts track.
             role = self.registration.role_table.roles[result.role]
+            if role.requires is not None:
+                # requires names a declared or implicit slot (Task 5's
+                # load-time validation guarantees this). The implicit
+                # "room" slot has no entry in _slot_requirements -- it's
+                # deliberately excluded there because it binds the room's
+                # own fixtures (already resolved at load_bit), not the
+                # carrier device joining this role. req is None means
+                # exactly that case, so treat it as satisfied.
+                req = self._slot_requirements.get(role.requires)
+                info = self.devices.get(dev)
+                carried = getattr(info, "carried", None) or TUNESHROOM
+                reason = satisfies(carried, req) if req is not None else None
+                if req is not None and reason is not None:
+                    self.registration.release(dev)
+                    return JoinResult(granted=False, reason=reason)
+                result.slot = role.requires
+                result.instrument = carried.name
             result.config = compose_role_config(
                 self.bit_name, self.bit.version, role,
                 room_name=self.provenance.get("room_name"),
                 terrarium_config_version=self.provenance.get(
-                    "terrarium_config_version"))
+                    "terrarium_config_version"),
+                slot=result.slot, instrument=result.instrument)
             try:
                 self.bit.on_join(dev, result.role)
             except Exception:

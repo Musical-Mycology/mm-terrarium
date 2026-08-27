@@ -16,6 +16,12 @@ class JoinResult:
     scored: bool | None = None
     reason: str | None = None
     hint: str | None = None
+    # The instrument-requirement slot this join filled, and the carried
+    # instrument's name that filled it -- set by GameServer.join on a
+    # granted, requires-bearing role. None for ROOM joins and roles with no
+    # Role.requires (wire-friendly: name, not the Instrument object).
+    slot: str | None = None
+    instrument: str | None = None
     # Composed per-role config blob for /ie<N>/role -- filled by
     # GameServer.join on granted results (control/role_config.py);
     # RegistrationState itself never touches it.
