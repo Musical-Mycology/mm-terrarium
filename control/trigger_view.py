@@ -65,4 +65,5 @@ def trigger_fired_view(record) -> dict:
         "devs": list(record.devs),
         "at": record.at,
         "steps": record.steps,
+        "room_name": record.room_name,
     }
