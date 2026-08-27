@@ -1,5 +1,6 @@
 from control.roles import Role, RoleClass
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room, room_role, room_role_name
 
 TEST_PROFILE = RoomProfile(
@@ -10,12 +11,12 @@ TEST_PROFILE = RoomProfile(
             blocks=(RoomBlock("main", 0, 60),),
             zones=(RoomZone("left", 0, 20),
                   RoomZone("center", 20, 20),
-                  RoomZone("right", 40, 20))),
+                  RoomZone("right", 40, 20)), instrument=GENERIC_SURFACE),
         RoomFixture(
             name="accent", color_order="GRB",
             blocks=(RoomBlock("accent", 0, 30),),
             zones=(RoomZone("low", 0, 15),
-                  RoomZone("high", 15, 15))),
+                  RoomZone("high", 15, 15)), instrument=GENERIC_SURFACE),
     ),
 )
 

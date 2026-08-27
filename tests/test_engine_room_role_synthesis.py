@@ -1,6 +1,7 @@
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room, room_role_name
 from bits.test.test_bit import TestBit
 
@@ -9,7 +10,7 @@ def make_room(name="TEST"):
     profile = RoomProfile(surface_id="room_x", fixtures=(
         RoomFixture(name="main", color_order="GRB",
                     blocks=(RoomBlock("main", 0, 10),),
-                    zones=(RoomZone("all", 0, 10),)),))
+                    zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),))
     return Room(name=name, profile=profile, node_id=f"ROOM_{name}_NODE")
 
 

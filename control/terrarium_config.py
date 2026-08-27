@@ -11,10 +11,20 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from control.instrument import Instrument
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
 
 KNOWN_BACKENDS = frozenset({"devicelink", "array"})
+
+# Temporary: every fixture parsed from terrarium.toml carries this generic
+# instrument until Task 4 adds real [fixtures.instrument] parsing (see
+# docs/superpowers/specs/2026-08-27-instruments-and-fixtures-design.md).
+_PLACEHOLDER = Instrument(
+    name="generic_surface",
+    capabilities=frozenset({"light.surface", "audio.flsyn"}),
+    accepted_triggers=("midi", "play", "solid", "mute"),
+)
 
 
 class TerrariumConfigError(Exception):
@@ -93,7 +103,8 @@ def _parse_room(rname: str, rraw: dict, *, source: str) -> RoomSpec:
                       for z in fraw.get("zones", []))
         fixtures.append(RoomFixture(name=fraw["name"],
                                     color_order=fraw["color_order"],
-                                    blocks=blocks, zones=zones))
+                                    blocks=blocks, zones=zones,
+                                    instrument=_PLACEHOLDER))
     try:
         profile = RoomProfile(surface_id=f"room_{rname.lower()}",
                               fixtures=tuple(fixtures))

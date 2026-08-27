@@ -13,6 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from control.instrument import (Instrument, InstrumentError,
+                                 validate_instrument,
+                                 validate_instrument_manifests)
+
 # A single luxaeterna Universe is 512 DMX channels, so one BLOCK -- one
 # physical LED device / one controller's worth -- caps at 170 px RGB (see
 # RoomBlock). A whole profile may exceed this by declaring more blocks;
@@ -66,6 +70,7 @@ class RoomFixture:
     color_order: str
     blocks: tuple[RoomBlock, ...]
     zones: tuple[RoomZone, ...]
+    instrument: Instrument
 
     @property
     def pixel_count(self) -> int:
@@ -145,6 +150,13 @@ class RoomProfile:
                 if intervals[i][0] < intervals[i - 1][1]:
                     raise ValueError(
                         f"fixture {fixture.name!r} has overlapping zones")
+        for fixture in self.fixtures:
+            try:
+                validate_instrument(fixture.instrument)
+                validate_instrument_manifests(fixture.instrument)
+            except InstrumentError as exc:
+                raise ValueError(
+                    f"fixture {fixture.name!r}: {exc}") from exc
 
     @property
     def pixel_count(self) -> int:

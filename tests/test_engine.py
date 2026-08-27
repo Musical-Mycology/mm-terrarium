@@ -7,6 +7,7 @@ from control.bit import Bit
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from tests.instrument_fixtures import GENERIC_SURFACE
 from control.roles import Role, RoleClass, RoleTable
 from control.rooms import Room
 from control.state import State
@@ -14,7 +15,7 @@ from control.state import State
 ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
     RoomFixture(name="main", color_order="GRB",
                blocks=(RoomBlock("main", 0, 10),),
-               zones=(RoomZone("all", 0, 10),)),))
+               zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),))
 
 
 def make_room(name="TEST"):

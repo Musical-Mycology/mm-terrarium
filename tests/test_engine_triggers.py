@@ -184,14 +184,17 @@ class _Room:
     def __init__(self, bound):
         from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                           RoomZone)
+        from tests.instrument_fixtures import GENERIC_SURFACE
         self.name = "TEST"
         self.profile = RoomProfile(surface_id="room_test", fixtures=(
             RoomFixture(name="main", color_order="GRB",
                        blocks=(RoomBlock("main", 0, 10),),
-                       zones=(RoomZone("all", 0, 10),)),
+                       zones=(RoomZone("all", 0, 10),),
+                       instrument=GENERIC_SURFACE),
             RoomFixture(name="accent", color_order="GRB",
                        blocks=(RoomBlock("accent", 0, 10),),
-                       zones=(RoomZone("all", 0, 10),)),
+                       zones=(RoomZone("all", 0, 10),),
+                       instrument=GENERIC_SURFACE),
         ))
         self.bound = bound   # dict[str, str], fixture name -> dev
 

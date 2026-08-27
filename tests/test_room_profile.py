@@ -5,9 +5,11 @@ import pathlib
 
 import pytest
 
+from control.instrument import Instrument
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
 from control.terrarium_config import load_terrarium_config
+from tests.instrument_fixtures import GENERIC_SURFACE
 
 
 def room_profile(name: str) -> RoomProfile:
@@ -17,11 +19,28 @@ def room_profile(name: str) -> RoomProfile:
     return load_terrarium_config("terrarium.toml").rooms[name].profile
 
 
-def _fixture(name="main", blocks=None, zones=(), color_order="GRB"):
+def _fixture(name="main", blocks=None, zones=(), color_order="GRB",
+            instrument=GENERIC_SURFACE):
     if blocks is None:
         blocks = (RoomBlock("b1", 0, 60),)
     return RoomFixture(name=name, color_order=color_order,
-                       blocks=blocks, zones=zones)
+                       blocks=blocks, zones=zones, instrument=instrument)
+
+
+def make_profile(instrument=GENERIC_SURFACE):
+    return RoomProfile(surface_id="p", fixtures=(
+        _fixture(instrument=instrument),))
+
+
+def test_fixture_carries_its_instrument():
+    profile = make_profile()
+    assert profile.fixtures[0].instrument.name == "generic_surface"
+
+
+def test_bad_fixture_instrument_fails_profile_construction():
+    bad = Instrument(name="x", capabilities=frozenset({"nope.tag"}))
+    with pytest.raises(ValueError, match="nope.tag"):
+        make_profile(instrument=bad)
 
 
 def test_test_room_declares_two_asymmetric_fixtures():
