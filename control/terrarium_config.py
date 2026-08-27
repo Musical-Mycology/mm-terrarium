@@ -8,23 +8,16 @@ from __future__ import annotations
 
 import hashlib
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from control.instrument import Instrument
+from control.instrument import (Instrument, InstrumentError,
+                                validate_instrument,
+                                validate_instrument_manifests)
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
 
 KNOWN_BACKENDS = frozenset({"devicelink", "array"})
-
-# Temporary: every fixture parsed from terrarium.toml carries this generic
-# instrument until Task 4 adds real [fixtures.instrument] parsing (see
-# docs/superpowers/specs/2026-08-27-instruments-and-fixtures-design.md).
-_PLACEHOLDER = Instrument(
-    name="generic_surface",
-    capabilities=frozenset({"light.surface", "audio.flsyn"}),
-    accepted_triggers=("midi", "play", "solid", "mute"),
-)
 
 
 class TerrariumConfigError(Exception):
@@ -52,6 +45,7 @@ class TerrariumConfig:
     bit_paths: tuple[str, ...]
     rooms: dict[str, RoomSpec]
     version: str          # f"{schema}-{sha256(text)[:12]}", content-addressed
+    instruments: dict[str, Instrument] = field(default_factory=dict)
 
 
 def load_terrarium_config(path: str) -> TerrariumConfig:
@@ -75,19 +69,49 @@ def parse_terrarium_config(text: str, source: str) -> TerrariumConfig:
         raise TerrariumConfigError(source=source, key="terrarium.name",
                                    message="required non-empty string")
     bit_paths = tuple(terr.get("bit_paths", ["bits"]))
+    instruments_raw = raw.get("instruments", {})
+    instruments: dict[str, Instrument] = {}
+    for iname, iraw in instruments_raw.items():
+        instruments[iname] = _parse_instrument(iname, iraw, source=source)
     rooms_raw = raw.get("rooms")
     if not isinstance(rooms_raw, dict) or not rooms_raw:
         raise TerrariumConfigError(source=source, key="rooms",
                                    message="at least one [rooms.<NAME>] required")
     rooms: dict[str, RoomSpec] = {}
     for rname, rraw in rooms_raw.items():
-        rooms[rname] = _parse_room(rname, rraw, source=source)
+        rooms[rname] = _parse_room(rname, rraw, source=source,
+                                   instruments=instruments)
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
     return TerrariumConfig(schema=schema, name=name, bit_paths=bit_paths,
-                           rooms=rooms, version=f"{schema}-{digest}")
+                           rooms=rooms, instruments=instruments,
+                           version=f"{schema}-{digest}")
 
 
-def _parse_room(rname: str, rraw: dict, *, source: str) -> RoomSpec:
+def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
+    key = f"instruments.{iname}"
+    ambient = iraw.get("ambient", {})
+    light_manifest = ambient.get("light", {})
+    ugen_manifest = ambient.get("ugen", {})
+    instrument = Instrument(
+        name=iname,
+        description=iraw.get("description", ""),
+        capabilities=frozenset(iraw.get("capabilities", [])),
+        functions=tuple(iraw.get("functions", [])),
+        accepted_triggers=tuple(iraw.get("accepted_triggers", [])),
+        light_manifest=light_manifest,
+        ugen_manifest=ugen_manifest,
+    )
+    try:
+        validate_instrument(instrument)
+        validate_instrument_manifests(instrument)
+    except InstrumentError as exc:
+        raise TerrariumConfigError(source=source, key=key,
+                                   message=str(exc)) from exc
+    return instrument
+
+
+def _parse_room(rname: str, rraw: dict, *, source: str,
+                instruments: dict[str, Instrument]) -> RoomSpec:
     key = f"rooms.{rname}"
     backends = tuple(rraw.get("backends", []))
     unknown = [b for b in backends if b not in KNOWN_BACKENDS]
@@ -101,10 +125,22 @@ def _parse_room(rname: str, rraw: dict, *, source: str) -> RoomSpec:
                        for b in fraw.get("blocks", []))
         zones = tuple(RoomZone(z["name"], z["start"], z["count"])
                       for z in fraw.get("zones", []))
+        iname = fraw.get("instrument")
+        if not iname:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"fixture {fraw.get('name')!r} missing required "
+                        f"'instrument' key")
+        instrument = instruments.get(iname)
+        if instrument is None:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"fixture {fraw.get('name')!r} references unknown "
+                        f"instrument {iname!r}; known: {sorted(instruments)}")
         fixtures.append(RoomFixture(name=fraw["name"],
                                     color_order=fraw["color_order"],
                                     blocks=blocks, zones=zones,
-                                    instrument=_PLACEHOLDER))
+                                    instrument=instrument))
     try:
         profile = RoomProfile(surface_id=f"room_{rname.lower()}",
                               fixtures=tuple(fixtures))
