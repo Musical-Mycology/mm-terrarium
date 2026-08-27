@@ -46,7 +46,7 @@ def test_markers_are_non_empty_and_distinct():
 
 
 def test_browse_url_marker_is_emitted_by_every_browser_surface():
-    """The Console and a simulated Tuneshroom canvas print their URL
+    """The Console and a Testshroom canvas print their URL
     behind markers.BROWSE_URL, so harness/run_stack.py can collect and
     open them under --open. Matching the incidental wording ('Watch the
     Shroom at ...') instead would be the silent-hang trap this module
@@ -89,7 +89,7 @@ def test_room_url_marker_is_emitted_by_room_simulator():
 
 def test_o2_shroom_emits_room_url_under_no_join_and_browse_url_otherwise():
     """o2_shroom.py stands in for a Room fixture under --no-join and for a
-    real Tuneshroom device otherwise -- the marker it prints has to track
+    player-device Testshroom otherwise -- the marker it prints has to track
     which one it is being right now, not just always emit BROWSE_URL."""
     import harness.o2_shroom
 

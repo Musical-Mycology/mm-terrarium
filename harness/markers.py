@@ -77,7 +77,7 @@ DEVICE_SERVICE_CONFLICT = "FATAL: service"
 # --- Browser surfaces (all three harness entry points) -----------------
 
 # A line carrying a URL worth a browser tab: the Terrarium Console, a Room
-# fixture canvas, or a simulated Tuneshroom canvas. run_stack collects
+# fixture canvas, or a Testshroom canvas. run_stack collects
 # every such URL and, under --open, opens each in the default browser.
 # Unlike the ready/failure markers this one is not waited on -- there is a
 # variable number of them per run -- so it lives outside both dicts.

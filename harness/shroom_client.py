@@ -1,4 +1,15 @@
-"""The Radxa Tuneshroom's devicelink participation.
+"""Devicelink participation for a Shroom-shaped device -- real or Testshroom.
+
+What is a Testshroom: the harness's own instrument type, used in testing.
+Every simulated device this repo spawns (harness/o2_shroom.py, the smoke
+drivers, run_stack's browser canvases) is a Testshroom: a browser-canvas
+instrument with a 12 px GRB surface and the standard gesture verbs. It is
+deliberately NOT defined as "a simulated Tuneshroom": its shape happens to
+match today's Tuneshroom wire, but it is decoupled from what real Tuneshroom
+hardware becomes -- the Testshroom's job is to exercise Control's seams, not
+to track a hardware design. This class is the shared protocol client both
+kinds of device use; the transport half in ``main()`` also runs on the real
+Radxa Tuneshroom.
 
 Socket-free by design: ``handle()`` takes a decoded JSON message and returns the
 address it handled, or ``""`` if it dropped the frame. That keeps the whole
@@ -47,9 +58,12 @@ from devicelink import protocol
 
 logger = logging.getLogger(__name__)
 
-# 12 pixels x GRB, per protocol.leds_event. The parts are SK6812 RGBW and the
-# white die is currently unreachable over this wire; see the plan's Task B7,
-# which is a pending decision rather than a bug to fix here.
+# 12 pixels x GRB, per protocol.leds_event: the Testshroom's own declared
+# surface shape. It matches today's Tuneshroom wire but is not defined AS that
+# wire -- if the hardware changes shape, the Testshroom does not have to
+# follow. (Hardware note: the real parts are SK6812 RGBW and the white die is
+# currently unreachable over this wire; see the plan's Task B7, a pending
+# decision rather than a bug to fix here.)
 LED_CHANNELS = 36
 
 # Bound on frames buffered in _pending between ticks. Under normal operation
@@ -84,10 +98,10 @@ class ShroomClient:
         # never propagates -- a broken speaker must not kill the session.
         self.on_play = on_play
         # Frame width this client will accept, in channels. Defaults to the
-        # 12 px x GRB Tuneshroom wire, so every existing caller is unchanged.
-        # The Room simulator passes its RoomProfile.channel_count instead: a
-        # Room is not a Tuneshroom and does not have 36 channels. See
-        # control/room_profile.py.
+        # Testshroom's 12 px x GRB shape, so every existing caller is
+        # unchanged. The Room simulator passes its RoomProfile.channel_count
+        # instead: a Room is not a Testshroom and does not have 36 channels.
+        # See control/room_profile.py.
         self.expected_channels = expected_channels
         self.config: dict | None = None
         self.released = False

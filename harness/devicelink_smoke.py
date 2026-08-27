@@ -1,5 +1,5 @@
 """python -m harness.devicelink_smoke -- run Control with a live DeviceLink
-so a browser Tuneshroom simulator can register and render.
+so a browser Testshroom can register and render.
 
     python -m harness.devicelink_smoke --hold
     python -m harness.devicelink_smoke --seconds 30 --host 0.0.0.0
@@ -73,7 +73,7 @@ def _wait_in_setup(agent: DeviceLinkAgent, setup_seconds: float,
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Serve DeviceLink for the Tuneshroom simulator.")
+        description="Serve DeviceLink for the Testshroom simulator.")
     ap.add_argument("--seconds", type=float, default=None,
                     help="How long the Bit stays RUNNING before completing.")
     ap.add_argument("--hold", action="store_true",

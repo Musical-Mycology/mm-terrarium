@@ -51,7 +51,7 @@ hardware fleet.
 > **The o2lite path has been run against a live Arco and observed working**
 > (2026-08-13), which is the first time anything in this repo's device path
 > has been confirmed on a real O2 network rather than against fakes. What was
-> measured: a simulated Tuneshroom joined `TEST_PLAYER_NODE` and received its
+> measured: a Testshroom (see the Testshroom note below) joined `TEST_PLAYER_NODE` and received its
 > composed role blob over the hub; **820** LED frames were delivered and
 > rendered with visible gesture-driven hue motion; the Room drone sounded
 > from Arco on RUNNING. Reproduced on **2026-08-14** with 2418 more frames.
@@ -378,6 +378,15 @@ venue" question. Landed in
   `harness/terrarium_boot.py --console-port N` (and `run_stack`'s passthrough)
   now serves it and prints the URL. Off by default. It also gained a **Room
   panel**; see the Room-panel section below.
+
+**Testshroom (2026-08-27):** the harness's simulated devices are no longer
+described as "simulated Tuneshrooms". A **Testshroom** is the harness's own
+instrument type, used in testing: a browser-canvas instrument with a 12 px
+GRB surface and the standard gesture verbs, deliberately decoupled from what
+real Tuneshroom hardware becomes. Its shape happens to match today's
+Tuneshroom wire but is not defined *as* that wire. Definition anchor:
+`harness/shroom_client.py`'s module docstring. Prose/identity only -- no wire,
+module, or behavior change.
 
 ### `harness/` — the in-process LED-sim harness (Slice 1)
 `DeviceBridge` + `led_smoke.py`: the first end-to-end exercise of the
@@ -819,7 +828,7 @@ Control becomes a real O2 participant, and a cue gains a time. Design:
 - **`LightCue`** (`control/cues.py`) — a cue carrying an absolute O2 time,
   sibling to `PlayCue`. Plain 4-tuples still work and mean "apply on
   arrival", so every Bit written before it keeps running unchanged.
-- **`harness/o2_shroom.py`** — a simulated Tuneshroom over real o2lite,
+- **`harness/o2_shroom.py`** — a Testshroom over real o2lite,
   rendering to a browser canvas. `--no-join` makes it serve as the Room
   simulator too (hello, never join), which is why `terrarium_boot`'s o2lite
   mode spawns this one file rather than a second near-copy. Same label slice
@@ -1173,7 +1182,7 @@ prevented the ordering from disagreeing with itself again, and it had.
 
   **`--open` (2026-08-20) makes it the one-command simulator test
   environment.** Every browser-facing surface -- the Terrarium Console,
-  each Room fixture canvas, each simulated Tuneshroom canvas -- prints its
+  each Room fixture canvas, each Testshroom canvas -- prints its
   URL behind a new `markers.BROWSE_URL` prefix, and `run_stack` collects
   each one as it appears (a `ProcTee(on_line=...)` hook, readiness-driven,
   not sleep-and-guess) and opens it in the default browser via
@@ -1716,7 +1725,7 @@ and operator surface, none in the engine. Design:
   crash, drone and device animation live.
 
 ### WebSim two-way input -- browser gestures become real /game/* messages
-The simulated Tuneshroom is now playable from its own canvas. Design:
+The Testshroom is now playable from its own canvas. Design:
 [`.../2026-08-20-websim-two-way-input-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-20-websim-two-way-input-design.md).
 Cross-repo: luxaeterna's `WebSimBackend` gained an optional `on_input`
 callback (inbound JSON text messages over the already-open page websocket;

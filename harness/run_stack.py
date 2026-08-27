@@ -567,7 +567,7 @@ def _dead_child(children: dict[str, object], *,
     released ie1, ie1 exited 0, this function reported it, run() SIGTERMed
     a perfectly healthy Control mid-serve and Arco went down with it. A
     control exit of any code and a NON-zero device exit still count.
-    Devices that stay up across rounds are a later slice (Tuneshroom
+    Devices that stay up across rounds are a later slice (device
     reconnection); until then round 2+ under run_stack runs device-less.
 
     "flutter-sim" (the Flutter simulator launcher spawned by
@@ -645,7 +645,7 @@ def parse_args(argv=None):
     ap.add_argument("--open", action="store_true",
                     help="Open a browser tab for every surface as it comes "
                          "up: the Terrarium Console, each Room fixture "
-                         "canvas, and each simulated Tuneshroom canvas. "
+                         "canvas, and each Testshroom canvas. "
                          "Implies a Console on an ephemeral port unless "
                          "--console-port is given. Refused under --ci.")
     ap.add_argument("--room", default=None,

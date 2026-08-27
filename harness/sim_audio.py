@@ -1,4 +1,4 @@
-"""Generated tones for the simulated Tuneshroom's /<dev>/play path.
+"""Generated tones for the Testshroom's /<dev>/play path.
 
 The real device plays preloaded samples off disk (harness/local_sample.py,
 MM_HARDWARE_DESIGN.md section 4.4). The simulator has no sample library and

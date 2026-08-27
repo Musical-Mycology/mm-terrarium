@@ -1,4 +1,4 @@
-"""python -m harness.o2_shroom -- a simulated Tuneshroom over real o2lite.
+"""python -m harness.o2_shroom -- a Testshroom over real o2lite.
 
 The acceptance vehicle for docs/superpowers/specs/
 2026-08-12-control-o2lite-and-timed-cues-design.md: a clock-synced O2
@@ -288,7 +288,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     build()/main() split.
 
     room_type, when given, renders that ROOM's ONE named fixture instead of
-    a Tuneshroom's surface -- fixture is then required. This is the
+    a Testshroom's surface -- fixture is then required. This is the
     --no-join path, where this module stands in for
     harness/room_simulator.py, once per fixture, on the o2lite transport.
 
@@ -401,7 +401,7 @@ def main() -> None:
                              "(harness/room_simulator.py's rule, reused).")
     parser.add_argument("--room-type", default=None,
                         help="Render this Room's (a name in terrarium.toml) surface instead of a "
-                             "Tuneshroom's. Only meaningful with --no-join, "
+                             "Testshroom's. Only meaningful with --no-join, "
                              "which is how this module serves as the Room "
                              "simulator on the o2lite path.")
     parser.add_argument("--fixture", default=None,

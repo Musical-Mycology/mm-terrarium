@@ -161,7 +161,7 @@ def test_exploding_result_does_not_wedge_state_machine():
     UplinkAgent(server, transport)
     transport.connect()
 
-    server.hello("ie1", "Tuneshroom 1", "1.0")
+    server.hello("ie1", "Testshroom 1", "1.0")
     server.load_bit("exploding_result_bit")
     server.join("ie1", "TEST_PLAYER_NODE")
     server.run()

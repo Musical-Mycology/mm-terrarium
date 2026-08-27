@@ -1,6 +1,7 @@
 """python -m harness.room_simulator -- the TEST-room simulator subprocess.
 
-An ordinary devicelink client, indistinguishable from a real Tuneshroom:
+An ordinary devicelink client -- a Testshroom speaking the same protocol
+as any player device:
 reuses harness/shroom_client.py's ShroomClient unmodified for the wire
 protocol, and renders into luxaeterna's WebSimBackend (a browser canvas)
 instead of real GPIO LEDs. Sends only `/game/hello` -- never `/game/join` --
@@ -56,7 +57,7 @@ class WebSimLeds:
     WebSimBackend's send(frame).
 
     `channels` is the frame width this surface expects. It is a parameter
-    rather than the LED_CHANNELS constant because a Room is not a Tuneshroom:
+    rather than the LED_CHANNELS constant because a Room is not a Testshroom:
     the Room's width comes from its RoomProfile (60 px x 3 = 180), while a
     player device is still 12 px x GRB = 36.
     """
