@@ -9,12 +9,27 @@ from control.arco_process import FakePopen
 from control.audio import AudioBridge, FakePool
 from control.boot_config import BootConfig
 from control.room_binding import RoomBindingRegistry
-from control.rooms import RoomType
+from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.state import State
 from control.teardown import TeardownStack
+from control.terrarium_config import RoomSpec
 from devicelink.server import DeviceLinkServer
 from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
                                     _run_duration, build, main, shutdown)
+
+TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
+    RoomFixture(name="main", color_order="GRB",
+               blocks=(RoomBlock("main", 0, 60),),
+               zones=(RoomZone("left", 0, 20),
+                     RoomZone("center", 20, 20),
+                     RoomZone("right", 40, 20))),
+    RoomFixture(name="accent", color_order="GRB",
+               blocks=(RoomBlock("accent", 0, 30),),
+               zones=(RoomZone("low", 0, 15),
+                     RoomZone("high", 15, 15))),
+))
+TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
+                     node_id="ROOM_TEST_NODE", profile=TEST_PROFILE)
 
 
 def _fake_arco(command, popen=None):
@@ -35,13 +50,14 @@ def _build_with_fakes(config, *, transport=None, clock=time.monotonic):
     return build(
         config, {"TestBit": TestBit},
         arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC,
         host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
         simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
         transport=transport, clock=clock)
 
 
 def test_build_wires_devicelink_room_bridge_and_simulator():
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = _build_with_fakes(config)
 
     assert gs.room.bound == {"main": "sim-room-main", "accent": "sim-room-accent"}
@@ -56,12 +72,13 @@ def test_devicelink_server_starts_before_boot_spawns_the_simulator():
     6): by the time boot()'s simulator_factory spawns the subprocess, the
     server it needs to connect to already exists. Assert the ordering
     directly via the fake simulator Popen's recorded launch args."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     sim_popen = FakePopen()
 
     gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=_fake_arco, simulator_popen=sim_popen,
         room_audio=_fake_room_audio())
 
@@ -71,13 +88,14 @@ def test_devicelink_server_starts_before_boot_spawns_the_simulator():
 
 
 def test_shutdown_tears_down_arco_and_simulator():
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     fake_arco_popen = FakePopen()
     sim_popen = FakePopen()
 
     gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=fake_arco_popen),
         simulator_popen=sim_popen, room_audio=_fake_room_audio())
     gs.run()
@@ -111,10 +129,11 @@ def test_shutdown_stops_the_simulator_before_arco():
     arco_popen = _RecordingPopen("arco")
     sim_popen = _RecordingPopen("simulator")
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
         simulator_popen=sim_popen, room_audio=_fake_room_audio())
 
@@ -156,10 +175,11 @@ def test_shutdown_stops_the_devicelink_server_last(monkeypatch):
                 order.append("arco")
             super().send_signal(sig)
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=_RecordingPopen()),
         simulator_popen=FakePopen(), room_audio=_fake_room_audio())
 
@@ -222,10 +242,11 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
     transport = O2LiteTransport()
     transport.start(fake_o2)
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
         simulator_popen=sim_popen, room_audio=_fake_room_audio(),
         transport=transport)
@@ -241,10 +262,11 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
 def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
     """A guarded stack: one broken teardown step must not orphan Arco."""
     arco_popen = FakePopen()
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
         simulator_popen=FakePopen(), room_audio=_fake_room_audio())
 
@@ -258,7 +280,7 @@ def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
 def test_build_passes_the_configured_horizon_to_the_agent():
     """The horizon lives in one place. An agent built with its own default
     would silently disagree with the audio path's scheduling."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit",
+    config = BootConfig(room_name="TEST", bit_name="TestBit",
                         cue_horizon=0.075)
     gs, server, agent, arco, teardown = _build_with_fakes(config)
     try:
@@ -277,7 +299,7 @@ def test_build_can_run_the_agent_on_the_o2lite_transport():
     transport = O2LiteTransport()
     transport.start(fake)
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = _build_with_fakes(config,
                                                      transport=transport)
     try:
@@ -292,7 +314,7 @@ def test_build_passes_the_supplied_clock_to_the_agent():
     stamps frames on the same clock the device ticks against -- see
     build()'s clock= docstring. This is the wiring seam that fix depends
     on; assert it directly rather than only through end-to-end behavior."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     fake_clock = lambda: 45.0
     gs, server, agent, arco, teardown = _build_with_fakes(config, clock=fake_clock)
     try:
@@ -311,7 +333,7 @@ def test_build_gives_the_engine_and_the_agent_one_clock_and_one_horizon():
     callable.
     """
     clk = lambda: 4242.0
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit",
+    config = BootConfig(room_name="TEST", bit_name="TestBit",
                         cue_horizon=0.111)
     gs, server, agent, arco, teardown = _build_with_fakes(config, clock=clk)
     try:
@@ -326,10 +348,11 @@ def test_build_omitting_clock_keeps_the_existing_default():
     """The websocket path (and every existing caller) must see no change:
     omitting clock= leaves build() -- and therefore the agent -- on
     time.monotonic, exactly as before this parameter existed."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
         room_audio=_fake_room_audio())
     try:
@@ -370,10 +393,11 @@ def test_build_threads_its_clock_into_the_default_room_audio(monkeypatch):
     monkeypatch.setattr("control.audio.AudioBridge", _capturing_audio_bridge)
     fake_clock = lambda: 45.0
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit}, arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
         arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
         clock=fake_clock)   # room_audio omitted: exercises the default branch
     try:
@@ -409,7 +433,7 @@ def test_o2lite_frame_is_released_across_the_shared_clock():
     transport = O2LiteTransport()
     transport.start(fake_o2)
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = _build_with_fakes(
         config, transport=transport, clock=fake_o2.time_get)
     try:
@@ -1364,11 +1388,12 @@ def test_build_tears_down_both_subprocesses_if_room_audio_fails(monkeypatch):
 
     arco_popen = FakePopen()
     sim_popen = FakePopen()
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
 
     with pytest.raises(TimeoutError):
         build(config, {"TestBit": TestBit}, arco_command=["arco-server"],
-              room_binding=RoomBindingRegistry(), host="127.0.0.1", port=0,
+              room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0,
               arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
               simulator_popen=sim_popen)   # room_audio omitted: real branch
 
@@ -1384,7 +1409,7 @@ def test_agent_exposes_its_room_bridge():
     """main() reaches the bridge through the agent, since build() does not
     return it and its signature is deliberately unchanged."""
     from control.room_bridge import RoomBridge
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = _build_with_fakes(config)
     try:
         assert isinstance(agent.room_bridge, RoomBridge)
@@ -1394,7 +1419,7 @@ def test_agent_exposes_its_room_bridge():
 
 def test_console_is_off_by_default():
     """Every existing invocation must be byte-identical."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = _build_with_fakes(config)
     try:
         assert agent._on_room_frame is None
@@ -1495,10 +1520,11 @@ def test_build_wires_on_join_denied_to_the_agent_constructor():
     FakeServer the agent test fixtures already use, not just an attribute
     check on the built agent."""
     calls = []
-    config = BootConfig(room_type=RoomType.TEST, bit_name="TestBit")
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown = build(
         config, {"TestBit": TestBit},
         arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC,
         host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
         simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
         clock=time.monotonic,

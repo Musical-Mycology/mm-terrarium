@@ -238,7 +238,7 @@ def test_terrarium_boot_profile_room_type_wins_over_the_manifest_default(
 
     captured = _run_main_capturing_build(
         monkeypatch, ["--profile", str(profile_path)])
-    assert captured["config"].room_type.name == "DEMO"
+    assert captured["config"].room_name == "DEMO"
 
 
 def test_terrarium_boot_without_a_profile_still_defaults_bit_to_test_bit(

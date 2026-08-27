@@ -627,7 +627,7 @@ def parse_args(argv=None):
                          "Implies a Console on an ephemeral port unless "
                          "--console-port is given. Refused under --ci.")
     ap.add_argument("--room-type", default=None, choices=["TEST", "DEMO"],
-                    help="Which RoomType to boot. DEMO configures the "
+                    help="Which Room (a name in terrarium.toml) to boot. DEMO configures the "
                          "simulated array backend (spec 2026-08-19); its "
                          "864 px canvas is otherwise identical in kind to "
                          "TEST's. Default: the selected Bit manifest's "

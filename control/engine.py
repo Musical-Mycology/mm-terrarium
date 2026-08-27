@@ -17,7 +17,7 @@ from control.device_pool import DevicePool
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
-from control.room_profile import room_profile
+from control.rooms import room_role
 from control.state import State
 from control.triggers import (
     FIRED_BY_BIT_ADJUDICATED,
@@ -165,6 +165,13 @@ class GameServer:
             bit_cls = self.bit_registry[name]
             bit = bit_cls(config) if config is not None else bit_cls()
             role_table = bit.role_table
+            if self.room is not None:
+                light_m, ugen_m = bit.room_manifests()
+                if light_m or ugen_m:
+                    rname, role, node = room_role(self.room, ugen_manifest=ugen_m,
+                                                  light_manifest=light_m)
+                    role_table.roles[rname] = role
+                    role_table.node_map[node] = [rname]
             validate_role_declarations(role_table)
             validate_trigger_table(bit.trigger_table, set(bit.verb_handlers()))
             registration = RegistrationState(role_table)
@@ -224,15 +231,15 @@ class GameServer:
     def _room_armed(self) -> bool:
         if self.room_binding is None or self.room is None:
             return False
-        return self.room_binding.is_armed(self.room.room_type)
+        return self.room_binding.is_armed(self.room.name)
 
     def _bind_room(self, dev: str) -> None:
         fixture = None
         if self.room_binding is not None and self.room is not None:
-            fixture = self.room_binding.armed_fixture(self.room.room_type)
+            fixture = self.room_binding.armed_fixture(self.room.name)
         if fixture is not None:
             if self.room_binding is not None:
-                self.room_binding.bind(self.room.room_type, fixture, dev)
+                self.room_binding.bind(self.room.name, fixture, dev)
             self.room.bound[fixture] = dev
         self._notify("on_devices_change")
 
@@ -307,7 +314,7 @@ class GameServer:
         happened to bind first or most recently."""
         if self.room is None or not self.room.bound:
             return None
-        profile = self.room.profile or room_profile(self.room.room_type)
+        profile = self.room.profile
         for fixture in profile.fixtures:
             dev = self.room.bound.get(fixture.name)
             if dev is not None:
@@ -346,7 +353,7 @@ class GameServer:
             return [dev] if dev else []
         room_devs: list[str] = []
         if self.room is not None and self.room.bound:
-            profile = self.room.profile or room_profile(self.room.room_type)
+            profile = self.room.profile
             room_devs = [self.room.bound[f.name] for f in profile.fixtures
                         if f.name in self.room.bound]
         if target is TriggerTarget.ROOM:

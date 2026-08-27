@@ -2,8 +2,7 @@ from bits.test.test_bit import TestBit
 from control.bit_config import ManifestError
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.rooms import Room, RoomType
-from tests.test_engine import RoomCapableBit
+from tests.test_engine import RoomCapableBit, make_room
 from uplink.link import UplinkAgent
 from uplink.transport import FakeTransport
 
@@ -268,14 +267,14 @@ def test_resync_omits_registration_snapshot_when_no_bit_loaded():
 def test_resync_never_sends_the_room_role():
     server = GameServer(bit_registry={"room_bit": RoomCapableBit},
                          room_binding=RoomBindingRegistry())
-    server.room = Room(room_type=RoomType.TEST)
+    server.room = make_room()
     transport = FakeTransport()
     agent = UplinkAgent(server, transport)
     transport.connect()
 
     server.load_bit("room_bit")
     server.hello("ie9", "Shroom Nine", "1")
-    server.room_binding.arm(RoomType.TEST, "main", window_seconds=10.0)
+    server.room_binding.arm("TEST", "main", window_seconds=10.0)
     server.join("ie9", "ROOM_TEST_NODE")
 
     transport.disconnect()
@@ -294,14 +293,14 @@ def test_resync_never_sends_the_room_role():
 def test_on_registration_change_never_sends_the_room_role():
     server = GameServer(bit_registry={"room_bit": RoomCapableBit},
                          room_binding=RoomBindingRegistry())
-    server.room = Room(room_type=RoomType.TEST)
+    server.room = make_room()
     transport = FakeTransport()
     agent = UplinkAgent(server, transport)
     transport.connect()
 
     server.load_bit("room_bit")
     server.hello("ie9", "Shroom Nine", "1")
-    server.room_binding.arm(RoomType.TEST, "main", window_seconds=10.0)
+    server.room_binding.arm("TEST", "main", window_seconds=10.0)
     server.join("ie9", "ROOM_TEST_NODE")  # a Room join alone doesn't fire
                                            # on_registration_change
 

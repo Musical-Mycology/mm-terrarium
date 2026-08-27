@@ -6,21 +6,26 @@ from bits.test.test_bit import TestBit
 from control.bit import Bit
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.room_binding import RoomBindingRegistry
+from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.roles import Role, RoleClass, RoleTable
-from control.rooms import Room, RoomType, room_role
+from control.rooms import Room
 from control.state import State
+
+ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
+    RoomFixture(name="main", color_order="GRB",
+               blocks=(RoomBlock("main", 0, 10),),
+               zones=(RoomZone("all", 0, 10),)),))
+
+
+def make_room(name="TEST"):
+    return Room(name=name, profile=ROOM_PROFILE, node_id="ROOM_TEST_NODE")
 
 
 class RoomCapableBit(TestBit):
-    room_types = {RoomType.TEST}
-
-    @property
-    def role_table(self) -> RoleTable:
-        table = super().role_table
-        name, role, node = room_role(RoomType.TEST)
-        table.roles[name] = role
-        table.node_map[node] = [name]
-        return table
+    # TestBit's own room_manifests (inherited) is what the engine reads to
+    # synthesize the ROOM role now -- this subclass no longer builds one
+    # itself.
+    room_types = {"TEST"}
 
 
 def test_add_observer_notifies_multiple_observers_of_state_changes():
@@ -439,7 +444,7 @@ def test_join_with_no_bit_loaded_carries_no_config():
 def test_room_node_join_denied_while_unarmed():
     server = GameServer({"RoomCapableBit": RoomCapableBit},
                         room_binding=RoomBindingRegistry())
-    server.room = Room(room_type=RoomType.TEST)
+    server.room = make_room()
     server.load_bit("RoomCapableBit")
     result = server.join("ie9", "ROOM_TEST_NODE")
     assert result.granted is False
@@ -449,9 +454,9 @@ def test_room_node_join_denied_while_unarmed():
 def test_room_node_join_binds_device_once_armed():
     binding = RoomBindingRegistry()
     server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
-    server.room = Room(room_type=RoomType.TEST)
+    server.room = make_room()
     server.load_bit("RoomCapableBit")
-    binding.arm(RoomType.TEST, "main", window_seconds=10.0)
+    binding.arm("TEST", "main", window_seconds=10.0)
 
     result = server.join("ie9", "ROOM_TEST_NODE")
 
@@ -459,13 +464,13 @@ def test_room_node_join_binds_device_once_armed():
     assert result.role_class == RoleClass.ROOM
     assert result.config is None
     assert server.room.bound == {"main": "ie9"}
-    assert binding.bound_device(RoomType.TEST, "main") == "ie9"
+    assert binding.bound_device("TEST", "main") == "ie9"
 
 
 def test_room_join_does_not_disturb_player_joins():
     binding = RoomBindingRegistry()
     server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
-    server.room = Room(room_type=RoomType.TEST)
+    server.room = make_room()
     server.load_bit("RoomCapableBit")
 
     result = server.join("ie1", "TEST_PLAYER_NODE")
@@ -490,8 +495,7 @@ def test_bit_cues_are_dispatched_once_per_running_tick():
     from control.bit import Bit
     from control.cues import ROOM
     from control.roles import Role, RoleClass, RoleTable
-    from control.rooms import Room, RoomType
-
+    
     class AmbientBit(Bit):
         version = "0.1"
         def __init__(self):
@@ -509,7 +513,7 @@ def test_bit_cues_are_dispatched_once_per_running_tick():
     bit = AmbientBit()
     gs = GameServer({"ab": lambda: bit}, cue_horizon=0.06,
                     clock=lambda: 1000.0)
-    gs.room = Room(room_type=RoomType.TEST)
+    gs.room = make_room()
     gs.room.bound = {"main": "sim-room"}
     seen = []
     gs.on_light_cue = lambda *a: seen.append(a)
@@ -649,16 +653,15 @@ def test_reap_stale_batches_observer_notifications_once():
 
 def test_reap_stale_never_reaps_a_room_bound_device():
     from control.room_binding import RoomBindingRegistry
-    from control.rooms import Room, RoomType
     from types import SimpleNamespace
     clk = SimpleNamespace(t=0.0)
     binding = RoomBindingRegistry()
     gs = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding,
                     clock=lambda: clk.t)
-    gs.room = Room(room_type=RoomType.TEST)
+    gs.room = make_room()
     gs.load_bit("RoomCapableBit")
     gs.hello("sim-room", "room", "1")
-    binding.arm(RoomType.TEST, "main", window_seconds=10.0)
+    binding.arm("TEST", "main", window_seconds=10.0)
     gs.join("sim-room", "ROOM_TEST_NODE")
     assert gs.room.bound == {"main": "sim-room"}
 

@@ -12,9 +12,8 @@ from console import protocol
 from control.bit_config import ManifestError
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.roles import RoleClass
-from control.room_profile import room_profile
 from control.room_view import room_view
-from control.rooms import RoomType, non_room_counts, room_role_name
+from control.rooms import non_room_counts, room_role_name
 from control.state import State
 from control.trigger_view import trigger_fired_view, triggers_view
 from control.triggers import FIRED_BY_ADMIN_MANUAL
@@ -127,19 +126,15 @@ class ConsoleAgent:
             if reason is not None:
                 return protocol.error_event(name, reason)
             return None
-        try:
-            room_type = RoomType[command.room_type]
-        except KeyError:
-            return protocol.error_event(
-                name, f"unknown room_type {command.room_type!r}")
+        room_name = command.room_type
         gs = self.game_server
-        if gs.room_binding is None or gs.room is None or gs.room.room_type != room_type:
+        if gs.room_binding is None or gs.room is None or gs.room.name != room_name:
             return protocol.error_event(
-                name, f"no {command.room_type} Room configured")
+                name, f"no {room_name} Room configured")
         if isinstance(command, protocol.ArmRoomCommand):
-            gs.room_binding.arm(room_type, command.fixture, command.window_seconds)
+            gs.room_binding.arm(room_name, command.fixture, command.window_seconds)
         elif isinstance(command, protocol.ReleaseRoomCommand):
-            gs.room_binding.release(room_type, command.fixture)
+            gs.room_binding.release(room_name, command.fixture)
         return None
 
     # --- snapshot (connect-time full read model) ---------------------------
@@ -179,18 +174,10 @@ class ConsoleAgent:
         gs = self.game_server
         if gs.room is None:
             return None
-        if gs.room.profile is not None:
-            profile = gs.room.profile
-        else:
-            try:
-                profile = room_profile(gs.room.room_type)
-            except NotImplementedError:
-                logger.warning("no room profile for %s; Room panel disabled",
-                               gs.room.room_type.name)
-                return None
+        profile = gs.room.profile
         role = None
-        if gs.bit is not None:
-            role = gs.bit.role_table.roles.get(room_role_name(gs.room.room_type))
+        if gs.bit is not None and gs.registration is not None:
+            role = gs.registration.role_table.roles.get(room_role_name(gs.room.name))
         controllers = getattr(self._room_bridge, "controllers", {}) or {}
         urls = self._canvas_urls() if self._canvas_urls else {}
         return room_view(gs.room, profile, role, controllers, urls)

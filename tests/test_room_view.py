@@ -1,14 +1,31 @@
 """The Room read model the Console renders. Pure dict builders, no engine
 imports, mirroring console/protocol.py."""
 
-from control.room_profile import room_profile
+from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.room_view import room_view
-from control.rooms import Room, RoomType, room_role
+from control.rooms import Room, room_role
+
+TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
+    RoomFixture(name="main", color_order="GRB",
+               blocks=(RoomBlock("main", 0, 60),),
+               zones=(RoomZone("left", 0, 20),
+                     RoomZone("center", 20, 20),
+                     RoomZone("right", 40, 20))),
+    RoomFixture(name="accent", color_order="GRB",
+               blocks=(RoomBlock("accent", 0, 30),),
+               zones=(RoomZone("low", 0, 15),
+                     RoomZone("high", 15, 15))),
+))
+
+
+def make_room(name="TEST", **kw):
+    return Room(name=name, profile=TEST_PROFILE, node_id="ROOM_TEST_NODE", **kw)
 
 
 def _role():
+    room = make_room()
     _, role, _ = room_role(
-        RoomType.TEST,
+        room,
         light_manifest={"instruments": [
             {"instrument": "rainbow", "target": "primary",
              "params": {"hue": 0.6, "level": 0.55},
@@ -22,7 +39,7 @@ def _role():
 
 
 def _room(bound=None):
-    room = Room(room_type=RoomType.TEST)
+    room = make_room()
     # `or` would treat an explicitly-passed {} the same as "no argument",
     # since both are falsy -- and _view(bound={}) below needs a genuinely
     # empty dict to reach the "no fixture bound" case.
@@ -31,7 +48,7 @@ def _room(bound=None):
 
 
 def _view(bound=None):
-    return room_view(_room(bound), room_profile(RoomType.TEST), _role(), {74: 93})
+    return room_view(_room(bound), TEST_PROFILE, _role(), {74: 93})
 
 
 def test_no_room_configured_yields_none():
@@ -116,15 +133,15 @@ def test_controllers_are_carried_through():
 
 
 def test_no_bit_loaded_yields_capability_with_no_instruments():
-    view = room_view(_room(bound={}), room_profile(RoomType.TEST), None, {})
+    view = room_view(_room(bound={}), TEST_PROFILE, None, {})
     assert view["instruments"] == []
     assert view["capability"]["pixel_count"] == 90
     assert all(f["dev"] is None for f in view["fixtures"])
 
 
 def test_empty_manifests_yield_no_instruments():
-    _, role, _ = room_role(RoomType.TEST)
-    view = room_view(_room(bound={}), room_profile(RoomType.TEST), role, {})
+    _, role, _ = room_role(make_room())
+    view = room_view(_room(bound={}), TEST_PROFILE, role, {})
     assert view["instruments"] == []
 
 
@@ -137,26 +154,25 @@ def test_the_node_id_never_appears_anywhere_in_the_view():
     """Section 3 of the room-panel design spec: the Registration Node id
     stays hidden."""
     import json
-    from control.rooms import ROOM_NODE_IDS
     blob = json.dumps(_view())
-    assert ROOM_NODE_IDS[RoomType.TEST] not in blob
+    assert "ROOM_TEST_NODE" not in blob
 
 
 def test_bound_fixture_with_reported_canvas_gets_url():
-    view = room_view(_room(), room_profile(RoomType.TEST), _role(), {},
+    view = room_view(_room(), TEST_PROFILE, _role(), {},
                       canvas_urls={"sim-room-main": "http://h:9/"})
     by_name = {f["name"]: f for f in view["fixtures"]}
     assert by_name["main"]["url"] == "http://h:9/"
 
 
 def test_unbound_or_unreported_fixture_url_is_none():
-    view = room_view(_room(), room_profile(RoomType.TEST), _role(), {},
+    view = room_view(_room(), TEST_PROFILE, _role(), {},
                       canvas_urls={})
     assert all(f["url"] is None for f in view["fixtures"])
 
 
 def test_omitting_canvas_urls_still_works():
-    view = room_view(_room(), room_profile(RoomType.TEST), _role(), {})
+    view = room_view(_room(), TEST_PROFILE, _role(), {})
     assert all(f["url"] is None for f in view["fixtures"])
 
 
@@ -171,4 +187,4 @@ def test_the_room_role_name_never_appears_in_the_view():
     from control.rooms import room_role_name
     view = _view()
     view["capability"].pop("surface_id")
-    assert room_role_name(RoomType.TEST) not in json.dumps(view)
+    assert room_role_name("TEST") not in json.dumps(view)

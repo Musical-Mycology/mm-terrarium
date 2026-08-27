@@ -28,11 +28,27 @@ from control.simulator_process import SimulatorProcess
 from control.start_condition import scored_count, start_decision
 from control.state import State
 from control.teardown import TeardownStack
+from control.terrarium_config import load_terrarium_config
 from devicelink.agent import DeviceLinkAgent
 from devicelink.server import DeviceLinkServer
 from harness import markers
 from harness.o2_shroom import parent_is_gone
 from harness.signals import sigterm_as_keyboard_interrupt
+
+
+def resolve_room_spec(room_name: str, *, config_path: str = "terrarium.toml"):
+    """Look up room_name in the shipped terrarium.toml, raising a located
+    error listing the valid names on a miss. The --room-type flag's VALUE
+    is a plain config-name string now (the old enum is gone); this is where
+    that string becomes a real RoomSpec."""
+    terrarium_config = load_terrarium_config(config_path)
+    try:
+        return terrarium_config.rooms[room_name]
+    except KeyError:
+        valid = ", ".join(sorted(terrarium_config.rooms))
+        raise SystemExit(
+            f"unknown room {room_name!r} in {config_path}; "
+            f"available: {valid}") from None
 
 
 def sim_dev(fixture: str) -> str:
@@ -116,7 +132,7 @@ class _O2SimulatorFactory:
 
 
 def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
-         room_binding: RoomBindingRegistry, host: str = "127.0.0.1",
+         room_binding: RoomBindingRegistry, room_spec, host: str = "127.0.0.1",
          port: int = 0, arco_process_cls=ArcoProcess,
          simulator_popen=subprocess.Popen, room_audio=None, transport=None,
          clock=time.monotonic, on_join_denied=None):
@@ -182,14 +198,15 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         factory = _SimulatorFactory(f"ws://{host}:{server.port}/ws",
                                     popen=simulator_popen,
                                     horizon=config.cue_horizon,
-                                    room_type=config.room_type.name)
+                                    room_type=config.room_name)
     else:
         factory = _O2SimulatorFactory(config.o2_ensemble,
                                       popen=simulator_popen,
-                                      room_type=config.room_type.name)
+                                      room_type=config.room_name)
     gs, room_bridge, arco, teardown = _boot(
         config, bit_registry, arco_command=arco_command,
-        room_binding=room_binding, arco_process_cls=arco_process_cls,
+        room_binding=room_binding, room_spec=room_spec,
+        arco_process_cls=arco_process_cls,
         simulator_factory=factory, teardown=teardown, clock=clock)
 
     try:
@@ -774,15 +791,15 @@ def _build_arg_parser():
                          "Binds --host, which defaults to 127.0.0.1: the "
                          "console is unauthenticated and trusted-LAN only.")
     ap.add_argument("--room-type", default=None, choices=["TEST", "DEMO"],
-                    help="Which RoomType to boot. DEMO configures the "
-                         "simulated array backend (spec 2026-08-19); its "
-                         "864 px canvas is otherwise identical in kind to "
-                         "TEST's. Default: the selected Bit manifest's "
-                         "launch.default_room_type.")
+                    help="Which Room (a name in terrarium.toml) to boot. "
+                         "DEMO configures the simulated array backend (spec "
+                         "2026-08-19); its 864 px canvas is otherwise "
+                         "identical in kind to TEST's. Default: the "
+                         "selected Bit manifest's launch.default_room_type.")
     ap.add_argument("--bit", default=None,
                     help="Which Bit to run, by its discovered manifest name "
                          "(bits/*/bit.toml). boot() already fails loud if "
-                         "the resolved RoomType is not in the chosen Bit's "
+                         "the resolved Room is not in the chosen Bit's "
                          "room_types. See --list-bits for what's available. "
                          "Default: the --profile's own [run].bit, else "
                          "TestBit.")
@@ -811,8 +828,6 @@ def _build_arg_parser():
 
 
 def main() -> None:
-    from control.rooms import RoomType
-
     ap = _build_arg_parser()
     args = ap.parse_args()
     effective_serve = _effective_serve(args)
@@ -889,14 +904,14 @@ def main() -> None:
     overrides = deep_merge_overrides(profile.overrides, overrides)
     cfg = registry.resolve_config(bit, overrides or None)
 
-    room_type_name = args.room_type or profile.room_type or cfg.launch.default_room_type
-    room_type = RoomType[room_type_name]
+    room_name = args.room_type or profile.room_type or cfg.launch.default_room_type
+    room_spec = resolve_room_spec(room_name)
     config = BootConfig(
-        room_type=room_type, bit_name=bit, bit_config=cfg,
-        # DEMO's recipe requires an array backend (control/rooms.py);
-        # "simulator" is the Terrarium-spawns-one value BootConfig already
-        # defines. TEST ignores the field.
-        array_backend="simulator" if room_type is RoomType.DEMO else None)
+        room_name=room_name, bit_name=bit, bit_config=cfg,
+        # A room whose config declares the array backend needs Terrarium to
+        # spawn one; "simulator" is the value BootConfig already defines
+        # for that. A room with no array backend leaves the field None.
+        array_backend="simulator" if "array" in room_spec.backends else None)
     if args.horizon is not None:
         config.cue_horizon = args.horizon
     if args.arco_ready_timeout is not None:
@@ -938,7 +953,8 @@ def main() -> None:
     gs, server, agent, arco, teardown = build(
         config, registry.lazy_class_map(),
         arco_command=[args.arco_command],
-        room_binding=room_binding, host=args.host, port=args.port,
+        room_binding=room_binding, room_spec=room_spec,
+        host=args.host, port=args.port,
         transport=transport, clock=clock,
         arco_process_cls=arco_process_cls, on_join_denied=_print_join_denied)
 

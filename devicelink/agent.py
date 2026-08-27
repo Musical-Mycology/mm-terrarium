@@ -18,7 +18,7 @@ from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
 from control.role_config import compose_role_config
 from control.roles import RoleClass
-from control.room_profile import RoomProfile, room_profile
+from control.room_profile import RoomProfile
 from control.rooms import room_role_name
 from control.state import State
 from control.timed_queue import TimedQueue
@@ -190,13 +190,13 @@ class DeviceLinkAgent:
         room = gs.room
         if room is None or gs.bit is None:
             return
-        role = gs.bit.role_table.roles.get(room_role_name(room.room_type))
+        role = gs.registration.role_table.roles.get(room_role_name(room.name))
         if role is None:
             return
         blob = compose_role_config(gs.bit_name, gs.bit.version, role)
         manifest = LightManifest.from_dict(blob["light_manifest"])
         if self._room_profile is None:
-            self._room_profile = room.profile or room_profile(room.room_type)
+            self._room_profile = room.profile
         cap = to_capability(self._room_profile)
         session = build_session(manifest, cap, clock=self._clock)
         self._room_light = _RoomLightSink(

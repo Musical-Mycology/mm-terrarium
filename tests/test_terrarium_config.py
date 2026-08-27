@@ -1,7 +1,5 @@
 import pytest
 
-from control.room_profile import ROOM_PROFILES
-from control.rooms import RoomType
 from control.terrarium_config import (
     TerrariumConfigError, load_terrarium_config, parse_terrarium_config,
     validate_rooms,
@@ -67,14 +65,45 @@ def test_profile_validation_errors_are_located():
 
 
 def test_shipped_config_matches_code_profiles_golden():
+    # The shipped terrarium.toml is now the single source of truth for
+    # these rooms' shapes (the old ROOM_PROFILES registry is deleted), so
+    # this pins the exact fixture/block/zone literals the file declares.
     cfg = load_terrarium_config("terrarium.toml")
     assert set(cfg.rooms) == {"TEST", "DEMO"}
-    assert cfg.rooms["TEST"].profile == ROOM_PROFILES[RoomType.TEST]
-    assert cfg.rooms["DEMO"].profile == ROOM_PROFILES[RoomType.DEMO]
-    assert cfg.rooms["TEST"].backends == ("devicelink",)
-    assert cfg.rooms["DEMO"].backends == ("devicelink", "array")
-    assert cfg.rooms["TEST"].node_id == "ROOM_TEST_NODE"
-    assert cfg.rooms["DEMO"].node_id == "ROOM_DEMO_NODE"
+
+    test_room = cfg.rooms["TEST"]
+    assert test_room.backends == ("devicelink",)
+    assert test_room.node_id == "ROOM_TEST_NODE"
+    assert test_room.profile.surface_id == "room_test"
+    assert [f.name for f in test_room.profile.fixtures] == ["main", "accent"]
+    main, accent = test_room.profile.fixtures
+    assert main.color_order == "GRB"
+    assert [(b.name, b.start, b.count) for b in main.blocks] == \
+        [("main", 0, 60)]
+    assert [(z.name, z.start, z.count) for z in main.zones] == \
+        [("left", 0, 20), ("center", 20, 20), ("right", 40, 20)]
+    assert accent.color_order == "GRB"
+    assert [(b.name, b.start, b.count) for b in accent.blocks] == \
+        [("accent", 0, 30)]
+    assert [(z.name, z.start, z.count) for z in accent.zones] == \
+        [("low", 0, 15), ("high", 15, 15)]
+    assert test_room.profile.pixel_count == 90
+
+    demo_room = cfg.rooms["DEMO"]
+    assert demo_room.backends == ("devicelink", "array")
+    assert demo_room.node_id == "ROOM_DEMO_NODE"
+    assert demo_room.profile.surface_id == "room_demo"
+    assert [f.name for f in demo_room.profile.fixtures] == ["array"]
+    array = demo_room.profile.fixtures[0]
+    assert array.color_order == "GRB"
+    assert [(b.name, b.start, b.count) for b in array.blocks] == [
+        ("m1", 0, 144), ("m2", 144, 144), ("m3", 288, 144),
+        ("m4", 432, 144), ("m5", 576, 144), ("m6", 720, 144),
+    ]
+    assert [(z.name, z.start, z.count) for z in array.zones] == [
+        ("left", 0, 288), ("center", 288, 288), ("right", 576, 288),
+    ]
+    assert demo_room.profile.pixel_count == 864
 
 
 def test_validate_rooms_reports_per_room():

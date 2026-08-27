@@ -7,10 +7,32 @@ from control.boot_config import BootConfig
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_bridge import RoomBridge
-from control.rooms import Room, RoomType
+from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from control.rooms import Room
 from control.state import State
 from control.teardown import TeardownStack
+from control.terrarium_config import RoomSpec
 from tests.test_engine import RoomCapableBit
+
+TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
+    RoomFixture(name="main", color_order="GRB",
+               blocks=(RoomBlock("main", 0, 10),),
+               zones=(RoomZone("all", 0, 10),)),
+    RoomFixture(name="accent", color_order="GRB",
+               blocks=(RoomBlock("accent", 0, 10),),
+               zones=(RoomZone("all", 0, 10),)),
+))
+TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
+                     node_id="ROOM_TEST_NODE", profile=TEST_PROFILE)
+
+DEMO_PROFILE = RoomProfile(surface_id="room_demo", fixtures=(
+    RoomFixture(name="array", color_order="GRB",
+               blocks=(RoomBlock("array", 0, 10),),
+               zones=(RoomZone("all", 0, 10),)),
+))
+DEMO_SPEC = RoomSpec(name="DEMO", description="",
+                     backends=("devicelink", "array"),
+                     node_id="ROOM_DEMO_NODE", profile=DEMO_PROFILE)
 
 
 def make_registry():
@@ -24,29 +46,27 @@ def test_canonical_room_dev_prefers_profile_order_over_bind_order():
     a dict whose insertion order is deliberately reversed from profile
     declaration order (accent inserted first, main second)."""
     from control.boot import _canonical_room_dev
-    from control.room_profile import room_profile
-    profile = room_profile(RoomType.TEST)
+    profile = TEST_PROFILE
     bound = {"accent": "accent-dev", "main": "main-dev"}
     assert _canonical_room_dev(profile, bound) == "main-dev"
 
 
 def test_canonical_room_dev_returns_none_when_nothing_bound():
     from control.boot import _canonical_room_dev
-    from control.room_profile import room_profile
-    profile = room_profile(RoomType.TEST)
+    profile = TEST_PROFILE
     assert _canonical_room_dev(profile, {}) is None
 
 
 def test_boot_happy_path_via_simulator_factory():
-    config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit")
+    config = BootConfig(room_name="TEST", bit_name="RoomCapableBit")
     gs, room_bridge, arco, teardown = boot(
         config, make_registry(), arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(),
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
         arco_process_cls=lambda cmd: _ready_arco(cmd),
         simulator_factory=lambda td, fixture: f"sim-room-{fixture}-dev")
 
     assert gs.state == State.SETUP
-    assert gs.room.room_type == RoomType.TEST
+    assert gs.room.name == "TEST"
     assert gs.room.bound == {"main": "sim-room-main-dev",
                              "accent": "sim-room-accent-dev"}
     assert room_bridge.dev == "sim-room-main-dev"   # canonical: first declared
@@ -54,13 +74,13 @@ def test_boot_happy_path_via_simulator_factory():
 
 def test_boot_happy_path_via_recorded_device_reconnect():
     binding = RoomBindingRegistry()
-    binding.bind(RoomType.TEST, "main", "ie7")
-    binding.bind(RoomType.TEST, "accent", "ie8")
-    config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit")
+    binding.bind("TEST", "main", "ie7")
+    binding.bind("TEST", "accent", "ie8")
+    config = BootConfig(room_name="TEST", bit_name="RoomCapableBit")
 
     gs, room_bridge, arco, teardown = boot(
         config, make_registry(), arco_command=["arco-server"],
-        room_binding=binding, arco_process_cls=_ready_arco,
+        room_binding=binding, room_spec=TEST_SPEC, arco_process_cls=_ready_arco,
         known_device_connected=lambda dev: dev in ("ie7", "ie8"))
 
     assert gs.room.bound == {"main": "ie7", "accent": "ie8"}
@@ -68,47 +88,48 @@ def test_boot_happy_path_via_recorded_device_reconnect():
 
 
 def test_boot_fails_when_room_type_unresolvable():
-    config = BootConfig(room_type=RoomType.DEMO, bit_name="RoomCapableBit")
+    config = BootConfig(room_name="DEMO", bit_name="RoomCapableBit")
     with pytest.raises(BootFailure, match="requires an array backend"):
         boot(config, make_registry(), arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco)
+             room_binding=RoomBindingRegistry(), room_spec=DEMO_SPEC,
+             arco_process_cls=_ready_arco)
 
 
 def test_boot_fails_when_arco_never_ready():
-    config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit",
+    config = BootConfig(room_name="TEST", bit_name="RoomCapableBit",
                         arco_ready_timeout=0.5)
     with pytest.raises(BootFailure, match="Arco failed to start"):
         boot(config, make_registry(), arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(), arco_process_cls=_never_ready_arco,
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC, arco_process_cls=_never_ready_arco,
              simulator_factory=lambda td, fixture: "sim-room-dev")
 
 
 def test_boot_fails_for_unknown_bit_name():
-    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+    config = BootConfig(room_name="TEST", bit_name="NoSuchBit")
     with pytest.raises(BootFailure, match="unknown Bit"):
         boot(config, make_registry(), arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC, arco_process_cls=_ready_arco,
              simulator_factory=lambda td, fixture: "sim-room-dev")
 
 
 def test_boot_fails_when_bit_does_not_support_resolved_room_type():
     class DemoOnlyBit(RoomCapableBit):
-        room_types = {RoomType.DEMO}
+        room_types = {"DEMO"}
 
     registry = {"DemoOnlyBit": DemoOnlyBit}
-    config = BootConfig(room_type=RoomType.TEST, bit_name="DemoOnlyBit")
+    config = BootConfig(room_name="TEST", bit_name="DemoOnlyBit")
     with pytest.raises(BootFailure, match="does not support TEST"):
         boot(config, registry, arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC, arco_process_cls=_ready_arco,
              simulator_factory=lambda td, fixture: "sim-room-dev")
 
 
 def test_boot_shuts_down_arco_on_any_failure_after_start():
     fake_popen = FakePopen()
-    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+    config = BootConfig(room_name="TEST", bit_name="NoSuchBit")
     with pytest.raises(BootFailure):
         boot(config, make_registry(), arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(),
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
              arco_process_cls=lambda cmd: _ready_arco(cmd, popen=fake_popen),
              simulator_factory=lambda td, fixture: "sim-room-dev")
     assert fake_popen.signals   # Arco was told to stop, not orphaned
@@ -126,11 +147,11 @@ def test_boot_shuts_down_arco_when_wait_ready_times_out():
     def sleep(seconds):
         now[0] += seconds
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit",
+    config = BootConfig(room_name="TEST", bit_name="RoomCapableBit",
                         arco_ready_timeout=1.0)
     with pytest.raises(BootFailure, match="Arco failed to start"):
         boot(config, make_registry(), arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(),
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
              arco_process_cls=lambda cmd: ArcoProcess(
                  cmd, popen=fake_popen, probe=lambda: False,
                  clock=clock, sleep=sleep),
@@ -154,7 +175,7 @@ def test_wait_for_room_binding_arms_each_unbound_fixture_in_turn():
 
     def tick():
         ticks[0] += 1
-        armed = room_binding.armed_fixture(gs.room.room_type)
+        armed = room_binding.armed_fixture(gs.room.name)
         if armed is not None and armed not in joined and ticks[0] % 3 == 0:
             joined.append(armed)
             gs.join(f"dev-{armed}", "ROOM_TEST_NODE")
@@ -164,7 +185,7 @@ def test_wait_for_room_binding_arms_each_unbound_fixture_in_turn():
                           clock=clock, sleep=sleep)
 
     assert gs.room.bound == {"main": "dev-main", "accent": "dev-accent"}
-    assert room_binding.is_armed(gs.room.room_type) is False
+    assert room_binding.is_armed(gs.room.name) is False
 
 
 def test_wait_for_room_binding_times_out_with_nothing_bound():
@@ -175,7 +196,7 @@ def test_wait_for_room_binding_times_out_with_nothing_bound():
         wait_for_room_binding(gs, room_binding, timeout=1.0, tick=lambda: None,
                               clock=clock, sleep=sleep)
 
-    assert room_binding.is_armed(gs.room.room_type) is False
+    assert room_binding.is_armed(gs.room.name) is False
 
 
 def test_wait_for_room_binding_proceeds_partially_bound_after_timeout(caplog):
@@ -186,7 +207,7 @@ def test_wait_for_room_binding_proceeds_partially_bound_after_timeout(caplog):
 
     def tick():
         ticks[0] += 1
-        if ticks[0] == 2 and room_binding.armed_fixture(gs.room.room_type) == "main":
+        if ticks[0] == 2 and room_binding.armed_fixture(gs.room.name) == "main":
             gs.join("dev-main", "ROOM_TEST_NODE")
 
     clock, sleep = _fake_clock()
@@ -235,7 +256,7 @@ def test_shutdown_on_already_idle_server_does_not_raise():
 def _setup_loaded_room_bit():
     room_binding = RoomBindingRegistry()
     gs = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=room_binding)
-    gs.room = Room(room_type=RoomType.TEST)
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
     gs.load_bit("RoomCapableBit")
     return gs, room_binding
 
@@ -312,10 +333,10 @@ def test_teardown_stops_the_simulator_before_arco():
         def shutdown(self):
             order.append("arco")
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit")
+    config = BootConfig(room_name="TEST", bit_name="RoomCapableBit")
     gs, room_bridge, arco, teardown = boot(
         config, make_registry(), arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(),
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
         arco_process_cls=lambda cmd: _RecordingArco(
             cmd, popen=FakePopen(), probe=lambda: True),
         simulator_factory=_RecordingFactory())
@@ -344,10 +365,10 @@ def test_teardown_aborts_the_bit_before_the_room_bridge(monkeypatch):
     monkeypatch.setattr(RoomBridge, "shutdown",
                         lambda self: order.append("room-bridge"))
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit")
+    config = BootConfig(room_name="TEST", bit_name="RoomCapableBit")
     gs, room_bridge, arco, teardown = boot(
         config, make_registry(), arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC, arco_process_cls=_ready_arco,
         simulator_factory=lambda td, fixture: "sim-room-dev")
 
     gs.run()
@@ -368,10 +389,10 @@ def test_a_caller_supplied_stack_gets_boots_steps_pushed_onto_it():
     teardown = TeardownStack()
     teardown.push("devicelink-server", lambda: order.append("server"))
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="RoomCapableBit")
+    config = BootConfig(room_name="TEST", bit_name="RoomCapableBit")
     gs, room_bridge, arco, returned = boot(
         config, make_registry(), arco_command=["arco-server"],
-        room_binding=RoomBindingRegistry(),
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
         arco_process_cls=lambda cmd: _ready_arco(cmd),
         simulator_factory=lambda td, fixture: "sim-room-dev",
         teardown=teardown)
@@ -388,11 +409,11 @@ def test_boot_shuts_down_the_simulator_on_a_failure_after_it_spawned():
     claims sim-room there, so that run's own simulator is refused by O2
     (o2/src/bridge.cpp:231-237) and renders nothing."""
     factory = _SpyFactory()
-    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+    config = BootConfig(room_name="TEST", bit_name="NoSuchBit")
 
     with pytest.raises(BootFailure, match="unknown Bit"):
         boot(config, make_registry(), arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC, arco_process_cls=_ready_arco,
              simulator_factory=factory)
 
     assert len(factory.processes) == 2
@@ -405,11 +426,11 @@ def test_boot_shuts_down_the_simulator_when_the_bit_fails_to_load():
             raise ValueError("bad Bit")
 
     factory = _SpyFactory()
-    config = BootConfig(room_type=RoomType.TEST, bit_name="BrokenBit")
+    config = BootConfig(room_name="TEST", bit_name="BrokenBit")
 
     with pytest.raises(BootFailure, match="Bit load failed"):
         boot(config, {"BrokenBit": _BrokenBit}, arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC, arco_process_cls=_ready_arco,
              simulator_factory=factory)
 
     assert len(factory.processes) == 2
@@ -428,12 +449,12 @@ def test_boot_shuts_both_down_on_a_keyboard_interrupt():
 
     factory = _SpyFactory()
     fake_popen = FakePopen()
-    config = BootConfig(room_type=RoomType.TEST, bit_name="InterruptingBit")
+    config = BootConfig(room_name="TEST", bit_name="InterruptingBit")
 
     with pytest.raises(KeyboardInterrupt):
         boot(config, {"InterruptingBit": _InterruptingBit},
              arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(),
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
              arco_process_cls=lambda cmd: _ready_arco(cmd, popen=fake_popen),
              simulator_factory=factory)
 
@@ -445,11 +466,11 @@ def test_boot_shuts_both_down_on_a_keyboard_interrupt():
 def test_boot_still_accepts_a_factory_that_spawns_nothing():
     """Every other test in this file passes `lambda: "sim-room-dev"`, which
     has no .process at all. That must stay a no-op, not an AttributeError."""
-    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+    config = BootConfig(room_name="TEST", bit_name="NoSuchBit")
 
     with pytest.raises(BootFailure, match="unknown Bit"):
         boot(config, make_registry(), arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(), arco_process_cls=_ready_arco,
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC, arco_process_cls=_ready_arco,
              simulator_factory=lambda td, fixture: "sim-room-dev")
 
 
@@ -470,11 +491,11 @@ def test_boot_shuts_arco_down_even_if_the_simulator_shutdown_raises():
             return "sim-room-dev"
 
     fake_popen = FakePopen()
-    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+    config = BootConfig(room_name="TEST", bit_name="NoSuchBit")
 
     with pytest.raises(BootFailure, match="unknown Bit"):
         boot(config, make_registry(), arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(),
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
              arco_process_cls=lambda cmd: _ready_arco(cmd, popen=fake_popen),
              simulator_factory=_RaisingFactory())
 
@@ -492,11 +513,11 @@ def test_boot_raises_the_original_failure_even_if_arco_shutdown_raises():
         def shutdown(self):
             raise OSError("no such process")
 
-    config = BootConfig(room_type=RoomType.TEST, bit_name="NoSuchBit")
+    config = BootConfig(room_name="TEST", bit_name="NoSuchBit")
 
     with pytest.raises(BootFailure, match="unknown Bit"):
         boot(config, make_registry(), arco_command=["arco-server"],
-             room_binding=RoomBindingRegistry(),
+             room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
              arco_process_cls=lambda cmd: _RaisingArco(
                  cmd, popen=FakePopen(), probe=lambda: True),
              simulator_factory=lambda td, fixture: "sim-room-dev")

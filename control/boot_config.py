@@ -8,12 +8,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from control.bit_config import BitConfig
-from control.rooms import RoomType
 
 
 @dataclass
 class BootConfig:
-    room_type: RoomType
+    room_name: str
     bit_name: str
     # The resolved BitConfig (manifest + any launch-time overrides) for
     # bit_name, threaded through to GameServer.load_bit() so a Bit's

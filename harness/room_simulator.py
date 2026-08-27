@@ -83,11 +83,10 @@ def build(dev: str, sim_host: str = "127.0.0.1", sim_port: int = 0,
     """
     from luxaeterna.backends.websim import WebSimBackend
 
-    from control.room_profile import room_profile
-    from control.rooms import RoomType
+    from control.terrarium_config import load_terrarium_config
     from harness.room_surface import to_fixture_capability
 
-    profile = room_profile(RoomType[room_type])
+    profile = load_terrarium_config("terrarium.toml").rooms[room_type].profile
     cap = to_fixture_capability(profile, fixture)
     backend = WebSimBackend(capability=cap, host=sim_host, port=sim_port,
                              serve=serve, label=dev)
@@ -115,8 +114,9 @@ def main() -> None:
     parser.add_argument("--sim-host", default="127.0.0.1")
     parser.add_argument("--sim-port", type=int, default=0)
     parser.add_argument("--room-type", default="TEST",
-                        help="Which RoomType's surface to render. Resolved "
-                             "through control/room_profile.py, so the "
+                        help="Which Room's (a name in terrarium.toml) "
+                             "surface to render. Resolved through "
+                             "control/terrarium_config.py, so the "
                              "simulator and Control agree on the shape by "
                              "construction rather than by convention.")
     parser.add_argument("--control-horizon", type=float, default=None,
@@ -152,10 +152,10 @@ def main() -> None:
     if args.identify_blocks:
         import time
 
-        from control.room_profile import room_profile
-        from control.rooms import RoomType
+        from control.terrarium_config import load_terrarium_config
 
-        profile = room_profile(RoomType[args.room_type])
+        profile = load_terrarium_config(
+            "terrarium.toml").rooms[args.room_type].profile
         backend.send(identify_blocks_frame(profile, args.fixture))
         print(f"identify-blocks: {args.fixture} painted; Ctrl-C to exit",
               flush=True)

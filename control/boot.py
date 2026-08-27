@@ -17,10 +17,9 @@ from control.boot_config import BootConfig
 from control.engine import BitLoadError, GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_bridge import RoomBridge
-from control.room_profile import room_profile
-from control.rooms import (ROOM_NODE_IDS, Room, RoomResolutionError,
-                           resolve_room_type)
+from control.rooms import Room
 from control.teardown import TeardownStack
+from control.terrarium_config import RoomSpec
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,8 @@ class BootFailure(Exception):
 
 
 def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
-         room_binding: RoomBindingRegistry, arco_process_cls=ArcoProcess,
+         room_binding: RoomBindingRegistry, room_spec: RoomSpec,
+         arco_process_cls=ArcoProcess,
          simulator_factory=None, known_device_connected=lambda dev: False,
          tick=None, teardown=None, clock=time.monotonic):
     """Run the full load sequence. Returns (game_server, room_bridge,
@@ -74,18 +74,11 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
     if teardown is None:
         teardown = TeardownStack()
 
-    try:
-        room_type = resolve_room_type(
-            config.room_type,
-            array_backend_configured=config.array_backend_configured)
-    except RoomResolutionError as exc:
-        raise BootFailure(str(exc)) from exc
-    try:
-        profile = room_profile(room_type)
-    except NotImplementedError:
-        profile = None
-    room = Room(room_type=room_type, profile=profile,
-               node_id=ROOM_NODE_IDS[room_type])
+    if "array" in room_spec.backends and not config.array_backend_configured:
+        raise BootFailure(
+            f"{room_spec.name} requires an array backend, none configured")
+    room = Room(name=room_spec.name, profile=room_spec.profile,
+               node_id=room_spec.node_id)
 
     arco = arco_process_cls(arco_command)
     try:
@@ -107,9 +100,9 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
         bit_cls = bit_registry.get(config.bit_name)
         if bit_cls is None:
             raise BootFailure(f"unknown Bit {config.bit_name!r}")
-        if room.room_type not in bit_cls.room_types:
+        if room.name not in bit_cls.room_types:
             raise BootFailure(
-                f"Bit {config.bit_name!r} does not support {room.room_type.name}")
+                f"Bit {config.bit_name!r} does not support {room.name}")
 
         # cue_horizon and clock go in together and MUST match the ones
         # DeviceLinkAgent is built with: GameServer computes every cue's
@@ -124,12 +117,8 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
         except BitLoadError as exc:
             raise BootFailure(f"Bit load failed: {exc}") from exc
 
-        profile_for_wait = None
-        try:
-            profile_for_wait = room_profile(room.room_type)
-        except NotImplementedError:
-            pass
-        if profile_for_wait is not None and not room.fully_bound(profile_for_wait):
+        profile_for_wait = room.profile
+        if not room.fully_bound(profile_for_wait):
             try:
                 wait_for_room_binding(
                     gs, room_binding, config.room_setup_timeout,
@@ -139,8 +128,7 @@ def boot(config: BootConfig, bit_registry: dict, *, arco_command: list,
                 raise BootFailure(str(exc)) from exc
 
         room_bridge = RoomBridge()
-        canonical = (_canonical_room_dev(profile_for_wait, room.bound)
-                    if profile_for_wait is not None else None)
+        canonical = _canonical_room_dev(profile_for_wait, room.bound)
         if canonical is not None:
             room_bridge.bind(canonical)
         teardown.push("room-bridge", room_bridge.shutdown)
@@ -197,17 +185,14 @@ def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
     once per fixture -- each fixture is its own o2lite client with its own
     unique service name (design spec section 3).
     """
-    try:
-        profile = room_profile(room.room_type)
-    except NotImplementedError:
-        return   # no fixture declaration for this RoomType yet (e.g. DEMO)
+    profile = room.profile
     for fixture in profile.fixtures:
         if simulator_factory is not None:
             dev = simulator_factory(teardown, fixture.name)
             room.bound[fixture.name] = dev
-            room_binding.bind(room.room_type, fixture.name, dev)
+            room_binding.bind(room.name, fixture.name, dev)
             continue
-        recorded = room_binding.bound_device(room.room_type, fixture.name)
+        recorded = room_binding.bound_device(room.name, fixture.name)
         if recorded is not None and known_device_connected(recorded):
             room.bound[fixture.name] = recorded
 
@@ -232,7 +217,7 @@ def wait_for_room_binding(gs: GameServer, room_binding: RoomBindingRegistry,
     see design spec section 7: one unresponsive fixture must not fail the
     whole boot.
     """
-    profile = room_profile(gs.room.room_type)
+    profile = gs.room.profile
     if gs.room.fully_bound(profile):
         return
     deadline = clock() + timeout
@@ -242,15 +227,15 @@ def wait_for_room_binding(gs: GameServer, room_binding: RoomBindingRegistry,
         remaining = deadline - clock()
         if remaining <= 0:
             break
-        room_binding.arm(gs.room.room_type, fixture.name, remaining)
+        room_binding.arm(gs.room.name, fixture.name, remaining)
         while clock() < deadline and fixture.name not in gs.room.bound:
             tick()
             sleep(0.05)
-        room_binding.disarm(gs.room.room_type)
+        room_binding.disarm(gs.room.name)
     if not gs.room.bound:
         raise RoomBindingTimeout(
-            f"no device joined as {gs.room.room_type.name} Room within {timeout}s")
+            f"no device joined as {gs.room.name} Room within {timeout}s")
     missing = [f.name for f in profile.fixtures if f.name not in gs.room.bound]
     if missing:
         logger.warning("Room %s partially bound; missing fixtures: %s",
-                       gs.room.room_type.name, missing)
+                       gs.room.name, missing)
