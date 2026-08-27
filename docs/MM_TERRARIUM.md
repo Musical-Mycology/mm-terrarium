@@ -1280,7 +1280,11 @@ operator surface for it. Design:
 (Spec A of two; Spec B covers triggers, cue scripts, conditions and firing,
 see the Design docs list below).
 
-- **The Room had no fixtures of its own.** `devicelink/agent.py` built the
+- **The Room had no fixtures of its own.** (Superseded 2026-08-27: a
+  `RoomFixture` now carries a required `Instrument` -- see the *`control/
+  instrument.py`* entry below. This bullet is otherwise unedited; read the
+  fixture as the room's only surface concept as of this slice, not
+  current shape.) `devicelink/agent.py` built the
   Room's `LightSession` from `self._capability or shroom_capability()` and
   sliced its frame with a literal `[:36]`, so structurally a Room *was* a
   12-LED Tuneshroom with a ring and a stem. `control/room_profile.py` now
@@ -2300,6 +2304,106 @@ together through boot -> load_room -> load_bit -> run -> complete ->
 unload_room -> load_room (a second, different room, asserting a fresh
 Arco-process instance) -> unload_room -> a clean, empty-`DevicePool` end).
 
+### `control/instrument.py`, `RoomFixture.instrument`, `terrarium.toml` instruments, requirement slots, ambient rendering, and accepted_triggers gating (2026-08-27)
+Instrument and Fixture become first-class entities instead of a Fixture being
+bare placement plus zones, and a Bit's demands on what a room/device can do
+become declared contracts rather than tribal knowledge. Spec 2 of the Room/
+Instrument/Trigger restructure. Design: [`.../
+2026-08-27-instruments-and-fixtures-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-27-instruments-and-fixtures-design.md)
+and its plan
+[`.../plans/2026-08-27-instruments-and-fixtures.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-27-instruments-and-fixtures.md).
+
+- **`Instrument`** (`control/instrument.py`) -- name, description,
+  `capabilities`/`functions`/`accepted_triggers` sets, plus optional ambient
+  `light_manifest`/`ugen_manifest` (validated by the same shared role_config
+  validators a Bit's own manifests already go through, so a typo'd ambient
+  manifest fails the same way a Bit's does). `TUNESHROOM` is defined once
+  here in code -- the only instrument the wire protocol currently speaks --
+  and `DeviceInfo.carried` defaults to it at hello.
+- **A Fixture is an Instrument plus placement and binding.**
+  `RoomFixture.instrument` is now a required field -- a fixture with no
+  instrument is not a representable thing. `terrarium.toml` gains
+  `[instruments.<name>]` tables (capabilities/functions/accepted_triggers,
+  optional `ambient.light`/`ambient.ugen`); each fixture's `instrument =
+  "<name>"` is a config-file-internal reference resolved at parse time --
+  unknown name, or a fixture missing the key entirely, is a located
+  `TerrariumConfigError`, same fails-hard-at-load convention every other
+  config defect in this file already gets. Everything downstream holds the
+  resolved `Instrument` value; nothing outside the parser sees the string
+  name again.
+- **`Bit.instrument_requirements()`** -- capability contracts, resolved at
+  two different times depending on kind, distinguished by how they resolve
+  rather than by type:
+  - **Room slots**, resolved at `load_bit` against the loaded room's
+    fixtures (the aggregate is checked, not any one fixture -- `min_pixels`
+    checks the profile's total pixel count, capability tags must each be
+    advertised by *some* fixture). No match is a `BitLoadError` naming the
+    `satisfies` refusal reason per fixture, not just "no match". The
+    implicit `"room"` slot is synthesized automatically whenever
+    `Bit.room_manifests()` is non-empty (a non-empty light manifest implies
+    `light.surface`, ugen implies `audio.flsyn`) -- every pre-existing Bit
+    gets contract-checked against the loaded room with zero Bit code
+    changes.
+  - **Role slots**, resolved at join against the joining device's carried
+    instrument. `Role.requires` names a slot; a refused join frees the slot
+    rather than leaving it half-bound; a successful `JoinResult` stamps
+    `slot`/`instrument` into the composed role blob, so a device (and the
+    Console) can see which slot it filled. `TestBit`'s `player` role now
+    declares `requires="player"` against a slot demanding `light.pixels`/
+    `gesture.tilt`, making it the reference exemplar for this path the way
+    it already is for every other seam.
+  - **Deviation from the spec's prose:** `GameServer.load_bit`'s slot
+    snapshot excludes the implicit `"room"` slot -- a `requires="room"`
+    role with no matching explicit declaration is treated as satisfied at
+    join, since the implicit room contract already bound the room's
+    fixtures at `load_bit` and there is nothing left for `join` to check
+    against a carried device (a room fixture has no gestures to advertise,
+    so checking a role slot's capabilities against the room profile would
+    make any gesture-gated role unloadable into a real room). This is the
+    T10 engine fix.
+- **Ambient rendering when no Bit is loaded.** On `ROOM_READY` with
+  fixtures bound, `DeviceLinkAgent` now builds the Room's light session from
+  the bound fixtures' instruments' ambient manifests (concatenated per
+  fixture declaration order) instead of leaving the room dark until
+  `load_bit` -- the concrete visible payoff of instrument-owned elements.
+  `load_bit`/unload swap the session to the Bit's declaration and back via
+  the existing `on_state_change` path; an empty ambient manifest renders
+  nothing, same as an empty role manifest today. Ambient audio rides
+  `AudioBridge` the same one-shared-MIDI-stream way the ROOM role's does.
+  **Fixed 2026-08-27:** `unwire_room` was releasing the wrong device's
+  ambient audio grant on room unload, because `_canonical_room_dev` is
+  already cleared by the time `unwire_room` runs (`gs.room` is gone) -- the
+  ambient audio release now goes through a small `_room_audio_dev` cache
+  populated at wire time, so the grant made at `rewire_room` is the one
+  actually released, not a recomputation against a room that no longer
+  exists.
+- **`accepted_triggers` gates cue kinds at `fire_trigger`.** One seam only:
+  a fire whose expanded cues would land on a surface whose instrument does
+  not accept that cue kind (`solid`/`play`/`mute`/`midi`, mapped from
+  `SolidCue`/`PlayCue`/`MuteCue`/plain-tuple-or-`LightCue`) is refused with
+  a reason string, the same never-raises convention `fire_trigger` already
+  uses. The refusal is **all-or-nothing** per fire (any one target's
+  refusal refuses the whole fire) and precedes `_clear_mutes`, so a refused
+  fire cannot un-mute a surface as a side effect. A dev with no matching
+  fixture/instrument (unknown to the Room) is accepted by default -- only a
+  declared, narrower instrument can refuse a cue kind. Every shipped
+  instrument accepts all four kinds today, so nothing observable changes
+  until a future narrower instrument (e.g. audio-only) declares one.
+- **Console.** `fixtures_view` rows gain an `instrument` block (name,
+  capabilities); `room_view` gains `instrument_name` per fixture; the rail's
+  per-role cards show a role's `requires` slot so an operator can see why a
+  join was refused. `console/static/surface.js`'s declaration-signature
+  discipline (a new field in the card counts as part of the signature; live
+  values still patch in place) is extended to cover the new instrument
+  fields.
+- **`dev_strip` in `terrarium.toml` gained `audio.flsyn`** -- a pre-existing
+  declaration gap the new capability enforcement surfaced; the fixture was
+  already rendering ugen content, it just hadn't been declared.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1529 passed, 1 skipped** (up from the previous baseline of 1442 passed,
+1 skipped).
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -2841,6 +2945,11 @@ Kept explicit so the doc doesn't over-claim:
   and its plan
   [`.../plans/2026-08-18-n-fixture-room.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-18-n-fixture-room.md).
   Live-verified against a real Arco: not yet done, offline suite only.
+- Instruments and Fixtures (Spec 2 of the Room/Instrument/Trigger
+  restructure):
+  [`.../2026-08-27-instruments-and-fixtures-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-27-instruments-and-fixtures-design.md)
+  and its plan
+  [`.../plans/2026-08-27-instruments-and-fixtures.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-27-instruments-and-fixtures.md).
 
 
 Game-design background (RenQuest integration, Bit scoring/loop rules, hardware)
