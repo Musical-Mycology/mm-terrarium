@@ -1,4 +1,5 @@
-"""Boot-time configuration for control.boot's load sequence. See
+"""Boot-time configuration for control.terrarium.Terrarium's load sequence.
+See
 docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md
 section 5.
 """

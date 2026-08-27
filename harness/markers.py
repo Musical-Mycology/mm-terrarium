@@ -42,6 +42,17 @@ CONTROL_BIT_COMPLETED = "Bit completed; tearing down"
 # the immediate-return case on entry). One line per round, always.
 CONTROL_ROUND_LOADED = "round loaded:"
 
+# A Room finished loading (control/terrarium.py's Terrarium reached
+# ROOM_READY) -- printed once per successful load_room, CLI-selected (main())
+# or Console-driven, "room loaded: TEST". run_stack gates on this where it
+# used to gate on boot completion: room loading now happens before the
+# devicelink transport is even reported ready.
+CONTROL_ROOM_LOADED = "room loaded:"
+
+# The active Room was torn down (Terrarium back to NO_ROOM) -- printed once
+# per successful unload_room, "room unloaded: TEST".
+CONTROL_ROOM_UNLOADED = "room unloaded:"
+
 # --- Device (harness/o2_shroom.py) -------------------------------------
 
 # o2lite.time_get() went non-negative. Until this, the device has no clock
@@ -82,6 +93,8 @@ READY_MARKERS = {
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,
     "CONTROL_BIT_COMPLETED": CONTROL_BIT_COMPLETED,
     "CONTROL_ROUND_LOADED": CONTROL_ROUND_LOADED,
+    "CONTROL_ROOM_LOADED": CONTROL_ROOM_LOADED,
+    "CONTROL_ROOM_UNLOADED": CONTROL_ROOM_UNLOADED,
     "DEVICE_CLOCK_SYNCED": DEVICE_CLOCK_SYNCED,
     "DEVICE_ROLE_GRANTED": DEVICE_ROLE_GRANTED,
 }

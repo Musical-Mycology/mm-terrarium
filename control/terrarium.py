@@ -14,8 +14,6 @@ import time
 from enum import Enum
 
 from control.arco_process import ArcoProcess
-from control.boot import (_bind_room_fast_path, _canonical_room_dev,
-                          wait_for_room_binding, RoomBindingTimeout)
 from control.boot_config import BootConfig
 from control.engine import BitLoadError, GameServer
 from control.room_binding import RoomBindingRegistry
@@ -41,6 +39,93 @@ class RoomLoadError(Exception):
     sequence -- load_room itself never lets this escape to its caller; it
     catches it, unwinds, and returns the reason string instead. Mirrors
     GameServer.fire_trigger's never-raises contract."""
+
+
+class RoomBindingTimeout(Exception):
+    """Raised when no device joins as the Room within the configured
+    setup window."""
+
+
+def _canonical_room_dev(profile, bound: dict) -> str | None:
+    """The Room's one dev for RoomBridge purposes: the first bound fixture
+    in the profile's declaration order, not dict-insertion order -- the
+    same algorithm as GameServer._canonical_room_dev and
+    DeviceLinkAgent._canonical_room_dev. Extracted as its own function
+    specifically so this guarantee is unit-testable directly, without
+    needing to drive a full load_room() through admin-tap timing to
+    construct a bound dict whose insertion order differs from declaration
+    order."""
+    for fixture in profile.fixtures:
+        dev = bound.get(fixture.name)
+        if dev is not None:
+            return dev
+    return None
+
+
+def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
+                         simulator_factory, known_device_connected,
+                         teardown) -> None:
+    """Attempt the no-tap-needed path per fixture: a Terrarium-spawned
+    simulator, or a reconnect to a previously recorded physical device.
+    Leaves any fixture unbound (absent from room.bound) if neither applies
+    -- wait_for_room_binding below is what holds for a fresh admin-armed
+    tap, not this function's job.
+
+    The factory is handed the teardown stack and the fixture name, and
+    registers whatever it spawns, so an orphaned Room simulator is
+    impossible by construction rather than by a getattr convention. Called
+    once per fixture -- each fixture is its own o2lite client with its own
+    unique service name (design spec section 3).
+    """
+    profile = room.profile
+    for fixture in profile.fixtures:
+        if simulator_factory is not None:
+            dev = simulator_factory(teardown, fixture.name)
+            room.bound[fixture.name] = dev
+            room_binding.bind(room.name, fixture.name, dev)
+            continue
+        recorded = room_binding.bound_device(room.name, fixture.name)
+        if recorded is not None and known_device_connected(recorded):
+            room.bound[fixture.name] = recorded
+
+
+def wait_for_room_binding(gs: GameServer, room_binding: RoomBindingRegistry,
+                          timeout: float, *, tick, clock=time.monotonic,
+                          sleep=time.sleep) -> None:
+    """Hold until every fixture is bound (each admin-armed tap grants one
+    fixture's ROOM-class join) or the shared timeout budget elapses,
+    arming fixtures one at a time in the profile's declaration order.
+    `tick` is called once per iteration -- driving whatever transport/tick
+    loop might deliver that join -- so this function has no transport
+    opinion of its own.
+
+    Raises RoomBindingTimeout only when NO fixture ever binds. A Room that
+    is SOME but not all fixtures bound after the timeout proceeds anyway --
+    see design spec section 7: one unresponsive fixture must not fail the
+    whole boot.
+    """
+    profile = gs.room.profile
+    if gs.room.fully_bound(profile):
+        return
+    deadline = clock() + timeout
+    for fixture in profile.fixtures:
+        if fixture.name in gs.room.bound:
+            continue
+        remaining = deadline - clock()
+        if remaining <= 0:
+            break
+        room_binding.arm(gs.room.name, fixture.name, remaining)
+        while clock() < deadline and fixture.name not in gs.room.bound:
+            tick()
+            sleep(0.05)
+        room_binding.disarm(gs.room.name)
+    if not gs.room.bound:
+        raise RoomBindingTimeout(
+            f"no device joined as {gs.room.name} Room within {timeout}s")
+    missing = [f.name for f in profile.fixtures if f.name not in gs.room.bound]
+    if missing:
+        logger.warning("Room %s partially bound; missing fixtures: %s",
+                       gs.room.name, missing)
 
 
 class Terrarium:
