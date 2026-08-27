@@ -122,19 +122,27 @@ def _validate_string_list(role: Role, field_name: str) -> None:
                 f"{where}[{idx}]: must be a non-empty string, got {entry!r}")
 
 
-def compose_role_config(bit_name: str, bit_version: str, role: Role) -> dict:
+def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
+                        room_name: str | None = None,
+                        terrarium_config_version: str | None = None) -> dict:
     """The per-role config blob shipped in /ie<N>/role at adoption time
     (docs/control-gameserver-design.md, player flow step 3). Deep-copied so
     transport/Console consumers can never alias the Bit's declaration. The
     welcome audio half is deliberately absent: it never ships to the device;
-    the future Arco cue path reads it off Role.welcome."""
+    the future Arco cue path reads it off Role.welcome.
+
+    room_name and terrarium_config_version are provenance stamps from an
+    active Room (see control/terrarium.py's GameServer.provenance); a Bit
+    joined outside a Room passes neither, and the two keys are omitted
+    entirely so a pre-Room blob stays byte-identical to what always shipped
+    -- never present as null."""
     light = deepcopy(role.light_manifest)
     light["bit_name"] = bit_name
     light["bit_version"] = bit_version
     light["role"] = role.name
     if role.welcome and "light" in role.welcome:
         light["welcome"] = deepcopy(role.welcome["light"])
-    return {
+    config = {
         "role": role.name,
         "class": role.role_class.name,
         "scored": role.scored,
@@ -142,6 +150,11 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role) -> dict:
         "uses": list(role.uses),
         "samples": list(role.samples),
     }
+    if room_name is not None:
+        config["room_name"] = room_name
+    if terrarium_config_version is not None:
+        config["terrarium_config_version"] = terrarium_config_version
+    return config
 
 
 def _cc_number(ref, where: str) -> int:

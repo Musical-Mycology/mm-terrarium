@@ -161,6 +161,23 @@ def test_bit_completed_event_stamps_bit_name_and_version():
     }
 
 
+def test_bit_completed_event_stamps_room_provenance_when_given():
+    assert bit_completed_event({"score": 42}, "test_bit", "1.0",
+                               room_name="atrium",
+                               terrarium_config_version="1-abcdef012345") == {
+        "event": "bit_completed", "result": {"score": 42},
+        "bit": {"name": "test_bit", "version": "1.0"},
+        "room_name": "atrium",
+        "terrarium_config_version": "1-abcdef012345",
+    }
+
+
+def test_bit_completed_event_omits_room_provenance_when_none():
+    event = bit_completed_event({"score": 42}, "test_bit", "1.0")
+    assert "room_name" not in event
+    assert "terrarium_config_version" not in event
+
+
 def test_bits_listed_event_shape():
     bits = [{"name": "test_bit"}]
     errors = [{"path": "x", "message": "bad"}]

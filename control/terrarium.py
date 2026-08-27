@@ -326,6 +326,8 @@ class Terrarium:
 
             self.room = room
             self.room_bridge = room_bridge
+            self.gs.provenance = {"room_name": name,
+                                  "terrarium_config_version": self.config.version}
             self._progress("room ready")
             self._set_state(TerrariumState.ROOM_READY)
             return None
@@ -333,6 +335,7 @@ class Terrarium:
             if stack is not None:
                 stack.close()
             self.gs.room = None
+            self.gs.provenance = {}
             self.room = None
             self.room_bridge = None
             self.arco = None
@@ -362,6 +365,7 @@ class Terrarium:
             self.room_stack.close()
         self.gs.clear_devices()
         self.gs.room = None
+        self.gs.provenance = {}
         self.room = None
         self.room_bridge = None
         self.arco = None

@@ -93,12 +93,18 @@ def registration_changed_event(counts: list[tuple[str, int, int | None]]) -> dic
 
 
 def bit_completed_event(result: dict, bit_name: str = "",
-                        bit_version: str = "") -> dict:
-    return {
+                        bit_version: str = "", *, room_name=None,
+                        terrarium_config_version=None) -> dict:
+    event = {
         "event": "bit_completed",
         "result": result,
         "bit": {"name": bit_name, "version": bit_version},
     }
+    if room_name is not None:
+        event["room_name"] = room_name
+    if terrarium_config_version is not None:
+        event["terrarium_config_version"] = terrarium_config_version
+    return event
 
 
 def bits_listed_event(bits: list[dict], errors: list[dict]) -> dict:

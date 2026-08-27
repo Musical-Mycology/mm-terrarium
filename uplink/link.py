@@ -194,7 +194,10 @@ class UplinkAgent:
             return
         if result is not None:
             self._send(protocol.bit_completed_event(
-                result, self.game_server.bit_name or "", bit.version))
+                result, self.game_server.bit_name or "", bit.version,
+                room_name=self.game_server.provenance.get("room_name"),
+                terrarium_config_version=self.game_server.provenance.get(
+                    "terrarium_config_version")))
 
     def on_registration_change(self) -> None:
         counts = non_room_counts(self.game_server.registration)

@@ -32,12 +32,14 @@ class CaptureBit(Bit):
     version = "0.1"
 
     def __init__(self, store: CaptureStore | None = None, config=None,
-                 idle_timeout_s: float = IDLE_TIMEOUT_S):
+                 idle_timeout_s: float = IDLE_TIMEOUT_S,
+                 provenance: dict | None = None):
         super().__init__(config)
         if store is None:
             store = CaptureStore(root=Path(CAPTURE_DIR),
                                  session_id=new_session_id(),
-                                 bit={"name": "capture", "version": self.version})
+                                 bit={"name": "capture", "version": self.version},
+                                 provenance=provenance)
         self._store = store
         self._idle_timeout_s = idle_timeout_s
 

@@ -248,6 +248,24 @@ def test_the_record_reports_what_the_fire_resolved_to():
     assert record.at == 100.0
 
 
+def test_trigger_fired_room_name_is_none_without_a_room():
+    gs, _, _ = _running()
+    observer = Recorder()
+    gs.add_observer(observer)
+    gs.fire_trigger("sweep", fired_by="admin-manual")
+    assert observer.fired[0].room_name is None
+
+
+def test_trigger_fired_carries_room_name_from_gs_provenance():
+    gs, _, _ = _running()
+    gs.provenance = {"room_name": "atrium",
+                     "terrarium_config_version": "1-abcdef012345"}
+    observer = Recorder()
+    gs.add_observer(observer)
+    gs.fire_trigger("sweep", fired_by="admin-manual")
+    assert observer.fired[0].room_name == "atrium"
+
+
 def test_a_target_fanout_across_two_bound_fixtures_feeds_the_room_once_per_step():
     """The Room's TARGET-fanout would double-feed the shared session once per
     bound fixture if not collapsed -- see control/engine.py's

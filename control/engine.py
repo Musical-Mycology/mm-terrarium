@@ -95,6 +95,13 @@ class GameServer:
         # _MAX_GESTURE_LEAD). A rising count means a device's clock is wrong.
         self.rejected_stamps = 0
         self._warned_no_room = False     # once-per-Bit-load ROOM drop warning
+        # Provenance stamp for the active Room, set by control/terrarium.py's
+        # load_room on success and cleared by unload_room (also on a failed
+        # load's unwind). {} outside a Room. join() and fire_trigger() read
+        # this so role blobs and trigger records carry room_name/
+        # terrarium_config_version without GameServer knowing anything about
+        # TerrariumConfig itself.
+        self.provenance: dict = {}
 
     def hello(self, dev: str, name: str, protoversion: str) -> None:
         self.devices.hello(dev, name, protoversion, self._clock())
@@ -212,7 +219,10 @@ class GameServer:
             # return different Role objects than the ones counts track.
             role = self.registration.role_table.roles[result.role]
             result.config = compose_role_config(
-                self.bit_name, self.bit.version, role)
+                self.bit_name, self.bit.version, role,
+                room_name=self.provenance.get("room_name"),
+                terrarium_config_version=self.provenance.get(
+                    "terrarium_config_version"))
             try:
                 self.bit.on_join(dev, result.role)
             except Exception:
@@ -463,6 +473,7 @@ class GameServer:
             devs=tuple(devs),
             at=at,
             steps=len(cues),
+            room_name=self.provenance.get("room_name"),
         ))
         return None
 
