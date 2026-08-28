@@ -14,13 +14,16 @@ const ROOM = {
       url: "http://sim-room-main.local/surface",
       instrument: { name: "generic_surface",
                     capabilities: ["audio.flsyn", "light.surface"],
-                    functions: [], accepted_triggers: ["midi", "solid"] } },
+                    functions: [{ name: "glow", kind: "generator",
+                                  lane: "cc:74", period: 12.0 }],
+                    accepted_cues: ["midi", "solid"],
+                    event_triggers: [{ name: "tap", thresholds: { z_delta: 2.5 } }] } },
     { name: "accent", pixel_count: 30, channel_start: 180, channel_count: 90,
       zones: [{ name: "accent.low", start: 0, count: 15 },
               { name: "accent.high", start: 15, count: 15 }], dev: null, url: null,
       instrument: { name: "generic_surface",
                     capabilities: ["audio.flsyn", "light.surface"],
-                    functions: [], accepted_triggers: ["midi", "solid"] } },
+                    functions: [], accepted_cues: ["midi", "solid"] } },
   ],
   instruments: [
     { kind: "light", instrument: "aurora", target: "primary",
@@ -49,7 +52,7 @@ const ROOM = {
   const send = (m) => sock.onmessage({ data: JSON.stringify(m) });
 
   send({ event: "snapshot", state: "RUNNING", loaded_bit: "TestBit", roles: [],
-         registration: [], devices: [], bit_status: {}, triggers: [], room: ROOM });
+         registration: [], devices: [], bit_status: {}, functions: [], room: ROOM });
   const card = byId.get("roomCard");
   assert.ok(card.innerHTML.includes("TEST"));
   assert.ok(card.innerHTML.includes("main.center (20..39)"));
@@ -59,10 +62,19 @@ const ROOM = {
   assert.ok(card.innerHTML.includes("= 93"));            // live lane value
   assert.ok(card.innerHTML.includes("Instruments"));     // accordion, not Controls
   // fixture cards show the fixture's own Instrument as a small tag row
-  // (name + capabilities + accepted triggers).
+  // (name + capabilities + accepted cues).
   assert.ok(card.innerHTML.includes("light.surface"));
   assert.ok(card.innerHTML.includes("audio.flsyn"));
   assert.ok(card.innerHTML.includes("generic_surface"));
+  // event triggers (Task 8's Instrument.event_triggers) render read-only
+  // alongside capabilities on the fixture's instrument tag row.
+  assert.ok(card.innerHTML.includes("tap"));
+  assert.ok(card.innerHTML.includes("z_delta:2.5"));
+  // declared generator function tags render a compact string, not
+  // "[object Object]" -- room_view.py's _function_view feeds an object,
+  // not a string (review fix round 1).
+  assert.ok(card.innerHTML.includes("glow (generator)"));
+  assert.ok(!card.innerHTML.includes("[object Object]"));
 
   // a controllers-only change must NOT rebuild fixture strips (rule 1/3):
   const stripBefore = surface._canvasFor("sim-room-main");

@@ -37,7 +37,7 @@ __all__ = [
     "devices_changed_event", "bit_status_event", "log_event",
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
     "room_changed_event", "room_frame_event",
-    "triggers_changed_event", "trigger_fired_event", "FireTriggerCommand",
+    "functions_changed_event", "function_fired_event", "FireFunctionCommand",
 ]
 
 
@@ -71,7 +71,7 @@ def device_view(info, role_name, url=None, muted=False) -> dict:
 
 def snapshot_event(*, state, installed_bits, loaded_bit, roles,
                    registration, devices, bit_status, room=None,
-                   triggers=None, terrarium_state=None, rooms=None) -> dict:
+                   functions=None, terrarium_state=None, rooms=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
@@ -82,7 +82,7 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "devices": devices,
         "bit_status": bit_status,
         "room": room,
-        "triggers": triggers or [],
+        "functions": functions or [],
         "terrarium_state": terrarium_state,
         "rooms": rooms or [],
     }
@@ -101,16 +101,16 @@ def room_frame_event(dev: str, channels) -> dict:
     return {"event": "room_frame", "dev": dev, "channels": list(channels)}
 
 
-def triggers_changed_event(triggers) -> dict:
-    """Every trigger the loaded Bit declares, as control.trigger_view's
-    triggers_view() builds them. A trigger table is static per Bit, so in
+def functions_changed_event(functions) -> dict:
+    """Every function the loaded Bit declares, as control.function_view's
+    functions_view() builds them. A function table is static per Bit, so in
     practice this fires on load and unload."""
-    return {"event": "triggers_changed", "triggers": triggers}
+    return {"event": "functions_changed", "functions": functions}
 
 
-def trigger_fired_event(fired) -> dict:
-    """One fire, as control.trigger_view's trigger_fired_view() builds it."""
-    return {"event": "trigger_fired", "fired": fired}
+def function_fired_event(fired) -> dict:
+    """One fire, as control.function_view's function_fired_view() builds it."""
+    return {"event": "function_fired", "fired": fired}
 
 
 def devices_changed_event(devices) -> dict:
@@ -139,7 +139,7 @@ class ReleaseRoomCommand:
 
 
 @dataclass
-class FireTriggerCommand:
+class FireFunctionCommand:
     name: str
     dev: str | None = None
 
@@ -149,7 +149,7 @@ def parse_admin_command(msg: dict):
     broker. Kept separate from uplink.protocol.parse_command: Room
     registration is a local, trusted-operator action (design spec section
     7), not something a remote fairyring peer should ever request. Firing a
-    declared trigger is the same kind of action for the same reason, so it
+    declared function is the same kind of action for the same reason, so it
     lives here too rather than in the shared parser."""
     command = msg.get("command")
     if command == "arm_room":
@@ -170,12 +170,12 @@ def parse_admin_command(msg: dict):
         if fixture is not None and not isinstance(fixture, str):
             raise ValueError("release_room 'fixture' must be a string when given")
         return ReleaseRoomCommand(room_type=room_type, fixture=fixture)
-    if command == "fire_trigger":
+    if command == "fire_function":
         name = msg.get("name")
         if not isinstance(name, str) or not name:
-            raise ValueError("fire_trigger requires a non-empty string 'name'")
+            raise ValueError("fire_function requires a non-empty string 'name'")
         dev = msg.get("dev")
         if dev is not None and not isinstance(dev, str):
-            raise ValueError("fire_trigger 'dev' must be a string when given")
-        return FireTriggerCommand(name=name, dev=dev or None)
+            raise ValueError("fire_function 'dev' must be a string when given")
+        return FireFunctionCommand(name=name, dev=dev or None)
     raise ValueError(f"unrecognized admin command: {command!r}")

@@ -16,6 +16,7 @@ import time
 
 from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
+from control.generator_runner import GeneratorRunner
 from control.instrument import ambient_manifests
 from control.role_config import compose_role_config
 from control.roles import Role, RoleClass
@@ -171,6 +172,18 @@ class DeviceLinkAgent:
         # Room is exactly the confusion this slice removes.
         self._room_profile: RoomProfile | None = room_profile
         self._room_light = None
+        # Set only on the ambient (no-Bit) branch of _setup_room(), to a
+        # GeneratorRunner over every fixture's instrument's declared
+        # GENERATOR Functions; None whenever a Bit's ROOM role is composed
+        # instead, or when no ambient session is built at all -- last-start-
+        # wins by construction, since _setup_room() rebuilds both the
+        # session and this runner together on every ambient<->Bit swap. See
+        # design spec section 7.
+        self._ambient_generators: GeneratorRunner | None = None
+        # clock() at the moment the CURRENT ambient session was built --
+        # _feed_ambient_generators measures elapsed time from here, mirroring
+        # self._breath_origin above.
+        self._ambient_start: float | None = None
         # The dev _setup_room() last granted Room audio to (None if no
         # grant is outstanding). Cached here rather than recomputed from
         # gs.room at release time because unwire_room() runs AFTER
@@ -224,6 +237,13 @@ class DeviceLinkAgent:
         gs = self.game_server
         room = gs.room
         if room is None:
+            # Defensive, mirroring every other branch below: a stale
+            # ambient runner/start-time must not survive a call that finds
+            # no Room to render at all (in practice unwire_room() already
+            # clears these first -- see its own docstring -- but nothing
+            # should depend on that ordering).
+            self._ambient_generators = None
+            self._ambient_start = None
             return
         if self._room_profile is None:
             self._room_profile = room.profile
@@ -235,12 +255,20 @@ class DeviceLinkAgent:
         if role is not None:
             blob = compose_role_config(gs.bit_name, gs.bit.version, role)
             manifest = LightManifest.from_dict(blob["light_manifest"])
+            self._ambient_generators = None
+            self._ambient_start = None
         else:
             ambient_light, ambient_ugen = ambient_manifests(self._room_profile)
             if not ambient_light and not ambient_ugen:
+                self._ambient_generators = None
+                self._ambient_start = None
                 return
             manifest = LightManifest.from_dict(
                 ambient_light or {"instruments": []})
+            functions = [fn for fixture in self._room_profile.fixtures
+                        for fn in fixture.instrument.functions]
+            self._ambient_generators = GeneratorRunner(functions)
+            self._ambient_start = self._clock()
         cap = to_capability(self._room_profile)
         session = build_session(manifest, cap, clock=self._clock)
         self._room_light = _RoomLightSink(
@@ -355,11 +383,22 @@ class DeviceLinkAgent:
         has already set gs.room = None (see control/terrarium.py), so
         _canonical_room_dev() can no longer see which dev held the grant --
         _room_audio_dev is the cached record _setup_room() left behind at
-        grant time."""
+        grant time.
+
+        Also drops the ambient generator runner and its start time, mirroring
+        the audio grant's own cached-at-wire-time cleanup just above: nothing
+        must consult a runner or a start time built for a Room that is gone.
+        _feed_ambient_generators() already no-ops once self._room_bridge is
+        cleared below, so this is redundant defense-in-depth rather than a
+        fix for a reachable bug, but it keeps this agent's Room state
+        entirely reset on every NO_ROOM entry rather than reset-except-for-
+        two-fields."""
         if self._room_audio is not None and self._room_audio_dev is not None:
             self._room_audio.stop_drone(self._room_audio_dev)
             self._room_audio.on_release(self._room_audio_dev)
             self._room_audio_dev = None
+        self._ambient_generators = None
+        self._ambient_start = None
         self._room_light = None
         self._room_bridge = None
         self._room_profile = None
@@ -407,6 +446,7 @@ class DeviceLinkAgent:
         self.game_server.reap_stale(self._stale_timeout)
         self._tick_overrides()
         self._feed_breath()
+        self._feed_ambient_generators()
         # Before both renders: a feed released this tick must be reflected in
         # the frame rendered this tick, not the next one. Draining after would
         # delay every cue by one frame, exactly the class of error this
@@ -577,6 +617,26 @@ class DeviceLinkAgent:
             self._on_room_frame(dev, frame)
         except Exception:
             logger.exception("room frame sink failed; dropping frame")
+
+    def _feed_ambient_generators(self) -> None:
+        """Every tick with no Bit loaded (self._ambient_generators is None
+        otherwise -- see _setup_room), feed each declared GENERATOR
+        Function's current waveform value into the Room's session, through
+        the same feed_light seam a Bit-declared light cue uses (see
+        _feed_light_now) so the Console's live controller read-out sees it
+        too. `dev` on each emitted tuple (cues.ROOM or cues.TARGET) is not
+        consulted: an ambient generator has no per-device routing to make,
+        only the one Room session this method already has."""
+        if self._ambient_generators is None or self._room_bridge is None:
+            return
+        now = self._clock()
+        start = self._ambient_start if self._ambient_start is not None else now
+        elapsed = now - start
+        for (_dev, status, data1, value) in self._ambient_generators.cues(elapsed, now):
+            try:
+                self._room_bridge.feed_light(status, data1, value)
+            except Exception:
+                logger.exception("ambient generator feed failed")
 
     def _feed_breath(self) -> None:
         """Drive every joined device's breath. Sent on change only, and never

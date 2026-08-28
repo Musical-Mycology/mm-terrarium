@@ -6,6 +6,7 @@ from control.role_config import (
     validate_ugen_manifest,
 )
 from control.roles import Role, RoleClass, RoleTable
+from control.triggers import EventTrigger
 
 
 def make_role(name="player", **kwargs):
@@ -37,6 +38,35 @@ def test_compose_role_config_omits_slot_and_instrument_by_default():
     config = compose_role_config("Bit", "0.1", make_role())
     assert "slot" not in config
     assert "instrument" not in config
+
+
+TAP = EventTrigger(name="tap", description="a single or double tap",
+                    thresholds={"peak_g": 2.0, "window_ms": 200})
+SHAKE = EventTrigger(name="shake", description="a shake gesture",
+                      thresholds={"peak_g": 2.0, "window_ms": 200})
+
+
+def test_compose_ships_event_trigger_thresholds_under_triggers_key():
+    config = compose_role_config("Bit", "0.1", make_role(),
+                                  event_triggers=(TAP, SHAKE))
+    assert config["triggers"] == {
+        "tap": {"peak_g": 2.0, "window_ms": 200},
+        "shake": {"peak_g": 2.0, "window_ms": 200},
+    }
+
+
+def test_compose_omits_triggers_key_when_event_triggers_empty():
+    config = compose_role_config("Bit", "0.1", make_role())
+    assert "triggers" not in config
+    config = compose_role_config("Bit", "0.1", make_role(), event_triggers=())
+    assert "triggers" not in config
+
+
+def test_compose_triggers_do_not_alias_the_instrument_declaration():
+    config = compose_role_config("Bit", "0.1", make_role(),
+                                  event_triggers=(TAP,))
+    config["triggers"]["tap"]["peak_g"] = 999
+    assert TAP.thresholds["peak_g"] == 2.0
 
 
 def test_compose_role_config_stamps_slot_and_instrument_when_given():

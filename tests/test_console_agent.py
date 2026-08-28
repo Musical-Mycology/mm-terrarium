@@ -24,7 +24,7 @@ ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
 
 def make_room(name="TEST"):
     return Room(name=name, profile=ROOM_PROFILE, node_id="ROOM_TEST_NODE")
-from control.triggers import TriggerFired
+from control.functions import FunctionFired
 from tests.test_engine import RoomCapableBit
 
 
@@ -558,93 +558,98 @@ def test_no_frame_received_broadcasts_nothing():
     assert [b for b in srv.broadcasts if b["event"] == "room_frame"] == []
 
 
-def test_snapshot_carries_the_loaded_bits_triggers():
+def test_snapshot_carries_the_loaded_bits_functions():
+    # TestBit now declares generator and stream Functions alongside its
+    # original scripted set (Task 10's kind-tagged fixtures), and
+    # functions_view returns every kind, not only SCRIPTED (Task 11).
     gs, srv, agent = _room_console()
-    names = sorted(t["name"] for t in agent.snapshot()["triggers"])
-    assert names == ["flash_device", "play_aurora", "stop", "win"]
+    names = sorted(t["name"] for t in agent.snapshot()["functions"])
+    assert names == ["drift", "flash_device", "jam_hue_neg", "jam_hue_pos",
+                     "jam_level_neg", "jam_level_pos", "play_aurora",
+                     "shake_hue", "stop", "tilt_hue", "win"]
 
 
-def test_snapshot_triggers_is_empty_with_no_bit_loaded():
+def test_snapshot_functions_is_empty_with_no_bit_loaded():
     gs, srv, agent = _server_with_agent()
-    assert agent.snapshot()["triggers"] == []
+    assert agent.snapshot()["functions"] == []
 
 
-def test_the_room_stays_hidden_while_triggers_are_visible():
+def test_the_room_stays_hidden_while_functions_are_visible():
     """The Spec A section 3 regression, extended. Both halves in one test,
-    because the safety argument is that they hold simultaneously: a trigger
+    because the safety argument is that they hold simultaneously: a function
     panel must not become the thing that leaks the Room's role.
     """
     gs, srv, agent = _room_console()
     snapshot = agent.snapshot()
 
-    assert snapshot["triggers"]                       # the new surface is live
+    assert snapshot["functions"]                      # the new surface is live
     room_name = room_role_name("TEST")
     assert all(r["role"] != room_name for r in snapshot["roles"])
     assert all(r["role"] != room_name for r in snapshot["registration"])
     # The node id must not appear anywhere in the payload, including inside
-    # the new triggers key.
-    assert "ROOM_TEST_NODE" not in json.dumps(snapshot["triggers"])
+    # the new functions key.
+    assert "ROOM_TEST_NODE" not in json.dumps(snapshot["functions"])
 
 
-def test_triggers_changed_broadcasts_on_change_only():
+def test_functions_changed_broadcasts_on_change_only():
     gs, srv, agent = _room_console()
     agent.poll()
     srv.broadcasts.clear()
     agent.poll()
     assert not [b for b in srv.broadcasts
-                if b.get("event") == "triggers_changed"]
+                if b.get("event") == "functions_changed"]
 
 
-def test_triggers_changed_broadcasts_when_a_bit_unloads():
+def test_functions_changed_broadcasts_when_a_bit_unloads():
     # NOTE: adjusted from the task-8 brief. TestBit currently declares no
-    # triggers (see the note on test_snapshot_carries_the_loaded_bits_triggers
-    # above), so _current_triggers() is already [] before the abort and the
+    # functions (see the note on test_snapshot_carries_the_loaded_bits_functions
+    # above), so _current_functions() is already [] before the abort and the
     # brief's before/after transition never actually occurs against today's
-    # fixtures -- there would be nothing to diff. `_last_triggers` is seeded
+    # fixtures -- there would be nothing to diff. `_last_functions` is seeded
     # with a non-empty sentinel directly (the same in-place technique the
-    # fire_trigger tests below use on gs.fire_trigger) so the abort's real []
+    # fire_function tests below use on gs.fire_function) so the abort's real []
     # is exercised as a genuine change. Re-tighten to drop the seed once
-    # Task 10 gives TestBit real triggers.
+    # Task 10 gives TestBit real functions.
     gs, srv, agent = _room_console()
     agent.poll()
     srv.broadcasts.clear()
-    agent._last_triggers = [{"name": "sentinel"}]
+    agent._last_functions = [{"name": "sentinel"}]
     gs.abort()
     agent.poll()
     changed = [b for b in srv.broadcasts
-               if b.get("event") == "triggers_changed"]
-    assert changed and changed[-1]["triggers"] == []
+               if b.get("event") == "functions_changed"]
+    assert changed and changed[-1]["functions"] == []
 
 
-def test_on_trigger_fired_broadcasts_the_record():
+def test_on_function_fired_broadcasts_the_record():
     gs, srv, agent = _room_console()
-    agent.on_trigger_fired(TriggerFired(
+    agent.on_function_fired(FunctionFired(
         name="play_aurora", condition="round_won", fired_by="admin-manual",
         declared_source="bit-adjudicated", dev=None, devs=("sim-room",),
         at=1.0, steps=3))
-    fired = [b for b in srv.broadcasts if b["event"] == "trigger_fired"]
+    fired = [b for b in srv.broadcasts if b["event"] == "function_fired"]
     assert fired[0]["fired"]["fired_by"] == "admin-manual"
     assert fired[0]["fired"]["declared_source"] == "bit-adjudicated"
     assert fired[0]["fired"]["devs"] == ["sim-room"]
 
 
-def test_a_fire_trigger_command_reaches_the_engine_as_admin_manual():
+def test_a_fire_function_command_reaches_the_engine_as_admin_manual():
     gs, srv, agent = _room_console()
     calls = []
-    gs.fire_trigger = lambda name, **kw: calls.append((name, kw))
+    gs.fire_function = lambda name, **kw: calls.append((name, kw))
     srv.connect("c1")
-    srv.deliver("c1", {"command": "fire_trigger", "name": "play_aurora"})
+    srv.deliver("c1", {"command": "fire_function", "name": "play_aurora"})
     agent.poll()
     assert calls == [("play_aurora",
                       {"fired_by": "admin-manual", "dev": None})]
 
 
-def test_a_fire_trigger_command_forwards_its_device():
+def test_a_fire_function_command_forwards_its_device():
     gs, srv, agent = _room_console()
     calls = []
-    gs.fire_trigger = lambda name, **kw: calls.append((name, kw))
+    gs.fire_function = lambda name, **kw: calls.append((name, kw))
     srv.connect("c1")
-    srv.deliver("c1", {"command": "fire_trigger", "name": "flash_device",
+    srv.deliver("c1", {"command": "fire_function", "name": "flash_device",
                        "dev": "ie1"})
     agent.poll()
     assert calls[0][1]["dev"] == "ie1"
@@ -653,11 +658,25 @@ def test_a_fire_trigger_command_forwards_its_device():
 def test_a_refused_fire_is_surfaced_as_an_error_event():
     gs, srv, agent = _room_console()
     srv.connect("c1")
-    srv.deliver("c1", {"command": "fire_trigger", "name": "nope"})
+    srv.deliver("c1", {"command": "fire_function", "name": "nope"})
     agent.poll()
     errors = [msg for _client, msg in srv.sent
               if msg.get("event") == "error"]
-    assert "unknown trigger" in errors[0]["message"]
+    assert "unknown function" in errors[0]["message"]
+
+
+def test_a_fire_of_a_non_scripted_function_is_surfaced_as_an_error_event():
+    """GameServer.fire_function refuses a GENERATOR/STREAM Function with a
+    'not scripted' reason (control/engine.py); this exercises the existing
+    error-event seam end to end rather than adding new plumbing -- the
+    handler already forwards fire_function's refusal reason verbatim."""
+    gs, srv, agent = _room_console()
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "fire_function", "name": "drift"})
+    agent.poll()
+    errors = [msg for _client, msg in srv.sent
+              if msg.get("event") == "error"]
+    assert "not scripted" in errors[0]["message"]
 
 
 def test_an_unparseable_fire_command_is_surfaced_not_dropped():
@@ -666,7 +685,7 @@ def test_an_unparseable_fire_command_is_surfaced_not_dropped():
     see why nothing happened."""
     gs, srv, agent = _room_console()
     srv.connect("c1")
-    srv.deliver("c1", {"command": "fire_trigger"})
+    srv.deliver("c1", {"command": "fire_function"})
     agent.poll()
     errors = [msg for _client, msg in srv.sent
               if msg.get("event") == "error"]

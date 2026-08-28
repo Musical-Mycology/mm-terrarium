@@ -9,7 +9,7 @@
 const assert = require("node:assert");
 const { byId, FakeSocket } = require("./_dom_stub.js");
 
-const TRIGGERS = [
+const FUNCTIONS = [
   { name: "fireworks_player", description: "Celebratory flashes", target: "DEVICE",
     condition: { name: "phrase_success", description: "Player matches the call phrase",
                  source: "bit-adjudicated", verb: null },
@@ -36,7 +36,7 @@ function snapshotMsg() {
     roles: [], registration: [{ role: "player", count: 2, capacity: 2 }],
     devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" },
               { dev: "sim-room-main", name: "Room", role: null }],
-    bit_status: {}, triggers: TRIGGERS, room: ROOM,
+    bit_status: {}, functions: FUNCTIONS, room: ROOM,
     terrarium_state: "ROOM_READY",
     rooms: [{ name: "DEMO", description: "", status: null, active: true }],
   };
@@ -47,11 +47,11 @@ function snapshotMsg() {
   const shell = await import("../../console/static/shell.js");
   const bit = await import("../../console/static/bit.js");
   const surface = await import("../../console/static/surface.js");
-  const triggers = await import("../../console/static/triggers.js");
+  const functions = await import("../../console/static/functions.js");
   const rail = await import("../../console/static/rail.js");
   const rooms = await import("../../console/static/rooms.js");
 
-  bit.init(); surface.init(); triggers.init(); rail.init(); rooms.init();
+  bit.init(); surface.init(); functions.init(); rail.init(); rooms.init();
   // small retryMs so the auto-reconnect this test relies on fires quickly
   // instead of leaving a 1s timer hanging the process.
   wire.connect({ WebSocketImpl: FakeSocket, retryMs: 5 });
@@ -59,7 +59,7 @@ function snapshotMsg() {
   sock.onopen();
   const send = (m) => sock.onmessage({ data: JSON.stringify(m) });
 
-  // 1. Loaded RUNNING Bit, bound Room with a fixture, declared triggers,
+  // 1. Loaded RUNNING Bit, bound Room with a fixture, declared functions,
   //    devices, registration roles.
   send(snapshotMsg());
   const bitPanel = byId.get("bitPanel");
@@ -76,10 +76,10 @@ function snapshotMsg() {
     send({ event: "room_frame", dev: "sim-room-main", channels });
   }
 
-  // 3. A trigger fires.
-  send({ event: "trigger_fired", fired: { name: "fireworks_player", fired_by: "admin-manual",
+  // 3. A function fires.
+  send({ event: "function_fired", fired: { name: "fireworks_player", fired_by: "admin-manual",
          declared_source: "bit-adjudicated", dev: "ie1", devs: ["ie1"], at: 3.2, steps: 2 } });
-  assert.ok(byId.get("triggersMount").innerHTML.includes("Admin manual"));
+  assert.ok(byId.get("functionsMount").innerHTML.includes("Admin manual"));
 
   // 4. An error for a command -- flashRefusal-style handling must not throw,
   //    even with no armed source element for "run".

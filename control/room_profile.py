@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from control.functions import FunctionKind, generator_lane
 from control.instrument import (Instrument, InstrumentError,
                                  validate_instrument,
                                  validate_instrument_manifests)
@@ -157,6 +158,35 @@ class RoomProfile:
             except InstrumentError as exc:
                 raise ValueError(
                     f"fixture {fixture.name!r}: {exc}") from exc
+        # A single instrument's own GENERATOR functions are already checked
+        # for lane collisions by validate_instrument (via
+        # validate_function_table), but two DIFFERENT fixtures' instruments
+        # may each declare a generator on the same (dev, status, data1)
+        # lane -- devicelink/agent.py's ambient feed writes every declared
+        # generator into the ONE Room session every tick, so a shared lane
+        # would silently have one fixture's generator overwrite the
+        # other's on alternating ticks. Cross-fixture, so it belongs at the
+        # profile level rather than in validate_instrument, which only ever
+        # sees one instrument at a time.
+        generator_lanes: dict[tuple[str, int, int], str] = {}
+        for fixture in self.fixtures:
+            for fn in fixture.instrument.functions:
+                if fn.kind is not FunctionKind.GENERATOR:
+                    # v0's own rule (validate_instrument) refuses a
+                    # non-GENERATOR function on an instrument, but this
+                    # profile-level sweep must not depend on that having
+                    # run -- an Instrument built directly (bypassing
+                    # validate_instrument) may still carry one, and
+                    # generator_lane() assumes fn.generator is set.
+                    continue
+                lane = generator_lane(fn)
+                if lane in generator_lanes:
+                    raise ValueError(
+                        f"profile {self.surface_id!r}: fixtures "
+                        f"{generator_lanes[lane]!r} and {fixture.name!r} "
+                        f"both declare a generator on lane {lane!r}; two "
+                        f"fixtures' generators may not share a lane")
+                generator_lanes[lane] = fixture.name
 
     @property
     def pixel_count(self) -> int:

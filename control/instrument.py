@@ -8,6 +8,11 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 
+from control.functions import Function, FunctionKind, FunctionTable, validate_function_table
+from control.triggers import (
+    EventTrigger, StreamTrigger, validate_event_trigger, validate_stream_trigger,
+)
+
 CAPABILITY_VOCABULARY: frozenset[str] = frozenset({
     "light.pixels",    # addressable pixels of any shape
     "light.surface",   # a linear multi-zone surface (Room-style array)
@@ -21,8 +26,8 @@ CUE_KINDS: tuple[str, ...] = ("midi", "play", "solid", "mute")
 
 
 def cue_kind(cue) -> str:
-    """Classify an expanded cue (control/triggers.py's expand_script output)
-    by the accepted_triggers vocabulary: SolidCue -> "solid", PlayCue ->
+    """Classify an expanded cue (control/functions.py's expand_script output)
+    by the accepted_cues vocabulary: SolidCue -> "solid", PlayCue ->
     "play", MuteCue -> "mute", everything else (plain 4-tuples, LightCue)
     -> "midi". Imported lazily to avoid control.cues <-> control.instrument
     becoming a cycle if control.cues ever needs an Instrument."""
@@ -45,10 +50,12 @@ class Instrument:
     name: str
     description: str = ""
     capabilities: frozenset[str] = frozenset()
-    functions: tuple[str, ...] = ()
-    accepted_triggers: tuple[str, ...] = ()
+    functions: tuple[Function, ...] = ()
+    accepted_cues: tuple[str, ...] = ()
     light_manifest: dict = field(default_factory=dict)
     ugen_manifest: dict = field(default_factory=dict)
+    event_triggers: tuple[EventTrigger, ...] = ()
+    stream_triggers: tuple[StreamTrigger, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -71,11 +78,29 @@ def validate_instrument(instrument: Instrument) -> None:
         raise InstrumentError(
             f"instrument {instrument.name!r}: unknown capability tag(s) "
             f"{sorted(unknown)}; known: {sorted(CAPABILITY_VOCABULARY)}")
-    bad = [k for k in instrument.accepted_triggers if k not in CUE_KINDS]
+    bad = [k for k in instrument.accepted_cues if k not in CUE_KINDS]
     if bad:
         raise InstrumentError(
-            f"instrument {instrument.name!r}: unknown accepted trigger "
+            f"instrument {instrument.name!r}: unknown accepted cue "
             f"kind(s) {bad}; known: {list(CUE_KINDS)}")
+    for fn in instrument.functions:
+        if not isinstance(fn, Function) or fn.kind is not FunctionKind.GENERATOR:
+            raise InstrumentError(
+                f"instrument {instrument.name!r}: only generator Functions "
+                f"may be declared on an instrument (v0)")
+    table = FunctionTable(functions={fn.name: fn for fn in instrument.functions})
+    try:
+        validate_function_table(table, verb_names=frozenset())
+    except ValueError as exc:
+        raise InstrumentError(f"instrument {instrument.name!r}: {exc}") from exc
+    where = f"instrument {instrument.name!r}"
+    try:
+        for trig in instrument.event_triggers:
+            validate_event_trigger(trig, where)
+        for trig in instrument.stream_triggers:
+            validate_stream_trigger(trig, where)
+    except ValueError as exc:
+        raise InstrumentError(str(exc)) from exc
 
 
 def satisfies(instrument: Instrument, requirement: InstrumentRequirement,
@@ -146,11 +171,29 @@ def ambient_manifests(profile) -> tuple[dict, dict]:
     return copy.deepcopy(light), copy.deepcopy(ugen)
 
 
+# Values are the mm-tuneshroom native TapDetector's current constants
+# (lib/sensors/tap_detector.dart: thresholdG=2.0, debounceDuration=200ms,
+# doubleTapWindow=400ms), carried here so the server owns them (Spec 3
+# section 6). The browser sensors.js detector mirrors the same heuristic
+# but compares a gravity-deviation magnitude rather than a raw peak, so the
+# two client detectors disagree by ~3x on what counts as a spike; real
+# values come from capture/ traces via tools/trace_stats.py -- a later tool
+# pass, not this slice. Shake has no dedicated native detector -- it reuses
+# the same TapDetector-derived peak_g/window_ms (www/sensors.js documents
+# itself as "mirrors the native TapDetector heuristic"), with no
+# double-tap concept.
 TUNESHROOM = Instrument(
     name="tuneshroom",
     description="Handheld 12-LED Tuneshroom (8-ring + 4-stem)",
     capabilities=frozenset({"light.pixels", "audio.samples",
                             "gesture.tap", "gesture.tilt"}),
-    functions=("tap", "tilt"),
-    accepted_triggers=("midi", "play", "solid", "mute"),
+    accepted_cues=("midi", "play", "solid", "mute"),
+    event_triggers=(
+        EventTrigger(
+            name="tap", description="a single or double tap on the shell",
+            thresholds={"peak_g": 2.0, "window_ms": 200, "double_ms": 400}),
+        EventTrigger(
+            name="shake", description="a shake gesture",
+            thresholds={"peak_g": 2.0, "window_ms": 200}),
+    ),
 )

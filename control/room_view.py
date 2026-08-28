@@ -61,12 +61,31 @@ def capability_view(profile) -> dict:
     }
 
 
+def _function_view(fn) -> dict:
+    """One declared generator Function, as the Console's fixture card
+    renders it. v0 only allows GENERATOR Functions on an instrument (see
+    control.instrument.validate_instrument), so this is the only shape."""
+    spec = fn.generator
+    return {
+        "name": fn.name,
+        "kind": "generator",
+        "lane": f"cc:{spec.data1}",
+        "period": float(spec.period),
+    }
+
+
+def _event_trigger_view(trigger) -> dict:
+    return {"name": trigger.name, "thresholds": dict(trigger.thresholds)}
+
+
 def _instrument_view(instrument) -> dict:
     return {
         "name": instrument.name,
         "capabilities": sorted(instrument.capabilities),
-        "functions": list(instrument.functions),
-        "accepted_triggers": list(instrument.accepted_triggers),
+        "functions": [_function_view(fn) for fn in instrument.functions],
+        "accepted_cues": list(instrument.accepted_cues),
+        "event_triggers": [_event_trigger_view(trigger)
+                           for trigger in instrument.event_triggers],
     }
 
 

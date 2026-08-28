@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from control.roles import RoleTable
-from control.triggers import TriggerTable
+from control.functions import FunctionTable
 
 if TYPE_CHECKING:
     from control.bit_config import BitConfig
@@ -57,18 +57,18 @@ class Bit(ABC):
         return ()
 
     @property
-    def trigger_table(self) -> TriggerTable:
-        """This Bit's declared triggers: the named things an operator can see
+    def function_table(self) -> FunctionTable:
+        """This Bit's declared functions: the named things an operator can see
         coming, each with a description, a target, a condition this Bit
         evaluates itself, and a declarative cue script.
 
         A plain property with an empty default, deliberately not abstract the
-        way role_table is, so every Bit written before triggers existed keeps
-        working untouched. Validated at load_bit (control/triggers.py), so a
-        trigger declared against a verb this Bit does not implement fails as a
+        way role_table is, so every Bit written before functions existed keeps
+        working untouched. Validated at load_bit (control/functions.py), so a
+        function declared against a verb this Bit does not implement fails as a
         BitLoadError rather than mid-installation.
         """
-        return TriggerTable(triggers={})
+        return FunctionTable(functions={})
 
     def on_setup_enter(self) -> None:
         """Called once when Control enters SETUP for this Bit."""
@@ -89,21 +89,21 @@ class Bit(ABC):
         """
         return False
 
-    def cues(self, at: float) -> list:
-        """Self-driven cues for this tick, in the same vocabulary a verb
-        handler returns: plain (dev, status, data1, data2) tuples,
-        control.cues.LightCue, control.cues.PlayCue, and the
-        control.cues.ROOM target.
+    def fires(self, at: float) -> list:
+        """Self-reported bit-adjudicated function fires for this tick.
 
         Called once per RUNNING tick, after update(dt), and skipped on the
         tick update() signals completion. `at` is the absolute time at which
-        these cues should be PRESENTED; Control has already added the
-        installation's cue_horizon to its own clock.
+        a fire reported here should be PRESENTED; Control has already added
+        the installation's cue_horizon to its own clock.
 
-        This is the only way a Bit can animate anything without a device
-        doing something: verb_handlers() can only ever react to a gesture,
-        which is why the Room's light used to reach its declared static hue
-        once and hold it for a whole run. Default: nothing to emit.
+        May return only control.cues.FireFunction -- this is a Bit's only
+        way to report a condition it evaluated itself (no gesture, no verb)
+        without an operator's manual fire. Anything else in the returned
+        list is logged and dropped by the engine: continuous lane-driving
+        without a device doing something is exactly what a declared
+        GENERATOR Function exists to do instead (see control/
+        generator_runner.py). Default: nothing to report.
         """
         return []
 

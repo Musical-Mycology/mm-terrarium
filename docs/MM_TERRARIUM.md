@@ -2363,6 +2363,9 @@ unload_room -> load_room (a second, different room, asserting a fresh
 Arco-process instance) -> unload_room -> a clean, empty-`DevicePool` end).
 
 ### `control/instrument.py`, `RoomFixture.instrument`, `terrarium.toml` instruments, requirement slots, ambient rendering, and accepted_triggers gating (2026-08-27)
+*(Partially superseded 2026-08-27 by Spec 3, next section: `accepted_triggers`
+is now spelled `accepted_cues`, and `Instrument.functions` is no longer bare
+strings -- read this entry with that rename applied.)*
 Instrument and Fixture become first-class entities instead of a Fixture being
 bare placement plus zones, and a Bit's demands on what a room/device can do
 become declared contracts rather than tribal knowledge. Spec 2 of the Room/
@@ -2461,6 +2464,78 @@ and its plan
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **1529 passed, 1 skipped** (up from the previous baseline of 1442 passed,
 1 skipped).
+
+### `control/functions.py`, `control/triggers.py`, `control/generator_runner.py` -- Functions and the Trigger rename (2026-08-27)
+Spec 3 of the Room/Instrument/Trigger restructure: one word stops doing two
+jobs. The acting side is now **Function**, the sensing side owns the name
+**Trigger**. Design: [`.../2026-08-27-functions-and-trigger-rename-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-27-functions-and-trigger-rename-design.md)
+and its plan
+[`.../plans/2026-08-27-functions-and-trigger-rename.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-27-functions-and-trigger-rename.md).
+Every "trigger" in the entries above this one is HISTORY -- read those
+entries with this rename applied. The full mapping is the spec's section 2
+table; `tests/test_vocabulary.py` pins the old acting-side vocabulary out
+of the tree (with a narrow `# legacy-vocabulary-ok` marker exemption for
+the config error that names the old `accepted_triggers` key to its author).
+
+- **Function, three kinds** (`control/functions.py`, the renamed
+  `control/triggers.py`): SCRIPTED is exactly the old Bit-declared Trigger
+  (condition + cue script, fired via `FireFunction` /
+  `GameServer.fire_function`); GENERATOR is a declared lane driver
+  (waveform/period/lo-hi, `"triangle"` v0) the engine runs each RUNNING
+  tick; STREAM is a declared gesture-arg -> cc-lane mapping the engine
+  applies in `data()` before the verb handler. One generator per element
+  lane; same-lane stream domains may not overlap within a verb (touching
+  at one endpoint is legal, the lower domain wins there); values beyond a
+  lane's whole domain hull **edge-clamp** to the nearest edge's function
+  (the old handlers' defensive clamp, engine-owned), interior gaps drop.
+- **`Bit.cues(at)` is gone.** The Room drift is a declared generator
+  (`GeneratorRunner`, phase deterministic in elapsed run time); a scripted
+  fire suppresses only the lanes its script writes, only for the script's
+  span, and the generator's phase keeps advancing underneath -- the
+  engine-owned generalization of TestBit's old `SCRIPT_QUIET_SECONDS`.
+  Bit-adjudicated fires moved to `Bit.fires(at) -> [FireFunction]` (anything
+  else is logged and dropped). `FireFunction` gained an optional `at`:
+  MetronomeBit's click track / downbeat flash / level pulse are SCRIPTED
+  Functions fired from `fires()` at beat-grid times -- discrete,
+  state-dependent cue emission rides scripted fires, never a resurrected
+  `cues()`.
+- **Hardcoded verb-handler cc math is gone from TestBit** -- tilt/shake
+  mappings are six declared STREAM functions, pinned byte-identical to the
+  old handler output by a table-driven regression test written against the
+  unconverted Bit first (`tests/test_test_bit.py`). `_on_tilt` keeps only
+  round adjudication; `_on_shake` is deleted (stream-only verbs are legal).
+- **Instruments animate ambiently.** `Instrument.functions` became a tuple
+  of GENERATOR `Function` declarations (config:
+  `[[instruments.<name>.functions]]` tables); with no Bit loaded,
+  `DeviceLinkAgent` runs them into the room session, and the Bit's own
+  generators supersede at `load_bit` and hand back at unload. Cross-fixture
+  generator lane collisions are a located `RoomProfile` error; ambient
+  runner state clears on `unwire_room`. The shipped `terrarium.toml`
+  declares no generators yet, so shipped visuals are unchanged.
+- **Sensing Triggers** (`control/triggers.py`, new meaning):
+  `EventTrigger` -- device-side detection, **server-owned thresholds**
+  shipped in the composed role blob as a `"triggers"` key for every granted
+  non-ROOM join (requires-less roles included; ROOM joins ship nothing).
+  `TUNESHROOM` declares `tap`/`shake` with the native TapDetector's
+  constants (shake reuses them; no native shake detector exists --
+  provenance commented, real values await the `capture/` ->
+  `tools/trace_stats.py` pass). The mm-tuneshroom client reading the blob
+  key is recorded cross-repo follow-up. `StreamTrigger` -- server-side
+  transform of gesture args in `data()` before streams/handlers, `"smooth"`
+  EMA v0, per-(dev, trigger) state cleared on release/unload; no shipped
+  instrument declares one.
+- **Console**: `functions.js` renders kind-tagged cards (Fire button on
+  scripted only); fixture instrument cards show declared generators and
+  event-trigger thresholds read-only. Wire events renamed
+  (`functions_changed`/`function_fired`/`fire_function`).
+- **Spec status deviations** are recorded in the spec's own Status section
+  (baseline correction, hi=127 drift amplitude, raw-domain stream
+  matching, `FireFunction.at`, edge-clamp, verb-scoped overlap, and more).
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1634 passed, 1 skipped** (up from 1539 passed, 1 skipped). The Spec 1,
+Spec 2, and Spec 3 live-Arco checklists are all still pending; run them
+together on the dev box.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -3008,6 +3083,12 @@ Kept explicit so the doc doesn't over-claim:
   [`.../2026-08-27-instruments-and-fixtures-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-27-instruments-and-fixtures-design.md)
   and its plan
   [`.../plans/2026-08-27-instruments-and-fixtures.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-27-instruments-and-fixtures.md).
+- Functions and the Trigger rename (Spec 3 of the Room/Instrument/Trigger
+  restructure -- acting side becomes Function, sensing side owns Trigger):
+  [`.../2026-08-27-functions-and-trigger-rename-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-27-functions-and-trigger-rename-design.md)
+  and its plan
+  [`.../plans/2026-08-27-functions-and-trigger-rename.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-27-functions-and-trigger-rename.md).
+  Live-verified against a real Arco: not yet done, offline suite only.
 
 
 Game-design background (RenQuest integration, Bit scoring/loop rules, hardware)

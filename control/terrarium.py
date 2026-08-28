@@ -38,7 +38,7 @@ class RoomLoadError(Exception):
     """Every load_room failure, raised only internally to short-circuit the
     sequence -- load_room itself never lets this escape to its caller; it
     catches it, unwinds, and returns the reason string instead. Mirrors
-    GameServer.fire_trigger's never-raises contract."""
+    GameServer.fire_function's never-raises contract."""
 
 
 class RoomBindingTimeout(Exception):

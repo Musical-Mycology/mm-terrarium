@@ -12,8 +12,9 @@ import logging
 import time
 
 from control.bit import Bit
-from control.cues import ROOM, FireTrigger, LightCue, MuteCue, PlayCue, SolidCue
+from control.cues import ROOM, FireFunction, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
+from control.generator_runner import GeneratorRunner
 from control.instrument import (TUNESHROOM, InstrumentRequirement, cue_kind,
                                  satisfies)
 from control.registration import JoinResult, RegistrationState
@@ -21,14 +22,17 @@ from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
 from control.rooms import room_role
 from control.state import State
-from control.triggers import (
+from control.functions import (
     FIRED_BY_BIT_ADJUDICATED,
     FIRED_BY_GESTURE_VERB,
     SOURCE_WIRE,
-    TriggerFired,
-    TriggerTarget,
+    Function,
+    FunctionFired,
+    FunctionKind,
+    FunctionTarget,
+    collect_stream_cues,
     expand_script,
-    validate_trigger_table,
+    validate_function_table,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,7 +46,7 @@ _MAX_GESTURE_LEAD = 5.0
 
 
 class InvalidTransition(Exception):
-    """Raised when a trigger is called from a state that doesn't allow it."""
+    """Raised when a function is called from a state that doesn't allow it."""
 
 
 class BitLoadError(Exception):
@@ -113,8 +117,8 @@ class GameServer:
         # `muted` (below) to learn latch state.
         self.on_mute_change = None
         # Resolved dev ids currently latched dark/silent by a MuteCue (the
-        # Stop trigger). Cleared per-dev by any non-mute fire at that surface
-        # (see fire_trigger/_clear_mutes) and wholesale on _unload.
+        # Stop function). Cleared per-dev by any non-mute fire at that surface
+        # (see fire_function/_clear_mutes) and wholesale on _unload.
         self.muted: set[str] = set()
         # Observers registered via add_observer(). Each may implement any of
         # on_state_change(old, new), on_registration_change(),
@@ -138,8 +142,8 @@ class GameServer:
         self._warned_no_room = False     # once-per-Bit-load ROOM drop warning
         # Provenance stamp for the active Room, set by control/terrarium.py's
         # load_room on success and cleared by unload_room (also on a failed
-        # load's unwind). {} outside a Room. join() and fire_trigger() read
-        # this so role blobs and trigger records carry room_name/
+        # load's unwind). {} outside a Room. join() and fire_function() read
+        # this so role blobs and function records carry room_name/
         # terrarium_config_version without GameServer knowing anything about
         # TerrariumConfig itself.
         self.provenance: dict = {}
@@ -149,6 +153,30 @@ class GameServer:
         # join() to gate a Role.requires slot against its resolved
         # requirement (see spec section 4) -- empty outside a loaded Bit.
         self._slot_requirements: dict[str, InstrumentRequirement] = {}
+        # This Bit's declared GENERATOR functions, evaluated once per
+        # RUNNING tick by _dispatch_generator_cues. Built in load_bit from
+        # the validated table (per-lane uniqueness already enforced there);
+        # None outside a loaded Bit. See control/generator_runner.py.
+        self._generators: GeneratorRunner | None = None
+        # This Bit's declared STREAM functions, keyed by the verb they read
+        # gesture args from, declaration order preserved per verb. Built in
+        # load_bit from the same validated table _generators is built from;
+        # empty outside a loaded Bit. Consumed by data() to map a gesture's
+        # args onto MIDI lanes without a Bit handler in the loop at all.
+        self._stream_functions: dict[str, list[Function]] = {}
+        # Seconds elapsed since run() started, accumulated in tick() and
+        # reset there. The clock GeneratorRunner.cues() samples -- distinct
+        # from self._clock() (wall/O2 time, used for `at`) so a generator's
+        # phase is deterministic in how long the Bit has been RUNNING, not
+        # in wall-clock time.
+        self._run_elapsed: float = 0.0
+        # Per-(dev, StreamTrigger.name) EMA state for data()'s "smooth"
+        # transform (control/triggers.py's StreamTrigger, Task 8/10):
+        # y_prev, seeded to the first sample seen for that key. Cleared for
+        # a dev wherever its registration ends (release, reap_stale) and
+        # wholesale on _unload -- a stale y_prev must never blend into a
+        # new occupant's first sample.
+        self._stream_trigger_state: dict[tuple[str, str], float] = {}
 
     def slot_requirement(self, slot: str) -> "InstrumentRequirement | None":
         """Public read of the loaded Bit's requirement for `slot`, or None
@@ -190,6 +218,7 @@ class GameServer:
             if self.registration is not None and \
                     dev in self.registration.assignments:
                 self.registration.release(dev)
+                self._clear_stream_trigger_state(dev)
                 released_any = True
                 if self.on_release:
                     try:
@@ -266,7 +295,8 @@ class GameServer:
                         f"role {role.name!r} requires undeclared slot "
                         f"{role.requires!r}; declared: {sorted(known_slots)}")
             validate_role_declarations(role_table)
-            validate_trigger_table(bit.trigger_table, set(bit.verb_handlers()))
+            function_table = bit.function_table
+            validate_function_table(function_table, set(bit.verb_handlers()))
             registration = RegistrationState(role_table)
         except Exception as exc:
             self._set_state(State.IDLE)
@@ -276,6 +306,20 @@ class GameServer:
         self.bit_name = name
         self.registration = registration
         self._slot_requirements = {r.slot: r for r in requirements}
+        # Built from the SAME table object validate_function_table just
+        # checked, not a fresh read of the property -- function_table is a
+        # property (see the class below), so a Bit that builds a new object
+        # per access could otherwise hand this an unvalidated table, exactly
+        # the hazard fire_function's own re-read already has to guard
+        # against (see _FlipFunctionTableBit in tests/test_engine_functions.py).
+        self._generators = GeneratorRunner(
+            [f for f in function_table.functions.values()
+             if f.kind is FunctionKind.GENERATOR])
+        stream_functions: dict[str, list[Function]] = {}
+        for f in function_table.functions.values():
+            if f.kind is FunctionKind.STREAM:
+                stream_functions.setdefault(f.stream.verb, []).append(f)
+        self._stream_functions = stream_functions
         self._set_state(State.LOADED)
         self._enter_setup()
 
@@ -287,6 +331,7 @@ class GameServer:
         if self.state != State.SETUP:
             raise InvalidTransition(
                 f"run requires SETUP, current state is {self.state}")
+        self._run_elapsed = 0.0
         self._set_state(State.RUNNING)
         self.bit.on_run_start()
 
@@ -305,6 +350,14 @@ class GameServer:
             # build role_table per property access, so a fresh call could
             # return different Role objects than the ones counts track.
             role = self.registration.role_table.roles[result.role]
+            # Resolved for every granted non-ROOM join, not just requires-
+            # bearing roles: event-trigger thresholds are a property of the
+            # carried instrument's server-owned detection contract,
+            # independent of whether this role also gates on a slot (e.g.
+            # TestBit's requires-less "jammer" role still needs its
+            # carrier's tap/shake thresholds).
+            info = self.devices.get(dev)
+            carried = getattr(info, "carried", None) or TUNESHROOM
             if role.requires is not None:
                 # requires names a declared or implicit slot (Task 5's
                 # load-time validation guarantees this). The implicit
@@ -314,11 +367,10 @@ class GameServer:
                 # carrier device joining this role. req is None means
                 # exactly that case, so treat it as satisfied.
                 req = self._slot_requirements.get(role.requires)
-                info = self.devices.get(dev)
-                carried = getattr(info, "carried", None) or TUNESHROOM
                 reason = satisfies(carried, req) if req is not None else None
                 if req is not None and reason is not None:
                     self.registration.release(dev)
+                    self._clear_stream_trigger_state(dev)
                     return JoinResult(granted=False, reason=reason)
                 result.slot = role.requires
                 result.instrument = carried.name
@@ -327,7 +379,8 @@ class GameServer:
                 room_name=self.provenance.get("room_name"),
                 terrarium_config_version=self.provenance.get(
                     "terrarium_config_version"),
-                slot=result.slot, instrument=result.instrument)
+                slot=result.slot, instrument=result.instrument,
+                event_triggers=carried.event_triggers)
             try:
                 self.bit.on_join(dev, result.role)
             except Exception:
@@ -386,6 +439,45 @@ class GameServer:
             return now
         return gesture_time
 
+    def _clear_stream_trigger_state(self, dev: str) -> None:
+        """Drop every StreamTrigger EMA entry for `dev`. Called wherever a
+        dev's registration ends (reap_stale, a join refused after slot
+        resolution, and wholesale in _unload) so a stale y_prev from a
+        departed occupant can never blend into the next one's first
+        sample."""
+        stale = [key for key in self._stream_trigger_state if key[0] == dev]
+        for key in stale:
+            del self._stream_trigger_state[key]
+
+    def _apply_stream_triggers(self, dev: str, verb: str, args: list) -> list:
+        """Run the carried instrument's StreamTriggers matching `verb`
+        (control/triggers.py's StreamTrigger, Task 8) over the arriving
+        args, BEFORE stream Functions and the verb handler see them -- the
+        seam where fusion/smoothing pipelines live (Task 10). Returns a
+        transformed copy; the caller's list is never mutated. A trigger
+        naming an out-of-range or non-numeric arg is skipped, never raises
+        -- a device must never be able to wedge Control."""
+        info = self.devices.get(dev)
+        carried = getattr(info, "carried", None) or TUNESHROOM
+        triggers = [t for t in carried.stream_triggers if t.verb == verb]
+        if not triggers:
+            return args
+        args = list(args)
+        for trig in triggers:
+            if trig.arg >= len(args):
+                continue
+            x = args[trig.arg]
+            if isinstance(x, bool) or not isinstance(x, (int, float)):
+                continue
+            if trig.transform == "smooth":
+                key = (dev, trig.name)
+                y_prev = self._stream_trigger_state.get(key)
+                alpha = trig.params.get("alpha", 1.0)
+                y = x if y_prev is None else alpha * x + (1 - alpha) * y_prev
+                self._stream_trigger_state[key] = y
+                args[trig.arg] = y
+        return args
+
     def data(self, dev: str, verb: str, args: list,
              gesture_time: float | None = None) -> str | None:
         """Route a /game/<verb> message to the loaded Bit's verb handler.
@@ -411,9 +503,16 @@ class GameServer:
         except Exception:
             logger.exception("Bit.verb_handlers raised; refusing %r", verb)
             return "handler error"
-        if handler is None:
+        args = self._apply_stream_triggers(dev, verb, args)
+        streams = self._stream_functions.get(verb, ())
+        if handler is None and not streams:
             return f"unknown verb {verb!r}"
         at = self._origin(gesture_time) + self._horizon
+        stream_cue_list = collect_stream_cues(streams, dev, args)
+        if handler is None:
+            # Legal: a verb with declared streams and no Bit handler at all.
+            self._dispatch_cues(stream_cue_list, at, FIRED_BY_GESTURE_VERB)
+            return None
         try:
             cues = handler(dev, args, at)
         except Exception:
@@ -424,8 +523,12 @@ class GameServer:
             # below, which would otherwise iterate the string character by
             # character and try to unpack each character as a cue tuple.
             # `or` guards a blank reason so /<dev>/error is never empty.
+            # One gesture, one verdict: a refusal suppresses the stream
+            # cues collected above too, so nothing from this gesture reaches
+            # a device.
             return cues or "handler refused"
-        self._dispatch_cues(cues, at, FIRED_BY_GESTURE_VERB)
+        self._dispatch_cues(list(stream_cue_list) + list(cues or ()), at,
+                            FIRED_BY_GESTURE_VERB)
         return None
 
     def _canonical_room_dev(self) -> str | None:
@@ -464,24 +567,24 @@ class GameServer:
         return canonical
 
     def _resolve_target(self, target, dev: str | None) -> list[str]:
-        """A trigger's declared target, resolved to the devs it lands on.
+        """A function's declared target, resolved to the devs it lands on.
 
         Returns every bound Room fixture dev for ROOM, in declaration order
         -- this is the one-method change the N-fixture Room slice makes; no
-        Bit's trigger declaration changes alongside it (design spec section
-        5). This full list is what TriggerFired.devs reports; a script's
+        Bit's function declaration changes alongside it (design spec section
+        5). This full list is what FunctionFired.devs reports; a script's
         TARGET fanout is collapsed separately, see _collapse_room_fanout.
         """
-        if target is TriggerTarget.DEVICE:
+        if target is FunctionTarget.DEVICE:
             return [dev] if dev else []
-        if target is TriggerTarget.SURFACE and dev != ROOM:
+        if target is FunctionTarget.SURFACE and dev != ROOM:
             return [dev] if dev else []
         room_devs: list[str] = []
         if self.room is not None and self.room.bound:
             profile = self.room.profile
             room_devs = [self.room.bound[f.name] for f in profile.fixtures
                         if f.name in self.room.bound]
-        if target in (TriggerTarget.ROOM, TriggerTarget.SURFACE):
+        if target in (FunctionTarget.ROOM, FunctionTarget.SURFACE):
             return room_devs
         out = list(room_devs)
         assignments = (self.registration.assignments
@@ -493,7 +596,7 @@ class GameServer:
 
     def _collapse_room_fanout(self, devs: list[str]) -> list[str]:
         """A script step addressed at cues.TARGET fans out to every dev in
-        `devs` (control/triggers.py's expand_script), one independent cue
+        `devs` (control/functions.py's expand_script), one independent cue
         per dev. That is correct for player devices, each with its own
         LightSession, but wrong for the Room: every Room fixture dev in
         `devs` shares ONE session (design spec section 2), so feeding it
@@ -517,7 +620,7 @@ class GameServer:
     def _check_cue_kinds(self, cues) -> str | None:
         """Refuse the whole fire, all-or-nothing (spec section 7), if any
         expanded cue's kind is not in its destination's instrument's
-        accepted_triggers.
+        accepted_cues.
 
         A device dev is checked against DeviceInfo.carried (TUNESHROOM by
         default). A dev the Room owns is checked against every Room fixture's
@@ -536,7 +639,7 @@ class GameServer:
             kind = cue_kind(cue)
             if resolved in room_devs:
                 fixtures = self.room.profile.fixtures
-                if any(kind in f.instrument.accepted_triggers
+                if any(kind in f.instrument.accepted_cues
                        for f in fixtures):
                     continue
                 return (f"instrument {fixtures[0].instrument.name!r} does "
@@ -545,15 +648,15 @@ class GameServer:
             if info is None:
                 continue
             carried = getattr(info, "carried", None) or TUNESHROOM
-            if kind not in carried.accepted_triggers:
+            if kind not in carried.accepted_cues:
                 return (f"instrument {carried.name!r} does not accept "
                         f"{kind!r} cues")
         return None
 
-    def fire_trigger(self, name: str, *, fired_by: str,
+    def fire_function(self, name: str, *, fired_by: str,
                      dev: str | None = None,
                      at: float | None = None) -> str | None:
-        """Fire one declared trigger: expand its script, dispatch it, and tell
+        """Fire one declared function: expand its script, dispatch it, and tell
         every observer it happened.
 
         Returns None when fired, else a refusal reason, and NEVER raises, for
@@ -562,7 +665,7 @@ class GameServer:
 
         `fired_by` is what actually fired it THIS time, which is deliberately
         not the same field as the condition's declared source: an operator may
-        fire a gesture-verb trigger by hand, and the record has to keep those
+        fire a gesture-verb function by hand, and the record has to keep those
         two distinguishable or a manual action reads as gameplay.
 
         `at` is supplied by _dispatch_cues when a Bit fired this from a verb
@@ -574,53 +677,57 @@ class GameServer:
         if self.state not in (State.SETUP, State.RUNNING):
             return "no Bit running"
         try:
-            table = self.bit.trigger_table
+            table = self.bit.function_table
         except Exception:
-            logger.exception("Bit.trigger_table raised; refusing to fire %r",
+            logger.exception("Bit.function_table raised; refusing to fire %r",
                              name)
-            return "trigger table error"
+            return "function table error"
         try:
-            trigger = table.triggers.get(name)
-            if trigger is None:
-                return f"unknown trigger {name!r}"
-            if trigger.target in (TriggerTarget.DEVICE,
-                                  TriggerTarget.SURFACE) and not dev:
-                if trigger.target is TriggerTarget.DEVICE:
-                    return (f"trigger {name!r} targets the firing device; "
+            function_decl = table.functions.get(name)
+            if function_decl is None:
+                return f"unknown function {name!r}"
+            if function_decl.kind is not FunctionKind.SCRIPTED:
+                return f"function {name!r} is not scripted"
+            if function_decl.target in (FunctionTarget.DEVICE,
+                                  FunctionTarget.SURFACE) and not dev:
+                if function_decl.target is FunctionTarget.DEVICE:
+                    return (f"function {name!r} targets the firing device; "
                             f"no device given")
-                return (f"trigger {name!r} targets a surface; "
+                return (f"function {name!r} targets a surface; "
                         f"no surface given")
             if at is None:
                 at = self._clock() + self._horizon
-            devs = self._resolve_target(trigger.target, dev)
-            cues = expand_script(trigger, at, self._collapse_room_fanout(devs))
+            devs = self._resolve_target(function_decl.target, dev)
+            cues = expand_script(function_decl, at, self._collapse_room_fanout(devs))
             refusal = self._check_cue_kinds(cues)
             if refusal is not None:
                 return refusal
             if not any(isinstance(c, MuteCue) for c in cues):
                 self._clear_mutes(devs)
         except Exception:
-            # trigger_table is a property: load_bit validated whatever it
+            # function_table is a property: load_bit validated whatever it
             # returned on THAT one call, and the validated object is never
             # retained (the same hazard RegistrationState's role_table
             # snapshot exists to close for role_table). A later access can
-            # return something else, so everything this trigger touches
+            # return something else, so everything this function touches
             # between lookup and expansion is guarded here, not just the
             # property access above.
-            logger.exception("trigger %r script expansion failed; refusing "
+            logger.exception("function %r script expansion failed; refusing "
                              "to fire", name)
-            return "trigger script error"
+            return "function script error"
         # No fired_by passed on: expand_script only ever yields LightCue and
-        # PlayCue, never FireTrigger, so this cannot recurse and a trigger
+        # PlayCue, never FireFunction, so this cannot recurse and a function
         # cannot chain into another. The guard above already contains
-        # anything a divergent trigger_table could throw while producing
+        # anything a divergent function_table could throw while producing
         # `cues`, so this call sees only well-formed cues.
+        if self._generators is not None:
+            self._suppress_generator_lanes(function_decl, cues, at)
         self._dispatch_cues(cues, at)
-        self._notify("on_trigger_fired", TriggerFired(
-            name=trigger.name,
-            condition=trigger.condition.name,
+        self._notify("on_function_fired", FunctionFired(
+            name=function_decl.name,
+            condition=function_decl.condition.name,
             fired_by=fired_by,
-            declared_source=SOURCE_WIRE[trigger.condition.source],
+            declared_source=SOURCE_WIRE[function_decl.condition.source],
             dev=dev,
             devs=tuple(devs),
             at=at,
@@ -628,6 +735,40 @@ class GameServer:
             room_name=self.provenance.get("room_name"),
         ))
         return None
+
+    def _suppress_generator_lanes(self, function_decl, cues, at: float) -> None:
+        """After a scripted fire's cues are expanded, overlay-suppress any
+        generator lane the script itself writes, until at + span (span =
+        the script's last step offset). Never kills the generator -- its
+        phase keeps advancing underneath (spec section 4)."""
+        if not function_decl.script:
+            return
+        span = float(function_decl.script[-1].offset)
+        canonical_room = self._canonical_room_dev()
+        lanes = set()
+        for cue in cues:
+            if isinstance(cue, LightCue):
+                dev, status, data1 = cue.dev, cue.status, cue.data1
+            elif isinstance(cue, tuple) and len(cue) == 4:
+                dev, status, data1, _ = cue
+            else:
+                continue
+            # A GENERATOR's own dev is always the ROOM sentinel or the
+            # unresolved TARGET sentinel (control/functions.py's
+            # _LEGAL_GENERATOR_DEVS) -- it never names a concrete device.
+            # A script step written literally as cues.ROOM stays that
+            # sentinel through expand_script and matches directly; a step
+            # written as cues.TARGET at a Room-targeting Function has
+            # already fanned out to the Room's actual canonical dev by the
+            # time it reaches here (_collapse_room_fanout), so it is folded
+            # back to the same sentinel for lane comparison -- otherwise a
+            # TARGET-authored script could never overlay a ROOM generator on
+            # the shared lane it visibly writes.
+            if canonical_room is not None and dev == canonical_room:
+                dev = ROOM
+            lanes.add((dev, status, data1))
+        if lanes:
+            self._generators.suppress(lanes, at + span)
 
     def _clear_mutes(self, devs) -> None:
         """Any non-mute fire at a surface un-latches it (spec section 4)."""
@@ -664,18 +805,19 @@ class GameServer:
         """
         for cue in cues or ():
             try:
-                if isinstance(cue, FireTrigger):
+                if isinstance(cue, FireFunction):
                     # A Bit reporting one of its own conditions satisfied.
-                    # fire_trigger re-enters this method with the expanded
-                    # script, carrying the same `at`, so a trigger fired from a
+                    # fire_function re-enters this method with the expanded
+                    # script, carrying the same `at`, so a function fired from a
                     # gesture lands on the same frame as the ordinary cues
                     # returned beside it.
-                    reason = self.fire_trigger(
+                    reason = self.fire_function(
                         cue.name,
                         fired_by=fired_by or FIRED_BY_BIT_ADJUDICATED,
-                        dev=cue.dev, at=at)
+                        dev=cue.dev,
+                        at=(cue.at if cue.at is not None else at))
                     if reason is not None:
-                        logger.warning("Bit fired trigger %r: %s",
+                        logger.warning("Bit fired function %r: %s",
                                        cue.name, reason)
                     continue
                 if isinstance(cue, SolidCue):
@@ -725,25 +867,47 @@ class GameServer:
     def tick(self, dt: float) -> None:
         if self.state != State.RUNNING:
             return
+        self._run_elapsed += dt
         if self.bit.update(dt):
             self._complete()
             return
-        self._dispatch_bit_cues()
+        self._dispatch_generator_cues()
+        self._dispatch_bit_fires()
 
-    def _dispatch_bit_cues(self) -> None:
-        """Drain Bit.cues() once per RUNNING tick. A self-driven cue has no
-        gesture behind it, so its origin is Control's own clock.
+    def _dispatch_generator_cues(self) -> None:
+        """Evaluate the loaded Bit's declared GENERATOR functions once per
+        RUNNING tick, in elapsed-run time, and dispatch their non-suppressed
+        lanes exactly where _dispatch_bit_cues used to drain Bit.cues()."""
+        if self._generators is None:
+            return
+        at = self._clock() + self._horizon
+        cues = self._generators.cues(self._run_elapsed, at)
+        self._dispatch_cues(cues, at, FIRED_BY_BIT_ADJUDICATED)
 
-        Guarded exactly like every other Bit hook: a raising cues() must not
-        stop this Bit reaching COMPLETING.
+    def _dispatch_bit_fires(self) -> None:
+        """Drain Bit.fires() once per RUNNING tick. A self-reported fire has
+        no gesture behind it, so its origin is Control's own clock.
+
+        Guarded exactly like _dispatch_bit_cues was: a raising fires() must
+        not stop this Bit reaching COMPLETING. Anything other than a
+        FireFunction is logged and dropped -- fires() may only report fires,
+        never drive a lane directly (that is what generators are for).
         """
         at = self._clock() + self._horizon
         try:
-            cues = self.bit.cues(at)
+            fires = self.bit.fires(at)
         except Exception:
-            logger.exception("Bit.cues raised; ignoring this tick")
+            logger.exception("Bit.fires raised; ignoring this tick")
             return
-        self._dispatch_cues(cues, at, FIRED_BY_BIT_ADJUDICATED)
+        clean = []
+        for item in fires or ():
+            if isinstance(item, FireFunction):
+                clean.append(item)
+            else:
+                logger.warning(
+                    "Bit.fires returned a non-FireFunction %r; dropping",
+                    item)
+        self._dispatch_cues(clean, at, FIRED_BY_BIT_ADJUDICATED)
 
     def abort(self) -> None:
         """Force an early end to the current Bit from any non-IDLE state.
@@ -789,6 +953,10 @@ class GameServer:
         self.bit_name = None
         self.registration = None
         self._slot_requirements = {}
+        self._generators = None
+        self._stream_functions = {}
+        self._stream_trigger_state = {}
+        self._run_elapsed = 0.0
         self._set_state(State.IDLE)
 
     def add_observer(self, observer) -> None:

@@ -1,7 +1,7 @@
 """MetronomeBit: a call-and-response metronome game for the DEMO Room.
 
 See docs/superpowers/specs/2026-08-20-metronome-bit-design.md. This module
-carries only the static declarations (roles, manifests, triggers) plus the
+carries only the static declarations (roles, manifests, functions) plus the
 lifecycle scaffolding later tasks fill in -- no gameplay logic yet.
 """
 
@@ -10,15 +10,15 @@ from __future__ import annotations
 import random
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, FireTrigger, LightCue
+from control.cues import ROOM, TARGET, FireFunction
 from control.roles import Role, RoleClass, RoleTable
-from control.triggers import (
+from control.functions import (
     Condition,
     ConditionSource,
     ScriptStep,
-    Trigger,
-    TriggerTable,
-    TriggerTarget,
+    Function,
+    FunctionTable,
+    FunctionTarget,
 )
 
 
@@ -170,32 +170,32 @@ class MetronomeBit(Bit):
         return room_light, room_ugen
 
     @property
-    def trigger_table(self) -> TriggerTable:
+    def function_table(self) -> FunctionTable:
         def _adjudicated(name: str, description: str) -> Condition:
             return Condition(name=name, description=description,
                              source=ConditionSource.BIT_ADJUDICATED)
 
-        return TriggerTable(triggers={
-            "fireworks_player": Trigger(
+        return FunctionTable(functions={
+            "fireworks_player": Function(
                 name="fireworks_player",
                 description="Celebratory flashes on the player who nailed it",
-                target=TriggerTarget.DEVICE,
+                target=FunctionTarget.DEVICE,
                 condition=_adjudicated(
                     "phrase_success", "Player matches the call phrase"),
                 script=_fireworks_script(),
             ),
-            "fireworks_room": Trigger(
+            "fireworks_room": Function(
                 name="fireworks_room",
                 description="Celebratory flashes across the Room",
-                target=TriggerTarget.ROOM,
+                target=FunctionTarget.ROOM,
                 condition=_adjudicated(
                     "phrase_success", "Player matches the call phrase"),
                 script=_fireworks_script(),
             ),
-            "fail_player": Trigger(
+            "fail_player": Function(
                 name="fail_player",
                 description="Player's light goes red and dark on a miss",
-                target=TriggerTarget.DEVICE,
+                target=FunctionTarget.DEVICE,
                 condition=_adjudicated(
                     "phrase_fail", "Player misses the call phrase"),
                 script=(
@@ -203,10 +203,10 @@ class MetronomeBit(Bit):
                     ScriptStep(1.0, (TARGET, 0xB0, 11, 0)),
                 ),
             ),
-            "fail_room": Trigger(
+            "fail_room": Function(
                 name="fail_room",
                 description="Room flashes a fail cue and restores the click",
-                target=TriggerTarget.ROOM,
+                target=FunctionTarget.ROOM,
                 condition=_adjudicated(
                     "phrase_fail", "Player misses the call phrase"),
                 script=(
@@ -217,13 +217,83 @@ class MetronomeBit(Bit):
                     ScriptStep(1.0, (TARGET, 0xC0, PROG_CLICK, 0)),
                 ),
             ),
-            "finale": Trigger(
+            "finale": Function(
                 name="finale",
                 description="Closing rainbow sweep and pad after the last cycle",
-                target=TriggerTarget.ROOM,
+                target=FunctionTarget.ROOM,
                 condition=_adjudicated(
                     "run_complete", "All cycles finished"),
                 script=_finale_script(),
+            ),
+            # The beat-grid schedule: fired once per beat from fires(at),
+            # each stamped with its own beat's grid time (FireFunction.at),
+            # not the tick's `at`. Byte-equivalent to the old _beat_cues(k)'s
+            # LightCue output -- same devs, same statuses, same data, same
+            # relative offsets -- just reached through a declared Function
+            # fire instead of a raw cue.
+            "metro_downbeat": Function(
+                name="metro_downbeat",
+                description="Hard click plus the green cc:74 flash on the "
+                            "downbeat of every 8-beat cycle",
+                target=FunctionTarget.ROOM,
+                condition=_adjudicated(
+                    "beat_downbeat", "Global beat index is on a cycle's "
+                    "downbeat (pos 0)"),
+                script=(
+                    ScriptStep(0.0, (TARGET, 0x90, CLICK_KEY, HARD_VEL)),
+                    ScriptStep(0.0, (TARGET, 0xB0, 74, GREEN_CC)),
+                    ScriptStep(0.1, (TARGET, 0x80, CLICK_KEY, 0)),
+                ),
+            ),
+            "metro_click": Function(
+                name="metro_click",
+                description="Soft click on a cycle's call beats 1-3",
+                target=FunctionTarget.ROOM,
+                condition=_adjudicated(
+                    "beat_call", "Global beat index is a call beat (pos "
+                    "1, 2, or 3)"),
+                script=(
+                    ScriptStep(0.0, (TARGET, 0x90, CLICK_KEY, SOFT_VEL)),
+                    ScriptStep(0.1, (TARGET, 0x80, CLICK_KEY, 0)),
+                ),
+            ),
+            "metro_pulse_room": Function(
+                name="metro_pulse_room",
+                description="Room's every-beat level pulse-then-decay",
+                target=FunctionTarget.ROOM,
+                condition=_adjudicated(
+                    "beat_pulse", "Every beat, while the Room is not "
+                    "failed"),
+                script=(
+                    ScriptStep(0.0, (TARGET, 0xB0, 11, LEVEL_PULSE)),
+                    ScriptStep(0.15, (TARGET, 0xB0, 11, LEVEL_BASE)),
+                ),
+            ),
+            "metro_pulse_player": Function(
+                name="metro_pulse_player",
+                description="A non-failed player's every-beat level "
+                            "pulse-then-decay",
+                target=FunctionTarget.DEVICE,
+                condition=_adjudicated(
+                    "beat_pulse", "Every beat, for each player not "
+                    "currently failed"),
+                script=(
+                    ScriptStep(0.0, (TARGET, 0xB0, 11, LEVEL_PULSE)),
+                    ScriptStep(0.15, (TARGET, 0xB0, 11, LEVEL_BASE)),
+                ),
+            ),
+            "metro_recovery": Function(
+                name="metro_recovery",
+                description="A failed player's green flash and level reset "
+                            "when their turn comes back around",
+                target=FunctionTarget.DEVICE,
+                condition=_adjudicated(
+                    "beat_recovery", "The turn dev's downbeat, after a "
+                    "previous cycle's fail"),
+                script=(
+                    ScriptStep(0.0, (TARGET, 0xB0, 74, GREEN_CC)),
+                    ScriptStep(0.0, (TARGET, 0xB0, 11, LEVEL_BASE)),
+                ),
             ),
         })
 
@@ -332,50 +402,87 @@ class MetronomeBit(Bit):
         """Absolute O2 time of global beat index `k` (0..31)."""
         return self._t0 + k * self.BEAT_S
 
-    def _beat_cues(self, k: int) -> list:
-        """All absolutely-timed LightCues for global beat `k`."""
+    def _beat_fires(self, k: int) -> list:
+        """FireFunctions for global beat `k`, each stamped with that beat's
+        own grid time (`at=self._grid(k)`) rather than the dispatching
+        fires(at) call's `at`. Byte-equivalent to the old _beat_cues(k)'s
+        LightCue output: same devs, same statuses, same data1/data2, same
+        relative offsets baked into the metro_* Function scripts declared
+        above -- reached through FireFunction.at instead of LightCue.when.
+        """
         t = self._grid(k)
         pos = k % self.BEATS_PER_CYCLE
         out = []
 
-        # Every beat: level pulse on ROOM and every player, then decay back
-        # to the neutral level.
+        # Every beat: level pulse-then-decay on ROOM and every non-failed
+        # player (metro_pulse_room / metro_pulse_player scripts).
         for dev in [ROOM, *self._rotation]:
             if dev in self._failed_devs:
                 continue
-            out.append(LightCue(dev, 0xB0, 11, self.LEVEL_PULSE, when=t))
-            out.append(LightCue(dev, 0xB0, 11, self.LEVEL_BASE, when=t + 0.15))
+            if dev == ROOM:
+                out.append(FireFunction("metro_pulse_room", at=t))
+            else:
+                out.append(FireFunction("metro_pulse_player", dev=dev, at=t))
 
-        # Call beats (0-3): click note pair on ROOM, hard on the downbeat.
-        if pos in (0, 1, 2, 3):
-            vel = self.HARD_VEL if pos == 0 else self.SOFT_VEL
-            out.append(LightCue(ROOM, 0x90, self.CLICK_KEY, vel, when=t))
-            out.append(LightCue(ROOM, 0x80, self.CLICK_KEY, 0, when=t + 0.1))
+        # Call beats (0-3): click, hard + green flash on the downbeat, soft
+        # otherwise (metro_downbeat / metro_click scripts).
+        if pos == 0:
+            out.append(FireFunction("metro_downbeat", at=t))
+        elif pos in (1, 2, 3):
+            out.append(FireFunction("metro_click", at=t))
 
         if pos == 0:
-            out.append(LightCue(ROOM, 0xB0, 74, self.GREEN_CC, when=t))
             dev = self._turn_dev(k // self.BEATS_PER_CYCLE)
             if dev is not None:
                 self._failed_devs.discard(dev)
-                out.append(LightCue(dev, 0xB0, 74, self.GREEN_CC, when=t))
-                out.append(LightCue(dev, 0xB0, 11, self.LEVEL_BASE, when=t))
+                out.append(FireFunction("metro_recovery", dev=dev, at=t))
 
         return out
 
-    def cues(self, at: float) -> list:
+    def fires(self, at: float) -> list:
+        """This Bit's own bit-adjudicated report: the beat-grid schedule
+        (click, flashes, level pulses) plus every cycle's win/fail judgment
+        and the run's finale.
+
+        Anchoring `self._t0` used to happen on the first `cues(at)` call;
+        `fires(at)` is now the only per-tick hook this Bit gets an absolute
+        `at` through, so the anchor moves here instead.
+
+        The beat walk below is the same `while self._next_beat ... <= at +
+        BEAT_S` loop the old `cues(at)` ran, restored here: it still emits
+        each beat's consequences exactly once, as soon as that beat's
+        gridpoint enters the horizon one beat ahead of `at`. What changed is
+        the vocabulary -- it now emits FireFunction(name, dev, at=grid_time)
+        for each beat, declared as SCRIPTED Functions above (see
+        control/cues.py's FireFunction.at and control/engine.py's
+        _dispatch_cues), rather than raw LightCue tuples. FireFunction.at is
+        exactly the seam that makes this possible: it lets a Bit stamp a
+        fire with its own beat-grid time instead of inheriting `fires(at)`'s
+        tick-`at`, which is what preserves "each beat's cues land on that
+        beat's own gridpoint" through a FireFunction-only hook.
+
+        The judgment loop below it is pure fire adjudication -- judging a
+        finished cycle's tapped phrase and reporting the win/fail
+        FireFunctions, then the finale once the run's last cycle is judged
+        -- carried verbatim from the old cues(at).
+        """
         out = []
         if self._t0 is None:
             self._t0 = at + self.LEAD_IN_S
-        # Emit each beat's cues once, when its gridpoint enters the horizon
-        # one beat ahead of `at`. TimedQueue holds them until `when`.
+
+        # Emit each beat's fires once, when its gridpoint enters the horizon
+        # one beat ahead of `at`. Each fire carries its own beat's grid time
+        # via FireFunction.at, so the engine's presentation `at` (already
+        # ahead of `at` by design here) never leaks into when the cue is
+        # actually meant to land.
         total = self.BEATS_PER_CYCLE * self.CYCLES
         while (self._next_beat < total
                and self._grid(self._next_beat) <= at + self.BEAT_S):
-            out.extend(self._beat_cues(self._next_beat))
+            out.extend(self._beat_fires(self._next_beat))
             self._next_beat += 1
 
         # Judge every unjudged cycle whose slack window has passed. A loop
-        # (not a single check) so a cues(at) call whose `at` jumps past more
+        # (not a single check) so a fires(at) call whose `at` jumps past more
         # than one cycle's judge deadline -- a stalled tick, scheduler
         # catch-up, or the final call -- still judges each of them.
         while self._judged_cycles < self.CYCLES:
@@ -388,18 +495,18 @@ class MetronomeBit(Bit):
                 phrase = self._phrase_for(c)
                 success = phrase["hits"] == {0, 1, 2, 3} and not phrase["spoiled"]
                 if success:
-                    out.append(FireTrigger("fireworks_player", dev))
-                    out.append(FireTrigger("fireworks_room"))
+                    out.append(FireFunction("fireworks_player", dev))
+                    out.append(FireFunction("fireworks_room"))
                     self._successes[dev] = self._successes.get(dev, 0) + 1
                 else:
                     self._failed_devs.add(dev)
-                    out.append(FireTrigger("fail_player", dev))
-                    out.append(FireTrigger("fail_room"))
+                    out.append(FireFunction("fail_player", dev))
+                    out.append(FireFunction("fail_room"))
             self._judged_cycles += 1
             if self._judged_cycles == self.CYCLES:
                 if sum(self._successes.values()) >= 1:
                     if self._finale_end is None:
-                        out.append(FireTrigger("finale"))
+                        out.append(FireFunction("finale"))
                         self._finale_end = at + self.FINALE_S
                 else:
                     self._done = True

@@ -5,16 +5,20 @@ section 4.
 """
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, FireTrigger, MuteCue, PlayCue, SolidCue
+from control.cues import ROOM, TARGET, FireFunction, MuteCue, PlayCue, SolidCue
 from control.instrument import InstrumentRequirement
 from control.roles import Role, RoleClass, RoleTable
-from control.triggers import (
+from control.functions import (
     Condition,
     ConditionSource,
     ScriptStep,
-    Trigger,
-    TriggerTable,
-    TriggerTarget,
+    Function,
+    FunctionKind,
+    FunctionTable,
+    FunctionTarget,
+    GeneratorSpec,
+    StreamOutput,
+    StreamSpec,
 )
 
 RUN_DURATION_SECONDS = 2.0
@@ -43,13 +47,6 @@ class TestBit(Bit):
     # game: it exists to be deterministic and assertable at an exact tick.
     ROUND_TILTS = 3
 
-    # How long this Bit stops driving the Room's cc:74 after firing
-    # play_aurora. The drift below runs at 44 Hz and shares that lane with the
-    # script, so without yielding it the very next tick would overwrite step 0
-    # and the declared sweep would never be visible. A Bit yielding a lane it
-    # shares with its own script is the general shape here, not a TestBit quirk.
-    SCRIPT_QUIET_SECONDS = 2.0
-
     def __init__(self, config=None, run_duration: float | None = None):
         super().__init__(config)
         self._run_duration = (
@@ -65,7 +62,6 @@ class TestBit(Bit):
         self._full_tilts = 0
         self._round_won = False
         self._rounds_won = 0
-        self._quiet_until = 0.0
 
     @property
     def run_duration(self) -> float:
@@ -123,8 +119,9 @@ class TestBit(Bit):
         # The jammer glows: a dim green aurora at rest. Its lanes are cc:1
         # (level) and cc:2 (hue), NOT the player's cc:74 -- that lane is a
         # plain full-rainbow sweep, and the jammer's green-centred
-        # yellow/purple shape needs its own controller pair (_on_tilt emits
-        # both; roles without these lanes simply ignore them).
+        # yellow/purple shape needs its own controller pair (the declared
+        # jam_hue_neg/jam_hue_pos and jam_level_neg/jam_level_pos stream
+        # functions emit them; roles without these lanes simply ignore them).
         jammer = Role(
             name="jammer", role_class=RoleClass.JAM,
             capacity=None, scored=False, uses=["tilt"],
@@ -139,8 +136,10 @@ class TestBit(Bit):
             },
         )
         # The Room's own role. Its cc:74 lane is driven two ways now: by any
-        # player's tilt (see _on_tilt) and by this Bit's own cues() drift, so
-        # the Room animates whether or not anyone has joined.
+        # player's tilt (see the declared tilt_hue stream function) and by
+        # this Bit's own declared "drift"
+        # GENERATOR function, so the Room animates whether or not anyone has
+        # joined.
         # A field-rate gesture, like player's aurora -- no note lane, so it
         # renders continuously under cc:74 without the note-triggered strobe
         # TestBit's own docstring already explains. Deliberately no cc:11/
@@ -194,27 +193,35 @@ class TestBit(Bit):
         self._elapsed = 0.0
         self._full_tilts = 0
         self._round_won = False
-        self._quiet_until = 0.0
 
     def update(self, dt: float) -> bool:
         self._elapsed += dt
         return self._elapsed >= self._run_duration
 
     @property
-    def trigger_table(self) -> TriggerTable:
+    def function_table(self) -> FunctionTable:
         """Two triggers, deliberately: one per fire path.
 
         play_aurora is bit-adjudicated, so nothing outside this Bit decides
         when a round is won. flash_device is reached through the `tap` verb
         this Bit already implements, and Control does NOT fire it just because
-        a tap arrived: _on_tap returns the FireTrigger itself, which is what
+        a tap arrived: _on_tap returns the FireFunction itself, which is what
         keeps condition evaluation inside the Bit.
         """
-        return TriggerTable(triggers={
-            "play_aurora": Trigger(
+        return FunctionTable(functions={
+            "drift": Function(
+                name="drift",
+                description="Ambient hue drift across the Room, whether or "
+                            "not anyone has joined",
+                kind=FunctionKind.GENERATOR,
+                generator=GeneratorSpec(
+                    dev=ROOM, status=0xB0, data1=74, waveform="triangle",
+                    period=self.ROOM_DRIFT_PERIOD, lo=0, hi=127),
+            ),
+            "play_aurora": Function(
                 name="play_aurora",
                 description="A slow rainbow sweep across the Room",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(
                     name="round_won",
                     description="User wins a round",
@@ -225,11 +232,11 @@ class TestBit(Bit):
                     ScriptStep(2.0, (TARGET, 0xB0, 74, 0)),
                 ),
             ),
-            "flash_device": Trigger(
+            "flash_device": Function(
                 name="flash_device",
                 description="Identify a surface: chime plus 5 s of solid "
                             "white at 90%.",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(
                     name="tapped",
                     description="Two-tap on the device",
@@ -240,22 +247,22 @@ class TestBit(Bit):
                     ScriptStep(0.0, SolidCue(TARGET, (255, 255, 255), 0.9, 5.0)),
                 ),
             ),
-            "stop": Trigger(
+            "stop": Function(
                 name="stop",
                 description="Latch this surface dark and silent until a "
                             "Play un-mutes it.",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(
                     name="operator-stop",
                     description="Fired by the operator",
                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, MuteCue(TARGET)),),
             ),
-            "win": Trigger(
+            "win": Function(
                 name="win",
                 description="Win celebration: ascending chime plus a hue "
                             "flourish.",
-                target=TriggerTarget.SURFACE,
+                target=FunctionTarget.SURFACE,
                 condition=Condition(
                     name="operator-win",
                     description="Fired by the operator",
@@ -268,40 +275,118 @@ class TestBit(Bit):
                     ScriptStep(1.2, (TARGET, 0xB0, 74, 0)),
                 ),
             ),
+            "tilt_hue": Function(
+                name="tilt_hue",
+                description="Tilt drives the calling device's own hue lane "
+                            "and the Room's, both on cc:74, straight from "
+                            "gamma in [-90, 90].",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=-90.0, in_hi=90.0,
+                    outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),
+                             StreamOutput(ROOM, 0xB0, 74, 0.0, 127.0))),
+            ),
+            # jam_level as a single mode="abs" stream over [0, 90] (the
+            # brief's shape) folds every negative gamma to zero -- Task 6's
+            # raw-value domain matching tests the ARG itself against
+            # [in_lo, in_hi] before any per-output abs(), so a negative
+            # gamma never satisfies a [0, 90] domain no matter what mode
+            # says. Declared instead as a domain-split pair, one linear
+            # map per half of the gamma range, each reading the raw
+            # (unfolded) tilt so the full [-90, 90] sweep is covered.
+            "jam_level_neg": Function(
+                name="jam_level_neg",
+                description="Jammer glow level, gamma in [-90, 0]: brightest "
+                            "at full negative tilt, dims toward rest at 0.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=-90.0, in_hi=0.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 1,
+                        JAMMER_LEVEL_FULL * 127.0,
+                        JAMMER_LEVEL_REST * 127.0),)),
+            ),
+            "jam_level_pos": Function(
+                name="jam_level_pos",
+                description="Jammer glow level, gamma in [0, 90]: rest at "
+                            "0, brightest at full positive tilt.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=0.0, in_hi=90.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 1,
+                        JAMMER_LEVEL_REST * 127.0,
+                        JAMMER_LEVEL_FULL * 127.0),)),
+            ),
+            "jam_hue_neg": Function(
+                name="jam_hue_neg",
+                description="Jammer glow hue, gamma in [-90, 0]: yellow at "
+                            "full negative tilt, green at rest.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=-90.0, in_hi=0.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 2,
+                        JAMMER_HUE_YELLOW * 127.0,
+                        JAMMER_HUE_GREEN * 127.0),)),
+            ),
+            "jam_hue_pos": Function(
+                name="jam_hue_pos",
+                description="Jammer glow hue, gamma in [0, 90]: green at "
+                            "rest, purple at full positive tilt.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=0.0, in_hi=90.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 2,
+                        JAMMER_HUE_GREEN * 127.0,
+                        JAMMER_HUE_PURPLE * 127.0),)),
+            ),
+            "shake_hue": Function(
+                name="shake_hue",
+                description="A wider shake sweep pushes the calling "
+                            "device's hue lane further.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="shake", arg=3, in_lo=0.0, in_hi=90.0,
+                    outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),)),
+            ),
+            # A wire gamma/sweep past the physical [-90, 90]/[0, 90] range
+            # (malformed, never a real device reading) still clamps to a
+            # full-deflection cue, matching the old _on_tilt/_on_shake's
+            # own clamp: control/engine.py's edge-clamp rule handles this
+            # at the engine level now, not with a per-Bit guard function --
+            # a value beyond every declared domain's hull on a lane is
+            # picked up by whichever function owns the nearest edge, with
+            # the value clamped to that edge.
         })
 
-    def cues(self, at: float) -> list:
-        """Self-driven Room animation, plus this Bit's own adjudication report.
+    def fires(self, at: float) -> list:
+        """This Bit's own bit-adjudicated report: a won round.
 
-        verb_handlers() can only ever react to a device, so without the drift
-        the Room's rainbow would still scroll on its own -- its `speed` param
-        advances the gradient every tick with no input at all -- but its base
-        hue would sit fixed at the declared value for a whole run rather than
-        sweeping. Deterministic in self._elapsed, which update(dt) already
-        accumulates, so a test can assert the exact value at a given elapsed
-        time.
+        The Room's ambient hue drift used to be reported from this same
+        hook (as a plain cc:74 cue, self-driven with no device doing
+        anything), yielding the lane for SCRIPT_QUIET_SECONDS while
+        play_aurora's script played. Both now live in the engine instead:
+        the drift is the declared "drift" GENERATOR function above, run
+        every RUNNING tick by GameServer's GeneratorRunner, and the
+        yield-while-scripted-playing behavior is the engine's generic
+        per-lane overlay suppression (control/generator_runner.py; see
+        docs/superpowers/specs/2026-08-27-functions-and-trigger-rename-
+        design.md section 4) -- this Bit no longer tracks a quiet window
+        itself.
 
-        Triangle rather than sawtooth: a sawtooth snaps from 127 back to 0 once
-        per period, and rainbow GLIDES to its target, so the snap reads as a
-        visible lurch rather than a wrap.
-
-        A won round is reported here rather than from update(dt) because a fire
-        is returned in the cue vocabulary, and this is the hook that carries it
-        with a presentation time already computed. It latches, so a round fires
-        exactly once however many ticks pass before it is drained.
+        A won round is reported here, rather than from update(dt), because a
+        fire is returned in the vocabulary this hook exists for, with a
+        presentation time already computed by the engine. It latches, so a
+        round fires exactly once however many ticks pass before it is
+        drained.
         """
         if self._round_won:
             self._round_won = False
             self._rounds_won += 1
-            self._quiet_until = self._elapsed + self.SCRIPT_QUIET_SECONDS
-            return [FireTrigger("play_aurora", ROOM)]
-        if self._elapsed < self._quiet_until:
-            # play_aurora owns cc:74 until its script finishes. See
-            # SCRIPT_QUIET_SECONDS.
-            return []
-        phase = (self._elapsed % self.ROOM_DRIFT_PERIOD) / self.ROOM_DRIFT_PERIOD
-        cc = int(round(254 * (phase if phase < 0.5 else 1.0 - phase)))
-        return [(ROOM, 0xB0, 74, cc)]
+            return [FireFunction("play_aurora", ROOM)]
+        return []
 
     def on_complete(self) -> None:
         self._completed = True
@@ -316,66 +401,47 @@ class TestBit(Bit):
                 "rounds_won": self._rounds_won}
 
     def verb_handlers(self) -> dict:
-        """Gameplay verbs beyond the fixed lifecycle set. `tilt` maps device
-        tilt onto cc:74, which this Bit's `player` role binds to aurora's hue
-        lane -- so tilting a device glides its Shroom's colour. `tap` and
-        `shake` exercise the local-sample path and the same hue lane.
-        Boundary rule 3: the Bit decides the light consequence, not the
-        transport."""
+        """Gameplay verbs beyond the fixed lifecycle set. `tilt`'s light/
+        audio consequences are the declared tilt_hue/jam_level_*/jam_hue_*
+        STREAM functions (function_table); this handler keeps only the
+        round adjudication a stream can't do. `tap` exercises the
+        local-sample path and fires flash_device. `shake` has no handler
+        at all here -- it is stream-only, reachable through the declared
+        shake_hue STREAM function's verb, per validate_function_table's
+        stream-verb allowance. Boundary rule 3: the Bit decides the light
+        consequence, not the transport."""
         return {"tilt": self._on_tilt,
-                "tap": self._on_tap,
-                "shake": self._on_shake}
+                "tap": self._on_tap}
 
     def _on_tilt(self, dev: str, args: list, at: float) -> list:
         """args: [dev, gamma]. gamma is degrees in [-90, 90].
 
-        Two cues, one `at`. The calling device's own hue lane, and the Room's.
-        The Room role declares cc:74 on BOTH its light_manifest (rainbow hue)
-        and its ugen_manifest (FluidSynth cutoff), so one tilt moves the Room's
-        colour and the Room's drone timbre against a single shared time.
-        Neither cue names a time: control/engine.py stamps both with `at`,
-        which is what makes "one gesture, one T" hold without a Bit having to
-        remember to say so.
-
-        Full deflection also counts toward the round. Counted here rather than
-        reported here: a round is not a light consequence of this gesture, and
-        cues() is where this Bit reports one.
+        Adjudication only now: every light/audio consequence of a tilt
+        (the calling device's hue lane, the Room's, and the jammer's glow
+        pair) is a declared STREAM function (tilt_hue, jam_level_neg/pos,
+        jam_hue_neg/pos) dispatched by the engine ahead of this handler, on
+        the same `at` -- see function_table. This handler keeps only what
+        the engine cannot decide for itself: whether a full deflection
+        counts toward the round. `cc` is recomputed here from gamma with
+        the exact old formula (not read off any stream) purely for that
+        threshold test; it produces no cue.
         """
         gamma = float(args[1]) if len(args) > 1 else 0.0
         gamma = max(-90.0, min(90.0, gamma))
         cc = int(round((gamma + 90.0) / 180.0 * 127.0))
-        # The jammer's glow pair, device-targeted only (the Room has no
-        # cc:1/cc:2 lanes and must not be fed them anyway). Brightness rises
-        # with |tilt| in either direction; hue leaves green toward yellow
-        # (gamma < 0) or purple (gamma > 0).
-        level = JAMMER_LEVEL_REST + abs(gamma) / 90.0 * (
-            JAMMER_LEVEL_FULL - JAMMER_LEVEL_REST)
-        edge = JAMMER_HUE_PURPLE if gamma >= 0 else JAMMER_HUE_YELLOW
-        hue = JAMMER_HUE_GREEN + abs(gamma) / 90.0 * (edge - JAMMER_HUE_GREEN)
-        level_cc = int(round(level * 127.0))
-        hue_cc = int(round(hue * 127.0))
         if cc >= 127:
             self._full_tilts += 1
             if self._full_tilts >= self.ROUND_TILTS:
                 self._full_tilts = 0
                 self._round_won = True
-        return [(dev, 0xB0, 74, cc), (ROOM, 0xB0, 74, cc),
-                (dev, 0xB0, 1, level_cc), (dev, 0xB0, 2, hue_cc)]
+        return []
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, count]. A single tap clicks, a
         double chimes; both flash the hue lane so the tap is visible as well
-        as audible, and both fire this Bit's declared flash_device trigger for
+        as audible, and both fire this Bit's declared flash_device function for
         the tapping device."""
         count = int(args[3]) if len(args) > 3 else 1
         name = "chime" if count >= 2 else "click"
         return [PlayCue(dev, name, ""), (dev, 0xB0, 74, 127),
-                FireTrigger("flash_device", dev)]
-
-    def _on_shake(self, dev: str, args: list, at: float) -> list:
-        """args: [dev, peak_g, duration_ms, sweep_deg]. Sweep drives the hue
-        lane: a wider sweep pushes the colour further."""
-        sweep = float(args[3]) if len(args) > 3 else 0.0
-        sweep = max(0.0, min(90.0, sweep))
-        cc = int(round(sweep / 90.0 * 127.0))
-        return [(dev, 0xB0, 74, cc)]
+                FireFunction("flash_device", dev)]

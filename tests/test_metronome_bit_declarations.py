@@ -46,6 +46,8 @@ def test_room_declares_rainbow_dark_by_default():
 
 
 def test_trigger_names():
-    names = set(MetronomeBit().trigger_table.triggers)
+    names = set(MetronomeBit().function_table.functions)
     assert names == {"fireworks_player", "fireworks_room",
-                     "fail_player", "fail_room", "finale"}
+                     "fail_player", "fail_room", "finale",
+                     "metro_downbeat", "metro_click", "metro_pulse_room",
+                     "metro_pulse_player", "metro_recovery"}
