@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from control.bit_config import (
@@ -145,3 +147,60 @@ def test_bad_assets_table_error_key_has_no_leading_dot():
     with pytest.raises(ManifestError) as exc:
         parse_manifest("assets = 1\n" + MINIMAL, source="s")
     assert exc.value.key == "assets"
+
+
+def test_terrarium_api_constant_is_one():
+    from control.api_version import TERRARIUM_API
+    assert TERRARIUM_API == 1
+
+
+def test_requires_terrarium_api_parses_as_int():
+    text = MINIMAL + "requires_terrarium_api = 1\n"
+    config = parse_manifest(text, source="t")
+    assert config.identity.requires_terrarium_api == 1
+
+
+def test_requires_terrarium_api_absent_is_none():
+    config = parse_manifest(MINIMAL, source="t")
+    assert config.identity.requires_terrarium_api is None
+
+
+def test_requires_terrarium_api_bool_refused():
+    # TOML `true` must not pass as 1 (spec 2.2).
+    text = MINIMAL + "requires_terrarium_api = true\n"
+    with pytest.raises(ManifestError) as exc:
+        parse_manifest(text, source="t")
+    assert "requires_terrarium_api" in str(exc.value)
+
+
+def test_min_terrarium_now_warns_as_unknown(caplog):
+    text = MINIMAL + 'min_terrarium = "0.1"\n'
+    with caplog.at_level(logging.WARNING):
+        config = parse_manifest(text, source="t")
+    assert not hasattr(config.identity, "min_terrarium")
+    assert any("min_terrarium" in r.message for r in caplog.records)
+
+
+def test_assets_parse_as_sorted_pairs():
+    text = MINIMAL + '\n[assets]\nchime = "assets/chime.wav"\n'
+    config = parse_manifest(text, source="t")
+    assert config.assets == (("chime", "assets/chime.wav"),)
+
+
+def test_asset_absolute_path_refused():
+    text = MINIMAL + '\n[assets]\nchime = "/etc/passwd"\n'
+    with pytest.raises(ManifestError) as exc:
+        parse_manifest(text, source="t")
+    assert "assets.chime" in str(exc.value)
+
+
+def test_asset_parent_escape_refused():
+    text = MINIMAL + '\n[assets]\nchime = "../outside.wav"\n'
+    with pytest.raises(ManifestError):
+        parse_manifest(text, source="t")
+
+
+def test_asset_non_string_value_refused():
+    text = MINIMAL + "\n[assets]\nchime = 3\n"
+    with pytest.raises(ManifestError):
+        parse_manifest(text, source="t")

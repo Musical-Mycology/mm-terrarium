@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from control.bit_config import ManifestError, parse_manifest
 from control.bit_registry import BitRegistry
 
 
@@ -19,6 +20,7 @@ GOOD = """
 [bit]
 name = "GoodBit"
 entry = "fake_bit:GoodBit"
+requires_terrarium_api = 1
 [console]
 hidden = false
 """
@@ -167,3 +169,126 @@ def test_list_view_role_summary_is_none_when_the_bit_raises(monkeypatch):
     monkeypatch.setattr(registry, "bit_class", lambda name: _RaisingBit)
     for row in registry.list_view():
         assert row["roles"] is None
+
+
+def _manifest(name: str, api_line: str = "requires_terrarium_api = 1") -> str:
+    return f"""
+[bit]
+name = "{name}"
+entry = "{name.lower()}:{name}"
+{api_line}
+"""
+
+
+def test_matching_api_version_discovers(tmp_path):
+    pkg = tmp_path / "ok"
+    pkg.mkdir()
+    (pkg / "bit.toml").write_text(_manifest("Ok"))
+    reg = BitRegistry.scan((tmp_path,))
+    assert "Ok" in reg.packages and not reg.errors
+
+
+def test_missing_api_key_is_located_package_error(tmp_path):
+    pkg = tmp_path / "old"
+    pkg.mkdir()
+    (pkg / "bit.toml").write_text(_manifest("Old", api_line=""))
+    reg = BitRegistry.scan((tmp_path,))
+    assert "Old" not in reg.packages
+    assert len(reg.errors) == 1
+    err = reg.errors[0]
+    assert "requires_terrarium_api" in err.message
+    assert err.path.endswith("old/bit.toml")
+
+
+def test_wrong_api_version_names_both_numbers(tmp_path):
+    pkg = tmp_path / "future"
+    pkg.mkdir()
+    (pkg / "bit.toml").write_text(
+        _manifest("Future", api_line="requires_terrarium_api = 2"))
+    reg = BitRegistry.scan((tmp_path,))
+    assert "Future" not in reg.packages
+    assert "2" in reg.errors[0].message and "1" in reg.errors[0].message
+
+
+def test_api_refusal_is_package_scoped(tmp_path):
+    for name, line in (("Good", "requires_terrarium_api = 1"),
+                       ("Bad", "requires_terrarium_api = 99")):
+        pkg = tmp_path / name.lower()
+        pkg.mkdir()
+        (pkg / "bit.toml").write_text(_manifest(name, api_line=line))
+    reg = BitRegistry.scan((tmp_path,))
+    assert "Good" in reg.packages and "Bad" not in reg.packages
+
+
+def test_declared_asset_must_exist(tmp_path):
+    pkg = tmp_path / "a"
+    pkg.mkdir()
+    (pkg / "bit.toml").write_text(
+        _manifest("A") + '\n[assets]\nchime = "assets/chime.wav"\n')
+    reg = BitRegistry.scan((tmp_path,))
+    assert "A" not in reg.packages
+    assert "chime" in reg.errors[0].message
+
+
+def test_present_asset_discovers(tmp_path):
+    pkg = tmp_path / "a"
+    (pkg / "assets").mkdir(parents=True)
+    (pkg / "assets" / "chime.wav").write_bytes(b"RIFF")
+    (pkg / "bit.toml").write_text(
+        _manifest("A") + '\n[assets]\nchime = "assets/chime.wav"\n')
+    reg = BitRegistry.scan((tmp_path,))
+    assert "A" in reg.packages and not reg.errors
+
+
+def test_symlink_escape_refused(tmp_path):
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"RIFF")
+    pkg = tmp_path / "a"
+    (pkg / "assets").mkdir(parents=True)
+    (pkg / "assets" / "chime.wav").symlink_to(outside)
+    (pkg / "bit.toml").write_text(
+        _manifest("A") + '\n[assets]\nchime = "assets/chime.wav"\n')
+    reg = BitRegistry.scan((tmp_path,))
+    assert "A" not in reg.packages
+    assert "escapes" in reg.errors[0].message
+
+
+def _asset_pkg(tmp_path):
+    pkg = tmp_path / "a"
+    (pkg / "assets").mkdir(parents=True)
+    (pkg / "assets" / "chime.wav").write_bytes(b"RIFF")
+    (pkg / "bit.toml").write_text(
+        _manifest("A") + '\n[assets]\nchime = "assets/chime.wav"\n')
+    return pkg
+
+
+def test_resolve_config_stamps_assets_root(tmp_path):
+    pkg = _asset_pkg(tmp_path)
+    reg = BitRegistry.scan((tmp_path,))
+    config = reg.resolve_config("A")
+    assert config.asset_path("chime") == pkg / "assets" / "chime.wav"
+    # override branch stamps too
+    config2 = reg.resolve_config("A", {"console": {"notes": "x"}})
+    assert config2.asset_path("chime") == pkg / "assets" / "chime.wav"
+
+
+def test_bit_package_asset_path(tmp_path):
+    pkg = _asset_pkg(tmp_path)
+    reg = BitRegistry.scan((tmp_path,))
+    assert reg.packages["A"].asset_path("chime") == pkg / "assets" / "chime.wav"
+
+
+def test_asset_path_unknown_key_raises(tmp_path):
+    _asset_pkg(tmp_path)
+    reg = BitRegistry.scan((tmp_path,))
+    with pytest.raises(ManifestError) as exc:
+        reg.resolve_config("A").asset_path("nope")
+    assert "nope" in str(exc.value)
+
+
+def test_asset_path_with_no_root_raises():
+    config = parse_manifest(
+        '[bit]\nname = "X"\nentry = "x:X"\nrequires_terrarium_api = 1\n'
+        '\n[assets]\nchime = "assets/chime.wav"\n', source="t")
+    with pytest.raises(ManifestError):
+        config.asset_path("chime")

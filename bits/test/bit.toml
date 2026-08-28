@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "Durable reference/regression fixture: scored player + jam jammer"
 entry = "test_bit:TestBit"
 kind = "tool"
+requires_terrarium_api = 1
 
 [launch]
 room_types = ["TEST", "DEMO"]

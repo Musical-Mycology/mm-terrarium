@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import tomllib
 from dataclasses import dataclass, field, fields, replace
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class BitIdentity:
     entry: str = ""
     kind: str = "game"
     author: str = ""
-    min_terrarium: str = ""
+    requires_terrarium_api: int | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,24 @@ class BitConfig:
     rhythm: RhythmConfig | None = None
     ambient: AmbientConfig | None = None
     extras: dict = field(default_factory=dict)
+    # Stamped by BitRegistry.resolve_config, never parsed from the manifest:
+    # the absolute package directory asset paths resolve against. None means
+    # "location unknown" and asset_path refuses rather than guessing.
+    assets_root: Path | None = None
+
+    def asset_path(self, key: str) -> Path:
+        for akey, rel in self.assets:
+            if akey == key:
+                if self.assets_root is None:
+                    raise ManifestError(
+                        source=self.identity.name, key=f"assets.{key}",
+                        message="no assets_root: config was not resolved "
+                                "through a BitRegistry")
+                return self.assets_root / rel
+        raise ManifestError(
+            source=self.identity.name, key=f"assets.{key}",
+            message=f"no such asset; declared: "
+                    f"{sorted(k for k, _ in self.assets)}")
 
     def node_for(self, role: str) -> str | None:
         for node_role, node in self.launch.nodes:
@@ -152,7 +171,7 @@ def _warn_unknown_keys(table: dict, known: set[str], *, source: str, prefix: str
 
 def _parse_identity(raw: dict, *, source: str) -> BitIdentity:
     known = {"name", "version", "description", "entry", "kind", "author",
-             "min_terrarium"}
+             "requires_terrarium_api"}
     _warn_unknown_keys(raw, known, source=source, prefix="bit")
 
     name = _get(raw, "name", str, "", source=source, prefix="bit")
@@ -180,8 +199,8 @@ def _parse_identity(raw: dict, *, source: str) -> BitIdentity:
         entry=entry,
         kind=kind,
         author=_get(raw, "author", str, "", source=source, prefix="bit"),
-        min_terrarium=_get(raw, "min_terrarium", str, "", source=source,
-                            prefix="bit"),
+        requires_terrarium_api=_get(raw, "requires_terrarium_api", int, None,
+                                     source=source, prefix="bit"),
     )
 
 
@@ -334,7 +353,19 @@ def parse_manifest(text: str, *, source: str) -> BitConfig:
         _get(results_raw, "keys", list, [], source=source, prefix="results"))
 
     assets_raw = _get(doc, "assets", dict, {}, source=source, prefix="")
-    assets = tuple(sorted(assets_raw.items())) if isinstance(assets_raw, dict) else ()
+    assets_items = []
+    for akey, aval in sorted(assets_raw.items()):
+        if not isinstance(aval, str):
+            raise ManifestError(
+                source=source, key=f"assets.{akey}",
+                message=f"expected str path, got {type(aval).__name__}")
+        p = PurePosixPath(aval)
+        if p.is_absolute() or ".." in p.parts:
+            raise ManifestError(
+                source=source, key=f"assets.{akey}",
+                message="must be a package-relative path with no '..'")
+        assets_items.append((akey, aval))
+    assets = tuple(assets_items)
 
     rhythm = None
     if "rhythm" in doc:

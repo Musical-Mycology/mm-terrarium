@@ -10,9 +10,10 @@ import importlib
 import sys
 import tomllib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from control.api_version import TERRARIUM_API
 from control.bit_config import BitConfig, ManifestError, merge_overrides, parse_manifest
 
 _DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "bits"
@@ -24,6 +25,12 @@ class BitPackage:
     config: BitConfig
     path: Path
     import_root: str
+
+    def asset_path(self, key: str) -> Path:
+        return self.resolved_config().asset_path(key)
+
+    def resolved_config(self) -> BitConfig:
+        return replace(self.config, assets_root=self.path)
 
 
 @dataclass
@@ -102,6 +109,36 @@ class BitRegistry:
                     registry.errors.append(PackageError(path=source, message=str(exc)))
                     continue
 
+                declared = config.identity.requires_terrarium_api
+                if declared is None:
+                    registry.errors.append(PackageError(
+                        path=source,
+                        message="[bit.requires_terrarium_api] required as of "
+                                f"Terrarium API v{TERRARIUM_API}"))
+                    continue
+                if declared != TERRARIUM_API:
+                    registry.errors.append(PackageError(
+                        path=source,
+                        message=f"requires Terrarium API {declared}, this "
+                                f"engine provides {TERRARIUM_API}"))
+                    continue
+
+                asset_error = None
+                for akey, rel in config.assets:
+                    target = pkg_dir / rel
+                    if not target.is_file():
+                        asset_error = f"declared asset {akey!r} missing: {rel}"
+                        break
+                    resolved = target.resolve()
+                    if not resolved.is_relative_to(pkg_dir.resolve()):
+                        asset_error = (f"declared asset {akey!r} escapes the "
+                                       f"package directory: {rel}")
+                        break
+                if asset_error is not None:
+                    registry.errors.append(
+                        PackageError(path=source, message=asset_error))
+                    continue
+
                 import_root = (
                     f"bits.{pkg_dir.name}" if is_default_root else pkg_dir.name
                 )
@@ -149,9 +186,10 @@ class BitRegistry:
     def resolve_config(self, name: str, overrides: dict | None = None) -> BitConfig:
         pkg = self.packages[name]
         if not overrides:
-            return pkg.config
-        return merge_overrides(pkg.config, overrides,
-                                source=str(pkg.path / "bit.toml"))
+            return pkg.resolved_config()
+        merged = merge_overrides(pkg.config, overrides,
+                                  source=str(pkg.path / "bit.toml"))
+        return replace(merged, assets_root=pkg.path)
 
     def _role_summary(self, name: str, config) -> dict | None:
         """Best-effort scored/jam summary for the Load picker. Instantiates

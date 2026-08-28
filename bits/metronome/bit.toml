@@ -5,6 +5,7 @@ description = "Call-and-response rhythm game"
 entry = "metronome_bit:MetronomeBit"
 kind = "r_game"
 author = "Musical Mycology"
+requires_terrarium_api = 1
 
 [launch]
 room_types = ["DEMO"]
