@@ -350,6 +350,14 @@ class GameServer:
             # build role_table per property access, so a fresh call could
             # return different Role objects than the ones counts track.
             role = self.registration.role_table.roles[result.role]
+            # Resolved for every granted non-ROOM join, not just requires-
+            # bearing roles: event-trigger thresholds are a property of the
+            # carried instrument's server-owned detection contract,
+            # independent of whether this role also gates on a slot (e.g.
+            # TestBit's requires-less "jammer" role still needs its
+            # carrier's tap/shake thresholds).
+            info = self.devices.get(dev)
+            carried = getattr(info, "carried", None) or TUNESHROOM
             if role.requires is not None:
                 # requires names a declared or implicit slot (Task 5's
                 # load-time validation guarantees this). The implicit
@@ -359,8 +367,6 @@ class GameServer:
                 # carrier device joining this role. req is None means
                 # exactly that case, so treat it as satisfied.
                 req = self._slot_requirements.get(role.requires)
-                info = self.devices.get(dev)
-                carried = getattr(info, "carried", None) or TUNESHROOM
                 reason = satisfies(carried, req) if req is not None else None
                 if req is not None and reason is not None:
                     self.registration.release(dev)
@@ -374,8 +380,7 @@ class GameServer:
                 terrarium_config_version=self.provenance.get(
                     "terrarium_config_version"),
                 slot=result.slot, instrument=result.instrument,
-                event_triggers=carried.event_triggers
-                if role.requires is not None else ())
+                event_triggers=carried.event_triggers)
             try:
                 self.bit.on_join(dev, result.role)
             except Exception:

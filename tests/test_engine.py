@@ -207,6 +207,24 @@ def test_join_granted_blob_omits_triggers_for_carried_instrument_without_any():
     assert "triggers" not in result.config
 
 
+def test_requires_less_role_join_blob_still_carries_event_triggers():
+    """Fix round 1: event-trigger thresholds are a property of the carried
+    instrument's server-owned detection contract, independent of slot
+    gating -- TestBit's jammer role has no Role.requires at all, but a
+    device joining it still needs its carrier's tap/shake thresholds."""
+    server = make_server()
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.load_bit("test_bit")
+    result = server.join("ie1", "TEST_JAM_NODE")
+    assert result.granted
+    assert result.slot is None
+    assert result.instrument is None
+    assert result.config["triggers"] == {
+        "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
+        "shake": {"peak_g": 2.0, "window_ms": 200},
+    }
+
+
 def test_room_join_blob_carries_no_triggers():
     binding = RoomBindingRegistry()
     server = GameServer(bit_registry={"RoomCapableBit": RoomCapableBit},
@@ -449,6 +467,10 @@ def test_granted_join_carries_composed_config_blob():
         },
         "uses": [],
         "samples": [],
+        "triggers": {
+            "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
+            "shake": {"peak_g": 2.0, "window_ms": 200},
+        },
     }
 
 
