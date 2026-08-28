@@ -31,9 +31,9 @@ def _step_view(step) -> dict:
             "status": status, "data1": data1, "data2": data2}
 
 
-def function_view(function_decl) -> dict:
-    """One declared function, as the Console draws its card."""
+def _scripted_view(function_decl) -> dict:
     return {
+        "kind": "scripted",
         "name": function_decl.name,
         "description": function_decl.description,
         "target": function_decl.target.name,
@@ -47,21 +47,67 @@ def function_view(function_decl) -> dict:
     }
 
 
-def functions_view(function_table) -> list[dict]:
-    """Every declared SCRIPTED function, in declaration order. Empty when no
-    Bit is loaded, which the panel renders as "No functions declared".
+def _generator_view(function_decl) -> dict:
+    spec = function_decl.generator
+    return {
+        "kind": "generator",
+        "name": function_decl.name,
+        "description": function_decl.description,
+        "lane": {"dev": spec.dev, "status": spec.status, "data1": spec.data1},
+        "waveform": spec.waveform,
+        "period": float(spec.period),
+        "lo": spec.lo,
+        "hi": spec.hi,
+    }
 
-    GENERATOR and STREAM functions are not yet rendered here -- the Console
-    only understands the SCRIPTED card shape (target/condition/script) today.
-    Kind-tagged cards for the other kinds are a later Console slice (see
+
+def _stream_output_view(output) -> dict:
+    return {
+        "dev": output.dev,
+        "status": output.status,
+        "data1": output.data1,
+        "out_lo": output.out_lo,
+        "out_hi": output.out_hi,
+        "mode": output.mode,
+    }
+
+
+def _stream_view(function_decl) -> dict:
+    spec = function_decl.stream
+    return {
+        "kind": "stream",
+        "name": function_decl.name,
+        "description": function_decl.description,
+        "verb": spec.verb,
+        "arg": spec.arg,
+        "in_lo": spec.in_lo,
+        "in_hi": spec.in_hi,
+        "outputs": [_stream_output_view(output) for output in spec.outputs],
+    }
+
+
+def function_view(function_decl) -> dict:
+    """One declared function, as the Console draws its card. The shape is
+    kind-tagged: SCRIPTED keeps the original target/condition/script fields,
+    GENERATOR carries its lane/waveform/period/lo/hi, STREAM carries its
+    verb/arg/domain/outputs. See
     docs/superpowers/specs/2026-08-27-functions-and-trigger-rename-design.md
-    section 10 item 6); skipping them here rather than crashing is what lets
-    a Bit declare one without losing its Console panel meanwhile.
+    sections 6 and 8.
     """
+    if function_decl.kind is FunctionKind.GENERATOR:
+        return _generator_view(function_decl)
+    if function_decl.kind is FunctionKind.STREAM:
+        return _stream_view(function_decl)
+    return _scripted_view(function_decl)
+
+
+def functions_view(function_table) -> list[dict]:
+    """Every declared function, in declaration order, kind-tagged. Empty
+    when no Bit is loaded, which the panel renders as "No functions
+    declared"."""
     if function_table is None:
         return []
-    return [function_view(fn) for fn in function_table.functions.values()
-            if fn.kind is FunctionKind.SCRIPTED]
+    return [function_view(fn) for fn in function_table.functions.values()]
 
 
 def function_fired_view(record) -> dict:

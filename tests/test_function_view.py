@@ -17,11 +17,15 @@ from control.function_view import (
 from control.functions import (
     Condition,
     ConditionSource,
+    FunctionKind,
+    GeneratorSpec,
     ScriptStep,
     Function,
     FunctionFired,
     FunctionTable,
     FunctionTarget,
+    StreamOutput,
+    StreamSpec,
 )
 
 SWEEP = Function(
@@ -40,14 +44,69 @@ FLASH = Function(
     script=(ScriptStep(0.0, PlayCue(TARGET, "click", "")),))
 
 
+GLOW = Function(
+    name="glow", description="ambient breathing glow",
+    kind=FunctionKind.GENERATOR,
+    generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                            waveform="triangle", period=12.0, lo=0, hi=127))
+
+TILT = Function(
+    name="tilt_wash", description="tilt drives the wash brightness",
+    kind=FunctionKind.STREAM,
+    stream=StreamSpec(verb="tilt", arg=0, in_lo=-90.0, in_hi=90.0,
+                      outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),
+                               StreamOutput(ROOM, 0xB0, 11, 127.0, 0.0,
+                                          mode="abs"))))
+
+
 def test_a_function_serializes_its_declaration():
     view = function_view(SWEEP)
+    assert view["kind"] == "scripted"
     assert view["name"] == "play_aurora"
     assert view["description"] == "A slow aurora sweep across the Room"
     assert view["target"] == "ROOM"
     assert view["condition"] == {
         "name": "round_won", "description": "User wins a round",
         "source": "bit-adjudicated", "verb": None}
+
+
+def test_a_generator_function_serializes_its_declaration():
+    assert function_view(GLOW) == {
+        "kind": "generator",
+        "name": "glow",
+        "description": "ambient breathing glow",
+        "lane": {"dev": ROOM, "status": 0xB0, "data1": 74},
+        "waveform": "triangle",
+        "period": 12.0,
+        "lo": 0,
+        "hi": 127,
+    }
+
+
+def test_a_stream_function_serializes_its_declaration():
+    assert function_view(TILT) == {
+        "kind": "stream",
+        "name": "tilt_wash",
+        "description": "tilt drives the wash brightness",
+        "verb": "tilt",
+        "arg": 0,
+        "in_lo": -90.0,
+        "in_hi": 90.0,
+        "outputs": [
+            {"dev": TARGET, "status": 0xB0, "data1": 74,
+             "out_lo": 0.0, "out_hi": 127.0, "mode": "linear"},
+            {"dev": ROOM, "status": 0xB0, "data1": 11,
+             "out_lo": 127.0, "out_hi": 0.0, "mode": "abs"},
+        ],
+    }
+
+
+def test_functions_view_returns_all_kinds_in_declaration_order():
+    table = FunctionTable(functions={
+        "play_aurora": SWEEP, "glow": GLOW, "tilt_wash": TILT})
+    view = functions_view(table)
+    assert [v["name"] for v in view] == ["play_aurora", "glow", "tilt_wash"]
+    assert [v["kind"] for v in view] == ["scripted", "generator", "stream"]
 
 
 def test_a_light_step_is_serialized_field_by_field():

@@ -74,12 +74,18 @@ def _function_view(fn) -> dict:
     }
 
 
+def _event_trigger_view(trigger) -> dict:
+    return {"name": trigger.name, "thresholds": dict(trigger.thresholds)}
+
+
 def _instrument_view(instrument) -> dict:
     return {
         "name": instrument.name,
         "capabilities": sorted(instrument.capabilities),
         "functions": [_function_view(fn) for fn in instrument.functions],
         "accepted_cues": list(instrument.accepted_cues),
+        "event_triggers": [_event_trigger_view(trigger)
+                           for trigger in instrument.event_triggers],
     }
 
 

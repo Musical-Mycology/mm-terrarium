@@ -14,7 +14,8 @@ const ROOM = {
       url: "http://sim-room-main.local/surface",
       instrument: { name: "generic_surface",
                     capabilities: ["audio.flsyn", "light.surface"],
-                    functions: [], accepted_cues: ["midi", "solid"] } },
+                    functions: [], accepted_cues: ["midi", "solid"],
+                    event_triggers: [{ name: "tap", thresholds: { z_delta: 2.5 } }] } },
     { name: "accent", pixel_count: 30, channel_start: 180, channel_count: 90,
       zones: [{ name: "accent.low", start: 0, count: 15 },
               { name: "accent.high", start: 15, count: 15 }], dev: null, url: null,
@@ -63,6 +64,10 @@ const ROOM = {
   assert.ok(card.innerHTML.includes("light.surface"));
   assert.ok(card.innerHTML.includes("audio.flsyn"));
   assert.ok(card.innerHTML.includes("generic_surface"));
+  // event triggers (Task 8's Instrument.event_triggers) render read-only
+  // alongside capabilities on the fixture's instrument tag row.
+  assert.ok(card.innerHTML.includes("tap"));
+  assert.ok(card.innerHTML.includes("z_delta:2.5"));
 
   // a controllers-only change must NOT rebuild fixture strips (rule 1/3):
   const stripBefore = surface._canvasFor("sim-room-main");

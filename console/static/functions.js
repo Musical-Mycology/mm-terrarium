@@ -111,7 +111,60 @@ function applyFired(card, line, fired) {
   }
 }
 
-function buildCard(fn) {
+function laneText(lane) {
+  return `${lane.dev}   status:${lane.status}   cc:${lane.data1}`;
+}
+
+function outputText(output) {
+  return `${output.dev}   status:${output.status}   cc:${output.data1}   `
+    + `[${output.out_lo}, ${output.out_hi}]   ${output.mode}`;
+}
+
+function buildGeneratorCard(fn) {
+  const card = document.createElement("div");
+  card.className = "fn";
+
+  const head = mk("div", "fnhead");
+  head.appendChild(mk("h3", null, fn.name));
+  head.appendChild(mk("span", "grow"));
+  head.appendChild(mk("span", "chip dim kind", "generator"));
+  card.appendChild(head);
+
+  card.appendChild(mk("p", "desc", fn.description));
+
+  const decl = mk("div", "script mono");
+  decl.appendChild(mk("div", "step", laneText(fn.lane)));
+  decl.appendChild(mk("div", "step",
+    `waveform:${fn.waveform}   period:${fn.period}s   [${fn.lo}, ${fn.hi}]`));
+  card.appendChild(decl);
+
+  return card;
+}
+
+function buildStreamCard(fn) {
+  const card = document.createElement("div");
+  card.className = "fn";
+
+  const head = mk("div", "fnhead");
+  head.appendChild(mk("h3", null, fn.name));
+  head.appendChild(mk("span", "grow"));
+  head.appendChild(mk("span", "chip dim kind", "stream"));
+  card.appendChild(head);
+
+  card.appendChild(mk("p", "desc", fn.description));
+
+  const decl = mk("div", "script mono");
+  decl.appendChild(mk("div", "step",
+    `verb:${fn.verb}   arg:${fn.arg}   in:[${fn.in_lo}, ${fn.in_hi}]`));
+  for (const output of fn.outputs) {
+    decl.appendChild(mk("div", "step", outputText(output)));
+  }
+  card.appendChild(decl);
+
+  return card;
+}
+
+function buildScriptedCard(fn) {
   const card = document.createElement("div");
   card.className = "fn";
 
@@ -177,6 +230,15 @@ function buildCard(fn) {
   card._firedLine = firedLine;
 
   return card;
+}
+
+// GENERATOR and STREAM cards render their declaration lines only -- no Fire
+// button (they never accept an admin-manual fire, see GameServer.fire_function's
+// kind refusal) and no fired-line (function_fired is scoped to SCRIPTED fires).
+function buildCard(fn) {
+  if (fn.kind === "generator") return buildGeneratorCard(fn);
+  if (fn.kind === "stream") return buildStreamCard(fn);
+  return buildScriptedCard(fn);
 }
 
 function render(list) {

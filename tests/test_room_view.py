@@ -5,6 +5,7 @@ from control.cues import ROOM
 from control.functions import Function, FunctionKind, GeneratorSpec
 from control.instrument import Instrument
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from control.triggers import EventTrigger
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.room_view import room_view
 from control.rooms import Room, room_role
@@ -107,7 +108,31 @@ def test_fixtures_carry_their_instrument():
             "capabilities": ["audio.flsyn", "light.surface"],
             "functions": [],
             "accepted_cues": ["midi", "play", "solid", "mute"],
+            "event_triggers": [],
         }
+
+
+def test_fixture_instrument_renders_declared_event_triggers():
+    sensing = Instrument(
+        name="sensing_surface",
+        capabilities=frozenset({"light.surface"}),
+        accepted_cues=("midi",),
+        event_triggers=(
+            EventTrigger(name="tap", description="a sharp accelerometer spike",
+                        thresholds={"z_delta": 2.5}),
+        ),
+    )
+    profile = RoomProfile(surface_id="room_sense", fixtures=(
+        RoomFixture(name="main", color_order="GRB",
+                   blocks=(RoomBlock("main", 0, 10),),
+                   zones=(), instrument=sensing),))
+    room = Room(name="SENSE", profile=profile, node_id="ROOM_SENSE_NODE")
+    room.bound = {"main": "sim-sense-main"}
+
+    view = room_view(room, profile, None, {})
+
+    assert view["fixtures"][0]["instrument"]["event_triggers"] == [
+        {"name": "tap", "thresholds": {"z_delta": 2.5}}]
 
 
 def test_fixture_instrument_renders_declared_generator_functions():

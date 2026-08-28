@@ -201,6 +201,28 @@ def test_functions_changed_event_shape():
         "event": "functions_changed", "functions": [{"name": "x"}]}
 
 
+def test_functions_changed_event_wire_bytes_for_a_generator_function():
+    """Pins the enriched, kind-tagged functions payload on the wire (Task 11):
+    a GENERATOR Function's card carries lane/waveform/period/lo/hi, not the
+    SCRIPTED target/condition/script shape."""
+    from control.cues import ROOM
+    from control.function_view import function_view
+    from control.functions import Function, FunctionKind, GeneratorSpec
+    from control.wire_json import dumps
+
+    glow = Function(
+        name="glow", description="ambient breathing glow",
+        kind=FunctionKind.GENERATOR,
+        generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                waveform="triangle", period=12.0, lo=0, hi=127))
+    event = protocol.functions_changed_event([function_view(glow)])
+    assert dumps(event) == (
+        '{"event": "functions_changed", "functions": [{"kind": "generator", '
+        '"name": "glow", "description": "ambient breathing glow", '
+        '"lane": {"dev": "@room", "status": 176, "data1": 74}, '
+        '"waveform": "triangle", "period": 12.0, "lo": 0, "hi": 127}]}')
+
+
 def test_function_fired_event_shape():
     fired = {"name": "x", "fired_by": "admin-manual"}
     assert protocol.function_fired_event(fired) == {

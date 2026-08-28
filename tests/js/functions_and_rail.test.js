@@ -3,19 +3,25 @@ const assert = require("node:assert");
 const { byId, FakeSocket } = require("./_dom_stub.js");
 
 const FUNCTIONS = [
-  { name: "fireworks_player", description: "Celebratory flashes", target: "DEVICE",
+  { kind: "scripted", name: "fireworks_player", description: "Celebratory flashes", target: "DEVICE",
     condition: { name: "phrase_success", description: "Player matches the call phrase",
                  source: "bit-adjudicated", verb: null },
     script: [{ offset: 0.0, kind: "light", dev: "@target", status: 176, data1: 70, data2: 81 },
              { offset: 1.4, kind: "light", dev: "@target", status: 176, data1: 70, data2: 0 }] },
-  { name: "finale", description: "Closing sweep", target: "ROOM",
+  { kind: "scripted", name: "finale", description: "Closing sweep", target: "ROOM",
     condition: { name: "run_complete", description: "All cycles finished",
                  source: "bit-adjudicated", verb: null },
     script: [{ offset: 0.0, kind: "play", dev: "@target", name: "sweep", params: {} }] },
-  { name: "flash_device", description: "Operator-chosen flash", target: "SURFACE",
+  { kind: "scripted", name: "flash_device", description: "Operator-chosen flash", target: "SURFACE",
     condition: { name: "admin_fire", description: "Fired by an operator",
                  source: "admin-manual", verb: null },
     script: [{ offset: 0.0, kind: "light", dev: "@target", status: 176, data1: 70, data2: 81 }] },
+  { kind: "generator", name: "drift", description: "ambient breathing glow",
+    lane: { dev: "@room", status: 176, data1: 74 },
+    waveform: "triangle", period: 12.0, lo: 0, hi: 127 },
+  { kind: "stream", name: "tilt_hue", description: "tilt drives the hue lane",
+    verb: "tilt", arg: 0, in_lo: -90.0, in_hi: 90.0,
+    outputs: [{ dev: "@target", status: 176, data1: 74, out_lo: 0.0, out_hi: 127.0, mode: "linear" }] },
 ];
 
 (async () => {
@@ -89,6 +95,40 @@ const FUNCTIONS = [
          declared_source: "bit-adjudicated", dev: null, devs: ["sim-room"],
          at: 12.5, steps: 1 } });
   assert.ok(mount.innerHTML.includes("Admin manual"));
+
+  // kind-tagged cards: a snapshot with all three kinds renders three cards;
+  // only the scripted one has a Fire button; generator/stream render their
+  // declaration lines with none.
+  assert.strictEqual(grid.children.length, 5, "one card per declared function");
+  const driftCard = functions._cardFor("drift");
+  assert.ok(driftCard, "generator card should render");
+  assert.ok(driftCard.innerHTML.includes("triangle"));
+  assert.ok(driftCard.innerHTML.includes("12"));
+  assert.ok(!driftCard.children.some((c) => c.tagName === "button" && c.textContent === "Fire"),
+    "generator card must not offer a Fire button");
+  const tiltCard = functions._cardFor("tilt_hue");
+  assert.ok(tiltCard, "stream card should render");
+  assert.ok(tiltCard.innerHTML.includes("tilt"));
+  assert.ok(tiltCard.innerHTML.includes("linear"));
+  assert.ok(!tiltCard.children.some((c) => c.tagName === "button" && c.textContent === "Fire"),
+    "stream card must not offer a Fire button");
+  const scriptedFireBtn = fireworksCard.children
+    .find((c) => c.className === "firerow").children
+    .find((c) => c.tagName === "button");
+  assert.ok(scriptedFireBtn && scriptedFireBtn.textContent === "Fire",
+    "scripted card keeps its Fire button");
+
+  // a function_fired patch on the scripted card leaves the generator and
+  // stream cards' children intact -- the single-card patch discipline is
+  // untouched by the new kinds.
+  const driftChildrenBefore = driftCard.children.length;
+  const tiltChildrenBefore = tiltCard.children.length;
+  send({ event: "function_fired", fired: { name: "fireworks_player", fired_by: "gesture-verb",
+         declared_source: "gesture-verb", dev: "ie1", devs: ["ie1"], at: 20.0, steps: 2 } });
+  assert.strictEqual(functions._cardFor("drift"), driftCard);
+  assert.strictEqual(functions._cardFor("tilt_hue"), tiltCard);
+  assert.strictEqual(driftCard.children.length, driftChildrenBefore);
+  assert.strictEqual(tiltCard.children.length, tiltChildrenBefore);
 
   // rail: registration meter, devices, log severities
   assert.ok(byId.get("registrationCard").innerHTML.includes("2/2"));

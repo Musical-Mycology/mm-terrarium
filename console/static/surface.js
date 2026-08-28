@@ -240,6 +240,12 @@ function instrumentTags(instrument) {
   for (const cue of instrument.accepted_cues || []) {
     row.appendChild(mk("span", "insttag cue", cue));
   }
+  for (const trig of instrument.event_triggers || []) {
+    const thresholds = Object.entries(trig.thresholds || {})
+      .map(([k, v]) => `${k}:${v}`).join(" ");
+    row.appendChild(mk("span", "insttag trigger",
+      thresholds ? `${trig.name} (${thresholds})` : trig.name));
+  }
   return row;
 }
 

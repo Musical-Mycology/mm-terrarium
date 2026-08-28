@@ -559,9 +559,14 @@ def test_no_frame_received_broadcasts_nothing():
 
 
 def test_snapshot_carries_the_loaded_bits_functions():
+    # TestBit now declares generator and stream Functions alongside its
+    # original scripted set (Task 10's kind-tagged fixtures), and
+    # functions_view returns every kind, not only SCRIPTED (Task 11).
     gs, srv, agent = _room_console()
     names = sorted(t["name"] for t in agent.snapshot()["functions"])
-    assert names == ["flash_device", "play_aurora", "stop", "win"]
+    assert names == ["drift", "flash_device", "jam_hue_neg", "jam_hue_pos",
+                     "jam_level_neg", "jam_level_pos", "play_aurora",
+                     "shake_hue", "stop", "tilt_hue", "win"]
 
 
 def test_snapshot_functions_is_empty_with_no_bit_loaded():
@@ -658,6 +663,20 @@ def test_a_refused_fire_is_surfaced_as_an_error_event():
     errors = [msg for _client, msg in srv.sent
               if msg.get("event") == "error"]
     assert "unknown function" in errors[0]["message"]
+
+
+def test_a_fire_of_a_non_scripted_function_is_surfaced_as_an_error_event():
+    """GameServer.fire_function refuses a GENERATOR/STREAM Function with a
+    'not scripted' reason (control/engine.py); this exercises the existing
+    error-event seam end to end rather than adding new plumbing -- the
+    handler already forwards fire_function's refusal reason verbatim."""
+    gs, srv, agent = _room_console()
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "fire_function", "name": "drift"})
+    agent.poll()
+    errors = [msg for _client, msg in srv.sent
+              if msg.get("event") == "error"]
+    assert "not scripted" in errors[0]["message"]
 
 
 def test_an_unparseable_fire_command_is_surfaced_not_dropped():
