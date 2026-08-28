@@ -22,8 +22,11 @@ pytest.importorskip("luxaeterna")
 from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.boot_config import BootConfig
+from control.cues import ROOM
 from control.engine import GameServer
 from control.audio import AudioBridge, FakePool
+from control.functions import Function, FunctionKind, GeneratorSpec
+from control.generator_runner import GeneratorRunner
 from control.instrument import Instrument
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile
@@ -49,6 +52,18 @@ _AMBIENT_ARRAY = Instrument(
                                      "target": "primary"}]},
     ugen_manifest={"instruments": [{"instrument": "flsyn", "program": 89,
                                     "drone": {"key": 48, "velocity": 80}}]},
+    # The shipped terrarium.toml instruments declare no generators (Task 5's
+    # brief: shipped visuals unchanged) -- this test-local fixture DOES, so
+    # the ambient leg below can prove the Room breathes on cc:74 before any
+    # Bit is loaded (spec section 6/7), the same lane TestBit's own "drift"
+    # generator later drives once a Bit takes the Room.
+    functions=(Function(
+        name="ambient_drift",
+        description="Ambient hue drift across the Room with no Bit loaded",
+        kind=FunctionKind.GENERATOR,
+        generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                waveform="triangle", period=12.0,
+                                lo=0, hi=127)),),
 )
 _AMBIENT_DEMO_PROFILE = RoomProfile(surface_id="room_demo_ambient", fixtures=(
     RoomFixture(name="array", color_order="GRB",
@@ -112,7 +127,18 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     # Room's audio grant) is only visible through this seam.
     audio_pool = FakePool()
     room_audio = AudioBridge(audio_pool)
-    dl_agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
+    # A controllable clock, not time.monotonic: the ambient-generator leg
+    # below needs to advance elapsed time deterministically across two
+    # dl_agent.poll() calls and read back two DIFFERENT triangle-wave
+    # values off the same cc:74 lane.
+    clock_value = [0.0]
+    dl_agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio,
+                              clock=lambda: clock_value[0])
+    # Same fake clock for GameServer's own `at` computations (generator/
+    # script dispatch timestamps): the suppression-window arithmetic below
+    # compares a fire's `at` against dl_agent's feed-now check, and both
+    # sides need to agree on what time it is.
+    gs._clock = lambda: clock_value[0]
     terrarium.add_observer(_RoomWiring(dl_agent, terrarium))
 
     # Spy on every manifest _setup_room actually parses, so the ambient leg
@@ -209,20 +235,100 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     ambient_voice = audio_pool.acquired[-1]
     assert any(call[0] == "note_on" for call in ambient_voice.sent)
 
+    # --- ambient generator leg: the Room breathes on cc:74 before any Bit
+    # is loaded, with no session poked directly -- two ticks of the
+    # engine-owned ambient GeneratorRunner (spec section 6/7), read back
+    # off terrarium.room_bridge, the same sink a Bit's own generator later
+    # drives. ---
+    room_bridge = terrarium.room_bridge
+    clock_value[0] = 3.0
+    dl_agent.poll()
+    ambient_value_at_3 = room_bridge.controllers.get(74)
+    clock_value[0] = 6.0
+    dl_agent.poll()
+    ambient_value_at_6 = room_bridge.controllers.get(74)
+    assert ambient_value_at_3 is not None and ambient_value_at_6 is not None
+    assert ambient_value_at_3 != ambient_value_at_6
+
     srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
     agent.poll()
     assert dl_agent._room_light is not None
     assert "rainbow" in _last_instruments()   # the Bit's declaration takes over
+    # TestBit's own declared "drift" generator supersedes the ambient one --
+    # _setup_room drops the ambient runner the moment a Bit's ROOM role is
+    # composed (last-start-wins, spec section 7).
+    assert dl_agent._ambient_generators is None
 
     srv.deliver("c1", {"command": "run"})
     agent.poll()
     assert gs.state.name == "RUNNING"
+
+    # --- TestBit's declared generator drives cc:74 during RUNNING, engine-
+    # dispatched (not through dl_agent.poll()): gs.tick() feeds it straight
+    # through GameServer.on_light_cue into the same room_bridge. clock_value
+    # is held at 6.0 (left where the ambient leg above last set it) so every
+    # `at`/`when` below shares one deterministic instant until advanced. ---
+    gs.tick(1.0)   # run_elapsed=1.0
+    assert gs.state.name == "RUNNING"
+    drift_spec = TestBit().function_table.functions["drift"].generator
+    assert room_bridge.controllers.get(74) == GeneratorRunner.value(drift_spec, 1.0)
+
+    # --- a play_aurora fire (bit-adjudicated in real play; fired manually
+    # here as the same test-local shortcut test_engine_functions.py uses)
+    # overlay-suppresses the drift lane for the script's span, then the
+    # drift resumes once the window closes -- spec section 4/7's "overlay,
+    # not kill". ---
+    assert gs.fire_function("play_aurora", fired_by="admin-manual", dev=ROOM) is None
+    # play_aurora's own offset-0.0 step (value 127) is due immediately
+    # (when == now == 6.0) and lands synchronously on the same lane.
+    assert room_bridge.controllers.get(74) == 127
+    gs.tick(0.1)   # run_elapsed=1.1, at=6.0 -- still inside the 2.0s span
+    # The generator's own next tick would emit a different value here; it
+    # does not, because the lane is suppressed until at(6.0) + span(2.0).
+    assert room_bridge.controllers.get(74) == 127
+    gs.tick(0.05)   # run_elapsed=1.15, at=6.0 -- still suppressed
+    assert room_bridge.controllers.get(74) == 127
+
+    # Advance the shared clock past the suppression window (8.0) and drain
+    # play_aurora's two remaining deferred script steps (due at 6.5 and 8.0)
+    # through dl_agent.poll(), the same way a real device link would.
+    clock_value[0] = 9.0
+    dl_agent.poll()
+    assert room_bridge.controllers.get(74) == 0   # play_aurora's last step
+    gs.tick(0.05)   # run_elapsed=1.20, at=9.0 -- past the window, drift resumes
+    assert room_bridge.controllers.get(74) == GeneratorRunner.value(drift_spec, 1.20)
+
+    # --- a joined device's blob carries `triggers`: TUNESHROOM (the default
+    # carried instrument gs.join() grants when none is declared) ships its
+    # own event-trigger thresholds in the composed config (control/
+    # role_config.py's compose_role_config, Task 8/spec section 5). The
+    # jammer role is requires-less and unscored (registration for the
+    # scored "player" role is already closed mid-run) -- exactly the case
+    # the docstring calls out: thresholds ship for every granted non-ROOM
+    # join, slot requirement or not. ---
+    join_result = gs.join("jammer_dev", "TEST_JAM_NODE")
+    assert join_result.granted
+    assert join_result.config["triggers"] == {
+        "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
+        "shake": {"peak_g": 2.0, "window_ms": 200},
+    }
 
     gs.tick(3.0)   # TestBit's run duration elapses -> COMPLETING -> IDLE
     assert gs.state.name == "IDLE"
     assert gs.bit is None
     assert dl_agent._room_light is not None
     assert "aurora" in _last_instruments()   # ambient again once the Bit unloads
+    # --- ambient animation returns once the Bit unloads: two more ticks,
+    # two more distinct values, off the SAME lane the Bit's drift just
+    # supplied (spec section 7's resume-at-unload guarantee). ---
+    clock_value[0] = 20.0
+    dl_agent.poll()
+    ambient_value_at_20 = room_bridge.controllers.get(74)
+    clock_value[0] = 23.0
+    dl_agent.poll()
+    ambient_value_at_23 = room_bridge.controllers.get(74)
+    assert ambient_value_at_20 is not None and ambient_value_at_23 is not None
+    assert ambient_value_at_20 != ambient_value_at_23
     # The ambient drone re-grants a FRESH voice on the swap back (mirrors
     # test_ambient_audio_swaps_to_the_bits_drone_at_load's pool-count check);
     # this is the voice unload_room below must release.

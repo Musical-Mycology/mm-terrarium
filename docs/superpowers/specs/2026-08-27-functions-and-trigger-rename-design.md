@@ -432,4 +432,46 @@ Run together with the still-pending Spec 1 and Spec 2 checklists.
 
 ## Status
 
-Spec written 2026-08-27. Not yet implemented.
+Spec written 2026-08-27. Implemented 2026-08-27. Suite green at 1634
+passed, 1 skipped throughout.
+
+Deviations/rulings recorded during execution:
+
+- Baseline correction: the pre-branch suite was 1539 passed, 1 skipped,
+  not the 1529/1 this spec originally quoted.
+- `accepted_triggers` legacy key: the located config error stays;
+  `tests/test_vocabulary.py` carries a narrow `# legacy-vocabulary-ok`
+  line-marker exemption for it.
+- TestBit's drift generator is `lo=0 hi=127`, not the old `254*frac`
+  math -- that formula's `frac` maxed at 0.5, so its observed max was
+  127 already; the generator's `lo`/`hi` now say so directly.
+- `FireFunction` gained `at: float | None` (an explicit presentation
+  time). Discrete state-dependent beat cues (MetronomeBit's click
+  track/flashes/pulses) ride SCRIPTED Functions fired from `fires(at)`
+  at beat-grid times -- section 4's fires()-returns-FireFunctions-only
+  rule stands, and its claim that scripted Functions are the only
+  discrete-cue vehicle is realized through this seam, not an exception
+  to it.
+- Stream domain matching uses the RAW arg value; `jam_level` is a
+  paired one-sided linear-stream pair (no `mode="abs"` in TestBit);
+  `mode="abs"` remains in the vocabulary for a Bit that wants it.
+- Edge-clamp rule (engine-side): a value beyond a (verb, lane)'s domain
+  hull clamps to the nearest domain edge's function; interior gaps
+  between disjoint domains still drop. Section 5's "disjoint domains"
+  wording is refined: domains touching at a single shared endpoint are
+  legal, and the lower domain's function applies there.
+- `_validate_stream_lane_overlap` is scoped per verb.
+- Cross-fixture generator lane collisions are a located room-profile
+  error; ambient generator state clears on `unwire_room`.
+- Thresholds ship for ALL granted non-ROOM joins, requires-less roles
+  included (this spec's own full-cycle pin exercises the jammer role,
+  requires-less and unscored, to prove exactly this); ROOM joins ship
+  nothing.
+- TUNESHROOM's shake thresholds reuse the native TapDetector constants
+  (no native shake detector exists); provenance commented in code.
+- `MM_TERRARIUM.md` deep-dive sync happens at branch closeout,
+  separately, via `mm-deepdive-sync`.
+
+Also recorded: the Spec 1/Spec 2 live-Arco checklists remain unrun;
+this spec's section 11 checklist is pending and should run together
+with them.
