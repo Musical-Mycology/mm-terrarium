@@ -131,7 +131,8 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
                         room_name: str | None = None,
                         terrarium_config_version: str | None = None,
                         slot: str | None = None,
-                        instrument: str | None = None) -> dict:
+                        instrument: str | None = None,
+                        event_triggers: tuple = ()) -> dict:
     """The per-role config blob shipped in /ie<N>/role at adoption time
     (docs/control-gameserver-design.md, player flow step 3). Deep-copied so
     transport/Console consumers can never alias the Bit's declaration. The
@@ -147,7 +148,13 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
     slot and instrument stamp the requirement slot a granted join filled
     and the carried instrument's name that filled it (GameServer.join,
     Task 6); both are omitted for ROOM joins and requires-less roles, same
-    never-null discipline as the provenance stamps."""
+    never-null discipline as the provenance stamps.
+
+    event_triggers is the carried instrument's Task 8 EventTrigger tuple;
+    when non-empty it ships as config["triggers"] = {name: thresholds},
+    deep-copied so the device-side detector's server-declared thresholds can
+    never alias Instrument.event_triggers. Omitted entirely when empty --
+    same never-null discipline as every other stamp here."""
     light = deepcopy(role.light_manifest)
     light["bit_name"] = bit_name
     light["bit_version"] = bit_version
@@ -170,6 +177,9 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
         config["slot"] = slot
     if instrument is not None:
         config["instrument"] = instrument
+    if event_triggers:
+        config["triggers"] = {t.name: dict(t.thresholds)
+                              for t in event_triggers}
     return config
 
 

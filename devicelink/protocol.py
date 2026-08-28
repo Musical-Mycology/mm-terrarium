@@ -99,7 +99,21 @@ def _event(address: str, typespec: str, args: list,
 
 def role_event(dev: str, config: dict) -> dict:
     """The granted /<dev>/role blob, passed through verbatim -- it must stay
-    byte-identical to JoinResult.config."""
+    byte-identical to JoinResult.config (control/role_config.py's
+    compose_role_config). Optional keys, present only when the underlying
+    value is non-null/non-empty (never shipped as null):
+
+        room_name, terrarium_config_version -- Room provenance stamps.
+        slot, instrument -- the requirement slot a granted join filled and
+            the carried instrument's name that filled it.
+        triggers -- {event_trigger_name: {threshold_key: number}} for every
+            Task 8 EventTrigger the carried instrument declares (e.g.
+            Tuneshroom's "tap"/"shake"): the DEVICE runs the gesture
+            detector, the SERVER owns the numeric thresholds, so this key
+            ships them at adoption time instead of each client guessing its
+            own. Consuming this key on the mm-tuneshroom client is recorded
+            cross-repo follow-up, not yet implemented there.
+    """
     return _event(f"/{dev}/role", "b", [config])
 
 

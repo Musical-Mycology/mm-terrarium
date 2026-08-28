@@ -364,7 +364,9 @@ class GameServer:
                 room_name=self.provenance.get("room_name"),
                 terrarium_config_version=self.provenance.get(
                     "terrarium_config_version"),
-                slot=result.slot, instrument=result.instrument)
+                slot=result.slot, instrument=result.instrument,
+                event_triggers=carried.event_triggers
+                if role.requires is not None else ())
             try:
                 self.bit.on_join(dev, result.role)
             except Exception:

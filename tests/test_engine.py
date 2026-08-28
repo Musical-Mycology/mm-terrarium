@@ -180,6 +180,45 @@ def test_join_denied_when_no_bit_loaded():
     assert result.reason == "no Bit accepting registrations"
 
 
+def test_join_granted_blob_carries_default_carried_instruments_event_triggers():
+    server = make_server()
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.load_bit("test_bit")
+    result = server.join("ie1", "TEST_PLAYER_NODE")
+    assert result.granted
+    assert result.config["triggers"] == {
+        "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
+        "shake": {"peak_g": 2.0, "window_ms": 200},
+    }
+
+
+def test_join_granted_blob_omits_triggers_for_carried_instrument_without_any():
+    from control.instrument import Instrument
+    server = make_server()
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.load_bit("test_bit")
+    no_event_triggers = Instrument(
+        name="quiet_widget",
+        capabilities=frozenset({"light.pixels", "gesture.tilt"}),
+        accepted_cues=("midi",))
+    server.devices.get("ie1").carried = no_event_triggers
+    result = server.join("ie1", "TEST_PLAYER_NODE")
+    assert result.granted
+    assert "triggers" not in result.config
+
+
+def test_room_join_blob_carries_no_triggers():
+    binding = RoomBindingRegistry()
+    server = GameServer(bit_registry={"RoomCapableBit": RoomCapableBit},
+                        room_binding=binding)
+    server.room = make_room()
+    server.load_bit("RoomCapableBit")
+    binding.arm("TEST", "main", window_seconds=10.0)
+    result = server.join("sim-room", "ROOM_TEST_NODE")
+    assert result.granted
+    assert result.config is None
+
+
 def test_full_lifecycle_reaches_idle_and_releases_devices():
     server = make_server()
     released = []
