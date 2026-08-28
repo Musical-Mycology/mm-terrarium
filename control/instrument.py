@@ -8,6 +8,8 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 
+from control.functions import Function, FunctionKind, FunctionTable, validate_function_table
+
 CAPABILITY_VOCABULARY: frozenset[str] = frozenset({
     "light.pixels",    # addressable pixels of any shape
     "light.surface",   # a linear multi-zone surface (Room-style array)
@@ -45,7 +47,7 @@ class Instrument:
     name: str
     description: str = ""
     capabilities: frozenset[str] = frozenset()
-    functions: tuple[str, ...] = ()
+    functions: tuple[Function, ...] = ()
     accepted_cues: tuple[str, ...] = ()
     light_manifest: dict = field(default_factory=dict)
     ugen_manifest: dict = field(default_factory=dict)
@@ -76,6 +78,16 @@ def validate_instrument(instrument: Instrument) -> None:
         raise InstrumentError(
             f"instrument {instrument.name!r}: unknown accepted cue "
             f"kind(s) {bad}; known: {list(CUE_KINDS)}")
+    for fn in instrument.functions:
+        if not isinstance(fn, Function) or fn.kind is not FunctionKind.GENERATOR:
+            raise InstrumentError(
+                f"instrument {instrument.name!r}: only generator Functions "
+                f"may be declared on an instrument (v0)")
+    table = FunctionTable(functions={fn.name: fn for fn in instrument.functions})
+    try:
+        validate_function_table(table, verb_names=frozenset())
+    except ValueError as exc:
+        raise InstrumentError(f"instrument {instrument.name!r}: {exc}") from exc
 
 
 def satisfies(instrument: Instrument, requirement: InstrumentRequirement,
@@ -151,6 +163,5 @@ TUNESHROOM = Instrument(
     description="Handheld 12-LED Tuneshroom (8-ring + 4-stem)",
     capabilities=frozenset({"light.pixels", "audio.samples",
                             "gesture.tap", "gesture.tilt"}),
-    functions=("tap", "tilt"),
     accepted_cues=("midi", "play", "solid", "mute"),
 )

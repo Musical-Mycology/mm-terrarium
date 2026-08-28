@@ -1,6 +1,9 @@
 """The Room read model the Console renders. Pure dict builders, no engine
 imports, mirroring console/protocol.py."""
 
+from control.cues import ROOM
+from control.functions import Function, FunctionKind, GeneratorSpec
+from control.instrument import Instrument
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.room_view import room_view
@@ -105,6 +108,30 @@ def test_fixtures_carry_their_instrument():
             "functions": [],
             "accepted_cues": ["midi", "play", "solid", "mute"],
         }
+
+
+def test_fixture_instrument_renders_declared_generator_functions():
+    animated = Instrument(
+        name="animated_surface",
+        capabilities=frozenset({"light.surface"}),
+        accepted_cues=("midi",),
+        functions=(Function(
+            name="glow", description="ambient breathing glow",
+            kind=FunctionKind.GENERATOR,
+            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                    waveform="triangle", period=12.0,
+                                    lo=0, hi=127)),))
+    profile = RoomProfile(surface_id="room_anim", fixtures=(
+        RoomFixture(name="main", color_order="GRB",
+                   blocks=(RoomBlock("main", 0, 10),),
+                   zones=(), instrument=animated),))
+    room = Room(name="ANIM", profile=profile, node_id="ROOM_ANIM_NODE")
+    room.bound = {"main": "sim-anim-main"}
+
+    view = room_view(room, profile, None, {})
+
+    assert view["fixtures"][0]["instrument"]["functions"] == [
+        {"name": "glow", "kind": "generator", "lane": "cc:74", "period": 12.0}]
 
 
 def test_capability_carries_the_whole_concatenated_surface():

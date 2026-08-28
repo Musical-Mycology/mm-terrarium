@@ -776,6 +776,75 @@ def test_ambient_session_renders_nothing_when_fixtures_declare_no_ambient():
     assert agent._room_light is None
 
 
+def _animated_ambient_game_server():
+    """A DEMO-shaped Room whose one fixture's instrument declares a
+    GENERATOR Function on cc:74, no Bit loaded -- the fixture case Task 5's
+    brief carves out (terrarium.toml's shipped dev_strip stays unanimated;
+    this is the animated case the test fixtures carry)."""
+    from control.cues import ROOM
+    from control.functions import Function, FunctionKind, GeneratorSpec
+    from control.instrument import Instrument
+    from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+
+    animated = Instrument(
+        name="animated_surface",
+        capabilities=frozenset({"light.surface", "audio.flsyn"}),
+        accepted_cues=("midi",),
+        light_manifest={"instruments": [
+            {"instrument": "aurora", "target": "primary"}]},
+        ugen_manifest={"instruments": [
+            {"instrument": "flsyn", "program": 89,
+             "drone": {"key": 48, "velocity": 80}}]},
+        functions=(Function(
+            name="glow", description="ambient breathing glow",
+            kind=FunctionKind.GENERATOR,
+            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                    waveform="triangle", period=12.0,
+                                    lo=0, hi=127)),))
+    profile = RoomProfile(surface_id="room_anim", fixtures=(
+        RoomFixture(name="main", color_order="GRB",
+                   blocks=(RoomBlock("main", 0, 10),),
+                   zones=(RoomZone("all", 0, 10),), instrument=animated),))
+    gs = GameServer({"TestBit": TestBit})
+    # Named DEMO (not a fresh room type) so gs.load_bit("TestBit") below
+    # resolves TestBit's declared ROOM role via room_role_name("DEMO") --
+    # the swap this file's other ambient<->Bit tests already exercise.
+    gs.room = Room(name="DEMO", profile=profile, node_id="ROOM_ANIM_NODE")
+    gs.room.bound["main"] = "sim-anim-main"
+    return gs, profile
+
+
+def test_ambient_generator_feeds_the_room_session_on_tick():
+    gs, profile = _animated_ambient_game_server()
+    clock_value = [0.0]
+    room_bridge = RoomBridge()
+
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            clock=lambda: clock_value[0])
+
+    # period=12.0, lo=0, hi=127: at elapsed=3.0 (quarter cycle) the triangle
+    # waveform is a quarter of the way up -- frac=0.5, value=round(63.5)=64,
+    # matching GeneratorRunner.value's own contract.
+    clock_value[0] = 3.0
+    agent.poll()
+
+    assert room_bridge.controllers.get(74) == 64
+
+
+def test_ambient_generator_is_not_fed_once_a_bit_is_loaded():
+    gs, profile = _animated_ambient_game_server()
+    clock_value = [0.0]
+    room_bridge = RoomBridge()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            clock=lambda: clock_value[0])
+
+    gs.load_bit("TestBit")   # TestBit declares DEMO room_manifests -> ROOM role
+    assert agent._ambient_generators is None
+
+    clock_value[0] = 3.0
+    agent.poll()   # must not raise, and must not consult the dropped runner
+
+
 def test_load_bit_swaps_ambient_for_the_bits_room_declaration(monkeypatch):
     calls = _spy_on_light_manifest(monkeypatch)
     gs = _demo_room_no_bit_game_server()

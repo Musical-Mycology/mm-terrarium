@@ -2,11 +2,20 @@
 from dataclasses import dataclass
 
 import pytest
+from control.cues import ROOM
+from control.functions import Function, FunctionKind, FunctionTarget, GeneratorSpec
 from control.instrument import (
     CAPABILITY_VOCABULARY, CUE_KINDS, CarriedInstrument, Instrument,
     InstrumentError, InstrumentRequirement, TUNESHROOM, ambient_manifests,
     satisfies, validate_instrument, validate_instrument_manifests,
 )
+
+
+def _generator_fn(name="glow", waveform="triangle", data1=74):
+    return Function(
+        name=name, description="ambient glow", kind=FunctionKind.GENERATOR,
+        generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=data1,
+                                waveform=waveform, period=12.0, lo=0, hi=127))
 
 
 @dataclass(frozen=True)
@@ -27,7 +36,34 @@ def test_tuneshroom_is_the_standard_carrier_instrument():
     assert "gesture.tap" in TUNESHROOM.capabilities
     assert TUNESHROOM.accepted_cues == ("midi", "play", "solid", "mute")
     assert TUNESHROOM.light_manifest == {}
+    assert TUNESHROOM.functions == ()
     validate_instrument(TUNESHROOM)  # the shipped standard always validates
+
+
+def test_instrument_generator_functions_validate():
+    inst = Instrument(name="glowstrip", functions=(_generator_fn(),))
+    validate_instrument(inst)  # must not raise
+
+
+def test_instrument_generator_function_with_bad_waveform_is_located():
+    bad = Function(
+        name="glow", description="ambient glow", kind=FunctionKind.GENERATOR,
+        generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                waveform="square", period=12.0))
+    inst = Instrument(name="glowstrip", functions=(bad,))
+    with pytest.raises(InstrumentError, match="glowstrip") as exc:
+        validate_instrument(inst)
+    assert "square" in str(exc.value)
+
+
+def test_instrument_non_generator_function_is_refused():
+    scripted = Function(
+        name="tap", description="a tap function",
+        target=FunctionTarget.DEVICE, kind=FunctionKind.SCRIPTED)
+    inst = Instrument(name="glowstrip", functions=(scripted,))
+    with pytest.raises(InstrumentError, match="glowstrip") as exc:
+        validate_instrument(inst)
+    assert "only generator Functions may be declared on an instrument" in str(exc.value)
 
 
 def test_unknown_capability_tag_is_a_located_error():
