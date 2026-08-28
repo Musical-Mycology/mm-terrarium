@@ -10,7 +10,7 @@ import importlib
 import sys
 import tomllib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from control.api_version import TERRARIUM_API
@@ -25,6 +25,12 @@ class BitPackage:
     config: BitConfig
     path: Path
     import_root: str
+
+    def asset_path(self, key: str) -> Path:
+        return self.resolved_config().asset_path(key)
+
+    def resolved_config(self) -> BitConfig:
+        return replace(self.config, assets_root=self.path)
 
 
 @dataclass
@@ -180,9 +186,10 @@ class BitRegistry:
     def resolve_config(self, name: str, overrides: dict | None = None) -> BitConfig:
         pkg = self.packages[name]
         if not overrides:
-            return pkg.config
-        return merge_overrides(pkg.config, overrides,
-                                source=str(pkg.path / "bit.toml"))
+            return pkg.resolved_config()
+        merged = merge_overrides(pkg.config, overrides,
+                                  source=str(pkg.path / "bit.toml"))
+        return replace(merged, assets_root=pkg.path)
 
     def _role_summary(self, name: str, config) -> dict | None:
         """Best-effort scored/jam summary for the Load picker. Instantiates

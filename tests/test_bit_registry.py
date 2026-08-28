@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from control.bit_config import ManifestError, parse_manifest
 from control.bit_registry import BitRegistry
 
 
@@ -250,3 +251,44 @@ def test_symlink_escape_refused(tmp_path):
     reg = BitRegistry.scan((tmp_path,))
     assert "A" not in reg.packages
     assert "escapes" in reg.errors[0].message
+
+
+def _asset_pkg(tmp_path):
+    pkg = tmp_path / "a"
+    (pkg / "assets").mkdir(parents=True)
+    (pkg / "assets" / "chime.wav").write_bytes(b"RIFF")
+    (pkg / "bit.toml").write_text(
+        _manifest("A") + '\n[assets]\nchime = "assets/chime.wav"\n')
+    return pkg
+
+
+def test_resolve_config_stamps_assets_root(tmp_path):
+    pkg = _asset_pkg(tmp_path)
+    reg = BitRegistry.scan((tmp_path,))
+    config = reg.resolve_config("A")
+    assert config.asset_path("chime") == pkg / "assets" / "chime.wav"
+    # override branch stamps too
+    config2 = reg.resolve_config("A", {"console": {"notes": "x"}})
+    assert config2.asset_path("chime") == pkg / "assets" / "chime.wav"
+
+
+def test_bit_package_asset_path(tmp_path):
+    pkg = _asset_pkg(tmp_path)
+    reg = BitRegistry.scan((tmp_path,))
+    assert reg.packages["A"].asset_path("chime") == pkg / "assets" / "chime.wav"
+
+
+def test_asset_path_unknown_key_raises(tmp_path):
+    _asset_pkg(tmp_path)
+    reg = BitRegistry.scan((tmp_path,))
+    with pytest.raises(ManifestError) as exc:
+        reg.resolve_config("A").asset_path("nope")
+    assert "nope" in str(exc.value)
+
+
+def test_asset_path_with_no_root_raises():
+    config = parse_manifest(
+        '[bit]\nname = "X"\nentry = "x:X"\nrequires_terrarium_api = 1\n'
+        '\n[assets]\nchime = "assets/chime.wav"\n', source="t")
+    with pytest.raises(ManifestError):
+        config.asset_path("chime")

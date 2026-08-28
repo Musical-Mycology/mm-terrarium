@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import tomllib
 from dataclasses import dataclass, field, fields, replace
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -96,6 +96,24 @@ class BitConfig:
     rhythm: RhythmConfig | None = None
     ambient: AmbientConfig | None = None
     extras: dict = field(default_factory=dict)
+    # Stamped by BitRegistry.resolve_config, never parsed from the manifest:
+    # the absolute package directory asset paths resolve against. None means
+    # "location unknown" and asset_path refuses rather than guessing.
+    assets_root: Path | None = None
+
+    def asset_path(self, key: str) -> Path:
+        for akey, rel in self.assets:
+            if akey == key:
+                if self.assets_root is None:
+                    raise ManifestError(
+                        source=self.identity.name, key=f"assets.{key}",
+                        message="no assets_root: config was not resolved "
+                                "through a BitRegistry")
+                return self.assets_root / rel
+        raise ManifestError(
+            source=self.identity.name, key=f"assets.{key}",
+            message=f"no such asset; declared: "
+                    f"{sorted(k for k, _ in self.assets)}")
 
     def node_for(self, role: str) -> str | None:
         for node_role, node in self.launch.nodes:
