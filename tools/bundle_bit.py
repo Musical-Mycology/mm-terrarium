@@ -12,6 +12,7 @@ import argparse
 import getpass
 import hashlib
 import json
+import shutil
 import socket
 import subprocess
 import sys
@@ -128,6 +129,49 @@ def verify(archive: Path, *, terrarium_api: int | None = None) -> list[str]:
     return problems
 
 
+def _safe_members(z: zipfile.ZipFile) -> list[str]:
+    members = []
+    for member in z.namelist():
+        if member.endswith("/"):
+            continue
+        p = Path(member)
+        if p.is_absolute() or ".." in p.parts:
+            sys.exit(f"refusing to install: unsafe member path {member!r}")
+        members.append(member)
+    return members
+
+
+def install(archive: Path, root: Path, *, force: bool = False) -> Path:
+    problems = verify(archive)
+    hard = [p for p in problems if not p.startswith("warning:")]
+    for p in problems:
+        print(p, file=sys.stderr)
+    if hard:
+        sys.exit(f"refusing to install {archive}: verification failed")
+
+    with zipfile.ZipFile(archive) as z:
+        meta = json.loads(z.read(BUNDLE_MANIFEST))
+        name = meta["name"]
+        dest = root / name
+        if dest.exists() and not force:
+            sys.exit(f"refusing to install: {dest} exists (use --force)")
+        staging = root / f"{name}.installing"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True)
+        for member in _safe_members(z):
+            target = staging / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(z.read(member))
+    old = root / f"{name}.replaced"
+    if dest.exists():
+        dest.rename(old)
+    staging.rename(dest)
+    if old.exists():
+        shutil.rmtree(old)
+    return dest
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -136,11 +180,18 @@ def main(argv: list[str] | None = None) -> int:
     p_bundle.add_argument("-o", "--out", type=Path, default=None)
     p_verify = sub.add_parser("verify")
     p_verify.add_argument("archive", type=Path)
+    p_install = sub.add_parser("install")
+    p_install.add_argument("archive", type=Path)
+    p_install.add_argument("root", type=Path)
+    p_install.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
 
     if args.cmd == "bundle":
         archive = bundle(args.pkg_dir, args.out)
         print(archive)
+        return 0
+    if args.cmd == "install":
+        print(install(args.archive, args.root, force=args.force))
         return 0
     problems = verify(args.archive)
     for p in problems:

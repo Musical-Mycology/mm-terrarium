@@ -1,3 +1,4 @@
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -89,3 +90,83 @@ def test_verify_warns_not_fails_on_api_mismatch(pkg):
     archive = bundle(pkg)
     problems = verify(archive, terrarium_api=2)
     assert problems and all(p.startswith("warning:") for p in problems)
+
+
+def test_verify_reports_manifest_entry_missing_from_archive(pkg):
+    archive = bundle(pkg)
+    tampered = archive.with_suffix(".missing.mmbit")
+    with zipfile.ZipFile(archive) as zin, \
+         zipfile.ZipFile(tampered, "w") as zout:
+        for item in zin.infolist():
+            if item.filename == "assets/palette.json":
+                continue
+            zout.writestr(item, zin.read(item.filename))
+    problems = verify(tampered)
+    assert any("manifest entry missing from archive: assets/palette.json"
+               in p for p in problems)
+
+
+def test_verify_hard_problem_suppresses_api_warning(pkg):
+    archive = bundle(pkg)
+    with zipfile.ZipFile(archive, "a") as z:
+        z.writestr("extra.py", "x = 1\n")
+    problems = verify(archive, terrarium_api=2)
+    assert any("extra.py" in p for p in problems)
+    assert not any(p.startswith("warning:") for p in problems)
+
+
+from control.bit_registry import BitRegistry
+from tools.bundle_bit import install
+
+
+def test_install_roundtrip_discovers_and_loads(pkg, tmp_path):
+    archive = bundle(pkg)
+    root = tmp_path / "installed"
+    root.mkdir()
+    dest = install(archive, root)
+    assert dest == root / "GlowBit"
+    assert (dest / "BUNDLE.json").is_file()
+    reg = BitRegistry.scan((root,))
+    assert "GlowBit" in reg.packages and not reg.errors
+    cls = reg.bit_class("GlowBit")
+    assert cls.__name__ == "GlowBit"
+
+
+def test_install_refuses_existing_without_force(pkg, tmp_path):
+    archive = bundle(pkg)
+    root = tmp_path / "installed"
+    (root / "GlowBit").mkdir(parents=True)
+    with pytest.raises(SystemExit):
+        install(archive, root)
+    install(archive, root, force=True)          # replaces
+    assert (root / "GlowBit" / "glow_bit.py").is_file()
+
+
+def test_install_refuses_tampered(pkg, tmp_path):
+    archive = bundle(pkg)
+    with zipfile.ZipFile(archive, "a") as z:
+        z.writestr("extra.py", "x = 1\n")
+    root = tmp_path / "installed"
+    root.mkdir()
+    with pytest.raises(SystemExit):
+        install(archive, root)
+
+
+def test_install_refuses_zip_slip(pkg, tmp_path):
+    archive = bundle(pkg)
+    evil = archive.with_suffix(".evil.mmbit")
+    with zipfile.ZipFile(archive) as zin, \
+         zipfile.ZipFile(evil, "w") as zout:
+        meta = json.loads(zin.read(BUNDLE_MANIFEST))
+        payload = b"pwn"
+        meta["files"]["../pwn.py"] = hashlib.sha256(payload).hexdigest()
+        for item in zin.infolist():
+            if item.filename != BUNDLE_MANIFEST:
+                zout.writestr(item, zin.read(item.filename))
+        zout.writestr("../pwn.py", payload)
+        zout.writestr(BUNDLE_MANIFEST, json.dumps(meta))
+    root = tmp_path / "installed"
+    root.mkdir()
+    with pytest.raises(SystemExit):
+        install(evil, root)
+    assert not (tmp_path / "pwn.py").exists()
