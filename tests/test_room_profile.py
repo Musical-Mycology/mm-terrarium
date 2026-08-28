@@ -6,7 +6,7 @@ import pathlib
 import pytest
 
 from control.cues import ROOM
-from control.functions import Function, FunctionKind, GeneratorSpec
+from control.functions import Function, FunctionKind, FunctionTarget, GeneratorSpec
 from control.instrument import Instrument
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
@@ -75,6 +75,33 @@ def test_two_fixtures_with_distinct_generator_lanes_are_fine():
         _fixture(name="accent", blocks=(RoomBlock("b2", 0, 30),),
                  instrument=second)))
     assert [f.name for f in profile.fixtures] == ["main", "accent"]
+
+
+def test_a_scripted_function_bypassing_validate_instrument_does_not_crash_the_collision_sweep(monkeypatch):
+    """Fix-round-2 regression (Critical finding): the cross-fixture
+    collision sweep must not assume every declared function is a
+    GENERATOR. v0's validate_instrument refuses a non-GENERATOR function on
+    an instrument, and RoomProfile.__post_init__ already calls
+    validate_instrument on every fixture BEFORE the collision sweep runs --
+    so under normal construction a SCRIPTED function is caught there first
+    and the sweep never sees it. That ordering is exactly what the sweep
+    must not depend on (a future reordering, or any other caller that
+    skips validate_instrument, must not resurrect the crash), so this test
+    monkeypatches validate_instrument to a no-op -- the same effect as an
+    Instrument built directly and handed straight to the sweep -- and
+    exercises the sweep on its own: generator_lane() would raise
+    AttributeError on a SCRIPTED function's None .generator if the sweep
+    did not filter by kind first."""
+    import control.room_profile as room_profile_mod
+    monkeypatch.setattr(room_profile_mod, "validate_instrument", lambda inst: None)
+    scripted = Function(name="tap", description="a tap function",
+                        target=FunctionTarget.DEVICE, kind=FunctionKind.SCRIPTED)
+    inst = Instrument(name="scripted_only",
+                      capabilities=frozenset({"light.surface"}),
+                      functions=(scripted,))
+    profile = RoomProfile(surface_id="p", fixtures=(
+        _fixture(name="main", instrument=inst),))
+    assert profile.fixtures[0].instrument.functions == (scripted,)
 
 
 def test_test_room_declares_two_asymmetric_fixtures():

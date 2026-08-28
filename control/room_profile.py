@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from control.functions import generator_lane
+from control.functions import FunctionKind, generator_lane
 from control.instrument import (Instrument, InstrumentError,
                                  validate_instrument,
                                  validate_instrument_manifests)
@@ -171,6 +171,14 @@ class RoomProfile:
         generator_lanes: dict[tuple[str, int, int], str] = {}
         for fixture in self.fixtures:
             for fn in fixture.instrument.functions:
+                if fn.kind is not FunctionKind.GENERATOR:
+                    # v0's own rule (validate_instrument) refuses a
+                    # non-GENERATOR function on an instrument, but this
+                    # profile-level sweep must not depend on that having
+                    # run -- an Instrument built directly (bypassing
+                    # validate_instrument) may still carry one, and
+                    # generator_lane() assumes fn.generator is set.
+                    continue
                 lane = generator_lane(fn)
                 if lane in generator_lanes:
                     raise ValueError(
