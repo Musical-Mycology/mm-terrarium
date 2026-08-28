@@ -179,3 +179,28 @@ def test_min_terrarium_now_warns_as_unknown(caplog):
         config = parse_manifest(text, source="t")
     assert not hasattr(config.identity, "min_terrarium")
     assert any("min_terrarium" in r.message for r in caplog.records)
+
+
+def test_assets_parse_as_sorted_pairs():
+    text = MINIMAL + '\n[assets]\nchime = "assets/chime.wav"\n'
+    config = parse_manifest(text, source="t")
+    assert config.assets == (("chime", "assets/chime.wav"),)
+
+
+def test_asset_absolute_path_refused():
+    text = MINIMAL + '\n[assets]\nchime = "/etc/passwd"\n'
+    with pytest.raises(ManifestError) as exc:
+        parse_manifest(text, source="t")
+    assert "assets.chime" in str(exc.value)
+
+
+def test_asset_parent_escape_refused():
+    text = MINIMAL + '\n[assets]\nchime = "../outside.wav"\n'
+    with pytest.raises(ManifestError):
+        parse_manifest(text, source="t")
+
+
+def test_asset_non_string_value_refused():
+    text = MINIMAL + "\n[assets]\nchime = 3\n"
+    with pytest.raises(ManifestError):
+        parse_manifest(text, source="t")

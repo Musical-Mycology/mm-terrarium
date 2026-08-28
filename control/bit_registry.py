@@ -117,6 +117,22 @@ class BitRegistry:
                                 f"engine provides {TERRARIUM_API}"))
                     continue
 
+                asset_error = None
+                for akey, rel in config.assets:
+                    target = pkg_dir / rel
+                    if not target.is_file():
+                        asset_error = f"declared asset {akey!r} missing: {rel}"
+                        break
+                    resolved = target.resolve()
+                    if not resolved.is_relative_to(pkg_dir.resolve()):
+                        asset_error = (f"declared asset {akey!r} escapes the "
+                                       f"package directory: {rel}")
+                        break
+                if asset_error is not None:
+                    registry.errors.append(
+                        PackageError(path=source, message=asset_error))
+                    continue
+
                 import_root = (
                     f"bits.{pkg_dir.name}" if is_default_root else pkg_dir.name
                 )

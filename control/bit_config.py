@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import tomllib
 from dataclasses import dataclass, field, fields, replace
+from pathlib import PurePosixPath
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -334,7 +335,19 @@ def parse_manifest(text: str, *, source: str) -> BitConfig:
         _get(results_raw, "keys", list, [], source=source, prefix="results"))
 
     assets_raw = _get(doc, "assets", dict, {}, source=source, prefix="")
-    assets = tuple(sorted(assets_raw.items())) if isinstance(assets_raw, dict) else ()
+    assets_items = []
+    for akey, aval in sorted(assets_raw.items()):
+        if not isinstance(aval, str):
+            raise ManifestError(
+                source=source, key=f"assets.{akey}",
+                message=f"expected str path, got {type(aval).__name__}")
+        p = PurePosixPath(aval)
+        if p.is_absolute() or ".." in p.parts:
+            raise ManifestError(
+                source=source, key=f"assets.{akey}",
+                message="must be a package-relative path with no '..'")
+        assets_items.append((akey, aval))
+    assets = tuple(assets_items)
 
     rhythm = None
     if "rhythm" in doc:

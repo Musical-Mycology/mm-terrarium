@@ -217,3 +217,36 @@ def test_api_refusal_is_package_scoped(tmp_path):
         (pkg / "bit.toml").write_text(_manifest(name, api_line=line))
     reg = BitRegistry.scan((tmp_path,))
     assert "Good" in reg.packages and "Bad" not in reg.packages
+
+
+def test_declared_asset_must_exist(tmp_path):
+    pkg = tmp_path / "a"
+    pkg.mkdir()
+    (pkg / "bit.toml").write_text(
+        _manifest("A") + '\n[assets]\nchime = "assets/chime.wav"\n')
+    reg = BitRegistry.scan((tmp_path,))
+    assert "A" not in reg.packages
+    assert "chime" in reg.errors[0].message
+
+
+def test_present_asset_discovers(tmp_path):
+    pkg = tmp_path / "a"
+    (pkg / "assets").mkdir(parents=True)
+    (pkg / "assets" / "chime.wav").write_bytes(b"RIFF")
+    (pkg / "bit.toml").write_text(
+        _manifest("A") + '\n[assets]\nchime = "assets/chime.wav"\n')
+    reg = BitRegistry.scan((tmp_path,))
+    assert "A" in reg.packages and not reg.errors
+
+
+def test_symlink_escape_refused(tmp_path):
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"RIFF")
+    pkg = tmp_path / "a"
+    (pkg / "assets").mkdir(parents=True)
+    (pkg / "assets" / "chime.wav").symlink_to(outside)
+    (pkg / "bit.toml").write_text(
+        _manifest("A") + '\n[assets]\nchime = "assets/chime.wav"\n')
+    reg = BitRegistry.scan((tmp_path,))
+    assert "A" not in reg.packages
+    assert "escapes" in reg.errors[0].message
