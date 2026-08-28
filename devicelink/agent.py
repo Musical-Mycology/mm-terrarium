@@ -237,6 +237,13 @@ class DeviceLinkAgent:
         gs = self.game_server
         room = gs.room
         if room is None:
+            # Defensive, mirroring every other branch below: a stale
+            # ambient runner/start-time must not survive a call that finds
+            # no Room to render at all (in practice unwire_room() already
+            # clears these first -- see its own docstring -- but nothing
+            # should depend on that ordering).
+            self._ambient_generators = None
+            self._ambient_start = None
             return
         if self._room_profile is None:
             self._room_profile = room.profile
@@ -376,11 +383,22 @@ class DeviceLinkAgent:
         has already set gs.room = None (see control/terrarium.py), so
         _canonical_room_dev() can no longer see which dev held the grant --
         _room_audio_dev is the cached record _setup_room() left behind at
-        grant time."""
+        grant time.
+
+        Also drops the ambient generator runner and its start time, mirroring
+        the audio grant's own cached-at-wire-time cleanup just above: nothing
+        must consult a runner or a start time built for a Room that is gone.
+        _feed_ambient_generators() already no-ops once self._room_bridge is
+        cleared below, so this is redundant defense-in-depth rather than a
+        fix for a reachable bug, but it keeps this agent's Room state
+        entirely reset on every NO_ROOM entry rather than reset-except-for-
+        two-fields."""
         if self._room_audio is not None and self._room_audio_dev is not None:
             self._room_audio.stop_drone(self._room_audio_dev)
             self._room_audio.on_release(self._room_audio_dev)
             self._room_audio_dev = None
+        self._ambient_generators = None
+        self._ambient_start = None
         self._room_light = None
         self._room_bridge = None
         self._room_profile = None

@@ -845,6 +845,52 @@ def test_ambient_generator_is_not_fed_once_a_bit_is_loaded():
     agent.poll()   # must not raise, and must not consult the dropped runner
 
 
+def test_ambient_generator_unwire_then_rewire_resets_elapsed():
+    """Fix-round-1 regression (Important finding 1): unwire_room() must
+    drop the ambient runner/start time so a stale feed can never reach a
+    gone Room, and a later rewire must rebuild the runner with a FRESH
+    start time -- elapsed measured from the new session, not carried over
+    from the old one."""
+    gs, profile = _animated_ambient_game_server()
+    clock_value = [0.0]
+    room_bridge = RoomBridge()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            clock=lambda: clock_value[0])
+
+    clock_value[0] = 3.0
+    agent.poll()
+    assert room_bridge.controllers.get(74) == 64   # ambient is live
+
+    # Mirror control/terrarium.py's unload_room(): gs.room is cleared to
+    # None BEFORE the observer notification fires unwire_room() (see
+    # test_unwire_room_releases_the_ambient_audio_grant_and_stops_the_drone
+    # above for the same ordering).
+    gs.room = None
+    agent.unwire_room()
+
+    assert agent._ambient_generators is None
+    assert agent._ambient_start is None
+    clock_value[0] = 9.0
+    agent.poll()   # must not raise, and must not feed the gone bridge
+    # unwire_room() drops this agent's reference to room_bridge but does not
+    # mutate the bridge object itself -- its value stays exactly where the
+    # last real feed left it, proof no further feed reached it.
+    assert room_bridge.controllers.get(74) == 64
+
+    # Rewire a NEW Room bridge back onto the SAME (still-live) profile --
+    # mirrors a Console `load_room` reloading the same room.
+    gs.room = Room(name="DEMO", profile=profile, node_id="ROOM_ANIM_NODE")
+    gs.room.bound["main"] = "sim-anim-main"
+    new_bridge = RoomBridge()
+    agent.rewire_room(new_bridge)
+
+    assert agent._ambient_start == 9.0   # fresh start, not the old run's 0.0
+    # Immediately at rewire time (elapsed=0), the triangle waveform is at
+    # its origin: phase=0, frac=0, value=lo=0.
+    agent.poll()
+    assert new_bridge.controllers.get(74) == 0
+
+
 def test_load_bit_swaps_ambient_for_the_bits_room_declaration(monkeypatch):
     calls = _spy_on_light_manifest(monkeypatch)
     gs = _demo_room_no_bit_game_server()

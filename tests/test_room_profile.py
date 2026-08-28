@@ -5,11 +5,23 @@ import pathlib
 
 import pytest
 
+from control.cues import ROOM
+from control.functions import Function, FunctionKind, GeneratorSpec
 from control.instrument import Instrument
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
 from control.terrarium_config import load_terrarium_config
 from tests.instrument_fixtures import GENERIC_SURFACE
+
+
+def _generator_instrument(name, data1=74, period=12.0):
+    return Instrument(
+        name=name, capabilities=frozenset({"light.surface"}),
+        functions=(Function(
+            name="glow", description="ambient glow", kind=FunctionKind.GENERATOR,
+            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=data1,
+                                    waveform="triangle", period=period,
+                                    lo=0, hi=127)),))
 
 
 def room_profile(name: str) -> RoomProfile:
@@ -41,6 +53,28 @@ def test_bad_fixture_instrument_fails_profile_construction():
     bad = Instrument(name="x", capabilities=frozenset({"nope.tag"}))
     with pytest.raises(ValueError, match="nope.tag"):
         make_profile(instrument=bad)
+
+
+def test_two_fixtures_sharing_a_generator_lane_are_refused():
+    first = _generator_instrument("first", data1=74)
+    second = _generator_instrument("second", data1=74)   # same cc as `first`
+    with pytest.raises(ValueError) as exc:
+        RoomProfile(surface_id="p", fixtures=(
+            _fixture(name="main", instrument=first),
+            _fixture(name="accent", blocks=(RoomBlock("b2", 0, 30),),
+                     instrument=second)))
+    assert "main" in str(exc.value) and "accent" in str(exc.value)
+    assert "74" in str(exc.value)
+
+
+def test_two_fixtures_with_distinct_generator_lanes_are_fine():
+    first = _generator_instrument("first", data1=74)
+    second = _generator_instrument("second", data1=75)   # distinct cc
+    profile = RoomProfile(surface_id="p", fixtures=(
+        _fixture(name="main", instrument=first),
+        _fixture(name="accent", blocks=(RoomBlock("b2", 0, 30),),
+                 instrument=second)))
+    assert [f.name for f in profile.fixtures] == ["main", "accent"]
 
 
 def test_test_room_declares_two_asymmetric_fixtures():
