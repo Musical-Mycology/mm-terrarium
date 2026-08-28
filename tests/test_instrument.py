@@ -9,6 +9,7 @@ from control.instrument import (
     InstrumentError, InstrumentRequirement, TUNESHROOM, ambient_manifests,
     satisfies, validate_instrument, validate_instrument_manifests,
 )
+from control.triggers import EventTrigger, StreamTrigger
 
 
 def _generator_fn(name="glow", waveform="triangle", data1=74):
@@ -38,6 +39,35 @@ def test_tuneshroom_is_the_standard_carrier_instrument():
     assert TUNESHROOM.light_manifest == {}
     assert TUNESHROOM.functions == ()
     validate_instrument(TUNESHROOM)  # the shipped standard always validates
+
+
+def test_tuneshroom_declares_tap_and_shake_event_triggers():
+    names = {t.name for t in TUNESHROOM.event_triggers}
+    assert names == {"tap", "shake"}
+    for trig in TUNESHROOM.event_triggers:
+        assert trig.thresholds
+        for key, value in trig.thresholds.items():
+            assert isinstance(key, str)
+            assert isinstance(value, (int, float))
+    assert TUNESHROOM.stream_triggers == ()
+
+
+def test_instrument_validates_its_event_triggers():
+    bad = Instrument(
+        name="glowstrip",
+        event_triggers=(EventTrigger(name="bad name!", description="x",
+                                      thresholds={"g": 1.0}),))
+    with pytest.raises(InstrumentError, match="glowstrip"):
+        validate_instrument(bad)
+
+
+def test_instrument_validates_its_stream_triggers():
+    bad = Instrument(
+        name="glowstrip",
+        stream_triggers=(StreamTrigger(name="s", description="x", verb="tilt",
+                                        arg=0, transform="bogus", params={}),))
+    with pytest.raises(InstrumentError, match="glowstrip"):
+        validate_instrument(bad)
 
 
 def test_instrument_generator_functions_validate():

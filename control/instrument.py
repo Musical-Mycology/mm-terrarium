@@ -9,6 +9,9 @@ import copy
 from dataclasses import dataclass, field
 
 from control.functions import Function, FunctionKind, FunctionTable, validate_function_table
+from control.triggers import (
+    EventTrigger, StreamTrigger, validate_event_trigger, validate_stream_trigger,
+)
 
 CAPABILITY_VOCABULARY: frozenset[str] = frozenset({
     "light.pixels",    # addressable pixels of any shape
@@ -51,6 +54,8 @@ class Instrument:
     accepted_cues: tuple[str, ...] = ()
     light_manifest: dict = field(default_factory=dict)
     ugen_manifest: dict = field(default_factory=dict)
+    event_triggers: tuple[EventTrigger, ...] = ()
+    stream_triggers: tuple[StreamTrigger, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -88,6 +93,14 @@ def validate_instrument(instrument: Instrument) -> None:
         validate_function_table(table, verb_names=frozenset())
     except ValueError as exc:
         raise InstrumentError(f"instrument {instrument.name!r}: {exc}") from exc
+    where = f"instrument {instrument.name!r}"
+    try:
+        for trig in instrument.event_triggers:
+            validate_event_trigger(trig, where)
+        for trig in instrument.stream_triggers:
+            validate_stream_trigger(trig, where)
+    except ValueError as exc:
+        raise InstrumentError(str(exc)) from exc
 
 
 def satisfies(instrument: Instrument, requirement: InstrumentRequirement,
@@ -158,10 +171,29 @@ def ambient_manifests(profile) -> tuple[dict, dict]:
     return copy.deepcopy(light), copy.deepcopy(ugen)
 
 
+# Values are the mm-tuneshroom native TapDetector's current constants
+# (lib/sensors/tap_detector.dart: thresholdG=2.0, debounceDuration=200ms,
+# doubleTapWindow=400ms), carried here so the server owns them (Spec 3
+# section 6). The browser sensors.js detector mirrors the same heuristic
+# but compares a gravity-deviation magnitude rather than a raw peak, so the
+# two client detectors disagree by ~3x on what counts as a spike; real
+# values come from capture/ traces via tools/trace_stats.py -- a later tool
+# pass, not this slice. Shake has no dedicated native detector -- it reuses
+# the same TapDetector-derived peak_g/window_ms (www/sensors.js documents
+# itself as "mirrors the native TapDetector heuristic"), with no
+# double-tap concept.
 TUNESHROOM = Instrument(
     name="tuneshroom",
     description="Handheld 12-LED Tuneshroom (8-ring + 4-stem)",
     capabilities=frozenset({"light.pixels", "audio.samples",
                             "gesture.tap", "gesture.tilt"}),
     accepted_cues=("midi", "play", "solid", "mute"),
+    event_triggers=(
+        EventTrigger(
+            name="tap", description="a single or double tap on the shell",
+            thresholds={"peak_g": 2.0, "window_ms": 200, "double_ms": 400}),
+        EventTrigger(
+            name="shake", description="a shake gesture",
+            thresholds={"peak_g": 2.0, "window_ms": 200}),
+    ),
 )
