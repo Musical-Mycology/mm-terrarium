@@ -31,12 +31,6 @@ JAMMER_HUE_PURPLE = 0.78
 JAMMER_LEVEL_REST = 0.18
 JAMMER_LEVEL_FULL = 0.80
 
-# A finite-but-huge domain bound for the overflow-guard stream functions
-# below: anything past the physical [-90, 90] gamma / [0, 90] sweep range
-# is a malformed reading, never a real device value. StreamSpec requires
-# a finite in_lo/in_hi, so this stands in for "no real ceiling".
-GAMMA_OVERFLOW_BOUND = 1_000_000.0
-
 
 class TestBit(Bit):
     version = "0.1"
@@ -358,93 +352,13 @@ class TestBit(Bit):
                     outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),)),
             ),
             # A wire gamma/sweep past the physical [-90, 90]/[0, 90] range
-            # is malformed (never a real device reading), which the old
-            # _on_tilt/_on_shake handled by clamping before doing any math.
-            # Task 6's domain matching tests the raw arg against a
-            # function's own [in_lo, in_hi], so a value outside every
-            # declared domain matches nothing and produces no cue -- a
-            # plain linear StreamOutput cannot both ramp over the real
-            # range AND go flat beyond it. These six pin the old clamped
-            # behaviour with constant-output (out_lo == out_hi) companions
-            # over the two overflow tails, touching their sibling's
-            # boundary so the value there agrees either way.
-            "tilt_hue_overflow_pos": Function(
-                name="tilt_hue_overflow_pos",
-                description="Malformed gamma above 90 clamps like tilt_hue "
-                            "did at exactly 90.",
-                kind=FunctionKind.STREAM,
-                stream=StreamSpec(
-                    verb="tilt", arg=1, in_lo=90.0, in_hi=GAMMA_OVERFLOW_BOUND,
-                    outputs=(StreamOutput(TARGET, 0xB0, 74, 127.0, 127.0),
-                             StreamOutput(ROOM, 0xB0, 74, 127.0, 127.0))),
-            ),
-            "tilt_hue_overflow_neg": Function(
-                name="tilt_hue_overflow_neg",
-                description="Malformed gamma below -90 clamps like tilt_hue "
-                            "did at exactly -90.",
-                kind=FunctionKind.STREAM,
-                stream=StreamSpec(
-                    verb="tilt", arg=1, in_lo=-GAMMA_OVERFLOW_BOUND, in_hi=-90.0,
-                    outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 0.0),
-                             StreamOutput(ROOM, 0xB0, 74, 0.0, 0.0))),
-            ),
-            "jam_level_overflow_pos": Function(
-                name="jam_level_overflow_pos",
-                description="Malformed gamma above 90 clamps like "
-                            "jam_level_pos did at exactly 90.",
-                kind=FunctionKind.STREAM,
-                stream=StreamSpec(
-                    verb="tilt", arg=1, in_lo=90.0, in_hi=GAMMA_OVERFLOW_BOUND,
-                    outputs=(StreamOutput(
-                        TARGET, 0xB0, 1,
-                        JAMMER_LEVEL_FULL * 127.0,
-                        JAMMER_LEVEL_FULL * 127.0),)),
-            ),
-            "jam_level_overflow_neg": Function(
-                name="jam_level_overflow_neg",
-                description="Malformed gamma below -90 clamps like "
-                            "jam_level_neg did at exactly -90.",
-                kind=FunctionKind.STREAM,
-                stream=StreamSpec(
-                    verb="tilt", arg=1, in_lo=-GAMMA_OVERFLOW_BOUND, in_hi=-90.0,
-                    outputs=(StreamOutput(
-                        TARGET, 0xB0, 1,
-                        JAMMER_LEVEL_FULL * 127.0,
-                        JAMMER_LEVEL_FULL * 127.0),)),
-            ),
-            "jam_hue_overflow_pos": Function(
-                name="jam_hue_overflow_pos",
-                description="Malformed gamma above 90 clamps like "
-                            "jam_hue_pos did at exactly 90.",
-                kind=FunctionKind.STREAM,
-                stream=StreamSpec(
-                    verb="tilt", arg=1, in_lo=90.0, in_hi=GAMMA_OVERFLOW_BOUND,
-                    outputs=(StreamOutput(
-                        TARGET, 0xB0, 2,
-                        JAMMER_HUE_PURPLE * 127.0,
-                        JAMMER_HUE_PURPLE * 127.0),)),
-            ),
-            "jam_hue_overflow_neg": Function(
-                name="jam_hue_overflow_neg",
-                description="Malformed gamma below -90 clamps like "
-                            "jam_hue_neg did at exactly -90.",
-                kind=FunctionKind.STREAM,
-                stream=StreamSpec(
-                    verb="tilt", arg=1, in_lo=-GAMMA_OVERFLOW_BOUND, in_hi=-90.0,
-                    outputs=(StreamOutput(
-                        TARGET, 0xB0, 2,
-                        JAMMER_HUE_YELLOW * 127.0,
-                        JAMMER_HUE_YELLOW * 127.0),)),
-            ),
-            "shake_hue_overflow": Function(
-                name="shake_hue_overflow",
-                description="Malformed sweep above 90 clamps like "
-                            "shake_hue did at exactly 90.",
-                kind=FunctionKind.STREAM,
-                stream=StreamSpec(
-                    verb="shake", arg=3, in_lo=90.0, in_hi=GAMMA_OVERFLOW_BOUND,
-                    outputs=(StreamOutput(TARGET, 0xB0, 74, 127.0, 127.0),)),
-            ),
+            # (malformed, never a real device reading) still clamps to a
+            # full-deflection cue, matching the old _on_tilt/_on_shake's
+            # own clamp: control/engine.py's edge-clamp rule handles this
+            # at the engine level now, not with a per-Bit guard function --
+            # a value beyond every declared domain's hull on a lane is
+            # picked up by whichever function owns the nearest edge, with
+            # the value clamped to that edge.
         })
 
     def fires(self, at: float) -> list:

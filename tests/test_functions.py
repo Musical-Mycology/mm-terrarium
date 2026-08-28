@@ -19,6 +19,7 @@ from control.functions import (
     Function,
     FunctionTable,
     FunctionTarget,
+    collect_stream_cues,
     expand_script,
     stream_cues,
     validate_function_table,
@@ -326,6 +327,63 @@ def test_stream_cues_missing_or_nonnumeric_arg_returns_empty():
     assert stream_cues(fn, "d1", [None, "not a number"]) == []
     assert stream_cues(fn, "d1", [None, True]) == []
     assert stream_cues(fn, "d1", []) == []
+
+
+# --- collect_stream_cues: the edge-clamp rule ---------------------------
+#
+# A raw arg outside every declared domain on a lane is not simply dropped
+# by GameServer.data's stream dispatch. Beyond the lane's whole domain
+# hull, the function owning the nearest edge still applies (clamped to
+# that edge); a value inside a GAP between two disjoint, non-touching
+# domains is unaffected and still drops. See collect_stream_cues's
+# docstring in control/functions.py.
+
+def test_collect_stream_cues_clamps_below_the_lowest_domain_to_its_owner():
+    lo = _stream("lo", in_lo=-90.0, in_hi=0.0,
+                 outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 50.0),))
+    hi = _stream("hi", in_lo=0.0, in_hi=90.0,
+                 outputs=(StreamOutput(TARGET, 0xB0, 74, 200.0, 255.0),))
+    # -200 is below every declared domain on this lane; "lo" owns the
+    # lowest in_lo (-90), so it applies, clamped to -90 -- same cue as
+    # stream_cues(lo, ..., -90) would produce on its own.
+    assert collect_stream_cues([lo, hi], "d1", [None, -200.0]) == \
+        stream_cues(lo, "d1", [None, -90.0])
+
+
+def test_collect_stream_cues_clamps_above_the_highest_domain_to_its_owner():
+    lo = _stream("lo", in_lo=-90.0, in_hi=0.0,
+                 outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 50.0),))
+    hi = _stream("hi", in_lo=0.0, in_hi=90.0,
+                 outputs=(StreamOutput(TARGET, 0xB0, 74, 200.0, 255.0),))
+    assert collect_stream_cues([lo, hi], "d1", [None, 999.0]) == \
+        stream_cues(hi, "d1", [None, 90.0])
+
+
+def test_collect_stream_cues_drops_a_value_in_a_gap_between_domains():
+    """A gap BETWEEN two disjoint (non-touching) domains is not an edge:
+    it stays dropped even though it sits inside the lane's overall hull."""
+    low = _stream("low", in_lo=-90.0, in_hi=-10.0,
+                  outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 50.0),))
+    high = _stream("high", in_lo=10.0, in_hi=90.0,
+                   outputs=(StreamOutput(TARGET, 0xB0, 74, 200.0, 255.0),))
+    assert collect_stream_cues([low, high], "d1", [None, 0.0]) == []
+
+
+def test_collect_stream_cues_edge_clamp_is_per_lane():
+    """A second, independent lane with its own (disjoint) hull clamps
+    against its OWN edges, not the other lane's."""
+    tilt_a = _stream("tilt_a", in_lo=-90.0, in_hi=90.0,
+                     outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),))
+    tilt_b = _stream("tilt_b", in_lo=-45.0, in_hi=45.0,
+                     outputs=(StreamOutput(TARGET, 0xB0, 1, 0.0, 127.0),))
+    cues = collect_stream_cues([tilt_a, tilt_b], "d1", [None, 999.0])
+    assert set(cues) == {("d1", 0xB0, 74, 127), ("d1", 0xB0, 1, 127)}
+
+
+def test_collect_stream_cues_interior_value_is_unaffected_by_edge_clamp():
+    fn = _stream(in_lo=-90.0, in_hi=90.0,
+                outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),))
+    assert collect_stream_cues([fn], "d1", [None, 0.0]) == [("d1", 0xB0, 74, 64)]
 
 
 def test_stream_cues_multi_output():

@@ -199,12 +199,14 @@ def test_shake_maps_sweep_to_a_light_cue():
 
 
 def test_shake_clamps_out_of_range_sweep():
-    """A sweep past 90 falls to shake_hue_overflow's constant-output tail
-    (see bits/test/test_bit.py's overflow-guard functions) rather than
-    shake_hue itself, but the cue is identical either way."""
-    fn = TestBit().function_table.functions["shake_hue_overflow"]
-    from control.functions import stream_cues
-    cues = stream_cues(fn, "ie1", ["ie1", 2.4, 600.0, 999.0])
+    """A sweep past 90 is beyond shake_hue's whole declared domain, but
+    the engine's edge-clamp rule (control/functions.py's
+    collect_stream_cues) still routes it to shake_hue -- the sole owner
+    of that lane's upper edge -- clamped to in_hi=90, matching the old
+    handler's own clamp."""
+    from control.functions import collect_stream_cues
+    fn = TestBit().function_table.functions["shake_hue"]
+    cues = collect_stream_cues([fn], "ie1", ["ie1", 2.4, 600.0, 999.0])
     assert cues == [("ie1", 0xB0, 74, 127)]
 
 
@@ -279,10 +281,6 @@ SCRIPTED_FUNCTION_NAMES = {"flash_device", "play_aurora", "stop", "win"}
 STREAM_FUNCTION_NAMES = {
     "tilt_hue", "jam_level_neg", "jam_level_pos", "jam_hue_neg",
     "jam_hue_pos", "shake_hue",
-    "tilt_hue_overflow_pos", "tilt_hue_overflow_neg",
-    "jam_level_overflow_pos", "jam_level_overflow_neg",
-    "jam_hue_overflow_pos", "jam_hue_overflow_neg",
-    "shake_hue_overflow",
 }
 
 
@@ -398,26 +396,13 @@ def test_jammer_declares_a_low_green_aurora_on_its_own_lanes():
 
 def _stream_cue_lanes(bit, dev: str, args: list) -> list:
     """Every declared tilt STREAM function's cue for one gesture, combined
-    the way GameServer._collect_stream_cues combines them (declaration
-    order, first write wins per lane) -- used by tests below that assert
-    on the jammer's cc:1/cc:2 pair without needing a full GameServer."""
-    from control.functions import FunctionKind, stream_cues, stream_input
-    written = set()
-    out = []
-    for fn in bit.function_table.functions.values():
-        if fn.kind is not FunctionKind.STREAM or fn.stream.verb != "tilt":
-            continue
-        spec = fn.stream
-        x = stream_input(spec, args)
-        if x is None or not (spec.in_lo <= x <= spec.in_hi):
-            continue
-        for cue, output in zip(stream_cues(fn, dev, args), spec.outputs):
-            lane = (output.dev, output.status, output.data1)
-            if lane in written:
-                continue
-            written.add(lane)
-            out.append(cue)
-    return out
+    the way GameServer.data's collect_stream_cues combines them --
+    used by tests below that assert on the jammer's cc:1/cc:2 pair without
+    needing a full GameServer."""
+    from control.functions import FunctionKind, collect_stream_cues
+    streams = [fn for fn in bit.function_table.functions.values()
+               if fn.kind is FunctionKind.STREAM and fn.stream.verb == "tilt"]
+    return collect_stream_cues(streams, dev, args)
 
 
 def test_tilt_emits_jammer_glow_ccs_alongside_the_player_lanes():

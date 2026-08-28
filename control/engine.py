@@ -30,9 +30,8 @@ from control.functions import (
     FunctionFired,
     FunctionKind,
     FunctionTarget,
+    collect_stream_cues,
     expand_script,
-    stream_cues,
-    stream_input,
     validate_function_table,
 )
 
@@ -453,7 +452,7 @@ class GameServer:
         if handler is None and not streams:
             return f"unknown verb {verb!r}"
         at = self._origin(gesture_time) + self._horizon
-        stream_cue_list = self._collect_stream_cues(streams, dev, args)
+        stream_cue_list = collect_stream_cues(streams, dev, args)
         if handler is None:
             # Legal: a verb with declared streams and no Bit handler at all.
             self._dispatch_cues(stream_cue_list, at, FIRED_BY_GESTURE_VERB)
@@ -475,26 +474,6 @@ class GameServer:
         self._dispatch_cues(list(stream_cue_list) + list(cues or ()), at,
                             FIRED_BY_GESTURE_VERB)
         return None
-
-    def _collect_stream_cues(self, streams, dev: str, args: list) -> list[tuple]:
-        """Mapped cues for every STREAM function on one verb whose domain
-        contains this gesture's arg, in declaration order, first write wins
-        per output lane -- the boundary rule for two domains that touch at a
-        shared point (control/functions.py's stream_cues docstring)."""
-        written_lanes: set[tuple[str, int, int]] = set()
-        out: list[tuple] = []
-        for fn in streams:
-            spec = fn.stream
-            x = stream_input(spec, args)
-            if x is None or not (spec.in_lo <= x <= spec.in_hi):
-                continue
-            for cue, output in zip(stream_cues(fn, dev, args), spec.outputs):
-                lane = (output.dev, output.status, output.data1)
-                if lane in written_lanes:
-                    continue
-                written_lanes.add(lane)
-                out.append(cue)
-        return out
 
     def _canonical_room_dev(self) -> str | None:
         """The Room's one dev for MIDI-feed purposes: the first bound

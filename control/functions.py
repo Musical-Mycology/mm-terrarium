@@ -263,6 +263,57 @@ def stream_cues(fn: Function, dev: str, args: list) -> list[tuple]:
     return out
 
 
+def collect_stream_cues(streams, dev: str, args: list) -> list[tuple]:
+    """Mapped cues for every STREAM function in `streams` (already
+    verb-filtered by the caller -- see GameServer.data) whose domain
+    contains this gesture's arg, in declaration order, first write wins
+    per output lane (stream_cues's touching-boundary rule).
+
+    Edge-clamp rule: a raw arg outside every declared domain on a lane is
+    not simply dropped. If it is below the lane's lowest in_lo, the
+    function that owns that lowest in_lo still applies, with the value
+    clamped to its in_lo (stream_cues already clamps internally, so
+    calling it unmodified produces exactly the in_lo-mapped cue);
+    symmetrically for an arg above the lane's highest in_hi and the
+    function owning it. This reproduces the old imperative handlers'
+    defensive clamp -- a device overshooting 90 degrees still reads as
+    full deflection -- without a Bit having to declare its own overflow
+    guard functions. A value in a GAP between two disjoint (non-touching)
+    domains is unaffected by this rule and still drops: only a value
+    beyond the lane's whole domain hull clamps to an edge.
+    """
+    lane_domains: dict[tuple[str, int, int], list[tuple[float, float, Function]]] = {}
+    for fn in streams:
+        spec = fn.stream
+        for output in spec.outputs:
+            lane = (output.dev, output.status, output.data1)
+            lane_domains.setdefault(lane, []).append(
+                (float(spec.in_lo), float(spec.in_hi), fn))
+
+    written_lanes: set[tuple[str, int, int]] = set()
+    out: list[tuple] = []
+    for fn in streams:
+        spec = fn.stream
+        x = stream_input(spec, args)
+        if x is None:
+            continue
+        for cue, output in zip(stream_cues(fn, dev, args), spec.outputs):
+            lane = (output.dev, output.status, output.data1)
+            if lane in written_lanes:
+                continue
+            if not (spec.in_lo <= x <= spec.in_hi):
+                domains = lane_domains[lane]
+                lo_lo, _, lo_owner = min(domains, key=lambda d: d[0])
+                _, hi_hi, hi_owner = max(domains, key=lambda d: d[1])
+                is_edge = (fn is lo_owner and x < lo_lo) or \
+                          (fn is hi_owner and x > hi_hi)
+                if not is_edge:
+                    continue
+            written_lanes.add(lane)
+            out.append(cue)
+    return out
+
+
 def validate_function_table(function_table, verb_names) -> None:
     """Shallow structural validation of a Bit's authored FunctionTable.
 
@@ -446,7 +497,7 @@ def _validate_stream_output(output: StreamOutput, where: str) -> None:
 def _validate_stream_lane_overlap(streams: list) -> None:
     """Two STREAM functions on the SAME verb may not write overlapping
     domains onto the same lane -- one gesture value could satisfy both,
-    and _collect_stream_cues's first-write-wins boundary rule only
+    and collect_stream_cues's first-write-wins boundary rule only
     resolves a single shared point, not a real overlap.
 
     Two different verbs sharing a lane are unrestricted here even when
