@@ -2537,6 +2537,72 @@ the config error that names the old `accepted_triggers` key to its author).
 Spec 2, and Spec 3 live-Arco checklists are all still pending; run them
 together on the dev box.
 
+### `control/api_version.py`, `requires_terrarium_api`, `[assets]`, `tools/bundle_bit.py` -- external and bundled Bits (2026-08-28)
+Spec 4 of the Room/Instrument/Trigger restructure: Bits can now live
+outside mm-terrarium, and can be handed to a venue box as a verified
+archive instead of a checkout. Design:
+[`.../2026-08-28-external-and-bundled-bits-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-28-external-and-bundled-bits-design.md)
+and its plan
+[`.../plans/2026-08-28-external-and-bundled-bits.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-28-external-and-bundled-bits.md).
+
+- **`control/api_version.py`** declares `TERRARIUM_API = 1`, this
+  checkout's version of the Bit-facing contract. Every package's
+  `bit.toml` must now set `requires_terrarium_api`; discovery gates on
+  exact equality (not >=), and a mismatch is a located, package-scoped
+  `PackageError` rather than a load attempt. The old `min_terrarium`
+  key is retired -- unrecognized manifest keys fall through to the
+  existing unknown-key warn path rather than being specially handled.
+- **`[assets]` is validated at parse and at discovery, resolved only
+  through config.** A manifest's `[assets]` entries must be relative
+  paths with no `..` component (parse-time), and discovery confirms
+  each file exists on disk with no symlink escaping the package root.
+  A Bit never builds its own asset paths: `BitConfig.asset_path()`
+  reads off `assets_root`, which is stamped only by
+  `BitRegistry.resolve_config` (both the found and the
+  package-scoped-locate branches) and by `BitPackage.resolved_config()`
+  -- the never-guesses rule extended to on-disk asset locations.
+- **`tools/bundle_bit.py`** adds `bundle`/`verify`/`install`
+  subcommands around a new `.mmbit` archive format: a plain zip of the
+  package directory plus a generated `BUNDLE.json` carrying a
+  per-file sha256, the manifest's `requires_terrarium_api`, and
+  provenance (`created`, `bundler`, `source_commit` when the package's
+  repo has one). `verify` re-hashes every member and warns
+  (`"warning: "`-prefixed, does not refuse) on a `TERRARIUM_API`
+  mismatch, since verify may legitimately run on a box other than the
+  target. `install` runs a full `verify` first, guards every member
+  path against zip-slip before writing a single byte, and an existing
+  target directory is a refusal unless `--force`, which replaces it
+  atomically through a staging directory. Integrity is not
+  authenticity this slice: sha256 proves the archive is intact, not
+  who made it -- install bundles only from sources you trust.
+- **External Bits live with the instrument they target, on `sys.path`,
+  not in a venv.** A `bits/` tree in the instrument's own repo, wired
+  through `terrarium.toml`'s `bit_paths`; `BitRegistry.scan()` inserts
+  the root on `sys.path` and imports the package directly. The
+  alternative (wheel per Bit, `pip install` into the runtime venv) was
+  rejected because **Bits may not depend on third-party packages** --
+  stdlib and mm-terrarium's own modules only -- which is what keeps a
+  bundle a self-contained folder and `install` trivially reversible
+  (delete the directory). Revisit trigger, recorded so nobody
+  rediscovers it: the day a real Bit genuinely needs a third-party
+  package, this decision reopens as its own spec.
+- **GlowBit** (`mm-tuneshroom/bits/GlowBit`) is the reference external
+  Bit -- an `ambient`-kind package with one declared GENERATOR
+  Function, one small `[assets]` file, and `requires_terrarium_api = 1`
+  -- landed cross-repo as
+  [mm-tuneshroom PR #15](https://github.com/Musical-Mycology/mm-tuneshroom/pull/15)
+  (open, unmerged at this writing). Execution turned up three
+  API-surface corrections against the brief's listing, recorded in
+  that PR: `RoleTable` takes `node_map`, not `node_fallbacks`;
+  `role_table` and `function_table` are `@property` on the `Bit` ABC,
+  so GlowBit implements both as properties; the ROOM role's import
+  comes from `control.cues`.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1667 passed, 1 skipped** (up from 1634 passed, 1 skipped). The Spec 1,
+Spec 2, Spec 3, and Spec 4 live-Arco checklists are all still pending;
+run them together on the dev box.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -2665,8 +2731,12 @@ yet**; the box does not exist.
   disappears, `ARCO_PYTHONPATH` and every `PYTHONPATH=` recipe in this
   doc must repoint at the o2 checkout.
 - **mm-tuneshroom** — the instrument app and browser simulator. Its web build
-  deploys into the Terrarium's `www/` as an artifact; it never contains
-  Terrarium-side logic. (The legacy M1a / Sensor-Check harness stays in
+  deploys into the Terrarium's `www/` as an artifact; the *application*
+  (Dart app, web build, native harness) never contains Terrarium-side
+  logic. As of Spec 4 (2026-08-28) the repo also hosts `bits/` --
+  Terrarium-side Bit packages that ship with the instrument they target,
+  consumed only through `bit_paths`, never imported by the app. (The
+  legacy M1a / Sensor-Check harness stays in
   mm-tuneshroom as a working reference until this stack reproduces its behavior;
   nothing was ported.) As of the telemetry-capture slice the repos also share
   a second wire contract, `docs/telemetry-trace-schema.md` — the

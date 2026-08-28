@@ -1,7 +1,7 @@
 # External and bundled Bits (Spec 4 of the Room/Instrument/Trigger restructure)
 
 Date: 2026-08-28
-Status: draft, awaiting review
+Status: approved 2026-08-28
 Authority: `docs/superpowers/specs/2026-08-26-terrarium-lifecycle-and-config-rooms-design.md`
 section 12 ("Spec 4 -- External and bundled Bits") records the agreed
 direction this spec instantiates, with one deliberate revision to it
@@ -364,4 +364,31 @@ the Spec 1/2/3 checklists, all still unrun)
 
 ## Status
 
-Spec written 2026-08-28. Not yet implemented.
+Spec approved and implemented 2026-08-28.
+
+Execution deviations found during Tasks 1-7, recorded here rather than
+silently drifting the spec:
+
+- **GlowBit API-surface corrections** (Task 7, `mm-tuneshroom/bits/GlowBit`,
+  [PR #15](https://github.com/Musical-Mycology/mm-tuneshroom/pull/15)):
+  `RoleTable` takes `node_map`, not `node_fallbacks`; `role_table` and
+  `function_table` are `@property` on the `Bit` ABC, so GlowBit
+  implements both as properties; the ROOM role imports from
+  `control.cues`. The section 4 seeding description above predates
+  these corrections.
+- **Task 6 closed two verify-coverage gaps** found while testing
+  `tools/bundle_bit.py verify` against itself: a missing-manifest-entry
+  branch (an archive member absent from `BUNDLE.json`), and the
+  interaction between a hard problem (e.g. zip-slip) and the soft
+  `TERRARIUM_API` mismatch warning suppressing each other.
+- **Known minor limitations, accepted rather than fixed:** a rejected
+  `install --force` (an existing directory refused without `--force`,
+  then retried and still failing some other check) can leave behind an
+  empty `<name>.installing` staging directory; there is no crash-safety
+  between the two renames that make up `--force`'s atomic replace
+  (stage-then-swap is not itself transactional) -- a deliberate design
+  tradeoff, not an oversight.
+
+The live verification checklist (section 8 above) remains unrun,
+queued behind the Spec 1, Spec 2, and Spec 3 live-Arco checklists --
+all four should be run together on the dev box.
