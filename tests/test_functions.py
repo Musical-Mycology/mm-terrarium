@@ -20,6 +20,7 @@ from control.functions import (
     FunctionTable,
     FunctionTarget,
     expand_script,
+    stream_cues,
     validate_function_table,
 )
 
@@ -274,3 +275,76 @@ def test_stream_bad_mode_and_inverted_domain_refused():
                           outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),)))
     with pytest.raises(ValueError, match="in_lo"):
         validate_function_table(_table(inverted), {"tilt"})
+
+
+def test_stream_cues_clamps_and_maps_linearly():
+    fn = _stream(in_lo=-90.0, in_hi=90.0,
+                 outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),))
+    assert stream_cues(fn, "d1", [None, -90.0]) == [("d1", 0xB0, 74, 0)]
+    assert stream_cues(fn, "d1", [None, 90.0]) == [("d1", 0xB0, 74, 127)]
+    assert stream_cues(fn, "d1", [None, 0.0]) == [("d1", 0xB0, 74, 64)]
+    # Out-of-domain input clamps to the nearer bound rather than raising.
+    assert stream_cues(fn, "d1", [None, 200.0]) == [("d1", 0xB0, 74, 127)]
+    assert stream_cues(fn, "d1", [None, -200.0]) == [("d1", 0xB0, 74, 0)]
+
+
+def test_stream_cues_inverted_output_range():
+    fn = _stream(in_lo=0.0, in_hi=90.0,
+                 outputs=(StreamOutput(TARGET, 0xB0, 74, 127.0, 0.0),))
+    assert stream_cues(fn, "d1", [None, 0.0]) == [("d1", 0xB0, 74, 127)]
+    assert stream_cues(fn, "d1", [None, 90.0]) == [("d1", 0xB0, 74, 0)]
+
+
+def test_stream_cues_abs_mode_folds_negative_domain():
+    # A tilt argument of +/-90 both map to the same output magnitude when
+    # mode="abs" takes abs(x) before clamping to the output's own [0, 90]
+    # domain -- a negative raw value is not out-of-domain here, it folds.
+    fn = _stream(in_lo=0.0, in_hi=90.0,
+                 outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0,
+                                       mode="abs"),))
+    assert stream_cues(fn, "d1", [None, -90.0]) == [("d1", 0xB0, 74, 127)]
+    assert stream_cues(fn, "d1", [None, 90.0]) == [("d1", 0xB0, 74, 127)]
+    assert stream_cues(fn, "d1", [None, 0.0]) == [("d1", 0xB0, 74, 0)]
+
+
+def test_stream_cues_rounding():
+    fn = _stream(in_lo=0.0, in_hi=1.0,
+                 outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 255.0),))
+    # 0.5 * 255 = 127.5 -> rounds to 128 (banker's rounding on .5 ties to
+    # even, but this exercises the general round-then-clamp path).
+    assert stream_cues(fn, "d1", [None, 0.5]) == [("d1", 0xB0, 74, 128)]
+
+
+def test_stream_cues_room_dev_passes_through():
+    fn = _stream(outputs=(StreamOutput(ROOM, 0xB0, 74, 0.0, 127.0),))
+    assert stream_cues(fn, "d1", [None, 0.0]) == [(ROOM, 0xB0, 74, 64)]
+
+
+def test_stream_cues_missing_or_nonnumeric_arg_returns_empty():
+    fn = _stream()
+    assert stream_cues(fn, "d1", [None]) == []
+    assert stream_cues(fn, "d1", [None, "not a number"]) == []
+    assert stream_cues(fn, "d1", [None, True]) == []
+    assert stream_cues(fn, "d1", []) == []
+
+
+def test_stream_cues_multi_output():
+    fn = _stream(outputs=(
+        StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),
+        StreamOutput(ROOM, 0xB0, 20, 127.0, 0.0),
+    ))
+    assert stream_cues(fn, "d1", [None, 90.0]) == [
+        ("d1", 0xB0, 74, 127), (ROOM, 0xB0, 20, 0)]
+
+
+def test_stream_touching_domain_boundary_gesture_verb_condition_validates():
+    """A gesture-verb condition may name a verb that is only ever declared
+    by STREAM functions, with no verb_handlers() entry at all."""
+    table = FunctionTable(functions={
+        "flash": _function(name="flash", condition=Condition(
+            name="tilted", description="d",
+            source=ConditionSource.GESTURE_VERB, verb="tilt")),
+        "lo": _stream("lo", verb="tilt", in_lo=-90.0, in_hi=0.0),
+        "hi": _stream("hi", verb="tilt", in_lo=0.0, in_hi=90.0),
+    })
+    validate_function_table(table, set())

@@ -214,6 +214,52 @@ def generator_lane(fn: Function) -> tuple[str, int, int]:
     return (fn.generator.dev, fn.generator.status, fn.generator.data1)
 
 
+def stream_input(spec: StreamSpec, args: list) -> float | None:
+    """The raw numeric value args[spec.arg] resolves to, or None when the
+    arg is missing or not a number (a malformed gesture, never raised on).
+
+    Shared by stream_cues (to build a mapped value) and GameServer.data()
+    (to test domain membership across sibling STREAM functions on the same
+    verb, ahead of any per-output mode transform)."""
+    if not isinstance(args, (list, tuple)) or spec.arg >= len(args):
+        return None
+    x = args[spec.arg]
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    x = float(x)
+    if not math.isfinite(x):
+        return None
+    return x
+
+
+def stream_cues(fn: Function, dev: str, args: list) -> list[tuple]:
+    """Mapped plain cues for one arriving verb. Clamps args[spec.arg]
+    to [in_lo, in_hi] (mode "abs" takes abs(x) first), maps linearly
+    onto each output's [out_lo, out_hi] (floats; inverted legal),
+    int(round(...)), clamps 0-255. TARGET -> the gesturing dev;
+    ROOM passes through for _resolve_dev. A missing/non-numeric arg
+    returns [] (a malformed gesture maps to nothing, never raises).
+    Boundary rule: when the value sits on two touching domains, the
+    function whose in_hi it is applies (enforced by matching
+    in_lo <= x <= in_hi in declaration order and skipping a later
+    match on an already-written lane)."""
+    spec = fn.stream
+    x = stream_input(spec, args)
+    if x is None:
+        return []
+    span_in = spec.in_hi - spec.in_lo
+    out: list[tuple] = []
+    for output in spec.outputs:
+        val = abs(x) if output.mode == "abs" else x
+        clamped = min(max(val, spec.in_lo), spec.in_hi)
+        t = (clamped - spec.in_lo) / span_in if span_in else 0.0
+        mapped = output.out_lo + t * (output.out_hi - output.out_lo)
+        data2 = max(0, min(255, int(round(mapped))))
+        out_dev = dev if output.dev == TARGET else output.dev
+        out.append((out_dev, output.status, output.data1, data2))
+    return out
+
+
 def validate_function_table(function_table, verb_names) -> None:
     """Shallow structural validation of a Bit's authored FunctionTable.
 
@@ -233,6 +279,20 @@ def validate_function_table(function_table, verb_names) -> None:
         raise ValueError(
             f"function_table: must be a FunctionTable, "
             f"got {type(function_table).__name__}")
+    # A scripted Function's GESTURE_VERB condition may name either a verb
+    # implemented by verb_handlers() or a verb declared by a STREAM Function
+    # in this same table -- a verb can be entirely stream-driven, with no
+    # handler at all, and still be a legal condition target. Computed as a
+    # first pass so declaration order within the table does not matter.
+    stream_verbs: set[str] = {
+        function_decl.stream.verb
+        for function_decl in function_table.functions.values()
+        if isinstance(function_decl, Function)
+        and function_decl.kind is FunctionKind.STREAM
+        and isinstance(function_decl.stream, StreamSpec)
+        and isinstance(function_decl.stream.verb, str)
+    }
+    allowed_verbs = set(verb_names) | stream_verbs
     generator_lanes: dict[tuple[str, int, int], str] = {}
     streams: list[Function] = []
     for key, function_decl in function_table.functions.items():
@@ -253,7 +313,7 @@ def validate_function_table(function_table, verb_names) -> None:
             raise ValueError(
                 f"{where}: kind must be a FunctionKind, got {function_decl.kind!r}")
         if function_decl.kind is FunctionKind.SCRIPTED:
-            _validate_scripted(function_decl, verb_names)
+            _validate_scripted(function_decl, allowed_verbs)
         elif function_decl.kind is FunctionKind.GENERATOR:
             _validate_generator(function_decl)
             lane = generator_lane(function_decl)

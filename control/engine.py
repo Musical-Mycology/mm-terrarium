@@ -26,10 +26,13 @@ from control.functions import (
     FIRED_BY_BIT_ADJUDICATED,
     FIRED_BY_GESTURE_VERB,
     SOURCE_WIRE,
+    Function,
     FunctionFired,
     FunctionKind,
     FunctionTarget,
     expand_script,
+    stream_cues,
+    stream_input,
     validate_function_table,
 )
 
@@ -156,6 +159,12 @@ class GameServer:
         # the validated table (per-lane uniqueness already enforced there);
         # None outside a loaded Bit. See control/generator_runner.py.
         self._generators: GeneratorRunner | None = None
+        # This Bit's declared STREAM functions, keyed by the verb they read
+        # gesture args from, declaration order preserved per verb. Built in
+        # load_bit from the same validated table _generators is built from;
+        # empty outside a loaded Bit. Consumed by data() to map a gesture's
+        # args onto MIDI lanes without a Bit handler in the loop at all.
+        self._stream_functions: dict[str, list[Function]] = {}
         # Seconds elapsed since run() started, accumulated in tick() and
         # reset there. The clock GeneratorRunner.cues() samples -- distinct
         # from self._clock() (wall/O2 time, used for `at`) so a generator's
@@ -299,6 +308,11 @@ class GameServer:
         self._generators = GeneratorRunner(
             [f for f in function_table.functions.values()
              if f.kind is FunctionKind.GENERATOR])
+        stream_functions: dict[str, list[Function]] = {}
+        for f in function_table.functions.values():
+            if f.kind is FunctionKind.STREAM:
+                stream_functions.setdefault(f.stream.verb, []).append(f)
+        self._stream_functions = stream_functions
         self._set_state(State.LOADED)
         self._enter_setup()
 
@@ -435,9 +449,15 @@ class GameServer:
         except Exception:
             logger.exception("Bit.verb_handlers raised; refusing %r", verb)
             return "handler error"
-        if handler is None:
+        streams = self._stream_functions.get(verb, ())
+        if handler is None and not streams:
             return f"unknown verb {verb!r}"
         at = self._origin(gesture_time) + self._horizon
+        stream_cue_list = self._collect_stream_cues(streams, dev, args)
+        if handler is None:
+            # Legal: a verb with declared streams and no Bit handler at all.
+            self._dispatch_cues(stream_cue_list, at, FIRED_BY_GESTURE_VERB)
+            return None
         try:
             cues = handler(dev, args, at)
         except Exception:
@@ -448,9 +468,33 @@ class GameServer:
             # below, which would otherwise iterate the string character by
             # character and try to unpack each character as a cue tuple.
             # `or` guards a blank reason so /<dev>/error is never empty.
+            # One gesture, one verdict: a refusal suppresses the stream
+            # cues collected above too, so nothing from this gesture reaches
+            # a device.
             return cues or "handler refused"
-        self._dispatch_cues(cues, at, FIRED_BY_GESTURE_VERB)
+        self._dispatch_cues(list(stream_cue_list) + list(cues or ()), at,
+                            FIRED_BY_GESTURE_VERB)
         return None
+
+    def _collect_stream_cues(self, streams, dev: str, args: list) -> list[tuple]:
+        """Mapped cues for every STREAM function on one verb whose domain
+        contains this gesture's arg, in declaration order, first write wins
+        per output lane -- the boundary rule for two domains that touch at a
+        shared point (control/functions.py's stream_cues docstring)."""
+        written_lanes: set[tuple[str, int, int]] = set()
+        out: list[tuple] = []
+        for fn in streams:
+            spec = fn.stream
+            x = stream_input(spec, args)
+            if x is None or not (spec.in_lo <= x <= spec.in_hi):
+                continue
+            for cue, output in zip(stream_cues(fn, dev, args), spec.outputs):
+                lane = (output.dev, output.status, output.data1)
+                if lane in written_lanes:
+                    continue
+                written_lanes.add(lane)
+                out.append(cue)
+        return out
 
     def _canonical_room_dev(self) -> str | None:
         """The Room's one dev for MIDI-feed purposes: the first bound
@@ -875,6 +919,7 @@ class GameServer:
         self.registration = None
         self._slot_requirements = {}
         self._generators = None
+        self._stream_functions = {}
         self._run_elapsed = 0.0
         self._set_state(State.IDLE)
 
