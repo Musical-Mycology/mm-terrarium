@@ -17,6 +17,8 @@ from control.functions import (
     FunctionTable,
     FunctionTarget,
     GeneratorSpec,
+    StreamOutput,
+    StreamSpec,
 )
 
 RUN_DURATION_SECONDS = 2.0
@@ -28,6 +30,12 @@ JAMMER_HUE_YELLOW = 0.15
 JAMMER_HUE_PURPLE = 0.78
 JAMMER_LEVEL_REST = 0.18
 JAMMER_LEVEL_FULL = 0.80
+
+# A finite-but-huge domain bound for the overflow-guard stream functions
+# below: anything past the physical [-90, 90] gamma / [0, 90] sweep range
+# is a malformed reading, never a real device value. StreamSpec requires
+# a finite in_lo/in_hi, so this stands in for "no real ceiling".
+GAMMA_OVERFLOW_BOUND = 1_000_000.0
 
 
 class TestBit(Bit):
@@ -117,8 +125,9 @@ class TestBit(Bit):
         # The jammer glows: a dim green aurora at rest. Its lanes are cc:1
         # (level) and cc:2 (hue), NOT the player's cc:74 -- that lane is a
         # plain full-rainbow sweep, and the jammer's green-centred
-        # yellow/purple shape needs its own controller pair (_on_tilt emits
-        # both; roles without these lanes simply ignore them).
+        # yellow/purple shape needs its own controller pair (the declared
+        # jam_hue_neg/jam_hue_pos and jam_level_neg/jam_level_pos stream
+        # functions emit them; roles without these lanes simply ignore them).
         jammer = Role(
             name="jammer", role_class=RoleClass.JAM,
             capacity=None, scored=False, uses=["tilt"],
@@ -133,7 +142,8 @@ class TestBit(Bit):
             },
         )
         # The Room's own role. Its cc:74 lane is driven two ways now: by any
-        # player's tilt (see _on_tilt) and by this Bit's own declared "drift"
+        # player's tilt (see the declared tilt_hue stream function) and by
+        # this Bit's own declared "drift"
         # GENERATOR function, so the Room animates whether or not anyone has
         # joined.
         # A field-rate gesture, like player's aurora -- no note lane, so it
@@ -271,6 +281,170 @@ class TestBit(Bit):
                     ScriptStep(1.2, (TARGET, 0xB0, 74, 0)),
                 ),
             ),
+            "tilt_hue": Function(
+                name="tilt_hue",
+                description="Tilt drives the calling device's own hue lane "
+                            "and the Room's, both on cc:74, straight from "
+                            "gamma in [-90, 90].",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=-90.0, in_hi=90.0,
+                    outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),
+                             StreamOutput(ROOM, 0xB0, 74, 0.0, 127.0))),
+            ),
+            # jam_level as a single mode="abs" stream over [0, 90] (the
+            # brief's shape) folds every negative gamma to zero -- Task 6's
+            # raw-value domain matching tests the ARG itself against
+            # [in_lo, in_hi] before any per-output abs(), so a negative
+            # gamma never satisfies a [0, 90] domain no matter what mode
+            # says. Declared instead as a domain-split pair, one linear
+            # map per half of the gamma range, each reading the raw
+            # (unfolded) tilt so the full [-90, 90] sweep is covered.
+            "jam_level_neg": Function(
+                name="jam_level_neg",
+                description="Jammer glow level, gamma in [-90, 0]: brightest "
+                            "at full negative tilt, dims toward rest at 0.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=-90.0, in_hi=0.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 1,
+                        JAMMER_LEVEL_FULL * 127.0,
+                        JAMMER_LEVEL_REST * 127.0),)),
+            ),
+            "jam_level_pos": Function(
+                name="jam_level_pos",
+                description="Jammer glow level, gamma in [0, 90]: rest at "
+                            "0, brightest at full positive tilt.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=0.0, in_hi=90.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 1,
+                        JAMMER_LEVEL_REST * 127.0,
+                        JAMMER_LEVEL_FULL * 127.0),)),
+            ),
+            "jam_hue_neg": Function(
+                name="jam_hue_neg",
+                description="Jammer glow hue, gamma in [-90, 0]: yellow at "
+                            "full negative tilt, green at rest.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=-90.0, in_hi=0.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 2,
+                        JAMMER_HUE_YELLOW * 127.0,
+                        JAMMER_HUE_GREEN * 127.0),)),
+            ),
+            "jam_hue_pos": Function(
+                name="jam_hue_pos",
+                description="Jammer glow hue, gamma in [0, 90]: green at "
+                            "rest, purple at full positive tilt.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=0.0, in_hi=90.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 2,
+                        JAMMER_HUE_GREEN * 127.0,
+                        JAMMER_HUE_PURPLE * 127.0),)),
+            ),
+            "shake_hue": Function(
+                name="shake_hue",
+                description="A wider shake sweep pushes the calling "
+                            "device's hue lane further.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="shake", arg=3, in_lo=0.0, in_hi=90.0,
+                    outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),)),
+            ),
+            # A wire gamma/sweep past the physical [-90, 90]/[0, 90] range
+            # is malformed (never a real device reading), which the old
+            # _on_tilt/_on_shake handled by clamping before doing any math.
+            # Task 6's domain matching tests the raw arg against a
+            # function's own [in_lo, in_hi], so a value outside every
+            # declared domain matches nothing and produces no cue -- a
+            # plain linear StreamOutput cannot both ramp over the real
+            # range AND go flat beyond it. These six pin the old clamped
+            # behaviour with constant-output (out_lo == out_hi) companions
+            # over the two overflow tails, touching their sibling's
+            # boundary so the value there agrees either way.
+            "tilt_hue_overflow_pos": Function(
+                name="tilt_hue_overflow_pos",
+                description="Malformed gamma above 90 clamps like tilt_hue "
+                            "did at exactly 90.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=90.0, in_hi=GAMMA_OVERFLOW_BOUND,
+                    outputs=(StreamOutput(TARGET, 0xB0, 74, 127.0, 127.0),
+                             StreamOutput(ROOM, 0xB0, 74, 127.0, 127.0))),
+            ),
+            "tilt_hue_overflow_neg": Function(
+                name="tilt_hue_overflow_neg",
+                description="Malformed gamma below -90 clamps like tilt_hue "
+                            "did at exactly -90.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=-GAMMA_OVERFLOW_BOUND, in_hi=-90.0,
+                    outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 0.0),
+                             StreamOutput(ROOM, 0xB0, 74, 0.0, 0.0))),
+            ),
+            "jam_level_overflow_pos": Function(
+                name="jam_level_overflow_pos",
+                description="Malformed gamma above 90 clamps like "
+                            "jam_level_pos did at exactly 90.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=90.0, in_hi=GAMMA_OVERFLOW_BOUND,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 1,
+                        JAMMER_LEVEL_FULL * 127.0,
+                        JAMMER_LEVEL_FULL * 127.0),)),
+            ),
+            "jam_level_overflow_neg": Function(
+                name="jam_level_overflow_neg",
+                description="Malformed gamma below -90 clamps like "
+                            "jam_level_neg did at exactly -90.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=-GAMMA_OVERFLOW_BOUND, in_hi=-90.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 1,
+                        JAMMER_LEVEL_FULL * 127.0,
+                        JAMMER_LEVEL_FULL * 127.0),)),
+            ),
+            "jam_hue_overflow_pos": Function(
+                name="jam_hue_overflow_pos",
+                description="Malformed gamma above 90 clamps like "
+                            "jam_hue_pos did at exactly 90.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=90.0, in_hi=GAMMA_OVERFLOW_BOUND,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 2,
+                        JAMMER_HUE_PURPLE * 127.0,
+                        JAMMER_HUE_PURPLE * 127.0),)),
+            ),
+            "jam_hue_overflow_neg": Function(
+                name="jam_hue_overflow_neg",
+                description="Malformed gamma below -90 clamps like "
+                            "jam_hue_neg did at exactly -90.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="tilt", arg=1, in_lo=-GAMMA_OVERFLOW_BOUND, in_hi=-90.0,
+                    outputs=(StreamOutput(
+                        TARGET, 0xB0, 2,
+                        JAMMER_HUE_YELLOW * 127.0,
+                        JAMMER_HUE_YELLOW * 127.0),)),
+            ),
+            "shake_hue_overflow": Function(
+                name="shake_hue_overflow",
+                description="Malformed sweep above 90 clamps like "
+                            "shake_hue did at exactly 90.",
+                kind=FunctionKind.STREAM,
+                stream=StreamSpec(
+                    verb="shake", arg=3, in_lo=90.0, in_hi=GAMMA_OVERFLOW_BOUND,
+                    outputs=(StreamOutput(TARGET, 0xB0, 74, 127.0, 127.0),)),
+            ),
         })
 
     def fires(self, at: float) -> list:
@@ -313,66 +487,47 @@ class TestBit(Bit):
                 "rounds_won": self._rounds_won}
 
     def verb_handlers(self) -> dict:
-        """Gameplay verbs beyond the fixed lifecycle set. `tilt` maps device
-        tilt onto cc:74, which this Bit's `player` role binds to aurora's hue
-        lane -- so tilting a device glides its Shroom's colour. `tap` and
-        `shake` exercise the local-sample path and the same hue lane.
-        Boundary rule 3: the Bit decides the light consequence, not the
-        transport."""
+        """Gameplay verbs beyond the fixed lifecycle set. `tilt`'s light/
+        audio consequences are the declared tilt_hue/jam_level_*/jam_hue_*
+        STREAM functions (function_table); this handler keeps only the
+        round adjudication a stream can't do. `tap` exercises the
+        local-sample path and fires flash_device. `shake` has no handler
+        at all here -- it is stream-only, reachable through the declared
+        shake_hue STREAM function's verb, per validate_function_table's
+        stream-verb allowance. Boundary rule 3: the Bit decides the light
+        consequence, not the transport."""
         return {"tilt": self._on_tilt,
-                "tap": self._on_tap,
-                "shake": self._on_shake}
+                "tap": self._on_tap}
 
     def _on_tilt(self, dev: str, args: list, at: float) -> list:
         """args: [dev, gamma]. gamma is degrees in [-90, 90].
 
-        Two cues, one `at`. The calling device's own hue lane, and the Room's.
-        The Room role declares cc:74 on BOTH its light_manifest (rainbow hue)
-        and its ugen_manifest (FluidSynth cutoff), so one tilt moves the Room's
-        colour and the Room's drone timbre against a single shared time.
-        Neither cue names a time: control/engine.py stamps both with `at`,
-        which is what makes "one gesture, one T" hold without a Bit having to
-        remember to say so.
-
-        Full deflection also counts toward the round. Counted here rather than
-        reported here: a round is not a light consequence of this gesture, and
-        cues() is where this Bit reports one.
+        Adjudication only now: every light/audio consequence of a tilt
+        (the calling device's hue lane, the Room's, and the jammer's glow
+        pair) is a declared STREAM function (tilt_hue, jam_level_neg/pos,
+        jam_hue_neg/pos) dispatched by the engine ahead of this handler, on
+        the same `at` -- see function_table. This handler keeps only what
+        the engine cannot decide for itself: whether a full deflection
+        counts toward the round. `cc` is recomputed here from gamma with
+        the exact old formula (not read off any stream) purely for that
+        threshold test; it produces no cue.
         """
         gamma = float(args[1]) if len(args) > 1 else 0.0
         gamma = max(-90.0, min(90.0, gamma))
         cc = int(round((gamma + 90.0) / 180.0 * 127.0))
-        # The jammer's glow pair, device-targeted only (the Room has no
-        # cc:1/cc:2 lanes and must not be fed them anyway). Brightness rises
-        # with |tilt| in either direction; hue leaves green toward yellow
-        # (gamma < 0) or purple (gamma > 0).
-        level = JAMMER_LEVEL_REST + abs(gamma) / 90.0 * (
-            JAMMER_LEVEL_FULL - JAMMER_LEVEL_REST)
-        edge = JAMMER_HUE_PURPLE if gamma >= 0 else JAMMER_HUE_YELLOW
-        hue = JAMMER_HUE_GREEN + abs(gamma) / 90.0 * (edge - JAMMER_HUE_GREEN)
-        level_cc = int(round(level * 127.0))
-        hue_cc = int(round(hue * 127.0))
         if cc >= 127:
             self._full_tilts += 1
             if self._full_tilts >= self.ROUND_TILTS:
                 self._full_tilts = 0
                 self._round_won = True
-        return [(dev, 0xB0, 74, cc), (ROOM, 0xB0, 74, cc),
-                (dev, 0xB0, 1, level_cc), (dev, 0xB0, 2, hue_cc)]
+        return []
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
         """args: [dev, peak_g, duration_ms, count]. A single tap clicks, a
         double chimes; both flash the hue lane so the tap is visible as well
-        as audible, and both fire this Bit's declared flash_device trigger for
+        as audible, and both fire this Bit's declared flash_device function for
         the tapping device."""
         count = int(args[3]) if len(args) > 3 else 1
         name = "chime" if count >= 2 else "click"
         return [PlayCue(dev, name, ""), (dev, 0xB0, 74, 127),
                 FireFunction("flash_device", dev)]
-
-    def _on_shake(self, dev: str, args: list, at: float) -> list:
-        """args: [dev, peak_g, duration_ms, sweep_deg]. Sweep drives the hue
-        lane: a wider sweep pushes the colour further."""
-        sweep = float(args[3]) if len(args) > 3 else 0.0
-        sweep = max(0.0, min(90.0, sweep))
-        cc = int(round(sweep / 90.0 * 127.0))
-        return [(dev, 0xB0, 74, cc)]

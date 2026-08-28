@@ -152,11 +152,14 @@ class StreamSpec:
     the domain (in_lo < in_hi); each entry in `outputs` maps that domain onto
     its own output range.
 
-    Two streams may write the same output lane as long as their `in_lo`/
-    `in_hi` domains do not overlap. They may touch at a single shared
-    boundary point (one's in_hi equal to the other's in_lo); at that exact
-    point, the function whose domain is lower (the one for which the shared
-    value is its in_hi) applies.
+    Two streams on the SAME verb may write the same output lane as long as
+    their `in_lo`/`in_hi` domains do not overlap. They may touch at a
+    single shared boundary point (one's in_hi equal to the other's
+    in_lo); at that exact point, the function whose domain is lower (the
+    one for which the shared value is its in_hi) applies. Two streams on
+    DIFFERENT verbs may share a lane with overlapping domains freely --
+    GameServer.data() dispatches one verb's streams per call, so they
+    never compete for the same gesture.
     """
     verb: str
     arg: int
@@ -441,11 +444,23 @@ def _validate_stream_output(output: StreamOutput, where: str) -> None:
 
 
 def _validate_stream_lane_overlap(streams: list) -> None:
-    lanes: dict[tuple[str, int, int], list[tuple[float, float, str]]] = {}
+    """Two STREAM functions on the SAME verb may not write overlapping
+    domains onto the same lane -- one gesture value could satisfy both,
+    and _collect_stream_cues's first-write-wins boundary rule only
+    resolves a single shared point, not a real overlap.
+
+    Two different verbs sharing a lane are unrestricted here even when
+    their domains overlap as plain numeric ranges: GameServer.data()
+    dispatches one verb's streams per call, so a tilt's domain and a
+    shake's domain on the same lane never compete for the same gesture --
+    the verb itself already disambiguates which one applies.
+    """
+    lanes: dict[tuple[str, int, int, str],
+               list[tuple[float, float, str]]] = {}
     for function_decl in streams:
         spec = function_decl.stream
         for output in spec.outputs:
-            lane = (output.dev, output.status, output.data1)
+            lane = (output.dev, output.status, output.data1, spec.verb)
             lanes.setdefault(lane, []).append(
                 (float(spec.in_lo), float(spec.in_hi), function_decl.name))
     for lane, intervals in lanes.items():
@@ -454,8 +469,9 @@ def _validate_stream_lane_overlap(streams: list) -> None:
                 intervals, intervals[1:]):
             if prev_hi > next_lo:
                 raise ValueError(
-                    f"stream lane {lane!r}: functions {prev_name!r} and "
-                    f"{next_name!r} overlap on their input domains")
+                    f"stream lane {lane[:3]!r} verb {lane[3]!r}: functions "
+                    f"{prev_name!r} and {next_name!r} overlap on their "
+                    f"input domains")
 
 
 def _validate_condition(function_decl: Function, verb_names) -> None:

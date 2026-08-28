@@ -1,5 +1,15 @@
-from bits.test.test_bit import TestBit
+import pytest
+
+from bits.test.test_bit import (
+    JAMMER_HUE_GREEN,
+    JAMMER_HUE_PURPLE,
+    JAMMER_HUE_YELLOW,
+    JAMMER_LEVEL_FULL,
+    JAMMER_LEVEL_REST,
+    TestBit,
+)
 from control.cues import ROOM, FireFunction, MuteCue
+from control.engine import GameServer
 from control.generator_runner import GeneratorRunner
 from control.instrument import InstrumentRequirement
 from control.roles import RoleClass
@@ -180,14 +190,21 @@ def test_double_tap_plays_chime():
 
 
 def test_shake_maps_sweep_to_a_light_cue():
-    from bits.test.test_bit import TestBit
-    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 90.0], 0.0)
+    """shake is stream-only now (no _on_shake handler): shake_hue maps the
+    sweep arg straight onto the calling device's cc:74 lane."""
+    from control.functions import stream_cues
+    fn = TestBit().function_table.functions["shake_hue"]
+    cues = stream_cues(fn, "ie1", ["ie1", 2.4, 600.0, 90.0])
     assert cues == [("ie1", 0xB0, 74, 127)]
 
 
 def test_shake_clamps_out_of_range_sweep():
-    from bits.test.test_bit import TestBit
-    cues = TestBit().verb_handlers()["shake"]("ie1", ["ie1", 2.4, 600.0, 999.0], 0.0)
+    """A sweep past 90 falls to shake_hue_overflow's constant-output tail
+    (see bits/test/test_bit.py's overflow-guard functions) rather than
+    shake_hue itself, but the cue is identical either way."""
+    fn = TestBit().function_table.functions["shake_hue_overflow"]
+    from control.functions import stream_cues
+    cues = stream_cues(fn, "ie1", ["ie1", 2.4, 600.0, 999.0])
     assert cues == [("ie1", 0xB0, 74, 127)]
 
 
@@ -196,7 +213,9 @@ def test_gesture_handlers_tolerate_short_args():
     from bits.test.test_bit import TestBit
     bit = TestBit()
     assert bit.verb_handlers()["tap"]("ie1", ["ie1"], 0.0) is not None
-    assert bit.verb_handlers()["shake"]("ie1", ["ie1"], 0.0) is not None
+    # shake has no handler at all post-conversion (stream-only); its
+    # robustness to a short frame is stream_input's job, pinned in
+    # control/functions.py's own tests, not this Bit's.
 
 
 def test_test_bit_declares_room_manifests():
@@ -228,12 +247,16 @@ def test_tilt_drives_the_calling_device_and_the_room_at_one_time():
     and its ugen_manifest (FluidSynth cutoff), so one tilt moves the Room's
     colour and the Room's drone timbre against a single shared time. This is
     the gesture that makes the timed-cue path load-bearing rather than merely
-    present."""
+    present.
+
+    Tilt's light/audio consequences are the declared tilt_hue stream
+    function now (_on_tilt keeps only round adjudication and returns []),
+    so this exercises stream_cues directly the way GameServer.data would."""
     from control.cues import ROOM
-    bit = TestBit()
-    cues = bit._on_tilt("ie1", ["ie1", 0.0], at=1000.06)
-    assert cues == [("ie1", 0xB0, 74, 64), (ROOM, 0xB0, 74, 64),
-                    ("ie1", 0xB0, 1, 23), ("ie1", 0xB0, 2, 42)]
+    from control.functions import stream_cues
+    fn = TestBit().function_table.functions["tilt_hue"]
+    cues = stream_cues(fn, "ie1", ["ie1", 0.0])
+    assert cues == [("ie1", 0xB0, 74, 64), (ROOM, 0xB0, 74, 64)]
 
 
 def test_room_drift_is_a_deterministic_triangle():
@@ -252,14 +275,28 @@ def test_room_drift_is_a_deterministic_triangle():
         spec, TestBit.ROOM_DRIFT_PERIOD * 3 / 4) == 64
 
 
+SCRIPTED_FUNCTION_NAMES = {"flash_device", "play_aurora", "stop", "win"}
+STREAM_FUNCTION_NAMES = {
+    "tilt_hue", "jam_level_neg", "jam_level_pos", "jam_hue_neg",
+    "jam_hue_pos", "shake_hue",
+    "tilt_hue_overflow_pos", "tilt_hue_overflow_neg",
+    "jam_level_overflow_pos", "jam_level_overflow_neg",
+    "jam_hue_overflow_pos", "jam_hue_overflow_neg",
+    "shake_hue_overflow",
+}
+
+
 def test_testbit_declares_a_room_drift_generator_and_four_surface_triggers():
     table = TestBit().function_table
-    assert set(table.functions) == {
-        "drift", "flash_device", "play_aurora", "stop", "win"}
+    assert set(table.functions) == (
+        {"drift"} | SCRIPTED_FUNCTION_NAMES | STREAM_FUNCTION_NAMES)
     assert table.functions["drift"].kind is FunctionKind.GENERATOR
     scripted = {name: fn for name, fn in table.functions.items()
-                if name != "drift"}
+                if name in SCRIPTED_FUNCTION_NAMES}
     assert all(t.target is FunctionTarget.SURFACE for t in scripted.values())
+    streams = {name: fn for name, fn in table.functions.items()
+               if name in STREAM_FUNCTION_NAMES}
+    assert all(fn.kind is FunctionKind.STREAM for fn in streams.values())
 
 
 def test_flash_script_is_chime_plus_white_5s():
@@ -359,6 +396,30 @@ def test_jammer_declares_a_low_green_aurora_on_its_own_lanes():
                              {"source": "cc:1", "dest": "level"}]
 
 
+def _stream_cue_lanes(bit, dev: str, args: list) -> list:
+    """Every declared tilt STREAM function's cue for one gesture, combined
+    the way GameServer._collect_stream_cues combines them (declaration
+    order, first write wins per lane) -- used by tests below that assert
+    on the jammer's cc:1/cc:2 pair without needing a full GameServer."""
+    from control.functions import FunctionKind, stream_cues, stream_input
+    written = set()
+    out = []
+    for fn in bit.function_table.functions.values():
+        if fn.kind is not FunctionKind.STREAM or fn.stream.verb != "tilt":
+            continue
+        spec = fn.stream
+        x = stream_input(spec, args)
+        if x is None or not (spec.in_lo <= x <= spec.in_hi):
+            continue
+        for cue, output in zip(stream_cues(fn, dev, args), spec.outputs):
+            lane = (output.dev, output.status, output.data1)
+            if lane in written:
+                continue
+            written.add(lane)
+            out.append(cue)
+    return out
+
+
 def test_tilt_emits_jammer_glow_ccs_alongside_the_player_lanes():
     """Every device gets the shaped cc:1/cc:2 pair; only a role declaring
     those lanes (jammer) reacts. gamma=0: rest -- green hue, dim level.
@@ -370,20 +431,104 @@ def test_tilt_emits_jammer_glow_ccs_alongside_the_player_lanes():
         return [(c[2], c[3]) for c in cues
                 if isinstance(c, tuple) and c[1] == 0xB0 and c[2] in (1, 2)]
 
-    rest = bit._on_tilt("ie1", ["ie1", 0.0], at=0.0)
-    assert rest[:2] == [("ie1", 0xB0, 74, 64), (ROOM, 0xB0, 74, 64)]
+    rest = _stream_cue_lanes(bit, "ie1", ["ie1", 0.0])
+    assert set(rest[:2]) == {("ie1", 0xB0, 74, 64), (ROOM, 0xB0, 74, 64)}
     assert glow(rest) == [(1, 23), (2, 42)]        # level 0.18, hue 0.33
 
-    purple = bit._on_tilt("ie1", ["ie1", 90.0], at=0.0)
+    purple = _stream_cue_lanes(bit, "ie1", ["ie1", 90.0])
     assert glow(purple) == [(1, 102), (2, 99)]     # level 0.80, hue 0.78
 
-    yellow = bit._on_tilt("ie1", ["ie1", -90.0], at=0.0)
+    yellow = _stream_cue_lanes(bit, "ie1", ["ie1", -90.0])
     assert glow(yellow) == [(1, 102), (2, 19)]     # level 0.80, hue 0.15
 
 
 def test_jammer_glow_ccs_target_only_the_calling_device():
     from control.cues import ROOM
-    cues = TestBit()._on_tilt("ie1", ["ie1", 45.0], at=0.0)
+    cues = _stream_cue_lanes(TestBit(), "ie1", ["ie1", 45.0])
     for cue in cues:
         if isinstance(cue, tuple) and cue[2] in (1, 2):
             assert cue[0] == "ie1" and cue[0] != ROOM
+
+
+# --- Task 7 regression pin: engine-level, byte-identical across the stream
+# conversion. Written FIRST against the unconverted _on_tilt/_on_shake and
+# run to PASS before any conversion happens (see task-7-brief.md Step 1);
+# the expected sets below are the OLD handler math, spelled out here so the
+# pin does not depend on the Bit's own implementation once it moves to
+# declared streams. Cue ORDER may legitimately differ post-conversion
+# (streams dispatch ahead of the handler's own cues, where the old handler
+# emitted all four itself in one list) -- every assertion below is therefore
+# a per-lane SET/multiset compare, not an ordered list compare.
+
+def _old_tilt_cue_set(dev: str, raw_gamma: float) -> set:
+    """Exactly _on_tilt's old math (bits/test/test_bit.py, pre-conversion),
+    spelled out independently of the Bit so the pin survives the Bit's own
+    code changing underneath it."""
+    gamma = max(-90.0, min(90.0, raw_gamma))
+    cc = int(round((gamma + 90.0) / 180.0 * 127.0))
+    level = JAMMER_LEVEL_REST + abs(gamma) / 90.0 * (
+        JAMMER_LEVEL_FULL - JAMMER_LEVEL_REST)
+    edge = JAMMER_HUE_PURPLE if gamma >= 0 else JAMMER_HUE_YELLOW
+    hue = JAMMER_HUE_GREEN + abs(gamma) / 90.0 * (edge - JAMMER_HUE_GREEN)
+    level_cc = int(round(level * 127.0))
+    hue_cc = int(round(hue * 127.0))
+    return {(dev, 0xB0, 74, cc), ("room-dev", 0xB0, 74, cc),
+            (dev, 0xB0, 1, level_cc), (dev, 0xB0, 2, hue_cc)}
+
+
+def _old_shake_cue_set(dev: str, raw_sweep: float) -> set:
+    """Exactly _on_shake's old math (deleted by the conversion)."""
+    sweep = max(0.0, min(90.0, raw_sweep))
+    cc = int(round(sweep / 90.0 * 127.0))
+    return {(dev, 0xB0, 74, cc)}
+
+
+def _pin_server() -> GameServer:
+    """A Room is bound (not just a joined device) so a ROOM-targeted cue
+    resolves to a real dev rather than being dropped -- the old _on_tilt
+    always emitted a (ROOM, ...) cue, so the pin needs a Room to catch it."""
+    from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+    from control.rooms import Room
+    from tests.instrument_fixtures import GENERIC_SURFACE
+
+    profile = RoomProfile(surface_id="room_test", fixtures=(
+        RoomFixture(name="main", color_order="GRB",
+                   blocks=(RoomBlock("main", 0, 10),),
+                   zones=(RoomZone("all", 0, 10),),
+                   instrument=GENERIC_SURFACE),))
+    gs = GameServer({"TestBit": TestBit})
+    gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
+    gs.room.bound = {"main": "room-dev"}
+    gs.load_bit("TestBit")
+    gs.devices.hello("dev-1", "device-one", "1.0")
+    result = gs.join("dev-1", "TEST_PLAYER_NODE")
+    assert result.granted, result.reason
+    return gs
+
+
+@pytest.mark.parametrize(
+    "gamma", [-90, -45, -0.0, 0.0, 30, 90, 120])
+def test_pin_tilt_cues_match_old_handler_math_per_lane(gamma):
+    gs = _pin_server()
+    seen = []
+    gs.on_light_cue = lambda *c: seen.append(c)
+
+    reason = gs.data("dev-1", "tilt", ["dev-1", gamma], gesture_time=0.0)
+
+    assert reason is None
+    got = {cue[:4] for cue in seen}
+    assert got == _old_tilt_cue_set("dev-1", gamma)
+
+
+@pytest.mark.parametrize("sweep", [0, 45, 90, 100])
+def test_pin_shake_cues_match_old_handler_math_per_lane(sweep):
+    gs = _pin_server()
+    seen = []
+    gs.on_light_cue = lambda *c: seen.append(c)
+
+    reason = gs.data(
+        "dev-1", "shake", ["dev-1", 2.4, 600.0, sweep], gesture_time=0.0)
+
+    assert reason is None
+    got = {cue[:4] for cue in seen}
+    assert got == _old_shake_cue_set("dev-1", sweep)
