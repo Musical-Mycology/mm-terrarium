@@ -68,10 +68,19 @@ class FireFunction:
     """A Bit's report that one of its own declared conditions is satisfied.
 
     Returned in the same list a Bit already returns cues in, from a verb
-    handler or from cues(at), so a fire inherits that path's single
+    handler or from fires(at), so a fire inherits that path's single
     presentation time and lands on the same frame as the ordinary cues
     returned beside it. `dev` names the device the fire is about, when there
     is one; it is what FunctionTarget.DEVICE resolves to.
+
+    `at` is an explicit presentation time for THIS fire -- e.g. a beat-grid
+    time a Bit computed itself -- overriding the dispatching call's own `at`.
+    None (the default) means inherit it, exactly as before this field
+    existed. This is the sanctioned seam for discrete, Bit-timed cue
+    emission: a Bit whose consequences are keyed to points on its own grid
+    (not a continuous per-tick `fires(at)` presentation time, and not a
+    GENERATOR Function's free-running waveform) reports each one as a
+    FireFunction stamped with its own grid time, rather than a raw cue.
 
     A distinct type rather than a magic tuple, for the same reason PlayCue and
     LightCue are: GameServer._dispatch_cues tells cue kinds apart by identity,
@@ -79,6 +88,7 @@ class FireFunction:
     """
     name: str
     dev: str | None = None
+    at: float | None = None
 
 
 @dataclass(frozen=True)

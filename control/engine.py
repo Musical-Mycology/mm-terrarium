@@ -735,7 +735,8 @@ class GameServer:
                     reason = self.fire_function(
                         cue.name,
                         fired_by=fired_by or FIRED_BY_BIT_ADJUDICATED,
-                        dev=cue.dev, at=at)
+                        dev=cue.dev,
+                        at=(cue.at if cue.at is not None else at))
                     if reason is not None:
                         logger.warning("Bit fired function %r: %s",
                                        cue.name, reason)

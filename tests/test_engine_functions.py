@@ -244,6 +244,36 @@ def test_a_fires_fire_is_recorded_as_bit_adjudicated():
     assert [r.fired_by for r in observer.fired] == ["bit-adjudicated"]
 
 
+def test_fires_returned_fire_with_explicit_at_overrides_the_ticks_at():
+    """FireFunction.at (control/cues.py) is the sanctioned seam for a Bit
+    to stamp a fire with its own presentation time -- e.g. a beat-grid time
+    it computed itself -- instead of inheriting fires(at)'s tick `at`. A
+    Bit-supplied `at` must reach fire_function untouched, so the script's
+    offsets land relative to THAT time, not the tick's."""
+    class GridFiresBit(_BaseBit):
+        @property
+        def function_table(self) -> FunctionTable:
+            return FunctionTable(functions={
+                "sweep": Function(
+                    name="sweep", description="Sweep the Room",
+                    target=FunctionTarget.ROOM,
+                    condition=Condition(name="round_won",
+                                        description="User wins a round",
+                                        source=ConditionSource.BIT_ADJUDICATED),
+                    script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
+                            ScriptStep(0.5, (TARGET, 0xB0, 74, 40)),
+                            ScriptStep(2.0, (TARGET, 0xB0, 74, 0)))),
+            })
+
+        def fires(self, at):
+            from control.cues import FireFunction
+            return [FireFunction("sweep", at=500.0)]
+
+    gs, light, _ = _running(bit_cls=GridFiresBit)
+    gs.tick(0.01)                      # tick's own `at` would be 100.0
+    assert [c[4] for c in light] == [500.0, 500.5, 502.0]
+
+
 def test_fires_returning_a_plain_cue_tuple_is_dropped_not_dispatched():
     """Bit.fires may return only FireFunctions -- lane-driving from this
     hook is exactly what generators exist to replace. A non-FireFunction

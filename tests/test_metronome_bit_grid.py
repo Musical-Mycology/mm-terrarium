@@ -1,17 +1,19 @@
 """tests/test_metronome_bit_grid.py
 
-MetronomeBit.cues(at) is gone (Bit.fires(at) is FireFunction-only now, and
-the engine never called cues() to begin with). The per-beat LightCue
-schedule these tests exercise -- click note pairs, the downbeat green
-flash, the level pulse decay -- has no engine seam any more (see
-bits/metronome/metronome_bit.py's fires(at) docstring and this task's
-DONE_WITH_CONCERNS report): it is not a periodic waveform a GENERATOR
-Function could declare, since each beat's cues depend on runtime state
-(whose turn it is, which devs are currently failed) a GeneratorSpec cannot
-read. _beat_cues(k) survives as a pure helper, tested directly here.
+Unit coverage for MetronomeBit's beat-grid schedule as restored through
+FireFunction.at (control/cues.py): fires(at) walks the beat grid forward
+exactly as the old cues(at) did, but now emits FireFunction(name, dev,
+at=beat_grid_time) instead of raw LightCue tuples -- each one a SCRIPTED
+Function declared in function_table (metro_downbeat, metro_click,
+metro_pulse_room, metro_pulse_player, metro_recovery). Engine-level
+coverage of the resulting on_light_cue bytes lives in
+tests/test_metronome_bit_engine.py; this file tests fires(at)'s own
+FireFunction output (names/devs/ats) and its per-beat idempotency.
 """
 from bits.metronome.metronome_bit import MetronomeBit
-from control.cues import ROOM, LightCue
+from control.cues import FireFunction, ROOM
+
+B = MetronomeBit.BEAT_S
 
 
 def _started(players=("ie1",)):
@@ -19,56 +21,63 @@ def _started(players=("ie1",)):
     for dev in players:
         bit.on_join(dev, "player")
     bit.on_run_start()
-    bit.fires(100.0)                   # anchor: t0 = 100.0 + LEAD_IN_S
     return bit
 
 
-def _lightcues(cues):
-    return [c for c in cues if isinstance(c, LightCue)]
+def _names(fires):
+    return [(f.name, f.dev, f.at) for f in fires]
 
 
 def test_anchor_set_on_first_fires_call():
-    bit = MetronomeBit()
-    bit.on_join("ie1", "player")
-    bit.on_run_start()
+    bit = _started()
     bit.fires(100.0)
     assert bit._t0 == 100.0 + bit.LEAD_IN_S
 
 
-def test_beat_zero_emits_hard_click_at_t0():
+def test_beat_zero_fires_downbeat_and_pulses_at_its_own_grid_time():
     bit = _started()
-    cues = _lightcues(bit._beat_cues(0))
-    ons = [c for c in cues
-           if c.dev == ROOM and c.status == 0x90 and c.data1 == bit.CLICK_KEY]
-    assert ons and ons[0].data2 == bit.HARD_VEL
-    assert ons[0].when == bit._t0
-    offs = [c for c in cues if c.status == 0x80]
-    assert offs and offs[0].when > ons[0].when
+    fires = bit.fires(100.0)
+    grid0 = bit._t0
+    names = _names(fires)
+    assert ("metro_downbeat", None, grid0) in names
+    assert ("metro_pulse_room", None, grid0) in names
+    assert ("metro_pulse_player", "ie1", grid0) in names
 
 
 def test_soft_clicks_on_beats_1_to_3_and_none_on_wait_beats():
     bit = _started()
     seen = {}
-    for k in range(9):                 # one cycle plus the next hard click
-        for c in _lightcues(bit._beat_cues(k)):
-            if c.dev == ROOM and c.status == 0x90 and c.data1 == bit.CLICK_KEY:
-                seen[k] = c.data2
-    assert seen[1] == seen[2] == seen[3] == bit.SOFT_VEL
+    t = 100.0
+    for _ in range(200):               # tick forward well past one cycle
+        t += 0.05
+        for f in bit.fires(t):
+            if f.name in ("metro_downbeat", "metro_click"):
+                k = round((f.at - bit._t0) / bit.BEAT_S)
+                seen[k] = f.name
+    assert seen[0] == "metro_downbeat"
+    assert seen[1] == seen[2] == seen[3] == "metro_click"
     assert 4 not in seen and 5 not in seen and 6 not in seen and 7 not in seen
-    assert seen[8] == bit.HARD_VEL     # next cycle's hard click
+    assert seen[8] == "metro_downbeat"     # next cycle's downbeat
 
 
-def test_beat_cues_is_pure_and_repeatable():
+def test_a_beat_fires_exactly_once():
     bit = _started()
-    first = _lightcues(bit._beat_cues(0))
-    again = _lightcues(bit._beat_cues(0))
-    assert [(c.dev, c.status, c.data1, c.data2, c.when) for c in first] == \
-           [(c.dev, c.status, c.data1, c.data2, c.when) for c in again]
+    bit.fires(100.0)
+    grid0 = bit._t0
+    again = [f for f in bit.fires(100.0) if f.at == grid0]
+    assert again == []                 # beat 0 not re-emitted
 
 
 def test_green_pulse_rides_every_beat_on_room_and_players():
     bit = _started(players=("ie1", "ie2"))
-    cues = _lightcues(bit._beat_cues(0))
-    pulse_devs = {c.dev for c in cues if c.status == 0xB0 and c.data1 == 11
-                  and c.data2 == bit.LEVEL_PULSE}
+    fires = bit.fires(100.0)
+    grid0 = bit._t0
+    pulse_devs = set()
+    for f in fires:
+        if f.at != grid0:
+            continue
+        if f.name == "metro_pulse_room":
+            pulse_devs.add(ROOM)
+        elif f.name == "metro_pulse_player":
+            pulse_devs.add(f.dev)
     assert pulse_devs == {ROOM, "ie1", "ie2"}
