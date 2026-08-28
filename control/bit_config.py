@@ -39,7 +39,7 @@ class BitIdentity:
     entry: str = ""
     kind: str = "game"
     author: str = ""
-    min_terrarium: str = ""
+    requires_terrarium_api: int | None = None
 
 
 @dataclass(frozen=True)
@@ -152,7 +152,7 @@ def _warn_unknown_keys(table: dict, known: set[str], *, source: str, prefix: str
 
 def _parse_identity(raw: dict, *, source: str) -> BitIdentity:
     known = {"name", "version", "description", "entry", "kind", "author",
-             "min_terrarium"}
+             "requires_terrarium_api"}
     _warn_unknown_keys(raw, known, source=source, prefix="bit")
 
     name = _get(raw, "name", str, "", source=source, prefix="bit")
@@ -180,8 +180,8 @@ def _parse_identity(raw: dict, *, source: str) -> BitIdentity:
         entry=entry,
         kind=kind,
         author=_get(raw, "author", str, "", source=source, prefix="bit"),
-        min_terrarium=_get(raw, "min_terrarium", str, "", source=source,
-                            prefix="bit"),
+        requires_terrarium_api=_get(raw, "requires_terrarium_api", int, None,
+                                     source=source, prefix="bit"),
     )
 
 
