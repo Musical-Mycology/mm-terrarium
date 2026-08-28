@@ -235,7 +235,7 @@ function instrumentTags(instrument) {
     row.appendChild(mk("span", "insttag cap", cap));
   }
   for (const fn of instrument.functions || []) {
-    row.appendChild(mk("span", "insttag fn", fn));
+    row.appendChild(mk("span", "insttag fn", `${fn.name} (${fn.kind})`));
   }
   for (const cue of instrument.accepted_cues || []) {
     row.appendChild(mk("span", "insttag cue", cue));

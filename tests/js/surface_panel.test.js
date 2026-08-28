@@ -14,7 +14,9 @@ const ROOM = {
       url: "http://sim-room-main.local/surface",
       instrument: { name: "generic_surface",
                     capabilities: ["audio.flsyn", "light.surface"],
-                    functions: [], accepted_cues: ["midi", "solid"],
+                    functions: [{ name: "glow", kind: "generator",
+                                  lane: "cc:74", period: 12.0 }],
+                    accepted_cues: ["midi", "solid"],
                     event_triggers: [{ name: "tap", thresholds: { z_delta: 2.5 } }] } },
     { name: "accent", pixel_count: 30, channel_start: 180, channel_count: 90,
       zones: [{ name: "accent.low", start: 0, count: 15 },
@@ -68,6 +70,11 @@ const ROOM = {
   // alongside capabilities on the fixture's instrument tag row.
   assert.ok(card.innerHTML.includes("tap"));
   assert.ok(card.innerHTML.includes("z_delta:2.5"));
+  // declared generator function tags render a compact string, not
+  // "[object Object]" -- room_view.py's _function_view feeds an object,
+  // not a string (review fix round 1).
+  assert.ok(card.innerHTML.includes("glow (generator)"));
+  assert.ok(!card.innerHTML.includes("[object Object]"));
 
   // a controllers-only change must NOT rebuild fixture strips (rule 1/3):
   const stripBefore = surface._canvasFor("sim-room-main");
