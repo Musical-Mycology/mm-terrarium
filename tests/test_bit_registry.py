@@ -19,6 +19,7 @@ GOOD = """
 [bit]
 name = "GoodBit"
 entry = "fake_bit:GoodBit"
+requires_terrarium_api = 1
 [console]
 hidden = false
 """
@@ -167,3 +168,52 @@ def test_list_view_role_summary_is_none_when_the_bit_raises(monkeypatch):
     monkeypatch.setattr(registry, "bit_class", lambda name: _RaisingBit)
     for row in registry.list_view():
         assert row["roles"] is None
+
+
+def _manifest(name: str, api_line: str = "requires_terrarium_api = 1") -> str:
+    return f"""
+[bit]
+name = "{name}"
+entry = "{name.lower()}:{name}"
+{api_line}
+"""
+
+
+def test_matching_api_version_discovers(tmp_path):
+    pkg = tmp_path / "ok"
+    pkg.mkdir()
+    (pkg / "bit.toml").write_text(_manifest("Ok"))
+    reg = BitRegistry.scan((tmp_path,))
+    assert "Ok" in reg.packages and not reg.errors
+
+
+def test_missing_api_key_is_located_package_error(tmp_path):
+    pkg = tmp_path / "old"
+    pkg.mkdir()
+    (pkg / "bit.toml").write_text(_manifest("Old", api_line=""))
+    reg = BitRegistry.scan((tmp_path,))
+    assert "Old" not in reg.packages
+    assert len(reg.errors) == 1
+    err = reg.errors[0]
+    assert "requires_terrarium_api" in err.message
+    assert err.path.endswith("old/bit.toml")
+
+
+def test_wrong_api_version_names_both_numbers(tmp_path):
+    pkg = tmp_path / "future"
+    pkg.mkdir()
+    (pkg / "bit.toml").write_text(
+        _manifest("Future", api_line="requires_terrarium_api = 2"))
+    reg = BitRegistry.scan((tmp_path,))
+    assert "Future" not in reg.packages
+    assert "2" in reg.errors[0].message and "1" in reg.errors[0].message
+
+
+def test_api_refusal_is_package_scoped(tmp_path):
+    for name, line in (("Good", "requires_terrarium_api = 1"),
+                       ("Bad", "requires_terrarium_api = 99")):
+        pkg = tmp_path / name.lower()
+        pkg.mkdir()
+        (pkg / "bit.toml").write_text(_manifest(name, api_line=line))
+    reg = BitRegistry.scan((tmp_path,))
+    assert "Good" in reg.packages and "Bad" not in reg.packages

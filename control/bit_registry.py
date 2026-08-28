@@ -13,6 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from control.api_version import TERRARIUM_API
 from control.bit_config import BitConfig, ManifestError, merge_overrides, parse_manifest
 
 _DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "bits"
@@ -100,6 +101,20 @@ class BitRegistry:
                     continue
                 except tomllib.TOMLDecodeError as exc:
                     registry.errors.append(PackageError(path=source, message=str(exc)))
+                    continue
+
+                declared = config.identity.requires_terrarium_api
+                if declared is None:
+                    registry.errors.append(PackageError(
+                        path=source,
+                        message="[bit.requires_terrarium_api] required as of "
+                                f"Terrarium API v{TERRARIUM_API}"))
+                    continue
+                if declared != TERRARIUM_API:
+                    registry.errors.append(PackageError(
+                        path=source,
+                        message=f"requires Terrarium API {declared}, this "
+                                f"engine provides {TERRARIUM_API}"))
                     continue
 
                 import_root = (

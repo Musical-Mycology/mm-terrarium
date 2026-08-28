@@ -5,6 +5,7 @@ description = "Records labelled sensor telemetry from a real phone"
 entry = "capture_bit:CaptureBit"
 kind = "tool"
 author = "Musical Mycology"
+requires_terrarium_api = 1
 
 [launch]
 room_types = ["TEST"]
