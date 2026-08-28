@@ -170,6 +170,13 @@ class GameServer:
         # phase is deterministic in how long the Bit has been RUNNING, not
         # in wall-clock time.
         self._run_elapsed: float = 0.0
+        # Per-(dev, StreamTrigger.name) EMA state for data()'s "smooth"
+        # transform (control/triggers.py's StreamTrigger, Task 8/10):
+        # y_prev, seeded to the first sample seen for that key. Cleared for
+        # a dev wherever its registration ends (release, reap_stale) and
+        # wholesale on _unload -- a stale y_prev must never blend into a
+        # new occupant's first sample.
+        self._stream_trigger_state: dict[tuple[str, str], float] = {}
 
     def slot_requirement(self, slot: str) -> "InstrumentRequirement | None":
         """Public read of the loaded Bit's requirement for `slot`, or None
@@ -211,6 +218,7 @@ class GameServer:
             if self.registration is not None and \
                     dev in self.registration.assignments:
                 self.registration.release(dev)
+                self._clear_stream_trigger_state(dev)
                 released_any = True
                 if self.on_release:
                     try:
@@ -356,6 +364,7 @@ class GameServer:
                 reason = satisfies(carried, req) if req is not None else None
                 if req is not None and reason is not None:
                     self.registration.release(dev)
+                    self._clear_stream_trigger_state(dev)
                     return JoinResult(granted=False, reason=reason)
                 result.slot = role.requires
                 result.instrument = carried.name
@@ -425,6 +434,45 @@ class GameServer:
             return now
         return gesture_time
 
+    def _clear_stream_trigger_state(self, dev: str) -> None:
+        """Drop every StreamTrigger EMA entry for `dev`. Called wherever a
+        dev's registration ends (reap_stale, a join refused after slot
+        resolution, and wholesale in _unload) so a stale y_prev from a
+        departed occupant can never blend into the next one's first
+        sample."""
+        stale = [key for key in self._stream_trigger_state if key[0] == dev]
+        for key in stale:
+            del self._stream_trigger_state[key]
+
+    def _apply_stream_triggers(self, dev: str, verb: str, args: list) -> list:
+        """Run the carried instrument's StreamTriggers matching `verb`
+        (control/triggers.py's StreamTrigger, Task 8) over the arriving
+        args, BEFORE stream Functions and the verb handler see them -- the
+        seam where fusion/smoothing pipelines live (Task 10). Returns a
+        transformed copy; the caller's list is never mutated. A trigger
+        naming an out-of-range or non-numeric arg is skipped, never raises
+        -- a device must never be able to wedge Control."""
+        info = self.devices.get(dev)
+        carried = getattr(info, "carried", None) or TUNESHROOM
+        triggers = [t for t in carried.stream_triggers if t.verb == verb]
+        if not triggers:
+            return args
+        args = list(args)
+        for trig in triggers:
+            if trig.arg >= len(args):
+                continue
+            x = args[trig.arg]
+            if isinstance(x, bool) or not isinstance(x, (int, float)):
+                continue
+            if trig.transform == "smooth":
+                key = (dev, trig.name)
+                y_prev = self._stream_trigger_state.get(key)
+                alpha = trig.params.get("alpha", 1.0)
+                y = x if y_prev is None else alpha * x + (1 - alpha) * y_prev
+                self._stream_trigger_state[key] = y
+                args[trig.arg] = y
+        return args
+
     def data(self, dev: str, verb: str, args: list,
              gesture_time: float | None = None) -> str | None:
         """Route a /game/<verb> message to the loaded Bit's verb handler.
@@ -450,6 +498,7 @@ class GameServer:
         except Exception:
             logger.exception("Bit.verb_handlers raised; refusing %r", verb)
             return "handler error"
+        args = self._apply_stream_triggers(dev, verb, args)
         streams = self._stream_functions.get(verb, ())
         if handler is None and not streams:
             return f"unknown verb {verb!r}"
@@ -901,6 +950,7 @@ class GameServer:
         self._slot_requirements = {}
         self._generators = None
         self._stream_functions = {}
+        self._stream_trigger_state = {}
         self._run_elapsed = 0.0
         self._set_state(State.IDLE)
 

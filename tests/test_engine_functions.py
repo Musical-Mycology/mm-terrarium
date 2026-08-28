@@ -703,3 +703,98 @@ def test_shipped_instruments_accept_every_cue_kind():
     assert config.instruments, "expected at least one declared instrument"
     for name, instrument in config.instruments.items():
         assert set(instrument.accepted_cues) == set(CUE_KINDS), name
+
+
+# --- Task 10: stream triggers transform args in data() before Functions/
+# handler see them ---
+
+class TiltRecorderBit(_BaseBit):
+    """Records every args list its "tilt"/"tap" verb handlers receive, so
+    tests can inspect exactly what data() handed downstream after any
+    stream trigger transform. "tap" has no declared StreamTrigger on
+    SMOOTHING_WIDGET, so it's the unmatched-verb control."""
+
+    def __init__(self):
+        self.received = []
+
+    def verb_handlers(self) -> dict:
+        return {"tilt": self._record, "tap": self._record}
+
+    def _record(self, dev, args, at):
+        self.received.append(list(args))
+        return []
+
+
+def _joined(bit_cls=TiltRecorderBit, carried=None, run=True):
+    from tests.instrument_fixtures import SMOOTHING_WIDGET
+    gs = _server(bit_cls)
+    gs.load_bit("bit")
+    info = gs.devices.hello("ie1", "Dev1", "1.0")
+    info.carried = carried if carried is not None else SMOOTHING_WIDGET
+    gs.join("ie1", "NODE")
+    if run:
+        gs.run()
+    return gs
+
+
+def test_first_stream_trigger_sample_passes_through_unchanged():
+    gs = _joined()
+    assert gs.data("ie1", "tilt", [0.8]) is None
+    assert gs.bit.received == [[0.8]]
+
+
+def test_second_stream_trigger_sample_is_ema_blended():
+    gs = _joined()
+    gs.data("ie1", "tilt", [0.0])
+    gs.data("ie1", "tilt", [1.0])
+    # alpha=0.5: y = 0.5*1.0 + 0.5*0.0 = 0.5
+    assert gs.bit.received[-1] == [0.5]
+
+
+def test_stream_trigger_state_is_per_device():
+    from tests.instrument_fixtures import SMOOTHING_WIDGET
+    gs = _server(TiltRecorderBit)
+    gs.load_bit("bit")
+    for dev in ("ie1", "ie2"):
+        info = gs.devices.hello(dev, dev, "1.0")
+        info.carried = SMOOTHING_WIDGET
+        gs.join(dev, "NODE")
+    gs.run()
+    gs.data("ie1", "tilt", [0.0])
+    gs.data("ie2", "tilt", [10.0])
+    gs.data("ie1", "tilt", [1.0])
+    gs.data("ie2", "tilt", [20.0])
+    assert gs.bit.received[-2] == [0.5]     # ie1: 0.5*1.0 + 0.5*0.0
+    assert gs.bit.received[-1] == [15.0]    # ie2: 0.5*20.0 + 0.5*10.0
+
+
+def test_stream_trigger_state_resets_after_release():
+    """reap_stale is the one engine-level path a device's registration ends
+    through today (control/engine.py); release there must clear this dev's
+    EMA state so a rejoin starts from a clean first sample."""
+    gs = _joined(run=False)     # role is scored: stays in SETUP so it can
+                                # accept the rejoin below (scored roles
+                                # close once RUNNING, control/registration.py)
+    gs.data("ie1", "tilt", [0.0])
+    gs.data("ie1", "tilt", [1.0])
+    assert gs.bit.received[-1] == [0.5]
+    gs.reap_stale(timeout=-1.0)     # every hello'd dev is "stale"
+    from tests.instrument_fixtures import SMOOTHING_WIDGET
+    info = gs.devices.hello("ie1", "Dev1", "1.0")
+    info.carried = SMOOTHING_WIDGET
+    gs.join("ie1", "NODE")
+    gs.data("ie1", "tilt", [1.0])
+    assert gs.bit.received[-1] == [1.0]     # first sample again: passthrough
+
+
+def test_unmatched_verb_is_untouched_by_stream_triggers():
+    gs = _joined()
+    original = [0.8]
+    assert gs.data("ie1", "tap", original) is None
+    assert original == [0.8]
+
+
+def test_non_numeric_stream_arg_passes_through_untouched_never_raises():
+    gs = _joined()
+    assert gs.data("ie1", "tilt", ["not-a-number"]) is None
+    assert gs.bit.received[-1] == ["not-a-number"]
