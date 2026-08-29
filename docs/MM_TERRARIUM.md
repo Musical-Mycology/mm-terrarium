@@ -1872,7 +1872,13 @@ enumerate, configure, and launch Bits without importing their code first.
   caveat below), and `operator` (console-driven only), each with a
   `timeout_seconds` / `on_timeout` (`start`/`abort`) fallback.
   `start_decision(cond, scored=, elapsed=, setup_seconds=)` is the single
-  function both the harness hold and its CI-timeout math call.
+  function both the harness hold and its CI-timeout math call. `scored_count`
+  treats a registration count whose role name is absent from the current
+  role_table as unscored (skipped): a room unloaded mid-SETUP leaves the
+  ROOM-class role's count behind with no matching role_table entry, and until
+  2026-08-28 that shape crashed `terrarium_boot` main() with
+  `KeyError: 'room_test'` instead of tearing down cleanly (seen live,
+  runs/20260828-193507).
 - **`terrarium_boot` + `run_stack` are discovery-driven.** `--bit` accepts
   any registered package name (previously a hardcoded choices list);
   `--list-bits` enumerates name/version/kind/room-types/start-condition/

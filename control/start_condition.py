@@ -15,15 +15,18 @@ def scored_count(gs) -> int:
 
     Scored-ness of a role is resolved off gs.bit.role_table (same idiom as
     control/registration.py's RegistrationState.counts()). Returns 0 when
-    gs.registration is None.
+    gs.registration is None. A counts() entry whose role name is absent from
+    the current role_table counts as unscored: a room unloaded mid-SETUP
+    leaves the ROOM-class role's registration count behind with no matching
+    role_table entry, and start evaluation must not crash the harness there.
     """
     if gs.registration is None:
         return 0
     role_table = gs.bit.role_table
     total = 0
     for name, count, _capacity in gs.registration.counts():
-        role = role_table.roles[name]
-        if role.scored:
+        role = role_table.roles.get(name)
+        if role is not None and role.scored:
             total += count
     return total
 
