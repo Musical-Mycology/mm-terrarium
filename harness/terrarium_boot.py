@@ -1093,6 +1093,36 @@ def _build_arg_parser():
     return ap
 
 
+def _make_arco_process_cls(arco_popen, settle: float):
+    """The Arco factory main() hands to Terrarium: ArcoProcess with the
+    chosen popen injected and, when --arco-settle-seconds is set, a settle
+    pause folded into start() (start() and wait_ready() are called back to
+    back with no seam between them, and the pause is a harness-only
+    concern that must not leak into control/).
+
+    Terrarium calls the factory two ways -- `factory(command)` and, when
+    run records are on (the default), `factory(command, record=...)`
+    (control/terrarium.py's load_room) -- so `record` must be accepted and
+    threaded into ArcoProcess or every default-flag live boot dies in
+    build().
+    """
+
+    def arco_process_cls(command, *, record=None):
+        proc = ArcoProcess(command, popen=arco_popen, record=record)
+        if settle <= 0:
+            return proc
+        started = proc.start
+
+        def start_then_settle():
+            started()
+            time.sleep(settle)
+
+        proc.start = start_then_settle
+        return proc
+
+    return arco_process_cls
+
+
 def main() -> None:
     ap = _build_arg_parser()
     args = ap.parse_args()
@@ -1208,11 +1238,6 @@ def main() -> None:
         config.stale_timeout = args.stale_timeout
     room_binding = RoomBindingRegistry()
 
-    # boot() constructs the process with a single positional argument, so
-    # both options below are one-argument factories rather than subclasses.
-    # The settle pause lives in start() because boot() calls start() and
-    # wait_ready() back to back with no seam between them -- putting it here
-    # keeps control/boot.py free of a harness-only concern.
     arco_popen = subprocess.Popen
     if args.arco_pty:
         from control.arco_process import pty_popen
@@ -1223,20 +1248,8 @@ def main() -> None:
     elif args.arco_log:
         print("--arco-log needs --arco-pty; ignoring", file=sys.stderr)
 
-    settle = args.arco_settle_seconds
-
-    def arco_process_cls(command):
-        proc = ArcoProcess(command, popen=arco_popen)
-        if settle <= 0:
-            return proc
-        started = proc.start
-
-        def start_then_settle():
-            started()
-            time.sleep(settle)
-
-        proc.start = start_then_settle
-        return proc
+    arco_process_cls = _make_arco_process_cls(
+        arco_popen, args.arco_settle_seconds)
 
     # Owned-pid run records + the stale-sweep guardrail are ON by default
     # (design spec section 5, controller ruling 2026-08-27): a run_id is

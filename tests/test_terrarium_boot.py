@@ -2011,3 +2011,32 @@ def test_console_load_room_after_a_no_room_boot_wires_room_rendering():
     assert msg["room"]["room_type"] == "TEST"
 
     shutdown(teardown, terrarium)
+
+
+def test_main_arco_factory_accepts_and_threads_record():
+    """Regression for the live-boot crash of 2026-08-28: run records are ON
+    by default, so Terrarium.load_room calls the Arco factory with
+    `record=` (control/terrarium.py). main()'s wrapper factory -- the one
+    that injects arco_popen and the settle pause -- did not accept the
+    kwarg, so every default-flag live boot died in build() with
+    "unexpected keyword argument 'record'" while the offline suite (which
+    runs with runs_dir=None) stayed green. The factory main() uses must
+    accept `record` and thread it into ArcoProcess, in both its settle and
+    no-settle shapes."""
+    from harness.terrarium_boot import _make_arco_process_cls
+
+    class _FakePopenWithPid(FakePopen):
+        def __init__(self, pid: int, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.pid = pid
+
+        def __call__(self, command, **kwargs):
+            super().__call__(command, **kwargs)
+            return self
+
+    for settle in (0.0, 0.001):
+        recorded = []
+        factory = _make_arco_process_cls(_FakePopenWithPid(4242), settle)
+        proc = factory(["arco-server"], record=recorded.append)
+        proc.start()
+        assert recorded == [4242], f"settle={settle}"
