@@ -141,6 +141,27 @@ class TerrariumBuildFailure(Exception):
     of this Task; build() now drives control.terrarium.Terrarium directly."""
 
 
+def make_arco_process_cls(arco_popen, settle: float):
+    """The harness's ArcoProcess factory: injects the pty popen and the
+    post-start settle. Must accept every kwarg Terrarium.load_room passes --
+    it threads record= (control/run_record.py) whenever run records are on,
+    which is the default; a factory without it fails every live launch."""
+    def arco_process_cls(command, *, record=None):
+        proc = ArcoProcess(command, popen=arco_popen, record=record)
+        if settle <= 0:
+            return proc
+        started = proc.start
+
+        def start_then_settle():
+            started()
+            time.sleep(settle)
+
+        proc.start = start_then_settle
+        return proc
+
+    return arco_process_cls
+
+
 def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
          room_binding: RoomBindingRegistry, room_spec=None,
          terrarium_config: TerrariumConfig | None = None,
@@ -1225,18 +1246,7 @@ def main() -> None:
 
     settle = args.arco_settle_seconds
 
-    def arco_process_cls(command):
-        proc = ArcoProcess(command, popen=arco_popen)
-        if settle <= 0:
-            return proc
-        started = proc.start
-
-        def start_then_settle():
-            started()
-            time.sleep(settle)
-
-        proc.start = start_then_settle
-        return proc
+    arco_process_cls = make_arco_process_cls(arco_popen, settle)
 
     # Owned-pid run records + the stale-sweep guardrail are ON by default
     # (design spec section 5, controller ruling 2026-08-27): a run_id is

@@ -2011,3 +2011,20 @@ def test_console_load_room_after_a_no_room_boot_wires_room_rendering():
     assert msg["room"]["room_type"] == "TEST"
 
     shutdown(teardown, terrarium)
+
+
+def test_make_arco_process_cls_accepts_the_record_kwarg_load_room_passes():
+    # Terrarium.load_room passes record= whenever run records are on (the
+    # default), so the harness factory refusing it broke every live launch
+    # with "unexpected keyword argument 'record'" (runs/20260828-201202).
+    from harness.terrarium_boot import make_arco_process_cls
+
+    def record(pid):
+        pass
+
+    cls = make_arco_process_cls(FakePopen(), settle=0)
+    proc = cls(["arco"], record=record)
+    assert proc._record is record
+    # And record= stays optional for the settle-wrapped path too.
+    cls_settle = make_arco_process_cls(FakePopen(), settle=0.001)
+    assert cls_settle(["arco"]) is not None
