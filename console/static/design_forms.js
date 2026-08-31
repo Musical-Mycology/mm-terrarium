@@ -42,6 +42,10 @@ import {
   setThreshold,
   appendBlock,
   removeBlock,
+  listScriptSteps,
+  setScriptStep,
+  addScriptStep,
+  removeScriptStep,
 } from "./toml_edit.js";
 
 let vocab = { capabilities: [], cue_kinds: [] };
@@ -284,6 +288,192 @@ function buildStreamTriggerCard(container, text, name) {
 
   container.appendChild(card);
 }
+
+// One text/number input row bound to a top-level scalar in a [[functions]]
+// block, writing through setScalar on change. `type` is the input's HTML
+// type ("text"/"number"); `parse`/`render` convert between the raw TOML
+// scalar text and the input's display value (default: raw string in,
+// JSON.stringify out for quoted-string fields).
+function functionFieldRow(container, name, key, text, type, opts = {}) {
+  const { parse = (v) => v, render = (v) => v } = opts;
+  const row = mk("label", "field");
+  row.appendChild(document.createTextNode(`${key} `));
+  const input = document.createElement("input");
+  input.type = type;
+  if (type === "number") input.step = "any";
+  const raw = getScalar(text, { header: "[[functions]]", name }, key);
+  input.value = raw != null ? parse(raw) : "";
+  input.setAttribute("data-form-key", `fn:${name}:${key}`);
+  input.onchange = () => {
+    applyEdit((t) => setScalar(t, { header: "[[functions]]", name }, key, render(input.value)));
+  };
+  row.appendChild(input);
+  container.appendChild(row);
+  return input;
+}
+
+// One [[functions]] card with kind = "generator": text/number inputs for
+// waveform/period/lo/hi, read-only lane info (rewiring the lane stays a
+// raw-TOML edit in v1), and a Remove button.
+function buildGeneratorCard(container, text, name) {
+  const card = mk("div", "card");
+  card.setAttribute("data-form-key", `fn:${name}`);
+  card.appendChild(mk("h4", null, name));
+
+  functionFieldRow(card, name, "waveform", text, "text", {
+    parse: (v) => { try { return JSON.parse(v); } catch { return v; } },
+    render: (v) => JSON.stringify(v),
+  });
+  functionFieldRow(card, name, "period", text, "number");
+  functionFieldRow(card, name, "lo", text, "number");
+  functionFieldRow(card, name, "hi", text, "number");
+
+  const lane = getThresholds(text, name, { header: "[[functions]]", childTable: "lane" }) || {};
+  const laneParts = Object.keys(lane).map((k) => `${k} = ${lane[k]}`);
+  card.appendChild(mk("p", "muted", `lane: ${laneParts.join(", ")} (edit lane wiring in raw TOML)`));
+
+  const removeBtn = document.createElement("button");
+  removeBtn.textContent = "Remove";
+  removeBtn.setAttribute("data-form-key", `fn:${name}:remove`);
+  removeBtn.onclick = () => {
+    applyEdit((t) => removeBlock(t, "[[functions]]", name));
+  };
+  card.appendChild(removeBtn);
+
+  container.appendChild(card);
+}
+
+// One row of a scripted function's step table: offset input, read-only kind
+// chip, args text input (Save-on-change via setScriptStep), Remove button.
+function scriptStepRow(container, name, index, step) {
+  const row = mk("div", "field");
+
+  const offsetInput = document.createElement("input");
+  offsetInput.type = "number";
+  offsetInput.step = "any";
+  offsetInput.value = step.offset;
+  offsetInput.setAttribute("data-form-key", `fn:${name}:step:${index}:offset`);
+  offsetInput.onchange = () => {
+    applyEdit((t) => setScriptStep(t, name, index, { offset: offsetInput.value, kind: step.kind, args: argsInput.value }));
+  };
+  row.appendChild(offsetInput);
+
+  row.appendChild(mk("span", "chip", step.kind));
+
+  const argsInput = document.createElement("input");
+  argsInput.type = "text";
+  argsInput.value = step.args;
+  argsInput.setAttribute("data-form-key", `fn:${name}:step:${index}:args`);
+  argsInput.onchange = () => {
+    applyEdit((t) => setScriptStep(t, name, index, { offset: offsetInput.value, kind: step.kind, args: argsInput.value }));
+  };
+  row.appendChild(argsInput);
+
+  const removeBtn = document.createElement("button");
+  removeBtn.textContent = "Remove";
+  removeBtn.setAttribute("data-form-key", `fn:${name}:step:${index}:remove`);
+  removeBtn.onclick = () => {
+    applyEdit((t) => removeScriptStep(t, name, index));
+  };
+  row.appendChild(removeBtn);
+
+  container.appendChild(row);
+}
+
+// One [[functions]] card with kind = "scripted": description input, a step
+// table (one row per script step), an "add step" row, and a Remove button.
+function buildScriptedCard(container, text, name) {
+  const card = mk("div", "card");
+  card.setAttribute("data-form-key", `fn:${name}`);
+  card.appendChild(mk("h4", null, name));
+
+  const descLabel = mk("label", "field");
+  descLabel.appendChild(document.createTextNode("Description "));
+  const descInput = document.createElement("input");
+  descInput.type = "text";
+  const rawDesc = getScalar(text, { header: "[[functions]]", name }, "description");
+  let descValue = "";
+  if (rawDesc != null) {
+    try { descValue = JSON.parse(rawDesc); } catch { descValue = rawDesc; }
+  }
+  descInput.value = descValue;
+  descInput.setAttribute("data-form-key", `fn:${name}:description`);
+  descInput.onchange = () => {
+    applyEdit((t) => setScalar(t, { header: "[[functions]]", name }, "description", JSON.stringify(descInput.value)));
+  };
+  descLabel.appendChild(descInput);
+  card.appendChild(descLabel);
+
+  const steps = listScriptSteps(text, name) || [];
+  steps.forEach((step, index) => scriptStepRow(card, name, index, step));
+
+  const addRow = mk("div", "field");
+  const addOffsetInput = document.createElement("input");
+  addOffsetInput.type = "number";
+  addOffsetInput.step = "any";
+  addOffsetInput.placeholder = "offset";
+  addOffsetInput.setAttribute("data-form-key", `fn:${name}:step:add-offset`);
+  const addKindSelect = document.createElement("select");
+  addKindSelect.setAttribute("data-form-key", `fn:${name}:step:add-kind`);
+  for (const kind of ["midi", "play", "solid", "mute"]) {
+    const opt = document.createElement("option");
+    opt.value = kind;
+    opt.textContent = kind;
+    addKindSelect.appendChild(opt);
+  }
+  const addArgsInput = document.createElement("input");
+  addArgsInput.type = "text";
+  addArgsInput.placeholder = "args";
+  addArgsInput.setAttribute("data-form-key", `fn:${name}:step:add-args`);
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "Add step";
+  addBtn.setAttribute("data-form-key", `fn:${name}:step:add`);
+  addBtn.onclick = () => {
+    applyEdit((t) => addScriptStep(t, name, {
+      offset: addOffsetInput.value || 0,
+      kind: addKindSelect.value,
+      args: addArgsInput.value,
+    }));
+  };
+  addRow.appendChild(addOffsetInput);
+  addRow.appendChild(addKindSelect);
+  addRow.appendChild(addArgsInput);
+  addRow.appendChild(addBtn);
+  card.appendChild(addRow);
+
+  const removeBtn = document.createElement("button");
+  removeBtn.textContent = "Remove";
+  removeBtn.setAttribute("data-form-key", `fn:${name}:remove`);
+  removeBtn.onclick = () => {
+    applyEdit((t) => removeBlock(t, "[[functions]]", name));
+  };
+  card.appendChild(removeBtn);
+
+  container.appendChild(card);
+}
+
+// Section builder for functions, pushed onto SECTION_BUILDERS. Renders one
+// card per [[functions]] block, branched on its `kind` scalar. No "add
+// function" button in v1 -- a new function starts as a raw-TOML paste or a
+// clone; a muted hint line notes this under the section.
+function buildFunctionSection(container, text) {
+  const blocks = splitBlocks(text);
+  for (const block of blocks) {
+    if (block.header !== "[[functions]]" || !block.name) continue;
+    const kind = getScalar(text, { header: "[[functions]]", name: block.name }, "kind");
+    let parsedKind = kind;
+    try { parsedKind = JSON.parse(kind); } catch { /* already bare */ }
+    if (parsedKind === "generator") {
+      buildGeneratorCard(container, text, block.name);
+    } else if (parsedKind === "scripted") {
+      buildScriptedCard(container, text, block.name);
+    }
+  }
+
+  container.appendChild(mk("p", "muted", "New functions start as a raw-TOML paste or a clone."));
+}
+
+SECTION_BUILDERS.push(buildFunctionSection);
 
 // Section builder for event/stream triggers, pushed onto SECTION_BUILDERS.
 // Renders one card per [[event_triggers]] block, one card per
