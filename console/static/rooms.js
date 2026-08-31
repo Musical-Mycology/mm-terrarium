@@ -97,7 +97,7 @@ function buildCard(room, rooms) {
     const unloadBtn = mk("button", "btn solid-rose", "Unload");
     unloadBtn.onclick = () => {
       wire.confirmTap(unloadBtn, { armLabel: "Confirm unload?" }, () => {
-        wire.send("unload_room", { force: false }, unloadBtn);
+        wire.send("unload_room", { force: true }, unloadBtn);
       });
     };
     actions.appendChild(unloadBtn);
