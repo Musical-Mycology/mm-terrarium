@@ -38,6 +38,10 @@ __all__ = [
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
     "room_changed_event", "room_frame_event",
     "functions_changed_event", "function_fired_event", "FireFunctionCommand",
+    "ListDesignsCommand", "GetDesignCommand", "SaveDesignCommand",
+    "PublishDesignCommand", "CloneDesignCommand",
+    "design_row", "designs_listed_event", "designs_changed_event",
+    "design_event",
 ]
 
 
@@ -71,7 +75,8 @@ def device_view(info, role_name, url=None, muted=False) -> dict:
 
 def snapshot_event(*, state, installed_bits, loaded_bit, roles,
                    registration, devices, bit_status, room=None,
-                   functions=None, terrarium_state=None, rooms=None) -> dict:
+                   functions=None, terrarium_state=None, rooms=None,
+                   designs=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
@@ -85,6 +90,7 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "functions": functions or [],
         "terrarium_state": terrarium_state,
         "rooms": rooms or [],
+        "designs": designs or [],
     }
 
 
@@ -144,6 +150,52 @@ class FireFunctionCommand:
     dev: str | None = None
 
 
+@dataclass
+class ListDesignsCommand:
+    pass
+
+
+@dataclass
+class GetDesignCommand:
+    state: str
+    name: str
+
+
+@dataclass
+class SaveDesignCommand:
+    name: str
+    text: str
+
+
+@dataclass
+class PublishDesignCommand:
+    name: str
+
+
+@dataclass
+class CloneDesignCommand:
+    source_state: str
+    source_name: str
+    new_name: str
+
+
+def design_row(entry) -> dict:
+    return {"name": entry.name, "state": entry.state, "error": entry.error}
+
+
+def designs_listed_event(designs: list) -> dict:
+    return {"event": "designs_listed", "designs": designs}
+
+
+def designs_changed_event(designs: list) -> dict:
+    return {"event": "designs_changed", "designs": designs}
+
+
+def design_event(name: str, state: str, text: str, errors: list) -> dict:
+    return {"event": "design", "name": name, "state": state,
+            "text": text, "errors": errors}
+
+
 def parse_admin_command(msg: dict):
     """Console-only admin commands -- never sent by the uplink's remote
     broker. Kept separate from uplink.protocol.parse_command: Room
@@ -178,4 +230,42 @@ def parse_admin_command(msg: dict):
         if dev is not None and not isinstance(dev, str):
             raise ValueError("fire_function 'dev' must be a string when given")
         return FireFunctionCommand(name=name, dev=dev or None)
+    if command == "list_designs":
+        return ListDesignsCommand()
+    if command == "get_design":
+        state = msg.get("state")
+        if state not in ("published", "draft"):
+            raise ValueError("get_design requires 'state' of 'published' or 'draft'")
+        name = msg.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("get_design requires a non-empty string 'name'")
+        return GetDesignCommand(state=state, name=name)
+    if command == "save_design":
+        name = msg.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("save_design requires a non-empty string 'name'")
+        text = msg.get("text")
+        if not isinstance(text, str):
+            raise ValueError("save_design requires a string 'text'")
+        return SaveDesignCommand(name=name, text=text)
+    if command == "publish_design":
+        name = msg.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("publish_design requires a non-empty string 'name'")
+        return PublishDesignCommand(name=name)
+    if command == "clone_design":
+        source_state = msg.get("source_state")
+        if source_state not in ("published", "draft"):
+            raise ValueError(
+                "clone_design requires 'source_state' of 'published' or 'draft'")
+        source_name = msg.get("source_name")
+        if not isinstance(source_name, str) or not source_name:
+            raise ValueError(
+                "clone_design requires a non-empty string 'source_name'")
+        new_name = msg.get("new_name")
+        if not isinstance(new_name, str) or not new_name:
+            raise ValueError(
+                "clone_design requires a non-empty string 'new_name'")
+        return CloneDesignCommand(source_state=source_state,
+                                  source_name=source_name, new_name=new_name)
     raise ValueError(f"unrecognized admin command: {command!r}")

@@ -2458,7 +2458,11 @@ and its plan
   validators a Bit's own manifests already go through, so a typo'd ambient
   manifest fails the same way a Bit's does). `TUNESHROOM` is defined once
   here in code -- the only instrument the wire protocol currently speaks --
-  and `DeviceInfo.carried` defaults to it at hello.
+  and `DeviceInfo.carried` defaults to it at hello. **(Superseded
+  2026-08-31: `TUNESHROOM` still exists as a code constant, but it is no
+  longer the only instrument -- `instruments/tuneshroom.toml`, a published
+  catalog entry, is pinned equal to it by test. See the *Instrument catalog
+  and Design panel* entry below.)**
 - **A Fixture is an Instrument plus placement and binding.**
   `RoomFixture.instrument` is now a required field -- a fixture with no
   instrument is not a representable thing. `terrarium.toml` gains
@@ -2469,7 +2473,12 @@ and its plan
   `TerrariumConfigError`, same fails-hard-at-load convention every other
   config defect in this file already gets. Everything downstream holds the
   resolved `Instrument` value; nothing outside the parser sees the string
-  name again.
+  name again. **(Superseded 2026-08-31: `terrarium.toml`'s `[instruments.*]`
+  tables are no longer the only source -- `load_terrarium_config` also
+  merges in every published entry from the instrument catalog
+  (`[terrarium] instrument_paths`, default `["instruments"]`), with a
+  located error on a name collision between the two. See the *Instrument
+  catalog and Design panel* entry below.)**
 - **`Bit.instrument_requirements()`** -- capability contracts, resolved at
   two different times depending on kind, distinguished by how they resolve
   rather than by type:
@@ -2680,6 +2689,91 @@ and its plan
 **1667 passed, 1 skipped** (up from 1634 passed, 1 skipped). The Spec 1,
 Spec 2, Spec 3, and Spec 4 live-Arco checklists are all still pending;
 run them together on the dev box.
+
+### `control/catalog.py`, `control/terrarium_config.py` instrument_paths, `console/static/design.js` -- instrument catalog and Design panel v1 (2026-08-31)
+
+Slices 1-2 of the plan below; slice 3 (carried-instrument wire support) is
+unplanned. Design:
+[`.../2026-08-31-design-panel-and-instrument-catalog-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-design-panel-and-instrument-catalog-design.md);
+its Status section records what shipped against what stays Plan 2.
+
+- **Catalog layout: `instruments/*.toml` published, `instruments/drafts/
+  *.toml` drafts, name = file stem** (`control/catalog.py`). `load_catalog`
+  keys `InstrumentCatalog.entries` `"<state>:<name>"`, not just `<name>` --
+  a draft edit of a published entry does not shadow the published one, so
+  both can be listed and opened at once. A missing catalog root is an
+  empty catalog, not an error (a terrarium with no `instruments/` directory
+  boots exactly as before this slice). Published entries fail hard at
+  load, same as every other config defect in this repo; a draft's parse or
+  validation error is collected onto its `CatalogEntry.error` instead --
+  the whole point of a draft is that it can be broken while you're working
+  on it.
+- **The write API never raises; every mutator returns a reason string (or
+  `None` on success).** `save_draft`, `clone_entry`, `publish_entry` --
+  same convention `fire_trigger`/`GameServer.fire_function` already use, so
+  the Console's admin-command handler can turn any refusal into an
+  `error_event` without a try/except. `save_draft` writes even an invalid
+  draft to disk (return value carries the validation errors separately) so
+  the editor never loses an in-progress edit to a rejected save. `publish_
+  entry` re-validates the draft in full before moving `drafts/<name>.toml`
+  to `<name>.toml` (`Path.replace`, one atomic rename) -- a draft that
+  fails validation cannot become published by mistake even if the panel's
+  own client-side check was stale.
+- **`terrarium.toml` gains `[terrarium] instrument_paths`** (default
+  `["instruments"]`), resolved by `load_terrarium_config` against the
+  config file's own directory -- the same relative-to-config-dir rule
+  `resolve_bit_roots` already uses for `bit_paths`. Every published entry
+  under each root is merged into `parse_terrarium_config`'s `instruments`
+  dict via a new `extra_instruments` parameter; a name defined both inline
+  in `terrarium.toml` and in a catalog root is a located
+  `TerrariumConfigError` ("defined both inline and in an instrument
+  catalog; pick one home") -- one instrument, one home, no silent
+  shadowing either direction. `TerrariumConfig.instrument_roots` carries
+  the resolved catalog root paths forward (empty from
+  `parse_terrarium_config`, which has no config path to resolve against);
+  `harness/terrarium_boot.py`'s `main()` reads `instrument_roots[0]`, when
+  non-empty, as the `ConsoleAgent(catalog_root=...)` it wires up.
+- **Shipped migration:** `terrarium.toml`'s inline `[instruments.*]`
+  tables move out to `instruments/{tuneshroom,venue_array,dev_strip}.toml`.
+  `instruments/tuneshroom.toml` is pinned equal to the code constant
+  `control.instrument.TUNESHROOM` by
+  `test_shipped_tuneshroom_catalog_file_matches_the_code_constant`
+  (`tests/test_catalog.py`) -- the code constant still exists (device
+  hello still defaults to it, per the not-yet-built slice 3 below), but it
+  is no longer the only instrument the catalog knows about.
+- **Console: five new admin commands, local-only, never uplink** --
+  `list_designs`/`get_design`/`save_design`/`publish_design`/
+  `clone_design` (`console/agent.py::_handle_design_command`), gated the
+  same way as the pre-existing `arm_room`/`release_room`/`fire_function`
+  admin commands: dispatched only from `_handle_admin_command`, which the
+  uplink's remote-command path never reaches. Three wire events --
+  `designs_listed`, `design` (one entry's text + errors), `designs_changed`
+  -- and a `"designs"` key on the snapshot. **Mutations reply
+  `designs_changed` to the caller and separately broadcast the same event
+  to every other connected client** (`self.server.broadcast(...)` then
+  `return ...`), mirroring `_broadcast_functions_if_changed`'s fan-out --
+  the catalog is shared state, so every open Design panel must re-render
+  on a mutation, not just the one that made it. The caller therefore
+  receives the event twice (once as the broadcast, once as the direct
+  reply); both carry the same rows, so re-rendering twice from identical
+  data is a no-op, not a bug to fix.
+- **`console/static/design.js` + a new Design nav view.** List (one row
+  per `"<name> [draft|published]"`, an error chip when `CatalogEntry.error`
+  is set), a raw-TOML editor (`#designText`/`#designErrors`), and Save/
+  Publish/Clone actions. **Draft-shadowing edit flow:** the client always
+  sends `save_design` with the *selected* entry's name, whatever its
+  state -- the server-side convention (a save on a published name lands in
+  `drafts/<name>.toml`, never overwrites the published file directly) does
+  the shadowing; the client does not special-case published vs. draft on
+  save.
+- **Not this slice (Plan 2):** structured editing forms (raw TOML only in
+  v1), the in-browser instrument-host simulator, and the Calibrate flow
+  (spec sections 4, 5, 6). **Unplanned:** carried-instrument wire support
+  (spec section 2, slice 3) -- hello still has no instrument name, and
+  `DeviceInfo.carried` still defaults to `TUNESHROOM` unconditionally.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1699 passed, 1 skipped** (up from 1669 passed, 1 skipped).
 
 ## Boundary rules (the load-bearing invariants)
 

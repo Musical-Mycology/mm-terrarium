@@ -1344,11 +1344,14 @@ def main() -> None:
             # on the websocket path, o2lite.time_get on the o2lite path),
             # not a fresh time.monotonic -- see build()'s clock= docstring
             # for the two-clocks bug this guards against.
+            catalog_root = (terrarium_config.instrument_roots[0]
+                            if terrarium_config.instrument_roots else None)
             console_agent = ConsoleAgent(gs, console_server,
                                          room_bridge=agent.room_bridge,
                                          clock=clock, registry=registry,
                                          canvas_urls=agent.canvas_urls,
-                                         terrarium=terrarium)
+                                         terrarium=terrarium,
+                                         catalog_root=catalog_root)
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
