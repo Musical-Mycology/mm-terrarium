@@ -2173,6 +2173,26 @@ everything renders from the existing `snapshot`/`room_changed`/
 - **The Live view's "Functions" accordion is labelled "Triggers"** (label
   only — ids `functionsAcc`/`functionsMount` and `functions.js` unchanged).
 
+### Console nav follow-up 2: the [hidden] guard, "Live values", nav backdrop (2026-08-31, PR #72)
+Venue-feedback pass over PR #71. The load-bearing item is a CSS gotcha worth
+remembering: **an author `display` rule silently defeats the `hidden`
+attribute.** `terrarium.css` had no `[hidden]` rule, and author styles
+(`.maincol { display: flex }`, `.chip { display: inline-flex }`) override the
+UA stylesheet's `[hidden] { display: none }` regardless of specificity — so
+PR #71's Live/Room switching was a visible no-op (both views rendered
+stacked) while every JS test stayed green, because the node DOM stub checks
+the `hidden` *property*, not computed style. The fix is a global
+`[hidden] { display: none !important; }` guard, pinned by
+`test_console_static.py::test_css_guards_the_hidden_attribute`. Anyone adding
+a new `display:`-styled container that is ever hidden is already covered by
+that guard — do not remove it.
+
+Also: the Live room card's "Instruments" accordion is labelled **"Live
+values"** (it shows real-time controller values; the official instrument
+declarations live on the Registration rollup and the Room view's detail),
+and the sidebar nav sits on a lighter `--s-high` backdrop to separate it
+from the rest of the rail. Ids and `functions.js` untouched.
+
 ### SolidCue overrides, SURFACE targeting, per-surface mute, and the four operator triggers (2026-08-26)
 The Triggers panel becomes a real operator control surface. Design:
 [`.../2026-08-26-trigger-cards-and-surface-triggers-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-26-trigger-cards-and-surface-triggers-design.md)
