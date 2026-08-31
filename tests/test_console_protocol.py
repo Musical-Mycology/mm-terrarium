@@ -84,6 +84,22 @@ def test_snapshot_carries_terrarium_state_and_rooms():
     assert msg["rooms"] == rooms
 
 
+def test_snapshot_carries_design_vocab_verbatim():
+    vocab = {"capabilities": ["light.pixels"], "cue_kinds": ["midi"]}
+    msg = protocol.snapshot_event(
+        state="SETUP", installed_bits=["TestBit"], loaded_bit="TestBit",
+        roles=[], registration=[], devices=[], bit_status={},
+        design_vocab=vocab)
+    assert msg["design_vocab"] == vocab
+
+
+def test_snapshot_design_vocab_defaults_to_none():
+    msg = protocol.snapshot_event(
+        state="SETUP", installed_bits=["TestBit"], loaded_bit="TestBit",
+        roles=[], registration=[], devices=[], bit_status={})
+    assert msg["design_vocab"] is None
+
+
 def test_room_lifecycle_events_are_reused_from_uplink():
     from uplink.protocol import (
         room_load_failed_event, room_load_progress_event, room_loaded_event,
