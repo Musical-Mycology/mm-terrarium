@@ -387,3 +387,30 @@ class Terrarium:
         self.room_stack = None
         self._set_state(TerrariumState.NO_ROOM)
         return None
+
+    def recycle_room(self) -> str | None:
+        """Unload and immediately reload the active Room, so the next Bit
+        round starts against a fresh Arco (and fresh fixture simulators).
+        The bit-cycle rule (design spec 2026-08-31): a long-lived Arco is
+        known-broken for round two upstream -- only the first client after
+        an Arco start gets working audio -- so closing a Bit recycles the
+        whole room rather than reusing its hub.
+
+        Returns None on success, else a reason string; never raises
+        (load_room/unload_room's shared convention). A live Bit is aborted
+        by the unload half (force=True). A failed reload leaves NO_ROOM
+        with the reason returned -- same recovery position as any failed
+        load_room: the next load_room (Console or harness) starts fresh.
+
+        Callers that hold their own clients of the dying hub (the o2lite
+        transport, ArcoSynthPool) must stop them BEFORE calling this and
+        restart them after -- see harness/terrarium_boot.py's
+        _recycle_room, the one production call site."""
+        if self.state != TerrariumState.ROOM_READY:
+            return (f"cannot recycle: Terrarium is {self.state.value}, "
+                    "not room_ready")
+        name = self.room.name
+        reason = self.unload_room(force=True)
+        if reason is not None:
+            return reason
+        return self.load_room(name)
