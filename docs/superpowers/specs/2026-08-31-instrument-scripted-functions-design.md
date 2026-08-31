@@ -1,7 +1,7 @@
 # Instrument-scripted Functions: room-authored cue content, universal diagnostics
 
 **Date:** 2026-08-31
-**Status:** Draft for approval
+**Status:** Implemented (this branch; final suite 1704 passed, 1 skipped)
 **Brainstormed with:** Chris (this session)
 
 ## Problem
