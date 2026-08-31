@@ -2727,12 +2727,7 @@ yet**; the box does not exist.
   predated this decision; it is now archived and superseded.
 - **o2litepy** (`arco/o2litepy/`, same checkout as pyarco) — the Python o2lite
   implementation pyarco connects through, and now the one `O2LiteTransport`
-  rides. Reached by the same `PYTHONPATH`, never vendored. **Its canonical
-  home is `rbdannenberg/o2`, not arco** (Roger, 2026-08-20): commit `f21499e`
-  there reworks the o2litepy package and adds multi-client regression tests;
-  the `arco/o2litepy` copy is downstream, currently byte-identical, and Roger
-  may remove it -- if a future `arco` pull loses the directory, point
-  `PYTHONPATH` at the `o2` checkout's package instead. **No module under
+  rides. Reached by the same `PYTHONPATH`, never vendored. **No module under
   `control/` may import it**, and `devicelink/o2_transport.py` does not either
   (the caller injects an already-connected object), which is what keeps the
   whole suite runnable with no Arco, no pyarco and no O2. That rule is the
@@ -2749,8 +2744,9 @@ yet**; the box does not exist.
   2026-08-24: no stack running, `PYTHONPATH` unset, the probe reached
   its `BROWSE_URL`/frame-summary output with no `ModuleNotFoundError`).
   Upstream note, same day: o2litepy's canonical home is now
-  the `rbdannenberg/o2` repo's reworked package (`o2litepy/src/o2litepy`),
-  with the `arco/o2litepy/` copy Roger describes as a downstream copy he
+  the `rbdannenberg/o2` repo's reworked package (`o2litepy/src/o2litepy`,
+  commit `f21499e`, which also adds multi-client regression tests), with
+  the `arco/o2litepy/` copy Roger describes as a downstream copy he
   may remove -- the two are byte-identical today, but if the arco copy
   disappears, `ARCO_PYTHONPATH` and every `PYTHONPATH=` recipe in this
   doc must repoint at the o2 checkout.
@@ -3017,7 +3013,8 @@ Kept explicit so the doc doesn't over-claim:
   reworks the o2litepy package and adds multi-client regression tests); the
   `arco/o2litepy` copy this repo reaches by `PYTHONPATH` is downstream of it,
   currently byte-identical, and Roger may remove it -- see the o2litepy
-  dependency bullet above. **Verified in source, not yet re-verified live**, and properly closing it means re-running the original
+  dependency bullet above. **Verified in source, not yet re-verified
+  live**, and properly closing it means re-running the original
   reproduction, and the venue consequence below needs two O2 hosts to
   exercise. The description of the original defect follows.
 
