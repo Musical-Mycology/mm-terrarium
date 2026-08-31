@@ -1192,6 +1192,193 @@ def test_serve_rounds_does_not_reannounce_a_bit_already_loaded_on_entry(
     assert markers.CONTROL_ROUND_LOADED not in out
 
 
+class _RecycleGS:
+    """Shared FakeGS shape for the recycle tests below: IDLE -> (console
+    load) SETUP -> RUNNING -> IDLE after two ticks, matching the
+    `_serve_until_done` "completed" detection (`agent.closing` falsy)."""
+
+    def __init__(self):
+        self.state = State.IDLE
+        self.bit = None
+        self.bit_name = None
+        self.run_calls = 0
+        self.abort_calls = 0
+        self._tick_count = 0
+
+    def tick(self, dt):
+        self._tick_count += 1
+        if self.state is State.RUNNING and self._tick_count >= 2:
+            self.state = State.IDLE
+
+    def run(self):
+        self.run_calls += 1
+        self.state = State.RUNNING
+        self._tick_count = 0
+
+    def abort(self):
+        self.abort_calls += 1
+        self.state = State.IDLE
+
+
+def test_serve_rounds_recycles_after_a_completed_round(monkeypatch):
+    """Every completed round must recycle the Room before the next
+    `_wait_for_load` -- the bit-cycle rule (spec section 2)."""
+    from harness.terrarium_boot import _serve_rounds
+
+    gs = _RecycleGS()
+
+    def load_round1():
+        gs.bit = _FakeBit(_FakeBitConfig(0.0))
+        gs.bit_name = "Round1Bit"
+        gs.state = State.SETUP
+
+    console_agent = _FakeConsoleAgent(gs, [(State.IDLE, load_round1)])
+
+    ended = {"count": 0}
+
+    def fake_parent_is_gone(pid):
+        if gs.state is State.IDLE:
+            ended["count"] += 1
+            return ended["count"] > 1
+        return False
+
+    monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
+                        fake_parent_is_gone)
+
+    recycles = []
+    reason = _serve_rounds(gs, _FakeAgent(), _FakeArco(),
+                           console_agent=console_agent,
+                           recycle=lambda: recycles.append("r") or None)
+
+    assert reason == "parent-gone"
+    assert recycles == ["r"]
+
+
+def test_serve_rounds_recycles_after_timeout_abort(monkeypatch):
+    """The timeout-abort branch must also recycle before looping back to
+    the next round's wait -- not just the completed-round tail."""
+    import harness.terrarium_boot as tb
+    from harness.terrarium_boot import _serve_rounds
+
+    gs = _RecycleGS()
+
+    def load_round1():
+        gs.bit = _FakeBit(_FakeBitConfig(5.0))
+        gs.bit_name = "Round1Bit"
+        gs.state = State.SETUP
+
+    console_agent = _FakeConsoleAgent(gs, [(State.IDLE, load_round1)])
+
+    wait_in_setup_results = iter(["timeout-abort"])
+    monkeypatch.setattr(tb, "_wait_in_setup",
+                        lambda *a, **k: next(wait_in_setup_results))
+
+    ended = {"count": 0}
+
+    def fake_parent_is_gone(pid):
+        if gs.state is State.IDLE:
+            ended["count"] += 1
+            return ended["count"] > 1
+        return False
+
+    monkeypatch.setattr(tb, "parent_is_gone", fake_parent_is_gone)
+
+    recycles = []
+    reason = _serve_rounds(gs, _FakeAgent(), _FakeArco(),
+                           console_agent=console_agent,
+                           recycle=lambda: recycles.append("r") or None)
+
+    assert reason == "parent-gone"
+    assert gs.abort_calls == 1
+    assert recycles == ["r"]
+
+
+def test_serve_rounds_recycle_failure_returns_no_room(capsys):
+    """A recycle failure at round end must bubble as "no-room" -- the
+    caller (main()/`_serve_roomless`) treats it exactly like a Console
+    unload_room."""
+    from harness.terrarium_boot import _serve_rounds
+
+    gs = _RecycleGS()
+
+    def load_round1():
+        gs.bit = _FakeBit(_FakeBitConfig(0.0))
+        gs.bit_name = "Round1Bit"
+        gs.state = State.SETUP
+
+    console_agent = _FakeConsoleAgent(gs, [(State.IDLE, load_round1)])
+
+    reason = _serve_rounds(gs, _FakeAgent(), _FakeArco(),
+                           console_agent=console_agent,
+                           recycle=lambda: "injected failure")
+
+    assert reason == "no-room"
+    assert "room recycle failed: injected failure" in capsys.readouterr().err
+
+
+def test_serve_rounds_rereads_arco_after_recycle(monkeypatch):
+    """The recycle replaces the Arco process -- the liveness checks in the
+    next round's waits must poll the NEW `terrarium.arco`, not a handle to
+    the SIGTERMed old one."""
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _serve_rounds
+
+    class PollCountingArco:
+        def __init__(self):
+            self.poll_calls = 0
+
+        def poll(self):
+            self.poll_calls += 1
+            return None
+
+    old_arco = PollCountingArco()
+    new_arco = PollCountingArco()
+
+    class FakeTerrarium:
+        state = TerrariumState.ROOM_READY
+        arco = old_arco
+
+    terrarium = FakeTerrarium()
+
+    gs = _RecycleGS()
+
+    def load_round1():
+        gs.bit = _FakeBit(_FakeBitConfig(0.0))
+        gs.bit_name = "Round1Bit"
+        gs.state = State.SETUP
+
+    console_agent = _FakeConsoleAgent(gs, [(State.IDLE, load_round1)])
+
+    ended = {"count": 0}
+
+    def fake_parent_is_gone(pid):
+        if gs.state is State.IDLE:
+            ended["count"] += 1
+            # Let the second wait poll `arco` (now `new_arco`) once before
+            # ending the test, so the re-read is actually exercised.
+            return ended["count"] > 2
+        return False
+
+    monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
+                        fake_parent_is_gone)
+
+    snapshot = {}
+
+    def recycle():
+        snapshot["old_polls_at_recycle"] = old_arco.poll_calls
+        terrarium.arco = new_arco
+        return None
+
+    reason = _serve_rounds(gs, _FakeAgent(), old_arco,
+                           console_agent=console_agent,
+                           terrarium=terrarium, recycle=recycle)
+
+    assert reason == "parent-gone"
+    assert new_arco.poll_calls > 0
+    # old_arco must never be polled again once the recycle has run.
+    assert old_arco.poll_calls == snapshot["old_polls_at_recycle"]
+
+
 def test_wait_for_load_returns_loaded_immediately_when_not_idle():
     """The first, CLI-selected round: main() has already loaded a Bit
     before this is ever called, so there is nothing to wait for."""
@@ -2062,7 +2249,7 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
         return gs, server, agent, None, teardown, terrarium
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
-                            parent_pid=None):
+                            parent_pid=None, recycle=None):
         captured["catalog_root"] = console_agent.catalog_root
         raise SystemExit(0)
 

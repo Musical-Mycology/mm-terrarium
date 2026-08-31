@@ -607,7 +607,8 @@ def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
 
 
 def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
-                  console_agent=None, drain_arco=None, terrarium=None) -> str:
+                  console_agent=None, drain_arco=None, terrarium=None,
+                  recycle=None) -> str:
     """The `--serve` round loop: load, hold, run, complete, repeat -- until
     the parent or Arco disappears. Each iteration is one round:
 
@@ -629,6 +630,12 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
       5. `_serve_until_done` -- run to completion. "completed" (which
          covers an in-round operator abort too -- both land back in IDLE)
          loops back to step 1 for the next round.
+      6. Recycle the Room (`recycle`, when given) at every round end --
+         both the timeout-abort branch and a "completed" round -- the
+         bit-cycle rule: a fresh Arco per Bit. A recycle failure bubbles
+         out of this loop as "no-room", same outcome as a Console
+         unload_room; `arco` is re-read from `terrarium.arco` on success
+         since the recycle replaced the process.
 
     `drain_arco`, when given, is called once per iteration of the setup
     and run legs in addition to `arco.poll()` -- an extra pty-drain hook
@@ -636,6 +643,23 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
     liveness check. Unused by the two callers `arco.poll()` already
     covers both concerns for.
     """
+    def _end_round() -> str | None:
+        """Recycle the room at every round end (bit-cycle rule). Returns
+        "no-room" to bubble as this loop's outcome when the recycle
+        fails, else None. Re-reads terrarium.arco: the recycle replaced
+        the process, and the liveness checks above must watch the new
+        one, not a handle to the SIGTERMed old one."""
+        nonlocal arco
+        if recycle is None:
+            return None
+        reason = recycle()
+        if reason is not None:
+            print(f"room recycle failed: {reason}", file=sys.stderr)
+            return "no-room"
+        if terrarium is not None and terrarium.arco is not None:
+            arco = terrarium.arco
+        return None
+
     while True:
         was_idle = gs.state is State.IDLE
         reason = _wait_for_load(gs, agent, arco, parent_pid=parent_pid,
@@ -663,6 +687,9 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
             return reason
         if reason == "timeout-abort":
             gs.abort()
+            outcome = _end_round()
+            if outcome:
+                return outcome
             continue
         if gs.state is State.SETUP:
             gs.run()
@@ -674,6 +701,9 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
                                    console_agent=console_agent)
         if reason in ("parent-gone", "arco-exited"):
             return reason
+        outcome = _end_round()
+        if outcome:
+            return outcome
         print("round complete; waiting for next load", flush=True)
 
 
@@ -703,7 +733,7 @@ def _wait_for_room_ready(agent, terrarium, *, console_agent=None,
 
 
 def _serve_roomless(gs, agent, terrarium, *, console_agent=None,
-                    parent_pid: int | None = None) -> str:
+                    parent_pid: int | None = None, recycle=None) -> str:
     """main()'s top-level loop for a NO_ROOM boot (no --room given): wait
     for the Console to load a Room (`_wait_for_room_ready`), then serve
     rounds against whatever that load produced
@@ -723,7 +753,7 @@ def _serve_roomless(gs, agent, terrarium, *, console_agent=None,
         reason = _serve_rounds(gs, agent, terrarium.arco,
                                parent_pid=parent_pid,
                                console_agent=console_agent,
-                               terrarium=terrarium)
+                               terrarium=terrarium, recycle=recycle)
         if reason != "no-room":
             return reason
 
@@ -1188,6 +1218,7 @@ def main() -> None:
     sigterm_as_keyboard_interrupt()
 
     transport = None
+    o2lite_module = None
     clock = time.monotonic
     if args.transport == "o2lite":
         from o2litepy import o2lite            # lazy: websocket mode needs no o2litepy
@@ -1198,6 +1229,7 @@ def main() -> None:
         # while constructing room_audio, so the transport is started after
         # build() returns rather than before it.
         transport = O2LiteTransport()
+        o2lite_module = o2lite
         # Control must stamp frames on the same clock the device ticks
         # against (harness/o2_shroom.py: client.tick(o2lite.time_get())),
         # or a frame's `when` is never reachable -- see build()'s clock=
@@ -1299,6 +1331,15 @@ def main() -> None:
         transport=transport, clock=clock,
         arco_process_cls=arco_process_cls, on_join_denied=_print_join_denied,
         runs_dir=runs_dir, run_id=run_id)
+    room_audio = getattr(agent, "room_audio", None)
+    pool = room_audio.pool if room_audio is not None else None
+    # One-shot (non-serve) mode has no round-end to recycle at all --
+    # `recycle=None` there, so its behavior stays byte-identical (Global
+    # Constraints). `effective_serve` is resolved above, before build().
+    recycle = ((lambda: _recycle_room(
+                    terrarium, transport=transport, pool=pool,
+                    o2lite=o2lite_module if transport is not None else None))
+               if effective_serve else None)
     # A SEPARATE stack from `teardown` -- see shutdown()'s docstring for
     # why the o2lite transport must close before terrarium.room_stack
     # (Arco) rather than with the rest of the process-level steps.
@@ -1425,9 +1466,17 @@ def main() -> None:
                      "aborting", file=sys.stderr)
                 gs.abort()
                 if effective_serve:
+                    if recycle is not None:
+                        recycle_reason = recycle()
+                        if recycle_reason is not None:
+                            print(f"room recycle failed: {recycle_reason}",
+                                 file=sys.stderr)
+                        elif terrarium.arco is not None:
+                            arco = terrarium.arco
                     _print_round_outcome(_serve_rounds(
                         gs, agent, arco, parent_pid=args.exit_with_parent,
-                        console_agent=console_agent, terrarium=terrarium))
+                        console_agent=console_agent, terrarium=terrarium,
+                        recycle=recycle))
             else:
                 if gs.state is State.SETUP:
                     gs.run()
@@ -1441,11 +1490,19 @@ def main() -> None:
                                            parent_pid=args.exit_with_parent,
                                            console_agent=console_agent)
                 if effective_serve and reason == "completed":
+                    if recycle is not None:
+                        recycle_reason = recycle()
+                        if recycle_reason is not None:
+                            print(f"room recycle failed: {recycle_reason}",
+                                 file=sys.stderr)
+                        elif terrarium.arco is not None:
+                            arco = terrarium.arco
                     print("round complete; waiting for next load", flush=True)
                     reason = _serve_rounds(gs, agent, arco,
                                            parent_pid=args.exit_with_parent,
                                            console_agent=console_agent,
-                                           terrarium=terrarium)
+                                           terrarium=terrarium,
+                                           recycle=recycle)
                 _print_round_outcome(reason)
         else:
             # NO_ROOM boot (no --room, a console port instead): wait for
@@ -1455,7 +1512,8 @@ def main() -> None:
             # room is unloaded mid-serve (see _serve_roomless).
             reason = _serve_roomless(gs, agent, terrarium,
                                      console_agent=console_agent,
-                                     parent_pid=args.exit_with_parent)
+                                     parent_pid=args.exit_with_parent,
+                                     recycle=recycle)
             _print_round_outcome(reason)
     except KeyboardInterrupt:
         pass
