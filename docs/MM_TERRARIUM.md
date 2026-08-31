@@ -2132,6 +2132,17 @@ is non-empty.
 `list_view()` now includes a best-effort `roles` summary per Bit, so the
 Load picker can show what a Bit will grant without loading it first.
 
+### Console nav redesign: right rail deleted, three toggled center views (2026-08-31)
+Design: [`.../2026-08-31-console-nav-redesign-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-console-nav-redesign-design.md).
+The right rail described above is gone. `rail.js` is now registration plus
+an "Instruments" pull (device rows tagged Scored/Jam/Fixture/Unregistered,
+with fixture devs sourced from the room's fixtures) and the event log; the
+old Roles & Manifests refcards moved into `bit.js`'s Bit Details popup
+instead. `shell.js` now owns `showView()`/`paintRoomNav()`, switching
+between three hidden-toggled center views — Live (the default), Room, and
+Event Log — rather than a single always-visible layout. The rooms panel is
+now the Room view itself, no longer a top strip.
+
 ### SolidCue overrides, SURFACE targeting, per-surface mute, and the four operator triggers (2026-08-26)
 The Triggers panel becomes a real operator control surface. Design:
 [`.../2026-08-26-trigger-cards-and-surface-triggers-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-26-trigger-cards-and-surface-triggers-design.md)
