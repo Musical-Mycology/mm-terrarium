@@ -100,7 +100,7 @@ function snapshotMsg(rooms, terrarium_state) {
 
   unloadBtn.onclick();
   assert.strictEqual(sock.sent.length, 1);
-  assert.deepStrictEqual(sock.sent[0], { command: "unload_room", force: false });
+  assert.deepStrictEqual(sock.sent[0], { command: "unload_room", force: true });
 
   console.log("rooms_panel: ok");
 })().catch((e) => { console.error(e); process.exit(1); });
