@@ -96,6 +96,16 @@ def validate_instrument(instrument: Instrument) -> None:
         validate_function_table(table, verb_names=frozenset(), owner="instrument")
     except ValueError as exc:
         raise InstrumentError(f"instrument {instrument.name!r}: {exc}") from exc
+    for fn in instrument.functions:
+        if fn.kind is not FunctionKind.SCRIPTED:
+            continue
+        for i, step in enumerate(fn.script):
+            kind = cue_kind(step.cue)
+            if kind not in instrument.accepted_cues:
+                raise InstrumentError(
+                    f"instrument {instrument.name!r}: function {fn.name!r} "
+                    f"script[{i}] is a {kind!r} cue but accepted_cues is "
+                    f"{list(instrument.accepted_cues)}")
     where = f"instrument {instrument.name!r}"
     try:
         for trig in instrument.event_triggers:

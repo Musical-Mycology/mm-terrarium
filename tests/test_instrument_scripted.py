@@ -94,6 +94,20 @@ def test_tuneshroom_fireworks_matches_the_bits_seeded_script():
     assert fw.script[0].offset == 0.0
 
 
+def test_scripted_step_cue_kind_not_in_accepted_cues_is_refused_at_load():
+    from control.cues import SolidCue
+    from control.instrument import Instrument, InstrumentError, validate_instrument
+    fn = _content("glow", (ScriptStep(0.0, SolidCue(TARGET, (255, 0, 0), 1.0, None)),))
+    instrument = Instrument(name="dev_strip", capabilities=frozenset(),
+                            functions=(fn,), accepted_cues=("midi",))
+    with pytest.raises(InstrumentError) as exc:
+        validate_instrument(instrument)
+    message = str(exc.value)
+    assert "dev_strip" in message
+    assert "glow" in message
+    assert "script[0]" in message
+
+
 def test_function_view_tolerates_an_instrument_scripted_functions_targetless_condition():
     # Instrument SCRIPTED functions declare neither target nor condition
     # (validate_function_table's owner="instrument" rules forbid both) --

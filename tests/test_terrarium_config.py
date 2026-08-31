@@ -427,6 +427,17 @@ def test_scripted_reserved_name_is_a_located_config_error():
         parse_terrarium_config(bad, "t.toml")
 
 
+def test_scripted_step_cue_kind_outside_accepted_cues_is_a_located_config_error():
+    bad = CONFIG_WITH_SCRIPTED_FUNCTION.replace(
+        'accepted_cues = ["midi", "play", "solid", "mute"]',
+        'accepted_cues = ["midi"]').replace(
+        '{ offset = 0.5, midi = [176, 74, 40] },',
+        '{ offset = 0.5, solid = { rgb = [255, 0, 0] } },')
+    with pytest.raises(TerrariumConfigError) as exc:
+        parse_terrarium_config(bad, "t.toml")
+    assert "play_aurora" in str(exc.value)
+
+
 def test_scripted_step_with_no_cue_key_is_located():
     bad = CONFIG_WITH_SCRIPTED_FUNCTION.replace(
         "midi = [176, 74, 127]", "offset2 = 1")

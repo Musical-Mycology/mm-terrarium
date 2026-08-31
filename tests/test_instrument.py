@@ -103,7 +103,8 @@ def test_instrument_scripted_function_is_accepted():
     scripted = Function(
         name="tap", description="a tap function", kind=FunctionKind.SCRIPTED,
         script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),))
-    inst = Instrument(name="glowstrip", functions=(scripted,))
+    inst = Instrument(name="glowstrip", functions=(scripted,),
+                      accepted_cues=("midi",))
     validate_instrument(inst)
 
 
