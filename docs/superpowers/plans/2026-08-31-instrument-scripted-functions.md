@@ -629,7 +629,7 @@ git commit -m "feat(config): instruments author scripted functions in terrarium.
 
 **Interfaces:**
 - Consumes: `builtin_functions`/`RESERVED_NAMES` (Task 1), owner-aware validation (Task 2), TUNESHROOM functions (Task 3).
-- Produces: `fire_function(name, *, fired_by, dev=None, at=None)` semantics: (a) Bit table consulted only in SETUP/RUNNING for the name-fire's `target`/`condition`; (b) an undeclared name defaults to `target=SURFACE` (dev required, `cues.ROOM` sentinel allowed) and works in ANY state, Bit or none; (c) per resolved dev, script = built-ins → that dev's instrument SCRIPTED function of that name → skip (logged); (d) a fire resolving zero devs-with-script returns None and emits a `FunctionFired` with `steps=0`; (e) `condition` on the record = Bit condition name when declared, else `"builtin"`/`"instrument"`; `declared_source` = Bit's when declared, else `fired_by`. Also `GameServer.load_warnings: tuple[str, ...]` set on every `load_bit` (target-aware name-gap check) + observer hook `on_load_warnings(warnings)`.
+- Produces (REDIRECTED 2026-08-31 — Bits keep their scripts; see the spec's mid-execution-redirect row): `fire_function(name, *, fired_by, dev=None, at=None)` semantics: (a) Bit table consulted only in SETUP/RUNNING; **a declared entry with a NON-EMPTY script fires exactly as today's code path does — byte-identical behavior, first rung of the ladder**; (b) a declared entry with an EMPTY script is a name-fire: its `target`/`condition` metadata applies but content resolves down the ladder; (c) an undeclared name defaults to `target=SURFACE` (dev required, `cues.ROOM` sentinel allowed) and works in ANY state, Bit or none; (d) ladder per resolved dev: built-ins → that dev's instrument SCRIPTED function of that name → skip (logged); (e) a fire resolving zero devs-with-script returns None and emits a `FunctionFired` with `steps=0`; (f) `condition` on the record = Bit condition name when declared, else `"builtin"`/`"instrument"`; `declared_source` = Bit's when declared, else `fired_by`. Also `GameServer.load_warnings: tuple[str, ...]` set on every `load_bit` — gap check applies ONLY to name-fire (empty-script) declarations, so unmigrated Bits produce zero warnings — + observer hook `on_load_warnings(warnings)`. The Task 5 test `test_load_warnings_report_target_aware_gaps`'s NameFireBit (empty script) is still valid. TestBit/MetronomeBit MUST load and behave unchanged after this task; the full suite must be GREEN at the end of Task 5 (the red window closed with the Task 2 redirect).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -847,7 +847,18 @@ git commit -m "feat(engine): Bit-optional fire ladder -- builtins, per-dev instr
 
 ---
 
-### Task 6: migrate TestBit, MetronomeBit, and the test fleet
+### Task 6: Bit/built-in interplay verification (REDIRECTED 2026-08-31 — the Bit migration is deferred)
+
+**Chris's mid-execution redirect: TestBit and MetronomeBit are NOT migrated. They keep their scripted functions, scripts and all. Everything below the REDIRECTED SCOPE block is the ORIGINAL task text, retained for the record only — do NOT execute it.**
+
+**REDIRECTED SCOPE — what this task now does:**
+- Verify zero-migration: `bits/` is untouched by this branch (`git diff main -- bits/` empty), TestBit and MetronomeBit load and run exactly as on main.
+- Add integration tests (in `tests/test_fire_ladder.py`): (1) with TestBit loaded and RUNNING, firing its declared `stop` (which shares a reserved built-in name) runs TESTBIT's script — the Bit's non-empty script is the ladder's first rung and shadows the built-in; (2) with TestBit loaded, firing `flash` (which TestBit does NOT declare) resolves the built-in — undeclared names fall through the ladder even mid-Bit; (3) `gs.load_warnings == ()` after loading TestBit and after loading MetronomeBit (non-empty-script declarations never warn).
+- Fix the two straggler test files the Task 2 redirect's fix round may have left (`tests/test_functions.py`, `tests/test_instrument.py`): only assertions about INSTRUMENT-side validation change (instruments now accept scripted functions); every Bit-side assertion must pass unchanged.
+- Full suite green; commit `test(ladder): pin Bit-script-first precedence and zero-warning unmigrated Bits`.
+
+--- ORIGINAL (superseded) TEXT BELOW ---
+
 
 **Files:**
 - Modify: `bits/test/test_bit.py` (function_table + `_on_tap`), `bits/metronome/metronome_bit.py` (function_table; script builders/constants now imported from `control.instrument`), `tests/test_engine_functions.py` (fixture Bits: `"stop"` at line ~172 renames to `"halt"` or becomes a name-fire; every Bit-declared script empties), `tests/test_test_bit.py` (`SCRIPTED_FUNCTION_NAMES` etc.), `tests/instrument_fixtures.py` (give `GENERIC_SURFACE` the scripted functions engine tests fire), MetronomeBit's test module, `tests/test_console_agent.py` where function shapes are asserted.
