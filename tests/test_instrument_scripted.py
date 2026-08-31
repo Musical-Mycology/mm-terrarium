@@ -92,3 +92,16 @@ def test_tuneshroom_fireworks_matches_the_bits_seeded_script():
               if fn.name == "fireworks_player")
     assert len(fw.script) == 36
     assert fw.script[0].offset == 0.0
+
+
+def test_function_view_tolerates_an_instrument_scripted_functions_targetless_condition():
+    # Instrument SCRIPTED functions declare neither target nor condition
+    # (validate_function_table's owner="instrument" rules forbid both) --
+    # unlike a Bit name-fire, which always has both. function_view must
+    # render None for each rather than raising.
+    from control.function_view import function_view
+    from control.instrument import TUNESHROOM
+    fn = next(f for f in TUNESHROOM.functions if f.name == "play_aurora")
+    view = function_view(fn)
+    assert view["target"] is None
+    assert view["condition"] is None

@@ -71,7 +71,9 @@ def device_view(info, role_name, url=None, muted=False) -> dict:
 
 def snapshot_event(*, state, installed_bits, loaded_bit, roles,
                    registration, devices, bit_status, room=None,
-                   functions=None, terrarium_state=None, rooms=None) -> dict:
+                   functions=None, terrarium_state=None, rooms=None,
+                   instrument_functions=None, surface_instruments=None,
+                   builtins=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
@@ -85,6 +87,9 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "functions": functions or [],
         "terrarium_state": terrarium_state,
         "rooms": rooms or [],
+        "instrument_functions": instrument_functions or {},
+        "surface_instruments": surface_instruments or {},
+        "builtins": builtins or {},
     }
 
 
@@ -101,11 +106,18 @@ def room_frame_event(dev: str, channels) -> dict:
     return {"event": "room_frame", "dev": dev, "channels": list(channels)}
 
 
-def functions_changed_event(functions) -> dict:
+def functions_changed_event(functions, instruments=None, surfaces=None,
+                            builtins=None) -> dict:
     """Every function the loaded Bit declares, as control.function_view's
-    functions_view() builds them. A function table is static per Bit, so in
-    practice this fires on load and unload."""
-    return {"event": "functions_changed", "functions": functions}
+    functions_view() builds them, plus the present instruments' SCRIPTED
+    functions, the dev/room -> instrument-name map, and each instrument's
+    built-in names. A function table is static per Bit, so `functions` in
+    practice only changes on load/unload; the other three can also change
+    on a Room load/unload."""
+    return {"event": "functions_changed", "functions": functions,
+            "instrument_functions": instruments or {},
+            "surface_instruments": surfaces or {},
+            "builtins": builtins or {}}
 
 
 def function_fired_event(fired) -> dict:

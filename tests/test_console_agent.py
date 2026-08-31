@@ -1032,3 +1032,55 @@ def test_room_load_progress_is_broadcast_per_stage():
                         if m["event"] == "room_load_progress")
     assert dumps(progress_msg) == (
         '{"event": "room_load_progress", "stage": "validating"}')
+
+
+# --- Task 7: instrument function views, builtins map, load-warning logs ---
+
+from control.terrarium_config import load_terrarium_config
+
+
+def test_snapshot_carries_tuneshroom_instrument_functions_and_builtins():
+    gs, srv, agent = _server_with_agent()
+    snapshot = agent.snapshot()
+    tuneshroom_names = sorted(
+        f["name"] for f in snapshot["instrument_functions"]["tuneshroom"])
+    assert tuneshroom_names == [
+        "fail_player", "fireworks_player", "metro_pulse_player",
+        "metro_recovery", "play_aurora", "win"]
+    assert snapshot["builtins"]["tuneshroom"] == ["flash", "ping", "stop"]
+
+
+def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
+    # NOTE: this exercises ConsoleAgent's builders directly rather than
+    # going through agent.snapshot() -- control/room_view.py's
+    # _function_view still assumes every instrument Function is a
+    # GENERATOR (stale now that dev_strip declares SCRIPTED functions;
+    # see terrarium.toml) and raises before this task's new fields are
+    # even reached. That's a pre-existing bug outside this task's scope,
+    # flagged separately; the instrument_functions/surface_instruments
+    # wiring under test here does not go through room_view at all.
+    config = load_terrarium_config("terrarium.toml")
+    terrarium = make_terrarium(config=config)
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+
+    reason = terrarium.load_room("TEST")
+    assert reason is None
+
+    instrument_functions = agent._current_instrument_functions()
+    dev_strip_names = sorted(f["name"] for f in instrument_functions["dev_strip"])
+    assert dev_strip_names == [
+        "fail_room", "finale", "fireworks_room", "metro_click",
+        "metro_downbeat", "metro_pulse_room", "play_aurora", "win"]
+
+    surface_instruments = agent._current_surface_instruments()
+    assert surface_instruments["sim-main-dev"] == "dev_strip"
+    assert surface_instruments["sim-accent-dev"] == "dev_strip"
+
+
+def test_on_load_warnings_broadcasts_warn_log_events():
+    gs, srv, agent = _server_with_agent()
+    agent.on_load_warnings(("function 'x' has no script on instrument 'y'",))
+    logs = [m for m in srv.broadcasts if m["event"] == "log"]
+    assert logs == [{"event": "log", "level": "warn",
+                     "message": "function 'x' has no script on instrument 'y'"}]

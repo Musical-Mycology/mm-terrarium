@@ -17,8 +17,11 @@ from control.rooms import non_room_counts, room_role_name
 from control.state import State
 from control.terrarium import TerrariumState
 from control.terrarium_config import validate_rooms
-from control.function_view import function_fired_view, functions_view
+from control.function_view import (
+    function_fired_view, functions_view, instrument_functions_view)
 from control.functions import FIRED_BY_ADMIN_MANUAL
+from control.builtins import builtin_functions
+from control.instrument import TUNESHROOM
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,9 @@ class ConsoleAgent:
         self._last_status: dict | None = None
         self._last_room: dict | None = None
         self._last_functions: list | None = None
+        self._last_instrument_functions: dict | None = None
+        self._last_surface_instruments: dict | None = None
+        self._last_builtins: dict | None = None
         self._clock = clock
         # The latest not-yet-broadcast frame per dev. Each dev's entry is
         # overwritten, not queued: see _broadcast_room_frame and
@@ -196,6 +202,9 @@ class ConsoleAgent:
                 self._non_room_counts())["roles"]
         self._last_room = self._current_room()
         self._last_functions = self._current_functions()
+        self._last_instrument_functions = self._current_instrument_functions()
+        self._last_surface_instruments = self._current_surface_instruments()
+        self._last_builtins = self._current_builtins()
         return protocol.snapshot_event(
             state=gs.state.name,
             installed_bits=list(gs.bit_registry.keys()),
@@ -209,6 +218,9 @@ class ConsoleAgent:
             terrarium_state=(
                 self.terrarium.state.name if self.terrarium is not None else None),
             rooms=self._rooms_view(),
+            instrument_functions=self._last_instrument_functions,
+            surface_instruments=self._last_surface_instruments,
+            builtins=self._last_builtins,
         )
 
     def _rooms_view(self) -> list:
@@ -289,11 +301,65 @@ class ConsoleAgent:
             logger.exception("Bit.function_table raised; reporting no functions")
             return []
 
+    def _present_instruments(self) -> dict:
+        """Room fixture instruments plus TUNESHROOM, keyed by instrument
+        name -- exactly the set GameServer.load_bit checks name-fires
+        against (control/engine.py's carried_instruments/room_instruments
+        blend)."""
+        gs = self.game_server
+        instruments = {}
+        if gs.room is not None:
+            for fixture in gs.room.profile.fixtures:
+                instruments[fixture.instrument.name] = fixture.instrument
+        instruments[TUNESHROOM.name] = TUNESHROOM
+        return instruments
+
+    def _current_instrument_functions(self) -> dict:
+        return instrument_functions_view(self._present_instruments())
+
+    def _current_surface_instruments(self) -> dict:
+        """dev/"room" -> instrument name, for every bound Room fixture and
+        every connected device: a bound fixture's dev maps to that
+        fixture's instrument, and every other connected device maps to its
+        carried instrument (TUNESHROOM's name when uncarried)."""
+        gs = self.game_server
+        # Live off `terrarium.room_binding` when a Terrarium is wired, not
+        # `gs.room_binding` -- the same reason _current_room reads
+        # `terrarium.room_bridge` rather than a frozen __init__ snapshot:
+        # the Terrarium owns the RoomBindingRegistry that actually records
+        # fixture binds (see control/terrarium.py's load_room), and a
+        # GameServer built without one (most test doubles) leaves
+        # `gs.room_binding` at None or a separate, never-bound registry.
+        room_binding = (self.terrarium.room_binding if self.terrarium is not None
+                       else gs.room_binding)
+        out: dict[str, str] = {}
+        if gs.room is not None and room_binding is not None:
+            for fixture in gs.room.profile.fixtures:
+                dev = room_binding.bound_device(gs.room.name, fixture.name)
+                if dev is not None:
+                    out[dev] = fixture.instrument.name
+        for info in gs.devices.all():
+            carried = getattr(info, "carried", None)
+            out[info.dev] = carried.name if carried is not None else TUNESHROOM.name
+        return out
+
+    def _current_builtins(self) -> dict:
+        return {name: sorted(builtin_functions(inst).keys())
+                for name, inst in self._present_instruments().items()}
+
     def _broadcast_functions_if_changed(self) -> None:
         functions = self._current_functions()
-        if functions != self._last_functions:
-            self._last_functions = functions
-            self.server.broadcast(protocol.functions_changed_event(functions))
+        instrument_functions = self._current_instrument_functions()
+        surface_instruments = self._current_surface_instruments()
+        builtins = self._current_builtins()
+        current = (functions, instrument_functions, surface_instruments, builtins)
+        previous = (self._last_functions, self._last_instrument_functions,
+                    self._last_surface_instruments, self._last_builtins)
+        if current != previous:
+            (self._last_functions, self._last_instrument_functions,
+             self._last_surface_instruments, self._last_builtins) = current
+            self.server.broadcast(protocol.functions_changed_event(
+                functions, instrument_functions, surface_instruments, builtins))
 
     def _non_room_counts(self):
         """Never surface the Room's occupancy on any Console view -- design
@@ -391,6 +457,14 @@ class ConsoleAgent:
     def on_devices_change(self) -> None:
         self.server.broadcast(protocol.devices_changed_event(
             self._devices_view()))
+
+    def on_load_warnings(self, warnings) -> None:
+        """Engine observer hook (control/engine.py's load_bit): one or more
+        name-fire-with-no-script warnings raised at load. Surfaced as `log`
+        events rather than folded into functions_changed -- these are
+        operator-facing diagnostics, not part of the read model."""
+        for warning in warnings:
+            self.server.broadcast(protocol.log_event("warn", warning))
 
     def on_function_fired(self, record) -> None:
         """Engine observer hook. A fire is engine-produced and has no device
