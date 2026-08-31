@@ -52,11 +52,30 @@ class TerrariumConfig:
 
 
 def load_terrarium_config(path: str) -> TerrariumConfig:
+    from control.catalog import load_catalog  # local: avoid import cycle
     with open(path, encoding="utf-8") as f:
-        return parse_terrarium_config(f.read(), source=path)
+        text = f.read()
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return parse_terrarium_config(text, source=path)  # located there
+    instrument_paths = raw.get("terrarium", {}).get(
+        "instrument_paths", ["instruments"])
+    extra: dict = {}
+    base = Path(path).resolve().parent
+    for rel in instrument_paths:
+        for name, inst in load_catalog(base / rel).published.items():
+            if name in extra:
+                raise TerrariumConfigError(
+                    source=str(base / rel), key=f"instruments.{name}",
+                    message="defined in more than one catalog root")
+            extra[name] = inst
+    return parse_terrarium_config(text, source=path, extra_instruments=extra)
 
 
-def parse_terrarium_config(text: str, source: str) -> TerrariumConfig:
+def parse_terrarium_config(text: str, source: str,
+                           extra_instruments: dict[str, Instrument] | None = None
+                           ) -> TerrariumConfig:
     try:
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
@@ -76,6 +95,13 @@ def parse_terrarium_config(text: str, source: str) -> TerrariumConfig:
     instruments: dict[str, Instrument] = {}
     for iname, iraw in instruments_raw.items():
         instruments[iname] = _parse_instrument(iname, iraw, source=source)
+    for iname, inst in (extra_instruments or {}).items():
+        if iname in instruments:
+            raise TerrariumConfigError(
+                source=source, key=f"instruments.{iname}",
+                message="defined both inline and in an instrument catalog; "
+                        "pick one home")
+        instruments[iname] = inst
     rooms_raw = raw.get("rooms")
     if not isinstance(rooms_raw, dict) or not rooms_raw:
         raise TerrariumConfigError(source=source, key="rooms",

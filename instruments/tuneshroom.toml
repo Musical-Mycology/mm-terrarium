@@ -1,0 +1,18 @@
+description = "Handheld 12-LED Tuneshroom (8-ring + 4-stem)"
+capabilities = ["light.pixels", "audio.samples", "gesture.tap", "gesture.tilt"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+
+[[event_triggers]]
+name = "tap"
+description = "a single or double tap on the shell"
+  [event_triggers.thresholds]
+  peak_g = 2.0
+  window_ms = 200
+  double_ms = 400
+
+[[event_triggers]]
+name = "shake"
+description = "a shake gesture"
+  [event_triggers.thresholds]
+  peak_g = 2.0
+  window_ms = 200

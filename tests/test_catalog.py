@@ -71,3 +71,33 @@ def test_bad_stem_is_refused_even_as_draft(tmp_path):
     (root / "drafts" / "we ird.toml").write_text(GOOD)
     with pytest.raises(TerrariumConfigError):
         load_catalog(root)
+
+
+from control.instrument import TUNESHROOM
+from control.terrarium_config import load_terrarium_config, parse_terrarium_config
+
+
+def test_shipped_tuneshroom_catalog_file_matches_the_code_constant():
+    cat = load_catalog(Path("instruments"))
+    assert cat.published["tuneshroom"] == TUNESHROOM
+
+
+def test_shipped_config_still_resolves_fixture_instruments():
+    config = load_terrarium_config("terrarium.toml")
+    assert "venue_array" in config.instruments
+    assert "dev_strip" in config.instruments
+    fixture = config.rooms["TEST"].profile.fixtures[0]
+    assert fixture.instrument.name == "dev_strip"
+
+
+def test_extra_instrument_collision_with_inline_is_located(tmp_path):
+    text = (
+        'schema = 1\n[terrarium]\nname = "t"\n'
+        '[instruments.dupe]\ncapabilities = []\n'
+        '[rooms.T]\ndescription = "d"\nbackends = ["devicelink"]\n')
+    from control.instrument import Instrument
+    with pytest.raises(TerrariumConfigError) as exc:
+        parse_terrarium_config(
+            text, source="test",
+            extra_instruments={"dupe": Instrument(name="dupe")})
+    assert "dupe" in str(exc.value)
