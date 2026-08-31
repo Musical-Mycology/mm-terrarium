@@ -2136,6 +2136,218 @@ def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
     assert len(serve_rounds_calls) == 2
 
 
+def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
+        monkeypatch):
+    """A `recycle()` failure stops Control's own transport/pool
+    (client-before-hub) but leaves no hub to restart them against -- so
+    when a later plain Console `load_room` succeeds, `_serve_roomless`
+    must restart them itself (pool first, then transport, mirroring
+    `_recycle_room`'s own order) before serving, or the process would sit
+    in ROOM_READY with a live Arco but dead clients."""
+    import harness.terrarium_boot as terrarium_boot_module
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _serve_roomless
+
+    class FakeTerrarium:
+        def __init__(self):
+            self.state = TerrariumState.ROOM_READY
+            self.arco = _FakeArco()
+            self.unload_calls = 0
+
+        def unload_room(self, force=False):
+            self.unload_calls += 1
+
+    class FakeGS:
+        state = State.IDLE
+
+        def tick(self, dt):
+            pass
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    terrarium = FakeTerrarium()
+    calls = []
+
+    def fake_wait_for_room_ready(agent, terr, **kwargs):
+        return "ready"
+
+    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
+                          console_agent=None, terrarium=None, **_kw):
+        calls.append("serve-rounds")
+        return "parent-gone"
+
+    def restart_clients():
+        calls.append("pool-start")
+        calls.append("transport-start")
+        return None
+
+    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
+                        fake_wait_for_room_ready)
+    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
+                        fake_serve_rounds)
+
+    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium,
+                             restart_clients=restart_clients)
+
+    assert reason == "parent-gone"
+    assert calls == ["pool-start", "transport-start", "serve-rounds"]
+    assert terrarium.unload_calls == 0
+
+
+def test_serve_roomless_skips_restart_when_recycle_already_succeeded(
+        monkeypatch):
+    """No double-start: when `restart_clients` reports nothing was stopped
+    (the ordinary case -- no prior failed recycle, or `_recycle_room`
+    already restarted the clients itself), `_serve_roomless` must not
+    restart them again."""
+    import harness.terrarium_boot as terrarium_boot_module
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _serve_roomless
+
+    class FakeTerrarium:
+        def __init__(self):
+            self.state = TerrariumState.ROOM_READY
+            self.arco = _FakeArco()
+
+    class FakeGS:
+        state = State.IDLE
+
+        def tick(self, dt):
+            pass
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    terrarium = FakeTerrarium()
+    calls = []
+
+    def fake_wait_for_room_ready(agent, terr, **kwargs):
+        return "ready"
+
+    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
+                          console_agent=None, terrarium=None, **_kw):
+        calls.append("serve-rounds")
+        return "parent-gone"
+
+    def restart_clients():
+        # Simulates the real closure's own "nothing was stopped" no-op.
+        return None
+
+    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
+                        fake_wait_for_room_ready)
+    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
+                        fake_serve_rounds)
+
+    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium,
+                             restart_clients=restart_clients)
+
+    assert reason == "parent-gone"
+    assert calls == ["serve-rounds"]
+
+
+def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
+        monkeypatch):
+    """If the restart-after-reload itself fails, `_serve_roomless` must
+    unload the Room (so ROOM_READY never lies about live clients) and
+    loop back to the NO_ROOM wait rather than serving with dead clients --
+    never calling `_serve_rounds` for that lap."""
+    import harness.terrarium_boot as terrarium_boot_module
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _serve_roomless
+
+    class FakeTerrarium:
+        def __init__(self):
+            self.state = TerrariumState.ROOM_READY
+            self.arco = _FakeArco()
+            self.unload_calls = []
+
+        def unload_room(self, force=False):
+            self.unload_calls.append(force)
+            self.state = TerrariumState.NO_ROOM
+
+    class FakeGS:
+        state = State.IDLE
+
+        def tick(self, dt):
+            pass
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    terrarium = FakeTerrarium()
+    wait_calls = []
+    serve_rounds_calls = []
+
+    def fake_wait_for_room_ready(agent, terr, **kwargs):
+        wait_calls.append(1)
+        if len(wait_calls) == 1:
+            return "ready"
+        return "parent-gone"
+
+    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
+                          console_agent=None, terrarium=None, **_kw):
+        serve_rounds_calls.append(1)
+        return "parent-gone"
+
+    def restart_clients():
+        return "injected restart failure"
+
+    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
+                        fake_wait_for_room_ready)
+    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
+                        fake_serve_rounds)
+
+    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium,
+                             restart_clients=restart_clients)
+
+    assert reason == "parent-gone"
+    assert serve_rounds_calls == []
+    assert terrarium.unload_calls == [True]
+    assert len(wait_calls) == 2
+
+
+def test_restart_room_clients_starts_pool_then_transport():
+    """`_restart_room_clients` is the restart half of `_recycle_room`,
+    factored out so `_serve_roomless` can call it too: pool.start() before
+    transport.start(o2lite), matching process launch order."""
+    import harness.terrarium_boot as terrarium_boot
+
+    calls = []
+
+    class FakePool:
+        def start(self):
+            calls.append("pool-start")
+
+    class FakeTransport:
+        def start(self, o2):
+            calls.append(("transport-start", o2))
+
+    o2 = object()
+    reason = terrarium_boot._restart_room_clients(
+        transport=FakeTransport(), pool=FakePool(), o2lite=o2)
+    assert reason is None
+    assert calls == ["pool-start", ("transport-start", o2)]
+
+
+def test_restart_room_clients_catches_a_raising_start_and_returns_reason():
+    """Unlike Terrarium's own methods, pool.start()/transport.start() DO
+    raise on failure -- `_restart_room_clients` must catch that and
+    stringify it rather than let it propagate, so callers get the same
+    "reason string, never raises" contract as `_recycle_room`."""
+    import harness.terrarium_boot as terrarium_boot
+
+    class FailingPool:
+        def start(self):
+            raise RuntimeError("injected pool failure")
+
+    reason = terrarium_boot._restart_room_clients(pool=FailingPool())
+    assert reason == "injected pool failure"
+
+
 def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
     """`_serve_rounds` threads `terrarium` straight into `_wait_for_load`
     so a Console `unload_room` landing while a round waits in IDLE (no Bit
@@ -2273,7 +2485,8 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
         return gs, server, agent, None, teardown, terrarium
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
-                            parent_pid=None, recycle=None):
+                            parent_pid=None, recycle=None,
+                            restart_clients=None):
         captured["catalog_root"] = console_agent.catalog_root
         raise SystemExit(0)
 

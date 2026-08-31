@@ -747,7 +747,8 @@ def _wait_for_room_ready(agent, terrarium, *, console_agent=None,
 
 
 def _serve_roomless(gs, agent, terrarium, *, console_agent=None,
-                    parent_pid: int | None = None, recycle=None) -> str:
+                    parent_pid: int | None = None, recycle=None,
+                    restart_clients=None) -> str:
     """main()'s top-level loop for a NO_ROOM boot (no --room given): wait
     for the Console to load a Room (`_wait_for_room_ready`), then serve
     rounds against whatever that load produced
@@ -757,13 +758,30 @@ def _serve_roomless(gs, agent, terrarium, *, console_agent=None,
     Console `unload_room` mid-serve) instead of treating that as this
     process's terminal outcome. `terrarium.arco` is re-read fresh on every
     lap -- it is None in NO_ROOM and only becomes the live ArcoProcess once
-    `_wait_for_room_ready` returns "ready"."""
+    `_wait_for_room_ready` returns "ready".
+
+    `restart_clients`, when given, is called on every "ready" lap -- a
+    no-op unless the room got here via a plain Console `load_room` that
+    followed a FAILED `recycle()`: that recycle already stopped Control's
+    own transport/pool (client-before-hub) but had no hub left to restart
+    them against, so without this a later successful load_room would land
+    in ROOM_READY with a live Arco but dead clients, silently, for the
+    rest of the process. If the restart itself fails, this Room is
+    unloaded (so ROOM_READY never lies about live clients) and the lap
+    returns to the NO_ROOM wait instead of serving."""
     while True:
         reason = _wait_for_room_ready(agent, terrarium,
                                       console_agent=console_agent,
                                       parent_pid=parent_pid)
         if reason != "ready":
             return reason
+        if restart_clients is not None:
+            restart_reason = restart_clients()
+            if restart_reason is not None:
+                print(f"room client restart failed: {restart_reason}",
+                     file=sys.stderr)
+                terrarium.unload_room(force=True)
+                continue
         reason = _serve_rounds(gs, agent, terrarium.arco,
                                parent_pid=parent_pid,
                                console_agent=console_agent,
@@ -983,10 +1001,32 @@ def _recycle_room(terrarium, *, transport=None, pool=None, o2lite=None):
     reason = terrarium.recycle_room()
     if reason is not None:
         return reason
-    if pool is not None:
-        pool.start()
-    if transport is not None:
-        transport.start(o2lite)
+    return _restart_room_clients(transport=transport, pool=pool,
+                                 o2lite=o2lite)
+
+
+def _restart_room_clients(*, transport=None, pool=None,
+                          o2lite=None) -> str | None:
+    """The restart half of `_recycle_room` (pool.start() then
+    transport.start(o2lite), process-launch order -- see `_recycle_room`'s
+    docstring), factored out so `_serve_roomless` can also call it after a
+    plain Console `load_room` that follows a FAILED recycle: that recycle
+    already stopped these same clients (client-before-hub) but had no hub
+    to restart them against, so a later successful load lands in
+    ROOM_READY with a live Arco but Control's own clients still down
+    unless something restarts them here.
+
+    Unlike Terrarium's own methods, `pool.start()`/`transport.start()`
+    actually raise on failure, so this wraps them and stringifies the
+    exception -- callers get the same "reason string, never raises"
+    contract `_recycle_room` promises."""
+    try:
+        if pool is not None:
+            pool.start()
+        if transport is not None:
+            transport.start(o2lite)
+    except Exception as exc:
+        return str(exc)
     return None
 
 
@@ -1350,10 +1390,37 @@ def main() -> None:
     # One-shot (non-serve) mode has no round-end to recycle at all --
     # `recycle=None` there, so its behavior stays byte-identical (Global
     # Constraints). `effective_serve` is resolved above, before build().
-    recycle = ((lambda: _recycle_room(
-                    terrarium, transport=transport, pool=pool,
-                    o2lite=o2lite_module if transport is not None else None))
-               if effective_serve else None)
+    # Set True by `recycle` whenever `_recycle_room` fails: it has already
+    # stopped the transport/pool (client-before-hub) but had no hub to
+    # restart them against, so the NO_ROOM wait's later `restart_clients`
+    # call knows there is a restart still owed before it may hand the next
+    # successful load_room a live-looking ROOM_READY.
+    clients_stopped = [False]
+
+    def recycle():
+        o2 = o2lite_module if transport is not None else None
+        reason = _recycle_room(terrarium, transport=transport, pool=pool,
+                               o2lite=o2)
+        clients_stopped[0] = reason is not None
+        return reason
+
+    def restart_clients():
+        """Called from the NO_ROOM wait after a plain Console `load_room`
+        succeeds. A no-op unless the previous recycle failed and left the
+        transport/pool stopped -- the ordinary case (no prior failure, or
+        `_recycle_room` already restarted them itself) does nothing here,
+        avoiding a double-start."""
+        if not clients_stopped[0]:
+            return None
+        o2 = o2lite_module if transport is not None else None
+        reason = _restart_room_clients(transport=transport, pool=pool,
+                                       o2lite=o2)
+        if reason is None:
+            clients_stopped[0] = False
+        return reason
+
+    recycle = recycle if effective_serve else None
+    restart_clients = restart_clients if effective_serve else None
     # A SEPARATE stack from `teardown` -- see shutdown()'s docstring for
     # why the o2lite transport must close before terrarium.room_stack
     # (Arco) rather than with the rest of the process-level steps.
@@ -1552,7 +1619,8 @@ def main() -> None:
             reason = _serve_roomless(gs, agent, terrarium,
                                      console_agent=console_agent,
                                      parent_pid=args.exit_with_parent,
-                                     recycle=recycle)
+                                     recycle=recycle,
+                                     restart_clients=restart_clients)
             _print_round_outcome(reason)
     except KeyboardInterrupt:
         pass
