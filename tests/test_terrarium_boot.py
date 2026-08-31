@@ -2078,3 +2078,49 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
 
     assert captured["catalog_root"] is not None
     assert captured["catalog_root"].name == "instruments"
+
+
+def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
+    """main() must also thread a bench_session_factory (from
+    harness.design_session) and a captures_root into the ConsoleAgent it
+    builds, so the Console's design bench and capture panel are backed for
+    real rather than answering error_event on every command. Same
+    fake-build/fake-serve harness as the catalog-root test above."""
+    import types
+
+    import harness.terrarium_boot as terrarium_boot_module
+    from control.terrarium import TerrariumState
+
+    class _FakeObservable:
+        room = None
+        state = TerrariumState.NO_ROOM
+
+        def add_observer(self, observer):
+            pass
+
+    def fake_build(config, bit_registry, **kwargs):
+        gs = _FakeObservable()
+        server = types.SimpleNamespace(port=0)
+        agent = types.SimpleNamespace(room_bridge=None, canvas_urls=[])
+        teardown = TeardownStack()
+        terrarium = _FakeObservable()
+        return gs, server, agent, None, teardown, terrarium
+
+    def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
+                            parent_pid=None):
+        captured["bench_session_factory"] = console_agent.bench_session_factory
+        captured["captures_root"] = console_agent.captures_root
+        raise SystemExit(0)
+
+    captured = {}
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(terrarium_boot_module, "_serve_roomless",
+                        fake_serve_roomless)
+    monkeypatch.setattr(sys, "argv",
+                        ["terrarium_boot.py", "--console-port", "0"])
+
+    with pytest.raises(SystemExit):
+        terrarium_boot_module.main()
+
+    assert captured["bench_session_factory"] is not None
+    assert captured["captures_root"].name == "captures"

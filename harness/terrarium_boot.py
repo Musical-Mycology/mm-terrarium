@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from control.arco_process import ArcoProcess
 from control.bit_config import StartCondition
@@ -1346,12 +1347,15 @@ def main() -> None:
             # for the two-clocks bug this guards against.
             catalog_root = (terrarium_config.instrument_roots[0]
                             if terrarium_config.instrument_roots else None)
+            from harness.design_session import bench_session_factory
             console_agent = ConsoleAgent(gs, console_server,
                                          room_bridge=agent.room_bridge,
                                          clock=clock, registry=registry,
                                          canvas_urls=agent.canvas_urls,
                                          terrarium=terrarium,
-                                         catalog_root=catalog_root)
+                                         catalog_root=catalog_root,
+                                         bench_session_factory=bench_session_factory,
+                                         captures_root=Path("captures"))
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
