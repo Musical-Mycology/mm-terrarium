@@ -643,13 +643,20 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
     liveness check. Unused by the two callers `arco.poll()` already
     covers both concerns for.
     """
-    def _end_round() -> str | None:
-        """Recycle the room at every round end (bit-cycle rule). Returns
-        "no-room" to bubble as this loop's outcome when the recycle
-        fails, else None. Re-reads terrarium.arco: the recycle replaced
-        the process, and the liveness checks above must watch the new
-        one, not a handle to the SIGTERMed old one."""
+    def _end_round(bit_name, reason_text: str) -> str | None:
+        """Announce the round's outcome, THEN recycle the room (bit-cycle
+        rule). Announcing first means the "round ended:" marker and console
+        event are on the wire before the console shows recycle progress
+        stages -- see markers.CONTROL_ROUND_ENDED. Returns "no-room" to
+        bubble as this loop's outcome when the recycle fails, else None.
+        Re-reads terrarium.arco: the recycle replaced the process, and the
+        liveness checks above must watch the new one, not a handle to the
+        SIGTERMed old one."""
         nonlocal arco
+        print(f"{markers.CONTROL_ROUND_ENDED} {bit_name} ({reason_text})",
+             flush=True)
+        if console_agent is not None:
+            console_agent.announce_round_ended(bit_name, reason_text)
         if recycle is None:
             return None
         reason = recycle()
@@ -675,6 +682,11 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
             print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}",
                  flush=True)
 
+        # Captured now: gs.bit_name is None again by the time this round
+        # ends (the engine clears it on unload), so this is the only local
+        # that can still name the round at _end_round() time.
+        bit_name = gs.bit_name
+
         cfg = getattr(gs.bit, "config", None)
         cond = cfg.start if cfg else None
         setup = cfg.launch.setup_seconds if cfg else 0.0
@@ -686,8 +698,10 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
         if reason == "parent-gone":
             return reason
         if reason == "timeout-abort":
+            scored = scored_count(gs)
             gs.abort()
-            outcome = _end_round()
+            outcome = _end_round(
+                bit_name, f"timeout-abort ({scored} scored joined)")
             if outcome:
                 return outcome
             continue
@@ -701,7 +715,7 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
                                    console_agent=console_agent)
         if reason in ("parent-gone", "arco-exited"):
             return reason
-        outcome = _end_round()
+        outcome = _end_round(bit_name, "completed")
         if outcome:
             return outcome
         print("round complete; waiting for next load", flush=True)
@@ -1449,6 +1463,11 @@ def main() -> None:
                 print("--arco-start-audio needs --arco-pty; ignoring",
                       file=sys.stderr)
         if room_spec is not None:
+            # Captured now, before any wait/run/abort: gs.bit_name is None
+            # again by round end (the engine clears it on unload), and this
+            # is round 1's only chance to still name it for the
+            # CONTROL_ROUND_ENDED announcement below.
+            round1_bit_name = gs.bit_name
             setup_seconds = cfg.launch.setup_seconds
             if setup_seconds > 0:
                 print(f"{markers.CONTROL_SETUP_HOLD} for {setup_seconds:g}s "
@@ -1464,8 +1483,15 @@ def main() -> None:
             elif reason == "timeout-abort":
                 print("start condition timed out without meeting players; "
                      "aborting", file=sys.stderr)
+                scored = scored_count(gs)
                 gs.abort()
                 if effective_serve:
+                    reason_text = f"timeout-abort ({scored} scored joined)"
+                    print(f"{markers.CONTROL_ROUND_ENDED} {round1_bit_name} "
+                         f"({reason_text})", flush=True)
+                    if console_agent is not None:
+                        console_agent.announce_round_ended(
+                            round1_bit_name, reason_text)
                     if recycle is not None:
                         recycle_reason = recycle()
                         if recycle_reason is not None:
@@ -1490,6 +1516,12 @@ def main() -> None:
                                            parent_pid=args.exit_with_parent,
                                            console_agent=console_agent)
                 if effective_serve and reason == "completed":
+                    print(f"{markers.CONTROL_ROUND_ENDED} {round1_bit_name} "
+                         "(completed)", flush=True)
+                    if console_agent is not None:
+                        console_agent.announce_round_ended(
+                            round1_bit_name, "completed")
+                    recycle_reason = None
                     if recycle is not None:
                         recycle_reason = recycle()
                         if recycle_reason is not None:
@@ -1497,7 +1529,14 @@ def main() -> None:
                                  file=sys.stderr)
                         elif terrarium.arco is not None:
                             arco = terrarium.arco
-                    print("round complete; waiting for next load", flush=True)
+                    # Only announced on a successful recycle (or no recycle
+                    # at all) -- a failed recycle already returned to
+                    # NO_ROOM, matching `_serve_rounds`'s own `_end_round`,
+                    # which never prints this line on a failed recycle
+                    # either.
+                    if recycle_reason is None:
+                        print("round complete; waiting for next load",
+                             flush=True)
                     reason = _serve_rounds(gs, agent, arco,
                                            parent_pid=args.exit_with_parent,
                                            console_agent=console_agent,

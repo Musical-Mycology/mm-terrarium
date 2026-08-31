@@ -621,6 +621,17 @@ def test_functions_changed_broadcasts_when_a_bit_unloads():
     assert changed and changed[-1]["functions"] == []
 
 
+def test_announce_round_ended_broadcasts_a_log_event():
+    gs, srv, agent = _room_console()
+    srv.broadcasts.clear()
+    agent.announce_round_ended("TestBit", "timeout-abort (0 scored joined)")
+    assert any(
+        e.get("event") == "log"
+        and "round ended: TestBit (timeout-abort (0 scored joined))"
+        in e["message"]
+        for e in srv.broadcasts)
+
+
 def test_on_function_fired_broadcasts_the_record():
     gs, srv, agent = _room_console()
     agent.on_function_fired(FunctionFired(

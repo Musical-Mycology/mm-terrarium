@@ -979,6 +979,7 @@ class _FakeConsoleAgent:
     def __init__(self, gs, script):
         self._gs = gs
         self._script = list(script)
+        self.round_ended_calls = []
 
     def poll(self):
         if not self._script:
@@ -987,6 +988,9 @@ class _FakeConsoleAgent:
         if self._gs.state is required_state:
             self._script.pop(0)
             action()
+
+    def announce_round_ended(self, bit_name, reason):
+        self.round_ended_calls.append((bit_name, reason))
 
 
 def test_serve_rounds_cycles_idle_load_run_idle(monkeypatch, capsys):
@@ -1201,6 +1205,7 @@ class _RecycleGS:
         self.state = State.IDLE
         self.bit = None
         self.bit_name = None
+        self.registration = None
         self.run_calls = 0
         self.abort_calls = 0
         self._tick_count = 0
@@ -1220,9 +1225,12 @@ class _RecycleGS:
         self.state = State.IDLE
 
 
-def test_serve_rounds_recycles_after_a_completed_round(monkeypatch):
+def test_serve_rounds_recycles_after_a_completed_round(monkeypatch, capsys):
     """Every completed round must recycle the Room before the next
-    `_wait_for_load` -- the bit-cycle rule (spec section 2)."""
+    `_wait_for_load` -- the bit-cycle rule (spec section 2). It must also
+    announce the round's end -- stdout marker and console event -- BEFORE
+    that recycle runs (spec section 4)."""
+    from harness import markers
     from harness.terrarium_boot import _serve_rounds
 
     gs = _RecycleGS()
@@ -1245,19 +1253,27 @@ def test_serve_rounds_recycles_after_a_completed_round(monkeypatch):
     monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
                         fake_parent_is_gone)
 
-    recycles = []
-    reason = _serve_rounds(gs, _FakeAgent(), _FakeArco(),
-                           console_agent=console_agent,
-                           recycle=lambda: recycles.append("r") or None)
+    events = []
+    reason = _serve_rounds(
+        gs, _FakeAgent(), _FakeArco(), console_agent=console_agent,
+        recycle=lambda: events.append("recycle") or None)
 
     assert reason == "parent-gone"
-    assert recycles == ["r"]
+    assert events == ["recycle"]
+    assert console_agent.round_ended_calls == [("Round1Bit", "completed")]
+    printed = capsys.readouterr().out
+    assert any(
+        line == f"{markers.CONTROL_ROUND_ENDED} Round1Bit (completed)"
+        for line in printed.splitlines())
 
 
-def test_serve_rounds_recycles_after_timeout_abort(monkeypatch):
+def test_serve_rounds_recycles_after_timeout_abort(monkeypatch, capsys):
     """The timeout-abort branch must also recycle before looping back to
-    the next round's wait -- not just the completed-round tail."""
+    the next round's wait -- not just the completed-round tail. It must
+    also announce the timeout-abort outcome, with the scored count read
+    BEFORE gs.abort() runs (spec section 4)."""
     import harness.terrarium_boot as tb
+    from harness import markers
     from harness.terrarium_boot import _serve_rounds
 
     gs = _RecycleGS()
@@ -1272,6 +1288,7 @@ def test_serve_rounds_recycles_after_timeout_abort(monkeypatch):
     wait_in_setup_results = iter(["timeout-abort"])
     monkeypatch.setattr(tb, "_wait_in_setup",
                         lambda *a, **k: next(wait_in_setup_results))
+    monkeypatch.setattr(tb, "scored_count", lambda gs: 0)
 
     ended = {"count": 0}
 
@@ -1291,6 +1308,13 @@ def test_serve_rounds_recycles_after_timeout_abort(monkeypatch):
     assert reason == "parent-gone"
     assert gs.abort_calls == 1
     assert recycles == ["r"]
+    assert console_agent.round_ended_calls == [
+        ("Round1Bit", "timeout-abort (0 scored joined)")]
+    printed = capsys.readouterr().out
+    assert any(
+        line == (f"{markers.CONTROL_ROUND_ENDED} Round1Bit "
+                 "(timeout-abort (0 scored joined))")
+        for line in printed.splitlines())
 
 
 def test_serve_rounds_recycle_failure_returns_no_room(capsys):

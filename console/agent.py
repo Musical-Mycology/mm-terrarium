@@ -531,6 +531,16 @@ class ConsoleAgent:
         for warning in warnings:
             self.server.broadcast(protocol.log_event("warn", warning))
 
+    def announce_round_ended(self, bit_name: str, reason: str) -> None:
+        """Broadcast a round's outcome into the console event log. Driven
+        by the harness round loop (the only place that knows why a round
+        ended); rides the existing `log` event so no front-end change is
+        needed. Spec 2026-08-31 section 4: a Bit that vanished
+        (self-completed in 2s, or timeout-aborted with nobody joined)
+        must be impossible to misread as 'no load occurred'."""
+        self.server.broadcast(protocol.log_event(
+            "info", f"round ended: {bit_name} ({reason})"))
+
     def on_function_fired(self, record) -> None:
         """Engine observer hook. A fire is engine-produced and has no device
         destination, which is why it rides the multi-observer list rather than
