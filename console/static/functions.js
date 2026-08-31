@@ -115,7 +115,7 @@ function onDevicesChanged(devices) {
 function isCompatible(fn, surfaceValue) {
   if (fn.script && fn.script.length) return true;
   if (BUILTIN_NAMES.has(fn.name)) return true;
-  const instrumentName = surfaceInstruments[surfaceValue];
+  const instrumentName = surfaceInstruments[surfaceLookupKey(surfaceValue)];
   if (!instrumentName) return false;
   const fns = instrumentFunctions[instrumentName] || [];
   return fns.some((f) => f.name === fn.name);
@@ -125,7 +125,7 @@ function isCompatible(fn, surfaceValue) {
 // resolved instrument's own function description when it declares one,
 // falling back to the Bit's own description otherwise.
 function resolvedDescription(fn, surfaceValue) {
-  const instrumentName = surfaceInstruments[surfaceValue];
+  const instrumentName = surfaceInstruments[surfaceLookupKey(surfaceValue)];
   if (instrumentName) {
     const fns = instrumentFunctions[instrumentName] || [];
     const match = fns.find((f) => f.name === fn.name);
@@ -162,9 +162,18 @@ function updateInstrumentData(m) {
 
 // ------------------------------------------------------------ diagnostics
 
+// The wire value fillDevicePicker gives the Room option (ROOM_OPTION, i.e.
+// "@room") is what fire_function's `dev` sentinel expects -- surface_instruments
+// keys the Room's instrument as the literal "room" instead, so this is the
+// one seam where the picker value and the surface_instruments lookup key
+// diverge.
+function surfaceLookupKey(pickerValue) {
+  return pickerValue === ROOM_OPTION ? "room" : pickerValue;
+}
+
 function refreshDiagButtons() {
   if (!diagPicker) return;
-  const instrumentName = surfaceInstruments[diagPicker.value];
+  const instrumentName = surfaceInstruments[surfaceLookupKey(diagPicker.value)];
   const names = instrumentName ? (builtinsMap[instrumentName] || []) : [];
   for (const name of ["flash", "stop", "ping"]) {
     diagButtons[name].disabled = !names.includes(name);

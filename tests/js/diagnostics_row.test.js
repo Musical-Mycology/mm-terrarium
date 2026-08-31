@@ -22,11 +22,12 @@ const INSTRUMENT_FUNCTIONS = {
   tuneshroom: [],
 };
 
-const SURFACE_INSTRUMENTS = { "ie1": "tuneshroom", "sim-strip": "dev_strip" };
+const SURFACE_INSTRUMENTS = { "ie1": "tuneshroom", "sim-strip": "dev_strip", "room": "arr" };
 
 const BUILTINS = {
   tuneshroom: ["flash", "ping", "stop"],
   dev_strip: ["flash"],
+  arr: ["flash", "stop", "ping"],
 };
 
 (async () => {
@@ -80,14 +81,25 @@ const BUILTINS = {
   assert.strictEqual(functions._diagButton("stop").disabled, true);
   assert.strictEqual(functions._diagButton("ping").disabled, true);
 
-  // "@room" (Room) has no surface_instruments entry -- nothing is compatible.
+  // "@room" (Room) resolves via surface_instruments["room"] -- the Room's
+  // bound fixture instrument ("arr") declares all three builtins here, so
+  // all three buttons must be enabled, not disabled.
+  assert.strictEqual(diagPicker.options[0].value, "@room");
   diagPicker.value = "@room";
   diagPicker.onchange();
-  assert.strictEqual(functions._diagButton("flash").disabled, true);
-  assert.strictEqual(functions._diagButton("stop").disabled, true);
-  assert.strictEqual(functions._diagButton("ping").disabled, true);
+  assert.strictEqual(functions._diagButton("flash").disabled, false);
+  assert.strictEqual(functions._diagButton("stop").disabled, false);
+  assert.strictEqual(functions._diagButton("ping").disabled, false);
 
   // ---- 3. Click sends the right command ----------------------------------
+  // Room stays selected -- the fire command must keep sending the picker's
+  // own wire value ("@room", the ROOM sentinel), not the surface_instruments
+  // lookup key ("room").
+  const pingBtn = functions._diagButton("ping");
+  pingBtn.onclick();
+  const roomSent = sock.sent.at(-1);
+  assert.deepStrictEqual(roomSent, { command: "fire_function", name: "ping", dev: "@room" });
+
   diagPicker.value = "sim-strip";
   diagPicker.onchange();
   const flashBtn = functions._diagButton("flash");

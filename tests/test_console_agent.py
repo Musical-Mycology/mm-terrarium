@@ -1048,6 +1048,9 @@ def test_snapshot_carries_tuneshroom_instrument_functions_and_builtins():
         "fail_player", "fireworks_player", "metro_pulse_player",
         "metro_recovery", "play_aurora", "win"]
     assert snapshot["builtins"]["tuneshroom"] == ["flash", "ping", "stop"]
+    # No Room loaded -- the diagnostics row's Room option has no instrument
+    # to resolve, so the literal "room" key must be absent.
+    assert "room" not in snapshot["surface_instruments"]
 
 
 def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
@@ -1074,6 +1077,10 @@ def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
 
     surface_instruments = snapshot["surface_instruments"]
     assert surface_instruments["sim-main-dev"] == "dev_strip"
+    # The diagnostics row's Room option resolves builtins through the
+    # literal "room" key -- the first bound fixture's instrument (TEST's
+    # fixtures carry homogeneous dev_strip instruments).
+    assert surface_instruments["room"] == "dev_strip"
     assert surface_instruments["sim-accent-dev"] == "dev_strip"
 
     # The room panel itself renders each fixture's scripted functions as a
