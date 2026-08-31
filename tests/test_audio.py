@@ -37,6 +37,14 @@ def test_grant_with_empty_ugen_manifest_acquires_nothing():
     assert pool.acquired == []
 
 
+def test_audio_bridge_exposes_pool():
+    # Room recycle (harness/terrarium_boot.py's _recycle_room) needs to reach
+    # the injected pool to quiesce/restart it across an Arco replacement.
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    assert bridge.pool is pool
+
+
 def test_declared_cc_lane_reaches_the_voice():
     pool = FakePool()
     br = AudioBridge(pool)

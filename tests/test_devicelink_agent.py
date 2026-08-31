@@ -927,6 +927,7 @@ def test_ambient_audio_drone_starts_at_room_ready():
     assert len(pool.acquired) == 1
     voice = pool.acquired[0]
     assert any(call[0] == "note_on" for call in voice.sent)
+    assert agent.room_audio is room_audio
 
 
 def test_ambient_audio_swaps_to_the_bits_drone_at_load(monkeypatch):
