@@ -621,6 +621,17 @@ def test_functions_changed_broadcasts_when_a_bit_unloads():
     assert changed and changed[-1]["functions"] == []
 
 
+def test_announce_round_ended_broadcasts_a_log_event():
+    gs, srv, agent = _room_console()
+    srv.broadcasts.clear()
+    agent.announce_round_ended("TestBit", "timeout-abort (0 scored joined)")
+    assert any(
+        e.get("event") == "log"
+        and "round ended: TestBit (timeout-abort (0 scored joined))"
+        in e["message"]
+        for e in srv.broadcasts)
+
+
 def test_on_function_fired_broadcasts_the_record():
     gs, srv, agent = _room_console()
     agent.on_function_fired(FunctionFired(
@@ -790,6 +801,57 @@ def test_load_bit_with_registry_unknown_bit_sends_error_state_stays_idle():
     errors = [msg for _client, msg in srv.sent if msg.get("event") == "error"]
     assert len(errors) == 1
     assert gs.state.name == "IDLE"
+
+
+def test_load_bit_with_nested_overrides_resolves_and_loads():
+    base = parse_manifest(open("bits/test/bit.toml").read(),
+                          source="bits/test/bit.toml")
+    merged = merge_overrides(base, {"defaults": {"run_duration_seconds": 9.0}},
+                             source="bits/test/bit.toml")
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    registry = FakeBitRegistry(config=merged)
+    agent = ConsoleAgent(gs, srv, registry=registry)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "overrides": {"defaults": {"run_duration_seconds": 9.0}}})
+    agent.poll()
+    assert registry.resolve_calls == [
+        ("TestBit", {"defaults": {"run_duration_seconds": 9.0}})]
+    assert gs.bit_name == "TestBit"
+    assert gs.bit.config.extras["run_duration_seconds"] == 9.0
+
+
+def test_load_bit_with_null_overrides_loads():
+    base = parse_manifest(open("bits/test/bit.toml").read(),
+                          source="bits/test/bit.toml")
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    registry = FakeBitRegistry(config=base)
+    agent = ConsoleAgent(gs, srv, registry=registry)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "overrides": None})
+    agent.poll()
+    assert registry.resolve_calls == [("TestBit", None)]
+    assert gs.bit_name == "TestBit"
+
+
+def test_load_bit_with_wrapper_table_is_refused_with_located_error():
+    # the exact broken shape the old JS sent; pins the server-side error
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    registry = FakeBitRegistry(raises=ManifestError(
+        source="bits/test/bit.toml", key="table",
+        message="unknown override table"))
+    agent = ConsoleAgent(gs, srv, registry=registry)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "overrides": {"table": {}}})
+    agent.poll()
+    errors = [msg for _client, msg in srv.sent if msg.get("event") == "error"]
+    assert any("unknown override table" in e["message"] for e in errors)
+    assert gs.bit_name is None
 
 
 def test_bit_completed_event_carries_bit_name_and_version():

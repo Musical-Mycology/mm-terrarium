@@ -60,6 +60,31 @@ def test_start_with_missing_soundfont_names_the_path_without_pyarco():
     assert missing_path in str(ei.value)
 
 
+def test_quiesce_drops_handles_without_wire_traffic():
+    # Room recycle calls quiesce() right when Arco is being (or already was)
+    # SIGTERMed, so it must not touch the dead handles at all.
+    from harness.arco_synth import ArcoSynthPool
+
+    class DeadFlsyn:
+        def __getattr__(self, name):
+            raise AssertionError(f"quiesce touched the wire: {name}")
+
+    class DeadArco:
+        def __getattr__(self, name):
+            raise AssertionError(f"quiesce touched the wire: {name}")
+
+    pool = ArcoSynthPool()
+    # Simulate a started pool whose hub has died: hand-set the private
+    # handles with recording fakes, exactly what start() would have set.
+    pool._flsyn = DeadFlsyn()
+    pool._arco = DeadArco()
+    pool._sched = object()
+    pool._free = []          # all voices out
+    pool.quiesce()
+    assert pool._flsyn is None and pool._arco is None and pool._sched is None
+    assert pool._free == list(range(16))
+
+
 @pytest.mark.skipif(not os.environ.get("MM_ARCO_LIVE"),
                     reason="needs a running Arco server; set MM_ARCO_LIVE=1")
 def test_live_pool_acquires_sends_and_releases():

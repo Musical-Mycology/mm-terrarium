@@ -411,3 +411,20 @@ def test_room_snapshot_is_stored_and_handled():
 
 def test_unknown_kind_is_still_dropped():
     assert client().handle(_down("mystery", "", [])) == ""
+
+
+# --- reset_for_lobby ---
+
+def test_reset_for_lobby_clears_round_state_and_keeps_the_rest():
+    c = client()
+    c.config = {"role": "player"}
+    c.released = True
+    c.last_deny = ("full", "hint")
+    c.last_error = ("ctx", "msg")
+    c._frames.clamped = 7
+    c.reset_for_lobby()
+    assert c.config is None
+    assert c.released is False
+    assert c.last_deny is None
+    assert c.last_error is None
+    assert c.clamped == 7        # cumulative stats survive rounds

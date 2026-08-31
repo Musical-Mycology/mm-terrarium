@@ -68,6 +68,19 @@ def next_heartbeat_time(now: float, interval: float) -> float:
 # enough that an unattended run still animates.
 SWEEP_RESUME_SECONDS = 5.0
 
+
+def lobby_round_over(client, persist: bool) -> str | None:
+    """The per-tick round-over decision, factored pure so it is testable
+    with no socket (this module's convention -- see next_heartbeat_time).
+    Release always ends the round; a deny ends it only in one-shot mode.
+    Under --persist a deny is not terminal: the node may reopen when the
+    Console loads the next Bit, and the join-retry cadence keeps asking."""
+    if client.released:
+        return "lobby" if persist else "exit"
+    if client.last_deny is not None and not persist:
+        return "exit"
+    return None
+
 # Bound on browser gestures queued between ticks. Generous: the page
 # rate-bounds tilts to 20 Hz and the loop drains every ~5 ms.
 INPUT_QUEUE_MAX = 64
@@ -414,7 +427,19 @@ def main() -> None:
                              "its own pid so a Room simulator cannot outlive "
                              "the Terrarium that spawned it and steal its dev "
                              "name from the next run.")
+    parser.add_argument("--persist", action="store_true",
+                        help="Lobby mode: on release, return to the "
+                             "hello+join-retry lobby instead of exiting, "
+                             "and treat a deny as retryable -- so this "
+                             "device joins whatever Bit the Console loads "
+                             "next, across room recycles (each Bit close "
+                             "replaces Arco; o2lite auto-reconnects and "
+                             "reconnect_recheck re-verifies the service). "
+                             "Implies --join-retry 2.0 when --join-retry "
+                             "is 0. Meaningless with --no-join.")
     args = parser.parse_args()
+    if args.persist and args.join_retry <= 0:
+        args.join_retry = 2.0
 
     # control/simulator_process.py shuts this process down with SIGTERM when
     # it is playing the Room simulator, and finally blocks do not run on a
@@ -534,99 +559,134 @@ def main() -> None:
             o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
 
         start = o2lite.time_get()
-        next_heartbeat = next_heartbeat_time(start, args.heartbeat_interval)
         interval = 1.0 / args.tilt_hz
-        # Deferred rather than started at `start`: gestures are held off until
-        # _gestures_ready(client) -- see that function's docstring for why --
-        # so the first tilt should be scheduled for the moment the role
-        # actually arrives, not backdated to loop start (which would fire a
-        # burst of "overdue" tilts back-to-back the instant the gate opens).
-        next_tilt = None
-        last_operator_tilt = None
-        # The join reply is asynchronous -- it only arrives once the loop below
-        # polls it in -- so noticing a deny/error has to happen inside the loop,
-        # not right after send_cmd. Printed once each: without this, a refused
-        # join looks identical to a working one that simply has no frames yet
-        # -- a blank browser and no explanation.
-        deny_printed = False
-        error_printed = False
-        # Only ever set when --join-retry is on, so the default path still sends
-        # exactly one join.
-        next_join = (o2lite.time_get() + args.join_retry
-                     if args.join_retry > 0 and not args.no_join else None)
-        joins_sent = 1
         bridge_id = getattr(o2lite, "bridge_id", None)
-        while not client.released:
-            if parent_is_gone(args.exit_with_parent):
-                print("parent is gone; exiting")
-                break
-            o2lite.poll()
-            bridge_id, problem = reconnect_recheck(o2lite, args.dev, bridge_id)
-            if problem is not None:
-                print(problem, file=sys.stderr)
-                raise SystemExit(1)
-            now = o2lite.time_get()
-            if next_join is not None and now >= next_join:
-                if client.config is not None or client.last_deny is not None \
-                        or client.last_error is not None:
-                    next_join = None       # Control answered; stop retrying
-                else:
-                    # hello as well as join, every time. Both were sent
-                    # before Control existed and BOTH were dropped by Arco
-                    # ("service was not found"), and /game/hello is what puts
-                    # this device in the DevicePool -- a join from a device
-                    # Control has never heard of goes nowhere. Retrying only
-                    # the join reconnects nothing.
+
+        round_num = 1
+        while True:                     # rounds; one lap in one-shot mode
+            round_start = o2lite.time_get()
+            next_heartbeat = next_heartbeat_time(round_start, args.heartbeat_interval)
+            # Deferred rather than started at `start`: gestures are held off
+            # until _gestures_ready(client) -- see that function's docstring
+            # for why -- so the first tilt should be scheduled for the
+            # moment the role actually arrives, not backdated to loop start
+            # (which would fire a burst of "overdue" tilts back-to-back the
+            # instant the gate opens).
+            next_tilt = None
+            last_operator_tilt = None
+            # The join reply is asynchronous -- it only arrives once the
+            # loop below polls it in -- so noticing a deny/error has to
+            # happen inside the loop, not right after send_cmd. Printed
+            # once each: without this, a refused join looks identical to a
+            # working one that simply has no frames yet -- a blank browser
+            # and no explanation.
+            deny_printed = False
+            error_printed = False
+            # Only ever set when --join-retry is on, so the default path
+            # still sends exactly one join.
+            next_join = (o2lite.time_get() + args.join_retry
+                         if args.join_retry > 0 and not args.no_join else None)
+            joins_sent = 1
+
+            outcome = None
+            while outcome is None:
+                if parent_is_gone(args.exit_with_parent):
+                    print("parent is gone; exiting")
+                    outcome = "exit"
+                    break
+                o2lite.poll()
+                bridge_id, problem = reconnect_recheck(o2lite, args.dev, bridge_id)
+                if problem is not None:
+                    print(problem, file=sys.stderr)
+                    raise SystemExit(1)
+                now = o2lite.time_get()
+                if now < 0:
+                    # Across a room recycle the clock goes unsynced until
+                    # the new Arco masters it, and every now-based branch
+                    # below would misfire on -1.
+                    time.sleep(0.05)
+                    continue
+                if next_join is not None and now >= next_join:
+                    if client.config is not None or client.last_deny is not None \
+                            or client.last_error is not None:
+                        next_join = None   # Control answered; stop retrying
+                    else:
+                        # hello as well as join, every time. Both were sent
+                        # before Control existed and BOTH were dropped by
+                        # Arco ("service was not found"), and /game/hello is
+                        # what puts this device in the DevicePool -- a join
+                        # from a device Control has never heard of goes
+                        # nowhere. Retrying only the join reconnects nothing.
+                        send_hello()
+                        o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
+                        joins_sent += 1
+                        next_join = now + args.join_retry
+                        if joins_sent % 5 == 0:
+                            print(f"{joins_sent} joins unanswered. "
+                                  f"{join_stall_hint(args.dev)}")
+                if now >= next_heartbeat:
                     send_hello()
-                    o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
-                    joins_sent += 1
-                    next_join = now + args.join_retry
-                    if joins_sent % 5 == 0:
-                        print(f"{joins_sent} joins unanswered. "
-                              f"{join_stall_hint(args.dev)}")
-            if now >= next_heartbeat:
-                send_hello()
-                next_heartbeat = next_heartbeat_time(now, args.heartbeat_interval)
-            if not deny_printed and client.last_deny is not None:
-                reason, hint = client.last_deny
-                print(f"{markers.DEVICE_JOIN_DENIED} {reason} ({hint})",
-                      flush=True)
-                deny_printed = True
-                # A denied join never gets a role, so _gestures_ready(client)
-                # can never become true and there is nothing left for this
-                # loop to do -- stop instead of silently polling forever
-                # with no gestures and no further explanation.
+                    next_heartbeat = next_heartbeat_time(now, args.heartbeat_interval)
+                if not deny_printed and client.last_deny is not None:
+                    reason, hint = client.last_deny
+                    print(f"{markers.DEVICE_JOIN_DENIED} {reason} ({hint})",
+                          flush=True)
+                    deny_printed = True
+                    # A denied join never gets a role, so
+                    # _gestures_ready(client) can never become true. In
+                    # one-shot mode lobby_round_over() above already ended
+                    # the round on this same lap; under --persist the node
+                    # may still reopen, so this loop keeps polling and
+                    # join-retrying instead of stopping here.
+                if not error_printed and client.last_error is not None:
+                    context, message = client.last_error
+                    print(f"ERROR from Control: {context}: {message}")
+                    error_printed = True
+                # Evaluated AFTER the deny/error prints above (not right
+                # after poll()): a deny that just arrived on this same lap
+                # must get its DEVICE_JOIN_DENIED line printed before a
+                # one-shot exit, or run_stack's marker watch never sees it.
+                outcome = lobby_round_over(client, args.persist)
+                if outcome is not None:
+                    break
+                if not args.no_join and _gestures_ready(client):
+                    if next_tilt is None:
+                        next_tilt = now   # first tilt fires now the role is in
+                        # Say so explicitly. Until this line appears, a
+                        # silent browser is indistinguishable from a role
+                        # that never arrived, and the two want completely
+                        # different fixes.
+                        print(f"{markers.DEVICE_ROLE_GRANTED} {joins_sent} "
+                              f"join(s); gestures starting at {now:.3f}", flush=True)
+                    operator = drain_gestures(operator_input, o2lite.send,
+                                              args.dev, now)
+                    if operator is not None:
+                        last_operator_tilt = operator
+                    sweeping = (last_operator_tilt is None
+                                or now - last_operator_tilt >= SWEEP_RESUME_SECONDS)
+                    if now >= next_tilt:
+                        if sweeping:
+                            gamma = tilt_sweep(now - start)
+                            # Timestamps at the source (Design Rule 4): the
+                            # device's own synced clock reading, not
+                            # Control's receipt time.
+                            o2lite.send("/game/tilt", now, "sf", args.dev, gamma)
+                        # Advance even while suspended, so the sweep resumes
+                        # on schedule instead of firing a backlog of overdue
+                        # tilts.
+                        next_tilt += interval
+                client.tick(now)
+                time.sleep(0.005)
+
+            if outcome == "exit" or args.no_join or not args.persist:
                 break
-            if not error_printed and client.last_error is not None:
-                context, message = client.last_error
-                print(f"ERROR from Control: {context}: {message}")
-                error_printed = True
-            if not args.no_join and _gestures_ready(client):
-                if next_tilt is None:
-                    next_tilt = now       # first tilt fires now the role is in
-                    # Say so explicitly. Until this line appears, a silent
-                    # browser is indistinguishable from a role that never
-                    # arrived, and the two want completely different fixes.
-                    print(f"{markers.DEVICE_ROLE_GRANTED} {joins_sent} "
-                          f"join(s); gestures starting at {now:.3f}", flush=True)
-                operator = drain_gestures(operator_input, o2lite.send,
-                                          args.dev, now)
-                if operator is not None:
-                    last_operator_tilt = operator
-                sweeping = (last_operator_tilt is None
-                            or now - last_operator_tilt >= SWEEP_RESUME_SECONDS)
-                if now >= next_tilt:
-                    if sweeping:
-                        gamma = tilt_sweep(now - start)
-                        # Timestamps at the source (Design Rule 4): the
-                        # device's own synced clock reading, not Control's
-                        # receipt time.
-                        o2lite.send("/game/tilt", now, "sf", args.dev, gamma)
-                    # Advance even while suspended, so the sweep resumes on
-                    # schedule instead of firing a backlog of overdue tilts.
-                    next_tilt += interval
-            client.tick(now)
-            time.sleep(0.005)
+            print(f"round {round_num} released; returning to lobby",
+                  flush=True)
+            client.reset_for_lobby()
+            round_num += 1
+            send_hello()
+            next_join = o2lite.time_get() + args.join_retry
+            o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
     except KeyboardInterrupt:
         pass
     finally:
