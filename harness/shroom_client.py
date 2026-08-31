@@ -258,6 +258,19 @@ class ShroomClient:
             if self.leds is not None:
                 self.leds.show(frame)
 
+    def reset_for_lobby(self) -> None:
+        """Return this client to its pre-join state so a --persist
+        o2_shroom can re-enter the hello+join lobby after a release,
+        without reconstructing the client (the WebSim backend and its
+        browser tab must survive rounds). Owns exactly which fields a
+        round clears, so harness/o2_shroom.py's loop never reaches into
+        internals. Cumulative diagnostics (clamped, latency samples) are
+        deliberately kept: the exit report spans the whole process."""
+        self.config = None
+        self.released = False
+        self.last_deny = None
+        self.last_error = None
+
     @property
     def clamped(self) -> int:
         return self._frames.clamped
