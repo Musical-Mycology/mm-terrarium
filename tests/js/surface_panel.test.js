@@ -60,7 +60,11 @@ const ROOM = {
   assert.ok(card.innerHTML.includes("sim-room-main"));   // main bound
   assert.ok(card.innerHTML.includes("aurora"));
   assert.ok(card.innerHTML.includes("= 93"));            // live lane value
-  assert.ok(card.innerHTML.includes("Instruments"));     // accordion, not Controls
+  // the accordion shows real-time controller values, so it is labeled
+  // "Live values" -- the official instrument declarations live on the
+  // Registration rollup / Room view instead.
+  assert.ok(card.innerHTML.includes("Live values"));
+  assert.ok(!card.innerHTML.includes("Instruments"));
   assert.ok(card.innerHTML.includes("Triggers"));        // renamed from Functions
   assert.ok(!card.innerHTML.includes("Functions"));
   // fixture cards show the fixture's own Instrument as a small tag row
