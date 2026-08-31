@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from control.catalog import load_catalog
+from control.catalog import clone_entry, load_catalog, publish_entry, save_draft
 from control.terrarium_config import TerrariumConfigError
 
 GOOD = '''
@@ -101,3 +101,46 @@ def test_extra_instrument_collision_with_inline_is_located(tmp_path):
             text, source="test",
             extra_instruments={"dupe": Instrument(name="dupe")})
     assert "dupe" in str(exc.value)
+
+
+def test_save_draft_roundtrips_and_reports_errors(tmp_path):
+    root = make_catalog(tmp_path)
+    refusal, errors = save_draft(root, "wip", 'capabilities = ["nope"]')
+    assert refusal is None
+    assert errors and "nope" in errors[0]
+    assert (root / "drafts" / "wip.toml").read_text() == 'capabilities = ["nope"]'
+    refusal, errors = save_draft(root, "wip", GOOD)
+    assert refusal is None and errors == []
+
+
+def test_save_draft_refuses_bad_name(tmp_path):
+    root = make_catalog(tmp_path)
+    refusal, _ = save_draft(root, "../evil", GOOD)
+    assert refusal is not None
+    assert not (tmp_path / "evil.toml").exists()
+
+
+def test_clone_published_to_new_draft(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "glowcap.toml").write_text(GOOD)
+    assert clone_entry(root, "published", "glowcap", "glowcap2") is None
+    assert (root / "drafts" / "glowcap2.toml").read_text() == GOOD
+    # refuses to clobber an existing draft
+    assert clone_entry(root, "published", "glowcap", "glowcap2") is not None
+
+
+def test_publish_moves_a_valid_draft(tmp_path):
+    root = make_catalog(tmp_path)
+    save_draft(root, "wip", GOOD)
+    assert publish_entry(root, "wip") is None
+    assert (root / "wip.toml").exists()
+    assert not (root / "drafts" / "wip.toml").exists()
+
+
+def test_publish_refuses_an_invalid_draft_in_place(tmp_path):
+    root = make_catalog(tmp_path)
+    save_draft(root, "wip", 'capabilities = ["nope"]')
+    reason = publish_entry(root, "wip")
+    assert reason is not None and "nope" in reason
+    assert (root / "drafts" / "wip.toml").exists()
+    assert not (root / "wip.toml").exists()

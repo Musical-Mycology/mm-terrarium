@@ -69,6 +69,65 @@ def _parse_entry(path: Path, state: str) -> CatalogEntry:
                         instrument=instrument, error=None)
 
 
+def _refuse_name(name: str) -> str | None:
+    if not CATALOG_NAME_RE.match(name):
+        return f"instrument name {name!r} must match [A-Za-z0-9_-]+"
+    return None
+
+
+def _draft_errors(name: str, text: str, path: Path) -> list[str]:
+    try:
+        _parse_instrument(name, tomllib.loads(text), source=str(path))
+    except tomllib.TOMLDecodeError as exc:
+        return [f"not valid TOML: {exc}"]
+    except TerrariumConfigError as exc:
+        return [str(exc)]
+    return []
+
+
+def save_draft(root: Path, name: str, text: str) -> tuple[str | None, list[str]]:
+    refusal = _refuse_name(name)
+    if refusal:
+        return refusal, []
+    drafts = Path(root) / "drafts"
+    drafts.mkdir(parents=True, exist_ok=True)
+    path = drafts / f"{name}.toml"
+    path.write_text(text, encoding="utf-8")
+    return None, _draft_errors(name, text, path)
+
+
+def clone_entry(root: Path, source_state: str, source_name: str,
+                 new_name: str) -> str | None:
+    refusal = _refuse_name(new_name)
+    if refusal:
+        return refusal
+    root = Path(root)
+    src = (root / f"{source_name}.toml" if source_state == "published"
+           else root / "drafts" / f"{source_name}.toml")
+    if _refuse_name(source_name) or not src.is_file():
+        return f"no {source_state} instrument named {source_name!r}"
+    dst = root / "drafts" / f"{new_name}.toml"
+    if dst.exists():
+        return f"draft {new_name!r} already exists"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(src.read_bytes())
+    return None
+
+
+def publish_entry(root: Path, name: str) -> str | None:
+    if _refuse_name(name):
+        return f"no draft named {name!r}"
+    root = Path(root)
+    src = root / "drafts" / f"{name}.toml"
+    if not src.is_file():
+        return f"no draft named {name!r}"
+    errors = _draft_errors(name, src.read_text(encoding="utf-8"), src)
+    if errors:
+        return "; ".join(errors)
+    src.replace(root / f"{name}.toml")
+    return None
+
+
 def load_catalog(root: Path) -> InstrumentCatalog:
     root = Path(root)
     entries: dict[str, CatalogEntry] = {}
