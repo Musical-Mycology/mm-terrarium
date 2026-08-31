@@ -245,16 +245,34 @@ function buildOverridesForm() {
   return { details, pairs };
 }
 
+// Build the nested overrides dict merge_overrides expects:
+// "rhythm.bpm" -> {rhythm: {bpm: 100}}. Returns {overrides} (null when the
+// form is empty) or {error} naming the first malformed key. A key with no
+// dot is refused here: every override lives in a table, and the old
+// {table: {...}} wrapper this replaces made EVERY console load fail with
+// "[table] unknown override table" (live log 2026-08-31 11:39:25).
 function overridesFromPairs(pairs) {
-  const table = {};
+  const overrides = {};
+  let any = false;
   for (const [keyInput, valInput] of pairs) {
     const key = (keyInput.value || "").trim();
     if (!key) continue;
+    const dot = key.indexOf(".");
+    if (dot <= 0 || dot === key.length - 1) return { error: key };
+    const table = key.slice(0, dot);
+    const field = key.slice(dot + 1);
     const raw = valInput.value;
     const num = Number(raw);
-    table[key] = raw !== "" && Number.isFinite(num) ? num : raw;
+    if (!(table in overrides)) overrides[table] = {};
+    overrides[table][field] = raw !== "" && Number.isFinite(num) ? num : raw;
+    any = true;
   }
-  return { table };
+  return { overrides: any ? overrides : null };
+}
+
+function flashError(el, message) {
+  el.title = message;
+  el.classList.add("err");
 }
 
 function buildPickCard(bitRow) {
@@ -278,8 +296,12 @@ function buildPickCard(bitRow) {
   const actions = mk("div", "actions");
   const loadBtn = mk("button", "btn solid-gold", "Load");
   loadBtn.onclick = () => {
-    const overrides = overridesFromPairs(pairs);
-    wire.send("load_bit", { name: bitRow.name, overrides }, loadBtn);
+    const result = overridesFromPairs(pairs);
+    if (result.error !== undefined) {
+      flashError(loadBtn, `override key must be table.key (got "${result.error}")`);
+      return;
+    }
+    wire.send("load_bit", { name: bitRow.name, overrides: result.overrides }, loadBtn);
     closeOverlay();
   };
   actions.appendChild(loadBtn);
