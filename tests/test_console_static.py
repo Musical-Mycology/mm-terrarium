@@ -53,6 +53,15 @@ def test_every_js_file_is_an_es_module():
         assert ("export " in text) or ("import " in text), f"{name} is not a module"
 
 
+def test_css_guards_the_hidden_attribute():
+    """Author display rules (.maincol flex, .chip inline-flex) override the
+    UA stylesheet's [hidden] { display: none }, which made view switching a
+    silent no-op: every view rendered stacked. The guard must outrank them."""
+    css = (STATIC / "terrarium.css").read_text()
+    assert "[hidden]" in css
+    assert "display: none !important" in css
+
+
 def test_css_defines_the_status_palette_and_faces():
     css = (STATIC / "terrarium.css").read_text()
     for token in ("#7a9e6e", "#d96680", "#c07850",   # sage/rose/terracotta
