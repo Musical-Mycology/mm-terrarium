@@ -19,6 +19,14 @@ const cardByName = new Map();       // room name -> its card element
 const loadBtnByName = new Map();    // room name -> its Load button (test hook)
 const unloadBtnByName = new Map();  // room name -> its Unload button (test hook)
 const statusLineByName = new Map(); // room name -> its status-line element
+const detailByName = new Map();     // room name -> its detail mount (active room only)
+
+// Live detail feeds (snapshot / room_changed / devices_changed). Rendered
+// into the active card's detail mount only; rebuilt freely there (no
+// buttons live inside it, so confirmTap state is never at risk).
+let currentRoom = null;   // room_view payload
+let deviceRows = [];      // [{dev, name, role}]
+let rolesByName = {};     // role name -> role_view dict, for device tags
 
 function clear(node) {
   node.textContent = "";
@@ -66,6 +74,78 @@ function updateStatusLine(name, rooms) {
   line.textContent = statusLineText(room);
 }
 
+// ------------------------------------------------------------ room detail
+
+function deviceTag(dev) {
+  const fixtures = (currentRoom && currentRoom.fixtures) || [];
+  if (fixtures.some((f) => f.dev === dev.dev)) return ["Fixture", "chip terra"];
+  if (!dev.role) return ["Unregistered", "chip dim"];
+  const decl = rolesByName[dev.role];
+  if (decl && decl.scored) return ["Scored", "chip gold"];
+  if (decl && String(decl.class).toLowerCase() === "jam") return ["Jam", "chip sage"];
+  const cls = decl ? String(decl.class) : "role";
+  return [cls.charAt(0).toUpperCase() + cls.slice(1), "chip dim"];
+}
+
+function section(mount, label) {
+  mount.appendChild(mk("p", "eyebrow", label));
+}
+
+function renderDetail() {
+  const active = lastRooms.find((r) => r.active);
+  const mount = active && detailByName.get(active.name);
+  if (!mount) return;
+  clear(mount);
+  if (!currentRoom) {
+    mount.appendChild(mk("p", "muted", "No live room data yet"));
+    return;
+  }
+
+  const cap = currentRoom.capability || {};
+  section(mount, "Capability");
+  mount.appendChild(mk("p", "mono dim",
+    `${cap.pixel_count} px · ${cap.color_order}` +
+    ((cap.zones || []).length ? ` · ${cap.zones.length} zones` : "")));
+
+  section(mount, "Fixtures & bindings");
+  const fixtures = currentRoom.fixtures || [];
+  if (!fixtures.length) mount.appendChild(mk("p", "muted", "No fixtures"));
+  for (const f of fixtures) {
+    const row = mk("div", "devrow");
+    row.appendChild(mk("span", "devname", f.name));
+    row.appendChild(mk("span", "mono devid", f.dev || "unbound"));
+    if (f.pixel_count != null) row.appendChild(mk("span", "mono dim", `${f.pixel_count} px`));
+    const zones = (f.zones || []).map((z) => z.name).join(", ");
+    if (zones) row.appendChild(mk("span", "mono dim", zones));
+    mount.appendChild(row);
+  }
+
+  section(mount, "Connected devices");
+  if (!deviceRows.length) mount.appendChild(mk("p", "muted", "No devices connected"));
+  for (const dev of deviceRows) {
+    const row = mk("div", "devrow");
+    row.appendChild(mk("span", "mono devid", dev.dev));
+    row.appendChild(mk("span", "devname", dev.name));
+    if (dev.role) row.appendChild(mk("span", "mono dim", dev.role));
+    const [label, chipClass] = deviceTag(dev);
+    row.appendChild(mk("span", `${chipClass} roletag`, label));
+    mount.appendChild(row);
+  }
+
+  section(mount, "Declared instruments");
+  const instruments = currentRoom.instruments || [];
+  if (!instruments.length) mount.appendChild(mk("p", "muted", "No instruments declared"));
+  for (const inst of instruments) {
+    const row = mk("div", "devrow");
+    row.appendChild(mk("span", "devname", inst.instrument));
+    row.appendChild(mk("span", "mono dim", inst.kind));
+    if (inst.program !== undefined) row.appendChild(mk("span", "mono dim", `program ${inst.program}`));
+    const lanes = (inst.lanes || []).map((l) => `${l.source} → ${l.dest}`).join(" · ");
+    if (lanes) row.appendChild(mk("span", "mono dim", lanes));
+    mount.appendChild(row);
+  }
+}
+
 function buildCard(room, rooms) {
   const card = document.createElement("div");
   card.className = "card room-decl";
@@ -107,6 +187,14 @@ function buildCard(room, rooms) {
   }
 
   card.appendChild(actions);
+
+  if (room.active) {
+    const detail = mk("div", "roomdetail");
+    card.appendChild(detail);
+    detailByName.set(room.name, detail);
+  } else {
+    detailByName.delete(room.name);
+  }
   return card;
 }
 
@@ -117,6 +205,7 @@ function render(rooms) {
   loadBtnByName.clear();
   unloadBtnByName.clear();
   statusLineByName.clear();
+  detailByName.clear();
 
   if (!rooms.length) {
     mount.appendChild(mk("p", "muted", "No rooms configured"));
@@ -141,6 +230,7 @@ function onRoomsChanged(rooms) {
   if (signature === roomsSignature) return;
   roomsSignature = signature;
   render(list);
+  renderDetail();
 }
 
 function onProgress(stage) {
@@ -159,7 +249,20 @@ function clearLoading() {
 export function init() {
   wire.on("snapshot", (m) => {
     terrariumState = m.terrarium_state;
+    currentRoom = m.room || null;
+    deviceRows = m.devices || [];
+    rolesByName = {};
+    for (const role of m.roles || []) rolesByName[role.role] = role;
     onRoomsChanged(m.rooms);
+    renderDetail();
+  });
+  wire.on("room_changed", (m) => {
+    currentRoom = m.room || null;
+    renderDetail();
+  });
+  wire.on("devices_changed", (m) => {
+    deviceRows = m.devices || [];
+    renderDetail();
   });
   wire.on("state_changed", (m) => {
     terrariumState = m.terrarium_state;

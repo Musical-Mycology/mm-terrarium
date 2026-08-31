@@ -61,6 +61,8 @@ const ROOM = {
   assert.ok(card.innerHTML.includes("aurora"));
   assert.ok(card.innerHTML.includes("= 93"));            // live lane value
   assert.ok(card.innerHTML.includes("Instruments"));     // accordion, not Controls
+  assert.ok(card.innerHTML.includes("Triggers"));        // renamed from Functions
+  assert.ok(!card.innerHTML.includes("Functions"));
   // fixture cards show the fixture's own Instrument as a small tag row
   // (name + capabilities + accepted cues).
   assert.ok(card.innerHTML.includes("light.surface"));
