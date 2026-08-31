@@ -656,13 +656,16 @@ def test_a_fire_function_command_forwards_its_device():
 
 
 def test_a_refused_fire_is_surfaced_as_an_error_event():
+    # Task 5's fire ladder: an undeclared name is no longer refused as
+    # "unknown function" -- it defaults to target=SURFACE and, with no
+    # `dev` given here, is refused for lacking a surface instead.
     gs, srv, agent = _room_console()
     srv.connect("c1")
     srv.deliver("c1", {"command": "fire_function", "name": "nope"})
     agent.poll()
     errors = [msg for _client, msg in srv.sent
               if msg.get("event") == "error"]
-    assert "unknown function" in errors[0]["message"]
+    assert "no surface given" in errors[0]["message"]
 
 
 def test_a_fire_of_a_non_scripted_function_is_surfaced_as_an_error_event():

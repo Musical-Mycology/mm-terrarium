@@ -22,6 +22,7 @@ from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
 from control.rooms import room_role
 from control.state import State
+from control.builtins import RESERVED_NAMES, builtin_functions
 from control.functions import (
     FIRED_BY_BIT_ADJUDICATED,
     FIRED_BY_GESTURE_VERB,
@@ -177,6 +178,13 @@ class GameServer:
         # wholesale on _unload -- a stale y_prev must never blend into a
         # new occupant's first sample.
         self._stream_trigger_state: dict[tuple[str, str], float] = {}
+        # Target-aware name-fire gap warnings from the most recent load_bit
+        # (Task 5): one entry per (declared SCRIPTED function with an empty
+        # script, instrument) pair whose instrument has no builtin or own
+        # SCRIPTED function of that name -- a fire there will silently
+        # no-op. Empty for an unmigrated Bit (every script non-empty).
+        # Reset in _unload.
+        self.load_warnings: tuple[str, ...] = ()
 
     def slot_requirement(self, slot: str) -> "InstrumentRequirement | None":
         """Public read of the loaded Bit's requirement for `slot`, or None
@@ -296,7 +304,8 @@ class GameServer:
                         f"{role.requires!r}; declared: {sorted(known_slots)}")
             validate_role_declarations(role_table)
             function_table = bit.function_table
-            validate_function_table(function_table, set(bit.verb_handlers()))
+            validate_function_table(function_table, set(bit.verb_handlers()),
+                                    owner="bit")
             registration = RegistrationState(role_table)
         except Exception as exc:
             self._set_state(State.IDLE)
@@ -320,6 +329,29 @@ class GameServer:
             if f.kind is FunctionKind.STREAM:
                 stream_functions.setdefault(f.stream.verb, []).append(f)
         self._stream_functions = stream_functions
+        room_instruments = {}
+        if self.room is not None:
+            for fixture in self.room.profile.fixtures:
+                room_instruments[fixture.instrument.name] = fixture.instrument
+        carried_instruments = {TUNESHROOM.name: TUNESHROOM}
+        warnings = []
+        for fn in function_table.functions.values():
+            if fn.kind is not FunctionKind.SCRIPTED or fn.script:
+                continue
+            if fn.target is FunctionTarget.DEVICE:
+                check = carried_instruments
+            elif fn.target is FunctionTarget.ROOM:
+                check = room_instruments
+            else:   # SURFACE, ALL, or undeclared target
+                check = {**room_instruments, **carried_instruments}
+            for iname, inst in check.items():
+                if self._resolve_script_for(fn.name, inst) is None:
+                    warnings.append(
+                        f"function {fn.name!r} has no script on instrument "
+                        f"{iname!r}; fires there will no-op")
+        self.load_warnings = tuple(warnings)
+        if warnings:
+            self._notify("on_load_warnings", self.load_warnings)
         self._set_state(State.LOADED)
         self._enter_setup()
 
@@ -653,6 +685,33 @@ class GameServer:
                         f"{kind!r} cues")
         return None
 
+    def _instrument_for(self, dev: str):
+        """The Instrument behind a resolved dev: a bound Room fixture's
+        declared instrument, else the device's carried instrument
+        (TUNESHROOM default -- same fallback _check_cue_kinds uses)."""
+        if self.room is not None and self.room.bound:
+            for fixture in self.room.profile.fixtures:
+                if self.room.bound.get(fixture.name) == dev:
+                    return fixture.instrument
+        info = self.devices.get(dev)
+        if info is None:
+            return None
+        return getattr(info, "carried", None) or TUNESHROOM
+
+    def _resolve_script_for(self, name: str, instrument):
+        """The ladder, per instrument: built-ins first (reserved names make
+        shadowing impossible), then the instrument's own SCRIPTED function,
+        else None."""
+        if instrument is None:
+            return None
+        builtin = builtin_functions(instrument).get(name)
+        if builtin is not None:
+            return builtin
+        for fn in instrument.functions:
+            if fn.name == name and fn.kind is FunctionKind.SCRIPTED:
+                return fn
+        return None
+
     def fire_function(self, name: str, *, fired_by: str,
                      dev: str | None = None,
                      at: float | None = None) -> str | None:
@@ -673,37 +732,75 @@ class GameServer:
         single presentation time. A manual fire has no origin, so it takes
         Control's clock plus the installation's horizon, exactly as a
         self-driven cue does.
+
+        The fire ladder (spec's mid-execution-redirect row): the Bit's
+        FunctionTable is consulted only in SETUP/RUNNING with a Bit loaded.
+        A declared entry with a NON-EMPTY script fires exactly as before --
+        byte-identical, rung 1. A declared entry with an EMPTY script is a
+        name-fire: its target/condition metadata drives this call but its
+        content resolves per-dev below. An undeclared name (or no Bit, or
+        outside SETUP/RUNNING) defaults to target=SURFACE and works in any
+        state; each resolved dev tries its own instrument's builtins, then
+        that instrument's own SCRIPTED function of this name, else is
+        skipped (logged). A fire that resolves no dev at all still emits a
+        FunctionFired with steps=0 and returns None -- never a refusal.
         """
-        if self.state not in (State.SETUP, State.RUNNING):
-            return "no Bit running"
+        decl = None
+        if self.bit is not None and self.state in (State.SETUP, State.RUNNING):
+            try:
+                table = self.bit.function_table
+            except Exception:
+                logger.exception("Bit.function_table raised; refusing to "
+                                 "fire %r", name)
+                return "function table error"
+            decl = table.functions.get(name)
         try:
-            table = self.bit.function_table
-        except Exception:
-            logger.exception("Bit.function_table raised; refusing to fire %r",
-                             name)
-            return "function table error"
-        try:
-            function_decl = table.functions.get(name)
-            if function_decl is None:
-                return f"unknown function {name!r}"
-            if function_decl.kind is not FunctionKind.SCRIPTED:
+            if decl is not None and decl.kind is not FunctionKind.SCRIPTED:
                 return f"function {name!r} is not scripted"
-            if function_decl.target in (FunctionTarget.DEVICE,
-                                  FunctionTarget.SURFACE) and not dev:
-                if function_decl.target is FunctionTarget.DEVICE:
+            target = decl.target if decl is not None else FunctionTarget.SURFACE
+            if target in (FunctionTarget.DEVICE,
+                          FunctionTarget.SURFACE) and not dev:
+                if target is FunctionTarget.DEVICE:
                     return (f"function {name!r} targets the firing device; "
                             f"no device given")
                 return (f"function {name!r} targets a surface; "
                         f"no surface given")
             if at is None:
                 at = self._clock() + self._horizon
-            devs = self._resolve_target(function_decl.target, dev)
-            cues = expand_script(function_decl, at, self._collapse_room_fanout(devs))
-            refusal = self._check_cue_kinds(cues)
-            if refusal is not None:
-                return refusal
-            if not any(isinstance(c, MuteCue) for c in cues):
-                self._clear_mutes(devs)
+            devs = self._resolve_target(target, dev)
+            if decl is not None and decl.script:
+                # Rung 1: byte-identical to the pre-ladder code path.
+                cues = expand_script(decl, at, self._collapse_room_fanout(devs))
+                refusal = self._check_cue_kinds(cues)
+                if refusal is not None:
+                    return refusal
+                if not any(isinstance(c, MuteCue) for c in cues):
+                    self._clear_mutes(devs)
+                fired_devs = devs
+            else:
+                # Rungs 2/3: per-dev ladder resolution -- built-ins, then
+                # the resolved instrument's own SCRIPTED function, else
+                # skip that dev (never refuse the whole fire for it).
+                cues = []
+                resolved: list[str] = []
+                for d in self._collapse_room_fanout(devs):
+                    fn = self._resolve_script_for(name, self._instrument_for(d))
+                    if fn is None:
+                        logger.info("function %r: no script resolved for "
+                                   "%r; skipping", name, d)
+                        continue
+                    dev_cues = expand_script(fn, at, (d,))
+                    if self._check_cue_kinds(dev_cues) is not None:
+                        logger.info("function %r: cue kind refused for %r; "
+                                   "skipping", name, d)
+                        continue
+                    if self._generators is not None:
+                        self._suppress_generator_lanes(fn, dev_cues, at)
+                    cues.extend(dev_cues)
+                    resolved.append(d)
+                if cues and not any(isinstance(c, MuteCue) for c in cues):
+                    self._clear_mutes(resolved)
+                fired_devs = tuple(resolved)
         except Exception:
             # function_table is a property: load_bit validated whatever it
             # returned on THAT one call, and the validated object is never
@@ -720,16 +817,19 @@ class GameServer:
         # cannot chain into another. The guard above already contains
         # anything a divergent function_table could throw while producing
         # `cues`, so this call sees only well-formed cues.
-        if self._generators is not None:
-            self._suppress_generator_lanes(function_decl, cues, at)
+        if decl is not None and decl.script and self._generators is not None:
+            self._suppress_generator_lanes(decl, cues, at)
         self._dispatch_cues(cues, at)
         self._notify("on_function_fired", FunctionFired(
-            name=function_decl.name,
-            condition=function_decl.condition.name,
+            name=name,
+            condition=(decl.condition.name if decl is not None
+                      else ("builtin" if name in RESERVED_NAMES
+                            else "instrument")),
             fired_by=fired_by,
-            declared_source=SOURCE_WIRE[function_decl.condition.source],
+            declared_source=(SOURCE_WIRE[decl.condition.source]
+                            if decl is not None else fired_by),
             dev=dev,
-            devs=tuple(devs),
+            devs=tuple(fired_devs),
             at=at,
             steps=len(cues),
             room_name=self.provenance.get("room_name"),
@@ -957,6 +1057,7 @@ class GameServer:
         self._stream_functions = {}
         self._stream_trigger_state = {}
         self._run_elapsed = 0.0
+        self.load_warnings = ()
         self._set_state(State.IDLE)
 
     def add_observer(self, observer) -> None:
