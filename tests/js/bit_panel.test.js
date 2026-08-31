@@ -78,6 +78,38 @@ const PLAYER_ROLE = {
   assert.ok(overlayHtml.includes("Notes"));
   assert.ok(overlayHtml.includes("refcard"), "roles refcards inside popup");
 
+  // refcard formatting (carried over from the old rolesCard coverage):
+  // role identity, kind-tagged instruments, welcome line, requires line.
+  assert.ok(overlayHtml.includes("player"), "role name should render");
+  assert.ok(overlayHtml.includes("PLAYER"), "role class should render");
+  assert.ok(overlayHtml.includes("Light"), "light instrument kind should render");
+  assert.ok(overlayHtml.includes("aurora"), "light instrument name should render");
+  assert.ok(overlayHtml.includes("primary"), "light instrument target should render");
+  assert.ok(overlayHtml.includes("Audio"), "audio instrument kind should render");
+  assert.ok(overlayHtml.includes("flsyn"), "audio instrument name should render");
+  // welcome-line formatting: `${k}: ${v.instrument}` joined with " · "
+  assert.ok(overlayHtml.includes("light: glow"), "welcome light entry should render");
+  assert.ok(overlayHtml.includes("audio: chime"), "welcome audio entry should render");
+  assert.ok(overlayHtml.includes("light: glow · audio: chime") ||
+            overlayHtml.includes("audio: chime · light: glow"),
+            "welcome entries should be joined with ·");
+  // requires: slot + capabilities render so an operator can see why a
+  // join was refused.
+  assert.ok(overlayHtml.includes("requires"), "requires label should render");
+  assert.ok(overlayHtml.includes("fixture"), "requires slot should render");
+  assert.ok(overlayHtml.includes("light.pixels"), "requires capabilities should render");
+
+  // a role with no `requires` slot renders no requires line at all.
+  const NO_REQUIRES_ROLE = { ...PLAYER_ROLE, role: "watcher", requires: null };
+  send({ event: "snapshot", state: "SETUP", loaded_bit: "MetronomeBit",
+         roles: [NO_REQUIRES_ROLE], registration: [], devices: [],
+         bit_status: {}, room: null, functions: [] });
+  const pill2 = findByClass(byId.get("bitPanel"), "pill");
+  pill2.onclick();
+  const noReqHtml = byId.get("overlayMount").innerHTML;
+  assert.ok(noReqHtml.includes("watcher"), "watcher refcard should render");
+  assert.ok(!noReqHtml.includes("requires —"), "no requires line without a requires slot");
+
   // phase chip follows further transitions; buttons never disabled
   send({ event: "state_changed", state: "RUNNING", loaded_bit: "MetronomeBit" });
   assert.ok(panel.innerHTML.includes("Running"));
