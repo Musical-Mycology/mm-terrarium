@@ -564,7 +564,8 @@ def main() -> None:
 
         round_num = 1
         while True:                     # rounds; one lap in one-shot mode
-            next_heartbeat = next_heartbeat_time(start, args.heartbeat_interval)
+            round_start = o2lite.time_get()
+            next_heartbeat = next_heartbeat_time(round_start, args.heartbeat_interval)
             # Deferred rather than started at `start`: gestures are held off
             # until _gestures_ready(client) -- see that function's docstring
             # for why -- so the first tilt should be scheduled for the
@@ -594,9 +595,6 @@ def main() -> None:
                     outcome = "exit"
                     break
                 o2lite.poll()
-                outcome = lobby_round_over(client, args.persist)
-                if outcome is not None:
-                    break
                 bridge_id, problem = reconnect_recheck(o2lite, args.dev, bridge_id)
                 if problem is not None:
                     print(problem, file=sys.stderr)
@@ -644,6 +642,13 @@ def main() -> None:
                     context, message = client.last_error
                     print(f"ERROR from Control: {context}: {message}")
                     error_printed = True
+                # Evaluated AFTER the deny/error prints above (not right
+                # after poll()): a deny that just arrived on this same lap
+                # must get its DEVICE_JOIN_DENIED line printed before a
+                # one-shot exit, or run_stack's marker watch never sees it.
+                outcome = lobby_round_over(client, args.persist)
+                if outcome is not None:
+                    break
                 if not args.no_join and _gestures_ready(client):
                     if next_tilt is None:
                         next_tilt = now   # first tilt fires now the role is in
