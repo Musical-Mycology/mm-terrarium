@@ -590,3 +590,61 @@ def test_build_passes_on_play_through_to_the_client():
         "ie1", "TEST_PLAYER_NODE", "127.0.0.1", 0, serve=False,
         on_play=lambda name, params: None)
     assert client.on_play is not None
+
+
+# --- lobby_round_over: the per-tick round-over decision, factored pure so
+# it is testable with no socket (this module's convention -- see
+# next_heartbeat_time). ------------------------------------------------
+
+class _RoundClient:
+    """Stands in for ShroomClient: lobby_round_over() only ever reads
+    .released and .last_deny, so nothing else about the real client is
+    needed here."""
+
+    def __init__(self) -> None:
+        self.released = False
+        self.last_deny = None
+
+
+def make_client() -> _RoundClient:
+    return _RoundClient()
+
+
+def test_lobby_round_over_release_one_shot_exits():
+    from harness.o2_shroom import lobby_round_over
+
+    client = make_client()
+    client.released = True
+    assert lobby_round_over(client, persist=False) == "exit"
+
+
+def test_lobby_round_over_release_persist_relobbies():
+    from harness.o2_shroom import lobby_round_over
+
+    client = make_client()
+    client.released = True
+    assert lobby_round_over(client, persist=True) == "lobby"
+
+
+def test_lobby_round_over_deny_one_shot_exits():
+    from harness.o2_shroom import lobby_round_over
+
+    client = make_client()
+    client.last_deny = ("closed", "hint")
+    assert lobby_round_over(client, persist=False) == "exit"
+
+
+def test_lobby_round_over_deny_persist_keeps_looping():
+    # under persist a deny is not terminal: the node may reopen next round,
+    # so the device stays in the lobby and keeps join-retrying.
+    from harness.o2_shroom import lobby_round_over
+
+    client = make_client()
+    client.last_deny = ("closed", "hint")
+    assert lobby_round_over(client, persist=True) is None
+
+
+def test_lobby_round_over_quiet_keeps_looping():
+    from harness.o2_shroom import lobby_round_over
+
+    assert lobby_round_over(make_client(), persist=False) is None
