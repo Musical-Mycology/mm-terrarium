@@ -158,19 +158,34 @@ unique value over hand-editing TOML.
   Design nav view, and a raw-TOML editor with draft-shadowing saves.
 - Section 3 (draft/published persistence): full -- publish re-validates
   and fails hard, draft errors collect without blocking a save.
+- Section 5 (in-browser instrument-host simulator): shipped, with one
+  deliberate cut. Light preview runs the real pipeline (`DesignBench` +
+  `LuxBenchSession`, `control/design_bench.py`, `harness/
+  design_session.py`). Gesture input is fire buttons (one per `fireable()`
+  row) plus a smoothed tilt lane -- **not** the stream-function idea this
+  doc's rev 1 sketched; that path is superseded by the
+  instrument-scripted-functions decision (see `control/builtins.py`'s
+  section above), which forecloses instrument-owned Python. Trace replay
+  (`replay_trace` command, `evaluate_trace`) is shipped. **Audio preview
+  is explicitly not built** -- no Arco badge, no audio path in the bench
+  at all; `DesignBench` skips `PlayCue` outright (see its module
+  docstring).
+- Section 6 (Calibrate flow): shipped. Capture-session stats
+  (`capture_stats` command, `control/gesture_eval.py`), threshold
+  proposal (`propose_thresholds`), provenance (a `# calibrated from`
+  comment inserted into the raw TOML by `design.js`'s client-side
+  `applyProposal`, reviewed by the operator before Save), and
+  replay-before-publish all shipped. "Operator accepts" is that
+  applyProposal-edit-review-Save sequence, not a server-side TOML writer.
 - Section 7 (Console integration): full -- new Design nav view under the
   same ConsoleServer/ConsoleAgent transport, local-admin-only wire
   commands that never ride `uplink`.
 
-**Plan 2 (not this plan):**
+**Plan 3 (not this plan):**
 
 - Section 4 (structured editing forms -- capabilities/accepted_cues
   checkboxes, ambient manifest editors, function/trigger editors). v1
   shipped raw-TOML editing only.
-- Section 5 (in-browser instrument-host simulator: light canvas, gesture
-  controls, trace replay, Arco-badged audio preview).
-- Section 6 (Calibrate flow: capture-session arming, `trace_stats.py`
-  analysis, threshold proposal with provenance).
 
 **Unplanned (section 2, slice 3):** carried-instrument wire support (hello
 gains an optional instrument name; Terrarium ships the full definition
