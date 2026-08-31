@@ -3,23 +3,7 @@ schema = 1
 [terrarium]
 name = "dev-box"
 bit_paths = ["bits"]
-
-[instruments.venue_array]
-description = "6 m SK6812 venue array"
-capabilities = ["light.surface", "audio.flsyn"]
-functions = []
-accepted_cues = ["midi", "play", "solid", "mute"]
-  [instruments.venue_array.ambient]
-  [instruments.venue_array.ambient.light]
-  instruments = [ { instrument = "aurora", target = "primary" } ]
-  [instruments.venue_array.ambient.ugen]
-  instruments = [ { instrument = "flsyn", program = 89, drone = { key = 48, velocity = 80 } } ]
-
-[instruments.dev_strip]
-description = "Simulated dev strip, no ambient"
-capabilities = ["light.surface", "audio.flsyn"]
-functions = []
-accepted_cues = ["midi", "play", "solid", "mute"]
+instrument_paths = ["instruments"]
 
 [rooms.TEST]
 description = "Simulated dev room: main + accent strips"

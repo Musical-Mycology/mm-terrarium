@@ -16,6 +16,7 @@ import time
 
 from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
+from control.functions import FunctionKind
 from control.generator_runner import GeneratorRunner
 from control.instrument import ambient_manifests
 from control.role_config import compose_role_config
@@ -266,7 +267,8 @@ class DeviceLinkAgent:
             manifest = LightManifest.from_dict(
                 ambient_light or {"instruments": []})
             functions = [fn for fixture in self._room_profile.fixtures
-                        for fn in fixture.instrument.functions]
+                        for fn in fixture.instrument.functions
+                        if fn.kind is FunctionKind.GENERATOR]
             self._ambient_generators = GeneratorRunner(functions)
             self._ambient_start = self._clock()
         cap = to_capability(self._room_profile)

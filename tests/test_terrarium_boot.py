@@ -2028,3 +2028,53 @@ def test_make_arco_process_cls_accepts_the_record_kwarg_load_room_passes():
     # And record= stays optional for the settle-wrapped path too.
     cls_settle = make_arco_process_cls(FakePopen(), settle=0.001)
     assert cls_settle(["arco"]) is not None
+
+
+def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
+        monkeypatch):
+    """main() loads terrarium.toml's own instrument_paths (default
+    ["instruments"]) via load_terrarium_config, resolved relative to the
+    config file's own directory -- and must thread the first resolved root
+    straight into the ConsoleAgent it builds, so the Console's design panel
+    (list/get/save/publish/clone) has somewhere to read and write. Uses the
+    repo's own shipped terrarium.toml/instruments -- --config defaults to
+    it -- with build() and _serve_roomless stubbed out (no room, no live
+    Arco needed) so only the argument plumbing through to ConsoleAgent's
+    construction is exercised."""
+    import types
+
+    import harness.terrarium_boot as terrarium_boot_module
+    from control.terrarium import TerrariumState
+
+    class _FakeObservable:
+        room = None
+        state = TerrariumState.NO_ROOM
+
+        def add_observer(self, observer):
+            pass
+
+    def fake_build(config, bit_registry, **kwargs):
+        gs = _FakeObservable()
+        server = types.SimpleNamespace(port=0)
+        agent = types.SimpleNamespace(room_bridge=None, canvas_urls=[])
+        teardown = TeardownStack()
+        terrarium = _FakeObservable()
+        return gs, server, agent, None, teardown, terrarium
+
+    def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
+                            parent_pid=None):
+        captured["catalog_root"] = console_agent.catalog_root
+        raise SystemExit(0)
+
+    captured = {}
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(terrarium_boot_module, "_serve_roomless",
+                        fake_serve_roomless)
+    monkeypatch.setattr(sys, "argv",
+                        ["terrarium_boot.py", "--console-port", "0"])
+
+    with pytest.raises(SystemExit):
+        terrarium_boot_module.main()
+
+    assert captured["catalog_root"] is not None
+    assert captured["catalog_root"].name == "instruments"

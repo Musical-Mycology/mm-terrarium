@@ -17,8 +17,11 @@ from control.rooms import non_room_counts, room_role_name
 from control.state import State
 from control.terrarium import TerrariumState
 from control.terrarium_config import validate_rooms
-from control.function_view import function_fired_view, functions_view
+from control.function_view import (
+    function_fired_view, functions_view, instrument_functions_view)
 from control.functions import FIRED_BY_ADMIN_MANUAL
+from control.builtins import builtin_functions
+from control.instrument import TUNESHROOM
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +35,15 @@ ROOM_FRAME_INTERVAL = 0.1
 class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_bridge=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
-                 terrarium=None):
+                 terrarium=None, catalog_root=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
+        # Optional Path to the instrument catalog root (instruments/), for
+        # the design panel's list/get/save/publish/clone commands. None
+        # means no catalog is wired up -- every design command answers
+        # error_event rather than crashing on a missing root.
+        self.catalog_root = catalog_root
         # Optional Terrarium (control/terrarium.py), the room-level lifecycle
         # sitting above GameServer. None (every pre-Task-6 caller) means no
         # room commands, no terrarium-state gating, and an all-None/empty
@@ -58,6 +66,9 @@ class ConsoleAgent:
         self._last_status: dict | None = None
         self._last_room: dict | None = None
         self._last_functions: list | None = None
+        self._last_instrument_functions: dict | None = None
+        self._last_surface_instruments: dict | None = None
+        self._last_builtins: dict | None = None
         self._clock = clock
         # The latest not-yet-broadcast frame per dev. Each dev's entry is
         # overwritten, not queued: see _broadcast_room_frame and
@@ -95,7 +106,9 @@ class ConsoleAgent:
     # --- inbound command dispatch ------------------------------------------
     def _handle_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
-        if name in ("arm_room", "release_room", "fire_function"):
+        if name in ("arm_room", "release_room", "fire_function",
+                    "list_designs", "get_design", "save_design",
+                    "publish_design", "clone_design"):
             return self._handle_admin_command(msg)
         try:
             command = protocol.parse_command(msg)
@@ -160,6 +173,12 @@ class ConsoleAgent:
             command = protocol.parse_admin_command(msg)
         except ValueError as exc:
             return protocol.error_event(name, str(exc))
+        if isinstance(command, (protocol.ListDesignsCommand,
+                                protocol.GetDesignCommand,
+                                protocol.SaveDesignCommand,
+                                protocol.PublishDesignCommand,
+                                protocol.CloneDesignCommand)):
+            return self._handle_design_command(name, command)
         if isinstance(command, protocol.FireFunctionCommand):
             # An operator action, tagged as one so the event log never reads it
             # as gameplay. GameServer.fire_function never raises, so a refusal
@@ -180,6 +199,47 @@ class ConsoleAgent:
             gs.room_binding.release(room_name, command.fixture)
         return None
 
+    def _design_rows(self) -> list:
+        from control.catalog import load_catalog
+        cat = load_catalog(self.catalog_root)
+        return [protocol.design_row(e) for e in sorted(
+            cat.entries.values(), key=lambda e: (e.name, e.state))]
+
+    def _handle_design_command(self, name: str, command) -> dict | None:
+        if self.catalog_root is None:
+            return protocol.error_event(name, "no instrument catalog")
+        from control.catalog import (clone_entry, load_catalog,
+                                     publish_entry, save_draft)
+        if isinstance(command, protocol.ListDesignsCommand):
+            return protocol.designs_listed_event(self._design_rows())
+        if isinstance(command, protocol.GetDesignCommand):
+            entry = load_catalog(self.catalog_root).get(
+                command.state, command.name)
+            if entry is None:
+                return protocol.error_event(
+                    name, f"no {command.state} design {command.name!r}")
+            text = entry.path.read_text(encoding="utf-8")
+            errors = [entry.error] if entry.error else []
+            return protocol.design_event(entry.name, entry.state, text, errors)
+        if isinstance(command, protocol.SaveDesignCommand):
+            refusal, _errors = save_draft(
+                self.catalog_root, command.name, command.text)
+        elif isinstance(command, protocol.PublishDesignCommand):
+            refusal = publish_entry(self.catalog_root, command.name)
+        else:
+            refusal = clone_entry(self.catalog_root, command.source_state,
+                                  command.source_name, command.new_name)
+        if refusal is not None:
+            return protocol.error_event(name, refusal)
+        rows = self._design_rows()
+        # Mutations reply designs_changed to the caller (below, via the
+        # normal reply path) AND broadcast it to every other connected
+        # client, mirroring _broadcast_functions_if_changed's fan-out --
+        # the design catalog is shared state, so every panel must re-render
+        # on a mutation, not just the one that made it.
+        self.server.broadcast(protocol.designs_changed_event(rows))
+        return protocol.designs_changed_event(rows)
+
     # --- snapshot (connect-time full read model) ---------------------------
     def snapshot(self) -> dict:
         gs = self.game_server
@@ -196,6 +256,9 @@ class ConsoleAgent:
                 self._non_room_counts())["roles"]
         self._last_room = self._current_room()
         self._last_functions = self._current_functions()
+        self._last_instrument_functions = self._current_instrument_functions()
+        self._last_surface_instruments = self._current_surface_instruments()
+        self._last_builtins = self._current_builtins()
         return protocol.snapshot_event(
             state=gs.state.name,
             installed_bits=list(gs.bit_registry.keys()),
@@ -209,6 +272,10 @@ class ConsoleAgent:
             terrarium_state=(
                 self.terrarium.state.name if self.terrarium is not None else None),
             rooms=self._rooms_view(),
+            instrument_functions=self._last_instrument_functions,
+            surface_instruments=self._last_surface_instruments,
+            builtins=self._last_builtins,
+            designs=self._design_rows() if self.catalog_root else [],
         )
 
     def _rooms_view(self) -> list:
@@ -289,11 +356,75 @@ class ConsoleAgent:
             logger.exception("Bit.function_table raised; reporting no functions")
             return []
 
+    def _present_instruments(self) -> dict:
+        """Room fixture instruments plus TUNESHROOM, keyed by instrument
+        name -- exactly the set GameServer.load_bit checks name-fires
+        against (control/engine.py's carried_instruments/room_instruments
+        blend)."""
+        gs = self.game_server
+        instruments = {}
+        if gs.room is not None:
+            for fixture in gs.room.profile.fixtures:
+                instruments[fixture.instrument.name] = fixture.instrument
+        instruments[TUNESHROOM.name] = TUNESHROOM
+        return instruments
+
+    def _current_instrument_functions(self) -> dict:
+        return instrument_functions_view(self._present_instruments())
+
+    def _current_surface_instruments(self) -> dict:
+        """dev/"room" -> instrument name, for every bound Room fixture and
+        every connected device: a bound fixture's dev maps to that
+        fixture's instrument, and every other connected device maps to its
+        carried instrument (TUNESHROOM's name when uncarried). The literal
+        "room" key -- consumed by the diagnostics row's Room option -- maps
+        to the FIRST bound fixture's instrument, and is absent entirely when
+        no Room is loaded or no fixture is bound."""
+        gs = self.game_server
+        # Live off `terrarium.room_binding` when a Terrarium is wired, not
+        # `gs.room_binding` -- the same reason _current_room reads
+        # `terrarium.room_bridge` rather than a frozen __init__ snapshot:
+        # the Terrarium owns the RoomBindingRegistry that actually records
+        # fixture binds (see control/terrarium.py's load_room), and a
+        # GameServer built without one (most test doubles) leaves
+        # `gs.room_binding` at None or a separate, never-bound registry.
+        room_binding = (self.terrarium.room_binding if self.terrarium is not None
+                       else gs.room_binding)
+        out: dict[str, str] = {}
+        if gs.room is not None and room_binding is not None:
+            for fixture in gs.room.profile.fixtures:
+                dev = room_binding.bound_device(gs.room.name, fixture.name)
+                if dev is not None:
+                    out[dev] = fixture.instrument.name
+                    # "room" (the diagnostics row's Room option) takes the
+                    # FIRST bound fixture's instrument: TEST/DEMO rooms carry
+                    # homogeneous fixture instruments today, and this mirrors
+                    # the engine's canonical-room-dev convention. No "room"
+                    # key at all when nothing is bound.
+                    if "room" not in out:
+                        out["room"] = fixture.instrument.name
+        for info in gs.devices.all():
+            carried = getattr(info, "carried", None)
+            out[info.dev] = carried.name if carried is not None else TUNESHROOM.name
+        return out
+
+    def _current_builtins(self) -> dict:
+        return {name: sorted(builtin_functions(inst).keys())
+                for name, inst in self._present_instruments().items()}
+
     def _broadcast_functions_if_changed(self) -> None:
         functions = self._current_functions()
-        if functions != self._last_functions:
-            self._last_functions = functions
-            self.server.broadcast(protocol.functions_changed_event(functions))
+        instrument_functions = self._current_instrument_functions()
+        surface_instruments = self._current_surface_instruments()
+        builtins = self._current_builtins()
+        current = (functions, instrument_functions, surface_instruments, builtins)
+        previous = (self._last_functions, self._last_instrument_functions,
+                    self._last_surface_instruments, self._last_builtins)
+        if current != previous:
+            (self._last_functions, self._last_instrument_functions,
+             self._last_surface_instruments, self._last_builtins) = current
+            self.server.broadcast(protocol.functions_changed_event(
+                functions, instrument_functions, surface_instruments, builtins))
 
     def _non_room_counts(self):
         """Never surface the Room's occupancy on any Console view -- design
@@ -391,6 +522,14 @@ class ConsoleAgent:
     def on_devices_change(self) -> None:
         self.server.broadcast(protocol.devices_changed_event(
             self._devices_view()))
+
+    def on_load_warnings(self, warnings) -> None:
+        """Engine observer hook (control/engine.py's load_bit): one or more
+        name-fire-with-no-script warnings raised at load. Surfaced as `log`
+        events rather than folded into functions_changed -- these are
+        operator-facing diagnostics, not part of the read model."""
+        for warning in warnings:
+            self.server.broadcast(protocol.log_event("warn", warning))
 
     def on_function_fired(self, record) -> None:
         """Engine observer hook. A fire is engine-produced and has no device

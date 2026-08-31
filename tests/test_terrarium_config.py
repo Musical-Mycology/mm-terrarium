@@ -376,3 +376,124 @@ def test_legacy_bare_functions_list_is_a_located_error():
         parse_terrarium_config(CONFIG_WITH_LEGACY_FUNCTIONS_LIST, "t.toml")
     assert "instruments.dev_strip" in str(exc.value)
     assert "[[instruments" in str(exc.value) and "functions" in str(exc.value)
+
+
+CONFIG_WITH_SCRIPTED_FUNCTION = """
+schema = 1
+[terrarium]
+name = "t"
+[instruments.arr]
+capabilities = ["light.surface", "audio.flsyn"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+[[instruments.arr.functions]]
+name = "play_aurora"
+kind = "scripted"
+description = "sweep"
+script = [
+  { offset = 0.0, midi = [176, 74, 127] },
+  { offset = 0.5, midi = [176, 74, 40] },
+  { offset = 2.0, midi = [176, 74, 0] },
+]
+[rooms.R]
+backends = ["devicelink"]
+[[rooms.R.fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "arr"
+[[rooms.R.fixtures.blocks]]
+name = "main"
+start = 0
+count = 10
+[[rooms.R.fixtures.zones]]
+name = "all"
+start = 0
+count = 10
+"""
+
+EVENT_TRIGGER_CONFIG = """
+schema = 1
+[terrarium]
+name = "t"
+[instruments.shroomy]
+capabilities = ["gesture.tap"]
+accepted_cues = ["midi"]
+  [[instruments.shroomy.event_triggers]]
+  name = "tap"
+  description = "a tap"
+    [instruments.shroomy.event_triggers.thresholds]
+    peak_g = 2.0
+    window_ms = 200
+  [[instruments.shroomy.stream_triggers]]
+  name = "smooth_tilt"
+  description = "EMA over tilt"
+  verb = "tilt"
+  arg = 0
+  transform = "smooth"
+    [instruments.shroomy.stream_triggers.params]
+    alpha = 0.4
+[rooms.T]
+description = "d"
+backends = ["devicelink"]
+[[rooms.T.fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "shroomy"
+[[rooms.T.fixtures.blocks]]
+name = "b1"
+start = 0
+count = 10
+[[rooms.T.fixtures.zones]]
+name = "all"
+start = 0
+count = 10
+"""
+
+
+def test_scripted_function_parses_with_target_devs():
+    cfg = parse_terrarium_config(CONFIG_WITH_SCRIPTED_FUNCTION, "t.toml")
+    arr = cfg.instruments["arr"]
+    fn = next(f for f in arr.functions if f.name == "play_aurora")
+    assert fn.kind is FunctionKind.SCRIPTED
+    assert [s.cue for s in fn.script] == [
+        (TARGET, 176, 74, 127), (TARGET, 176, 74, 40), (TARGET, 176, 74, 0)]
+
+
+def test_scripted_reserved_name_is_a_located_config_error():
+    bad = CONFIG_WITH_SCRIPTED_FUNCTION.replace(
+        'name = "play_aurora"', 'name = "flash"')
+    with pytest.raises(TerrariumConfigError, match="reserved"):
+        parse_terrarium_config(bad, "t.toml")
+
+
+def test_scripted_step_cue_kind_outside_accepted_cues_is_a_located_config_error():
+    bad = CONFIG_WITH_SCRIPTED_FUNCTION.replace(
+        'accepted_cues = ["midi", "play", "solid", "mute"]',
+        'accepted_cues = ["midi"]').replace(
+        '{ offset = 0.5, midi = [176, 74, 40] },',
+        '{ offset = 0.5, solid = { rgb = [255, 0, 0] } },')
+    with pytest.raises(TerrariumConfigError) as exc:
+        parse_terrarium_config(bad, "t.toml")
+    assert "play_aurora" in str(exc.value)
+
+
+def test_scripted_step_with_no_cue_key_is_located():
+    bad = CONFIG_WITH_SCRIPTED_FUNCTION.replace(
+        "midi = [176, 74, 127]", "offset2 = 1")
+    with pytest.raises(TerrariumConfigError, match="exactly one of"):
+        parse_terrarium_config(bad, "t.toml")
+
+def test_instrument_event_and_stream_triggers_parse():
+    config = parse_terrarium_config(EVENT_TRIGGER_CONFIG, source="test")
+    inst = config.instruments["shroomy"]
+    (tap,) = inst.event_triggers
+    assert tap.name == "tap"
+    assert tap.thresholds == {"peak_g": 2.0, "window_ms": 200}
+    (smooth,) = inst.stream_triggers
+    assert smooth.verb == "tilt" and smooth.transform == "smooth"
+
+
+def test_event_trigger_missing_name_is_located():
+    bad = EVENT_TRIGGER_CONFIG.replace('name = "tap"\n  ', "")
+    with pytest.raises(TerrariumConfigError) as exc:
+        parse_terrarium_config(bad, source="test")
+    assert "instruments.shroomy" in str(exc.value)

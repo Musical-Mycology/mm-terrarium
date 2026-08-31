@@ -17,9 +17,22 @@ import * as wire from "./wire.js";
 let fnSignature = null;              // JSON of the last-rendered declaration
 const lastFired = {};                // function name -> its last fire record (survives rebuilds)
 let fnDevices = [];                  // {dev, muted} offered by DEVICE/SURFACE pickers
-let currentDeviceTargets = new Map(); // name -> target ("DEVICE"/"SURFACE") for rendered pickers
+let currentDeviceTargets = new Map(); // name -> {target, fn} for rendered SURFACE/DEVICE pickers
 const cardByName = new Map();        // function name -> its card element (test hook)
 const ROOM_OPTION = "@room";
+
+// Instrument-compatibility data, carried on `snapshot`/`functions_changed`
+// (Task 7): instrument name -> [scripted function views]; dev/room-option ->
+// instrument name; instrument name -> [builtin function names]. All default
+// {} so a Bit-less or instrument-less snapshot still renders cleanly.
+let instrumentFunctions = {};
+let surfaceInstruments = {};
+let builtinsMap = {};
+const BUILTIN_NAMES = new Set(["flash", "stop", "ping"]);
+
+let diagRowEl = null;                // Diagnostics row, built once, reused across rebuilds
+let diagPicker = null;
+const diagButtons = {};              // "flash"/"stop"/"ping" -> button element
 
 function clear(node) {
   node.textContent = "";
@@ -36,6 +49,18 @@ function mk(tag, className, text) {
 
 export function _cardFor(name) {
   return cardByName.get(name);
+}
+
+export function _diagRow() {
+  return diagRowEl;
+}
+
+export function _diagPicker() {
+  return diagPicker;
+}
+
+export function _diagButton(name) {
+  return diagButtons[name];
 }
 
 // ---------------------------------------------------------- device pickers
@@ -69,9 +94,121 @@ function fillDevicePicker(picker, withRoom) {
 
 function onDevicesChanged(devices) {
   fnDevices = (devices || []).map((d) => ({ dev: d.dev, muted: !!d.muted }));
-  for (const [name, target] of currentDeviceTargets) {
-    fillDevicePicker(document.getElementById("functionDev_" + name), target === "SURFACE");
+  if (diagPicker) {
+    fillDevicePicker(diagPicker, true);
+    refreshDiagButtons();
   }
+  for (const [name, info] of currentDeviceTargets) {
+    const picker = document.getElementById("functionDev_" + name);
+    fillDevicePicker(picker, info.target === "SURFACE");
+    refreshCardCompatibility(info.fn, picker, cardByName.get(name));
+  }
+}
+
+// -------------------------------------------------------- instrument compat
+
+// A scripted function is compatible with a surface when: the Bit supplied
+// its own script (script.length > 0 -- the Bit script rides above whatever
+// instrument is present, per the brief), OR its name is a reserved builtin
+// name (flash/stop/ping -- every instrument answers those), OR the surface's
+// bound instrument declares a same-named scripted function.
+function isCompatible(fn, surfaceValue) {
+  if (fn.script && fn.script.length) return true;
+  if (BUILTIN_NAMES.has(fn.name)) return true;
+  const instrumentName = surfaceInstruments[surfaceLookupKey(surfaceValue)];
+  if (!instrumentName) return false;
+  const fns = instrumentFunctions[instrumentName] || [];
+  return fns.some((f) => f.name === fn.name);
+}
+
+// The description shown for a card at its currently-selected surface: the
+// resolved instrument's own function description when it declares one,
+// falling back to the Bit's own description otherwise.
+function resolvedDescription(fn, surfaceValue) {
+  const instrumentName = surfaceInstruments[surfaceLookupKey(surfaceValue)];
+  if (instrumentName) {
+    const fns = instrumentFunctions[instrumentName] || [];
+    const match = fns.find((f) => f.name === fn.name);
+    if (match) return match.description;
+  }
+  return fn.description;
+}
+
+function refreshCardCompatibility(fn, picker, card) {
+  if (picker) {
+    for (const option of picker.options) {
+      option.disabled = !isCompatible(fn, option.value);
+    }
+  }
+  if (card && card._descEl) {
+    card._descEl.textContent = resolvedDescription(fn, picker ? picker.value : null);
+  }
+}
+
+function refreshAllCardCompatibility() {
+  refreshDiagButtons();
+  for (const [name, info] of currentDeviceTargets) {
+    refreshCardCompatibility(info.fn, document.getElementById("functionDev_" + name),
+      cardByName.get(name));
+  }
+}
+
+function updateInstrumentData(m) {
+  instrumentFunctions = (m && m.instrument_functions) || {};
+  surfaceInstruments = (m && m.surface_instruments) || {};
+  builtinsMap = (m && m.builtins) || {};
+  refreshAllCardCompatibility();
+}
+
+// ------------------------------------------------------------ diagnostics
+
+// The wire value fillDevicePicker gives the Room option (ROOM_OPTION, i.e.
+// "@room") is what fire_function's `dev` sentinel expects -- surface_instruments
+// keys the Room's instrument as the literal "room" instead, so this is the
+// one seam where the picker value and the surface_instruments lookup key
+// diverge.
+function surfaceLookupKey(pickerValue) {
+  return pickerValue === ROOM_OPTION ? "room" : pickerValue;
+}
+
+function refreshDiagButtons() {
+  if (!diagPicker) return;
+  const instrumentName = surfaceInstruments[surfaceLookupKey(diagPicker.value)];
+  const names = instrumentName ? (builtinsMap[instrumentName] || []) : [];
+  for (const name of ["flash", "stop", "ping"]) {
+    diagButtons[name].disabled = !names.includes(name);
+  }
+}
+
+function buildDiagRow() {
+  const row = mk("div", "fn diagrow");
+
+  const head = mk("div", "fnhead");
+  head.appendChild(mk("h3", null, "Diagnostics"));
+  row.appendChild(head);
+
+  const bar = mk("div", "firerow");
+  diagPicker = document.createElement("select");
+  bar.appendChild(diagPicker);
+  fillDevicePicker(diagPicker, true);
+  diagPicker.onchange = refreshDiagButtons;
+
+  bar.appendChild(mk("span", "grow"));
+  for (const name of ["flash", "stop", "ping"]) {
+    const btn = mk("button", "btn", name[0].toUpperCase() + name.slice(1));
+    btn.onclick = () => wire.send("fire_function", { name, dev: diagPicker.value }, btn);
+    diagButtons[name] = btn;
+    bar.appendChild(btn);
+  }
+  row.appendChild(bar);
+
+  refreshDiagButtons();
+  return row;
+}
+
+function ensureDiagRow() {
+  if (!diagRowEl) diagRowEl = buildDiagRow();
+  return diagRowEl;
 }
 
 // -------------------------------------------------------------- rendering
@@ -174,7 +311,9 @@ function buildScriptedCard(fn) {
   head.appendChild(mk("span", "chip dim kind", fn.target));
   card.appendChild(head);
 
-  card.appendChild(mk("p", "desc", fn.description));
+  const descEl = mk("p", "desc", fn.description);
+  card.appendChild(descEl);
+  card._descEl = descEl;
 
   const cond = fn.condition;
   const condText = cond.description + "   (" + cond.source
@@ -213,6 +352,8 @@ function buildScriptedCard(fn) {
     picker.id = "functionDev_" + fn.name;
     firerow.appendChild(picker);
     fillDevicePicker(picker, fn.target === "SURFACE");
+    picker.onchange = () => refreshCardCompatibility(fn, picker, card);
+    refreshCardCompatibility(fn, picker, card);
   }
   firerow.appendChild(mk("span", "grow"));
   const fireBtn = mk("button", "btn solid-gold", "Fire");
@@ -245,6 +386,10 @@ function render(list) {
   const mount = document.getElementById("functionsMount");
   clear(mount);
   cardByName.clear();
+  // The diagnostics row is built once and reused across rebuilds -- clear()
+  // just emptied the mount, so re-append the same node rather than
+  // reconstructing it.
+  mount.appendChild(ensureDiagRow());
 
   if (!list.length) {
     currentDeviceTargets = new Map();
@@ -260,7 +405,7 @@ function render(list) {
     grid.appendChild(card);
     cardByName.set(fn.name, card);
     if (fn.target === "DEVICE" || fn.target === "SURFACE") {
-      currentDeviceTargets.set(fn.name, fn.target);
+      currentDeviceTargets.set(fn.name, { target: fn.target, fn });
     }
   }
 }
@@ -285,9 +430,13 @@ function onFunctionFired(fired) {
 export function init() {
   wire.on("snapshot", (m) => {
     onDevicesChanged(m.devices);
+    updateInstrumentData(m);
     onFunctionsChanged(m.functions);
   });
-  wire.on("functions_changed", (m) => onFunctionsChanged(m.functions));
+  wire.on("functions_changed", (m) => {
+    updateInstrumentData(m);
+    onFunctionsChanged(m.functions);
+  });
   wire.on("devices_changed", (m) => onDevicesChanged(m.devices));
   wire.on("function_fired", (m) => onFunctionFired(m.fired));
 }
