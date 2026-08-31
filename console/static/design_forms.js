@@ -12,9 +12,20 @@
 //   - forms -> raw: a form edit calls applyEdit(fn), which reads the
 //     textarea, runs fn(text) -> newText through a toml_edit transform, and
 //     writes the result back -- guarded so that write does NOT re-trigger
-//     the debounced rebuild (which would nuke whatever form control still
-//     has focus). applyEdit still re-renders the forms directly afterward,
-//     so the UI reflects the edit immediately.
+//     the debounced rebuild. applyEdit re-renders the forms directly
+//     afterward (there's no in-place patching), so to keep a keyboard/mouse
+//     user's focus from falling out to document.body on every toggle, it
+//     captures the focused control's identity before rebuilding and
+//     restores it after.
+//
+// Every form control carries a stable `data-form-key` attribute identifying
+// its role -- "description" for the identity field, "cap:<name>" for a
+// capability checkbox, "cue:<name>" for a cue checkbox. applyEdit reads
+// document.activeElement's data-form-key (plus selectionStart/selectionEnd
+// for text inputs) before rebuilding, then re-focuses (and restores the
+// caret on) whichever freshly-rendered control carries the same key. Tasks
+// 4-6 must give their own controls a data-form-key for the same reason --
+// any field wired through applyEdit loses focus on every edit otherwise.
 //
 // This task builds identity (description), capabilities, and accepted_cues.
 // Later tasks hang additional sections off SECTION_BUILDERS -- each entry is
@@ -42,26 +53,64 @@ function mk(tag, className, text) {
   return e;
 }
 
+// Depth-first search under `root` for the control carrying `key` as its
+// data-form-key attribute -- how applyEdit relocates the focused control
+// after rebuild() has thrown away and recreated the whole tree.
+function findByFormKey(root, key) {
+  if (!root) return null;
+  if (root.getAttribute && root.getAttribute("data-form-key") === key) return root;
+  for (const child of root.children || []) {
+    const found = findByFormKey(child, key);
+    if (found) return found;
+  }
+  return null;
+}
+
 // Shared apply implementation form controls call to write an edit through:
 // reads #designText, runs `fn(text) -> newText`, writes the result back
 // (without tripping the debounced raw->forms rebuild), then re-renders the
-// forms immediately so the UI reflects the edit.
+// forms immediately so the UI reflects the edit. rebuild() has no in-place
+// patching -- it clears and recreates every control -- so a naive rebuild
+// here would drop focus to document.body on every keystroke/toggle. Instead
+// this captures the focused control's data-form-key (and, for text inputs,
+// its caret) before rebuilding, then finds the freshly-rendered control with
+// the same key afterward and restores focus (and the caret) onto it.
 export function applyEdit(fn) {
   const textEl = document.getElementById("designText");
+  const panel = document.getElementById("formsPanel");
+
+  const active = document.activeElement;
+  const activeKey = active && active.getAttribute ? active.getAttribute("data-form-key") : null;
+  const selStart = active && typeof active.selectionStart === "number" ? active.selectionStart : null;
+  const selEnd = active && typeof active.selectionEnd === "number" ? active.selectionEnd : null;
+
   const newText = fn(textEl.value);
   guard = true;
   textEl.value = newText;
   guard = false;
   rebuild(newText);
+
+  if (activeKey) {
+    const restored = findByFormKey(panel, activeKey);
+    if (restored && restored.focus) {
+      restored.focus();
+      if (selStart != null && typeof restored.selectionStart === "number") {
+        restored.selectionStart = selStart;
+        restored.selectionEnd = selEnd != null ? selEnd : selStart;
+      }
+    }
+  }
 }
 
 // One checkbox row: a <label> wrapping a checkbox and its text, appended to
-// `container`. `onToggle(checked)` fires on change.
-function checkboxRow(container, name, checked, onToggle) {
+// `container`. `onToggle(checked)` fires on change. `key` is the
+// checkbox's data-form-key ("cap:<name>" / "cue:<name>").
+function checkboxRow(container, name, key, checked, onToggle) {
   const label = mk("label", "checkitem");
   const input = document.createElement("input");
   input.type = "checkbox";
   input.checked = checked;
+  input.setAttribute("data-form-key", key);
   input.onchange = () => onToggle(input.checked);
   label.appendChild(input);
   label.appendChild(document.createTextNode(name));
@@ -69,25 +118,27 @@ function checkboxRow(container, name, checked, onToggle) {
 }
 
 // Renders one checkgrid (capabilities or accepted_cues) from `vocabList`
-// (the full, sorted set of options) against `key`'s current array in
+// (the full, sorted set of options) against `arrayKey`'s current array in
 // `text`. Toggling a box writes the new array back via setStringArray,
-// preserving vocabList's order.
-function rebuildCheckgrid(elId, vocabList, key, text) {
+// preserving vocabList's order. `keyPrefix` ("cap"/"cue") namespaces each
+// checkbox's data-form-key.
+function rebuildCheckgrid(elId, vocabList, arrayKey, keyPrefix, text) {
   const el = document.getElementById(elId);
   clear(el);
-  const current = getStringArray(text, key) || [];
+  const current = getStringArray(text, arrayKey) || [];
   for (const name of vocabList) {
-    checkboxRow(el, name, current.includes(name), (checked) => {
+    checkboxRow(el, name, `${keyPrefix}:${name}`, current.includes(name), (checked) => {
       const next = checked
         ? vocabList.filter((v) => current.includes(v) || v === name)
         : current.filter((v) => v !== name);
-      applyEdit((t) => setStringArray(t, key, next));
+      applyEdit((t) => setStringArray(t, arrayKey, next));
     });
   }
 }
 
 function rebuildDescription(text) {
   const input = document.getElementById("formDescription");
+  input.setAttribute("data-form-key", "description");
   const raw = getScalar(text, null, "description");
   let value = "";
   if (raw != null) {
@@ -135,8 +186,8 @@ export function rebuild(text) {
   panel.appendChild(sectionsDiv);
 
   rebuildDescription(text);
-  rebuildCheckgrid("formCapabilities", vocab.capabilities || [], "capabilities", text);
-  rebuildCheckgrid("formCues", vocab.cue_kinds || [], "accepted_cues", text);
+  rebuildCheckgrid("formCapabilities", vocab.capabilities || [], "capabilities", "cap", text);
+  rebuildCheckgrid("formCues", vocab.cue_kinds || [], "accepted_cues", "cue", text);
 
   for (const builder of SECTION_BUILDERS) {
     builder(sectionsDiv, text, applyEdit);

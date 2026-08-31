@@ -93,6 +93,37 @@ accepted_cues = ["midi", "play"]
 `,
   );
 
+  // -- a checkbox toggled via applyEdit keeps focus (and its data-form-key
+  // identity) across the rebuild it triggers, instead of falling out to
+  // document.body -- the concrete keyboard-user break the review flagged.
+  textEl.value = FIXTURE;
+  forms.rebuild(FIXTURE);
+  const cuesForFocus = byId.get("formCues").children.map((c) => c.children[0]);
+  const solidCheckbox = cuesForFocus[2]; // "solid", key "cue:solid"
+  solidCheckbox.focus();
+  assert.strictEqual(document.activeElement, solidCheckbox);
+  solidCheckbox.checked = true;
+  solidCheckbox.onchange();
+  const restoredSolid = document.activeElement;
+  assert.notStrictEqual(restoredSolid, null);
+  assert.strictEqual(restoredSolid.getAttribute("data-form-key"), "cue:solid");
+  assert.notStrictEqual(restoredSolid, solidCheckbox); // rebuild recreated the node
+  assert.strictEqual(restoredSolid, byId.get("formCues").children[2].children[0]);
+
+  // -- the description text input restores its caret position too --------
+  textEl.value = FIXTURE;
+  forms.rebuild(FIXTURE);
+  const descForCaret = byId.get("formDescription");
+  descForCaret.focus();
+  descForCaret.value = "A test shroom!";
+  descForCaret.selectionStart = 5;
+  descForCaret.selectionEnd = 5;
+  descForCaret.onchange();
+  const restoredDesc = document.activeElement;
+  assert.strictEqual(restoredDesc.getAttribute("data-form-key"), "description");
+  assert.strictEqual(restoredDesc.selectionStart, 5);
+  assert.strictEqual(restoredDesc.selectionEnd, 5);
+
   // -- a manual textarea input event debounces a rebuild -------------------
   textEl.value = `description = "Manual edit"
 capabilities = ["gesture.tap"]

@@ -45,6 +45,11 @@ function escapeText(s) {
 // tree" the whole time, same as the real DOM.
 function unregisterIdTree(n) {
   if (n._id && byId.get(n._id) === n) byId.delete(n._id);
+  // Matches the real DOM: removing the focused node drops focus (to
+  // document.body there; here we just clear activeElement).
+  if (globalThis.document && globalThis.document.activeElement === n) {
+    globalThis.document.activeElement = null;
+  }
   for (const c of n.children) unregisterIdTree(c);
 }
 
@@ -120,6 +125,16 @@ function el(tagName) {
       if (node.parentNode) node.parentNode.removeChild(node);
     },
     setAttribute(k, v) { node._attrs[k] = v; },
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(node._attrs, k) ? node._attrs[k] : null; },
+    // Minimal focus tracking: document.activeElement follows the last
+    // focus()/blur() call, matching enough of the real DOM for tests to
+    // assert focus survives a rebuild. selectionStart/selectionEnd are
+    // plain read/write fields (no real caret semantics), sufficient to
+    // assert a caret position is restored after a text input is recreated.
+    focus() { globalThis.document.activeElement = node; },
+    blur() { if (globalThis.document.activeElement === node) globalThis.document.activeElement = null; },
+    selectionStart: 0,
+    selectionEnd: 0,
     addEventListener() {},
     removeEventListener() {},
     querySelector: () => null,
@@ -188,6 +203,7 @@ globalThis.document = {
   createElement: (tag) => el(tag),
   createTextNode: (text) => { const n = el("#text"); n.textContent = text; return n; },
   body: el("body"),
+  activeElement: null,
   addEventListener() {},
   removeEventListener() {},
 };
