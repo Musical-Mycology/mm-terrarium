@@ -146,17 +146,27 @@ export function setStringArray(text, key, values) {
 }
 
 // -- getThresholds / setThreshold -----------------------------------------
+//
+// `opts` (both optional) lets callers reuse this machinery for a different
+// array-of-table block / child-table pair than `[[event_triggers]]` /
+// `[event_triggers.thresholds]` -- e.g. stream triggers' `[[stream_triggers]]`
+// / `[stream_triggers.params]`. Defaults preserve the original callers.
 
-const THRESHOLDS_HEADER_RE = /^\s*\[event_triggers\.thresholds\]\s*$/;
 const THRESHOLD_LINE_RE = /^(\s*)([A-Za-z0-9_]+)\s*=\s*(.+)\s*$/;
 
-function findThresholdsRange(text, triggerName) {
-  const block = findBlock(text, "[[event_triggers]]", triggerName);
+function childTableHeaderRe(header, childTable) {
+  const blockName = header.replace(/^\[\[|\]\]$/g, "");
+  return new RegExp(`^\\s*\\[${blockName}\\.${childTable}\\]\\s*$`);
+}
+
+function findThresholdsRange(text, triggerName, header = "[[event_triggers]]", childTable = "thresholds") {
+  const block = findBlock(text, header, triggerName);
   if (!block) return null;
   const lines = text.split("\n");
+  const headerRe = childTableHeaderRe(header, childTable);
   let thresholdsIdx = -1;
   for (let i = block.start; i < block.end; i++) {
-    if (THRESHOLDS_HEADER_RE.test(lines[i])) { thresholdsIdx = i; break; }
+    if (headerRe.test(lines[i])) { thresholdsIdx = i; break; }
   }
   if (thresholdsIdx === -1) return null;
   let bodyEnd = thresholdsIdx + 1;
@@ -164,8 +174,9 @@ function findThresholdsRange(text, triggerName) {
   return { block, thresholdsIdx, bodyEnd };
 }
 
-export function getThresholds(text, triggerName) {
-  const range = findThresholdsRange(text, triggerName);
+export function getThresholds(text, triggerName, opts = {}) {
+  const { header = "[[event_triggers]]", childTable = "thresholds" } = opts;
+  const range = findThresholdsRange(text, triggerName, header, childTable);
   if (!range) return null;
   const lines = text.split("\n");
   const out = {};
@@ -176,8 +187,9 @@ export function getThresholds(text, triggerName) {
   return out;
 }
 
-export function setThreshold(text, triggerName, key, value) {
-  const range = findThresholdsRange(text, triggerName);
+export function setThreshold(text, triggerName, key, value, opts = {}) {
+  const { header = "[[event_triggers]]", childTable = "thresholds" } = opts;
+  const range = findThresholdsRange(text, triggerName, header, childTable);
   if (!range) return text;
   const lines = text.split("\n");
   for (let i = range.thresholdsIdx + 1; i < range.bodyEnd; i++) {

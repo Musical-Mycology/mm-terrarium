@@ -32,7 +32,17 @@
 // `(container, text, apply) -> void`, called against #formSections on every
 // rebuild.
 import * as wire from "./wire.js";
-import { getScalar, setScalar, getStringArray, setStringArray } from "./toml_edit.js";
+import {
+  getScalar,
+  setScalar,
+  getStringArray,
+  setStringArray,
+  splitBlocks,
+  getThresholds,
+  setThreshold,
+  appendBlock,
+  removeBlock,
+} from "./toml_edit.js";
 
 let vocab = { capabilities: [], cue_kinds: [] };
 let guard = false;         // true while applyEdit is writing #designText -- suppresses its "input" listener
@@ -153,6 +163,164 @@ function rebuildDescription(text) {
     applyEdit((t) => setScalar(t, null, "description", JSON.stringify(input.value)));
   };
 }
+
+// One numeric input row bound to a threshold/param key, writing through
+// setThreshold on change. `opts` forwards {header, childTable} for
+// non-event-trigger callers (stream triggers reuse this machinery against
+// `[stream_triggers.params]`).
+function thresholdRow(container, name, key, value, keyPrefix, opts) {
+  const row = mk("label", "field");
+  row.appendChild(document.createTextNode(`${key} `));
+  const input = document.createElement("input");
+  input.type = "number";
+  input.step = "any";
+  input.value = value;
+  input.setAttribute("data-form-key", `${keyPrefix}:${name}:${key}`);
+  input.onchange = () => {
+    applyEdit((t) => setThreshold(t, name, key, input.value, opts));
+  };
+  row.appendChild(input);
+  container.appendChild(row);
+}
+
+// One [[event_triggers]] card: name label, description input, one numeric
+// input per thresholds key, an add-threshold key/value pair, and a Remove
+// button.
+function buildEventTriggerCard(container, text, name) {
+  const card = mk("div", "card");
+  card.setAttribute("data-form-key", `trig:${name}`);
+  card.appendChild(mk("h4", null, name));
+
+  const descLabel = mk("label", "field");
+  descLabel.appendChild(document.createTextNode("Description "));
+  const descInput = document.createElement("input");
+  descInput.type = "text";
+  const rawDesc = getScalar(text, { header: "[[event_triggers]]", name }, "description");
+  let descValue = "";
+  if (rawDesc != null) {
+    try { descValue = JSON.parse(rawDesc); } catch { descValue = rawDesc; }
+  }
+  descInput.value = descValue;
+  descInput.setAttribute("data-form-key", `trig:${name}:description`);
+  descInput.onchange = () => {
+    applyEdit((t) => setScalar(t, { header: "[[event_triggers]]", name }, "description", JSON.stringify(descInput.value)));
+  };
+  descLabel.appendChild(descInput);
+  card.appendChild(descLabel);
+
+  const thresholds = getThresholds(text, name) || {};
+  for (const key of Object.keys(thresholds)) {
+    thresholdRow(card, name, key, thresholds[key], "trig");
+  }
+
+  const addRow = mk("div", "field");
+  const addKeyInput = document.createElement("input");
+  addKeyInput.type = "text";
+  addKeyInput.placeholder = "key";
+  addKeyInput.setAttribute("data-form-key", `trig:${name}:add-key`);
+  const addValueInput = document.createElement("input");
+  addValueInput.type = "number";
+  addValueInput.step = "any";
+  addValueInput.placeholder = "value";
+  addValueInput.setAttribute("data-form-key", `trig:${name}:add-value`);
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "Add threshold";
+  addBtn.setAttribute("data-form-key", `trig:${name}:add-threshold`);
+  addBtn.onclick = () => {
+    if (!addKeyInput.value) return;
+    applyEdit((t) => setThreshold(t, name, addKeyInput.value, addValueInput.value || 0));
+  };
+  addRow.appendChild(addKeyInput);
+  addRow.appendChild(addValueInput);
+  addRow.appendChild(addBtn);
+  card.appendChild(addRow);
+
+  const removeBtn = document.createElement("button");
+  removeBtn.textContent = "Remove";
+  removeBtn.setAttribute("data-form-key", `trig:${name}:remove`);
+  removeBtn.onclick = () => {
+    applyEdit((t) => removeBlock(t, "[[event_triggers]]", name));
+  };
+  card.appendChild(removeBtn);
+
+  container.appendChild(card);
+}
+
+// One [[stream_triggers]] card: description input, read-only verb/arg/
+// transform, and one numeric input per `params` key (reusing the
+// thresholds machinery against the `params` child table).
+function buildStreamTriggerCard(container, text, name) {
+  const card = mk("div", "card");
+  card.setAttribute("data-form-key", `strig:${name}`);
+  card.appendChild(mk("h4", null, name));
+
+  const descLabel = mk("label", "field");
+  descLabel.appendChild(document.createTextNode("Description "));
+  const descInput = document.createElement("input");
+  descInput.type = "text";
+  const rawDesc = getScalar(text, { header: "[[stream_triggers]]", name }, "description");
+  let descValue = "";
+  if (rawDesc != null) {
+    try { descValue = JSON.parse(rawDesc); } catch { descValue = rawDesc; }
+  }
+  descInput.value = descValue;
+  descInput.setAttribute("data-form-key", `strig:${name}:description`);
+  descInput.onchange = () => {
+    applyEdit((t) => setScalar(t, { header: "[[stream_triggers]]", name }, "description", JSON.stringify(descInput.value)));
+  };
+  descLabel.appendChild(descInput);
+  card.appendChild(descLabel);
+
+  const verb = getScalar(text, { header: "[[stream_triggers]]", name }, "verb");
+  const arg = getScalar(text, { header: "[[stream_triggers]]", name }, "arg");
+  const transform = getScalar(text, { header: "[[stream_triggers]]", name }, "transform");
+  card.appendChild(mk("p", "muted", `verb ${verb ?? ""} / arg ${arg ?? ""} / transform ${transform ?? ""}`));
+
+  const opts = { header: "[[stream_triggers]]", childTable: "params" };
+  const params = getThresholds(text, name, opts) || {};
+  for (const key of Object.keys(params)) {
+    thresholdRow(card, name, key, params[key], "strig", opts);
+  }
+
+  container.appendChild(card);
+}
+
+// Section builder for event/stream triggers, pushed onto SECTION_BUILDERS.
+// Renders one card per [[event_triggers]] block, one card per
+// [[stream_triggers]] block, and an "Add event trigger" button that
+// appends a new block (name via window.prompt, Clone's idiom -- decline on
+// falsy).
+function buildTriggerSection(container, text, apply) {
+  const blocks = splitBlocks(text);
+  for (const block of blocks) {
+    if (block.header === "[[event_triggers]]" && block.name) {
+      buildEventTriggerCard(container, text, block.name);
+    }
+  }
+  for (const block of blocks) {
+    if (block.header === "[[stream_triggers]]" && block.name) {
+      buildStreamTriggerCard(container, text, block.name);
+    }
+  }
+
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "Add event trigger";
+  addBtn.setAttribute("data-form-key", "add-event-trigger");
+  addBtn.onclick = () => {
+    const name = window.prompt("Trigger name");
+    if (!name) return;
+    const block = `[[event_triggers]]
+name = "${name}"
+description = ""
+  [event_triggers.thresholds]
+  peak_g = 2.0
+  window_ms = 200`;
+    apply((t) => appendBlock(t, block));
+  };
+  container.appendChild(addBtn);
+}
+
+SECTION_BUILDERS.push(buildTriggerSection);
 
 // Re-renders every form section from `text`. With no design open (no
 // selection and/or empty text), renders a single muted placeholder line and
