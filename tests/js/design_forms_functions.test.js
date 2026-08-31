@@ -144,6 +144,32 @@ function findByKey(root, key) {
   assert.strictEqual(textEl.value.includes("midi = [176, 74, 127]"), false);
   assert.strictEqual(textEl.value.includes("midi = [176, 74, 0]"), true);
 
+  // -- removing a step never restores focus onto a (now-shifted) remove -----
+  // button by key: with focus on step 0's Remove control before the click,
+  // the post-rebuild activeElement must not be some other row's Remove
+  // button (a double-click / stray Enter would otherwise delete the wrong
+  // step).
+  textEl.value = FIXTURE;
+  forms.rebuild(FIXTURE);
+  const removeStep0Again = findByKey(byId.get("formSections"), "fn:play_aurora:step:0:remove");
+  removeStep0Again.focus();
+  assert.strictEqual(
+    globalThis.document.activeElement === removeStep0Again,
+    true,
+    "expected focus on the remove button before the click",
+  );
+  removeStep0Again.onclick();
+  const activeAfterRemove = globalThis.document.activeElement;
+  const activeKeyAfterRemove =
+    activeAfterRemove && activeAfterRemove.getAttribute
+      ? activeAfterRemove.getAttribute("data-form-key")
+      : null;
+  assert.strictEqual(
+    activeKeyAfterRemove == null || !activeKeyAfterRemove.endsWith(":remove"),
+    true,
+    "focus must not land on any remove control after a destructive removal",
+  );
+
   // -- removing a function deletes its whole block, sibling untouched -------
   textEl.value = FIXTURE;
   forms.rebuild(FIXTURE);

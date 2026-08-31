@@ -27,6 +27,16 @@
 // 4-6 must give their own controls a data-form-key for the same reason --
 // any field wired through applyEdit loses focus on every edit otherwise.
 //
+// Destructive actions never restore focus by key: applyEdit(fn, {restoreFocus:
+// false}) skips the by-key refocus entirely. Removing a row (a script step,
+// an event/stream trigger's threshold, a function card, etc.) shifts every
+// later row's index down, so a key like "fn:<name>:step:2:remove" now names
+// a DIFFERENT row after rebuild -- restoring focus onto it would silently
+// arm the next row's destructive control for a stray Enter/double-click.
+// Every Remove button (and any other index/name-shifting destructive action)
+// must pass {restoreFocus: false}; non-destructive edits keep the default
+// (true) restore behavior.
+//
 // This task builds identity (description), capabilities, and accepted_cues.
 // Later tasks hang additional sections off SECTION_BUILDERS -- each entry is
 // `(container, text, apply) -> void`, called against #formSections on every
@@ -89,12 +99,13 @@ function findByFormKey(root, key) {
 // this captures the focused control's data-form-key (and, for text inputs,
 // its caret) before rebuilding, then finds the freshly-rendered control with
 // the same key afterward and restores focus (and the caret) onto it.
-export function applyEdit(fn) {
+export function applyEdit(fn, opts = {}) {
+  const { restoreFocus = true } = opts;
   const textEl = document.getElementById("designText");
   const panel = document.getElementById("formsPanel");
 
   const active = document.activeElement;
-  const activeKey = active && active.getAttribute ? active.getAttribute("data-form-key") : null;
+  const activeKey = restoreFocus && active && active.getAttribute ? active.getAttribute("data-form-key") : null;
   const selStart = active && typeof active.selectionStart === "number" ? active.selectionStart : null;
   const selEnd = active && typeof active.selectionEnd === "number" ? active.selectionEnd : null;
 
@@ -243,7 +254,7 @@ function buildEventTriggerCard(container, text, name) {
   removeBtn.textContent = "Remove";
   removeBtn.setAttribute("data-form-key", `trig:${name}:remove`);
   removeBtn.onclick = () => {
-    applyEdit((t) => removeBlock(t, "[[event_triggers]]", name));
+    applyEdit((t) => removeBlock(t, "[[event_triggers]]", name), { restoreFocus: false });
   };
   card.appendChild(removeBtn);
 
@@ -336,7 +347,7 @@ function buildGeneratorCard(container, text, name) {
   removeBtn.textContent = "Remove";
   removeBtn.setAttribute("data-form-key", `fn:${name}:remove`);
   removeBtn.onclick = () => {
-    applyEdit((t) => removeBlock(t, "[[functions]]", name));
+    applyEdit((t) => removeBlock(t, "[[functions]]", name), { restoreFocus: false });
   };
   card.appendChild(removeBtn);
 
@@ -373,7 +384,7 @@ function scriptStepRow(container, name, index, step) {
   removeBtn.textContent = "Remove";
   removeBtn.setAttribute("data-form-key", `fn:${name}:step:${index}:remove`);
   removeBtn.onclick = () => {
-    applyEdit((t) => removeScriptStep(t, name, index));
+    applyEdit((t) => removeScriptStep(t, name, index), { restoreFocus: false });
   };
   row.appendChild(removeBtn);
 
@@ -445,7 +456,7 @@ function buildScriptedCard(container, text, name) {
   removeBtn.textContent = "Remove";
   removeBtn.setAttribute("data-form-key", `fn:${name}:remove`);
   removeBtn.onclick = () => {
-    applyEdit((t) => removeBlock(t, "[[functions]]", name));
+    applyEdit((t) => removeBlock(t, "[[functions]]", name), { restoreFocus: false });
   };
   card.appendChild(removeBtn);
 
