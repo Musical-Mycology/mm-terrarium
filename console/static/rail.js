@@ -1,12 +1,11 @@
-// Right rail: Registration, Devices, Event log. Three independent
-// renderers sharing nothing but wire.js.
+// Right rail: Registration rollup and the Event log. The per-device
+// Instruments pull and per-role rows moved to the center views (rooms.js
+// carries device detail; the Live view carries the log card).
 import * as wire from "./wire.js";
 
-let rolesByName = {};        // role name -> role_view() dict, used for registration tags
+let rolesByName = {};        // role name -> role_view() dict, for scored/jam classing
 let registrationRows = [];   // last registration_changed/snapshot rows: {role, count, capacity}
-let deviceRows = [];         // last devices_changed/snapshot rows: {dev, name, role}
-let fixtureDevs = new Set(); // devs bound to a room fixture, for the "Fixture" tag
-let instPullOpen = false;    // Instruments pull open/closed, preserved across rebuilds
+let currentRoom = null;      // last snapshot/room_changed room, for the fixtures rollup
 let pointerOverLog = false;
 
 function clear(node) {
@@ -20,72 +19,48 @@ function mk(tag, className, text) {
   return e;
 }
 
-// ---------------------------------------------------------------- rolerows
+// ---------------------------------------------------------------- rollup
 
-function deviceTag(dev) {
-  if (fixtureDevs.has(dev.dev)) return ["Fixture", "chip terra"];
-  if (!dev.role) return ["Unregistered", "chip dim"];
-  const decl = rolesByName[dev.role];
-  if (decl && decl.scored) return ["Scored", "chip gold"];
-  if (decl && decl.class === "jam") return ["Jam", "chip sage"];
-  const cls = decl ? decl.class : "role";
-  return [cls.charAt(0).toUpperCase() + cls.slice(1), "chip dim"];
+// Category rollup across declared roles: a declared role with no
+// registration row still counts (as 0), so Jam reads 0/∞ rather than
+// disappearing before anyone joins. Roles without a declaration (roles
+// list empty or lagging) fall into neither category.
+function rollup() {
+  const countByRole = {};
+  for (const row of registrationRows) countByRole[row.role] = row.count;
+
+  const sums = { scored: { count: 0, cap: 0, unbounded: false },
+                 jam: { count: 0, cap: 0, unbounded: false } };
+  for (const decl of Object.values(rolesByName)) {
+    const isJam = String(decl.class).toLowerCase() === "jam";
+    const bucket = decl.scored ? sums.scored : isJam ? sums.jam : null;
+    if (!bucket) continue;
+    bucket.count += countByRole[decl.role] || 0;
+    if (decl.capacity == null) bucket.unbounded = true;
+    else bucket.cap += decl.capacity;
+  }
+
+  const fixtures = (currentRoom && currentRoom.fixtures) || [];
+  const bound = fixtures.filter((f) => f.dev).length;
+
+  const fmt = (b) => `${b.count}/${b.unbounded ? "∞" : b.cap}`;
+  return [
+    ["Fixtures", `${bound}/${fixtures.length}`],
+    ["Scored", fmt(sums.scored)],
+    ["Jam", fmt(sums.jam)],
+  ];
 }
 
 function renderRegistration() {
   const card = document.getElementById("registrationCard");
   clear(card);
   card.appendChild(mk("h3", "railhead", "Registration"));
-
-  if (!registrationRows.length) {
-    card.appendChild(mk("p", "muted", "No roles"));
-  } else {
-    for (const row of registrationRows) {
-      const decl = rolesByName[row.role];
-      const wrap = mk("div", "rolerow");
-
-      const top = mk("div", "rolerow-top");
-      top.appendChild(mk("span", "rolename", row.role));
-      if (decl) top.appendChild(mk("span", "chip dim classtag", decl.class));
-      if (decl && decl.scored) top.appendChild(mk("span", "chip gold scoredtag", "scored"));
-      wrap.appendChild(top);
-
-      const capIsBounded = row.capacity != null;
-      const countText = capIsBounded ? `${row.count}/${row.capacity}` : `${row.count}/∞`;
-      if (capIsBounded) {
-        const meter = mk("div", "meter");
-        const fill = mk("div", "meter-fill");
-        const pct = row.capacity > 0 ? Math.min(100, (row.count / row.capacity) * 100) : 100;
-        fill.style.width = `${pct}%`;
-        meter.appendChild(fill);
-        wrap.appendChild(meter);
-      }
-      wrap.appendChild(mk("span", "mono count", countText));
-
-      card.appendChild(wrap);
-    }
+  for (const [label, count] of rollup()) {
+    const wrap = mk("div", "rolerow");
+    wrap.appendChild(mk("span", "rolename", label));
+    wrap.appendChild(mk("span", "mono count", count));
+    card.appendChild(wrap);
   }
-
-  const pull = document.createElement("details");
-  pull.className = "acc instpull";
-  const summary = document.createElement("summary");
-  summary.appendChild(mk("span", "tri", "▸"));
-  summary.appendChild(document.createTextNode(`Instruments (${deviceRows.length})`));
-  pull.appendChild(summary);
-  const body = mk("div", "accbody");
-  if (!deviceRows.length) body.appendChild(mk("p", "muted", "No instruments connected"));
-  for (const dev of deviceRows) {
-    const row = mk("div", "devrow");
-    row.appendChild(mk("span", "mono devid", dev.dev));
-    row.appendChild(mk("span", "devname", dev.name));
-    const [label, chipClass] = deviceTag(dev);
-    row.appendChild(mk("span", `${chipClass} roletag`, label));
-    body.appendChild(row);
-  }
-  pull.appendChild(body);
-  if (instPullOpen) pull.setAttribute("open", "");
-  pull.addEventListener("toggle", () => { instPullOpen = pull.open; });
-  card.appendChild(pull);
 }
 
 // -------------------------------------------------------------------- log
@@ -131,20 +106,15 @@ export function init() {
     rolesByName = {};
     for (const role of m.roles || []) rolesByName[role.role] = role;
     registrationRows = m.registration || [];
-    deviceRows = m.devices || [];
-    fixtureDevs = new Set(((m.room && m.room.fixtures) || []).map((f) => f.dev).filter(Boolean));
+    currentRoom = m.room || null;
     renderRegistration();
   });
   wire.on("registration_changed", (m) => {
     registrationRows = m.roles || [];
     renderRegistration();
   });
-  wire.on("devices_changed", (m) => {
-    deviceRows = m.devices || [];
-    renderRegistration();
-  });
   wire.on("room_changed", (m) => {
-    fixtureDevs = new Set(((m.room && m.room.fixtures) || []).map((f) => f.dev).filter(Boolean));
+    currentRoom = m.room || null;
     renderRegistration();
   });
   wire.on("state_changed", (m) => {

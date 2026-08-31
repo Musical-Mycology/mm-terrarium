@@ -9,7 +9,7 @@ import { init as initRooms } from "./rooms.js";
 const conn = document.getElementById("connChip");
 const roomChip = document.getElementById("roomChip");
 
-const VIEWS = { live: ["viewLive", "navLive"], room: ["viewRoom", "navRoom"], log: ["viewLog", "navLog"] };
+export const VIEWS = { live: ["viewLive", "navLive"], room: ["viewRoom", "navRoom"] };
 
 export function showView(name) {
   for (const [key, [viewId, navId]] of Object.entries(VIEWS)) {
@@ -28,7 +28,6 @@ export function paintRoomNav(rooms) {
 
 document.getElementById("navLive").onclick = () => showView("live");
 document.getElementById("navRoom").onclick = () => showView("room");
-document.getElementById("navLog").onclick = () => showView("log");
 wire.on("snapshot", (m) => paintRoomNav(m.rooms));
 
 wire.on("_open", () => {

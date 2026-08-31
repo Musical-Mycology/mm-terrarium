@@ -649,7 +649,7 @@ function render() {
     functionsAccEl.open = true;
     const summary = document.createElement("summary");
     summary.appendChild(mk("span", "tri", "▸"));
-    summary.appendChild(document.createTextNode("Functions"));
+    summary.appendChild(document.createTextNode("Triggers"));
     functionsAccEl.appendChild(summary);
     const functionsBody = mk("div", "accbody");
     functionsBody.id = "functionsMount";

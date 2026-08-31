@@ -148,7 +148,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2.5px solid var(--gold
 }
 
 /* ---------- sidebar nav + cards ---------- */
-.viewnav { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
+.viewnav { display: flex; flex-direction: column; gap: 6px; }
 .navbtn {
   font-family: var(--f-disp); font-size: 15px; letter-spacing: 0.06em;
   text-align: left; background: none; border: none; color: var(--ink-var);
@@ -332,6 +332,12 @@ details.refcard > summary::-webkit-details-marker { display: none; }
 details.refcard > summary .tri { color: var(--gold); transition: transform 0.2s; font-size: 14px; }
 details.refcard[open] > summary .tri { transform: rotate(90deg); }
 details.refcard .body { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+/* ---------- room detail (active room card, Room view) ---------- */
+.roomdetail { border-top: 1.5px solid var(--hair); margin-top: 14px; padding-top: 10px; }
+.roomdetail .eyebrow { margin-top: 10px; }
+.roomdetail .eyebrow:first-child { margin-top: 0; }
+.roomdetail p { margin: 0 0 4px; }
 
 /* ---------- load picker overlay ---------- */
 .overlay {
