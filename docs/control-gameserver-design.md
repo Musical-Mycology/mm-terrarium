@@ -1,6 +1,6 @@
 # Control+GameServer Design (Official Architecture Path)
 
-**Terrarium / Tuneshroom / Bit architecture** · v3 · 2026-07-27 · Chris Oltyan — chris@musicalmycology.org, with Roger Dannenberg
+**Terrarium / Tuneshroom / Bit architecture** · v4 · 2026-08-31 · Chris Oltyan — chris@musicalmycology.org, with Roger Dannenberg
 
 **Status: OFFICIAL PATH FORWARD as of 2026-07-18. This file is the canonical
 copy.**
@@ -41,6 +41,26 @@ copy.**
 > smaller in the part that matters: **moving Control, the devices, and Lux
 > Aeterna onto o2lite is still entirely unstarted.** Audio reaching Arco over a
 > direct pyarco connection is not the same thing as the room speaking o2lite.
+
+> **v4 (2026-08-31) — Roger's answers folded in, Design Rule 5 corrected.**
+> Two questions raised in PR #8 (2026-07-24) got direct answers from Roger
+> the same day that were never folded into this doc. **Hub forwarding
+> cost:** WiFi hop latency runs 2–10 ms typically, occasionally higher and
+> audible — that variability is the real risk, not Arco's synthesis thread,
+> which runs on its own high-priority thread and isn't affected by other
+> threads unless incoming control itself delays it. An Interactive Element
+> that needs to react to local sensor data with no round trip through
+> Control should get a local-synthesis short-cut instead of routing through
+> Arco. **Patch-library overlap:** build on `pyarco.py`. `arco_instr.py`'s
+> `Instrument` abstraction sits on top of it and can run in parallel — an
+> `Instrument` allocates its own Ugens from the pool `pyarco.py` manages.
+> The only shared, wired-in resources are `pyarco.input_ugen` (a Thru Ugen)
+> and `pyarco.output_ugen` (a Sum Ugen); any number of otherwise-independent
+> Ugen graphs can coexist as long as those two stay connected rather than
+> deleted.
+>
+> Also corrected here: **Design Rule 5** was written as a system-wide rule
+> and wasn't one — see the rule below.
 
 It supersedes the earlier Musical Mycology direction of an embedded
 Arco engine on every device (mm-documents design, §4.5) and the M1a-era O2
@@ -213,10 +233,15 @@ A Bit's role table declares each role with:
 2. **Identity in arguments, not addresses.** Every input carries `dev`, and joins
    carry `node`. A phone simulating shroom 3 at node A sends byte-identical
    messages with `dev="ie3"`, `node="A"`. One handler per verb in Control
-   regardless of fleet size, one place to validate and log.
+   regardless of fleet size, one place to validate and log. A transport's own
+   `bridge_id`, where one exists, can never stand in for `dev` — it changes
+   across disconnect/reconnect, while `dev` is the stable device identity.
 3. **Single writer to `/arco`.** Only Control builds graphs and owns the ugen id
    space. Interactive Elements express intent to `/game`; Control decides the
-   audio consequence.
+   audio consequence. Owning the id space means freeing it: an early
+   prototype loaded a new Bit over an old one without releasing the previous
+   graph, and the old Bit kept playing. Every Bit load must release the prior
+   graph before building the next one.
 4. **Timestamps at the source, scheduling at the sink.** Devices stamp inputs
    with `o2l_get_time()` at the physical event; Control schedules audio and cues
    ahead of time. With Arco as the sample-locked reference clock, the forwarding
@@ -224,8 +249,15 @@ A Bit's role table declares each role with:
    true feedback paths (gesture to sound), where WiFi jitter dominates anyway.
    The `/ie<N>/play` local-sample path exists precisely so the tightest feedback
    never crosses the network.
-5. **MIDI over o2lite as packed int32** (status, data1, data2 in one word), since
-   o2lite lacks O2's native `'m'` type; blobs for sysex or bulk.
+5. **MIDI over o2lite as packed int32** (status, data1, data2 in one word)
+   describes the **device path only** — o2lite lacks O2's native `'m'` type
+   there, and blobs cover sysex or bulk. Arco never sees this encoding:
+   Control addresses it with typed per-verb messages instead (e.g.
+   `/arco/flsyn/noteon "iiii" ref chan key vel`), so the missing `'m'` type is
+   not a problem on that path. The two encodings must not be treated as
+   interchangeable: `arco/apps/pytest/miditest.py`'s `midi_osc_fmt` decodes
+   **left-aligned**, Lux Aeterna's own packing is **right-aligned**, and
+   copying one toward the other shifts every value by a byte.
 
 ## What a Bit Is, in Code Terms
 

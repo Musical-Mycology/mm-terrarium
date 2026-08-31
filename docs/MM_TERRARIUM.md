@@ -458,8 +458,11 @@ Two things here are **deliberately provisional**. The voice type is
 real but internal, so the abstraction Roger has open is not frozen by this demo.
 And `ugen_manifest` v0 is *not* the audio-manifest freeze that light-manifest v2
 was for light: shallow validation, no cross-repo contract, no device-side
-parser. The backend living in `harness/` is likewise a holding position until
-pyarco's source-of-truth is settled.
+parser. The backend living in `harness/` is likewise a holding position, for
+a narrower reason than it used to be: pyarco's source-of-truth was settled
+2026-08-10 (see *Relationships to other repos* below). What's still missing
+is a cross-repo audio-manifest contract, the same gap `ugen_manifest` v0
+already names above.
 
 ### `harness/` — venue-array and device tooling (pre-hardware)
 Four modules landed 2026-08-06 ahead of the hardware they drive, so the student
