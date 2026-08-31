@@ -17,7 +17,7 @@
 - Never `import o2litepy` or `pyarco` at module level in `devicelink/` or `control/`; lazy imports in `harness/` only.
 - `Terrarium.load_room`/`unload_room`/`recycle_room` never raise to their caller; they return `None` or a reason string.
 - Existing behavior without new flags must stay byte-identical (`--persist` off, non-serve mode unchanged).
-- Test baseline before this plan: 1442+ passed, 1 skipped (re-run to get the exact current number before Task 1 and keep it green after every task).
+- Test baseline before this plan: 1737 passed, 1 skipped (measured 2026-08-31 after merging origin/main's instrument-scripted-functions work into this branch; keep it green after every task).
 
 ---
 
@@ -28,7 +28,7 @@
 - Test: `tests/test_console_agent.py` (append)
 
 **Interfaces:**
-- Consumes: `uplink/protocol.py`'s `LoadBitCommand(name, overrides: dict | None)`; `console/agent.py:125-137` already passes `command.overrides` to `registry.resolve_config`.
+- Consumes: `uplink/protocol.py`'s `LoadBitCommand(name, overrides: dict | None)`; `console/agent.py:138-150` already passes `command.overrides` to `registry.resolve_config`.
 - Produces: wire messages `{"command": "load_bit", "name": ..., "overrides": <nested dict or null>}`.
 
 - [ ] **Step 1: Write the failing agent-side tests** (these pass a correctly shaped overrides dict end-to-end, pinning the wire contract the JS fix must emit; they fail today only if the registry path mishandles nested overrides or null, so run them first to find out which already pass)
