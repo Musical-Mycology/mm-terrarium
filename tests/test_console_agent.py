@@ -65,6 +65,9 @@ class FakeConsoleServer:
         self._raising = set()               # clients whose send() raises
 
     # --- tick-thread API consumed by ConsoleAgent ---
+    def client_count(self):
+        return len(self._clients)
+
     def drain_new_clients(self):
         out, self._new_clients = self._new_clients, []
         return out
@@ -1179,6 +1182,7 @@ def test_bench_start_replies_bench_started_and_polls_frame(tmp_path):
     gs, srv, agent = _server_with_agent(
         catalog_root=root,
         bench_session_factory=lambda manifest: FakeBenchSession())
+    srv.connect("c1")
     agent._clock = lambda: t[0]
     started = agent._handle_command(
         {"command": "bench_start", "state": "published", "name": "glowcap"})
@@ -1325,3 +1329,74 @@ def test_replay_trace_missing_capture_refuses(tmp_path):
         {"command": "replay_trace", "state": "published", "name": "tuneshroom",
          "trigger": "tap", "session": "sess1", "label": "tap", "series": 1})
     assert reply["event"] == "error"
+
+
+def test_capture_stats_skips_malformed_json_with_error_event(tmp_path):
+    captures = tmp_path / "captures"
+    session_dir = captures / "sess1" / "tap"
+    session_dir.mkdir(parents=True)
+    (session_dir / "1.json").write_text("{not valid json")
+    gs, srv, agent = _server_with_agent(captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "capture_stats", "session": "sess1", "label": "tap"})
+    assert reply["event"] == "error"
+    assert "1.json" in reply["message"]
+
+
+def test_replay_trace_valid_json_missing_trace_keys_returns_error(tmp_path):
+    from pathlib import Path
+    catalog_root = Path("instruments")
+    captures = tmp_path / "captures"
+    label_dir = captures / "sess1" / "tap"
+    label_dir.mkdir(parents=True)
+    (label_dir / "1.json").write_text(json.dumps({"not": "a trace"}))
+    gs, srv, agent = _server_with_agent(catalog_root=catalog_root,
+                                        captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "replay_trace", "state": "published", "name": "tuneshroom",
+         "trigger": "tap", "session": "sess1", "label": "tap", "series": 1})
+    assert reply["event"] == "error"
+
+
+def test_capture_stats_rejects_path_traversal_in_session(tmp_path):
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    outside = tmp_path / "secret"
+    outside.mkdir()
+    (outside / "leak.json").write_text("{}")
+    gs, srv, agent = _server_with_agent(captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "capture_stats", "session": "../secret", "label": "tap"})
+    assert reply["event"] == "error"
+
+
+def test_replay_trace_rejects_path_traversal_in_session_and_label(tmp_path):
+    from pathlib import Path
+    catalog_root = Path("instruments")
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    gs, srv, agent = _server_with_agent(catalog_root=catalog_root,
+                                        captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "replay_trace", "state": "published", "name": "tuneshroom",
+         "trigger": "tap", "session": "../evil", "label": "../x", "series": 1})
+    assert reply["event"] == "error"
+
+
+def test_bench_closes_when_server_reports_zero_clients(tmp_path):
+    root = tmp_path / "instruments"
+    root.mkdir()
+    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    session = FakeBenchSession()
+    gs, srv, agent = _server_with_agent(
+        catalog_root=root, bench_session_factory=lambda manifest: session)
+    agent._handle_command(
+        {"command": "bench_start", "state": "published", "name": "glowcap"})
+    assert not session.closed
+    srv._clients.clear()  # simulate the console client disconnecting
+    agent.poll()
+    assert session.closed
+    # a later bench_start works again
+    reply = agent._handle_command(
+        {"command": "bench_start", "state": "published", "name": "glowcap"})
+    assert reply["event"] == "bench_started"

@@ -124,6 +124,12 @@ class ConsoleAgent:
     def _tick_bench(self) -> None:
         if self._bench is None:
             return
+        if self.server.client_count() == 0:
+            logger.info("no console clients connected; closing live bench")
+            self._bench.close()
+            self._bench = None
+            self._pending_bench_frame = None
+            return
         frame = self._bench.tick()
         if frame is not None:
             self._pending_bench_frame = frame
@@ -337,15 +343,48 @@ class ConsoleAgent:
                 sessions.append({"session": session_dir.name, "labels": labels})
         return sessions
 
+    def _first_unreadable_trace(self, session_dir) -> "object | None":
+        """Returns the path of the first trace file under session_dir that
+        fails to parse as valid JSON with the expected trace shape, or None
+        if every file is readable. Named separately from session_rows so a
+        malformed capture file names itself in the returned error_event
+        rather than crashing gesture_eval's own parse."""
+        import json
+
+        for path in sorted(session_dir.glob("*/[0-9]*.json")):
+            try:
+                trace = json.loads(path.read_text())
+                trace["samples"]["t_ms"]
+                trace["label"]
+                trace["capture_id"]
+                trace["series"]
+            except Exception:
+                return path
+        return None
+
     def _handle_capture_command(self, name: str, command) -> dict | None:
         if self.captures_root is None:
             return protocol.error_event(name, "no capture store")
         if isinstance(command, protocol.ListCapturesCommand):
             return protocol.captures_listed_event(self._captures_listed())
+        if isinstance(command, (protocol.CaptureStatsCommand,
+                                protocol.ReplayTraceCommand)):
+            from control.catalog import CATALOG_NAME_RE
+            if not CATALOG_NAME_RE.match(command.session):
+                return protocol.error_event(name, f"invalid session {command.session!r}")
+            if not CATALOG_NAME_RE.match(command.label):
+                return protocol.error_event(name, f"invalid label {command.label!r}")
         if isinstance(command, protocol.CaptureStatsCommand):
             from control.gesture_eval import propose_thresholds, session_rows
-            rows = [r for r in session_rows(self.captures_root / command.session)
-                    if r["label"] == command.label]
+            session_dir = self.captures_root / command.session
+            bad_path = self._first_unreadable_trace(session_dir)
+            if bad_path is not None:
+                return protocol.error_event(name, f"bad capture at {bad_path}")
+            try:
+                rows = [r for r in session_rows(session_dir)
+                        if r["label"] == command.label]
+            except Exception as exc:
+                return protocol.error_event(name, f"bad capture data: {exc}")
             return protocol.capture_stats_event(rows, propose_thresholds(rows))
         # ReplayTraceCommand
         import json
@@ -370,10 +409,13 @@ class ConsoleAgent:
                 / f"{command.series}.json")
         if not path.is_file():
             return protocol.error_event(name, f"no capture at {path}")
-        trace = json.loads(path.read_text(encoding="utf-8"))
-        result = evaluate_trace(trace, trigger.thresholds)
-        result["trace"] = {"t_ms": list(trace["samples"]["t_ms"]),
-                           "accel_g": _accel_g(trace["samples"])}
+        try:
+            trace = json.loads(path.read_text(encoding="utf-8"))
+            result = evaluate_trace(trace, trigger.thresholds)
+            result["trace"] = {"t_ms": list(trace["samples"]["t_ms"]),
+                               "accel_g": _accel_g(trace["samples"])}
+        except Exception as exc:
+            return protocol.error_event(name, f"bad capture at {path}: {exc}")
         return protocol.replay_result_event(result)
 
     # --- snapshot (connect-time full read model) ---------------------------
