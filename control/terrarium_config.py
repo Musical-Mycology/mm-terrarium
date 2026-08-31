@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue
@@ -18,6 +18,7 @@ from control.instrument import (Instrument, InstrumentError,
                                 validate_instrument_manifests)
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
+from control.triggers import EventTrigger, StreamTrigger
 
 KNOWN_BACKENDS = frozenset({"devicelink", "array"})
 
@@ -48,14 +49,42 @@ class TerrariumConfig:
     rooms: dict[str, RoomSpec]
     version: str          # f"{schema}-{sha256(text)[:12]}", content-addressed
     instruments: dict[str, Instrument] = field(default_factory=dict)
+    # [terrarium] instrument_paths, resolved to filesystem roots the same
+    # way load_terrarium_config resolves them for load_catalog below --
+    # relative to the config file's own directory. Empty from
+    # parse_terrarium_config (no config path to resolve against); the
+    # Console's design panel reads instrument_roots[0], when non-empty, as
+    # its catalog_root (harness/terrarium_boot.py's main()).
+    instrument_roots: tuple[Path, ...] = ()
 
 
 def load_terrarium_config(path: str) -> TerrariumConfig:
+    from control.catalog import load_catalog  # local: avoid import cycle
     with open(path, encoding="utf-8") as f:
-        return parse_terrarium_config(f.read(), source=path)
+        text = f.read()
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return parse_terrarium_config(text, source=path)  # located there
+    instrument_paths = raw.get("terrarium", {}).get(
+        "instrument_paths", ["instruments"])
+    extra: dict = {}
+    base = Path(path).resolve().parent
+    roots = tuple(base / rel for rel in instrument_paths)
+    for root in roots:
+        for name, inst in load_catalog(root).published.items():
+            if name in extra:
+                raise TerrariumConfigError(
+                    source=str(root), key=f"instruments.{name}",
+                    message="defined in more than one catalog root")
+            extra[name] = inst
+    config = parse_terrarium_config(text, source=path, extra_instruments=extra)
+    return replace(config, instrument_roots=roots)
 
 
-def parse_terrarium_config(text: str, source: str) -> TerrariumConfig:
+def parse_terrarium_config(text: str, source: str,
+                           extra_instruments: dict[str, Instrument] | None = None
+                           ) -> TerrariumConfig:
     try:
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
@@ -75,6 +104,13 @@ def parse_terrarium_config(text: str, source: str) -> TerrariumConfig:
     instruments: dict[str, Instrument] = {}
     for iname, iraw in instruments_raw.items():
         instruments[iname] = _parse_instrument(iname, iraw, source=source)
+    for iname, inst in (extra_instruments or {}).items():
+        if iname in instruments:
+            raise TerrariumConfigError(
+                source=source, key=f"instruments.{iname}",
+                message="defined both inline and in an instrument catalog; "
+                        "pick one home")
+        instruments[iname] = inst
     rooms_raw = raw.get("rooms")
     if not isinstance(rooms_raw, dict) or not rooms_raw:
         raise TerrariumConfigError(source=source, key="rooms",
@@ -212,6 +248,56 @@ def _parse_functions(iname: str, iraw: dict, *, source: str, key: str
     return tuple(functions)
 
 
+def _parse_trigger_tables(iname: str, iraw: dict, *, source: str, key: str,
+                          table: str, required: tuple[str, ...]) -> list[dict]:
+    """`[[instruments.<name>.<table>]]` array-of-tables -> raw dicts, with a
+    located structural check (array-of-tables shape, required keys present).
+    Defects inside a trigger itself (bad transform, non-numeric threshold)
+    are left to validate_instrument on the built Instrument."""
+    raw_list = iraw.get(table, [])
+    if not isinstance(raw_list, list):
+        raise TerrariumConfigError(
+            source=source, key=key,
+            message=f"{table} must be an array of "
+                    f"[[instruments.{iname}.{table}]] tables")
+    out = []
+    for entry in raw_list:
+        if not isinstance(entry, dict):
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"{table} entries must be tables, got {entry!r}")
+        for req in required:
+            if req not in entry:
+                raise TerrariumConfigError(
+                    source=source, key=key,
+                    message=f"{table} entry missing required {req!r}")
+        out.append(entry)
+    return out
+
+
+def _parse_event_triggers(iname: str, iraw: dict, *, source: str, key: str
+                          ) -> tuple[EventTrigger, ...]:
+    return tuple(
+        EventTrigger(name=e["name"], description=e.get("description", ""),
+                     thresholds=dict(e.get("thresholds", {})))
+        for e in _parse_trigger_tables(iname, iraw, source=source, key=key,
+                                       table="event_triggers",
+                                       required=("name",)))
+
+
+def _parse_stream_triggers(iname: str, iraw: dict, *, source: str, key: str
+                           ) -> tuple[StreamTrigger, ...]:
+    return tuple(
+        StreamTrigger(name=e["name"], description=e.get("description", ""),
+                      verb=e["verb"], arg=int(e["arg"]),
+                      transform=e["transform"],
+                      params=dict(e.get("params", {})))
+        for e in _parse_trigger_tables(iname, iraw, source=source, key=key,
+                                       table="stream_triggers",
+                                       required=("name", "verb", "arg",
+                                                 "transform")))
+
+
 def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
     key = f"instruments.{iname}"
     if "accepted_triggers" in iraw:  # legacy-vocabulary-ok
@@ -230,6 +316,8 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
         accepted_cues=tuple(iraw.get("accepted_cues", [])),
         light_manifest=light_manifest,
         ugen_manifest=ugen_manifest,
+        event_triggers=_parse_event_triggers(iname, iraw, source=source, key=key),
+        stream_triggers=_parse_stream_triggers(iname, iraw, source=source, key=key),
     )
     try:
         validate_instrument(instrument)

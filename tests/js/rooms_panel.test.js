@@ -100,7 +100,66 @@ function snapshotMsg(rooms, terrarium_state) {
 
   unloadBtn.onclick();
   assert.strictEqual(sock.sent.length, 1);
-  assert.deepStrictEqual(sock.sent[0], { command: "unload_room", force: false });
+  assert.deepStrictEqual(sock.sent[0], { command: "unload_room", force: true });
+
+  // 6. Active room card detail: capability, fixtures/bindings, connected
+  //    devices (with registration tags), and declared instruments -- fed by
+  //    snapshot.room/devices/roles, refreshed by room_changed and
+  //    devices_changed without rebuilding the card list.
+  const detailSnapshot = snapshotMsg(
+    [
+      { name: "TEST", description: "Test room", status: null, active: true },
+      { name: "OTHER", description: "Other room", status: null, active: false },
+    ],
+    "ROOM_READY");
+  detailSnapshot.roles = [
+    { role: "player", class: "shared", capacity: 2, scored: true },
+    { role: "jammer", class: "jam", capacity: null, scored: false },
+  ];
+  detailSnapshot.devices = [
+    { dev: "ie1", name: "Testshroom 1", role: "player" },
+    { dev: "ie2", name: "Testshroom 2", role: "jammer" },
+    { dev: "sim-room", name: "Room sim", role: null },
+    { dev: "ie9", name: "Wanderer", role: null },
+  ];
+  detailSnapshot.room = {
+    room_type: "TEST",
+    capability: { pixel_count: 60, color_order: "GRB",
+      zones: [{ name: "main.left", start: 0, count: 30 }] },
+    fixtures: [{ name: "main", dev: "sim-room", pixel_count: 60,
+      zones: [{ name: "main.left", start: 0, count: 30 },
+              { name: "main.right", start: 30, count: 30 }] }],
+    instruments: [
+      { kind: "light", instrument: "aurora", target: "primary",
+        params: { hue: 0.33 },
+        lanes: [{ source: "cc:74", dest: "hue" }] },
+      { kind: "audio", instrument: "flsyn", program: 89, lanes: [] },
+    ],
+    controllers: {},
+  };
+  send(detailSnapshot);
+  const activeCard = rooms._cardFor("TEST");
+  const html = () => activeCard.innerHTML;
+  assert.ok(/60 px[\s\S]*?GRB/.test(html()), "capability line");
+  assert.ok(/main[\s\S]*?sim-room/.test(html()), "fixture shows its bound dev");
+  assert.ok(html().includes("main.left"), "fixture zones listed");
+  assert.ok(/Testshroom 1[\s\S]*?Scored/.test(html()), "scored device tagged");
+  assert.ok(/Testshroom 2[\s\S]*?Jam/.test(html()), "jam device tagged");
+  assert.ok(/Room sim[\s\S]*?Fixture/.test(html()), "room-bound dev tagged Fixture");
+  assert.ok(/Wanderer[\s\S]*?Unregistered/.test(html()), "roleless dev tagged");
+  assert.ok(html().includes("aurora"), "declared light instrument listed");
+  assert.ok(/cc:74[\s\S]*?hue/.test(html()), "instrument lanes listed");
+  assert.ok(html().includes("flsyn"), "declared audio instrument listed");
+  // inactive card carries no detail
+  assert.ok(!rooms._cardFor("OTHER").innerHTML.includes("Testshroom 1"));
+
+  // devices_changed refreshes the detail in place -- card identity survives.
+  send({ event: "devices_changed",
+         devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" },
+                   { dev: "ie7", name: "Newcomer", role: null }] });
+  assert.strictEqual(rooms._cardFor("TEST"), activeCard, "card identity preserved");
+  assert.ok(html().includes("Newcomer"), "new device appears");
+  assert.ok(!html().includes("Wanderer"), "departed device disappears");
 
   console.log("rooms_panel: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -2137,6 +2137,8 @@ Load picker can show what a Bit will grant without loading it first.
 
 ### Console nav redesign: right rail deleted, three toggled center views (2026-08-31)
 Design: [`.../2026-08-31-console-nav-redesign-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-console-nav-redesign-design.md).
+(Partially superseded the same day — see the next entry: the Event Log view
+and the sidebar Instruments pull are gone again.)
 The right rail described above is gone. `rail.js` is now registration plus
 an "Instruments" pull (device rows tagged Scored/Jam/Fixture/Unregistered,
 with fixture devs sourced from the room's fixtures) and the event log; the
@@ -2145,6 +2147,51 @@ instead. `shell.js` now owns `showView()`/`paintRoomNav()`, switching
 between three hidden-toggled center views — Live (the default), Room, and
 Event Log — rather than a single always-visible layout. The rooms panel is
 now the Room view itself, no longer a top strip.
+
+### Console nav follow-up: two views, registration rollup, Room detail, pinned log (2026-08-31, PR #71)
+Same-day operator-feedback pass over the entry above; no protocol changes —
+everything renders from the existing `snapshot`/`room_changed`/
+`devices_changed` payloads.
+
+- **Two nav views, not three.** The sidebar nav (Live, Room) moved to the
+  top of the sidebar so it can never scroll out of view; the Event Log nav
+  button is deleted. The event log card is pinned at the bottom of the
+  **Live** view's main column instead (main-area width; the sidebar column
+  stays nav-only). `shell.VIEWS` is exported and has no `log` key.
+- **Sidebar registration is a three-line category rollup** — `Fixtures x/y`
+  (bound/total from the room's fixtures), `Scored x/y`, `Jam x/y` (counts
+  summed across declared roles by `scored`/`class`; a declared role with no
+  registration row counts as 0, any null capacity renders ∞). The per-role
+  rows/meters and the per-device "Instruments" pull left the sidebar.
+- **The Room view's active card grew a detail section** (`rooms.js`
+  `renderDetail()`): capability (px, color order, zone count), fixtures with
+  binding state and zone names, every connected device with its role and the
+  Scored/Jam/Fixture/Unregistered tag (the tag logic that used to live in
+  `rail.js`), and declared instruments with lanes. The detail mount holds no
+  buttons, so it rebuilds freely without threatening the Load/Unload
+  confirm-tap discipline; only the active room's card carries it.
+- **The Live view's "Functions" accordion is labelled "Triggers"** (label
+  only — ids `functionsAcc`/`functionsMount` and `functions.js` unchanged).
+
+### Console nav follow-up 2: the [hidden] guard, "Live values", nav backdrop (2026-08-31, PR #72)
+Venue-feedback pass over PR #71. The load-bearing item is a CSS gotcha worth
+remembering: **an author `display` rule silently defeats the `hidden`
+attribute.** `terrarium.css` had no `[hidden]` rule, and author styles
+(`.maincol { display: flex }`, `.chip { display: inline-flex }`) override the
+UA stylesheet's `[hidden] { display: none }` regardless of specificity — so
+PR #71's Live/Room switching was a visible no-op (both views rendered
+stacked) while every JS test stayed green, because the node DOM stub checks
+the `hidden` *property*, not computed style. The fix is a global
+`[hidden] { display: none !important; }` guard, pinned by
+`test_console_static.py::test_css_guards_the_hidden_attribute`. Anyone adding
+a new `display:`-styled container that is ever hidden is already covered by
+that guard — do not remove it.
+
+Also: the Live room card's "Instruments" accordion is labelled **"Live
+values"** (it shows real-time controller values; the official instrument
+declarations live on the Registration rollup and the Room view's detail),
+and the sidebar nav sits on a lighter `--s-high` backdrop to separate it
+from the rest of the rail. Ids and `functions.js` untouched.
 
 ### SolidCue overrides, SURFACE targeting, per-surface mute, and the four operator triggers (2026-08-26)
 The Triggers panel becomes a real operator control surface. Design:
@@ -2411,7 +2458,11 @@ and its plan
   validators a Bit's own manifests already go through, so a typo'd ambient
   manifest fails the same way a Bit's does). `TUNESHROOM` is defined once
   here in code -- the only instrument the wire protocol currently speaks --
-  and `DeviceInfo.carried` defaults to it at hello.
+  and `DeviceInfo.carried` defaults to it at hello. **(Superseded
+  2026-08-31: `TUNESHROOM` still exists as a code constant, but it is no
+  longer the only instrument -- `instruments/tuneshroom.toml`, a published
+  catalog entry, is pinned equal to it by test. See the *Instrument catalog
+  and Design panel* entry below.)**
 - **A Fixture is an Instrument plus placement and binding.**
   `RoomFixture.instrument` is now a required field -- a fixture with no
   instrument is not a representable thing. `terrarium.toml` gains
@@ -2422,7 +2473,12 @@ and its plan
   `TerrariumConfigError`, same fails-hard-at-load convention every other
   config defect in this file already gets. Everything downstream holds the
   resolved `Instrument` value; nothing outside the parser sees the string
-  name again.
+  name again. **(Superseded 2026-08-31: `terrarium.toml`'s `[instruments.*]`
+  tables are no longer the only source -- `load_terrarium_config` also
+  merges in every published entry from the instrument catalog
+  (`[terrarium] instrument_paths`, default `["instruments"]`), with a
+  located error on a name collision between the two. See the *Instrument
+  catalog and Design panel* entry below.)**
 - **`Bit.instrument_requirements()`** -- capability contracts, resolved at
   two different times depending on kind, distinguished by how they resolve
   rather than by type:
@@ -2675,9 +2731,14 @@ troubleshooting vocabulary for free.
   `condition` on that record reads `"builtin"` or `"instrument"` (rather
   than the declared condition name) when no Bit entry drove the fire.
 - **Instrument-authored scripted functions** are declared two ways.
-  `terrarium.toml`'s `[[instruments.<name>.functions]]` tables (`kind =
-  "scripted"`, `midi`/`play`/`solid`/`mute` steps) are the config path --
-  `venue_array` and `dev_strip` each carry eight: `play_aurora`, `win`,
+  `[[functions]]` tables (`kind = "scripted"`, `midi`/`play`/`solid`/`mute`
+  steps) in the instrument's own declaration are the config path -- since
+  the PR #73 instrument catalog landed (merged into this branch), that
+  means the `instruments/<name>.toml` catalog files rather than inline
+  `terrarium.toml` tables (inline `[instruments.<name>]` still parses but
+  is refused when the same name exists in the catalog) --
+  `instruments/venue_array.toml` and `instruments/dev_strip.toml` each
+  carry eight: `play_aurora`, `win`,
   `fireworks_room`, `fail_room`, `finale`, `metro_downbeat`,
   `metro_click`, `metro_pulse_room`. TUNESHROOM's six
   (`play_aurora`, `win`, `fireworks_player`, `fail_player`,
@@ -2738,6 +2799,91 @@ per the spec's section-5 checklist: live-Arco verification -- firing the
 built-ins (`flash`/`stop`/`ping`) at both `venue_array`/`dev_strip`
 (Room) and TUNESHROOM (Testshroom) with no Bit loaded, and a TestBit
 end-to-end pass exercising the ladder's rung 1 against a real Arco stack.
+
+### `control/catalog.py`, `control/terrarium_config.py` instrument_paths, `console/static/design.js` -- instrument catalog and Design panel v1 (2026-08-31)
+
+Slices 1-2 of the plan below; slice 3 (carried-instrument wire support) is
+unplanned. Design:
+[`.../2026-08-31-design-panel-and-instrument-catalog-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-design-panel-and-instrument-catalog-design.md);
+its Status section records what shipped against what stays Plan 2.
+
+- **Catalog layout: `instruments/*.toml` published, `instruments/drafts/
+  *.toml` drafts, name = file stem** (`control/catalog.py`). `load_catalog`
+  keys `InstrumentCatalog.entries` `"<state>:<name>"`, not just `<name>` --
+  a draft edit of a published entry does not shadow the published one, so
+  both can be listed and opened at once. A missing catalog root is an
+  empty catalog, not an error (a terrarium with no `instruments/` directory
+  boots exactly as before this slice). Published entries fail hard at
+  load, same as every other config defect in this repo; a draft's parse or
+  validation error is collected onto its `CatalogEntry.error` instead --
+  the whole point of a draft is that it can be broken while you're working
+  on it.
+- **The write API never raises; every mutator returns a reason string (or
+  `None` on success).** `save_draft`, `clone_entry`, `publish_entry` --
+  same convention `fire_trigger`/`GameServer.fire_function` already use, so
+  the Console's admin-command handler can turn any refusal into an
+  `error_event` without a try/except. `save_draft` writes even an invalid
+  draft to disk (return value carries the validation errors separately) so
+  the editor never loses an in-progress edit to a rejected save. `publish_
+  entry` re-validates the draft in full before moving `drafts/<name>.toml`
+  to `<name>.toml` (`Path.replace`, one atomic rename) -- a draft that
+  fails validation cannot become published by mistake even if the panel's
+  own client-side check was stale.
+- **`terrarium.toml` gains `[terrarium] instrument_paths`** (default
+  `["instruments"]`), resolved by `load_terrarium_config` against the
+  config file's own directory -- the same relative-to-config-dir rule
+  `resolve_bit_roots` already uses for `bit_paths`. Every published entry
+  under each root is merged into `parse_terrarium_config`'s `instruments`
+  dict via a new `extra_instruments` parameter; a name defined both inline
+  in `terrarium.toml` and in a catalog root is a located
+  `TerrariumConfigError` ("defined both inline and in an instrument
+  catalog; pick one home") -- one instrument, one home, no silent
+  shadowing either direction. `TerrariumConfig.instrument_roots` carries
+  the resolved catalog root paths forward (empty from
+  `parse_terrarium_config`, which has no config path to resolve against);
+  `harness/terrarium_boot.py`'s `main()` reads `instrument_roots[0]`, when
+  non-empty, as the `ConsoleAgent(catalog_root=...)` it wires up.
+- **Shipped migration:** `terrarium.toml`'s inline `[instruments.*]`
+  tables move out to `instruments/{tuneshroom,venue_array,dev_strip}.toml`.
+  `instruments/tuneshroom.toml` is pinned equal to the code constant
+  `control.instrument.TUNESHROOM` by
+  `test_shipped_tuneshroom_catalog_file_matches_the_code_constant`
+  (`tests/test_catalog.py`) -- the code constant still exists (device
+  hello still defaults to it, per the not-yet-built slice 3 below), but it
+  is no longer the only instrument the catalog knows about.
+- **Console: five new admin commands, local-only, never uplink** --
+  `list_designs`/`get_design`/`save_design`/`publish_design`/
+  `clone_design` (`console/agent.py::_handle_design_command`), gated the
+  same way as the pre-existing `arm_room`/`release_room`/`fire_function`
+  admin commands: dispatched only from `_handle_admin_command`, which the
+  uplink's remote-command path never reaches. Three wire events --
+  `designs_listed`, `design` (one entry's text + errors), `designs_changed`
+  -- and a `"designs"` key on the snapshot. **Mutations reply
+  `designs_changed` to the caller and separately broadcast the same event
+  to every other connected client** (`self.server.broadcast(...)` then
+  `return ...`), mirroring `_broadcast_functions_if_changed`'s fan-out --
+  the catalog is shared state, so every open Design panel must re-render
+  on a mutation, not just the one that made it. The caller therefore
+  receives the event twice (once as the broadcast, once as the direct
+  reply); both carry the same rows, so re-rendering twice from identical
+  data is a no-op, not a bug to fix.
+- **`console/static/design.js` + a new Design nav view.** List (one row
+  per `"<name> [draft|published]"`, an error chip when `CatalogEntry.error`
+  is set), a raw-TOML editor (`#designText`/`#designErrors`), and Save/
+  Publish/Clone actions. **Draft-shadowing edit flow:** the client always
+  sends `save_design` with the *selected* entry's name, whatever its
+  state -- the server-side convention (a save on a published name lands in
+  `drafts/<name>.toml`, never overwrites the published file directly) does
+  the shadowing; the client does not special-case published vs. draft on
+  save.
+- **Not this slice (Plan 2):** structured editing forms (raw TOML only in
+  v1), the in-browser instrument-host simulator, and the Calibrate flow
+  (spec sections 4, 5, 6). **Unplanned:** carried-instrument wire support
+  (spec section 2, slice 3) -- hello still has no instrument name, and
+  `DeviceInfo.carried` still defaults to `TUNESHROOM` unconditionally.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1699 passed, 1 skipped** (up from 1669 passed, 1 skipped).
 
 ## Boundary rules (the load-bearing invariants)
 

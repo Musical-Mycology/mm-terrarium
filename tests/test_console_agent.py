@@ -107,10 +107,10 @@ class FakeConsoleServer:
         self._inbound.append((client, msg))
 
 
-def _server_with_agent():
+def _server_with_agent(catalog_root=None):
     gs = GameServer({"TestBit": TestBit})
     srv = FakeConsoleServer()
-    agent = ConsoleAgent(gs, srv)
+    agent = ConsoleAgent(gs, srv, catalog_root=catalog_root)
     return gs, srv, agent
 
 
@@ -1095,3 +1095,46 @@ def test_on_load_warnings_broadcasts_warn_log_events():
     logs = [m for m in srv.broadcasts if m["event"] == "log"]
     assert logs == [{"event": "log", "level": "warn",
                      "message": "function 'x' has no script on instrument 'y'"}]
+
+
+def test_design_commands_error_without_catalog():
+    gs, srv, agent = _server_with_agent()
+    reply = agent._handle_command({"command": "list_designs"})
+    assert reply["event"] == "error"
+
+
+def test_design_roundtrip_via_agent(tmp_path):
+    root = tmp_path / "instruments"
+    (root / "drafts").mkdir(parents=True)
+    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    gs, srv, agent = _server_with_agent(catalog_root=root)
+    listed = agent._handle_command({"command": "list_designs"})
+    assert listed["event"] == "designs_listed"
+    assert listed["designs"][0]["name"] == "glowcap"
+    assert agent.snapshot()["designs"][0]["name"] == "glowcap"
+    assert agent._handle_command(
+        {"command": "clone_design", "source_state": "published",
+         "source_name": "glowcap", "new_name": "glowcap2"}) is not None
+    # mutation replies with designs_changed so the caller re-renders, and it
+    # is also broadcast so every OTHER connected client re-renders too --
+    # mirroring _broadcast_functions_if_changed's fan-out.
+    assert srv.broadcasts[-1]["event"] == "designs_changed"
+    got = agent._handle_command({"command": "get_design",
+                                 "state": "draft", "name": "glowcap2"})
+    assert got["event"] == "design"
+    assert "light.pixels" in got["text"]
+    saved = agent._handle_command(
+        {"command": "save_design", "name": "glowcap2",
+         "text": 'capabilities = ["nope"]\n'})
+    assert saved["event"] == "designs_changed"
+    assert srv.broadcasts[-1]["event"] == "designs_changed"
+    reason = agent._handle_command({"command": "publish_design",
+                                    "name": "glowcap2"})
+    assert reason["event"] == "error"
+
+
+def test_design_command_unrecognized_field_returns_error():
+    gs, srv, agent = _server_with_agent()
+    reply = agent._handle_command({"command": "get_design", "state": "bogus",
+                                   "name": "x"})
+    assert reply["event"] == "error"

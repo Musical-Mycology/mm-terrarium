@@ -15,25 +15,35 @@
 </div>
 <div class="shell">
   <div class="sidebar">
-    <p class="navlabel">Loaded Bit</p>
-    <div id="bitPanel"></div>
-    <div id="registrationCard" class="sidecard"></div>
     <nav class="viewnav">
       <button id="navLive" class="navbtn active">Live</button>
       <button id="navRoom" class="navbtn">Room: none</button>
-      <button id="navLog" class="navbtn">Event Log</button>
+      <button id="navDesign" class="navbtn">Design</button>
     </nav>
+    <p class="navlabel">Loaded Bit</p>
+    <div id="bitPanel"></div>
+    <div id="registrationCard" class="sidecard"></div>
   </div>
   <div class="content">
     <div id="viewLive" class="maincol">
       <div id="roomCard" class="card"></div>
       <div id="bitStatusCard" class="card" hidden></div>
+      <div id="logCard" class="card"></div>
     </div>
     <div id="viewRoom" class="maincol" hidden>
       <section id="roomsPanel" class="roomspanel"></section>
     </div>
-    <div id="viewLog" class="maincol" hidden>
-      <div id="logCard" class="card"></div>
+    <div id="viewDesign" class="maincol" hidden>
+      <section id="designPanel" class="card">
+        <div id="designList"></div>
+        <textarea id="designText" spellcheck="false"></textarea>
+        <div id="designErrors"></div>
+        <div class="actions">
+          <button id="designSave" class="btn solid-gold">Save</button>
+          <button id="designPublish" class="btn solid-gold">Publish</button>
+          <button id="designClone" class="btn">Clone</button>
+        </div>
+      </section>
     </div>
   </div>
 </div>

@@ -5,11 +5,16 @@ import { init as initSurface } from "./surface.js";
 import { init as initFunctions } from "./functions.js";
 import { init as initRail, logLine } from "./rail.js";
 import { init as initRooms } from "./rooms.js";
+import { init as initDesign } from "./design.js";
 
 const conn = document.getElementById("connChip");
 const roomChip = document.getElementById("roomChip");
 
-const VIEWS = { live: ["viewLive", "navLive"], room: ["viewRoom", "navRoom"], log: ["viewLog", "navLog"] };
+export const VIEWS = {
+  live: ["viewLive", "navLive"],
+  room: ["viewRoom", "navRoom"],
+  design: ["viewDesign", "navDesign"],
+};
 
 export function showView(name) {
   for (const [key, [viewId, navId]] of Object.entries(VIEWS)) {
@@ -28,7 +33,7 @@ export function paintRoomNav(rooms) {
 
 document.getElementById("navLive").onclick = () => showView("live");
 document.getElementById("navRoom").onclick = () => showView("room");
-document.getElementById("navLog").onclick = () => showView("log");
+document.getElementById("navDesign").onclick = () => showView("design");
 wire.on("snapshot", (m) => paintRoomNav(m.rooms));
 
 wire.on("_open", () => {
@@ -59,5 +64,5 @@ wire.on("error", (m) => {
   logLine("error", `${m.command}: ${m.message}`);
 });
 
-initBit(); initSurface(); initFunctions(); initRail(); initRooms();
+initBit(); initSurface(); initFunctions(); initRail(); initRooms(); initDesign();
 wire.connect();

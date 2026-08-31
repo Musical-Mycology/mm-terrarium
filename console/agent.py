@@ -35,10 +35,15 @@ ROOM_FRAME_INTERVAL = 0.1
 class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_bridge=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
-                 terrarium=None):
+                 terrarium=None, catalog_root=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
+        # Optional Path to the instrument catalog root (instruments/), for
+        # the design panel's list/get/save/publish/clone commands. None
+        # means no catalog is wired up -- every design command answers
+        # error_event rather than crashing on a missing root.
+        self.catalog_root = catalog_root
         # Optional Terrarium (control/terrarium.py), the room-level lifecycle
         # sitting above GameServer. None (every pre-Task-6 caller) means no
         # room commands, no terrarium-state gating, and an all-None/empty
@@ -101,7 +106,9 @@ class ConsoleAgent:
     # --- inbound command dispatch ------------------------------------------
     def _handle_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
-        if name in ("arm_room", "release_room", "fire_function"):
+        if name in ("arm_room", "release_room", "fire_function",
+                    "list_designs", "get_design", "save_design",
+                    "publish_design", "clone_design"):
             return self._handle_admin_command(msg)
         try:
             command = protocol.parse_command(msg)
@@ -166,6 +173,12 @@ class ConsoleAgent:
             command = protocol.parse_admin_command(msg)
         except ValueError as exc:
             return protocol.error_event(name, str(exc))
+        if isinstance(command, (protocol.ListDesignsCommand,
+                                protocol.GetDesignCommand,
+                                protocol.SaveDesignCommand,
+                                protocol.PublishDesignCommand,
+                                protocol.CloneDesignCommand)):
+            return self._handle_design_command(name, command)
         if isinstance(command, protocol.FireFunctionCommand):
             # An operator action, tagged as one so the event log never reads it
             # as gameplay. GameServer.fire_function never raises, so a refusal
@@ -185,6 +198,47 @@ class ConsoleAgent:
         elif isinstance(command, protocol.ReleaseRoomCommand):
             gs.room_binding.release(room_name, command.fixture)
         return None
+
+    def _design_rows(self) -> list:
+        from control.catalog import load_catalog
+        cat = load_catalog(self.catalog_root)
+        return [protocol.design_row(e) for e in sorted(
+            cat.entries.values(), key=lambda e: (e.name, e.state))]
+
+    def _handle_design_command(self, name: str, command) -> dict | None:
+        if self.catalog_root is None:
+            return protocol.error_event(name, "no instrument catalog")
+        from control.catalog import (clone_entry, load_catalog,
+                                     publish_entry, save_draft)
+        if isinstance(command, protocol.ListDesignsCommand):
+            return protocol.designs_listed_event(self._design_rows())
+        if isinstance(command, protocol.GetDesignCommand):
+            entry = load_catalog(self.catalog_root).get(
+                command.state, command.name)
+            if entry is None:
+                return protocol.error_event(
+                    name, f"no {command.state} design {command.name!r}")
+            text = entry.path.read_text(encoding="utf-8")
+            errors = [entry.error] if entry.error else []
+            return protocol.design_event(entry.name, entry.state, text, errors)
+        if isinstance(command, protocol.SaveDesignCommand):
+            refusal, _errors = save_draft(
+                self.catalog_root, command.name, command.text)
+        elif isinstance(command, protocol.PublishDesignCommand):
+            refusal = publish_entry(self.catalog_root, command.name)
+        else:
+            refusal = clone_entry(self.catalog_root, command.source_state,
+                                  command.source_name, command.new_name)
+        if refusal is not None:
+            return protocol.error_event(name, refusal)
+        rows = self._design_rows()
+        # Mutations reply designs_changed to the caller (below, via the
+        # normal reply path) AND broadcast it to every other connected
+        # client, mirroring _broadcast_functions_if_changed's fan-out --
+        # the design catalog is shared state, so every panel must re-render
+        # on a mutation, not just the one that made it.
+        self.server.broadcast(protocol.designs_changed_event(rows))
+        return protocol.designs_changed_event(rows)
 
     # --- snapshot (connect-time full read model) ---------------------------
     def snapshot(self) -> dict:
@@ -221,6 +275,7 @@ class ConsoleAgent:
             instrument_functions=self._last_instrument_functions,
             surface_instruments=self._last_surface_instruments,
             builtins=self._last_builtins,
+            designs=self._design_rows() if self.catalog_root else [],
         )
 
     def _rooms_view(self) -> list:

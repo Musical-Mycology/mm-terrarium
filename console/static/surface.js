@@ -629,7 +629,7 @@ function render() {
     instAccEl.open = true;
     const summary = document.createElement("summary");
     summary.appendChild(mk("span", "tri", "▸"));
-    summary.appendChild(document.createTextNode("Instruments"));
+    summary.appendChild(document.createTextNode("Live values"));
     instSummaryMetaEl = mk("span", "summeta mono dim", "");
     summary.appendChild(instSummaryMetaEl);
     instAccEl.appendChild(summary);
@@ -637,7 +637,7 @@ function render() {
     instAccEl.appendChild(instMountEl);
     body.appendChild(instAccEl);
   }
-  instSummaryMetaEl.textContent = `${room.instruments.length} declared · live values`;
+  instSummaryMetaEl.textContent = `${room.instruments.length} instruments`;
   renderInstruments(instMountEl, room.instruments, room.controllers || {});
 
   // Functions accordion shell -- created ONCE here; functions.js renders into
@@ -649,7 +649,7 @@ function render() {
     functionsAccEl.open = true;
     const summary = document.createElement("summary");
     summary.appendChild(mk("span", "tri", "▸"));
-    summary.appendChild(document.createTextNode("Functions"));
+    summary.appendChild(document.createTextNode("Triggers"));
     functionsAccEl.appendChild(summary);
     const functionsBody = mk("div", "accbody");
     functionsBody.id = "functionsMount";

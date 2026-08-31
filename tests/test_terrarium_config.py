@@ -410,6 +410,44 @@ start = 0
 count = 10
 """
 
+EVENT_TRIGGER_CONFIG = """
+schema = 1
+[terrarium]
+name = "t"
+[instruments.shroomy]
+capabilities = ["gesture.tap"]
+accepted_cues = ["midi"]
+  [[instruments.shroomy.event_triggers]]
+  name = "tap"
+  description = "a tap"
+    [instruments.shroomy.event_triggers.thresholds]
+    peak_g = 2.0
+    window_ms = 200
+  [[instruments.shroomy.stream_triggers]]
+  name = "smooth_tilt"
+  description = "EMA over tilt"
+  verb = "tilt"
+  arg = 0
+  transform = "smooth"
+    [instruments.shroomy.stream_triggers.params]
+    alpha = 0.4
+[rooms.T]
+description = "d"
+backends = ["devicelink"]
+[[rooms.T.fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "shroomy"
+[[rooms.T.fixtures.blocks]]
+name = "b1"
+start = 0
+count = 10
+[[rooms.T.fixtures.zones]]
+name = "all"
+start = 0
+count = 10
+"""
+
 
 def test_scripted_function_parses_with_target_devs():
     cfg = parse_terrarium_config(CONFIG_WITH_SCRIPTED_FUNCTION, "t.toml")
@@ -443,3 +481,19 @@ def test_scripted_step_with_no_cue_key_is_located():
         "midi = [176, 74, 127]", "offset2 = 1")
     with pytest.raises(TerrariumConfigError, match="exactly one of"):
         parse_terrarium_config(bad, "t.toml")
+
+def test_instrument_event_and_stream_triggers_parse():
+    config = parse_terrarium_config(EVENT_TRIGGER_CONFIG, source="test")
+    inst = config.instruments["shroomy"]
+    (tap,) = inst.event_triggers
+    assert tap.name == "tap"
+    assert tap.thresholds == {"peak_g": 2.0, "window_ms": 200}
+    (smooth,) = inst.stream_triggers
+    assert smooth.verb == "tilt" and smooth.transform == "smooth"
+
+
+def test_event_trigger_missing_name_is_located():
+    bad = EVENT_TRIGGER_CONFIG.replace('name = "tap"\n  ', "")
+    with pytest.raises(TerrariumConfigError) as exc:
+        parse_terrarium_config(bad, source="test")
+    assert "instruments.shroomy" in str(exc.value)

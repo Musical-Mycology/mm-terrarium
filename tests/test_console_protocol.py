@@ -262,3 +262,67 @@ def test_fire_function_is_not_a_command_the_uplink_can_send():
     with pytest.raises(ValueError):
         uplink_protocol.parse_command(
             {"command": "fire_function", "name": "play_aurora"})
+
+
+def test_design_admin_commands_parse():
+    cmd = protocol.parse_admin_command({"command": "get_design",
+                                        "state": "draft", "name": "wip"})
+    assert isinstance(cmd, protocol.GetDesignCommand)
+    assert (cmd.state, cmd.name) == ("draft", "wip")
+    cmd = protocol.parse_admin_command(
+        {"command": "save_design", "name": "wip", "text": "x = 1"})
+    assert isinstance(cmd, protocol.SaveDesignCommand)
+    cmd = protocol.parse_admin_command({"command": "publish_design",
+                                        "name": "wip"})
+    assert isinstance(cmd, protocol.PublishDesignCommand)
+    cmd = protocol.parse_admin_command(
+        {"command": "clone_design", "source_state": "published",
+         "source_name": "tuneshroom", "new_name": "fungiflute"})
+    assert isinstance(cmd, protocol.CloneDesignCommand)
+    cmd = protocol.parse_admin_command({"command": "list_designs"})
+    assert isinstance(cmd, protocol.ListDesignsCommand)
+
+
+def test_design_command_missing_field_raises():
+    with pytest.raises(ValueError):
+        protocol.parse_admin_command({"command": "save_design", "name": "w"})
+
+
+def test_get_design_rejects_bad_state():
+    with pytest.raises(ValueError):
+        protocol.parse_admin_command(
+            {"command": "get_design", "state": "bogus", "name": "wip"})
+
+
+def test_clone_design_rejects_bad_source_state():
+    with pytest.raises(ValueError):
+        protocol.parse_admin_command(
+            {"command": "clone_design", "source_state": "bogus",
+             "source_name": "a", "new_name": "b"})
+
+
+def test_design_row_shape():
+    class FakeEntry:
+        name = "glowcap"
+        state = "published"
+        error = None
+    assert protocol.design_row(FakeEntry()) == {
+        "name": "glowcap", "state": "published", "error": None}
+
+
+def test_designs_listed_event_shape():
+    designs = [{"name": "a", "state": "published", "error": None}]
+    assert protocol.designs_listed_event(designs) == {
+        "event": "designs_listed", "designs": designs}
+
+
+def test_designs_changed_event_shape():
+    designs = [{"name": "a", "state": "draft", "error": None}]
+    assert protocol.designs_changed_event(designs) == {
+        "event": "designs_changed", "designs": designs}
+
+
+def test_design_event_shape():
+    assert protocol.design_event("glowcap", "draft", "x = 1", []) == {
+        "event": "design", "name": "glowcap", "state": "draft",
+        "text": "x = 1", "errors": []}
