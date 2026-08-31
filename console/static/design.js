@@ -62,6 +62,13 @@ function onDesignsChanged(designs) {
   render();
 }
 
+// Accessor for the currently-open design selection ({name, state}, or null
+// when nothing is open) -- used by design_forms.js to gate form rendering
+// without duplicating design.js's selection tracking.
+export function getSelection() {
+  return current;
+}
+
 // Fills the editor from a `design` event: text, errors, and remembers the
 // open selection so Save/Publish/Clone know what they're acting on.
 export function openDesign(msg) {
