@@ -198,7 +198,8 @@ def test_snapshot_defaults_functions_to_an_empty_list():
 
 def test_functions_changed_event_shape():
     assert protocol.functions_changed_event([{"name": "x"}]) == {
-        "event": "functions_changed", "functions": [{"name": "x"}]}
+        "event": "functions_changed", "functions": [{"name": "x"}],
+        "instrument_functions": {}, "surface_instruments": {}, "builtins": {}}
 
 
 def test_functions_changed_event_wire_bytes_for_a_generator_function():
@@ -220,7 +221,8 @@ def test_functions_changed_event_wire_bytes_for_a_generator_function():
         '{"event": "functions_changed", "functions": [{"kind": "generator", '
         '"name": "glow", "description": "ambient breathing glow", '
         '"lane": {"dev": "@room", "status": 176, "data1": 74}, '
-        '"waveform": "triangle", "period": 12.0, "lo": 0, "hi": 127}]}')
+        '"waveform": "triangle", "period": 12.0, "lo": 0, "hi": 127}], '
+        '"instrument_functions": {}, "surface_instruments": {}, "builtins": {}}')
 
 
 def test_function_fired_event_shape():

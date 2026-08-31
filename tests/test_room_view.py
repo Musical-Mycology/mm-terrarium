@@ -159,6 +159,35 @@ def test_fixture_instrument_renders_declared_generator_functions():
         {"name": "glow", "kind": "generator", "lane": "cc:74", "period": 12.0}]
 
 
+def test_fixture_instrument_renders_declared_scripted_functions():
+    """The trigger-instrument redesign lets an instrument declare SCRIPTED
+    functions too (e.g. terrarium.toml's dev_strip play_aurora/win/...),
+    not only GENERATOR ones -- _function_view must render them rather than
+    reach for a `.generator` that is None."""
+    from control.cues import TARGET
+    from control.functions import ScriptStep
+
+    scripted = Instrument(
+        name="scripted_surface",
+        capabilities=frozenset({"light.surface"}),
+        accepted_cues=("midi",),
+        functions=(Function(
+            name="play_aurora", description="Hue bloom sweep",
+            kind=FunctionKind.SCRIPTED,
+            script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),)),))
+    profile = RoomProfile(surface_id="room_scripted", fixtures=(
+        RoomFixture(name="main", color_order="GRB",
+                   blocks=(RoomBlock("main", 0, 10),),
+                   zones=(), instrument=scripted),))
+    room = Room(name="SCRIPTED", profile=profile, node_id="ROOM_SCRIPTED_NODE")
+    room.bound = {"main": "sim-scripted-main"}
+
+    view = room_view(room, profile, None, {})
+
+    assert view["fixtures"][0]["instrument"]["functions"] == [
+        {"name": "play_aurora", "kind": "scripted"}]
+
+
 def test_capability_carries_the_whole_concatenated_surface():
     view = _view()
     assert view["capability"]["surface_id"] == "room_test"

@@ -490,14 +490,27 @@ def test_surface_fire_with_room_sentinel_lights_the_room():
     assert [c[0] for c in light] == ["sim-room-main"]
 
 
-def test_an_unknown_trigger_is_refused():
+def test_an_undeclared_trigger_with_no_dev_is_refused_as_a_bare_surface_fire():
+    # Task 5's fire ladder: an undeclared name is no longer refused outright
+    # -- it defaults to target=SURFACE and falls through to the builtin/
+    # instrument ladder. With no `dev` given, that SURFACE default still
+    # needs one, so the refusal is "no surface given," not "unknown
+    # function" (see tests/test_fire_ladder.py for the ladder resolving
+    # such a name once a dev IS given).
     gs, _, _ = _running()
-    assert "unknown function" in gs.fire_function("nope", fired_by="admin-manual")
+    reason = gs.fire_function("nope", fired_by="admin-manual")
+    assert reason is not None and "no surface given" in reason
 
 
-def test_firing_with_no_bit_running_is_refused():
+def test_firing_with_no_bit_running_falls_through_the_ladder():
+    # Task 5's fire ladder: fire_function no longer refuses outright just
+    # because no Bit is loaded -- "sweep" is undeclared with no Bit table
+    # to consult, so it defaults to target=SURFACE, and with no `dev`
+    # given that is still refused, but for "no surface given," not "no
+    # Bit running."
     gs = GameServer({"bit": ScriptBit})
-    assert gs.fire_function("sweep", fired_by="admin-manual") == "no Bit running"
+    reason = gs.fire_function("sweep", fired_by="admin-manual")
+    assert reason is not None and "no surface given" in reason
 
 
 def test_a_room_target_with_no_room_bound_fires_and_reaches_nothing():

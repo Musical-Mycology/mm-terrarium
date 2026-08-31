@@ -2690,6 +2690,116 @@ and its plan
 Spec 2, Spec 3, and Spec 4 live-Arco checklists are all still pending;
 run them together on the dev box.
 
+### `control/builtins.py`, `GameServer.fire_function`'s ladder, instrument-authored SCRIPTED functions -- Trigger renamed to instrument-scripted Functions (2026-08-31)
+Design: [`.../2026-08-31-instrument-scripted-functions-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-instrument-scripted-functions-design.md).
+Functions can now be authored directly on an instrument, not only forwarded
+through a Bit's declared name-fire, and every instrument gets a fixed
+troubleshooting vocabulary for free.
+
+- **`control/builtins.py`'s `builtin_functions(instrument)`** synthesizes
+  `flash`/`stop`/`ping` from `instrument.capabilities` -- never authored,
+  so the operator's diagnostic vocabulary is identical at every venue.
+  `flash` needs any `light.*`: solid white for 5 s (0.9 gain), preceded by
+  a chime if `audio.samples` is present. `stop` needs any `light.*` or
+  `audio.*` (samples or flsyn): a single `MuteCue` that latches the
+  surface dark and silent until the next play un-mutes it. `ping` needs
+  audio: a `chime` sample play when `audio.samples` is present, else a
+  short note pair (key 57, on then off 0.5 s later) through the flsyn
+  voice when only `audio.flsyn` is. `RESERVED_NAMES = {"flash", "stop",
+  "ping"}` is refused **only on instrument declarations**
+  (`control/functions.py`'s `owner == "instrument"` branch in the
+  validator) -- Bit-declared FunctionTables are not checked, deliberately:
+  `bits/metronome/metronome_bit.py`'s own `stop` gesture predates the
+  built-ins and shadows the built-in `stop` by design when that Bit is
+  loaded. A future Bit that wants the built-in behavior back just leaves
+  the name undeclared.
+- **The firing ladder lives in `GameServer.fire_function`, per the spec's
+  mid-execution-redirect row.** Three rungs, in order: (1) a Bit-declared
+  FunctionTable entry with a *non-empty* script fires byte-identical to
+  the pre-ladder code -- this rung only runs in SETUP/RUNNING with a Bit
+  loaded. (2) an entry with an *empty* script (a name-fire) or no Bit
+  entry at all resolves per-dev through `_resolve_script_for`: built-ins
+  first (so a built-in can never be shadowed on an instrument), then that
+  dev's own instrument's SCRIPTED function of the same name. (3) a dev
+  that resolves nothing at either rung is skipped and logged
+  (`"function %r: no script resolved for %r; skipping"`), not refused --
+  the fire as a whole still succeeds for every dev that did resolve. The
+  ladder runs with **no Bit loaded in any state**, which is what makes a
+  manual `flash`/`stop`/`ping` fire from the Console possible outside
+  SETUP/RUNNING. A fire that resolves zero devs still emits a
+  `FunctionFired` with `steps=0` and returns `None` -- never a refusal;
+  `condition` on that record reads `"builtin"` or `"instrument"` (rather
+  than the declared condition name) when no Bit entry drove the fire.
+- **Instrument-authored scripted functions** are declared two ways.
+  `[[functions]]` tables (`kind = "scripted"`, `midi`/`play`/`solid`/`mute`
+  steps) in the instrument's own declaration are the config path -- since
+  the PR #73 instrument catalog landed (merged into this branch), that
+  means the `instruments/<name>.toml` catalog files rather than inline
+  `terrarium.toml` tables (inline `[instruments.<name>]` still parses but
+  is refused when the same name exists in the catalog) --
+  `instruments/venue_array.toml` and `instruments/dev_strip.toml` each
+  carry eight: `play_aurora`, `win`,
+  `fireworks_room`, `fail_room`, `finale`, `metro_downbeat`,
+  `metro_click`, `metro_pulse_room`. TUNESHROOM's six
+  (`play_aurora`, `win`, `fireworks_player`, `fail_player`,
+  `metro_pulse_player`, `metro_recovery`) are declared in Python on the
+  `Instrument(...)` literal in `control/instrument.py` instead, because
+  TUNESHROOM is code-defined, not config-defined. All instrument-declared
+  SCRIPTED functions are TARGET-implicit (`cues.TARGET` only; the
+  validator refuses an explicit `target` or `condition` on this owner)
+  and must carry a non-empty script. `control/instrument.py` deliberately
+  **duplicates** `bits/metronome/metronome_bit.py`'s `RED_CC`/`GREEN_CC`/
+  `LEVEL_BASE`/`LEVEL_PULSE` constants and its `_fireworks_script()` body
+  rather than importing them -- a documented sync-by-hand caveat, not an
+  oversight: the instrument/bit split redirect (next bullet) means
+  bits/ is not being migrated, so MetronomeBit keeps its own copies and
+  `control/instrument.py` carries a second copy for TUNESHROOM's
+  functions. A change to one does not propagate to the other.
+- **The user's mid-execution redirect, recorded so it isn't rediscovered
+  as a gap: existing Bits were NOT migrated onto instrument-authored
+  functions.** Bits keep their own scripts on non-empty-script
+  FunctionTable entries (rung 1 of the ladder, unchanged); moving that
+  content onto instruments is deferred to a later slice. Consequently,
+  `GameServer.load_bit`'s gap-warning pass (`self.load_warnings`, plus
+  the matching Console warn-log lines) only fires for **empty-script
+  name-fire declarations** whose target instrument has no matching
+  built-in or instrument-declared SCRIPTED function -- a Bit whose
+  FunctionTable entries all carry non-empty scripts (every Bit in this
+  checkout, today) produces zero load warnings, because the warning pass
+  never inspects non-empty-script entries at all.
+- **Console changes.** `snapshot` and `functions_changed` (`console/protocol.py`,
+  `console/agent.py`) now carry three new keys alongside `functions`:
+  `instrument_functions` (`{instrument name: [SCRIPTED function views]}`,
+  built by `control/function_view.py`'s `instrument_functions_view` over
+  every present instrument -- Room fixture instruments plus TUNESHROOM),
+  `surface_instruments` (`{dev or "room": instrument name}`, one entry
+  per bound fixture and connected device), and `builtins`
+  (`{instrument name: sorted built-in names}`). The always-present
+  diagnostics row on the Functions panel offers Flash/Stop/Ping per
+  surface using these three maps; its Room option resolves through
+  `surface_instruments["room"]`, which `console/agent.py`'s
+  `_current_surface_instruments` documents as mapping to the **first
+  bound fixture's instrument** -- correct today because TEST/DEMO rooms
+  carry homogeneous fixture instruments, wrong the day a Room mixes
+  instrument types on its fixtures. `console/static/functions.js`'s
+  device/surface pickers filter compatibility in both directions (a
+  picker only offers surfaces the function can actually run on, and a
+  card only shows steps/description resolved for the picker's current
+  selection). `control/room_view.py`'s `_function_view` renders each
+  fixture's function list as a kind-aware minimal tag row
+  (`{"name":..., "kind":...}`, GENERATOR gets an extra ambient summary) --
+  this is the fix for a prior crash where a SCRIPTED instrument function
+  had no lane/period to summarize and the Room panel assumed every
+  function did.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1704 passed, 1 skipped** (up from 1669 passed, 1 skipped -- the 1667
+figure two sections up predates an unrelated intervening slice). Pending,
+per the spec's section-5 checklist: live-Arco verification -- firing the
+built-ins (`flash`/`stop`/`ping`) at both `venue_array`/`dev_strip`
+(Room) and TUNESHROOM (Testshroom) with no Bit loaded, and a TestBit
+end-to-end pass exercising the ladder's rung 1 against a real Arco stack.
+
 ### `control/catalog.py`, `control/terrarium_config.py` instrument_paths, `console/static/design.js` -- instrument catalog and Design panel v1 (2026-08-31)
 
 Slices 1-2 of the plan below; slice 3 (carried-instrument wire support) is

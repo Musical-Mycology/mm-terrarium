@@ -32,17 +32,20 @@ def _step_view(step) -> dict:
 
 
 def _scripted_view(function_decl) -> dict:
-    return {
-        "kind": "scripted",
-        "name": function_decl.name,
-        "description": function_decl.description,
-        "target": function_decl.target.name,
-        "condition": {
+    condition = None
+    if function_decl.condition is not None:
+        condition = {
             "name": function_decl.condition.name,
             "description": function_decl.condition.description,
             "source": SOURCE_WIRE[function_decl.condition.source],
             "verb": function_decl.condition.verb,
-        },
+        }
+    return {
+        "kind": "scripted",
+        "name": function_decl.name,
+        "description": function_decl.description,
+        "target": function_decl.target.name if function_decl.target else None,
+        "condition": condition,
         "script": [_step_view(step) for step in function_decl.script],
     }
 
@@ -108,6 +111,17 @@ def functions_view(function_table) -> list[dict]:
     if function_table is None:
         return []
     return [function_view(fn) for fn in function_table.functions.values()]
+
+
+def instrument_functions_view(instruments: dict) -> dict:
+    """{instrument name: [scripted function views]} for every present
+    instrument (Room fixture instruments plus TUNESHROOM -- see
+    console/agent.py's present-instruments builder). SCRIPTED only:
+    generators render on the Room panel, not here."""
+    from control.functions import FunctionKind
+    return {name: [function_view(fn) for fn in inst.functions
+                   if fn.kind is FunctionKind.SCRIPTED]
+            for name, inst in instruments.items()}
 
 
 def function_fired_view(record) -> dict:

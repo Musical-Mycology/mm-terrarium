@@ -656,13 +656,16 @@ def test_a_fire_function_command_forwards_its_device():
 
 
 def test_a_refused_fire_is_surfaced_as_an_error_event():
+    # Task 5's fire ladder: an undeclared name is no longer refused as
+    # "unknown function" -- it defaults to target=SURFACE and, with no
+    # `dev` given here, is refused for lacking a surface instead.
     gs, srv, agent = _room_console()
     srv.connect("c1")
     srv.deliver("c1", {"command": "fire_function", "name": "nope"})
     agent.poll()
     errors = [msg for _client, msg in srv.sent
               if msg.get("event") == "error"]
-    assert "unknown function" in errors[0]["message"]
+    assert "no surface given" in errors[0]["message"]
 
 
 def test_a_fire_of_a_non_scripted_function_is_surfaced_as_an_error_event():
@@ -1029,6 +1032,69 @@ def test_room_load_progress_is_broadcast_per_stage():
                         if m["event"] == "room_load_progress")
     assert dumps(progress_msg) == (
         '{"event": "room_load_progress", "stage": "validating"}')
+
+
+# --- Task 7: instrument function views, builtins map, load-warning logs ---
+
+from control.terrarium_config import load_terrarium_config
+
+
+def test_snapshot_carries_tuneshroom_instrument_functions_and_builtins():
+    gs, srv, agent = _server_with_agent()
+    snapshot = agent.snapshot()
+    tuneshroom_names = sorted(
+        f["name"] for f in snapshot["instrument_functions"]["tuneshroom"])
+    assert tuneshroom_names == [
+        "fail_player", "fireworks_player", "metro_pulse_player",
+        "metro_recovery", "play_aurora", "win"]
+    assert snapshot["builtins"]["tuneshroom"] == ["flash", "ping", "stop"]
+    # No Room loaded -- the diagnostics row's Room option has no instrument
+    # to resolve, so the literal "room" key must be absent.
+    assert "room" not in snapshot["surface_instruments"]
+
+
+def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
+    # Goes through the public agent.snapshot() path -- this is the exact
+    # scenario (a terrarium-loaded TEST room from the real terrarium.toml,
+    # whose dev_strip fixtures carry SCRIPTED functions) that used to raise
+    # inside control/room_view.py's _function_view before it was made
+    # kind-aware.
+    config = load_terrarium_config("terrarium.toml")
+    terrarium = make_terrarium(config=config)
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+
+    reason = terrarium.load_room("TEST")
+    assert reason is None
+
+    snapshot = agent.snapshot()
+
+    instrument_functions = snapshot["instrument_functions"]
+    dev_strip_names = sorted(f["name"] for f in instrument_functions["dev_strip"])
+    assert dev_strip_names == [
+        "fail_room", "finale", "fireworks_room", "metro_click",
+        "metro_downbeat", "metro_pulse_room", "play_aurora", "win"]
+
+    surface_instruments = snapshot["surface_instruments"]
+    assert surface_instruments["sim-main-dev"] == "dev_strip"
+    # The diagnostics row's Room option resolves builtins through the
+    # literal "room" key -- the first bound fixture's instrument (TEST's
+    # fixtures carry homogeneous dev_strip instruments).
+    assert surface_instruments["room"] == "dev_strip"
+    assert surface_instruments["sim-accent-dev"] == "dev_strip"
+
+    # The room panel itself renders each fixture's scripted functions as a
+    # minimal name+kind tag now, rather than raising.
+    fixture_functions = snapshot["room"]["fixtures"][0]["instrument"]["functions"]
+    assert {"name": "play_aurora", "kind": "scripted"} in fixture_functions
+
+
+def test_on_load_warnings_broadcasts_warn_log_events():
+    gs, srv, agent = _server_with_agent()
+    agent.on_load_warnings(("function 'x' has no script on instrument 'y'",))
+    logs = [m for m in srv.broadcasts if m["event"] == "log"]
+    assert logs == [{"event": "log", "level": "warn",
+                     "message": "function 'x' has no script on instrument 'y'"}]
 
 
 def test_design_commands_error_without_catalog():
