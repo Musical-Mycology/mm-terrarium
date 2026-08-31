@@ -109,3 +109,91 @@ export function init() {
   wire.on("designs_changed", (m) => onDesignsChanged(m.designs));
   wire.on("design", (m) => openDesign(m));
 }
+
+// ----------------------------------------------------------------- bench
+//
+// Design bench: a headless simulator run against the currently-open design
+// selection (`current`, above). Simulate starts it, Stop tears it down;
+// while running, bench_started's declared functions render as fire buttons
+// and bench_frame paints the strip preview canvas. The tilt lane sends a
+// synthetic CC (status 176, data1 74) throttled to at most one send per
+// 100ms so a fast drag doesn't flood the wire.
+
+const BENCH_TILT_THROTTLE_MS = 100;
+let lastTiltSendAt = 0;
+
+// Pure renderer: one button per declared function, labeled by name with a
+// title/tooltip of its description and a builtin/instrument class per its
+// `source`. Click sends {command: "bench_fire", name} via `send`.
+export function renderBenchFunctions(el, functions, send) {
+  clear(el);
+  for (const fn of functions) {
+    const btn = mk("button", `btn ${fn.source === "builtin" ? "builtin" : "instrument"}`, fn.name);
+    btn.setAttribute("title", fn.description || "");
+    btn.onclick = () => send({ command: "bench_fire", name: fn.name });
+    el.appendChild(btn);
+  }
+}
+
+// Paints one filled rect per pixel from a flat GRB channel list, matching
+// surface.js's onRoomFrame color handling (channels[i*3]=g, +1=r, +2=b).
+export function paintBenchFrame(canvas, channels) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width || canvas.clientWidth || 0;
+  const h = canvas.height || canvas.clientHeight || 0;
+  ctx.clearRect(0, 0, w, h);
+  const n = Math.floor(channels.length / 3);
+  if (n === 0) return;
+  const pitch = w / n;
+  for (let i = 0; i < n; i++) {
+    const g = channels[i * 3] || 0;
+    const r = channels[i * 3 + 1] || 0;
+    const b = channels[i * 3 + 2] || 0;
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(pitch * i, 0, pitch, h);
+  }
+}
+
+function onBenchStarted(functions) {
+  const mount = document.getElementById("benchFunctions");
+  renderBenchFunctions(mount, functions || [], (cmd) => wire.send(cmd.command, { name: cmd.name }));
+  document.getElementById("benchStop").disabled = false;
+  document.getElementById("benchTilt").disabled = false;
+}
+
+function onBenchFrame(channels) {
+  paintBenchFrame(document.getElementById("benchCanvas"), channels || []);
+}
+
+export function initBench() {
+  const startBtn = document.getElementById("benchStart");
+  const stopBtn = document.getElementById("benchStop");
+  const tilt = document.getElementById("benchTilt");
+
+  startBtn.onclick = () => {
+    if (!current) return;
+    wire.send("bench_start", { state: current.state, name: current.name }, startBtn);
+  };
+
+  stopBtn.onclick = () => {
+    wire.send("bench_stop", {}, stopBtn);
+    stopBtn.disabled = true;
+    tilt.disabled = true;
+    clear(document.getElementById("benchFunctions"));
+  };
+
+  tilt.oninput = () => {
+    const now = Date.now();
+    if (now - lastTiltSendAt < BENCH_TILT_THROTTLE_MS) return;
+    lastTiltSendAt = now;
+    wire.send("bench_lane", {
+      verb: "tilt",
+      value: Number(tilt.value) / 100,
+      status: 176,
+      data1: 74,
+    });
+  };
+
+  wire.on("bench_started", (m) => onBenchStarted(m.functions));
+  wire.on("bench_frame", (m) => onBenchFrame(m.channels));
+}

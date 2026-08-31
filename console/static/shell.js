@@ -5,7 +5,7 @@ import { init as initSurface } from "./surface.js";
 import { init as initFunctions } from "./functions.js";
 import { init as initRail, logLine } from "./rail.js";
 import { init as initRooms } from "./rooms.js";
-import { init as initDesign } from "./design.js";
+import { init as initDesign, initBench } from "./design.js";
 
 const conn = document.getElementById("connChip");
 const roomChip = document.getElementById("roomChip");
@@ -64,5 +64,5 @@ wire.on("error", (m) => {
   logLine("error", `${m.command}: ${m.message}`);
 });
 
-initBit(); initSurface(); initFunctions(); initRail(); initRooms(); initDesign();
+initBit(); initSurface(); initFunctions(); initRail(); initRooms(); initDesign(); initBench();
 wire.connect();

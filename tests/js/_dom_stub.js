@@ -124,7 +124,23 @@ function el(tagName) {
     removeEventListener() {},
     querySelector: () => null,
     querySelectorAll: () => [],
-    getContext: () => ({ clearRect() {}, beginPath() {}, arc() {}, fill() {}, stroke() {}, fillRect() {} }),
+    getContext: () => {
+      if (!node._ctx) {
+        node._ctx = {
+          fillStyle: null,
+          calls: [],
+          clearRect() {},
+          beginPath() {},
+          arc() {},
+          fill() {},
+          stroke() {},
+          fillRect(x, y, w, h) {
+            node._ctx.calls.push({ fillStyle: node._ctx.fillStyle, x, y, w, h });
+          },
+        };
+      }
+      return node._ctx;
+    },
   };
   Object.defineProperty(node, "options", {
     // Real <select>.options only ever lists <option> children; filtering
