@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from control.cues import ROOM, TARGET
@@ -49,6 +49,13 @@ class TerrariumConfig:
     rooms: dict[str, RoomSpec]
     version: str          # f"{schema}-{sha256(text)[:12]}", content-addressed
     instruments: dict[str, Instrument] = field(default_factory=dict)
+    # [terrarium] instrument_paths, resolved to filesystem roots the same
+    # way load_terrarium_config resolves them for load_catalog below --
+    # relative to the config file's own directory. Empty from
+    # parse_terrarium_config (no config path to resolve against); the
+    # Console's design panel reads instrument_roots[0], when non-empty, as
+    # its catalog_root (harness/terrarium_boot.py's main()).
+    instrument_roots: tuple[Path, ...] = ()
 
 
 def load_terrarium_config(path: str) -> TerrariumConfig:
@@ -63,14 +70,16 @@ def load_terrarium_config(path: str) -> TerrariumConfig:
         "instrument_paths", ["instruments"])
     extra: dict = {}
     base = Path(path).resolve().parent
-    for rel in instrument_paths:
-        for name, inst in load_catalog(base / rel).published.items():
+    roots = tuple(base / rel for rel in instrument_paths)
+    for root in roots:
+        for name, inst in load_catalog(root).published.items():
             if name in extra:
                 raise TerrariumConfigError(
-                    source=str(base / rel), key=f"instruments.{name}",
+                    source=str(root), key=f"instruments.{name}",
                     message="defined in more than one catalog root")
             extra[name] = inst
-    return parse_terrarium_config(text, source=path, extra_instruments=extra)
+    config = parse_terrarium_config(text, source=path, extra_instruments=extra)
+    return replace(config, instrument_roots=roots)
 
 
 def parse_terrarium_config(text: str, source: str,
