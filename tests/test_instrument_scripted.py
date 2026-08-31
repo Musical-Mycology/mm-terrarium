@@ -73,3 +73,22 @@ def test_stream_refused_on_instruments():
     with pytest.raises(ValueError, match="STREAM"):
         validate_function_table(FunctionTable(functions={"s": fn}),
                                 frozenset(), owner="instrument")
+
+
+def test_tuneshroom_declares_its_scripted_vocabulary():
+    from control.instrument import TUNESHROOM, validate_instrument
+    from control.functions import FunctionKind
+    names = {fn.name for fn in TUNESHROOM.functions
+             if fn.kind is FunctionKind.SCRIPTED}
+    assert names == {"play_aurora", "win", "fireworks_player",
+                     "fail_player", "metro_pulse_player", "metro_recovery"}
+    validate_instrument(TUNESHROOM)   # v1 rules hold
+
+
+def test_tuneshroom_fireworks_matches_the_bits_seeded_script():
+    # Deterministic (random.Random(2026)) -- 12 flashes, 36 steps.
+    from control.instrument import TUNESHROOM
+    fw = next(fn for fn in TUNESHROOM.functions
+              if fn.name == "fireworks_player")
+    assert len(fw.script) == 36
+    assert fw.script[0].offset == 0.0

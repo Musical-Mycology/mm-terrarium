@@ -40,7 +40,6 @@ def test_tuneshroom_is_the_standard_carrier_instrument():
     assert "gesture.tap" in TUNESHROOM.capabilities
     assert TUNESHROOM.accepted_cues == ("midi", "play", "solid", "mute")
     assert TUNESHROOM.light_manifest == {}
-    assert TUNESHROOM.functions == ()
     validate_instrument(TUNESHROOM)  # the shipped standard always validates
 
 

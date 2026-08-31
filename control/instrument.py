@@ -6,12 +6,14 @@ Spec: docs/superpowers/specs/2026-08-27-instruments-and-fixtures-design.md.
 from __future__ import annotations
 
 import copy
+import random
 from dataclasses import dataclass, field
 
-from control.functions import Function, FunctionKind, FunctionTable, validate_function_table
+from control.functions import Function, FunctionKind, FunctionTable, ScriptStep, validate_function_table
 from control.triggers import (
     EventTrigger, StreamTrigger, validate_event_trigger, validate_stream_trigger,
 )
+from control.cues import TARGET, PlayCue
 
 CAPABILITY_VOCABULARY: frozenset[str] = frozenset({
     "light.pixels",    # addressable pixels of any shape
@@ -183,12 +185,68 @@ def ambient_manifests(profile) -> tuple[dict, dict]:
 # the same TapDetector-derived peak_g/window_ms (www/sensors.js documents
 # itself as "mirrors the native TapDetector heuristic"), with no
 # double-tap concept.
+# MetronomeBit's device-content constants, duplicated here (not imported)
+# per the instrument/bit split redirect: bits/ are not being migrated, so
+# bits/metronome/metronome_bit.py keeps its own copies untouched and this
+# module carries the values TUNESHROOM's scripted functions need. Real
+# values copied verbatim from bits/metronome/metronome_bit.py.
+RED_CC = 0
+GREEN_CC = 42
+LEVEL_BASE = 60
+LEVEL_PULSE = 110
+
+
+def _fireworks_script():
+    """12 flashes over ~1.4 s, seeded so every build is identical.
+
+    Verbatim copy of bits/metronome/metronome_bit.py's _fireworks_script."""
+    rng = random.Random(2026)
+    steps = []
+    for i in range(12):
+        t = i * 0.12
+        pitch = rng.randrange(48, 84)
+        steps.append(ScriptStep(t, (TARGET, 0xB0, 70, rng.randrange(0, 128))))
+        steps.append(ScriptStep(t, (TARGET, 0x90, pitch, 100)))
+        steps.append(ScriptStep(t + 0.08, (TARGET, 0x80, pitch, 0)))
+    return tuple(steps)
+
+
 TUNESHROOM = Instrument(
     name="tuneshroom",
     description="Handheld 12-LED Tuneshroom (8-ring + 4-stem)",
     capabilities=frozenset({"light.pixels", "audio.samples",
                             "gesture.tap", "gesture.tilt"}),
     accepted_cues=("midi", "play", "solid", "mute"),
+    functions=(
+        Function(name="play_aurora", kind=FunctionKind.SCRIPTED,
+                 description="Hue bloom on the handheld's ring",
+                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
+                         ScriptStep(1.0, (TARGET, 0xB0, 74, 0)))),
+        Function(name="win", kind=FunctionKind.SCRIPTED,
+                 description="Win celebration: ascending chime plus a hue "
+                             "flourish",
+                 script=(ScriptStep(0.0, PlayCue(TARGET, "win", "")),
+                         ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
+                         ScriptStep(0.3, (TARGET, 0xB0, 74, 60)),
+                         ScriptStep(0.6, (TARGET, 0xB0, 74, 110)),
+                         ScriptStep(1.2, (TARGET, 0xB0, 74, 0)))),
+        Function(name="fireworks_player", kind=FunctionKind.SCRIPTED,
+                 description="Celebratory flashes on the player who nailed it",
+                 script=_fireworks_script()),
+        Function(name="fail_player", kind=FunctionKind.SCRIPTED,
+                 description="Player's light goes red and dark on a miss",
+                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74, RED_CC)),
+                         ScriptStep(1.0, (TARGET, 0xB0, 11, 0)))),
+        Function(name="metro_pulse_player", kind=FunctionKind.SCRIPTED,
+                 description="A non-failed player's every-beat level "
+                             "pulse-then-decay",
+                 script=(ScriptStep(0.0, (TARGET, 0xB0, 11, LEVEL_PULSE)),
+                         ScriptStep(0.15, (TARGET, 0xB0, 11, LEVEL_BASE)))),
+        Function(name="metro_recovery", kind=FunctionKind.SCRIPTED,
+                 description="A failed player's green flash and level reset",
+                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74, GREEN_CC)),
+                         ScriptStep(0.0, (TARGET, 0xB0, 11, LEVEL_BASE)))),
+    ),
     event_triggers=(
         EventTrigger(
             name="tap", description="a single or double tap on the shell",
