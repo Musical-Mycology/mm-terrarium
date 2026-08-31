@@ -42,6 +42,16 @@ CONTROL_BIT_COMPLETED = "Bit completed; tearing down"
 # the immediate-return case on entry). One line per round, always.
 CONTROL_ROUND_LOADED = "round loaded:"
 
+# A round ended -- printed once per round end (both a normal "completed"
+# end, which also covers an in-round operator abort, and a "timeout-abort
+# (N scored joined)" end where nobody ever ran) -- BEFORE the recycle that
+# follows it runs. Spec 2026-08-31 section 4: a Bit that self-completed in
+# 2 seconds or timeout-aborted with nobody joined must never be misread as
+# "no load occurred" -- this line, paired with CONTROL_ROUND_LOADED, makes
+# every round's full lifetime visible on stdout regardless of how briefly
+# it ran.
+CONTROL_ROUND_ENDED = "round ended:"
+
 # A Room finished loading (control/terrarium.py's Terrarium reached
 # ROOM_READY) -- printed once per successful load_room, CLI-selected (main())
 # or Console-driven, "room loaded: TEST". run_stack gates on this where it
@@ -93,6 +103,7 @@ READY_MARKERS = {
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,
     "CONTROL_BIT_COMPLETED": CONTROL_BIT_COMPLETED,
     "CONTROL_ROUND_LOADED": CONTROL_ROUND_LOADED,
+    "CONTROL_ROUND_ENDED": CONTROL_ROUND_ENDED,
     "CONTROL_ROOM_LOADED": CONTROL_ROOM_LOADED,
     "CONTROL_ROOM_UNLOADED": CONTROL_ROOM_UNLOADED,
     "DEVICE_CLOCK_SYNCED": DEVICE_CLOCK_SYNCED,

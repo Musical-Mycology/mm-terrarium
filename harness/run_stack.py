@@ -98,6 +98,7 @@ class StackConfig:
     serve: bool = False               # forward --serve to terrarium_boot
     flutter_sim: str | None = None    # mm-tuneshroom checkout; spawns tool/sim serve
     flutter_devices: int = 0          # how many Flutter simulator URLs to serve
+    persist_shrooms: bool = False     # forward --persist to every o2_shroom child
 
 
 @dataclass
@@ -175,7 +176,7 @@ def device_command(cfg: StackConfig, index: int, ppid: int, *,
     and a respawn resolves its own node fresh from the just-loaded bit."""
     dev = dev if dev is not None else f"ie{index}"
     node = node if node is not None else cfg.node
-    return [
+    command = [
         sys.executable, "-u", "-m", "harness.o2_shroom",
         "--dev", dev,
         "--node", node,
@@ -185,6 +186,9 @@ def device_command(cfg: StackConfig, index: int, ppid: int, *,
         "--samples-out", os.path.join(cfg.log_dir, f"{dev}-samples.json"),
         "--exit-with-parent", str(ppid),
     ]
+    if cfg.persist_shrooms:
+        command += ["--persist"]
+    return command
 
 
 _URL_PATTERN = re.compile(r"http://\S+")
@@ -695,6 +699,10 @@ def parse_args(argv=None):
     ap.add_argument("--flutter-devices", type=int, default=0,
                     help="How many Flutter simulator URLs to serve "
                          "(needs --flutter-sim).")
+    ap.add_argument("--persist-shrooms", action="store_true",
+                    help="Launch every player o2_shroom with --persist so "
+                         "devices survive Bit rounds; pair with "
+                         "terrarium_boot --serve.")
     args = ap.parse_args(argv)
     if args.ci and args.open:
         ap.error("--open makes no sense under --ci: a headless CI run "
@@ -775,7 +783,8 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         devices_explicit=args.devices is not None,
         open_urls=args.open, profile=args.profile,
         serve=serve, flutter_sim=args.flutter_sim,
-        flutter_devices=args.flutter_devices)
+        flutter_devices=args.flutter_devices,
+        persist_shrooms=args.persist_shrooms)
 
 
 def _failing_log_key(result: RunResult) -> str | None:

@@ -434,6 +434,11 @@ Two operational traps, both hit during live testing:
    server's audio re-open then fails with PortAudio `-9988, Invalid stream
    pointer`. Practical consequence: restart the Arco server before each run of
    `--audio`. This is upstream in Arco, not something this repo can fix.
+   **Note (2026-08-31):** in serve mode, `Terrarium`'s bit-cycle room
+   recycle now performs this restart automatically once per round (see the
+   *bit-cycle room recycle* entry near the end of this file) -- the trap and
+   its upstream cause are unchanged, but a hand-run restart is no longer
+   needed on that path.
 
 `control/breath.py` generates that shared `cc:11` value: it holds the breath
 envelope (point-for-point what luxaeterna's aurora preset used to loop on its
@@ -908,7 +913,10 @@ simulator steals the next run's `sim-room` service, and O2's refusal is
 invisible to the client.** `harness/o2_shroom.py --dev sim-room --no-join`
 never exits on its own -- it loops `while not client.released`
 (`harness/o2_shroom.py:283`) and only a live Control ever sends `/release` --
-so a `Popen` child that outlives a killed parent (a `SIGKILL` on
+**this is the default, `--persist`-off behavior; see the *bit-cycle room
+recycle, persistent Testshrooms* entry near the end of this file for the
+`--persist` lobby mode, which resets and loops instead of exiting on
+release** -- so a `Popen` child that outlives a killed parent (a `SIGKILL` on
 `terrarium_boot`, say) becomes a permanent orphan. o2litepy reconnects it
 automatically to whatever Arco starts next and re-announces every service on
 that connect, re-claiming `sim-room` before the new run's own simulator is
@@ -2335,7 +2343,13 @@ from the Console -- not just once at process start. Design: [`.../
   `unload_room` (Console-driven, or the harness's own no-room handling)
   touches only `terrarium.room_stack`, never `pre_room_teardown`, since the
   transport is scoped to the whole process rather than to any one Room
-  cycle. `DeviceLinkAgent.rewire_room()`/`unwire_room()`
+  cycle. **Superseded in part 2026-08-31:** the harness's own bit-cycle
+  `_recycle_room()` (see the *bit-cycle room recycle* entry near the end of
+  this file) is a deliberate exception -- it stops and restarts the o2lite
+  transport around every round-end recycle, on purpose, because the Arco
+  hub it is wired to is being replaced underneath it. This entry's claim
+  still holds for a plain Console-driven `unload_room` outside that path.
+  `DeviceLinkAgent.rewire_room()`/`unwire_room()`
   (`devicelink/agent.py`) plus a `_RoomWiring` observer keep the
   o2lite-mode device-link layer's own Room-scoped state (which fixtures are
   bound, the canonical Room dev) in step with each `load_room`/
@@ -2977,6 +2991,100 @@ stream functions is superseded, not revived.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest -q` ->
 **1791 passed, 1 skipped** (up from 1699 passed, 1 skipped).
+
+### Bit-cycle room recycle, persistent Testshrooms, and console load fixes (2026-08-31)
+Design: [`.../2026-08-31-bit-cycle-recycle-and-persistent-testshrooms-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-bit-cycle-recycle-and-persistent-testshrooms-design.md).
+
+- **Console `load_bit` overrides bug, fixed.** `console/static/bit.js` was
+  sending overrides wrapped as `{table: {...}}` for every dotted override
+  key, so every Console-driven `load_bit` with any override failed with
+  `[table] unknown override table` -- the override path documented in the
+  Bit packaging entry above (`[bit.overrides.*]`, precedence manifest <
+  profile < CLI/console flag) was silently unreachable from the Console.
+  `bit.js` now builds the real nested shape from a dotted key
+  (`"rhythm.bpm"` -> `{rhythm: {bpm: ...}}`), sends `null` when the override
+  set is empty rather than an empty table, and refuses a dot-less key
+  client-side before it ever reaches the wire.
+- **Fresh Arco per bit cycle: `Terrarium.recycle_room()`.** Upstream Arco's
+  `arco.initialize()`-calls-`reset()` trap (documented above: only the first
+  client after an Arco start gets working audio) makes a long-lived Arco
+  unreliable for a round two, so serve mode now tears the Room down and
+  reloads the same name -- `unload_room(force=True)` then `load_room(name)`,
+  never raising to its caller the way every other `Terrarium` method
+  doesn't. **This is the automatic restart the "restart Arco before each
+  run" trap above used to leave to the operator** -- serve-mode round
+  recycling now does it once per bit cycle without a hand-run restart, but
+  the underlying Arco defect and its live-testing consequences are
+  otherwise unchanged.
+  - **The harness's `_recycle_room()` wraps the Terrarium call with an
+    ordering invariant that extends the pre-existing client-before-hub rule
+    (see the *config-defined rooms* entry above) across a recycle, not just
+    a teardown:** it stops the o2lite transport and calls the new
+    `ArcoSynthPool.quiesce()` (drops dead-hub handles, no wire traffic, and
+    leaves the pool in a state where `start()` can rerun cleanly)
+    **before** `recycle_room()`, then restarts the pool and only then the
+    transport, pool-before-transport, after the recycle returns. The
+    transport is still process-lifetime, not Room-scoped (the *two teardown
+    stacks* note above still holds for a final shutdown), but a bit-cycle
+    recycle is a new, narrower exception to "mid-run `unload_room` never
+    touches `pre_room_teardown`": this path stops and restarts the
+    transport around every recycle, on purpose, because the Arco hub
+    underneath it is being replaced. Wired into `_serve_rounds` at every
+    round end (both a completed round and a timeout-abort) and into
+    `main()`'s round-1 call sites; one-shot mode is untouched. New
+    accessors `AudioBridge.pool` and `DeviceLinkAgent.room_audio` exist so
+    the harness can reach the pool and the room-scoped audio bridge to
+    drive this sequencing.
+  - **Failed-recycle recovery contract.** If the recycle fails, the harness
+    falls back to the ordinary `NO_ROOM` wait rather than reporting a
+    healthy room. `_restart_room_clients()` restarts any stopped clients on
+    the *next* successful Console `load_room`; if that restart itself
+    fails, the room is unloaded with `force=True` and control returns to
+    the `NO_ROOM` wait again. The invariant this protects: `ROOM_READY`
+    must never be broadcast while the audio path or transport underneath it
+    is actually dead.
+  - **Round-ended visibility.** A new marker `CONTROL_ROUND_ENDED =
+    "round ended:"` (`harness/markers.py`) and
+    `ConsoleAgent.announce_round_ended` broadcast a log event `"round
+    ended: <bit> (<reason>)"` -- reason is `"completed"` or
+    `"timeout-abort (N scored joined)"` -- **before** the recycle stages
+    run, so an operator watching the Console log sees why a round ended
+    ahead of the Arco churn that follows it.
+  - **Open question, not resolved live:** whether `arco.initialize()` can
+    safely run a second time in the same OS process is unproven -- the
+    recycle path exercises this every round in the offline suite but has
+    not yet been live-verified against a real Arco. Supervisor-restart
+    (a fresh process per round) remains the fallback if it turns out it
+    cannot; `_recycle_room()` is the seam either fix would go through.
+- **Persistent Testshrooms: `o2_shroom --persist`.** Off by default
+  (byte-identical to the pre-existing behavior described above). With
+  `--persist`, a Testshroom that reaches `/release` does not exit -- it
+  calls the new `ShroomClient.reset_for_lobby()` (clears `config`,
+  `released`, `last_deny`, `last_error`) and drops back into the
+  hello-then-join-retry loop, i.e. the lobby, ready to join the *next*
+  bit cycle's Room without a process restart. A join denial is retryable
+  under `--persist` rather than terminal. `--persist` implies
+  `--join-retry 2.0` when `--join-retry` is `0`, since a persistent
+  Testshroom that never retries a join would just sit denied forever. The
+  clock guard now tolerates `time_get() < 0` across a hub restart (the
+  recycle above tears down and rebuilds the Arco hub a persistent
+  Testshroom rides across). `--no-join` Room-simulator mode is
+  unaffected. `harness/run_stack.py --persist-shrooms` forwards the flag
+  to the Testshrooms it spawns.
+  - **This qualifies the exit-on-release description above
+    (`harness/o2_shroom.py` entry, *"loops `while not client.released`...
+    and only a live Control ever sends `/release`"*): that description is
+    the `--persist`-off case. Under `--persist` the client no longer exits
+    on release at all.**
+  - **Deny-marker ordering trap, pinned by regression test.** One-shot mode
+    (no `--persist`) still prints its deny marker before exiting, and
+    `run_stack`'s fast-fail path depends on seeing that marker before the
+    child's exit -- `--persist`'s lobby-retry behavior must never delay or
+    suppress that print in the non-persist path, since a marker that
+    arrives after (or is swallowed by) the process exit turns a fast,
+    diagnosed failure back into a timeout. The heartbeat is also re-armed
+    per round under `--persist`, not left running against a stale hub
+    connection.
 
 ## Boundary rules (the load-bearing invariants)
 

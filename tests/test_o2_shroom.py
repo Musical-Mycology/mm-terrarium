@@ -590,3 +590,175 @@ def test_build_passes_on_play_through_to_the_client():
         "ie1", "TEST_PLAYER_NODE", "127.0.0.1", 0, serve=False,
         on_play=lambda name, params: None)
     assert client.on_play is not None
+
+
+# --- lobby_round_over: the per-tick round-over decision, factored pure so
+# it is testable with no socket (this module's convention -- see
+# next_heartbeat_time). ------------------------------------------------
+
+class _RoundClient:
+    """Stands in for ShroomClient: lobby_round_over() only ever reads
+    .released and .last_deny, so nothing else about the real client is
+    needed here."""
+
+    def __init__(self) -> None:
+        self.released = False
+        self.last_deny = None
+
+
+def make_client() -> _RoundClient:
+    return _RoundClient()
+
+
+def test_lobby_round_over_release_one_shot_exits():
+    from harness.o2_shroom import lobby_round_over
+
+    client = make_client()
+    client.released = True
+    assert lobby_round_over(client, persist=False) == "exit"
+
+
+def test_lobby_round_over_release_persist_relobbies():
+    from harness.o2_shroom import lobby_round_over
+
+    client = make_client()
+    client.released = True
+    assert lobby_round_over(client, persist=True) == "lobby"
+
+
+def test_lobby_round_over_deny_one_shot_exits():
+    from harness.o2_shroom import lobby_round_over
+
+    client = make_client()
+    client.last_deny = ("closed", "hint")
+    assert lobby_round_over(client, persist=False) == "exit"
+
+
+def test_lobby_round_over_deny_persist_keeps_looping():
+    # under persist a deny is not terminal: the node may reopen next round,
+    # so the device stays in the lobby and keeps join-retrying.
+    from harness.o2_shroom import lobby_round_over
+
+    client = make_client()
+    client.last_deny = ("closed", "hint")
+    assert lobby_round_over(client, persist=True) is None
+
+
+def test_lobby_round_over_quiet_keeps_looping():
+    from harness.o2_shroom import lobby_round_over
+
+    assert lobby_round_over(make_client(), persist=False) is None
+
+
+def test_main_prints_deny_before_evaluating_round_outcome():
+    """Regression: a deny arriving on the same lap it is first observed
+    must get its DEVICE_JOIN_DENIED line printed before the loop can act
+    on lobby_round_over()'s outcome and exit. run_stack's _wait_for_marker
+    watches child stdout for exactly that marker (see
+    tests/test_run_stack.py::test_a_denied_join_fails_immediately); a
+    one-shot exit that races ahead of the print would starve that watch
+    and regress run_stack's fast-fail into waiting out the full timeout.
+
+    Source-inspection, same technique and reason as
+    test_main_has_exactly_one_backend_close: main() imports o2litepy,
+    absent from this offline suite by design. Finds the print(...) call
+    whose f-string embeds markers.DEVICE_JOIN_DENIED and the
+    `outcome = lobby_round_over(...)` assignment, and asserts the print's
+    line comes first.
+    """
+    import ast
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    def _is_deny_print(node):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "print"
+                and node.args
+                and isinstance(node.args[0], ast.JoinedStr)):
+            return False
+        return any(
+            isinstance(value, ast.Attribute) and value.attr == "DEVICE_JOIN_DENIED"
+            for part in node.args[0].values
+            if isinstance(part, ast.FormattedValue)
+            for value in ast.walk(part.value))
+
+    def _is_lobby_round_over_assign(node):
+        return (isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "lobby_round_over"
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "outcome")
+
+    deny_print_linenos = [node.lineno for node in ast.walk(main)
+                          if _is_deny_print(node)]
+    outcome_assign_linenos = [node.lineno for node in ast.walk(main)
+                              if _is_lobby_round_over_assign(node)]
+
+    assert deny_print_linenos, (
+        "no print(...) call embedding markers.DEVICE_JOIN_DENIED found in "
+        "main() -- the deny notice appears to have been removed")
+    assert outcome_assign_linenos, (
+        "no `outcome = lobby_round_over(...)` assignment found in main() "
+        "-- the round-over decision appears to have been removed or "
+        "renamed")
+    assert max(deny_print_linenos) < max(outcome_assign_linenos), (
+        "main() evaluates lobby_round_over() (and can exit on its "
+        "outcome) before printing DEVICE_JOIN_DENIED for a deny observed "
+        "on the same lap -- move the outcome check to AFTER the deny "
+        "print block so run_stack's marker watch always sees the line "
+        "before a one-shot exit.")
+
+
+def test_main_reinitializes_heartbeat_from_the_current_round(monkeypatch):
+    """Regression: on persist rounds >= 2, re-arming next_heartbeat from
+    the ORIGINAL o2lite.time_get() captured before the round loop (a stale
+    `start`) returns a timestamp in the past, forcing an immediate hello
+    at the top of every round after the first instead of waiting one
+    heartbeat interval. The per-round re-arm must be seeded from a value
+    read again at the top of that round.
+
+    Source-inspection: finds the `next_heartbeat = next_heartbeat_time(...)`
+    assignment inside the round loop and asserts its first argument is NOT
+    the bare name `start` (the one-time, pre-round-loop clock read) -- it
+    must be a fresh per-round variable (e.g. `round_start`, itself an
+    `o2lite.time_get()` call made after the round loop begins)."""
+    import ast
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    def _is_heartbeat_rearm(node):
+        return (isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "next_heartbeat_time"
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "next_heartbeat")
+
+    rearm_calls = [node.value for node in ast.walk(main)
+                  if _is_heartbeat_rearm(node)]
+    assert rearm_calls, "no `next_heartbeat = next_heartbeat_time(...)` found"
+
+    stale_seed = [call for call in rearm_calls
+                 if isinstance(call.args[0], ast.Name)
+                 and call.args[0].id == "start"]
+    assert not stale_seed, (
+        "next_heartbeat_time(start, ...) seeds the per-round heartbeat "
+        "re-arm from the pre-round-loop clock read (`start`), which is in "
+        "the past by round 2+ -- seed it from a fresh per-round "
+        "o2lite.time_get() instead.")

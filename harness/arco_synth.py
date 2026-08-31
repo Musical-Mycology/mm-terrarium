@@ -66,6 +66,7 @@ class ArcoSynthPool:
                  ensemble: str = "arco", max_channels: int = 16) -> None:
         self._soundfont = soundfont
         self._ensemble = ensemble
+        self._max_channels = max_channels
         self._free = list(range(max_channels))
         self._flsyn = None
         self._sched = None
@@ -149,3 +150,16 @@ class ArcoSynthPool:
             self._arco.finish()
             self._arco = None
         self._sched = None
+
+    def quiesce(self) -> None:
+        """Drop every handle to a hub that is already dead, with NO wire
+        traffic -- the room-recycle counterpart of shutdown(). shutdown()
+        speaks to the server (alloff per channel, arco.finish()); quiesce()
+        must not, because the recycle calls it precisely when Arco is about
+        to be (or already is) SIGTERMed and every ugen dies with it. Resets
+        the pool to its pre-start() state so start() can run again against
+        the next Arco."""
+        self._flsyn = None
+        self._arco = None
+        self._sched = None
+        self._free = list(range(self._max_channels))

@@ -336,6 +336,19 @@ def test_device_command_uses_the_configs_node_verbatim(tmp_path):
     assert command[command.index("--node") + 1] == "SOME_OTHER_NODE"
 
 
+def test_device_command_omits_persist_by_default(tmp_path):
+    command = device_command(_cfg(tmp_path, node="TEST_PLAYER_NODE"), 1, 99)
+
+    assert "--persist" not in command
+
+
+def test_device_command_forwards_persist_shrooms(tmp_path):
+    command = device_command(
+        _cfg(tmp_path, node="TEST_PLAYER_NODE", persist_shrooms=True), 1, 99)
+
+    assert "--persist" in command
+
+
 def test_more_than_one_device_gets_distinct_dev_names(tmp_path):
     popen = ScriptedPopen([_CONTROL_OK, _DEVICE_OK, _DEVICE_OK])
     run(_cfg(tmp_path, devices=2), popen=popen, sleep=lambda _s: None)

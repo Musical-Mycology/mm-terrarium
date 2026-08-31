@@ -134,6 +134,14 @@ class AudioBridge:
         # that voice is released the moment its declared duration expires.
         self._pending_offs: list[tuple[float, object, int]] = []
 
+    @property
+    def pool(self):
+        """The injected voice pool -- the room-recycle path
+        (harness/terrarium_boot.py's _recycle_room) needs to quiesce and
+        restart it across an Arco replacement, and reaching into _pool from
+        the harness would couple it to a private."""
+        return self._pool
+
     def on_grant(self, dev: str, role: Role) -> None:
         """Role adopted: acquire a voice, wire its lanes, sound the welcome.
         A role declaring no instruments is silent and must not consume a voice,

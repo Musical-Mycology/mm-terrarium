@@ -416,6 +416,12 @@ class DeviceLinkAgent:
         return self._room_bridge
 
     @property
+    def room_audio(self):
+        """The injected AudioBridge (None when audio is off) -- see
+        AudioBridge.pool for who needs it and why."""
+        return self._room_audio
+
+    @property
     def clamped(self) -> int:
         """Room AUDIO cues that arrived already past their target time.
 

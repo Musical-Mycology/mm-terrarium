@@ -333,3 +333,40 @@ def test_construction_with_runs_dir_records_a_supervisor_entry(tmp_path):
     assert len(records) == 1
     assert records[0].pid == os.getpid()
     assert records[0].role == "supervisor"
+
+
+def test_recycle_room_refuses_outside_room_ready():
+    terr = make_terrarium()
+    reason = terr.recycle_room()
+    assert reason is not None and "no_room" in reason
+
+
+def test_recycle_room_replaces_arco_and_room_stack():
+    terr = make_terrarium()
+    assert terr.load_room("TEST") is None
+    first_arco = terr.arco
+    first_stack = terr.room_stack
+    assert terr.recycle_room() is None
+    assert terr.state is TerrariumState.ROOM_READY
+    assert terr.arco is not first_arco
+    assert terr.room_stack is not first_stack
+    assert terr.room.name == "TEST"
+
+
+def test_recycle_room_aborts_a_live_bit_first():
+    terr = make_terrarium()
+    assert terr.load_room("TEST") is None
+    terr.gs.load_bit("RoomCapableBit")
+    terr.gs.run()
+    assert terr.recycle_room() is None
+    assert terr.gs.state is State.IDLE
+
+
+def test_recycle_room_load_failure_reports_and_lands_no_room(monkeypatch):
+    terr = make_terrarium()
+    assert terr.load_room("TEST") is None
+    monkeypatch.setattr(terr, "load_room",
+                        lambda name: "boom: injected load failure")
+    reason = terr.recycle_room()
+    assert reason == "boom: injected load failure"
+    assert terr.state is TerrariumState.NO_ROOM
