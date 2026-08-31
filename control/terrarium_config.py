@@ -18,6 +18,7 @@ from control.instrument import (Instrument, InstrumentError,
                                 validate_instrument_manifests)
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
+from control.triggers import EventTrigger, StreamTrigger
 
 KNOWN_BACKENDS = frozenset({"devicelink", "array"})
 
@@ -164,6 +165,56 @@ def _parse_functions(iname: str, iraw: dict, *, source: str, key: str
     return tuple(functions)
 
 
+def _parse_trigger_tables(iname: str, iraw: dict, *, source: str, key: str,
+                          table: str, required: tuple[str, ...]) -> list[dict]:
+    """`[[instruments.<name>.<table>]]` array-of-tables -> raw dicts, with a
+    located structural check (array-of-tables shape, required keys present).
+    Defects inside a trigger itself (bad transform, non-numeric threshold)
+    are left to validate_instrument on the built Instrument."""
+    raw_list = iraw.get(table, [])
+    if not isinstance(raw_list, list):
+        raise TerrariumConfigError(
+            source=source, key=key,
+            message=f"{table} must be an array of "
+                    f"[[instruments.{iname}.{table}]] tables")
+    out = []
+    for entry in raw_list:
+        if not isinstance(entry, dict):
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"{table} entries must be tables, got {entry!r}")
+        for req in required:
+            if req not in entry:
+                raise TerrariumConfigError(
+                    source=source, key=key,
+                    message=f"{table} entry missing required {req!r}")
+        out.append(entry)
+    return out
+
+
+def _parse_event_triggers(iname: str, iraw: dict, *, source: str, key: str
+                          ) -> tuple[EventTrigger, ...]:
+    return tuple(
+        EventTrigger(name=e["name"], description=e.get("description", ""),
+                     thresholds=dict(e.get("thresholds", {})))
+        for e in _parse_trigger_tables(iname, iraw, source=source, key=key,
+                                       table="event_triggers",
+                                       required=("name",)))
+
+
+def _parse_stream_triggers(iname: str, iraw: dict, *, source: str, key: str
+                           ) -> tuple[StreamTrigger, ...]:
+    return tuple(
+        StreamTrigger(name=e["name"], description=e.get("description", ""),
+                      verb=e["verb"], arg=int(e["arg"]),
+                      transform=e["transform"],
+                      params=dict(e.get("params", {})))
+        for e in _parse_trigger_tables(iname, iraw, source=source, key=key,
+                                       table="stream_triggers",
+                                       required=("name", "verb", "arg",
+                                                 "transform")))
+
+
 def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
     key = f"instruments.{iname}"
     if "accepted_triggers" in iraw:  # legacy-vocabulary-ok
@@ -182,6 +233,8 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
         accepted_cues=tuple(iraw.get("accepted_cues", [])),
         light_manifest=light_manifest,
         ugen_manifest=ugen_manifest,
+        event_triggers=_parse_event_triggers(iname, iraw, source=source, key=key),
+        stream_triggers=_parse_stream_triggers(iname, iraw, source=source, key=key),
     )
     try:
         validate_instrument(instrument)
