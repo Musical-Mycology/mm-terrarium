@@ -376,3 +376,59 @@ def test_legacy_bare_functions_list_is_a_located_error():
         parse_terrarium_config(CONFIG_WITH_LEGACY_FUNCTIONS_LIST, "t.toml")
     assert "instruments.dev_strip" in str(exc.value)
     assert "[[instruments" in str(exc.value) and "functions" in str(exc.value)
+
+
+CONFIG_WITH_SCRIPTED_FUNCTION = """
+schema = 1
+[terrarium]
+name = "t"
+[instruments.arr]
+capabilities = ["light.surface", "audio.flsyn"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+[[instruments.arr.functions]]
+name = "play_aurora"
+kind = "scripted"
+description = "sweep"
+script = [
+  { offset = 0.0, midi = [176, 74, 127] },
+  { offset = 0.5, midi = [176, 74, 40] },
+  { offset = 2.0, midi = [176, 74, 0] },
+]
+[rooms.R]
+backends = ["devicelink"]
+[[rooms.R.fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "arr"
+[[rooms.R.fixtures.blocks]]
+name = "main"
+start = 0
+count = 10
+[[rooms.R.fixtures.zones]]
+name = "all"
+start = 0
+count = 10
+"""
+
+
+def test_scripted_function_parses_with_target_devs():
+    cfg = parse_terrarium_config(CONFIG_WITH_SCRIPTED_FUNCTION, "t.toml")
+    arr = cfg.instruments["arr"]
+    fn = next(f for f in arr.functions if f.name == "play_aurora")
+    assert fn.kind is FunctionKind.SCRIPTED
+    assert [s.cue for s in fn.script] == [
+        (TARGET, 176, 74, 127), (TARGET, 176, 74, 40), (TARGET, 176, 74, 0)]
+
+
+def test_scripted_reserved_name_is_a_located_config_error():
+    bad = CONFIG_WITH_SCRIPTED_FUNCTION.replace(
+        'name = "play_aurora"', 'name = "flash"')
+    with pytest.raises(TerrariumConfigError, match="reserved"):
+        parse_terrarium_config(bad, "t.toml")
+
+
+def test_scripted_step_with_no_cue_key_is_located():
+    bad = CONFIG_WITH_SCRIPTED_FUNCTION.replace(
+        "midi = [176, 74, 127]", "offset2 = 1")
+    with pytest.raises(TerrariumConfigError, match="exactly one of"):
+        parse_terrarium_config(bad, "t.toml")
