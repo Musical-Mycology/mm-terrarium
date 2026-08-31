@@ -44,6 +44,28 @@
           <button id="designClone" class="btn">Clone</button>
         </div>
       </section>
+      <section id="benchPanel" class="card">
+        <canvas id="benchCanvas" width="360" height="30"></canvas>
+        <div id="benchFunctions"></div>
+        <div class="actions">
+          <button id="benchStart" class="btn solid-gold">Simulate</button>
+          <button id="benchStop" class="btn" disabled>Stop</button>
+        </div>
+        <label>Tilt <input id="benchTilt" type="range" min="-100"
+               max="100" value="0" disabled></label>
+      </section>
+      <section id="calibratePanel" class="card">
+        <div class="actions">
+          <button id="calRefresh" class="btn">Captures</button>
+        </div>
+        <div id="calSessions"></div>
+        <div id="calStats"></div>
+        <div class="actions">
+          <button id="calPropose" class="btn solid-gold" disabled>Apply proposal to draft</button>
+          <button id="calReplay" class="btn" disabled>Replay</button>
+        </div>
+        <canvas id="calPlot" width="360" height="120" hidden></canvas>
+      </section>
     </div>
   </div>
 </div>

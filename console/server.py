@@ -112,6 +112,10 @@ class ConsoleServer:
                 self._clients.discard(connection)
 
     # --- tick-thread API (consumed by ConsoleAgent) ------------------------
+    def client_count(self) -> int:
+        with self._lock:
+            return len(self._clients)
+
     def drain_new_clients(self) -> list:
         with self._lock:
             out = list(self._new_clients)

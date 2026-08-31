@@ -2899,6 +2899,99 @@ its Status section records what shipped against what stays Plan 2.
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **1699 passed, 1 skipped** (up from 1669 passed, 1 skipped).
 
+### `control/gesture_eval.py`, `control/design_bench.py`, `harness/design_session.py`, `console/static/design.js` -- design bench and calibrate (Plan 2 of the Design panel, 2026-08-31)
+
+Design doc:
+[`.../2026-08-31-design-panel-and-instrument-catalog-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-design-panel-and-instrument-catalog-design.md),
+sections 5-6; its Status section records what shipped. **This slice adds
+no new function kinds to instruments** -- STREAM stayed Bit-declared,
+unaffected, per the instrument-scripted-functions decision (see the
+`control/builtins.py` section above); the rev-1 idea of instrument-owned
+stream functions is superseded, not revived.
+
+- **`control/gesture_eval.py` is pure stdlib and deliberately mirrors
+  `tools/trace_stats.py`'s magnitude/edge math** rather than importing it
+  -- `trace_stats.py` is an offline CLI, not an importable runtime
+  package, so the duplication is the interface. `evaluate_trace(trace,
+  thresholds)` walks a recorded accel trace for rising edges past
+  `peak_g`, debounces by `window_ms`, and reports fires/spikes/inter-
+  spike-intervals; `propose_thresholds(rows)` turns labelled
+  `session_rows()` output into a `{peak_g, window_ms, double_ms}`
+  proposal (0.8x the weakest observed peak deviation, so a proposed
+  threshold sits comfortably under every captured gesture, not at their
+  average).
+- **`control/design_bench.py`'s `DesignBench` drives one `Instrument`
+  against an injected `BenchSession` protocol** (`feed_midi`/`render`/
+  `close`) -- no Arco, no transport, no Bit, so a designer previews
+  generators/fire ladder/stream triggers standalone. The fire ladder
+  mirrors `GameServer._resolve_script_for`'s builtin-first order exactly
+  (builtins first, reserved names make shadowing impossible, then the
+  instrument's own SCRIPTED function of that name); the stream "smooth"
+  transform mirrors `GameServer._apply_stream_triggers`'s EMA, seeded
+  from the *first* sample rather than 0. Two deliberate simplifications
+  from the real engine, both because a bench has exactly one surface and
+  no audio path: `PlayCue` is skipped outright (`expand_script` still
+  produces one for a fired function that declares it; `DesignBench` just
+  drops it), and firing anything other than `"stop"` un-latches mute --
+  the real engine's rule ("any non-mute fire clears the mute", evaluated
+  per resolved dev across possibly many surfaces) collapses to that same
+  test when there is only one surface. A scheduled-cue heap
+  (`heapq`-backed) handles cues with a future `when`; `SolidCue` is an
+  override with its own expiry, composited over the rendered frame each
+  tick; the `GeneratorRunner`'s lanes are suppressed across a fired
+  script's span so a generator doesn't fight a just-fired cue on the same
+  lane. A `_dirty` flag forces `tick()` to report a frame on any state
+  change (latching an already-black frame, say) even when the rendered
+  pixels come out byte-identical to the last frame -- without it such a
+  change would be silently swallowed as "unchanged".
+- **Console: seven new admin commands, five new events, local-only, gated
+  the same way as `arm_room`/`fire_function`.** `bench_start`/
+  `bench_stop`/`bench_fire`/`bench_lane` run a `DesignBench` against
+  whatever `bench_session_factory` the agent was constructed with;
+  `list_captures`/`capture_stats`/`replay_trace` read the capture store
+  at `captures_root` and run `gesture_eval` over it server-side. Events:
+  `bench_started` (the bench's `fireable()` rows -- name/description/
+  source, builtin vs. instrument), `bench_frame`, `captures_listed`,
+  `capture_stats`, `replay_result`. **`BENCH_FRAME_INTERVAL = 0.1`**
+  decimates the frame stream -- `tick()` can run far faster than the
+  console needs to broadcast, so frames are buffered in
+  `_pending_bench_frame` and only flushed to `bench_frame_event` once
+  every 100ms, same shape as the existing tick-loop broadcast throttling
+  elsewhere in `console/agent.py`. `ConsoleAgent.__init__` gained
+  `bench_session_factory=` and `captures_root=`, both `None` by default
+  (no bench backend, no capture store) so every existing caller and test
+  is unaffected.
+- **`harness/design_session.py`'s `LuxBenchSession` is the real
+  luxaeterna-backed `BenchSession`**, mirroring `harness/device_bridge.py`'s
+  dev/test dependency on luxaeterna rather than faking it. Three
+  deviations from the task sketch, all forced by reading the real
+  luxaeterna API instead of guessing it (see the module's docstring for
+  the reasoning): `render_into` takes a full `luxaeterna.universe.Universe`
+  (the standard 512-channel DMX512 default, same precedent
+  `harness/led_smoke.py` already sets) and `render()` slices back only the
+  capability's own channel count; `close()` calls `session.clear()`,
+  confirmed by reading `luxaeterna.synth.session` as the correct teardown
+  (same as `DeviceBridge.on_release`). `harness/terrarium_boot.py`'s
+  `main()` wires `ConsoleAgent(bench_session_factory=bench_session_factory,
+  captures_root=Path("captures"), ...)` unconditionally.
+- **`console/static/design.js`'s bench section**: a canvas painted from
+  `bench_frame`, fire buttons generated from `bench_started`'s functions
+  list, and a throttled tilt lane slider that sends `bench_lane` on
+  input. **Calibrate section**: a captures browser (`list_captures` ->
+  session/label tree), a stats table (`capture_stats`), and
+  `applyProposal` -- a **client-side raw-TOML text edit**, not a
+  server-side TOML writer. It inserts the proposed thresholds into the
+  selected trigger's block and a `# calibrated from <provenance>` comment
+  line directly above them, into the same `#designText` textarea the
+  raw-TOML editor already uses, so the operator reviews the exact diff
+  before hitting Save -- no new persistence path, no TOML-writer library
+  dependency, no risk of reformatting the rest of the file. Replay draws
+  the accel trace with the trigger's threshold line and a tick per fire
+  from `replay_result`.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest -q` ->
+**1791 passed, 1 skipped** (up from 1699 passed, 1 skipped).
+
 ### Bit-cycle room recycle, persistent Testshrooms, and console load fixes (2026-08-31)
 Design: [`.../2026-08-31-bit-cycle-recycle-and-persistent-testshrooms-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-bit-cycle-recycle-and-persistent-testshrooms-design.md).
 

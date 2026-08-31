@@ -42,6 +42,10 @@ __all__ = [
     "PublishDesignCommand", "CloneDesignCommand",
     "design_row", "designs_listed_event", "designs_changed_event",
     "design_event",
+    "BenchStartCommand", "BenchStopCommand", "BenchFireCommand",
+    "BenchLaneCommand", "ListCapturesCommand", "CaptureStatsCommand",
+    "ReplayTraceCommand", "bench_started_event", "bench_frame_event",
+    "captures_listed_event", "capture_stats_event", "replay_result_event",
 ]
 
 
@@ -207,6 +211,75 @@ def design_event(name: str, state: str, text: str, errors: list) -> dict:
             "text": text, "errors": errors}
 
 
+@dataclass
+class BenchStartCommand:
+    state: str
+    name: str
+
+
+@dataclass
+class BenchStopCommand:
+    pass
+
+
+@dataclass
+class BenchFireCommand:
+    name: str
+
+
+@dataclass
+class BenchLaneCommand:
+    verb: str
+    value: float
+    status: int
+    data1: int
+
+
+@dataclass
+class ListCapturesCommand:
+    pass
+
+
+@dataclass
+class CaptureStatsCommand:
+    session: str
+    label: str
+
+
+@dataclass
+class ReplayTraceCommand:
+    state: str
+    name: str
+    trigger: str
+    session: str
+    label: str
+    series: int
+
+
+def bench_started_event(functions) -> dict:
+    """Reply to a successful bench_start: DesignBench.fireable()'s list of
+    {"name", "description", "source"}."""
+    return {"event": "bench_started", "functions": list(functions)}
+
+
+def bench_frame_event(channels) -> dict:
+    """One rendered bench frame, display-only and droppable -- see
+    console/agent.py's BENCH_FRAME_INTERVAL."""
+    return {"event": "bench_frame", "channels": list(channels)}
+
+
+def captures_listed_event(sessions: list) -> dict:
+    return {"event": "captures_listed", "sessions": sessions}
+
+
+def capture_stats_event(rows: list, proposal: dict | None) -> dict:
+    return {"event": "capture_stats", "rows": rows, "proposal": proposal}
+
+
+def replay_result_event(result: dict) -> dict:
+    return {"event": "replay_result", "result": result}
+
+
 def parse_admin_command(msg: dict):
     """Console-only admin commands -- never sent by the uplink's remote
     broker. Kept separate from uplink.protocol.parse_command: Room
@@ -279,4 +352,65 @@ def parse_admin_command(msg: dict):
                 "clone_design requires a non-empty string 'new_name'")
         return CloneDesignCommand(source_state=source_state,
                                   source_name=source_name, new_name=new_name)
+    if command == "bench_start":
+        state = msg.get("state")
+        if state not in ("published", "draft"):
+            raise ValueError("bench_start requires 'state' of 'published' or 'draft'")
+        name = msg.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("bench_start requires a non-empty string 'name'")
+        return BenchStartCommand(state=state, name=name)
+    if command == "bench_stop":
+        return BenchStopCommand()
+    if command == "bench_fire":
+        name = msg.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("bench_fire requires a non-empty string 'name'")
+        return BenchFireCommand(name=name)
+    if command == "bench_lane":
+        verb = msg.get("verb")
+        if not isinstance(verb, str) or not verb:
+            raise ValueError("bench_lane requires a non-empty string 'verb'")
+        value = msg.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError("bench_lane requires a numeric 'value'")
+        status = msg.get("status")
+        if not isinstance(status, int) or isinstance(status, bool):
+            raise ValueError("bench_lane requires an integer 'status'")
+        data1 = msg.get("data1")
+        if not isinstance(data1, int) or isinstance(data1, bool):
+            raise ValueError("bench_lane requires an integer 'data1'")
+        return BenchLaneCommand(verb=verb, value=float(value), status=status,
+                                data1=data1)
+    if command == "list_captures":
+        return ListCapturesCommand()
+    if command == "capture_stats":
+        session = msg.get("session")
+        if not isinstance(session, str) or not session:
+            raise ValueError("capture_stats requires a non-empty string 'session'")
+        label = msg.get("label")
+        if not isinstance(label, str) or not label:
+            raise ValueError("capture_stats requires a non-empty string 'label'")
+        return CaptureStatsCommand(session=session, label=label)
+    if command == "replay_trace":
+        state = msg.get("state")
+        if state not in ("published", "draft"):
+            raise ValueError("replay_trace requires 'state' of 'published' or 'draft'")
+        name = msg.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("replay_trace requires a non-empty string 'name'")
+        trigger = msg.get("trigger")
+        if not isinstance(trigger, str) or not trigger:
+            raise ValueError("replay_trace requires a non-empty string 'trigger'")
+        session = msg.get("session")
+        if not isinstance(session, str) or not session:
+            raise ValueError("replay_trace requires a non-empty string 'session'")
+        label = msg.get("label")
+        if not isinstance(label, str) or not label:
+            raise ValueError("replay_trace requires a non-empty string 'label'")
+        series = msg.get("series")
+        if not isinstance(series, int) or isinstance(series, bool):
+            raise ValueError("replay_trace requires an integer 'series'")
+        return ReplayTraceCommand(state=state, name=name, trigger=trigger,
+                                  session=session, label=label, series=series)
     raise ValueError(f"unrecognized admin command: {command!r}")

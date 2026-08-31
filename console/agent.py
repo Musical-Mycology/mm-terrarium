@@ -31,11 +31,16 @@ logger = logging.getLogger(__name__)
 # something gameplay waits on.
 ROOM_FRAME_INTERVAL = 0.1
 
+# Same decimation idea as ROOM_FRAME_INTERVAL, applied to a live design-bench
+# session: the bench can tick faster than any panel needs to render.
+BENCH_FRAME_INTERVAL = 0.1
+
 
 class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_bridge=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
-                 terrarium=None, catalog_root=None):
+                 terrarium=None, catalog_root=None, bench_session_factory=None,
+                 captures_root=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
@@ -44,6 +49,18 @@ class ConsoleAgent:
         # means no catalog is wired up -- every design command answers
         # error_event rather than crashing on a missing root.
         self.catalog_root = catalog_root
+        # Optional Callable[[dict], BenchSession] building the session a
+        # DesignBench drives -- see control/design_bench.py. None means no
+        # bench backend is wired up: every bench command answers error_event
+        # rather than crashing.
+        self.bench_session_factory = bench_session_factory
+        # Optional Path to the gesture-capture store root, for
+        # list_captures/capture_stats/replay_trace. None means no capture
+        # store is wired up.
+        self.captures_root = captures_root
+        self._bench = None  # DesignBench | None, the one live bench session
+        self._pending_bench_frame = None
+        self._last_bench_frame_at = 0.0
         # Optional Terrarium (control/terrarium.py), the room-level lifecycle
         # sitting above GameServer. None (every pre-Task-6 caller) means no
         # room commands, no terrarium-state gating, and an all-None/empty
@@ -102,13 +119,37 @@ class ConsoleAgent:
         self._broadcast_room_if_changed()
         self._broadcast_room_frame()
         self._broadcast_functions_if_changed()
+        self._tick_bench()
+
+    def _tick_bench(self) -> None:
+        if self._bench is None:
+            return
+        if self.server.client_count() == 0:
+            logger.info("no console clients connected; closing live bench")
+            self._bench.close()
+            self._bench = None
+            self._pending_bench_frame = None
+            return
+        frame = self._bench.tick()
+        if frame is not None:
+            self._pending_bench_frame = frame
+        if self._pending_bench_frame is None:
+            return
+        now = self._clock()
+        if now - self._last_bench_frame_at < BENCH_FRAME_INTERVAL:
+            return
+        frame, self._pending_bench_frame = self._pending_bench_frame, None
+        self._last_bench_frame_at = now
+        self.server.broadcast(protocol.bench_frame_event(frame))
 
     # --- inbound command dispatch ------------------------------------------
     def _handle_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
         if name in ("arm_room", "release_room", "fire_function",
                     "list_designs", "get_design", "save_design",
-                    "publish_design", "clone_design"):
+                    "publish_design", "clone_design",
+                    "bench_start", "bench_stop", "bench_fire", "bench_lane",
+                    "list_captures", "capture_stats", "replay_trace"):
             return self._handle_admin_command(msg)
         try:
             command = protocol.parse_command(msg)
@@ -179,6 +220,15 @@ class ConsoleAgent:
                                 protocol.PublishDesignCommand,
                                 protocol.CloneDesignCommand)):
             return self._handle_design_command(name, command)
+        if isinstance(command, (protocol.BenchStartCommand,
+                                protocol.BenchStopCommand,
+                                protocol.BenchFireCommand,
+                                protocol.BenchLaneCommand)):
+            return self._handle_bench_command(name, command)
+        if isinstance(command, (protocol.ListCapturesCommand,
+                                protocol.CaptureStatsCommand,
+                                protocol.ReplayTraceCommand)):
+            return self._handle_capture_command(name, command)
         if isinstance(command, protocol.FireFunctionCommand):
             # An operator action, tagged as one so the event log never reads it
             # as gameplay. GameServer.fire_function never raises, so a refusal
@@ -239,6 +289,134 @@ class ConsoleAgent:
         # on a mutation, not just the one that made it.
         self.server.broadcast(protocol.designs_changed_event(rows))
         return protocol.designs_changed_event(rows)
+
+    def _handle_bench_command(self, name: str, command) -> dict | None:
+        if isinstance(command, protocol.BenchStopCommand):
+            if self._bench is not None:
+                self._bench.close()
+                self._bench = None
+                self._pending_bench_frame = None
+            return None
+        if isinstance(command, protocol.BenchFireCommand):
+            if self._bench is None:
+                return protocol.error_event(name, "no bench running")
+            reason = self._bench.fire(command.name)
+            if reason is not None:
+                return protocol.error_event(name, reason)
+            return None
+        if isinstance(command, protocol.BenchLaneCommand):
+            if self._bench is None:
+                return protocol.error_event(name, "no bench running")
+            self._bench.lane(command.verb, command.value, command.status,
+                             command.data1)
+            return None
+        # BenchStartCommand
+        if self.bench_session_factory is None:
+            return protocol.error_event(name, "no bench backend")
+        from control.catalog import load_catalog
+        from control.design_bench import DesignBench
+        entry = (load_catalog(self.catalog_root).get(command.state, command.name)
+                 if self.catalog_root is not None else None)
+        if entry is None:
+            return protocol.error_event(
+                name, f"no {command.state} design {command.name!r}")
+        if entry.instrument is None:
+            return protocol.error_event(
+                name, entry.error or f"design {command.name!r} failed to parse")
+        if self._bench is not None:
+            self._bench.close()
+            self._pending_bench_frame = None
+        session = self.bench_session_factory(entry.instrument.light_manifest)
+        self._bench = DesignBench(entry.instrument, session, clock=self._clock)
+        return protocol.bench_started_event(self._bench.fireable())
+
+    def _captures_listed(self) -> list:
+        root = self.captures_root
+        sessions = []
+        if root.is_dir():
+            for session_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+                labels = {}
+                for label_dir in sorted(
+                        p for p in session_dir.iterdir() if p.is_dir()):
+                    labels[label_dir.name] = len(
+                        list(label_dir.glob("[0-9]*.json")))
+                sessions.append({"session": session_dir.name, "labels": labels})
+        return sessions
+
+    def _first_unreadable_trace(self, session_dir) -> "object | None":
+        """Returns the path of the first trace file under session_dir that
+        fails to parse as valid JSON with the expected trace shape, or None
+        if every file is readable. Named separately from session_rows so a
+        malformed capture file names itself in the returned error_event
+        rather than crashing gesture_eval's own parse."""
+        import json
+
+        for path in sorted(session_dir.glob("*/[0-9]*.json")):
+            try:
+                trace = json.loads(path.read_text())
+                trace["samples"]["t_ms"]
+                trace["label"]
+                trace["capture_id"]
+                trace["series"]
+            except Exception:
+                return path
+        return None
+
+    def _handle_capture_command(self, name: str, command) -> dict | None:
+        if self.captures_root is None:
+            return protocol.error_event(name, "no capture store")
+        if isinstance(command, protocol.ListCapturesCommand):
+            return protocol.captures_listed_event(self._captures_listed())
+        if isinstance(command, (protocol.CaptureStatsCommand,
+                                protocol.ReplayTraceCommand)):
+            from control.catalog import CATALOG_NAME_RE
+            if not CATALOG_NAME_RE.match(command.session):
+                return protocol.error_event(name, f"invalid session {command.session!r}")
+            if not CATALOG_NAME_RE.match(command.label):
+                return protocol.error_event(name, f"invalid label {command.label!r}")
+        if isinstance(command, protocol.CaptureStatsCommand):
+            from control.gesture_eval import propose_thresholds, session_rows
+            session_dir = self.captures_root / command.session
+            bad_path = self._first_unreadable_trace(session_dir)
+            if bad_path is not None:
+                return protocol.error_event(name, f"bad capture at {bad_path}")
+            try:
+                rows = [r for r in session_rows(session_dir)
+                        if r["label"] == command.label]
+            except Exception as exc:
+                return protocol.error_event(name, f"bad capture data: {exc}")
+            return protocol.capture_stats_event(rows, propose_thresholds(rows))
+        # ReplayTraceCommand
+        import json
+
+        from control.catalog import load_catalog
+        from control.gesture_eval import _accel_g, evaluate_trace
+        entry = (load_catalog(self.catalog_root).get(command.state, command.name)
+                 if self.catalog_root is not None else None)
+        if entry is None:
+            return protocol.error_event(
+                name, f"no {command.state} design {command.name!r}")
+        if entry.instrument is None:
+            return protocol.error_event(
+                name, entry.error or f"design {command.name!r} failed to parse")
+        trigger = next((t for t in entry.instrument.event_triggers
+                        if t.name == command.trigger), None)
+        if trigger is None:
+            return protocol.error_event(
+                name, f"no event trigger {command.trigger!r} on "
+                     f"{command.name!r}")
+        path = (self.captures_root / command.session / command.label
+                / f"{command.series}.json")
+        if not path.is_file():
+            return protocol.error_event(name, f"no capture at {path}")
+        try:
+            trace = json.loads(path.read_text(encoding="utf-8"))
+            result = evaluate_trace(trace, trigger.thresholds)
+            result["trace"] = {"t_ms": list(trace["samples"]["t_ms"]),
+                               "accel_g": _accel_g(trace["samples"])}
+        except Exception as exc:
+            return protocol.error_event(name, f"bad capture at {path}: {exc}")
+        return protocol.replay_result_event(result)
 
     # --- snapshot (connect-time full read model) ---------------------------
     def snapshot(self) -> dict:

@@ -65,6 +65,9 @@ class FakeConsoleServer:
         self._raising = set()               # clients whose send() raises
 
     # --- tick-thread API consumed by ConsoleAgent ---
+    def client_count(self):
+        return len(self._clients)
+
     def drain_new_clients(self):
         out, self._new_clients = self._new_clients, []
         return out
@@ -107,10 +110,13 @@ class FakeConsoleServer:
         self._inbound.append((client, msg))
 
 
-def _server_with_agent(catalog_root=None):
+def _server_with_agent(catalog_root=None, bench_session_factory=None,
+                       captures_root=None):
     gs = GameServer({"TestBit": TestBit})
     srv = FakeConsoleServer()
-    agent = ConsoleAgent(gs, srv, catalog_root=catalog_root)
+    agent = ConsoleAgent(gs, srv, catalog_root=catalog_root,
+                         bench_session_factory=bench_session_factory,
+                         captures_root=captures_root)
     return gs, srv, agent
 
 
@@ -1200,3 +1206,259 @@ def test_design_command_unrecognized_field_returns_error():
     reply = agent._handle_command({"command": "get_design", "state": "bogus",
                                    "name": "x"})
     assert reply["event"] == "error"
+
+
+class FakeBenchSession:
+    """Stands in for control.design_bench.BenchSession -- feed_midi/render/
+    close, no Arco."""
+
+    def __init__(self):
+        self.midi = []
+        self.closed = False
+
+    def feed_midi(self, status, d1, d2):
+        self.midi.append((status, d1, d2))
+
+    def render(self):
+        return [1, 2, 3]
+
+    def close(self):
+        self.closed = True
+
+
+def test_bench_commands_error_without_factory(tmp_path):
+    root = tmp_path / "instruments"
+    root.mkdir()
+    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    gs, srv, agent = _server_with_agent(catalog_root=root)
+    reply = agent._handle_command(
+        {"command": "bench_start", "state": "published", "name": "glowcap"})
+    assert reply["event"] == "error"
+
+
+def test_bench_start_replies_bench_started_and_polls_frame(tmp_path):
+    root = tmp_path / "instruments"
+    root.mkdir()
+    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    t = [0.0]
+    gs, srv, agent = _server_with_agent(
+        catalog_root=root,
+        bench_session_factory=lambda manifest: FakeBenchSession())
+    srv.connect("c1")
+    agent._clock = lambda: t[0]
+    started = agent._handle_command(
+        {"command": "bench_start", "state": "published", "name": "glowcap"})
+    assert started["event"] == "bench_started"
+    names = {f["name"] for f in started["functions"]}
+    assert "stop" in names
+    t[0] = 1.0
+    agent.poll()
+    frames = [m for m in srv.broadcasts if m["event"] == "bench_frame"]
+    assert frames and frames[0]["channels"] == [1, 2, 3]
+
+
+def test_bench_start_missing_entry_refuses(tmp_path):
+    root = tmp_path / "instruments"
+    root.mkdir()
+    gs, srv, agent = _server_with_agent(
+        catalog_root=root,
+        bench_session_factory=lambda manifest: FakeBenchSession())
+    reply = agent._handle_command(
+        {"command": "bench_start", "state": "published", "name": "nope"})
+    assert reply["event"] == "error"
+
+
+def test_bench_fire_unknown_name_returns_error(tmp_path):
+    root = tmp_path / "instruments"
+    root.mkdir()
+    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    gs, srv, agent = _server_with_agent(
+        catalog_root=root,
+        bench_session_factory=lambda manifest: FakeBenchSession())
+    agent._handle_command(
+        {"command": "bench_start", "state": "published", "name": "glowcap"})
+    reply = agent._handle_command({"command": "bench_fire", "name": "nope"})
+    assert reply["event"] == "error"
+
+
+def test_bench_fire_without_running_bench_refuses(tmp_path):
+    root = tmp_path / "instruments"
+    root.mkdir()
+    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    gs, srv, agent = _server_with_agent(
+        catalog_root=root,
+        bench_session_factory=lambda manifest: FakeBenchSession())
+    reply = agent._handle_command({"command": "bench_fire", "name": "flash"})
+    assert reply["event"] == "error"
+
+
+def test_bench_stop_closes_session(tmp_path):
+    root = tmp_path / "instruments"
+    root.mkdir()
+    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    session = FakeBenchSession()
+    gs, srv, agent = _server_with_agent(
+        catalog_root=root, bench_session_factory=lambda manifest: session)
+    agent._handle_command(
+        {"command": "bench_start", "state": "published", "name": "glowcap"})
+    assert agent._handle_command({"command": "bench_stop"}) is None
+    assert session.closed
+
+
+def test_capture_commands_error_without_root():
+    gs, srv, agent = _server_with_agent()
+    reply = agent._handle_command({"command": "list_captures"})
+    assert reply["event"] == "error"
+
+
+def test_list_captures_and_capture_stats(tmp_path):
+    from tests.test_gesture_eval import make_trace
+    captures = tmp_path / "captures"
+    session_dir = captures / "sess1" / "tap"
+    session_dir.mkdir(parents=True)
+    trace = make_trace([0, 10, 20], [1.0, 3.0, 1.0])
+    (session_dir / "1.json").write_text(json.dumps(trace))
+    gs, srv, agent = _server_with_agent(captures_root=captures)
+    listed = agent._handle_command({"command": "list_captures"})
+    assert listed == {"event": "captures_listed",
+                      "sessions": [{"session": "sess1", "labels": {"tap": 1}}]}
+    stats = agent._handle_command(
+        {"command": "capture_stats", "session": "sess1", "label": "tap"})
+    assert stats["event"] == "capture_stats"
+    assert len(stats["rows"]) == 1
+    assert stats["rows"][0]["label"] == "tap"
+    assert stats["proposal"] is not None
+
+
+def test_capture_stats_filters_to_label(tmp_path):
+    from tests.test_gesture_eval import make_trace
+    captures = tmp_path / "captures"
+    tap_dir = captures / "sess1" / "tap"
+    shake_dir = captures / "sess1" / "shake"
+    tap_dir.mkdir(parents=True)
+    shake_dir.mkdir(parents=True)
+    (tap_dir / "1.json").write_text(
+        json.dumps(make_trace([0, 10, 20], [1.0, 3.0, 1.0], label="tap")))
+    (shake_dir / "1.json").write_text(
+        json.dumps(make_trace([0, 10, 20], [1.0, 3.0, 1.0], label="shake")))
+    gs, srv, agent = _server_with_agent(captures_root=captures)
+    stats = agent._handle_command(
+        {"command": "capture_stats", "session": "sess1", "label": "tap"})
+    assert len(stats["rows"]) == 1
+    assert stats["rows"][0]["label"] == "tap"
+
+
+def test_replay_trace_returns_fires_for_tuneshroom_tap(tmp_path):
+    from pathlib import Path
+
+    from tests.test_gesture_eval import make_trace
+    catalog_root = Path("instruments")
+    captures = tmp_path / "captures"
+    label_dir = captures / "sess1" / "tap"
+    label_dir.mkdir(parents=True)
+    trace = make_trace([0, 10, 20, 30, 40], [1.0, 1.0, 3.0, 1.0, 1.0])
+    (label_dir / "1.json").write_text(json.dumps(trace))
+    gs, srv, agent = _server_with_agent(catalog_root=catalog_root,
+                                        captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "replay_trace", "state": "published", "name": "tuneshroom",
+         "trigger": "tap", "session": "sess1", "label": "tap", "series": 1})
+    assert reply["event"] == "replay_result"
+    assert reply["result"]["fires"] == [20]
+    assert reply["result"]["trace"]["t_ms"] == [0, 10, 20, 30, 40]
+    assert len(reply["result"]["trace"]["accel_g"]) == 5
+
+
+def test_replay_trace_missing_trigger_refuses(tmp_path):
+    from pathlib import Path
+    catalog_root = Path("instruments")
+    captures = tmp_path / "captures"
+    (captures / "sess1" / "tap").mkdir(parents=True)
+    gs, srv, agent = _server_with_agent(catalog_root=catalog_root,
+                                        captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "replay_trace", "state": "published", "name": "tuneshroom",
+         "trigger": "nope", "session": "sess1", "label": "tap", "series": 1})
+    assert reply["event"] == "error"
+
+
+def test_replay_trace_missing_capture_refuses(tmp_path):
+    from pathlib import Path
+    catalog_root = Path("instruments")
+    gs, srv, agent = _server_with_agent(catalog_root=catalog_root,
+                                        captures_root=tmp_path / "captures")
+    reply = agent._handle_command(
+        {"command": "replay_trace", "state": "published", "name": "tuneshroom",
+         "trigger": "tap", "session": "sess1", "label": "tap", "series": 1})
+    assert reply["event"] == "error"
+
+
+def test_capture_stats_skips_malformed_json_with_error_event(tmp_path):
+    captures = tmp_path / "captures"
+    session_dir = captures / "sess1" / "tap"
+    session_dir.mkdir(parents=True)
+    (session_dir / "1.json").write_text("{not valid json")
+    gs, srv, agent = _server_with_agent(captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "capture_stats", "session": "sess1", "label": "tap"})
+    assert reply["event"] == "error"
+    assert "1.json" in reply["message"]
+
+
+def test_replay_trace_valid_json_missing_trace_keys_returns_error(tmp_path):
+    from pathlib import Path
+    catalog_root = Path("instruments")
+    captures = tmp_path / "captures"
+    label_dir = captures / "sess1" / "tap"
+    label_dir.mkdir(parents=True)
+    (label_dir / "1.json").write_text(json.dumps({"not": "a trace"}))
+    gs, srv, agent = _server_with_agent(catalog_root=catalog_root,
+                                        captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "replay_trace", "state": "published", "name": "tuneshroom",
+         "trigger": "tap", "session": "sess1", "label": "tap", "series": 1})
+    assert reply["event"] == "error"
+
+
+def test_capture_stats_rejects_path_traversal_in_session(tmp_path):
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    outside = tmp_path / "secret"
+    outside.mkdir()
+    (outside / "leak.json").write_text("{}")
+    gs, srv, agent = _server_with_agent(captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "capture_stats", "session": "../secret", "label": "tap"})
+    assert reply["event"] == "error"
+
+
+def test_replay_trace_rejects_path_traversal_in_session_and_label(tmp_path):
+    from pathlib import Path
+    catalog_root = Path("instruments")
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    gs, srv, agent = _server_with_agent(catalog_root=catalog_root,
+                                        captures_root=captures)
+    reply = agent._handle_command(
+        {"command": "replay_trace", "state": "published", "name": "tuneshroom",
+         "trigger": "tap", "session": "../evil", "label": "../x", "series": 1})
+    assert reply["event"] == "error"
+
+
+def test_bench_closes_when_server_reports_zero_clients(tmp_path):
+    root = tmp_path / "instruments"
+    root.mkdir()
+    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    session = FakeBenchSession()
+    gs, srv, agent = _server_with_agent(
+        catalog_root=root, bench_session_factory=lambda manifest: session)
+    agent._handle_command(
+        {"command": "bench_start", "state": "published", "name": "glowcap"})
+    assert not session.closed
+    srv._clients.clear()  # simulate the console client disconnecting
+    agent.poll()
+    assert session.closed
+    # a later bench_start works again
+    reply = agent._handle_command(
+        {"command": "bench_start", "state": "published", "name": "glowcap"})
+    assert reply["event"] == "bench_started"

@@ -326,3 +326,113 @@ def test_design_event_shape():
     assert protocol.design_event("glowcap", "draft", "x = 1", []) == {
         "event": "design", "name": "glowcap", "state": "draft",
         "text": "x = 1", "errors": []}
+
+
+def test_bench_start_command_parses():
+    cmd = protocol.parse_admin_command(
+        {"command": "bench_start", "state": "published", "name": "tuneshroom"})
+    assert isinstance(cmd, protocol.BenchStartCommand)
+    assert (cmd.state, cmd.name) == ("published", "tuneshroom")
+
+
+def test_bench_start_rejects_bad_state():
+    with pytest.raises(ValueError):
+        protocol.parse_admin_command(
+            {"command": "bench_start", "state": "bogus", "name": "x"})
+
+
+def test_bench_stop_command_parses():
+    assert isinstance(protocol.parse_admin_command({"command": "bench_stop"}),
+                      protocol.BenchStopCommand)
+
+
+def test_bench_fire_command_parses():
+    cmd = protocol.parse_admin_command({"command": "bench_fire", "name": "flash"})
+    assert isinstance(cmd, protocol.BenchFireCommand)
+    assert cmd.name == "flash"
+
+
+def test_bench_fire_missing_name_raises():
+    with pytest.raises(ValueError):
+        protocol.parse_admin_command({"command": "bench_fire"})
+
+
+def test_bench_lane_command_parses():
+    cmd = protocol.parse_admin_command(
+        {"command": "bench_lane", "verb": "tilt", "value": 0.5,
+         "status": 176, "data1": 74})
+    assert isinstance(cmd, protocol.BenchLaneCommand)
+    assert (cmd.verb, cmd.value, cmd.status, cmd.data1) == ("tilt", 0.5, 176, 74)
+
+
+def test_bench_lane_rejects_non_numeric_value():
+    with pytest.raises(ValueError):
+        protocol.parse_admin_command(
+            {"command": "bench_lane", "verb": "tilt", "value": "nope",
+             "status": 176, "data1": 74})
+
+
+def test_list_captures_command_parses():
+    assert isinstance(
+        protocol.parse_admin_command({"command": "list_captures"}),
+        protocol.ListCapturesCommand)
+
+
+def test_capture_stats_command_parses():
+    cmd = protocol.parse_admin_command(
+        {"command": "capture_stats", "session": "s1", "label": "tap"})
+    assert isinstance(cmd, protocol.CaptureStatsCommand)
+    assert (cmd.session, cmd.label) == ("s1", "tap")
+
+
+def test_capture_stats_missing_field_raises():
+    with pytest.raises(ValueError):
+        protocol.parse_admin_command({"command": "capture_stats", "session": "s1"})
+
+
+def test_replay_trace_command_parses():
+    cmd = protocol.parse_admin_command(
+        {"command": "replay_trace", "state": "published", "name": "tuneshroom",
+         "trigger": "tap", "session": "s1", "label": "tap", "series": 1})
+    assert isinstance(cmd, protocol.ReplayTraceCommand)
+    assert (cmd.state, cmd.name, cmd.trigger, cmd.session, cmd.label,
+           cmd.series) == ("published", "tuneshroom", "tap", "s1", "tap", 1)
+
+
+def test_replay_trace_missing_field_raises():
+    with pytest.raises(ValueError):
+        protocol.parse_admin_command(
+            {"command": "replay_trace", "state": "published", "name": "tuneshroom",
+             "trigger": "tap", "session": "s1", "label": "tap"})
+
+
+def test_bench_started_event_shape():
+    functions = [{"name": "flash", "description": "", "source": "builtin"}]
+    assert protocol.bench_started_event(functions) == {
+        "event": "bench_started", "functions": functions}
+
+
+def test_bench_frame_event_shape():
+    assert protocol.bench_frame_event([1, 2]) == {
+        "event": "bench_frame", "channels": [1, 2]}
+
+
+def test_captures_listed_event_shape():
+    sessions = [{"session": "s1", "labels": {"tap": 3}}]
+    assert protocol.captures_listed_event(sessions) == {
+        "event": "captures_listed", "sessions": sessions}
+
+
+def test_capture_stats_event_shape():
+    rows = [{"label": "tap", "n": 3}]
+    proposal = {"peak_g": 1.6}
+    assert protocol.capture_stats_event(rows, proposal) == {
+        "event": "capture_stats", "rows": rows, "proposal": proposal}
+    assert protocol.capture_stats_event([], None) == {
+        "event": "capture_stats", "rows": [], "proposal": None}
+
+
+def test_replay_result_event_shape():
+    result = {"fires": [10], "trace": {"t_ms": [0, 10], "accel_g": [1.0, 3.0]}}
+    assert protocol.replay_result_event(result) == {
+        "event": "replay_result", "result": result}
