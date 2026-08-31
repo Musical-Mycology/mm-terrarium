@@ -136,4 +136,22 @@ globalThis.WebSocket = FakeSocket;
 
     console.log("confirmTap stale-timer-after-confirm: ok");
   }
+
+  const shell = await import("../../console/static/shell.js");
+  // view switcher: exactly one visible view at a time
+  shell.showView("log");
+  assert.strictEqual(byId.get("viewLive").hidden, true);
+  assert.strictEqual(byId.get("viewLog").hidden, false);
+  assert.ok(byId.get("navLog").className.includes("active"));
+  assert.ok(!byId.get("navLive").className.includes("active"));
+  shell.showView("live");
+  assert.strictEqual(byId.get("viewLive").hidden, false);
+  assert.strictEqual(byId.get("viewLog").hidden, true);
+  // Room nav label tracks the active room
+  shell.paintRoomNav([{ name: "TEST", active: true }]);
+  assert.strictEqual(byId.get("navRoom").textContent, "Room: TEST");
+  shell.paintRoomNav([{ name: "TEST", active: false }]);
+  assert.strictEqual(byId.get("navRoom").textContent, "Room: none");
+
+  console.log("shell view switcher: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

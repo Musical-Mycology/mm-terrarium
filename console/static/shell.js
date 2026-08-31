@@ -9,6 +9,28 @@ import { init as initRooms } from "./rooms.js";
 const conn = document.getElementById("connChip");
 const roomChip = document.getElementById("roomChip");
 
+const VIEWS = { live: ["viewLive", "navLive"], room: ["viewRoom", "navRoom"], log: ["viewLog", "navLog"] };
+
+export function showView(name) {
+  for (const [key, [viewId, navId]] of Object.entries(VIEWS)) {
+    const on = key === name;
+    document.getElementById(viewId).hidden = !on;
+    const btn = document.getElementById(navId);
+    btn.className = on ? "navbtn active" : "navbtn";
+  }
+}
+
+export function paintRoomNav(rooms) {
+  const active = (rooms || []).find((r) => r.active);
+  document.getElementById("navRoom").textContent =
+    `Room: ${active ? active.name : "none"}`;
+}
+
+document.getElementById("navLive").onclick = () => showView("live");
+document.getElementById("navRoom").onclick = () => showView("room");
+document.getElementById("navLog").onclick = () => showView("log");
+wire.on("snapshot", (m) => paintRoomNav(m.rooms));
+
 wire.on("_open", () => {
   conn.className = "chip sage";
   conn.textContent = "Connected";

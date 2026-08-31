@@ -135,23 +135,41 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2.5px solid var(--gold
   text-transform: uppercase; color: var(--terra); margin: 0;
 }
 .content {
-  display: grid; grid-template-columns: 1fr 320px;
+  display: grid; grid-template-columns: 1fr;
   gap: 16px; padding: 16px; align-items: start;
   max-width: 1460px; width: 100%;
 }
-.maincol, .rail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.maincol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
-/* The rail folds under main FIRST; the left nav survives down to phone
-   width. The nav is the design's anchor -- it must not collapse into a
-   top strip at artifact-panel / tablet widths. */
-@media (max-width: 1400px) {
-  .content { grid-template-columns: 1fr; }
-}
 @media (max-width: 800px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { border-right: none; border-bottom: 2px solid rgba(240,201,160,0.35); }
   .bitcard { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 14px; }
 }
+
+/* ---------- sidebar nav + cards ---------- */
+.viewnav { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
+.navbtn {
+  font-family: var(--f-disp); font-size: 15px; letter-spacing: 0.06em;
+  text-align: left; background: none; border: none; color: var(--ink-var);
+  border-left: 3px solid transparent; border-radius: 0 9999px 9999px 0;
+  padding: 7px 14px;
+}
+.navbtn:hover { color: var(--ink); background: var(--s-high); }
+.navbtn.active { color: var(--gold); border-left-color: var(--gold); background: var(--s); }
+.sidecard { border-top: 1.5px solid var(--hair); padding-top: 12px; }
+.pill {
+  font-family: var(--f-disp); font-size: 12px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--gold);
+  background: none; border: 1.5px solid var(--gold-deep);
+  border-radius: 9999px; padding: 2px 12px;
+}
+.pill:hover { background: var(--s-high); }
+
+/* Identity/version sizing (Task 2 relies on these). */
+.bitname-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.bitname-row h3 { font-family: var(--f-disp); font-weight: 400; font-size: 17px; line-height: 1.1; margin: 0; overflow-wrap: anywhere; }
+.bitversion { font-family: var(--f-mono); font-size: 9.5px; color: var(--ink-dim); margin: 0; }
 
 /* ---------- sidebar: loaded bit (compact) ---------- */
 .bitcard { display: flex; flex-direction: column; gap: 11px; }
