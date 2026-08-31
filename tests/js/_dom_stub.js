@@ -133,9 +133,13 @@ function el(tagName) {
           beginPath() {},
           arc() {},
           fill() {},
-          stroke() {},
+          moveTo() {},
+          lineTo() {},
+          stroke() {
+            node._ctx.calls.push({ type: "stroke", strokeStyle: node._ctx.strokeStyle });
+          },
           fillRect(x, y, w, h) {
-            node._ctx.calls.push({ fillStyle: node._ctx.fillStyle, x, y, w, h });
+            node._ctx.calls.push({ type: "fillRect", fillStyle: node._ctx.fillStyle, x, y, w, h });
           },
         };
       }
