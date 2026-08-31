@@ -33,7 +33,8 @@ const ROOM = {
 function snapshotMsg() {
   return {
     event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
-    roles: [], registration: [{ role: "player", count: 2, capacity: 2 }],
+    roles: [{ role: "player", class: "shared", capacity: 2, scored: true }],
+    registration: [{ role: "player", count: 2, capacity: 2 }],
     devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" },
               { dev: "sim-room-main", name: "Room", role: null }],
     bit_status: {}, functions: FUNCTIONS, room: ROOM,
@@ -66,7 +67,11 @@ function snapshotMsg() {
   assert.ok(bitPanel.innerHTML.includes("Metronome"), "bit panel should show loaded bit");
   assert.ok(byId.get("roomCard").innerHTML.includes("DEMO"));
   assert.ok(byId.get("registrationCard").innerHTML.includes("2/2"));
-  assert.ok(byId.get("registrationCard").innerHTML.includes("Testshroom 1"));
+  // per-device detail lives on the Room view's active card now, not the rail
+  assert.ok(!byId.get("registrationCard").innerHTML.includes("Testshroom 1"));
+  const roomsModule = rooms;
+  const demoCard = roomsModule._cardFor("DEMO");
+  assert.ok(demoCard.innerHTML.includes("Testshroom 1"), "active room card lists connected devices");
 
   // shell.showView smoke: nav switches the visible maincol and marks the
   // active nav button.

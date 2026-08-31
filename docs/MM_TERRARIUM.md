@@ -2137,6 +2137,8 @@ Load picker can show what a Bit will grant without loading it first.
 
 ### Console nav redesign: right rail deleted, three toggled center views (2026-08-31)
 Design: [`.../2026-08-31-console-nav-redesign-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-console-nav-redesign-design.md).
+(Partially superseded the same day — see the next entry: the Event Log view
+and the sidebar Instruments pull are gone again.)
 The right rail described above is gone. `rail.js` is now registration plus
 an "Instruments" pull (device rows tagged Scored/Jam/Fixture/Unregistered,
 with fixture devs sourced from the room's fixtures) and the event log; the
@@ -2145,6 +2147,51 @@ instead. `shell.js` now owns `showView()`/`paintRoomNav()`, switching
 between three hidden-toggled center views — Live (the default), Room, and
 Event Log — rather than a single always-visible layout. The rooms panel is
 now the Room view itself, no longer a top strip.
+
+### Console nav follow-up: two views, registration rollup, Room detail, pinned log (2026-08-31, PR #71)
+Same-day operator-feedback pass over the entry above; no protocol changes —
+everything renders from the existing `snapshot`/`room_changed`/
+`devices_changed` payloads.
+
+- **Two nav views, not three.** The sidebar nav (Live, Room) moved to the
+  top of the sidebar so it can never scroll out of view; the Event Log nav
+  button is deleted. The event log card is pinned at the bottom of the
+  **Live** view's main column instead (main-area width; the sidebar column
+  stays nav-only). `shell.VIEWS` is exported and has no `log` key.
+- **Sidebar registration is a three-line category rollup** — `Fixtures x/y`
+  (bound/total from the room's fixtures), `Scored x/y`, `Jam x/y` (counts
+  summed across declared roles by `scored`/`class`; a declared role with no
+  registration row counts as 0, any null capacity renders ∞). The per-role
+  rows/meters and the per-device "Instruments" pull left the sidebar.
+- **The Room view's active card grew a detail section** (`rooms.js`
+  `renderDetail()`): capability (px, color order, zone count), fixtures with
+  binding state and zone names, every connected device with its role and the
+  Scored/Jam/Fixture/Unregistered tag (the tag logic that used to live in
+  `rail.js`), and declared instruments with lanes. The detail mount holds no
+  buttons, so it rebuilds freely without threatening the Load/Unload
+  confirm-tap discipline; only the active room's card carries it.
+- **The Live view's "Functions" accordion is labelled "Triggers"** (label
+  only — ids `functionsAcc`/`functionsMount` and `functions.js` unchanged).
+
+### Console nav follow-up 2: the [hidden] guard, "Live values", nav backdrop (2026-08-31, PR #72)
+Venue-feedback pass over PR #71. The load-bearing item is a CSS gotcha worth
+remembering: **an author `display` rule silently defeats the `hidden`
+attribute.** `terrarium.css` had no `[hidden]` rule, and author styles
+(`.maincol { display: flex }`, `.chip { display: inline-flex }`) override the
+UA stylesheet's `[hidden] { display: none }` regardless of specificity — so
+PR #71's Live/Room switching was a visible no-op (both views rendered
+stacked) while every JS test stayed green, because the node DOM stub checks
+the `hidden` *property*, not computed style. The fix is a global
+`[hidden] { display: none !important; }` guard, pinned by
+`test_console_static.py::test_css_guards_the_hidden_attribute`. Anyone adding
+a new `display:`-styled container that is ever hidden is already covered by
+that guard — do not remove it.
+
+Also: the Live room card's "Instruments" accordion is labelled **"Live
+values"** (it shows real-time controller values; the official instrument
+declarations live on the Registration rollup and the Room view's detail),
+and the sidebar nav sits on a lighter `--s-high` backdrop to separate it
+from the rest of the rail. Ids and `functions.js` untouched.
 
 ### SolidCue overrides, SURFACE targeting, per-surface mute, and the four operator triggers (2026-08-26)
 The Triggers panel becomes a real operator control surface. Design:

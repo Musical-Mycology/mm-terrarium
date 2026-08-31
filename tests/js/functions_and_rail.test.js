@@ -130,8 +130,8 @@ const FUNCTIONS = [
   assert.strictEqual(driftCard.children.length, driftChildrenBefore);
   assert.strictEqual(tiltCard.children.length, tiltChildrenBefore);
 
-  // rail: registration meter, log severities
-  assert.ok(byId.get("registrationCard").innerHTML.includes("2/2"));
+  // rail: rollup categories render even with no role declarations
+  assert.ok(byId.get("registrationCard").innerHTML.includes("Fixtures"));
   send({ event: "log", level: "error", message: "boom" });
   assert.ok(byId.get("logCard").innerHTML.includes("boom"));
   send({ event: "bit_completed", result: { phrases: 4 }, bit_name: "MetronomeBit" });
@@ -181,14 +181,14 @@ const FUNCTIONS = [
                  controllers: {} } });
 
   {
+    // Sidebar registration is now a three-line category rollup only; the
+    // per-device Instruments pull moved to the Room view (rooms.js).
     const reg = byId.get("registrationCard").innerHTML;
-    assert.ok(reg.includes("Instruments"), "pull is labeled Instruments");
-    assert.ok(!reg.includes(">Devices<"), "no Devices wording");
-    assert.ok(reg.includes("Testshroom 1"));
-    assert.ok(/Testshroom 1[\s\S]*?Scored/.test(reg), "scored role tagged Scored");
-    assert.ok(/Testshroom 2[\s\S]*?Jam/.test(reg), "jam role tagged Jam");
-    assert.ok(/Room sim[\s\S]*?Fixture/.test(reg), "room-bound dev tagged Fixture");
-    assert.ok(/Wanderer[\s\S]*?Unregistered/.test(reg), "no-role dev tagged Unregistered");
+    assert.ok(/Fixtures[\s\S]*?1\/1/.test(reg), "fixtures rollup bound/total");
+    assert.ok(/Scored[\s\S]*?2\/2/.test(reg), "scored rollup count/capacity");
+    assert.ok(/Jam[\s\S]*?0\/∞/.test(reg), "jam rollup count/unbounded");
+    assert.ok(!reg.includes("Instruments"), "no Instruments pull in sidebar");
+    assert.ok(!reg.includes("Testshroom 1"), "no per-device rows in sidebar");
   }
 
   console.log("functions_and_rail: ok");

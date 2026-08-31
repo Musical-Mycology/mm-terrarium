@@ -138,15 +138,17 @@ globalThis.WebSocket = FakeSocket;
   }
 
   const shell = await import("../../console/static/shell.js");
-  // view switcher: exactly one visible view at a time
-  shell.showView("log");
+  // view switcher: exactly one visible view at a time; the Event Log is no
+  // longer a view of its own (it lives pinned inside the Live view).
+  shell.showView("room");
   assert.strictEqual(byId.get("viewLive").hidden, true);
-  assert.strictEqual(byId.get("viewLog").hidden, false);
-  assert.ok(byId.get("navLog").className.includes("active"));
+  assert.strictEqual(byId.get("viewRoom").hidden, false);
+  assert.ok(byId.get("navRoom").className.includes("active"));
   assert.ok(!byId.get("navLive").className.includes("active"));
   shell.showView("live");
   assert.strictEqual(byId.get("viewLive").hidden, false);
-  assert.strictEqual(byId.get("viewLog").hidden, true);
+  assert.strictEqual(byId.get("viewRoom").hidden, true);
+  assert.strictEqual(shell.VIEWS.log, undefined, "log is not a nav view");
   // Room nav label tracks the active room
   shell.paintRoomNav([{ name: "TEST", active: true }]);
   assert.strictEqual(byId.get("navRoom").textContent, "Room: TEST");

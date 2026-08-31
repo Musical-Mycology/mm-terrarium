@@ -10,11 +10,10 @@ import { init as initDesign } from "./design.js";
 const conn = document.getElementById("connChip");
 const roomChip = document.getElementById("roomChip");
 
-const VIEWS = {
+export const VIEWS = {
   live: ["viewLive", "navLive"],
   room: ["viewRoom", "navRoom"],
   design: ["viewDesign", "navDesign"],
-  log: ["viewLog", "navLog"],
 };
 
 export function showView(name) {
@@ -35,7 +34,6 @@ export function paintRoomNav(rooms) {
 document.getElementById("navLive").onclick = () => showView("live");
 document.getElementById("navRoom").onclick = () => showView("room");
 document.getElementById("navDesign").onclick = () => showView("design");
-document.getElementById("navLog").onclick = () => showView("log");
 wire.on("snapshot", (m) => paintRoomNav(m.rooms));
 
 wire.on("_open", () => {
