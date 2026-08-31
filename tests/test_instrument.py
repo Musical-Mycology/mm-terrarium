@@ -2,8 +2,11 @@
 from dataclasses import dataclass
 
 import pytest
-from control.cues import ROOM
-from control.functions import Function, FunctionKind, FunctionTarget, GeneratorSpec
+from control.cues import ROOM, TARGET
+from control.functions import (
+    Function, FunctionKind, FunctionTarget, GeneratorSpec, ScriptStep,
+    StreamOutput, StreamSpec,
+)
 from control.instrument import (
     CAPABILITY_VOCABULARY, CUE_KINDS, CarriedInstrument, Instrument,
     InstrumentError, InstrumentRequirement, TUNESHROOM, ambient_manifests,
@@ -86,14 +89,23 @@ def test_instrument_generator_function_with_bad_waveform_is_located():
     assert "square" in str(exc.value)
 
 
-def test_instrument_non_generator_function_is_refused():
-    scripted = Function(
-        name="tap", description="a tap function",
-        target=FunctionTarget.DEVICE, kind=FunctionKind.SCRIPTED)
-    inst = Instrument(name="glowstrip", functions=(scripted,))
+def test_instrument_stream_function_is_refused():
+    stream = Function(
+        name="tap", description="a tap function", kind=FunctionKind.STREAM,
+        stream=StreamSpec(verb="tilt", arg=0, in_lo=-1.0, in_hi=1.0,
+                          outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),)))
+    inst = Instrument(name="glowstrip", functions=(stream,))
     with pytest.raises(InstrumentError, match="glowstrip") as exc:
         validate_instrument(inst)
-    assert "only generator Functions may be declared on an instrument" in str(exc.value)
+    assert "only generator and scripted Functions" in str(exc.value)
+
+
+def test_instrument_scripted_function_is_accepted():
+    scripted = Function(
+        name="tap", description="a tap function", kind=FunctionKind.SCRIPTED,
+        script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),))
+    inst = Instrument(name="glowstrip", functions=(scripted,))
+    validate_instrument(inst)
 
 
 def test_unknown_capability_tag_is_a_located_error():

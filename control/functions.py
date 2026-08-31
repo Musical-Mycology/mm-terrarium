@@ -381,17 +381,12 @@ def validate_function_table(function_table, verb_names, *, owner="bit") -> None:
         if not isinstance(function_decl.kind, FunctionKind):
             raise ValueError(
                 f"{where}: kind must be a FunctionKind, got {function_decl.kind!r}")
-        if function_decl.name in RESERVED_NAMES:
+        if owner == "instrument" and function_decl.name in RESERVED_NAMES:
             raise ValueError(
                 f"{where}: {function_decl.name!r} is a reserved built-in "
                 f"name (flash/stop/ping) and may not be declared")
         if function_decl.kind is FunctionKind.SCRIPTED:
             if owner == "bit":
-                if function_decl.script:
-                    raise ValueError(
-                        f"{where}: a Bit scripted function is a name-fire "
-                        f"and carries no script; content lives on the "
-                        f"instrument (declare script=())")
                 _validate_scripted(function_decl, allowed_verbs)
             else:
                 if not function_decl.script:
