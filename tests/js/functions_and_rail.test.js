@@ -138,10 +138,11 @@ const FUNCTIONS = [
   send({ event: "bit_completed", result: { phrases: 4 }, bit_name: "MetronomeBit" });
   assert.ok(byId.get("logCard").innerHTML.includes("phrases"));
 
-  // rail: Roles & manifests renderer -- light + audio instrument kinds and
-  // the welcome-line formatting transform. Shape modeled on test_bit.py's
-  // `player` role (real light_manifest cc:74->hue lane, ugen_manifest, and
-  // a welcome dict) via console/protocol.py's role_view().
+  // Roles refcard data (shape modeled on test_bit.py's `player` role via
+  // console/protocol.py's role_view()) now feeds bit.js's Bit Details popup;
+  // that rendering is covered by bit_panel.test.js. This block only keeps
+  // the PLAYER_ROLE fixture as snapshot input so the rest of the rail
+  // (registration/devices/log) still exercises a populated snapshot.
   const PLAYER_ROLE = {
     role: "player", class: "PLAYER", capacity: 2, scored: true,
     light_manifest: {
@@ -173,40 +174,6 @@ const FUNCTIONS = [
          room: { room_type: "DEMO", capability: { pixel_count: 864,
                  color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
                  controllers: {} } });
-
-  const rolesHtml = byId.get("rolesCard").innerHTML;
-  assert.ok(rolesHtml.includes("player"), "role name should render");
-  assert.ok(rolesHtml.includes("PLAYER"), "role class should render");
-  // light instrument path: kind-tagged "Light" and delegated to buildInstrumentCard
-  assert.ok(rolesHtml.includes("Light"), "light instrument kind should render");
-  assert.ok(rolesHtml.includes("aurora"), "light instrument name should render");
-  assert.ok(rolesHtml.includes("primary"), "light instrument target should render");
-  // audio instrument path: kind-tagged "Audio" and delegated to buildInstrumentCard
-  assert.ok(rolesHtml.includes("Audio"), "audio instrument kind should render");
-  assert.ok(rolesHtml.includes("flsyn"), "audio instrument name should render");
-  // welcome-line formatting: `${k}: ${v.instrument}` joined with " · "
-  assert.ok(rolesHtml.includes("light: glow"), "welcome light entry should render");
-  assert.ok(rolesHtml.includes("audio: chime"), "welcome audio entry should render");
-  assert.ok(rolesHtml.includes("light: glow · audio: chime") ||
-            rolesHtml.includes("audio: chime · light: glow"),
-            "welcome entries should be joined with ·");
-  // requires: slot + capabilities should render on the role card so an
-  // operator can see why a join was refused.
-  assert.ok(rolesHtml.includes("requires"), "requires label should render");
-  assert.ok(rolesHtml.includes("fixture"), "requires slot should render");
-  assert.ok(rolesHtml.includes("light.pixels"), "requires capabilities should render");
-
-  // a role with no `requires` slot renders no requires line at all.
-  const NO_REQUIRES_ROLE = { ...PLAYER_ROLE, role: "watcher", requires: null };
-  send({ event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
-         roles: [NO_REQUIRES_ROLE],
-         registration: [{ role: "watcher", count: 0, capacity: null }],
-         devices: [], bit_status: {}, functions: FUNCTIONS,
-         room: { room_type: "DEMO", capability: { pixel_count: 864,
-                 color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
-                 controllers: {} } });
-  const noReqHtml = byId.get("rolesCard").innerHTML;
-  assert.ok(!noReqHtml.includes("requires —"), "no requires line without a requires slot");
 
   console.log("functions_and_rail: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

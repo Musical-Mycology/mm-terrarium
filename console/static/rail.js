@@ -1,11 +1,8 @@
-// Right rail: Registration, Devices, Roles & manifests, Event log. Four
-// independent renderers sharing nothing but wire.js and, for the Roles &
-// manifests card, surface.js's instrument-card builder -- one component,
-// two consumers, per the spec.
+// Right rail: Registration, Devices, Event log. Three independent
+// renderers sharing nothing but wire.js.
 import * as wire from "./wire.js";
-import { buildInstrumentCard } from "./surface.js";
 
-let rolesByName = {};        // role name -> role_view() dict (class, scored, manifests, welcome)
+let rolesByName = {};        // role name -> role_view() dict, used for registration tags
 let registrationRows = [];   // last registration_changed/snapshot rows: {role, count, capacity}
 let deviceRows = [];         // last devices_changed/snapshot rows: {dev, name, role}
 let pointerOverLog = false;
@@ -81,68 +78,6 @@ function renderDevices() {
   }
 }
 
-// ------------------------------------------------------------- roles/manifests
-
-function manifestInstruments(role) {
-  const out = [];
-  for (const inst of (role.light_manifest && role.light_manifest.instruments) || []) {
-    out.push(Object.assign({ kind: "light" }, inst));
-  }
-  for (const inst of (role.ugen_manifest && role.ugen_manifest.instruments) || []) {
-    out.push(Object.assign({ kind: "audio" }, inst));
-  }
-  return out;
-}
-
-function buildRefCard(role) {
-  const details = document.createElement("details");
-  details.className = "refcard";
-
-  const summary = document.createElement("summary");
-  summary.appendChild(mk("span", "tri", "▸"));
-  summary.appendChild(document.createTextNode(role.role));
-  summary.appendChild(mk("span", "chip dim classtag", role.class));
-  if (role.scored) summary.appendChild(mk("span", "chip gold scoredtag", "scored"));
-  details.appendChild(summary);
-
-  const body = mk("div", "accbody");
-  if (role.requires) {
-    const caps = (role.requires.capabilities || []).join(", ");
-    const reqText = caps ? `${role.requires.slot} (${caps})` : role.requires.slot;
-    body.appendChild(mk("p", "muted requires", `requires — ${reqText}`));
-  }
-  if (role.welcome) {
-    const welcomeText = Object.entries(role.welcome)
-      .map(([k, v]) => `${k}: ${v && v.instrument ? v.instrument : JSON.stringify(v)}`)
-      .join(" · ");
-    body.appendChild(mk("p", "muted welcome", `welcome — ${welcomeText}`));
-  }
-
-  const instruments = manifestInstruments(role);
-  if (!instruments.length) {
-    body.appendChild(mk("p", "muted", "No manifest declared"));
-  } else {
-    const grid = mk("div", "instgrid");
-    for (const inst of instruments) grid.appendChild(buildInstrumentCard(inst, {}));
-    body.appendChild(grid);
-  }
-  details.appendChild(body);
-  return details;
-}
-
-function renderRoles() {
-  const card = document.getElementById("rolesCard");
-  clear(card);
-  card.appendChild(mk("h3", "railhead", "Roles & manifests"));
-
-  const names = Object.keys(rolesByName);
-  if (!names.length) {
-    card.appendChild(mk("p", "muted", "No roles declared"));
-    return;
-  }
-  for (const name of names) card.appendChild(buildRefCard(rolesByName[name]));
-}
-
 // -------------------------------------------------------------------- log
 
 const LOG_CAP = 500;
@@ -189,7 +124,6 @@ export function init() {
     deviceRows = m.devices || [];
     renderRegistration();
     renderDevices();
-    renderRoles();
   });
   wire.on("registration_changed", (m) => {
     registrationRows = m.roles || [];

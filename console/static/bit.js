@@ -1,6 +1,7 @@
 // Sidebar Loaded-Bit panel: identity, phase chip, Run/Abort/Load buttons,
 // the Load picker overlay, and the Bit status card.
 import * as wire from "./wire.js";
+import { buildInstrumentCard } from "./surface.js";
 
 const PHASES = {
   LOADING: ["Loaded", "gold"],
@@ -17,6 +18,7 @@ let bitsSignature = null; // rule 1: bits_listed gated by signature
 let state = "IDLE";
 let loadedName = null;
 let terrariumState = null; // gates Load/Run/Abort: only enabled in ROOM_READY
+let rolesByName = {};      // role name -> role_view() dict, for the Bit Details popup
 
 function roomReady() {
   return terrariumState === "ROOM_READY";
@@ -75,16 +77,20 @@ function render() {
   const bit = findBit(loadedName);
   const wrap = mk("div", "bitcard");
 
-  // identity row
-  const idrow = mk("div", "identity");
+  // identity: icon + title one row, version + details pill beneath
+  const idrow = mk("div", "bitname-row");
   idrow.appendChild(mk("span", "art", "✦"));
-  const namewrap = mk("div");
-  namewrap.appendChild(mk("h3", null, (bit && bit.display_name) || loadedName));
-  const versionSuffix = bit ? ` · v${bit.version}` : "";
-  namewrap.appendChild(mk("p", "muted mono", `${loadedName}${versionSuffix}`));
-  idrow.appendChild(namewrap);
+  const h3 = mk("h3", null, (bit && bit.display_name) || loadedName);
+  idrow.appendChild(h3);
   if (bit) idrow.appendChild(mk("span", "kind", bit.kind));
   wrap.appendChild(idrow);
+
+  const versionSuffix = bit ? ` · v${bit.version}` : "";
+  wrap.appendChild(mk("p", "bitversion", `${loadedName}${versionSuffix}`));
+
+  const detailsPill = mk("button", "pill", "Bit Details");
+  detailsPill.onclick = () => openDetails(bit);
+  wrap.appendChild(detailsPill);
 
   // button row -- Run/Abort/Load, disabled outside ROOM_READY (spec: a Bit
   // cannot run, abort, or be (re)loaded without a Room bound and ready).
@@ -124,21 +130,93 @@ function render() {
   }
   wrap.appendChild(phase);
 
-  // details
-  if (bit) {
-    const dl = mk("dl", "detail");
-    const addRow = (k, v) => {
-      dl.appendChild(mk("dt", null, k));
-      dl.appendChild(mk("dd", null, v));
-    };
-    addRow("Rooms", (bit.room_types || []).join(", ") || "none");
-    addRow("Roles", rolesText(bit.roles));
-    addRow("About", bit.description || "—");
-    addRow("Notes", bit.notes || "—");
-    wrap.appendChild(dl);
+  panel.appendChild(wrap);
+}
+
+// ------------------------------------------------------------ Bit Details
+
+function manifestInstruments(role) {
+  const out = [];
+  for (const inst of (role.light_manifest && role.light_manifest.instruments) || []) {
+    out.push(Object.assign({ kind: "light" }, inst));
+  }
+  for (const inst of (role.ugen_manifest && role.ugen_manifest.instruments) || []) {
+    out.push(Object.assign({ kind: "audio" }, inst));
+  }
+  return out;
+}
+
+function buildRefCard(role) {
+  const details = document.createElement("details");
+  details.className = "refcard";
+
+  const summary = document.createElement("summary");
+  summary.appendChild(mk("span", "tri", "▸"));
+  summary.appendChild(document.createTextNode(role.role));
+  summary.appendChild(mk("span", "chip dim classtag", role.class));
+  if (role.scored) summary.appendChild(mk("span", "chip gold scoredtag", "scored"));
+  details.appendChild(summary);
+
+  const body = mk("div", "accbody");
+  if (role.requires) {
+    const caps = (role.requires.capabilities || []).join(", ");
+    const reqText = caps ? `${role.requires.slot} (${caps})` : role.requires.slot;
+    body.appendChild(mk("p", "muted requires", `requires — ${reqText}`));
+  }
+  if (role.welcome) {
+    const welcomeText = Object.entries(role.welcome)
+      .map(([k, v]) => `${k}: ${v && v.instrument ? v.instrument : JSON.stringify(v)}`)
+      .join(" · ");
+    body.appendChild(mk("p", "muted welcome", `welcome — ${welcomeText}`));
   }
 
-  panel.appendChild(wrap);
+  const instruments = manifestInstruments(role);
+  if (!instruments.length) {
+    body.appendChild(mk("p", "muted", "No manifest declared"));
+  } else {
+    const grid = mk("div", "instgrid");
+    for (const inst of instruments) grid.appendChild(buildInstrumentCard(inst, {}));
+    body.appendChild(grid);
+  }
+  details.appendChild(body);
+  return details;
+}
+
+function openDetails(bit) {
+  const mount = document.getElementById("overlayMount");
+  clear(mount);
+  const overlay = mk("div", "overlay open");
+  overlay.onclick = (e) => { if (e.target === overlay) closeOverlay(); };
+  const picker = mk("div", "picker");
+
+  const head = mk("div", "pickhead");
+  head.appendChild(mk("h2", null, "Bit Details"));
+  const xbtn = mk("button", "xbtn", "✕");
+  xbtn.onclick = closeOverlay;
+  head.appendChild(xbtn);
+  picker.appendChild(head);
+
+  const dl = mk("dl", "detail");
+  const addRow = (k, v) => { dl.appendChild(mk("dt", null, k)); dl.appendChild(mk("dd", null, v)); };
+  addRow("Rooms", (bit && bit.room_types || []).join(", ") || "none");
+  addRow("Roles", rolesText(bit && bit.roles));
+  addRow("About", (bit && bit.description) || "—");
+  addRow("Notes", (bit && bit.notes) || "—");
+  picker.appendChild(dl);
+
+  for (const name of Object.keys(rolesByName)) {
+    picker.appendChild(buildRefCard(rolesByName[name]));
+  }
+  overlay.appendChild(picker);
+  mount.appendChild(overlay);
+
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      closeOverlay();
+      document.removeEventListener("keydown", onKey);
+    }
+  };
+  document.addEventListener("keydown", onKey);
 }
 
 // ---------------------------------------------------------------- picker
@@ -285,6 +363,8 @@ export function init() {
     state = m.state;
     loadedName = m.loaded_bit;
     terrariumState = m.terrarium_state;
+    rolesByName = {};
+    for (const role of m.roles || []) rolesByName[role.role] = role;
     render();
     renderStatus(m.bit_status || {});
   });
