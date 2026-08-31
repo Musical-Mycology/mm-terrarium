@@ -130,9 +130,8 @@ const FUNCTIONS = [
   assert.strictEqual(driftCard.children.length, driftChildrenBefore);
   assert.strictEqual(tiltCard.children.length, tiltChildrenBefore);
 
-  // rail: registration meter, devices, log severities
+  // rail: registration meter, log severities
   assert.ok(byId.get("registrationCard").innerHTML.includes("2/2"));
-  assert.ok(byId.get("devicesCard").innerHTML.includes("Testshroom 1"));
   send({ event: "log", level: "error", message: "boom" });
   assert.ok(byId.get("logCard").innerHTML.includes("boom"));
   send({ event: "bit_completed", result: { phrases: 4 }, bit_name: "MetronomeBit" });
@@ -167,13 +166,30 @@ const FUNCTIONS = [
     },
     requires: { slot: "fixture", capabilities: ["light.pixels", "light.surface"] },
   };
+  const JAMMER_ROLE = { role: "jammer", class: "jam", capacity: null, scored: false };
   send({ event: "snapshot", state: "RUNNING", loaded_bit: "MetronomeBit",
-         roles: [PLAYER_ROLE], registration: [{ role: "player", count: 2, capacity: 2 }],
-         devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" }],
+         roles: [PLAYER_ROLE, JAMMER_ROLE],
+         registration: [{ role: "player", count: 2, capacity: 2 }],
+         devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" },
+                   { dev: "ie2", name: "Testshroom 2", role: "jammer" },
+                   { dev: "sim-room", name: "Room sim", role: null },
+                   { dev: "ie9", name: "Wanderer", role: null }],
          bit_status: {}, functions: FUNCTIONS,
-         room: { room_type: "DEMO", capability: { pixel_count: 864,
-                 color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
+         room: { room_type: "TEST", capability: { pixel_count: 864,
+                 color_order: "GRB", zones: [] },
+                 fixtures: [{ name: "main", dev: "sim-room", zones: [] }], instruments: [],
                  controllers: {} } });
+
+  {
+    const reg = byId.get("registrationCard").innerHTML;
+    assert.ok(reg.includes("Instruments"), "pull is labeled Instruments");
+    assert.ok(!reg.includes(">Devices<"), "no Devices wording");
+    assert.ok(reg.includes("Testshroom 1"));
+    assert.ok(/Testshroom 1[\s\S]*?Scored/.test(reg), "scored role tagged Scored");
+    assert.ok(/Testshroom 2[\s\S]*?Jam/.test(reg), "jam role tagged Jam");
+    assert.ok(/Room sim[\s\S]*?Fixture/.test(reg), "room-bound dev tagged Fixture");
+    assert.ok(/Wanderer[\s\S]*?Unregistered/.test(reg), "no-role dev tagged Unregistered");
+  }
 
   console.log("functions_and_rail: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

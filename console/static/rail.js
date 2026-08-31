@@ -5,6 +5,8 @@ import * as wire from "./wire.js";
 let rolesByName = {};        // role name -> role_view() dict, used for registration tags
 let registrationRows = [];   // last registration_changed/snapshot rows: {role, count, capacity}
 let deviceRows = [];         // last devices_changed/snapshot rows: {dev, name, role}
+let fixtureDevs = new Set(); // devs bound to a room fixture, for the "Fixture" tag
+let instPullOpen = false;    // Instruments pull open/closed, preserved across rebuilds
 let pointerOverLog = false;
 
 function clear(node) {
@@ -20,6 +22,16 @@ function mk(tag, className, text) {
 
 // ---------------------------------------------------------------- rolerows
 
+function deviceTag(dev) {
+  if (fixtureDevs.has(dev.dev)) return ["Fixture", "chip terra"];
+  if (!dev.role) return ["Unregistered", "chip dim"];
+  const decl = rolesByName[dev.role];
+  if (decl && decl.scored) return ["Scored", "chip gold"];
+  if (decl && decl.class === "jam") return ["Jam", "chip sage"];
+  const cls = decl ? decl.class : "role";
+  return [cls.charAt(0).toUpperCase() + cls.slice(1), "chip dim"];
+}
+
 function renderRegistration() {
   const card = document.getElementById("registrationCard");
   clear(card);
@@ -27,55 +39,53 @@ function renderRegistration() {
 
   if (!registrationRows.length) {
     card.appendChild(mk("p", "muted", "No roles"));
-    return;
-  }
+  } else {
+    for (const row of registrationRows) {
+      const decl = rolesByName[row.role];
+      const wrap = mk("div", "rolerow");
 
-  for (const row of registrationRows) {
-    const decl = rolesByName[row.role];
-    const wrap = mk("div", "rolerow");
+      const top = mk("div", "rolerow-top");
+      top.appendChild(mk("span", "rolename", row.role));
+      if (decl) top.appendChild(mk("span", "chip dim classtag", decl.class));
+      if (decl && decl.scored) top.appendChild(mk("span", "chip gold scoredtag", "scored"));
+      wrap.appendChild(top);
 
-    const top = mk("div", "rolerow-top");
-    top.appendChild(mk("span", "rolename", row.role));
-    if (decl) top.appendChild(mk("span", "chip dim classtag", decl.class));
-    if (decl && decl.scored) top.appendChild(mk("span", "chip gold scoredtag", "scored"));
-    wrap.appendChild(top);
+      const capIsBounded = row.capacity != null;
+      const countText = capIsBounded ? `${row.count}/${row.capacity}` : `${row.count}/∞`;
+      if (capIsBounded) {
+        const meter = mk("div", "meter");
+        const fill = mk("div", "meter-fill");
+        const pct = row.capacity > 0 ? Math.min(100, (row.count / row.capacity) * 100) : 100;
+        fill.style.width = `${pct}%`;
+        meter.appendChild(fill);
+        wrap.appendChild(meter);
+      }
+      wrap.appendChild(mk("span", "mono count", countText));
 
-    const capIsBounded = row.capacity != null;
-    const countText = capIsBounded ? `${row.count}/${row.capacity}` : `${row.count}/∞`;
-    if (capIsBounded) {
-      const meter = mk("div", "meter");
-      const fill = mk("div", "meter-fill");
-      const pct = row.capacity > 0 ? Math.min(100, (row.count / row.capacity) * 100) : 100;
-      fill.style.width = `${pct}%`;
-      meter.appendChild(fill);
-      wrap.appendChild(meter);
+      card.appendChild(wrap);
     }
-    wrap.appendChild(mk("span", "mono count", countText));
-
-    card.appendChild(wrap);
-  }
-}
-
-// ------------------------------------------------------------------ devrows
-
-function renderDevices() {
-  const card = document.getElementById("devicesCard");
-  clear(card);
-  card.appendChild(mk("h3", "railhead", "Devices"));
-
-  if (!deviceRows.length) {
-    card.appendChild(mk("p", "muted", "No devices"));
-    return;
   }
 
+  const pull = document.createElement("details");
+  pull.className = "acc instpull";
+  const summary = document.createElement("summary");
+  summary.appendChild(mk("span", "tri", "▸"));
+  summary.appendChild(document.createTextNode(`Instruments (${deviceRows.length})`));
+  pull.appendChild(summary);
+  const body = mk("div", "accbody");
+  if (!deviceRows.length) body.appendChild(mk("p", "muted", "No instruments connected"));
   for (const dev of deviceRows) {
     const row = mk("div", "devrow");
     row.appendChild(mk("span", "mono devid", dev.dev));
     row.appendChild(mk("span", "devname", dev.name));
-    if (dev.role) row.appendChild(mk("span", "chip dim roletag", dev.role));
-    else row.appendChild(mk("span", "dim roletag", "—"));
-    card.appendChild(row);
+    const [label, chipClass] = deviceTag(dev);
+    row.appendChild(mk("span", `${chipClass} roletag`, label));
+    body.appendChild(row);
   }
+  pull.appendChild(body);
+  if (instPullOpen) pull.setAttribute("open", "");
+  pull.addEventListener("toggle", () => { instPullOpen = pull.open; });
+  card.appendChild(pull);
 }
 
 // -------------------------------------------------------------------- log
@@ -122,8 +132,8 @@ export function init() {
     for (const role of m.roles || []) rolesByName[role.role] = role;
     registrationRows = m.registration || [];
     deviceRows = m.devices || [];
+    fixtureDevs = new Set(((m.room && m.room.fixtures) || []).map((f) => f.dev).filter(Boolean));
     renderRegistration();
-    renderDevices();
   });
   wire.on("registration_changed", (m) => {
     registrationRows = m.roles || [];
@@ -131,7 +141,11 @@ export function init() {
   });
   wire.on("devices_changed", (m) => {
     deviceRows = m.devices || [];
-    renderDevices();
+    renderRegistration();
+  });
+  wire.on("room_changed", (m) => {
+    fixtureDevs = new Set(((m.room && m.room.fixtures) || []).map((f) => f.dev).filter(Boolean));
+    renderRegistration();
   });
   wire.on("state_changed", (m) => {
     logLine("info", "state → " + m.state);
