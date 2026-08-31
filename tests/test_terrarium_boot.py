@@ -2078,3 +2078,101 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
 
     assert captured["catalog_root"] is not None
     assert captured["catalog_root"].name == "instruments"
+
+
+def test_recycle_room_orders_client_stops_before_unload_and_restarts_after():
+    """Client-before-hub (control/teardown.py's invariant): both of
+    Control's own Arco clients -- the O2LiteTransport and the
+    ArcoSynthPool -- must stop before terrarium.recycle_room() tears down
+    the old Arco, and the relaunch mirrors process launch order: pool
+    first (arco.initialize() blocks on clock sync with the new hub), then
+    transport (which asserts a synced clock)."""
+    import types
+
+    import harness.terrarium_boot as terrarium_boot
+
+    calls = []
+
+    class FakeTerrarium:
+        room = types.SimpleNamespace(name="TEST")
+
+        def recycle_room(self):
+            calls.append("recycle")
+            return None
+
+    class FakeTransport:
+        def stop(self):
+            calls.append("transport-stop")
+
+        def start(self, o2):
+            calls.append(("transport-start", o2))
+
+    class FakePool:
+        def quiesce(self):
+            calls.append("pool-quiesce")
+
+        def start(self):
+            calls.append("pool-start")
+
+    o2 = object()
+    reason = terrarium_boot._recycle_room(
+        FakeTerrarium(), transport=FakeTransport(), pool=FakePool(), o2lite=o2)
+    assert reason is None
+    assert calls == ["transport-stop", "pool-quiesce", "recycle",
+                     "pool-start", ("transport-start", o2)]
+
+
+def test_recycle_room_websocket_mode_skips_transport():
+    """Websocket mode passes transport=None -- the devicelink server is
+    process-scoped, not an Arco client -- but the pool still quiesces and
+    restarts since audio is unconditionally on."""
+    import types
+
+    import harness.terrarium_boot as terrarium_boot
+
+    calls = []
+
+    class FakeTerrarium:
+        room = types.SimpleNamespace(name="TEST")
+
+        def recycle_room(self):
+            calls.append("recycle")
+            return None
+
+    class FakePool:
+        def quiesce(self):
+            calls.append("pool-quiesce")
+
+        def start(self):
+            calls.append("pool-start")
+
+    assert terrarium_boot._recycle_room(FakeTerrarium(), pool=FakePool()) is None
+    assert calls == ["pool-quiesce", "recycle", "pool-start"]
+
+
+def test_recycle_room_failure_skips_restarts_and_returns_reason():
+    """On failure the restarts are skipped -- there is no hub to restart
+    against -- and the reason string propagates so the caller can treat it
+    like a Console unload_room."""
+    import types
+
+    import harness.terrarium_boot as terrarium_boot
+
+    calls = []
+
+    class FakeTerrarium:
+        room = types.SimpleNamespace(name="TEST")
+
+        def recycle_room(self):
+            return "arco failed to start: injected"
+
+    class FakePool:
+        def quiesce(self):
+            calls.append("pool-quiesce")
+
+        def start(self):
+            calls.append("pool-start")
+
+    reason = terrarium_boot._recycle_room(FakeTerrarium(), pool=FakePool())
+    assert reason == "arco failed to start: injected"
+    assert "pool-start" not in calls

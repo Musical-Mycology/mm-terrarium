@@ -913,6 +913,39 @@ def _print_join_denied(dev: str, node: str, reason: str) -> None:
     print(f"join denied: {dev} -> {node} ({reason})", flush=True)
 
 
+def _recycle_room(terrarium, *, transport=None, pool=None, o2lite=None):
+    """Recycle the active Room with Control's own Arco clients handled in
+    the only survivable order. Control is a client of the hub it is about
+    to kill, twice over in o2lite mode: the O2LiteTransport (game/actl on
+    pyarco's o2lite singleton) and the ArcoSynthPool (a Flsyn and voices
+    on the dying Arco). Client-before-hub (control/teardown.py's
+    invariant) demands both stop BEFORE the unload; the relaunch mirrors
+    process launch order -- pool.start() first (arco.initialize() blocks
+    until clock sync with the NEW hub), then transport.start(o2lite)
+    (which asserts a synced clock and re-claims actl,game).
+
+    Returns None on success, else the reason string (never raises). On
+    failure the restarts are skipped: there is no hub to restart against,
+    and the caller (the serve-round loop) treats the reason like a
+    Console unload_room -- back to the NO_ROOM wait.
+
+    Websocket mode passes transport=None (the devicelink server is
+    process-scoped, not an Arco client); pool applies in both modes
+    (audio is unconditionally on)."""
+    if transport is not None:
+        transport.stop()
+    if pool is not None:
+        pool.quiesce()
+    reason = terrarium.recycle_room()
+    if reason is not None:
+        return reason
+    if pool is not None:
+        pool.start()
+    if transport is not None:
+        transport.start(o2lite)
+    return None
+
+
 def _register_o2lite_transport(teardown, transport) -> None:
     """Push the o2lite transport's teardown -- exactly where main() calls
     this, right after transport.start(o2lite) has actually adopted the
