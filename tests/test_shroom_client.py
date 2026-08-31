@@ -363,3 +363,51 @@ def test_a_default_client_drops_a_one_eighty_channel_frame():
     client = ShroomClient("ie1", "node-a")
 
     assert client.handle(protocol.leds_event("ie1", list(range(180)))) == ""
+
+
+def test_canvas_message_shape():
+    client = ShroomClient("ie1", "TEST_PLAYER_NODE")
+    msg = client.canvas("http://127.0.0.1:8123/")
+    assert msg["address"] == "/game/canvas"
+    assert msg["typespec"] == "ss"
+    assert msg["args"] == ["ie1", "http://127.0.0.1:8123/"]
+
+
+# --- inbound /<dev>/play and /<dev>/room ---
+
+def _down(kind: str, typespec: str, args: list) -> dict:
+    return {"timestamp": 0.0, "address": f"/{DEV}/{kind}",
+            "typespec": typespec, "args": args}
+
+
+def test_play_invokes_the_injected_callback_and_is_handled():
+    played = []
+    c = ShroomClient(DEV, NODE, leds=None,
+                     on_play=lambda name, params: played.append((name, params)))
+    assert c.handle(_down("play", "ss", ["click", ""])) == f"/{DEV}/play"
+    assert played == [("click", "")]
+    assert c.last_play == ("click", "")
+
+
+def test_play_without_a_callback_is_still_handled_not_dropped():
+    c = client()
+    assert c.handle(_down("play", "ss", ["chime", ""])) == f"/{DEV}/play"
+    assert c.last_play == ("chime", "")
+
+
+def test_a_raising_play_callback_never_propagates():
+    def boom(name, params):
+        raise RuntimeError("sink died")
+    c = ShroomClient(DEV, NODE, leds=None, on_play=boom)
+    assert c.handle(_down("play", "ss", ["click", ""])) == f"/{DEV}/play"
+
+
+def test_room_snapshot_is_stored_and_handled():
+    c = client()
+    blob = {"state": "SETUP", "nodes": []}
+    assert c.handle(_down("room", "b", [blob])) == f"/{DEV}/room"
+    assert c.last_room == blob
+
+
+def test_unknown_kind_is_still_dropped():
+    assert client().handle(_down("mystery", "", [])) == ""

@@ -2,30 +2,36 @@ from types import SimpleNamespace
 
 import pytest
 
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.bit import Bit
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.room_binding import RoomBindingRegistry
+from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from tests.instrument_fixtures import GENERIC_SURFACE
 from control.roles import Role, RoleClass, RoleTable
-from control.rooms import Room, RoomType, room_role
+from control.rooms import Room
 from control.state import State
+
+ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
+    RoomFixture(name="main", color_order="GRB",
+               blocks=(RoomBlock("main", 0, 10),),
+               zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),))
+
+
+def make_room(name="TEST"):
+    return Room(name=name, profile=ROOM_PROFILE, node_id="ROOM_TEST_NODE")
 
 
 class RoomCapableBit(TestBit):
-    room_types = {RoomType.TEST}
-
-    @property
-    def role_table(self) -> RoleTable:
-        table = super().role_table
-        name, role, node = room_role(RoomType.TEST)
-        table.roles[name] = role
-        table.node_map[node] = [name]
-        return table
+    # TestBit's own room_manifests (inherited) is what the engine reads to
+    # synthesize the ROOM role now -- this subclass no longer builds one
+    # itself.
+    room_types = {"TEST"}
 
 
 def test_add_observer_notifies_multiple_observers_of_state_changes():
     from types import SimpleNamespace
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     from control.engine import GameServer
     a, b = [], []
     server = GameServer({"TestBit": TestBit})
@@ -39,7 +45,7 @@ def test_add_observer_notifies_multiple_observers_of_state_changes():
 
 def test_observer_exception_does_not_break_engine_or_peers():
     from types import SimpleNamespace
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     from control.engine import GameServer
     seen = []
     server = GameServer({"TestBit": TestBit})
@@ -56,7 +62,7 @@ def test_observer_exception_does_not_break_engine_or_peers():
 
 def test_on_devices_change_fires_on_hello_join_and_unload():
     from types import SimpleNamespace
-    from bits.test_bit import TestBit
+    from bits.test.test_bit import TestBit
     from control.engine import GameServer
     calls = []
     server = GameServer({"TestBit": TestBit})
@@ -174,12 +180,69 @@ def test_join_denied_when_no_bit_loaded():
     assert result.reason == "no Bit accepting registrations"
 
 
+def test_join_granted_blob_carries_default_carried_instruments_event_triggers():
+    server = make_server()
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.load_bit("test_bit")
+    result = server.join("ie1", "TEST_PLAYER_NODE")
+    assert result.granted
+    assert result.config["triggers"] == {
+        "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
+        "shake": {"peak_g": 2.0, "window_ms": 200},
+    }
+
+
+def test_join_granted_blob_omits_triggers_for_carried_instrument_without_any():
+    from control.instrument import Instrument
+    server = make_server()
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.load_bit("test_bit")
+    no_event_triggers = Instrument(
+        name="quiet_widget",
+        capabilities=frozenset({"light.pixels", "gesture.tilt"}),
+        accepted_cues=("midi",))
+    server.devices.get("ie1").carried = no_event_triggers
+    result = server.join("ie1", "TEST_PLAYER_NODE")
+    assert result.granted
+    assert "triggers" not in result.config
+
+
+def test_requires_less_role_join_blob_still_carries_event_triggers():
+    """Fix round 1: event-trigger thresholds are a property of the carried
+    instrument's server-owned detection contract, independent of slot
+    gating -- TestBit's jammer role has no Role.requires at all, but a
+    device joining it still needs its carrier's tap/shake thresholds."""
+    server = make_server()
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.load_bit("test_bit")
+    result = server.join("ie1", "TEST_JAM_NODE")
+    assert result.granted
+    assert result.slot is None
+    assert result.instrument is None
+    assert result.config["triggers"] == {
+        "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
+        "shake": {"peak_g": 2.0, "window_ms": 200},
+    }
+
+
+def test_room_join_blob_carries_no_triggers():
+    binding = RoomBindingRegistry()
+    server = GameServer(bit_registry={"RoomCapableBit": RoomCapableBit},
+                        room_binding=binding)
+    server.room = make_room()
+    server.load_bit("RoomCapableBit")
+    binding.arm("TEST", "main", window_seconds=10.0)
+    result = server.join("sim-room", "ROOM_TEST_NODE")
+    assert result.granted
+    assert result.config is None
+
+
 def test_full_lifecycle_reaches_idle_and_releases_devices():
     server = make_server()
     released = []
     server.on_release = released.append
 
-    server.hello("ie1", "Tuneshroom 1", "1.0")
+    server.hello("ie1", "Testshroom 1", "1.0")
     server.load_bit("test_bit")
     assert server.state == State.SETUP
 
@@ -290,7 +353,7 @@ def test_abort_from_setup_unloads_and_releases_devices():
     server = make_server()
     released = []
     server.on_release = released.append
-    server.hello("ie1", "Tuneshroom 1", "1.0")
+    server.hello("ie1", "Testshroom 1", "1.0")
     server.load_bit("test_bit")
     server.join("ie1", "TEST_PLAYER_NODE")
 
@@ -314,8 +377,8 @@ def test_a_raising_on_release_does_not_strand_later_devices_or_wedge_unload():
             raise RuntimeError("transport blew up releasing the first device")
 
     server.on_release = raise_on_first
-    server.hello("ie1", "Tuneshroom 1", "1.0")
-    server.hello("ie2", "Tuneshroom 2", "1.0")
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.hello("ie2", "Testshroom 2", "1.0")
     server.load_bit("test_bit")
     server.join("ie1", "TEST_PLAYER_NODE")
     server.join("ie2", "TEST_JAM_NODE")
@@ -404,6 +467,10 @@ def test_granted_join_carries_composed_config_blob():
         },
         "uses": [],
         "samples": [],
+        "triggers": {
+            "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
+            "shake": {"peak_g": 2.0, "window_ms": 200},
+        },
     }
 
 
@@ -439,7 +506,7 @@ def test_join_with_no_bit_loaded_carries_no_config():
 def test_room_node_join_denied_while_unarmed():
     server = GameServer({"RoomCapableBit": RoomCapableBit},
                         room_binding=RoomBindingRegistry())
-    server.room = Room(room_type=RoomType.TEST)
+    server.room = make_room()
     server.load_bit("RoomCapableBit")
     result = server.join("ie9", "ROOM_TEST_NODE")
     assert result.granted is False
@@ -449,9 +516,9 @@ def test_room_node_join_denied_while_unarmed():
 def test_room_node_join_binds_device_once_armed():
     binding = RoomBindingRegistry()
     server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
-    server.room = Room(room_type=RoomType.TEST)
+    server.room = make_room()
     server.load_bit("RoomCapableBit")
-    binding.arm(RoomType.TEST, "main", window_seconds=10.0)
+    binding.arm("TEST", "main", window_seconds=10.0)
 
     result = server.join("ie9", "ROOM_TEST_NODE")
 
@@ -459,13 +526,13 @@ def test_room_node_join_binds_device_once_armed():
     assert result.role_class == RoleClass.ROOM
     assert result.config is None
     assert server.room.bound == {"main": "ie9"}
-    assert binding.bound_device(RoomType.TEST, "main") == "ie9"
+    assert binding.bound_device("TEST", "main") == "ie9"
 
 
 def test_room_join_does_not_disturb_player_joins():
     binding = RoomBindingRegistry()
     server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
-    server.room = Room(room_type=RoomType.TEST)
+    server.room = make_room()
     server.load_bit("RoomCapableBit")
 
     result = server.join("ie1", "TEST_PLAYER_NODE")
@@ -484,45 +551,53 @@ def test_join_without_room_configured_ignores_room_gating():
     assert result.granted is True
 
 
-def test_bit_cues_are_dispatched_once_per_running_tick():
-    """update(dt) answers 'am I done'; cues(at) answers 'what should happen'.
-    Without this hook nothing in a Bit can animate the Room on its own."""
+def test_a_declared_generator_is_dispatched_once_per_running_tick():
+    """update(dt) answers 'am I done'; a declared GENERATOR function answers
+    'what should happen' without any device doing something. Without this a
+    Bit could not animate the Room on its own -- Bit.cues(at) used to be
+    that hook; a declared generator, engine-run every RUNNING tick, replaces
+    it (see control/generator_runner.py)."""
     from control.bit import Bit
     from control.cues import ROOM
+    from control.functions import (Function, FunctionKind, FunctionTable,
+                                    GeneratorSpec)
     from control.roles import Role, RoleClass, RoleTable
-    from control.rooms import Room, RoomType
 
     class AmbientBit(Bit):
         version = "0.1"
-        def __init__(self):
-            self.at_seen = []
         @property
         def role_table(self):
             player = Role(name="player", role_class=RoleClass.SHARED,
                           capacity=None, scored=False)
             return RoleTable(roles={"player": player},
                              node_map={"NODE_A": ["player"]})
-        def cues(self, at):
-            self.at_seen.append(at)
-            return [(ROOM, 0xB0, 74, 42)]
+        @property
+        def function_table(self):
+            return FunctionTable(functions={
+                "drift": Function(
+                    name="drift", description="Ambient drift",
+                    kind=FunctionKind.GENERATOR,
+                    generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                            waveform="triangle", period=12.0,
+                                            lo=0, hi=254)),
+            })
 
     bit = AmbientBit()
     gs = GameServer({"ab": lambda: bit}, cue_horizon=0.06,
                     clock=lambda: 1000.0)
-    gs.room = Room(room_type=RoomType.TEST)
+    gs.room = make_room()
     gs.room.bound = {"main": "sim-room"}
     seen = []
     gs.on_light_cue = lambda *a: seen.append(a)
     gs.load_bit("ab")
     gs.run()
-    gs.tick(0.02)
+    gs.tick(3.0)   # elapsed=3.0 of a 12s triangle from lo=0 hi=254 -> 127
 
-    assert bit.at_seen == [pytest.approx(1000.06)]
-    assert seen == [("sim-room", 0xB0, 74, 42, pytest.approx(1000.06))]
+    assert seen == [("sim-room", 0xB0, 74, 127, pytest.approx(1000.06))]
 
 
-def test_bit_cues_are_not_dispatched_on_the_completing_tick():
-    """A Bit that just signalled done is tearing down; dispatching a cue for
+def test_bit_fires_are_not_dispatched_on_the_completing_tick():
+    """A Bit that just signalled done is tearing down; dispatching a fire for
     it would put light on a device the engine is about to release."""
     from control.bit import Bit
     from control.roles import Role, RoleClass, RoleTable
@@ -530,7 +605,7 @@ def test_bit_cues_are_not_dispatched_on_the_completing_tick():
     class DoneBit(Bit):
         version = "0.1"
         def __init__(self):
-            self.cue_calls = 0
+            self.fires_calls = 0
         @property
         def role_table(self):
             player = Role(name="player", role_class=RoleClass.SHARED,
@@ -539,8 +614,8 @@ def test_bit_cues_are_not_dispatched_on_the_completing_tick():
                              node_map={"NODE_A": ["player"]})
         def update(self, dt):
             return True
-        def cues(self, at):
-            self.cue_calls += 1
+        def fires(self, at):
+            self.fires_calls += 1
             return []
 
     bit = DoneBit()
@@ -548,10 +623,10 @@ def test_bit_cues_are_not_dispatched_on_the_completing_tick():
     gs.load_bit("db")
     gs.run()
     gs.tick(0.02)
-    assert bit.cue_calls == 0
+    assert bit.fires_calls == 0
 
 
-def test_raising_bit_cues_does_not_wedge_the_tick():
+def test_raising_bit_fires_does_not_wedge_the_tick():
     """Same guarantee every other Bit hook has: a misbehaving Bit must never
     stop Control reaching COMPLETING."""
     from control.bit import Bit
@@ -565,7 +640,7 @@ def test_raising_bit_cues_does_not_wedge_the_tick():
                           capacity=None, scored=False)
             return RoleTable(roles={"player": player},
                              node_map={"NODE_A": ["player"]})
-        def cues(self, at):
+        def fires(self, at):
             raise RuntimeError("boom")
 
     gs = GameServer({"bb": BadBit})
@@ -573,3 +648,118 @@ def test_raising_bit_cues_does_not_wedge_the_tick():
     gs.run()
     gs.tick(0.02)                    # must not raise
     assert gs.state == State.RUNNING
+
+
+def test_reap_stale_removes_a_silent_unjoined_device():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.hello("ie1", "sim", "1")
+    changes = []
+    gs.add_observer(SimpleNamespace(
+        on_devices_change=lambda: changes.append("devices"),
+        on_registration_change=lambda: changes.append("registration")))
+
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)
+
+    assert reaped == ["ie1"]
+    assert [d.dev for d in gs.devices.all()] == []
+    assert changes == ["devices"]   # no registration_change: it never joined
+
+
+def test_reap_stale_leaves_a_fresh_device_alone():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.hello("ie1", "sim", "1")
+    clk.t = 3.0
+    reaped = gs.reap_stale(timeout=50.0)
+    assert reaped == []
+    assert gs.devices.known("ie1") is True
+
+
+def test_reap_stale_frees_a_scored_roles_slot_immediately():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.load_bit("test_bit")
+    gs.hello("ie1", "sim", "1")
+    gs.join("ie1", "TEST_PLAYER_NODE")
+    released = []
+    gs.on_release = released.append
+    counts_before = dict((n, c) for n, c, _ in gs.registration.counts())
+    assert counts_before["player"] == 1
+
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)
+
+    assert reaped == ["ie1"]
+    counts_after = dict((n, c) for n, c, _ in gs.registration.counts())
+    assert counts_after["player"] == 0
+    assert released == ["ie1"]
+    assert gs.devices.known("ie1") is False
+
+
+def test_reap_stale_batches_observer_notifications_once():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.load_bit("test_bit")
+    for dev in ("ie1", "ie2"):
+        gs.hello(dev, "sim", "1")
+        gs.join(dev, "TEST_PLAYER_NODE")
+    calls = []
+    gs.add_observer(SimpleNamespace(
+        on_devices_change=lambda: calls.append("devices"),
+        on_registration_change=lambda: calls.append("registration")))
+
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)
+
+    assert sorted(reaped) == ["ie1", "ie2"]
+    assert calls == ["devices", "registration"] or calls == ["registration", "devices"]
+    assert len(calls) == 2   # not 2 per device
+
+
+def test_reap_stale_never_reaps_a_room_bound_device():
+    from control.room_binding import RoomBindingRegistry
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    binding = RoomBindingRegistry()
+    gs = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding,
+                    clock=lambda: clk.t)
+    gs.room = make_room()
+    gs.load_bit("RoomCapableBit")
+    gs.hello("sim-room", "room", "1")
+    binding.arm("TEST", "main", window_seconds=10.0)
+    gs.join("sim-room", "ROOM_TEST_NODE")
+    assert gs.room.bound == {"main": "sim-room"}
+
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)
+
+    assert reaped == []
+    assert gs.devices.known("sim-room") is True
+    assert gs.room.bound == {"main": "sim-room"}
+    assert "sim-room" in gs.registration.assignments
+
+
+def test_reap_stale_on_release_exception_does_not_stop_the_rest():
+    from types import SimpleNamespace
+    clk = SimpleNamespace(t=0.0)
+    gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
+    gs.load_bit("test_bit")
+    for dev in ("ie1", "ie2"):
+        gs.hello(dev, "sim", "1")
+        gs.join(dev, "TEST_PLAYER_NODE")
+
+    def boom(dev):
+        raise RuntimeError("transport exploded")
+
+    gs.on_release = boom
+    clk.t = 100.0
+    reaped = gs.reap_stale(timeout=5.0)   # must not raise
+    assert sorted(reaped) == ["ie1", "ie2"]
+    assert gs.devices.known("ie1") is False
+    assert gs.devices.known("ie2") is False

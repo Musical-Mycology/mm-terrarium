@@ -1,55 +1,60 @@
-"""The console's static assets. Split across files as of the Room panel
-slice, still with NO build step: a venue box must never need npm."""
+"""The console's static assets. NO build step: a venue box never needs npm.
+As of the 2026-08-25 redesign the front end is ES modules with one entry."""
 
 from pathlib import Path
 
 STATIC = Path(__file__).resolve().parent.parent / "console" / "static"
 
+MODULES = {"wire.js", "shell.js", "bit.js", "surface.js", "functions.js",
+           "rail.js"}
 
-def _all_assets() -> str:
+
+def _text_assets() -> str:
     return "\n".join(p.read_text() for p in sorted(STATIC.glob("*"))
                      if p.suffix in (".html", ".js", ".css"))
 
 
 def test_no_external_asset_fetches_anywhere():
-    """Global Constraint: self-contained. A venue box may have no internet."""
-    for needle in ("http://", "https://", "//cdn", "src=\"//"):
-        assert needle not in _all_assets(), f"external reference found: {needle}"
+    for needle in ("http://", "https://", "//cdn", "src=\"//",
+                   "fonts.googleapis", "@import url"):
+        assert needle not in _text_assets(), f"external reference: {needle}"
 
 
 def test_the_expected_files_exist():
-    names = {p.name for p in STATIC.glob("*")}
-    assert {"index.html", "style.css", "console.js"} <= names
+    names = {p.name for p in STATIC.glob("*") if p.is_file()}
+    assert {"index.html", "terrarium.css"} | MODULES <= names
+    # the old plain-script front end is gone
+    assert not {"style.css", "console.js", "room.js"} & names
 
 
-def test_index_references_its_split_assets():
+def test_fonts_are_self_hosted_and_servable():
+    fonts = {p.name for p in (STATIC / "fonts").glob("*")}
+    assert any("LondrinaSolid" in f for f in fonts)
+    assert any("AtkinsonHyperlegible" in f for f in fonts)
+    assert any("JetBrainsMono" in f for f in fonts)
+    from console.server import _CONTENT_TYPES
+    for f in fonts:
+        assert Path(f).suffix in _CONTENT_TYPES, f"{f} not servable"
+
+
+def test_index_loads_exactly_one_module_entry():
     html = (STATIC / "index.html").read_text()
-    assert "style.css" in html
-    assert "console.js" in html
+    import re
+    tags = re.findall(r"<script[^>]*>", html)
+    assert len(tags) == 1
+    assert 'type="module"' in tags[0] and 'src="shell.js"' in tags[0]
 
 
-def test_the_lifecycle_controls_survived_the_split():
-    assets = _all_assets()
-    assert "new WebSocket" in assets
-    assert "/ws" in assets
-    assert "load_bit" in assets and "\"run\"" in assets and "abort" in assets
-    assert "snapshot" in assets
+def test_every_js_file_is_an_es_module():
+    """Module isolation by construction: no shared global scope exists, so
+    the 2026-08-19 buildCard collision class is structurally impossible."""
+    for name in MODULES:
+        text = (STATIC / name).read_text()
+        assert ("export " in text) or ("import " in text), f"{name} is not a module"
 
 
-def test_room_panel_renders_zones_instruments_and_live_values():
-    room_js = (STATIC / "room.js").read_text()
-    # zone view driven by the capability
-    assert "capability" in room_js and "zones" in room_js
-    # the frame relay
-    assert "roomStrip" in room_js
-    # instrument cards, both kinds, with live controller values
-    assert "instruments" in room_js and "controllers" in room_js
-    assert "lanes" in room_js
-    # the empty state
-    assert "No Room configured" in room_js
-
-
-def test_room_panel_decodes_grb_not_rgb():
-    """The wire is GRB (control/room_profile.py's color_order), so a naive
-    rgb(c[0], c[1], c[2]) would render every zone the wrong colour."""
-    assert "GRB" in (STATIC / "room.js").read_text()
+def test_css_defines_the_status_palette_and_faces():
+    css = (STATIC / "terrarium.css").read_text()
+    for token in ("#7a9e6e", "#d96680", "#c07850",   # sage/rose/terracotta
+                  "Londrina Solid", "Atkinson Hyperlegible", "JetBrains Mono"):
+        assert token in css

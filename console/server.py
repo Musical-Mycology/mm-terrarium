@@ -29,6 +29,7 @@ _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
+    ".ttf": "font/ttf",
 }
 
 
@@ -42,7 +43,7 @@ class ConsoleServer:
         # console is a fixed asset set, and re-reading per request would put
         # filesystem access on a request path for no benefit.
         self._assets: dict[str, tuple[bytes, str]] = {}
-        for path in sorted(_STATIC_DIR.iterdir()):
+        for path in sorted(_STATIC_DIR.rglob("*")):
             content_type = _CONTENT_TYPES.get(path.suffix)
             if path.is_file() and content_type is not None:
                 self._assets[path.name] = (path.read_bytes(), content_type)

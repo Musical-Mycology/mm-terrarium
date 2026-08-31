@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("luxaeterna.backends.websim")
 
-from bits.test_bit import RUN_DURATION_SECONDS
+from bits.test.test_bit import RUN_DURATION_SECONDS
 from control.state import State
 from harness.led_smoke import _run_duration, build
 

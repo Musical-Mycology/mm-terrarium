@@ -60,6 +60,13 @@ class Role:
     # cue path (no consumer yet; shape frozen so Bit authors declare both
     # together from day one).
     welcome: dict | None = None
+    # Names the instrument-requirement slot (control/instrument.py's
+    # InstrumentRequirement.slot, resolved at load_bit) this role's join must
+    # gate on -- e.g. "room" for the implicit/explicit Room slot. None (the
+    # default) means this role has no instrument dependency. Validated at
+    # load_bit against the Bit's declared slots (spec section 4); a typo
+    # raises BitLoadError rather than silently never gating.
+    requires: str | None = None
 
 
 @dataclass

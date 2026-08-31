@@ -28,6 +28,31 @@ CONTROL_TRANSPORT_READY = "DeviceLink running on o2lite ensemble"
 # Registration is open. Devices must join scored roles inside this window.
 CONTROL_SETUP_HOLD = "Holding in SETUP"
 
+# The Bit signalled done from update(dt) and terrarium_boot is unwinding on
+# purpose. A control child that exits ZERO after this line is the run
+# ending on its own -- run_stack treats it as success, not child-exited.
+# (TestBit under --hold never emits this; self-completing Bits like
+# MetronomeBit always do.)
+CONTROL_BIT_COMPLETED = "Bit completed; tearing down"
+
+# A Bit is loaded and about to run -- round 1's CLI-selected Bit (printed
+# once by main() before the round machinery starts) and, under --serve,
+# every later round's Console-loaded Bit (printed by _serve_rounds only for
+# a round it watched _wait_for_load actually observe leave IDLE, never for
+# the immediate-return case on entry). One line per round, always.
+CONTROL_ROUND_LOADED = "round loaded:"
+
+# A Room finished loading (control/terrarium.py's Terrarium reached
+# ROOM_READY) -- printed once per successful load_room, CLI-selected (main())
+# or Console-driven, "room loaded: TEST". run_stack gates on this where it
+# used to gate on boot completion: room loading now happens before the
+# devicelink transport is even reported ready.
+CONTROL_ROOM_LOADED = "room loaded:"
+
+# The active Room was torn down (Terrarium back to NO_ROOM) -- printed once
+# per successful unload_room, "room unloaded: TEST".
+CONTROL_ROOM_UNLOADED = "room unloaded:"
+
 # --- Device (harness/o2_shroom.py) -------------------------------------
 
 # o2lite.time_get() went non-negative. Until this, the device has no clock
@@ -52,15 +77,24 @@ DEVICE_SERVICE_CONFLICT = "FATAL: service"
 # --- Browser surfaces (all three harness entry points) -----------------
 
 # A line carrying a URL worth a browser tab: the Terrarium Console, a Room
-# fixture canvas, or a simulated Tuneshroom canvas. run_stack collects
+# fixture canvas, or a Testshroom canvas. run_stack collects
 # every such URL and, under --open, opens each in the default browser.
 # Unlike the ready/failure markers this one is not waited on -- there is a
 # variable number of them per run -- so it lives outside both dicts.
 BROWSE_URL = "BROWSE_URL:"
 
+# A line carrying a URL worth knowing but NOT worth an automatic browser
+# tab: a Room fixture canvas, opened on demand from the Console's Room
+# card instead. run_stack collects and echoes these, never opens them.
+ROOM_URL = "ROOM_URL:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,
+    "CONTROL_BIT_COMPLETED": CONTROL_BIT_COMPLETED,
+    "CONTROL_ROUND_LOADED": CONTROL_ROUND_LOADED,
+    "CONTROL_ROOM_LOADED": CONTROL_ROOM_LOADED,
+    "CONTROL_ROOM_UNLOADED": CONTROL_ROOM_UNLOADED,
     "DEVICE_CLOCK_SYNCED": DEVICE_CLOCK_SYNCED,
     "DEVICE_ROLE_GRANTED": DEVICE_ROLE_GRANTED,
 }

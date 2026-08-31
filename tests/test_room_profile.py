@@ -5,57 +5,144 @@ import pathlib
 
 import pytest
 
-from control.room_profile import (ROOM_PROFILES, RoomBlock, RoomFixture,
-                                  RoomProfile, RoomZone, room_profile)
-from control.rooms import RoomType
+from control.cues import ROOM
+from control.functions import Function, FunctionKind, FunctionTarget, GeneratorSpec
+from control.instrument import Instrument
+from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
+                                  RoomZone)
+from control.terrarium_config import load_terrarium_config
+from tests.instrument_fixtures import GENERIC_SURFACE
 
 
-def _fixture(name="main", blocks=None, zones=(), color_order="GRB"):
+def _generator_instrument(name, data1=74, period=12.0):
+    return Instrument(
+        name=name, capabilities=frozenset({"light.surface"}),
+        functions=(Function(
+            name="glow", description="ambient glow", kind=FunctionKind.GENERATOR,
+            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=data1,
+                                    waveform="triangle", period=period,
+                                    lo=0, hi=127)),))
+
+
+def room_profile(name: str) -> RoomProfile:
+    """This module's own tests exercise RoomProfile's shape validation
+    plus, for the shipped TEST/DEMO rooms, that terrarium.toml still
+    describes the same fixtures the old code-owned registry used to."""
+    return load_terrarium_config("terrarium.toml").rooms[name].profile
+
+
+def _fixture(name="main", blocks=None, zones=(), color_order="GRB",
+            instrument=GENERIC_SURFACE):
     if blocks is None:
         blocks = (RoomBlock("b1", 0, 60),)
     return RoomFixture(name=name, color_order=color_order,
-                       blocks=blocks, zones=zones)
+                       blocks=blocks, zones=zones, instrument=instrument)
+
+
+def make_profile(instrument=GENERIC_SURFACE):
+    return RoomProfile(surface_id="p", fixtures=(
+        _fixture(instrument=instrument),))
+
+
+def test_fixture_carries_its_instrument():
+    profile = make_profile()
+    assert profile.fixtures[0].instrument.name == "generic_surface"
+
+
+def test_bad_fixture_instrument_fails_profile_construction():
+    bad = Instrument(name="x", capabilities=frozenset({"nope.tag"}))
+    with pytest.raises(ValueError, match="nope.tag"):
+        make_profile(instrument=bad)
+
+
+def test_two_fixtures_sharing_a_generator_lane_are_refused():
+    first = _generator_instrument("first", data1=74)
+    second = _generator_instrument("second", data1=74)   # same cc as `first`
+    with pytest.raises(ValueError) as exc:
+        RoomProfile(surface_id="p", fixtures=(
+            _fixture(name="main", instrument=first),
+            _fixture(name="accent", blocks=(RoomBlock("b2", 0, 30),),
+                     instrument=second)))
+    assert "main" in str(exc.value) and "accent" in str(exc.value)
+    assert "74" in str(exc.value)
+
+
+def test_two_fixtures_with_distinct_generator_lanes_are_fine():
+    first = _generator_instrument("first", data1=74)
+    second = _generator_instrument("second", data1=75)   # distinct cc
+    profile = RoomProfile(surface_id="p", fixtures=(
+        _fixture(name="main", instrument=first),
+        _fixture(name="accent", blocks=(RoomBlock("b2", 0, 30),),
+                 instrument=second)))
+    assert [f.name for f in profile.fixtures] == ["main", "accent"]
+
+
+def test_a_scripted_function_bypassing_validate_instrument_does_not_crash_the_collision_sweep(monkeypatch):
+    """Fix-round-2 regression (Critical finding): the cross-fixture
+    collision sweep must not assume every declared function is a
+    GENERATOR. v0's validate_instrument refuses a non-GENERATOR function on
+    an instrument, and RoomProfile.__post_init__ already calls
+    validate_instrument on every fixture BEFORE the collision sweep runs --
+    so under normal construction a SCRIPTED function is caught there first
+    and the sweep never sees it. That ordering is exactly what the sweep
+    must not depend on (a future reordering, or any other caller that
+    skips validate_instrument, must not resurrect the crash), so this test
+    monkeypatches validate_instrument to a no-op -- the same effect as an
+    Instrument built directly and handed straight to the sweep -- and
+    exercises the sweep on its own: generator_lane() would raise
+    AttributeError on a SCRIPTED function's None .generator if the sweep
+    did not filter by kind first."""
+    import control.room_profile as room_profile_mod
+    monkeypatch.setattr(room_profile_mod, "validate_instrument", lambda inst: None)
+    scripted = Function(name="tap", description="a tap function",
+                        target=FunctionTarget.DEVICE, kind=FunctionKind.SCRIPTED)
+    inst = Instrument(name="scripted_only",
+                      capabilities=frozenset({"light.surface"}),
+                      functions=(scripted,))
+    profile = RoomProfile(surface_id="p", fixtures=(
+        _fixture(name="main", instrument=inst),))
+    assert profile.fixtures[0].instrument.functions == (scripted,)
 
 
 def test_test_room_declares_two_asymmetric_fixtures():
-    profile = room_profile(RoomType.TEST)
+    profile = room_profile("TEST")
     assert profile.surface_id == "room_test"
     assert [f.name for f in profile.fixtures] == ["main", "accent"]
     assert [f.pixel_count for f in profile.fixtures] == [60, 30]
 
 
 def test_main_fixture_keeps_the_original_three_zones():
-    main = room_profile(RoomType.TEST).fixtures[0]
+    main = room_profile("TEST").fixtures[0]
     assert [z.name for z in main.zones] == ["left", "center", "right"]
     assert [(z.start, z.count) for z in main.zones] == [(0, 20), (20, 20), (40, 20)]
 
 
 def test_accent_fixture_has_its_own_two_zones():
-    accent = room_profile(RoomType.TEST).fixtures[1]
+    accent = room_profile("TEST").fixtures[1]
     assert [z.name for z in accent.zones] == ["low", "high"]
     assert [(z.start, z.count) for z in accent.zones] == [(0, 15), (15, 15)]
 
 
 def test_pixel_count_sums_every_fixture():
-    assert room_profile(RoomType.TEST).pixel_count == 90
+    assert room_profile("TEST").pixel_count == 90
 
 
 def test_channel_count_is_three_per_pixel_of_the_whole_profile():
-    assert room_profile(RoomType.TEST).channel_count == 270
+    assert room_profile("TEST").channel_count == 270
 
 
 def test_color_order_is_the_shared_order():
-    assert room_profile(RoomType.TEST).color_order == "GRB"
+    assert room_profile("TEST").color_order == "GRB"
 
 
 def test_zones_are_namespaced_by_fixture():
-    names = [z.name for z in room_profile(RoomType.TEST).zones]
+    names = [z.name for z in room_profile("TEST").zones]
     assert names == ["main.left", "main.center", "main.right",
                      "accent.low", "accent.high"]
 
 
 def test_zones_are_offset_into_the_concatenated_surface():
-    zones = {z.name: (z.start, z.count) for z in room_profile(RoomType.TEST).zones}
+    zones = {z.name: (z.start, z.count) for z in room_profile("TEST").zones}
     assert zones["main.left"] == (0, 20)
     assert zones["main.right"] == (40, 20)
     assert zones["accent.low"] == (60, 15)   # offset past main's 60 px
@@ -67,7 +154,7 @@ def test_test_rooms_declared_zones_happen_to_tile_gaplessly():
     invariant -- see test_zones_need_not_be_declared_in_position_order_or_
     tile_gaplessly below for what validation actually requires (no overlap,
     no overrun)."""
-    profile = room_profile(RoomType.TEST)
+    profile = room_profile("TEST")
     cursor = 0
     for zone in profile.zones:
         assert zone.start == cursor, f"zone {zone.name} does not abut its predecessor"
@@ -76,7 +163,7 @@ def test_test_rooms_declared_zones_happen_to_tile_gaplessly():
 
 
 def test_fixture_slices_are_channel_offsets_in_declaration_order():
-    slices = room_profile(RoomType.TEST).fixture_slices()
+    slices = room_profile("TEST").fixture_slices()
     assert slices == (("main", 0, 180), ("accent", 180, 90))
 
 
@@ -84,13 +171,13 @@ def test_primary_is_not_declared_here():
     """luxaeterna's SurfaceCapability.zone() synthesizes `primary` on demand,
     and harness/room_surface.py appends it. Declaring it here would make it a
     real zone that the Console would draw on top of every other one."""
-    assert "primary" not in [z.name for z in room_profile(RoomType.TEST).zones]
+    assert "primary" not in [z.name for z in room_profile("TEST").zones]
 
 
 def test_demo_profile_matches_the_real_array_scale():
     """864 px = 6 m x 144 LED/m, the real Terrarium array
     (MM_HARDWARE_DESIGN.md section 7.1), one block per meter run."""
-    profile = room_profile(RoomType.DEMO)
+    profile = room_profile("DEMO")
     assert profile.surface_id == "room_demo"
     (array,) = profile.fixtures
     assert array.name == "array"          # matches tests/test_room_binding.py
@@ -105,28 +192,22 @@ def test_demo_profile_matches_the_real_array_scale():
 def test_demo_zones_and_blocks_are_independent_axes():
     """3 zones over 6 blocks, deliberately not 1:1 -- zones target
     gameplay, blocks describe hardware (spec section 2.1)."""
-    (array,) = room_profile(RoomType.DEMO).fixtures
+    (array,) = room_profile("DEMO").fixtures
     zone_bounds = {(z.start, z.start + z.count) for z in array.zones}
     block_bounds = {(b.start, b.start + b.count) for b in array.blocks}
     assert zone_bounds != block_bounds
 
 
 def test_profile_is_immutable():
-    profile = room_profile(RoomType.TEST)
+    profile = room_profile("TEST")
     with pytest.raises(Exception):
         profile.fixtures = ()
 
 
 def test_fixture_is_immutable():
-    fixture = room_profile(RoomType.TEST).fixtures[0]
+    fixture = room_profile("TEST").fixtures[0]
     with pytest.raises(Exception):
         fixture.pixel_count = 99
-
-
-def test_every_room_type_key_maps_to_a_room_profile():
-    for key, value in ROOM_PROFILES.items():
-        assert isinstance(key, RoomType)
-        assert isinstance(value, RoomProfile)
 
 
 def test_zone_is_a_plain_value():
@@ -234,7 +315,7 @@ def test_zero_or_negative_block_count_is_refused():
 
 
 def test_test_profile_declares_explicit_blocks():
-    profile = room_profile(RoomType.TEST)
+    profile = room_profile("TEST")
     main, accent = profile.fixtures
     assert [b.name for b in main.blocks] == ["main"]
     assert main.pixel_count == 60

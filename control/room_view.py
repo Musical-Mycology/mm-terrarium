@@ -61,7 +61,35 @@ def capability_view(profile) -> dict:
     }
 
 
-def fixtures_view(profile, room) -> list[dict]:
+def _function_view(fn) -> dict:
+    """One declared generator Function, as the Console's fixture card
+    renders it. v0 only allows GENERATOR Functions on an instrument (see
+    control.instrument.validate_instrument), so this is the only shape."""
+    spec = fn.generator
+    return {
+        "name": fn.name,
+        "kind": "generator",
+        "lane": f"cc:{spec.data1}",
+        "period": float(spec.period),
+    }
+
+
+def _event_trigger_view(trigger) -> dict:
+    return {"name": trigger.name, "thresholds": dict(trigger.thresholds)}
+
+
+def _instrument_view(instrument) -> dict:
+    return {
+        "name": instrument.name,
+        "capabilities": sorted(instrument.capabilities),
+        "functions": [_function_view(fn) for fn in instrument.functions],
+        "accepted_cues": list(instrument.accepted_cues),
+        "event_triggers": [_event_trigger_view(trigger)
+                           for trigger in instrument.event_triggers],
+    }
+
+
+def fixtures_view(profile, room, canvas_urls=None) -> list[dict]:
     """One entry per fixture: its own pixel count, its zones (already
     namespaced <fixture>.<zone> by RoomProfile.zones), its channel offset
     into the concatenated frame, and which dev is bound (None if not yet).
@@ -69,10 +97,17 @@ def fixtures_view(profile, room) -> list[dict]:
     the whole Room (the old single bound_dev field): it is not the
     Registration Node id, the role name, or a registration count, so it is
     not covered by the hiding rule in this module's docstring.
+
+    `canvas_urls` is a plain dev -> url dict (DeviceLinkAgent.canvas_urls()'s
+    shape, passed in rather than imported so this module stays engine-free).
+    A fixture with no bound dev, or a bound dev with no reported canvas yet,
+    gets `"url": None`.
     """
+    urls = canvas_urls or {}
     out = []
     for name, start, count in profile.fixture_slices():
         fixture = next(f for f in profile.fixtures if f.name == name)
+        dev = room.bound.get(name)
         out.append({
             "name": name,
             "pixel_count": fixture.pixel_count,
@@ -80,12 +115,14 @@ def fixtures_view(profile, room) -> list[dict]:
             "channel_count": count,
             "zones": [{"name": f"{name}.{z.name}", "start": z.start, "count": z.count}
                       for z in fixture.zones],
-            "dev": room.bound.get(name),
+            "dev": dev,
+            "url": urls.get(dev) if dev else None,
+            "instrument": _instrument_view(fixture.instrument),
         })
     return out
 
 
-def room_view(room, profile, role, controllers: dict) -> dict | None:
+def room_view(room, profile, role, controllers: dict, canvas_urls=None) -> dict | None:
     """Build the Console's whole Room panel payload.
 
     Returns None when no Room is configured, which the panel renders as
@@ -105,9 +142,21 @@ def room_view(room, profile, role, controllers: dict) -> dict | None:
     if role is not None:
         instruments = (_light_instruments(role.light_manifest or {})
                        + _audio_instruments(role.ugen_manifest or {}))
+    # Each manifest entry names an instrument *declaration* (e.g. "rainbow"),
+    # not a physical Instrument object -- the room-level Instrument that
+    # backs the fixture(s) it plays on isn't threaded through the manifest.
+    # Rather than guess per-entry, every entry gets the same
+    # `instrument_name`: the room's first fixture's Instrument name. This is
+    # a deliberate ambiguity-breaking simplification (a multi-fixture Room
+    # with per-fixture Instruments would need real per-entry attribution;
+    # nothing in this codebase needs that yet).
+    instrument_name = (profile.fixtures[0].instrument.name
+                        if profile.fixtures else None)
+    for entry in instruments:
+        entry["instrument_name"] = instrument_name
     return {
-        "room_type": room.room_type.name,
-        "fixtures": fixtures_view(profile, room),
+        "room_type": room.name,
+        "fixtures": fixtures_view(profile, room, canvas_urls),
         "capability": capability_view(profile),
         "instruments": instruments,
         "controllers": dict(controllers),

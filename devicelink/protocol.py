@@ -71,6 +71,26 @@ def parse_game_address(address: str) -> str | None:
     return verb or None
 
 
+# Schemes a device-reported canvas URL may carry. The URL becomes a link
+# in the operator's admin panel, so this is enforced at the decode
+# boundary (same reasoning as the capture-label restriction below): a
+# hostile device must not be able to plant a javascript: link.
+CANVAS_SCHEMES = ("http://", "https://")
+
+
+def parse_canvas_url(args: list) -> str:
+    """Validate a /game/canvas message's args ([dev, url]) and return the
+    URL. Raises ValueError on anything malformed; callers treat that as
+    'refuse and log', never as an engine error."""
+    if len(args) < 2 or not isinstance(args[1], str):
+        raise ValueError("canvas needs a string url argument")
+    url = args[1]
+    if not url.startswith(CANVAS_SCHEMES):
+        raise ValueError(f"canvas url must start with one of "
+                         f"{CANVAS_SCHEMES}, got {url!r}")
+    return url
+
+
 def _event(address: str, typespec: str, args: list,
            timestamp: float = 0.0) -> dict:
     return encode(Envelope(timestamp=timestamp, address=address,
@@ -79,7 +99,21 @@ def _event(address: str, typespec: str, args: list,
 
 def role_event(dev: str, config: dict) -> dict:
     """The granted /<dev>/role blob, passed through verbatim -- it must stay
-    byte-identical to JoinResult.config."""
+    byte-identical to JoinResult.config (control/role_config.py's
+    compose_role_config). Optional keys, present only when the underlying
+    value is non-null/non-empty (never shipped as null):
+
+        room_name, terrarium_config_version -- Room provenance stamps.
+        slot, instrument -- the requirement slot a granted join filled and
+            the carried instrument's name that filled it.
+        triggers -- {event_trigger_name: {threshold_key: number}} for every
+            Task 8 EventTrigger the carried instrument declares (e.g.
+            Tuneshroom's "tap"/"shake"): the DEVICE runs the gesture
+            detector, the SERVER owns the numeric thresholds, so this key
+            ships them at adoption time instead of each client guessing its
+            own. Consuming this key on the mm-tuneshroom client is recorded
+            cross-repo follow-up, not yet implemented there.
+    """
     return _event(f"/{dev}/role", "b", [config])
 
 
@@ -113,7 +147,7 @@ def error_event(dev: str, context: str, message: str) -> dict:
 
 
 def play_event(dev: str, name: str, params: str = "") -> dict:
-    """Trigger a device-local sample by name.
+    """Fire a device-local sample by name.
 
     The canonical design (docs/control-gameserver-design.md, player flow
     step 4) writes this `/ie<N>/play "tis" time id params`. Two deviations,
@@ -129,6 +163,16 @@ def play_event(dev: str, name: str, params: str = "") -> dict:
     scheduling later is a device-side change, not a wire change.
     """
     return _event(f"/{dev}/play", "ss", [name, params])
+
+
+def room_event(dev: str, blob: dict) -> dict:
+    """Informational room snapshot pushed to hello'd devices: engine state,
+    loaded Bit, and the Registration Nodes a player could tap with their
+    fill counts. Hardware ignores it (NFC tells it the node); the Flutter
+    simulator draws its node tiles from it. Downstream only -- no device
+    ever asks for it. See mm-tuneshroom's
+    docs/superpowers/specs/2026-08-21-simulated-room-flow-design.md."""
+    return _event(f"/{dev}/room", "b", [blob])
 
 
 # --- telemetry capture (see docs/telemetry-trace-schema.md) ---------------

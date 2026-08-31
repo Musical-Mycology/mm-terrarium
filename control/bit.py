@@ -1,10 +1,13 @@
 """Base interface every Bit implements. See design spec section 4."""
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from control.roles import RoleTable
-from control.rooms import RoomType
-from control.triggers import TriggerTable
+from control.functions import FunctionTable
+
+if TYPE_CHECKING:
+    from control.bit_config import BitConfig
 
 
 class Bit(ABC):
@@ -14,43 +17,69 @@ class Bit(ABC):
     no-ops by default; a Bit overrides only the ones it needs.
     """
 
+    def __init__(self, config: "BitConfig | None" = None) -> None:
+        # Opaque to the engine -- GameServer.load_bit passes whatever it was
+        # given through unexamined. A Bit subclass reads its own fields off
+        # this if it wants packaged manifest data; the default None keeps
+        # every hand-constructed test Bit working unchanged.
+        self.config = config
+
     # Bit identity for provenance stamping (light-manifest v2 bit_version).
     # The bit *name* is the registry key GameServer loaded it under -- not
     # an attribute here, so there is nothing for an author to keep in sync.
     version: str = ""
 
-    # Which RoomTypes this Bit can run in. Every Bit supports at least
-    # RoomType.TEST (the universal baseline); a Bit declares more by
+    # Which Room config names this Bit can run in. Every Bit supports at
+    # least "TEST" (the universal baseline); a Bit declares more by
     # overriding this class attribute. Read off the class (not an instance)
     # by control/boot.py's Bit-gating check, before the Bit is constructed.
     # Treat as override-only -- do not mutate this set in place, since it is
     # shared across every instance of a Bit that doesn't override it.
-    room_types: set[RoomType] = {RoomType.TEST}
+    room_types: set[str] = {"TEST"}
 
     @property
     @abstractmethod
     def role_table(self) -> RoleTable:
         """This Bit's static role declarations (control.roles.RoleTable)."""
 
+    def room_manifests(self) -> tuple[dict, dict]:
+        """(light_manifest, ugen_manifest) for the active Room's synthesized
+        ROOM-class role. Empty dicts (the default) mean this Bit declares no
+        Room instruments and no ROOM role is merged. The Bit no longer builds
+        the Role itself: capacity (fixture count) and the node id are config
+        data the engine holds, not something a Bit can know."""
+        return ({}, {})
+
+    def instrument_requirements(self) -> tuple:
+        """Capability contracts this Bit demands (spec section 4). Room slots
+        resolve at load_bit; a Role names a slot via Role.requires and the
+        join gates on it. Base default: no demands."""
+        return ()
+
     @property
-    def trigger_table(self) -> TriggerTable:
-        """This Bit's declared triggers: the named things an operator can see
+    def function_table(self) -> FunctionTable:
+        """This Bit's declared functions: the named things an operator can see
         coming, each with a description, a target, a condition this Bit
         evaluates itself, and a declarative cue script.
 
         A plain property with an empty default, deliberately not abstract the
-        way role_table is, so every Bit written before triggers existed keeps
-        working untouched. Validated at load_bit (control/triggers.py), so a
-        trigger declared against a verb this Bit does not implement fails as a
+        way role_table is, so every Bit written before functions existed keeps
+        working untouched. Validated at load_bit (control/functions.py), so a
+        function declared against a verb this Bit does not implement fails as a
         BitLoadError rather than mid-installation.
         """
-        return TriggerTable(triggers={})
+        return FunctionTable(functions={})
 
     def on_setup_enter(self) -> None:
         """Called once when Control enters SETUP for this Bit."""
 
     def on_run_start(self) -> None:
         """Called once when Control enters RUNNING for this Bit."""
+
+    def on_join(self, dev: str, role_name: str) -> None:
+        """Called once per granted (non-ROOM) join, after the grant is
+        recorded. `role_name` is the granted role's name. Default: no-op.
+        Guarded by GameServer -- a raising Bit cannot break join()."""
 
     def update(self, dt: float) -> bool:
         """Called once per tick while RUNNING.
@@ -60,21 +89,21 @@ class Bit(ABC):
         """
         return False
 
-    def cues(self, at: float) -> list:
-        """Self-driven cues for this tick, in the same vocabulary a verb
-        handler returns: plain (dev, status, data1, data2) tuples,
-        control.cues.LightCue, control.cues.PlayCue, and the
-        control.cues.ROOM target.
+    def fires(self, at: float) -> list:
+        """Self-reported bit-adjudicated function fires for this tick.
 
         Called once per RUNNING tick, after update(dt), and skipped on the
         tick update() signals completion. `at` is the absolute time at which
-        these cues should be PRESENTED; Control has already added the
-        installation's cue_horizon to its own clock.
+        a fire reported here should be PRESENTED; Control has already added
+        the installation's cue_horizon to its own clock.
 
-        This is the only way a Bit can animate anything without a device
-        doing something: verb_handlers() can only ever react to a gesture,
-        which is why the Room's light used to reach its declared static hue
-        once and hold it for a whole run. Default: nothing to emit.
+        May return only control.cues.FireFunction -- this is a Bit's only
+        way to report a condition it evaluated itself (no gesture, no verb)
+        without an operator's manual fire. Anything else in the returned
+        list is logged and dropped by the engine: continuous lane-driving
+        without a device doing something is exactly what a declared
+        GENERATOR Function exists to do instead (see control/
+        generator_runner.py). Default: nothing to report.
         """
         return []
 

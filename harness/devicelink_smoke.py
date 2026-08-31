@@ -1,5 +1,5 @@
 """python -m harness.devicelink_smoke -- run Control with a live DeviceLink
-so a browser Tuneshroom simulator can register and render.
+so a browser Testshroom can register and render.
 
     python -m harness.devicelink_smoke --hold
     python -m harness.devicelink_smoke --seconds 30 --host 0.0.0.0
@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import time
 
-from bits.test_bit import RUN_DURATION_SECONDS, TestBit
+from bits.test.test_bit import RUN_DURATION_SECONDS, TestBit
 from control.engine import GameServer
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
@@ -34,8 +34,16 @@ def build(host: str = HOST, port: int = PORT,
     Returns (game_server, server, agent). The server is already started and
     bound; pass port=0 for an ephemeral port in tests. `clock` is a pure test
     seam -- DeviceLinkAgent/DeviceBridge already expose it, and the default
-    keeps main()'s production path byte-identical."""
-    gs = GameServer({"test_bit": lambda: TestBit(run_duration=run_duration)})
+    keeps main()'s production path byte-identical.
+
+    gs shares `clock` with the agent -- control/boot.py's own comment on
+    this ("cue_horizon and clock go in together and MUST match the ones
+    DeviceLinkAgent is built with... Two clock bases is the 2026-08-13
+    live-run bug") applies here too: GameServer.reap_stale(), now called
+    every poll(), reads its own clock against DevicePool.last_seen, which
+    DeviceLinkAgent writes using ITS clock on every touch() call."""
+    gs = GameServer({"test_bit": lambda: TestBit(run_duration=run_duration)},
+                    clock=clock)
     server = DeviceLinkServer(host=host, port=port)
     server.start()
     agent = DeviceLinkAgent(gs, server, clock=clock)
@@ -65,7 +73,7 @@ def _wait_in_setup(agent: DeviceLinkAgent, setup_seconds: float,
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Serve DeviceLink for the Tuneshroom simulator.")
+        description="Serve DeviceLink for the Testshroom simulator.")
     ap.add_argument("--seconds", type=float, default=None,
                     help="How long the Bit stays RUNNING before completing.")
     ap.add_argument("--hold", action="store_true",

@@ -15,7 +15,7 @@ import pytest
 # without the sibling checkout.
 pytest.importorskip("luxaeterna")
 
-from bits.capture_bit import CAPTURE_NODE
+from bits.capture.capture_bit import CAPTURE_NODE
 from harness.capture_smoke import build
 from tests.test_devicelink_agent import FakeServer
 
@@ -38,7 +38,7 @@ def test_a_synthetic_device_produces_a_real_trace_on_disk(tmp_path):
 
     from control.engine import GameServer
     from devicelink.agent import DeviceLinkAgent
-    from bits.capture_bit import CaptureBit
+    from bits.capture.capture_bit import CaptureBit
     from capture.store import CaptureStore
 
     store = CaptureStore(root=tmp_path, session_id="SESSION",
@@ -85,7 +85,7 @@ def test_a_synthetic_device_produces_a_real_trace_on_disk(tmp_path):
 def test_a_refusal_comes_back_as_an_error_frame(tmp_path):
     from control.engine import GameServer
     from devicelink.agent import DeviceLinkAgent
-    from bits.capture_bit import CaptureBit
+    from bits.capture.capture_bit import CaptureBit
     from capture.store import CaptureStore
 
     store = CaptureStore(root=tmp_path, session_id="SESSION",

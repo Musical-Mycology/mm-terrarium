@@ -9,13 +9,17 @@ import pytest
 # (requirements-dev.txt states that contract).
 pytest.importorskip("luxaeterna")
 
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.audio import AudioBridge, FakePool
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_bridge import FakeRoomAudioSink, FakeRoomLightSink, RoomBridge
-from control.rooms import Room, RoomType
+from control.rooms import Room
+from control.terrarium_config import load_terrarium_config
+
+TEST_PROFILE = load_terrarium_config("terrarium.toml").rooms["TEST"].profile
+DEMO_PROFILE = load_terrarium_config("terrarium.toml").rooms["DEMO"].profile
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
 
@@ -125,9 +129,17 @@ def _agent_with_joined_device(dev="ie1"):
     existing clock=clk convention) rather than real time, since the join
     poll() itself already sends the device's first breath -- the tests need
     to move time deliberately to observe a change from there, not rely on
-    however many microseconds elapse between two Python statements."""
+    however many microseconds elapse between two Python statements.
+
+    gs shares this SAME clk with the agent -- control/engine.py's own
+    comment on GameServer.__init__'s clock= param ("MUST be the same
+    callable DeviceLinkAgent was built with") is not just about frame
+    timestamps: GameServer.reap_stale() (poll()'s stale-device check) reads
+    its own clock against DevicePool.last_seen, which DeviceLinkAgent
+    writes using ITS clock on every touch() call. Two unsynced clocks here
+    would make every device look enormously stale on the very next poll()."""
     clk = _Clock()
-    gs = GameServer({"test_bit": TestBit})
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
@@ -274,9 +286,12 @@ def test_release_sends_release_and_clears_the_bridge():
     which now plays the device's closing fade before dropping it -- see
     tests/test_devicelink_frames.py for the detailed fade-then-release test.
     A fake clock (rather than the `rig` fixture's real one) is needed so the
-    fade actually finishes within a bounded number of poll()s here."""
+    fade actually finishes within a bounded number of poll()s here. gs
+    shares the SAME clk as the agent -- see _agent_with_joined_device's
+    docstring for why an unsynced GameServer clock now makes poll()'s
+    reap_stale() reap the device immediately."""
     clk = iter(_CLOSING_CLOCK_SCHEDULE).__next__
-    gs = GameServer({"test_bit": TestBit})
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
@@ -288,6 +303,94 @@ def test_release_sends_release_and_clears_the_bridge():
     _drain_releases(agent, ["ie1"])
     assert server.addressed("/ie1/release")
     assert "ie1" not in agent.bridges
+
+
+def test_hello_then_canvas_is_stored(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+
+
+def test_bad_scheme_canvas_url_is_refused_not_stored(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "javascript:x"])
+    agent.poll()
+    assert agent.canvas_urls() == {}
+
+
+def test_canvas_urls_returns_a_copy(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    agent.canvas_urls().clear()
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+
+
+class _RecordingObserver:
+    """Records every on_devices_change() call -- see control/engine.py's
+    GameServer.add_observer for the observer protocol this mimics."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def on_devices_change(self):
+        self.calls += 1
+
+
+def test_canvas_for_non_fixture_dev_fires_devices_changed(rig):
+    """A canvas url for a non-fixture dev arrives strictly after hello's own
+    devices_changed broadcast (which went out with url still null), and
+    nothing else re-fires devices_changed for it -- so _on_canvas has to poke
+    the engine's observers itself. Room-fixture devs need no such poke:
+    poll()'s _broadcast_room_if_changed diff already covers them (see
+    docs/MM_TERRARIUM.md and this file's other canvas tests)."""
+    gs, server, agent = rig
+    observer = _RecordingObserver()
+    gs.add_observer(observer)
+    _hello(server, agent)
+    before = observer.calls
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    assert observer.calls == before + 1
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+
+
+def test_repeat_canvas_with_same_url_does_not_refire(rig):
+    gs, server, agent = rig
+    observer = _RecordingObserver()
+    gs.add_observer(observer)
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    after_first = observer.calls
+
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    assert observer.calls == after_first
+
+
+def test_release_clears_the_canvas_url():
+    """Same release path as test_release_sends_release_and_clears_the_bridge
+    above: gs.abort() starts the closing fade, and _finish_release is what
+    actually pops per-dev state once it completes."""
+    clk = iter(_CLOSING_CLOCK_SCHEDULE).__next__
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+    gs.load_bit("test_bit")
+    _hello(server, agent)
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    gs.run()
+    gs.abort()
+    _drain_releases(agent, ["ie1"])
+    assert agent.canvas_urls() == {}
 
 
 def test_light_cue_reaches_the_devices_session(rig):
@@ -311,9 +414,10 @@ def test_a_raising_transport_does_not_strand_any_device_on_release():
     eventual /<dev>/release send can fail (RaisingSendServer always raises)
     without preventing the fade from finishing or the bridge from being
     dropped -- _finish_release's map cleanup does not depend on the send
-    succeeding, see devicelink/agent.py."""
+    succeeding, see devicelink/agent.py. gs shares the SAME clk as the
+    agent -- see _agent_with_joined_device's docstring."""
     clk = iter(_CLOSING_CLOCK_SCHEDULE).__next__
-    gs = GameServer({"test_bit": TestBit})
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
     server = RaisingSendServer()
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
@@ -468,11 +572,11 @@ def _room_ready_game_server(bound=None):
         bound = {"main": "sim-room-main"}
     binding = RoomBindingRegistry()
     gs = GameServer({"TestBit": TestBit}, room_binding=binding)
-    gs.room = Room(room_type=RoomType.TEST)
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
     gs.load_bit("TestBit")
     for fixture, dev in bound.items():
         gs.room.bound[fixture] = dev
-        binding.bind(RoomType.TEST, fixture, dev)
+        binding.bind("TEST", fixture, dev)
     return gs
 
 
@@ -486,11 +590,11 @@ def _demo_room_ready_game_server(bound=None):
         bound = {"array": "sim-room-array"}
     binding = RoomBindingRegistry()
     gs = GameServer({"TestBit": TestBit}, room_binding=binding)
-    gs.room = Room(room_type=RoomType.DEMO)
+    gs.room = Room(name="DEMO", profile=DEMO_PROFILE, node_id="ROOM_DEMO_NODE")
     gs.load_bit("TestBit")
     for fixture, dev in bound.items():
         gs.room.bound[fixture] = dev
-        binding.bind(RoomType.DEMO, fixture, dev)
+        binding.bind("DEMO", fixture, dev)
     return gs
 
 
@@ -501,8 +605,6 @@ def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
     hardcoded 512-channel Universe, so every render_into() call raised
     ChannelError -- caught and silently swallowed by _render_room(), so the
     Room's light never rendered a single frame against a real Arco."""
-    from control.room_profile import room_profile
-
     gs = _demo_room_ready_game_server()
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server)
@@ -510,7 +612,7 @@ def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
 
     assert agent._room_light is not None
     universe = agent._room_light.universe
-    assert len(universe) == room_profile(RoomType.DEMO).channel_count
+    assert len(universe) == DEMO_PROFILE.channel_count
 
     agent._render_room()   # must not raise, and must actually send a frame
 
@@ -606,6 +708,266 @@ def test_no_room_configured_leaves_room_wiring_inert():
 
     assert agent._room_light is None
     agent._render_room()   # must not raise
+
+
+# --- Ambient rendering (Task 7, spec section 6): a Room with no Bit's ROOM
+# role renders each fixture's own instrument's ambient declaration instead of
+# going unbuilt -- DEMO's `array` fixture declares venue_array (aurora light
+# + flsyn drone); TEST's fixtures declare dev_strip (no ambient). -----------
+
+def _instrument_names(manifest_calls):
+    """The `instrument` name of every LightInstrumentDecl LightManifest.
+    from_dict actually parsed, across every call recorded by the spy below
+    -- what matters for these tests is WHICH declaration reached the
+    session factory, not any other manifest detail."""
+    return [decl.instrument for call in manifest_calls
+            for decl in call.instruments]
+
+
+def _spy_on_light_manifest(monkeypatch):
+    """Wrap LightManifest.from_dict so every parsed manifest -- the actual
+    input _setup_room fed it, ambient or role-composed -- is recorded, in
+    call order. This is the file's existing spy-on-a-collaborator pattern
+    (see test_failing_on_grant_sends_error_not_role_and_omits_the_bridge),
+    applied to the seam Task 7's brief calls out: assert on the manifest
+    fed to the session factory."""
+    from luxaeterna.synth.manifest import LightManifest
+    calls = []
+    orig = LightManifest.from_dict
+
+    def spy(d):
+        manifest = orig(d)
+        calls.append(manifest)
+        return manifest
+
+    monkeypatch.setattr(LightManifest, "from_dict", staticmethod(spy))
+    return calls
+
+
+def _demo_room_no_bit_game_server():
+    """A GameServer with a DEMO Room already set but NO Bit loaded -- the
+    state ambient rendering exists to cover (spec section 6). `array` is
+    bound so the audio tests below have a canonical dev to grant against,
+    mirroring _demo_room_ready_game_server()'s own default binding."""
+    gs = GameServer({"TestBit": TestBit})
+    gs.room = Room(name="DEMO", profile=DEMO_PROFILE, node_id="ROOM_DEMO_NODE")
+    gs.room.bound["array"] = "sim-room-array"
+    return gs
+
+
+def test_ambient_session_built_with_no_bit_loaded(monkeypatch):
+    calls = _spy_on_light_manifest(monkeypatch)
+    gs = _demo_room_no_bit_game_server()
+
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    assert agent._room_light is not None
+    assert "aurora" in _instrument_names(calls)
+
+
+def test_ambient_session_renders_nothing_when_fixtures_declare_no_ambient():
+    """TEST's fixtures are dev_strip, which declares no ambient -- today's
+    no-session behavior must be unchanged when there is nothing to render."""
+    gs = GameServer({"TestBit": TestBit})
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    assert agent._room_light is None
+
+
+def _animated_ambient_game_server():
+    """A DEMO-shaped Room whose one fixture's instrument declares a
+    GENERATOR Function on cc:74, no Bit loaded -- the fixture case Task 5's
+    brief carves out (terrarium.toml's shipped dev_strip stays unanimated;
+    this is the animated case the test fixtures carry)."""
+    from control.cues import ROOM
+    from control.functions import Function, FunctionKind, GeneratorSpec
+    from control.instrument import Instrument
+    from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+
+    animated = Instrument(
+        name="animated_surface",
+        capabilities=frozenset({"light.surface", "audio.flsyn"}),
+        accepted_cues=("midi",),
+        light_manifest={"instruments": [
+            {"instrument": "aurora", "target": "primary"}]},
+        ugen_manifest={"instruments": [
+            {"instrument": "flsyn", "program": 89,
+             "drone": {"key": 48, "velocity": 80}}]},
+        functions=(Function(
+            name="glow", description="ambient breathing glow",
+            kind=FunctionKind.GENERATOR,
+            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                    waveform="triangle", period=12.0,
+                                    lo=0, hi=127)),))
+    profile = RoomProfile(surface_id="room_anim", fixtures=(
+        RoomFixture(name="main", color_order="GRB",
+                   blocks=(RoomBlock("main", 0, 10),),
+                   zones=(RoomZone("all", 0, 10),), instrument=animated),))
+    gs = GameServer({"TestBit": TestBit})
+    # Named DEMO (not a fresh room type) so gs.load_bit("TestBit") below
+    # resolves TestBit's declared ROOM role via room_role_name("DEMO") --
+    # the swap this file's other ambient<->Bit tests already exercise.
+    gs.room = Room(name="DEMO", profile=profile, node_id="ROOM_ANIM_NODE")
+    gs.room.bound["main"] = "sim-anim-main"
+    return gs, profile
+
+
+def test_ambient_generator_feeds_the_room_session_on_tick():
+    gs, profile = _animated_ambient_game_server()
+    clock_value = [0.0]
+    room_bridge = RoomBridge()
+
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            clock=lambda: clock_value[0])
+
+    # period=12.0, lo=0, hi=127: at elapsed=3.0 (quarter cycle) the triangle
+    # waveform is a quarter of the way up -- frac=0.5, value=round(63.5)=64,
+    # matching GeneratorRunner.value's own contract.
+    clock_value[0] = 3.0
+    agent.poll()
+
+    assert room_bridge.controllers.get(74) == 64
+
+
+def test_ambient_generator_is_not_fed_once_a_bit_is_loaded():
+    gs, profile = _animated_ambient_game_server()
+    clock_value = [0.0]
+    room_bridge = RoomBridge()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            clock=lambda: clock_value[0])
+
+    gs.load_bit("TestBit")   # TestBit declares DEMO room_manifests -> ROOM role
+    assert agent._ambient_generators is None
+
+    clock_value[0] = 3.0
+    agent.poll()   # must not raise, and must not consult the dropped runner
+
+
+def test_ambient_generator_unwire_then_rewire_resets_elapsed():
+    """Fix-round-1 regression (Important finding 1): unwire_room() must
+    drop the ambient runner/start time so a stale feed can never reach a
+    gone Room, and a later rewire must rebuild the runner with a FRESH
+    start time -- elapsed measured from the new session, not carried over
+    from the old one."""
+    gs, profile = _animated_ambient_game_server()
+    clock_value = [0.0]
+    room_bridge = RoomBridge()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
+                            clock=lambda: clock_value[0])
+
+    clock_value[0] = 3.0
+    agent.poll()
+    assert room_bridge.controllers.get(74) == 64   # ambient is live
+
+    # Mirror control/terrarium.py's unload_room(): gs.room is cleared to
+    # None BEFORE the observer notification fires unwire_room() (see
+    # test_unwire_room_releases_the_ambient_audio_grant_and_stops_the_drone
+    # above for the same ordering).
+    gs.room = None
+    agent.unwire_room()
+
+    assert agent._ambient_generators is None
+    assert agent._ambient_start is None
+    clock_value[0] = 9.0
+    agent.poll()   # must not raise, and must not feed the gone bridge
+    # unwire_room() drops this agent's reference to room_bridge but does not
+    # mutate the bridge object itself -- its value stays exactly where the
+    # last real feed left it, proof no further feed reached it.
+    assert room_bridge.controllers.get(74) == 64
+
+    # Rewire a NEW Room bridge back onto the SAME (still-live) profile --
+    # mirrors a Console `load_room` reloading the same room.
+    gs.room = Room(name="DEMO", profile=profile, node_id="ROOM_ANIM_NODE")
+    gs.room.bound["main"] = "sim-anim-main"
+    new_bridge = RoomBridge()
+    agent.rewire_room(new_bridge)
+
+    assert agent._ambient_start == 9.0   # fresh start, not the old run's 0.0
+    # Immediately at rewire time (elapsed=0), the triangle waveform is at
+    # its origin: phase=0, frac=0, value=lo=0.
+    agent.poll()
+    assert new_bridge.controllers.get(74) == 0
+
+
+def test_load_bit_swaps_ambient_for_the_bits_room_declaration(monkeypatch):
+    calls = _spy_on_light_manifest(monkeypatch)
+    gs = _demo_room_no_bit_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+    assert "aurora" in _instrument_names([calls[-1]])
+
+    gs.load_bit("TestBit")   # TestBit declares DEMO room_manifests -> ROOM role
+
+    assert agent._room_light is not None
+    assert "rainbow" in _instrument_names([calls[-1]])
+
+
+def test_unload_bit_swaps_back_to_ambient(monkeypatch):
+    calls = _spy_on_light_manifest(monkeypatch)
+    gs = _demo_room_no_bit_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+    gs.load_bit("TestBit")
+    assert "rainbow" in _instrument_names([calls[-1]])
+
+    gs.abort()   # -> UNLOADING -> IDLE; no Bit, no ROOM role any more
+
+    assert agent._room_light is not None
+    assert "aurora" in _instrument_names([calls[-1]])
+
+
+def test_ambient_audio_drone_starts_at_room_ready():
+    gs = _demo_room_no_bit_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+
+    assert len(pool.acquired) == 1
+    voice = pool.acquired[0]
+    assert any(call[0] == "note_on" for call in voice.sent)
+
+
+def test_ambient_audio_swaps_to_the_bits_drone_at_load(monkeypatch):
+    gs = _demo_room_no_bit_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+    ambient_voice = pool.acquired[0]
+
+    gs.load_bit("TestBit")
+
+    assert len(pool.acquired) == 2   # ambient voice released, Bit's granted fresh
+    assert ambient_voice.sent[-1][0] in ("note_off", "all_off")
+
+
+def test_unwire_room_releases_the_ambient_audio_grant_and_stops_the_drone():
+    """Final-review Important finding: unload_room only requires gs.state ==
+    IDLE, which ambient audio (granted at ROOM_READY with no Bit loaded)
+    routinely satisfies. unwire_room() -- the NO_ROOM-entry counterpart Console
+    `unload_room` triggers -- must release the Room's outstanding audio grant
+    and stop its drone the same way _setup_room()'s own ambient<->Bit swap
+    does, or the AudioBridge's finite voice pool leaks a voice and the drone
+    note is left sounding on every ambient-Room unload cycle."""
+    gs = _demo_room_no_bit_game_server()
+    pool = FakePool()
+    room_audio = AudioBridge(pool)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=room_audio)
+    voice = pool.acquired[0]
+    assert any(call[0] == "note_on" for call in voice.sent)   # drone is live
+
+    # Mirror control/terrarium.py's unload_room(): it clears gs.room to None
+    # BEFORE the ROOM_READY -> NO_ROOM observer notification fires
+    # unwire_room(), so unwire_room cannot recover the canonical dev from
+    # gs.room -- it must have cached it at grant time.
+    gs.room = None
+    agent.unwire_room()
+
+    assert voice in pool.released
+    assert voice.sent[-1][0] in ("note_off", "all_off")
 
 
 # --- Room cue timing: the Room branch of _on_light_cue queues on
@@ -765,6 +1127,9 @@ class _RaisingAudioBridge:
     def on_grant(self, dev, role) -> None:
         pass
 
+    def on_release(self, dev) -> None:
+        pass
+
     def tick(self, now=None) -> None:
         raise RuntimeError("audio tick exploded")
 
@@ -862,30 +1227,28 @@ def test_a_room_audio_cue_already_past_clamps_and_counts():
 
 # --- Room fixture profile: the Room's session is built from its own
 # RoomProfile (control/room_profile.py), not borrowed from the player
-# Tuneshroom's shroom_capability(). See this task's brief. ------------------
+# Testshroom's shroom_capability(). See this task's brief. ------------------
 
 def test_room_session_is_built_from_the_whole_concatenated_profile():
     """The session renders every fixture's pixels, bound or not -- only the
     SEND is scoped to bound fixtures. This is what lets a spatial instrument
     (e.g. luxaeterna's rainbow) paint one gradient across every fixture from
     one declaration."""
-    from control.room_profile import room_profile
     gs = _room_ready_game_server()
     agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
 
-    assert agent._room_profile == room_profile(RoomType.TEST)
+    assert agent._room_profile == TEST_PROFILE
     assert agent._room_light.session.cap.pixel_count == 90
     assert agent._room_light.session.cap.surface_id == "room_test"
 
 
 def test_player_devices_still_get_the_shroom_capability():
-    """Players remain Tuneshrooms. Only the Room changed."""
+    """Players remain Testshrooms. Only the Room changed."""
     gs, server, agent, dev, clk = _agent_with_joined_device("ie1")
     assert agent.bridges["ie1"].session.cap.pixel_count == 12
 
 
 def test_room_frame_is_the_bound_fixtures_own_width_not_the_whole_profile():
-    from control.room_profile import room_profile
     gs = _room_ready_game_server()
     server = FakeServer()
     server.bind_dev("sim-room-main", "c-room")
@@ -896,7 +1259,7 @@ def test_room_frame_is_the_bound_fixtures_own_width_not_the_whole_profile():
 
     frames = [m for dev, m in server.sent if m["address"] == "/sim-room-main/leds"]
     assert frames, "the Room emitted no frame for its bound fixture"
-    main = next(f for f in room_profile(RoomType.TEST).fixtures if f.name == "main")
+    main = next(f for f in TEST_PROFILE.fixtures if f.name == "main")
     assert len(frames[-1]["args"][0]) == main.pixel_count * 3
     assert len(frames[-1]["args"][0]) == 180
 
@@ -1034,10 +1397,12 @@ def test_setup_room_builds_the_session_even_with_nothing_bound_yet():
 
 def test_an_explicit_room_profile_overrides_the_resolved_one():
     from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+    from tests.instrument_fixtures import GENERIC_SURFACE
     profile = RoomProfile(surface_id="custom", fixtures=(
         RoomFixture(name="only", color_order="GRB",
                    blocks=(RoomBlock("only", 0, 24),),
-                   zones=(RoomZone("all", 0, 24),)),))
+                   zones=(RoomZone("all", 0, 24),),
+                   instrument=GENERIC_SURFACE),))
     gs = _room_ready_game_server()
     agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
                             room_profile=profile)
@@ -1051,6 +1416,47 @@ def test_no_room_configured_leaves_the_profile_unset():
     agent = DeviceLinkAgent(gs, FakeServer())
     assert agent._room_profile is None
     assert agent._room_light is None
+
+
+def test_rewire_room_builds_the_session_after_a_no_room_boot():
+    """harness/terrarium_boot.py's NO_ROOM boot constructs this agent
+    BEFORE any Room exists (room_bridge=None): _setup_room() at __init__
+    time is a no-op then, same as test_no_room_configured_leaves_the_profile
+    _unset above. rewire_room() is what a later Console `load_room` drives
+    (via the harness's own Terrarium observer) -- re-running Room setup now
+    that gs.room/gs.bit both actually exist, exactly as if boot() had
+    always known about them."""
+    gs = GameServer({"TestBit": TestBit})
+    agent = DeviceLinkAgent(gs, FakeServer())
+    assert agent._room_light is None
+    assert agent.room_bridge is None
+
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    gs.room.bound["main"] = "sim-room-main"
+    gs.load_bit("TestBit")
+    room_bridge = RoomBridge()
+
+    agent.rewire_room(room_bridge)
+
+    assert agent.room_bridge is room_bridge
+    assert agent._room_light is not None
+    assert agent._room_profile is not None
+    assert room_bridge.dev == "sim-room-main"
+
+
+def test_unwire_room_clears_a_previously_wired_session():
+    """The NO_ROOM-entry counterpart: a Console `unload_room` must not
+    leave a stale session/bridge/profile behind for the next NO_ROOM wait
+    (or a subsequent, differently-shaped Room) to render against."""
+    gs = _room_ready_game_server()
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+    assert agent._room_light is not None
+
+    agent.unwire_room()
+
+    assert agent._room_light is None
+    assert agent.room_bridge is None
+    assert agent._room_profile is None
 
 
 # --- Room frame relay to the Console: an optional, guarded, best-effort
@@ -1154,3 +1560,311 @@ def test_unloading_clears_queues_even_with_no_room_audio_injected():
                            now=agent._clock())
     agent.on_state_change(State.RUNNING, State.UNLOADING)
     assert agent._light_cues.pending() == 0
+
+
+def _room_msgs(server, dev="ie1"):
+    return [m for d, m in server.sent if d == dev and m["address"] == f"/{dev}/room"]
+
+
+def test_hello_is_answered_with_an_idle_room_snapshot(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    rooms = _room_msgs(server)
+    assert len(rooms) == 1
+    blob = rooms[0]["args"][0]
+    assert blob == {"state": "IDLE", "bit": None, "version": None, "nodes": []}
+
+
+def test_load_bit_broadcasts_setup_with_tappable_nodes_only(rig):
+    gs, server, agent = rig
+    _hello(server, agent, client="c1", dev="ie1")
+    _hello(server, agent, client="c2", dev="ie2")
+    gs.load_bit("test_bit")
+    for dev in ("ie1", "ie2"):
+        blob = _room_msgs(server, dev)[-1]["args"][0]
+        assert blob["state"] == "SETUP"
+        assert blob["bit"] == "test_bit"
+        assert blob["version"] == TestBit.version
+        ids = [n["id"] for n in blob["nodes"]]
+        assert ids == ["TEST_PLAYER_NODE", "TEST_JAM_NODE"]
+        player, jam = blob["nodes"]
+        assert player == {"id": "TEST_PLAYER_NODE", "roles": ["player"],
+                          "scored": True, "count": 0,
+                          "capacity": gs.bit.role_table.roles["player"].capacity}
+        assert jam["scored"] is False
+        assert jam["count"] == 0
+
+
+def test_join_broadcasts_updated_count(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    gs.load_bit("test_bit")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    blob = _room_msgs(server)[-1]["args"][0]
+    player = next(n for n in blob["nodes"] if n["id"] == "TEST_PLAYER_NODE")
+    assert player["count"] == 1
+
+
+def test_run_broadcasts_running(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    gs.load_bit("test_bit")
+    gs.run()
+    assert _room_msgs(server)[-1]["args"][0]["state"] == "RUNNING"
+
+
+def test_room_broadcast_skips_unbound_devices_without_raising(rig):
+    gs, server, agent = rig
+    _hello(server, agent)
+    server.drop_dev("ie1")
+    gs.load_bit("test_bit")   # must not raise; FakeServer.send is a no-op for unbound
+    assert _room_msgs(server)[-1]["args"][0]["state"] == "IDLE"
+
+
+# --- Stale-device reaping and drop_dev cleanup: DeviceLinkAgent.poll() now
+# calls GameServer.reap_stale() every tick, and _handle() touches last_seen
+# on every inbound message (not just hello), so a device that stays quiet
+# past stale_timeout is reaped even though it never sends another /game/hello.
+# See docs/superpowers/specs/2026-08-25-device-liveness-detection-design.md.
+
+def test_handle_touches_last_seen_on_every_inbound_message():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    clk.advance(3.0)
+    server.deliver("c1", "/game/tilt", "sf", [dev, 10.0])
+    agent.poll()
+    assert gs.devices.get(dev).last_seen == clk.t
+
+
+def test_poll_reaps_a_device_silent_past_stale_timeout():
+    # gs shares clk with the agent -- see _agent_with_joined_device's
+    # docstring for why an unsynced GameServer clock breaks reap_stale.
+    clk = _Clock()
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk, stale_timeout=10.0)
+    gs.load_bit("test_bit")
+    _hello(server, agent, client="c1", dev="ie1")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    assert "ie1" in agent.bridges
+
+    clk.advance(11.0)
+    agent.poll()   # no inbound traffic this tick -- ie1 has gone silent
+
+    assert gs.devices.known("ie1") is False
+    counts = dict((n, c) for n, c, _ in gs.registration.counts())
+    assert counts["player"] == 0
+    # Reaped through the SAME graceful path a normal release takes
+    # (GameServer.reap_stale fires the on_release sink, exactly like
+    # _unload does), not some separate hard-drop code path: the closing
+    # fade started _and_ finished, sending /ie1/release and forgetting the
+    # transport's connection mapping. It resolves within this one poll()
+    # rather than staying mid-fade (contrast test_finish_release_calls_
+    # drop_dev's fine-grained clock schedule) because the single 11s clock
+    # jump is itself the render's dt on the next frame -- far past the
+    # ~0.6s sys:closing signature's own duration -- so the same call that
+    # starts CLOSING also renders it to completion (see
+    # luxaeterna's synth/director.py StatusDirector.frame()).
+    assert "ie1" not in agent._closing
+    assert "ie1" not in agent.bridges
+    assert server.addressed("/ie1/release")
+    assert "ie1" not in server._devs
+
+
+def test_a_fresh_heartbeat_prevents_reaping():
+    # gs shares clk with the agent -- see _agent_with_joined_device's
+    # docstring for why an unsynced GameServer clock breaks reap_stale.
+    clk = _Clock()
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk, stale_timeout=10.0)
+    gs.load_bit("test_bit")
+    _hello(server, agent, client="c1", dev="ie1")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+
+    clk.advance(8.0)
+    server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
+    agent.poll()   # heartbeat lands before the 10s timeout
+
+    clk.advance(8.0)   # 16s since join, but only 8s since the heartbeat
+    agent.poll()
+
+    assert gs.devices.known("ie1") is True
+    assert "ie1" in agent.bridges
+
+
+def test_finish_release_calls_drop_dev():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    assert dev in server._devs
+    gs.abort()          # -> _unload -> on_release -> fade -> _finish_release
+    # drive the closing fade to completion
+    for _ in range(250):
+        agent.poll()
+        clk.advance(1.0 / 44.0)
+    assert dev not in server._devs
+
+
+def test_a_hello_mid_fade_survives_finish_release():
+    """Final-review Finding 2 regression. A device that reconnects
+    (hello-only, no rejoin -- exactly how the Room simulator's heartbeat
+    resend behaves) while a PRIOR release's closing fade is still in
+    flight must not have that FRESH connection severed once the STALE
+    fade finishes. _on_hello rebinds server._devs[dev] to the new client
+    but never touches self._closing (unlike _on_join, which already pops
+    self._closing on a rejoin); left unguarded, _finish_release's
+    unconditional drop_dev(dev) would drop the connection that just
+    proved dev is alive, not the stale one."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    old_client = server._devs[dev]
+    gs.abort()   # -> _unload -> on_release -> fade starts, self._closing[dev] = 0
+
+    # A fresh connection re-hellos mid-fade -- never rejoins. Queued here,
+    # BEFORE the fade is driven at all: in this fixture the very next
+    # poll() is what both delivers this hello AND can finish the stale
+    # fade in the same call, which is exactly the race Finding 2 describes
+    # -- so the assertion below must hold no matter how many poll()s it
+    # actually takes.
+    new_client = "c2"
+    assert new_client != old_client
+    server.arrive(new_client)
+    server.deliver(new_client, "/game/hello", "sss", [dev, "sim", "1"])
+
+    # Drive the closing fade to completion -- same bounded tick-by-tick
+    # pattern as test_finish_release_calls_drop_dev above.
+    for _ in range(250):
+        agent.poll()
+        clk.advance(1.0 / 44.0)
+
+    # The fade itself still finished and cleaned up the OLD session state.
+    assert dev not in agent.bridges
+    assert dev not in agent._closing
+    # But the FRESH connection must survive _finish_release's drop_dev.
+    assert dev in server._devs
+    assert server._devs[dev] == new_client
+
+
+def test_on_release_with_no_bridge_calls_drop_dev():
+    """Mirrors test_failing_on_grant_sends_error_not_role... -- a device
+    whose on_grant failed never got a bridge, so _on_release takes the
+    early-return branch, not the fade. That branch must still forget the
+    transport's connection mapping."""
+    gs = GameServer({"test_bit": TestBit})
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server)
+    gs.load_bit("test_bit")
+    _hello(server, agent, client="c1", dev="ie1")
+    assert "ie1" in server._devs
+
+    # Simulate a grant with no bridge ever created, exactly what
+    # devicelink/agent.py's _on_join does on a failing on_grant: the
+    # engine-level assignment exists, but self.bridges never got an entry.
+    gs.join("ie1", "TEST_PLAYER_NODE")
+    # A canvas url can land for this dev before its release ever runs (the
+    # protocol makes no ordering guarantee here); the no-bridge branch must
+    # clear it just like _finish_release does for the faded path, or it
+    # leaks in agent._canvas_urls forever.
+    server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
+    agent.poll()
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+
+    agent._on_release("ie1")
+
+    assert "ie1" not in server._devs
+    assert agent.canvas_urls() == {}
+
+
+# --- solid-override rendering, expiry, and mute suppression ----------------
+# See docs/superpowers/specs/2026-08-26-trigger-cards-and-surface-triggers-
+# design.md section 2. These exercise the two send seams (_render_frames,
+# _render_room) plus mute suppression at the transport boundary; PlayCue
+# suppression itself is already engine-side (control/engine.py's data()).
+
+def _last_leds_payload(server, dev):
+    frames = [m for d, m in server.sent
+              if d == dev and m["address"] == f"/{dev}/leds"]
+    assert frames, f"no /{dev}/leds frame was sent"
+    return frames[-1]["args"][0]
+
+
+def test_solid_override_replaces_outgoing_frame():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    agent._on_solid_cue(dev, (255, 255, 255), 0.9, 5.0, when=clk())
+    agent.poll()
+    frame = _last_leds_payload(server, dev)
+    assert set(frame) == {round(255 * 0.9)}
+
+
+def test_solid_override_expires_back_to_session():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    agent._on_solid_cue(dev, (255, 255, 255), 0.9, 0.5, when=clk())
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) == {round(255 * 0.9)}
+    clk.advance(1.0)
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) != {round(255 * 0.9)}
+
+
+def test_mute_blackout_is_latched_and_suppresses_cues():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    agent._on_mute_change(dev, True)
+    agent._on_light_cue(dev, 0xB0, 74, 127)     # must be dropped, not raise
+    clk.advance(10.0)
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) == {0}
+
+
+def test_unmute_restores_session_rendering():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    clk.advance(1.0)   # off t=0, or the breath's own value is 0 too
+    agent._on_mute_change(dev, True)
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) == {0}
+    agent._on_mute_change(dev, False)
+    clk.advance(1.0)   # let the resumed breath actually move the frame
+    agent.poll()
+    assert set(_last_leds_payload(server, dev)) != {0}
+
+
+def test_mute_purges_a_pending_timed_cue_so_unmute_does_not_replay_it():
+    """A cue queued before the Stop that muted this surface must not still
+    drain into its LightSession under the blackout override -- otherwise
+    un-mute reveals stale mid-script state instead of the session's own
+    idle/breath frame. See docs/superpowers/specs/
+    2026-08-26-trigger-cards-and-surface-triggers-design.md section 4."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+
+    # Beyond the horizon, so it lands on _light_cues rather than feeding now.
+    agent._on_light_cue(dev, 0xB0, 74, 99, when=clk() + agent._horizon + 5.0)
+    assert agent._light_cues.pending() == 1
+
+    agent._on_mute_change(dev, True)
+    assert agent._light_cues.pending() == 0
+
+    clk.advance(agent._horizon + 5.0)
+    agent.poll()
+    agent._on_mute_change(dev, False)
+
+    assert (0xB0, 74, 99) not in seen
+
+
+def test_room_override_covers_every_fixture_slice():
+    gs = _room_ready_game_server(
+        bound={"main": "sim-room-main", "accent": "sim-room-accent"})
+    server = FakeServer()
+    server.bind_dev("sim-room-main", "c-main")
+    server.bind_dev("sim-room-accent", "c-accent")
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge())
+    agent.poll()   # settle the initial render
+
+    canonical = agent._canonical_room_dev()
+    assert canonical == "sim-room-main"
+    agent._on_solid_cue(canonical, (255, 255, 255), 0.9, 5.0,
+                        when=agent._clock())
+    agent.poll()
+
+    for dev in ("sim-room-main", "sim-room-accent"):
+        assert set(_last_leds_payload(server, dev)) == {round(255 * 0.9)}

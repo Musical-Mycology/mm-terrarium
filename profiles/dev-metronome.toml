@@ -1,0 +1,13 @@
+[run]
+bit = "MetronomeBit"
+room_type = "DEMO"
+devices = 2
+
+[bit.overrides.rhythm]
+bpm = 80
+
+[bit.overrides.start]
+when = "players"
+min_scored = 2
+timeout_seconds = 60
+on_timeout = "start"

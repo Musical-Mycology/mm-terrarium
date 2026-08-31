@@ -1,0 +1,12 @@
+direction: down
+
+no_room: NO_ROOM
+loading: ROOM_LOADING
+ready: ROOM_READY
+unloading: ROOM_UNLOADING
+
+no_room -> loading: load_room(name)
+loading -> ready: ready
+loading -> no_room: "failure unwinds room_stack"
+ready -> unloading: unload_room()
+unloading -> no_room

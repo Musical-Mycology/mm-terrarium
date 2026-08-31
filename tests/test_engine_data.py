@@ -4,9 +4,18 @@ import time
 
 import pytest
 
-from bits.test_bit import TestBit
-from control.cues import LightCue
+from bits.test.test_bit import TestBit
+from control.cues import LightCue, TARGET
 from control.engine import GameServer
+from control.functions import (
+    Condition,
+    ConditionSource,
+    Function,
+    FunctionKind,
+    FunctionTable,
+    StreamOutput,
+    StreamSpec,
+)
 from control.roles import Role, RoleClass, RoleTable
 from control.bit import Bit
 
@@ -363,9 +372,16 @@ def test_no_gesture_time_argument_still_works():
 
 
 def _room_bound(bit, cue_horizon=0.06, clock=lambda: 1000.0, bound="sim-room"):
-    from control.rooms import Room, RoomType
+    from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+    from control.rooms import Room
+    from tests.instrument_fixtures import GENERIC_SURFACE
+    profile = RoomProfile(surface_id="room_test", fixtures=(
+        RoomFixture(name="main", color_order="GRB",
+                   blocks=(RoomBlock("main", 0, 10),),
+                   zones=(RoomZone("all", 0, 10),),
+                   instrument=GENERIC_SURFACE),))
     gs = GameServer({"vb": lambda: bit}, cue_horizon=cue_horizon, clock=clock)
-    gs.room = Room(room_type=RoomType.TEST)
+    gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
     gs.room.bound = {"main": bound}
     gs.load_bit("vb")
     gs.join("ie1", "NODE_A")
@@ -419,6 +435,124 @@ def test_explicit_light_cue_time_wins_over_at():
     gs.on_light_cue = lambda *a: seen.append(a)
     gs.data("ie1", "tilt", ["ie1", 0.0], gesture_time=999.5)
     assert seen == [("ie1", 0xB0, 74, 5, 12345.0)]
+
+
+class StreamBit(Bit):
+    """A Bit whose function_table and verb_handlers are both set directly
+    by the test, so one class covers stream-only, stream+handler, and
+    handler-only shapes without a family of near-duplicate Bit classes."""
+    version = "0.1"
+
+    def __init__(self, streams: dict, handlers: dict | None = None):
+        self._table = FunctionTable(functions=streams)
+        self._handlers = handlers or {}
+
+    @property
+    def role_table(self) -> RoleTable:
+        player = Role(name="player", role_class=RoleClass.SHARED,
+                      capacity=None, scored=False)
+        return RoleTable(roles={"player": player},
+                         node_map={"NODE_A": ["player"]})
+
+    def update(self, dt: float) -> bool:
+        return False
+
+    def verb_handlers(self) -> dict:
+        return self._handlers
+
+    @property
+    def function_table(self) -> FunctionTable:
+        return self._table
+
+
+def _stream_fn(name, verb="tilt", arg=1, in_lo=-90.0, in_hi=90.0,
+              outputs=None):
+    outputs = outputs or (StreamOutput(TARGET, 0xB0, 74, 0.0, 127.0),)
+    return Function(name=name, description="d", kind=FunctionKind.STREAM,
+                    stream=StreamSpec(verb=verb, arg=arg, in_lo=in_lo,
+                                      in_hi=in_hi, outputs=outputs))
+
+
+def test_stream_only_verb_dispatches_mapped_cues_and_returns_none():
+    """A verb with a declared STREAM function and no verb_handlers() entry
+    at all is legal -- the stream cues dispatch on their own."""
+    bit = StreamBit({"hue": _stream_fn("hue")})
+    gs = _joined(bit)
+    seen = []
+    gs.on_light_cue = lambda *a: seen.append(a)
+
+    assert gs.data("ie1", "tilt", ["ie1", 90.0], gesture_time=999.5) is None
+    assert seen == [("ie1", 0xB0, 74, 127, pytest.approx(999.56))]
+
+
+def test_stream_and_handler_share_one_at():
+    """Streams first, handler cues after, one _dispatch_cues call so both
+    land on the same computed `at`."""
+    bit = StreamBit(
+        {"hue": _stream_fn("hue")},
+        handlers={"tilt": lambda dev, args, at: [(dev, 0xB0, 20, 5)]})
+    gs = _joined(bit)
+    seen = []
+    gs.on_light_cue = lambda *a: seen.append(a)
+
+    assert gs.data("ie1", "tilt", ["ie1", 90.0], gesture_time=999.5) is None
+    assert seen == [
+        ("ie1", 0xB0, 74, 127, pytest.approx(999.56)),
+        ("ie1", 0xB0, 20, 5, pytest.approx(999.56)),
+    ]
+
+
+def test_handler_refusal_suppresses_stream_cues():
+    """One gesture, one verdict: a handler refusal must suppress the stream
+    cues collected for the same verb, not just its own cues."""
+    bit = StreamBit(
+        {"hue": _stream_fn("hue")},
+        handlers={"tilt": lambda dev, args, at: "nope"})
+    gs = _joined(bit)
+    seen = []
+    gs.on_light_cue = lambda *a: seen.append(a)
+
+    assert gs.data("ie1", "tilt", ["ie1", 90.0]) == "nope"
+    assert seen == []
+
+
+def test_verb_with_neither_stream_nor_handler_stays_unknown():
+    bit = StreamBit({})
+    gs = _joined(bit)
+    assert gs.data("ie1", "tilt", ["ie1", 90.0]) == "unknown verb 'tilt'"
+
+
+def test_touching_domain_boundary_dispatches_one_cue_from_lower_domain():
+    """Two STREAM functions on the same verb and lane whose domains touch at
+    a shared point: the value 0.0 satisfies both [-90, 0] and [0, 90], and
+    only the lower-domain function's (declared first) cue reaches the sink."""
+    lo = _stream_fn("lo", in_lo=-90.0, in_hi=0.0,
+                    outputs=(StreamOutput(TARGET, 0xB0, 74, 0.0, 50.0),))
+    hi = _stream_fn("hi", in_lo=0.0, in_hi=90.0,
+                    outputs=(StreamOutput(TARGET, 0xB0, 74, 200.0, 255.0),))
+    bit = StreamBit({"lo": lo, "hi": hi})
+    gs = _joined(bit)
+    seen = []
+    gs.on_light_cue = lambda *a: seen.append(a)
+
+    gs.data("ie1", "tilt", ["ie1", 0.0], gesture_time=999.5)
+    assert seen == [("ie1", 0xB0, 74, 50, pytest.approx(999.56))]
+
+
+def test_gesture_verb_condition_on_stream_only_verb_loads():
+    """A scripted Function's GESTURE_VERB condition may name a verb that is
+    declared only by a STREAM function, with no verb_handlers() entry."""
+    from control.functions import FunctionTarget, ScriptStep
+
+    scripted = Function(
+        name="flash", description="d", target=FunctionTarget.DEVICE,
+        condition=Condition(name="tilted", description="d",
+                            source=ConditionSource.GESTURE_VERB, verb="tilt"),
+        script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),))
+    bit = StreamBit({"hue": _stream_fn("hue"), "flash": scripted})
+    gs = GameServer({"vb": lambda: bit})
+    gs.load_bit("vb")   # must not raise
+    assert gs.state.name == "SETUP"
 
 
 def test_play_cue_can_target_the_room_too():

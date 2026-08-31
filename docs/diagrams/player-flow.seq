@@ -5,6 +5,8 @@ participants: Tuneshroom, Arco, Control
 # Registration. Control offers "game" on Arco's hub as an o2lite guest.
 Tuneshroom -> Arco: /game/hello
 Arco -> Control: /game/hello
+Control -> Arco: /ie1/room pushed on hello and on state change
+Arco -> Tuneshroom: /ie1/room
 note: SETUP holds registration open; --setup-seconds widens the window
 Tuneshroom -> Arco: /game/join TEST_PLAYER_NODE
 Arco -> Control: /game/join

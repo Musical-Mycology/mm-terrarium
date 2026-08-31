@@ -4,44 +4,35 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Terrarium Console</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="terrarium.css">
 </head>
 <body>
-<h1>Terrarium Console <span id="conn" class="conn-down">(connecting…)</span></h1>
-
-<p>State: <span id="state">—</span> &nbsp; Loaded Bit: <span id="loaded">—</span></p>
-
-<h2>Controls</h2>
-<div>
-  <select id="bitPicker"></select>
-  <button id="loadBtn">Load Bit</button>
-  <button id="runBtn">Run</button>
-  <button id="abortBtn">Abort</button>
+<div class="topbar">
+  <span class="wordmark"><span class="orn">&#10022;</span> Terrarium Console</span>
+  <span id="connChip" class="chip dim">connecting&hellip;</span>
+  <span class="spacer"></span>
+  <span id="roomChip" class="chip dim" hidden></span>
 </div>
-
-<h2>Room</h2>
-<div id="room"></div>
-
-<h2>Triggers</h2>
-<div id="triggers"></div>
-
-<h2>Registration</h2>
-<table id="registration"><thead><tr><th>Role</th><th>Count</th><th>Capacity</th></tr></thead><tbody></tbody></table>
-
-<h2>Roles &amp; media manifests</h2>
-<table id="roles"><thead><tr><th>Role</th><th>Class</th><th>Cap</th><th>Scored</th><th>ugen_manifest</th><th>light_manifest</th></tr></thead><tbody></tbody></table>
-
-<h2>Devices</h2>
-<table id="devices"><thead><tr><th>Device</th><th>Name</th><th>Role</th></tr></thead><tbody></tbody></table>
-
-<h2>Bit status</h2>
-<table id="bitStatus"><tbody></tbody></table>
-
-<h2>Event log</h2>
-<div id="log"></div>
-
-<script src="room.js"></script>
-<script src="triggers.js"></script>
-<script src="console.js"></script>
+<div class="shell">
+  <div class="sidebar">
+    <p class="navlabel">Loaded Bit</p>
+    <div id="bitPanel"></div>
+  </div>
+  <div class="content">
+    <div class="maincol">
+      <section id="roomsPanel" class="roomspanel"></section>
+      <div id="roomCard" class="card"></div>
+      <div id="bitStatusCard" class="card" hidden></div>
+    </div>
+    <div class="rail">
+      <div id="registrationCard" class="card"></div>
+      <div id="devicesCard" class="card"></div>
+      <div id="rolesCard" class="card"></div>
+      <div id="logCard" class="card"></div>
+    </div>
+  </div>
+</div>
+<div id="overlayMount"></div>
+<script type="module" src="shell.js"></script>
 </body>
 </html>

@@ -1,4 +1,5 @@
-"""Boot-time configuration for control.boot's load sequence. See
+"""Boot-time configuration for control.terrarium.Terrarium's load sequence.
+See
 docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md
 section 5.
 """
@@ -7,13 +8,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from control.rooms import RoomType
+from control.bit_config import BitConfig
 
 
 @dataclass
 class BootConfig:
-    room_type: RoomType
+    room_name: str
     bit_name: str
+    # The resolved BitConfig (manifest + any launch-time overrides) for
+    # bit_name, threaded through to GameServer.load_bit() so a Bit's
+    # __init__ sees its own manifest defaults (e.g. TestBit's
+    # extras["run_duration_seconds"]). None keeps every existing caller
+    # that never set this (e.g. tests constructing BootConfig directly)
+    # on load_bit's own config=None default -- an unconfigured Bit
+    # instantiation, exactly as before this field existed.
+    bit_config: BitConfig | None = None
     arco_soundfont: str | None = None
     # None = no array backend configured; "simulator" = Terrarium spawns
     # one (Spec 2's job); any other string = a real ArtNet/WLED host.
@@ -55,6 +64,15 @@ class BootConfig:
     # Every figure above is a DEV-BOX figure. No venue-box measurement
     # exists, and none of these numbers carry from a dev box to the venue box.
     cue_horizon: float = 0.060
+
+    # Control-side reap threshold (seconds of silence before a device is
+    # removed from DevicePool and, if it held one, its role slot freed).
+    # Default is three missed heartbeats at the harness clients' own
+    # default --heartbeat-interval (5.0s) -- the same generous-multiple
+    # shape _MAX_CLOSING_FRAMES already uses relative to a session's fade
+    # time. See docs/superpowers/specs/
+    # 2026-08-25-device-liveness-detection-design.md.
+    stale_timeout: float = 15.0
 
     @property
     def array_backend_configured(self) -> bool:

@@ -1,7 +1,12 @@
 import pytest
 
-from control.role_config import validate_role_declarations, validate_ugen_manifest
+from control.role_config import (
+    compose_role_config,
+    validate_role_declarations,
+    validate_ugen_manifest,
+)
 from control.roles import Role, RoleClass, RoleTable
+from control.triggers import EventTrigger
 
 
 def make_role(name="player", **kwargs):
@@ -27,6 +32,48 @@ GOOD_WELCOME = {
               "duration": 1.5},
     "audio": {"instrument": "chime", "duration": 1.5},
 }
+
+
+def test_compose_role_config_omits_slot_and_instrument_by_default():
+    config = compose_role_config("Bit", "0.1", make_role())
+    assert "slot" not in config
+    assert "instrument" not in config
+
+
+TAP = EventTrigger(name="tap", description="a single or double tap",
+                    thresholds={"peak_g": 2.0, "window_ms": 200})
+SHAKE = EventTrigger(name="shake", description="a shake gesture",
+                      thresholds={"peak_g": 2.0, "window_ms": 200})
+
+
+def test_compose_ships_event_trigger_thresholds_under_triggers_key():
+    config = compose_role_config("Bit", "0.1", make_role(),
+                                  event_triggers=(TAP, SHAKE))
+    assert config["triggers"] == {
+        "tap": {"peak_g": 2.0, "window_ms": 200},
+        "shake": {"peak_g": 2.0, "window_ms": 200},
+    }
+
+
+def test_compose_omits_triggers_key_when_event_triggers_empty():
+    config = compose_role_config("Bit", "0.1", make_role())
+    assert "triggers" not in config
+    config = compose_role_config("Bit", "0.1", make_role(), event_triggers=())
+    assert "triggers" not in config
+
+
+def test_compose_triggers_do_not_alias_the_instrument_declaration():
+    config = compose_role_config("Bit", "0.1", make_role(),
+                                  event_triggers=(TAP,))
+    config["triggers"]["tap"]["peak_g"] = 999
+    assert TAP.thresholds["peak_g"] == 2.0
+
+
+def test_compose_role_config_stamps_slot_and_instrument_when_given():
+    config = compose_role_config("Bit", "0.1", make_role(),
+                                 slot="player", instrument="tuneshroom")
+    assert config["slot"] == "player"
+    assert config["instrument"] == "tuneshroom"
 
 
 def test_validate_accepts_empty_defaults():
@@ -242,6 +289,36 @@ def test_compose_never_aliases_the_authored_declaration():
     config["light_manifest"]["welcome"]["params"]["b"] = 99
     assert role.light_manifest["instruments"][0]["params"]["a"] == 1
     assert role.welcome["light"]["params"]["b"] == 2
+
+
+def test_compose_without_provenance_is_byte_identical_to_pre_room_shape():
+    """Pins the pre-Room wire shape via raw wire_json.dumps text: a Bit
+    loaded outside a Room (or before this feature existed) must produce
+    the exact same bytes on the wire, so neither key may appear absent an
+    explicit room_name/terrarium_config_version."""
+    from control.wire_json import dumps
+    config = compose_role_config("test_bit", "", make_role())
+    assert dumps(config, sort_keys=True) == (
+        '{"class": "SHARED", "light_manifest": {"bit_name": "test_bit", '
+        '"bit_version": "", "role": "player"}, "role": "player", '
+        '"samples": [], "scored": true, "uses": []}')
+    assert "room_name" not in config
+    assert "terrarium_config_version" not in config
+
+
+def test_compose_stamps_room_provenance_when_given():
+    config = compose_role_config("test_bit", "", make_role(),
+                                 room_name="atrium",
+                                 terrarium_config_version="1-abcdef012345")
+    assert config["room_name"] == "atrium"
+    assert config["terrarium_config_version"] == "1-abcdef012345"
+
+
+def test_compose_room_provenance_defaults_to_none_and_is_omitted():
+    config = compose_role_config("test_bit", "", make_role(), room_name=None,
+                                 terrarium_config_version=None)
+    assert "room_name" not in config
+    assert "terrarium_config_version" not in config
 
 
 def _role(**kw):

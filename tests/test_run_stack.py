@@ -10,8 +10,8 @@ import pytest
 
 from control.arco_process import FakePopen
 from harness import markers
-from harness.run_stack import (StackConfig, _failed_marker, control_command,
-                               device_command, run)
+from harness.run_stack import (StackConfig, _dead_child, _failed_marker, _hold,
+                               control_command, device_command, run)
 
 
 class ScriptedPopen(FakePopen):
@@ -41,7 +41,8 @@ def _cfg(tmp_path, **kwargs):
                        echo=False, seconds=0.0, **kwargs)
 
 
-_CONTROL_OK = (f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
+_CONTROL_OK = (f"{markers.CONTROL_ROOM_LOADED} TEST\n"
+               f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
                f"{markers.CONTROL_SETUP_HOLD} for 20s\n")
 _DEVICE_OK = (f"{markers.DEVICE_CLOCK_SYNCED} 12.345\n"
               f"{markers.DEVICE_ROLE_GRANTED} 1 join(s)\n")
@@ -187,7 +188,7 @@ def test_control_never_becoming_ready_fails_bounded(tmp_path):
                  sleep=lambda _s: None)
 
     assert result.ok is False
-    assert result.stage == "control-ready"
+    assert result.stage == "control-room-loaded"
 
 
 def test_a_device_that_never_syncs_fails_bounded_and_names_the_defect(tmp_path):
@@ -316,13 +317,23 @@ def test_control_command_carries_the_flags_a_headless_run_needs(tmp_path):
 def test_device_command_carries_join_retry_and_samples_out(tmp_path):
     """--join-retry because a join sent before Control is listening is
     dropped with no queue behind it."""
-    command = device_command(_cfg(tmp_path), 1, 99)
+    command = device_command(_cfg(tmp_path, node="TEST_PLAYER_NODE"), 1, 99)
 
     assert "--join-retry" in command
     assert "--samples-out" in command
     assert "--control-horizon" in command
     assert "ie1" in command
     assert "TEST_PLAYER_NODE" in command
+
+
+def test_device_command_uses_the_configs_node_verbatim(tmp_path):
+    """Node derivation from the Bit manifest happens once, in
+    config_from_args (BitRegistry.resolve_config(...).join_node()) -- by
+    the time device_command runs, cfg.node is already the resolved value,
+    and this function just forwards it."""
+    command = device_command(_cfg(tmp_path, node="SOME_OTHER_NODE"), 1, 99)
+
+    assert command[command.index("--node") + 1] == "SOME_OTHER_NODE"
 
 
 def test_more_than_one_device_gets_distinct_dev_names(tmp_path):
@@ -456,23 +467,243 @@ def test_control_command_defaults_room_type_to_test():
     from harness.run_stack import StackConfig, control_command
     cfg = StackConfig(log_dir="/tmp/x")
     cmd = control_command(cfg, ppid=1)
-    assert cmd[cmd.index("--room-type") + 1] == "TEST"
+    assert cmd[cmd.index("--room") + 1] == "TEST"
 
 
 def test_control_command_passes_room_type_when_set():
     from harness.run_stack import StackConfig, control_command
     cfg = StackConfig(log_dir="/tmp/x", room_type="DEMO")
     cmd = control_command(cfg, ppid=1)
-    assert cmd[cmd.index("--room-type") + 1] == "DEMO"
+    assert cmd[cmd.index("--room") + 1] == "DEMO"
 
 
 def test_config_from_args_forwards_room_type():
     from harness.run_stack import config_from_args, parse_args
-    args = parse_args(["--room-type", "DEMO"])
+    args = parse_args(["--room", "DEMO"])
     assert config_from_args(args).room_type == "DEMO"
 
 
+def test_config_is_none_by_default():
+    from harness.run_stack import StackConfig
+    assert StackConfig(log_dir="/tmp/x").config is None
+
+
+def test_control_command_omits_config_by_default():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x")
+    cmd = control_command(cfg, ppid=1)
+    assert "--config" not in cmd
+
+
+def test_control_command_passes_config_when_set():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x", config="venue.toml")
+    cmd = control_command(cfg, ppid=1)
+    assert cmd[cmd.index("--config") + 1] == "venue.toml"
+
+
+def test_config_from_args_forwards_config_path():
+    from control.bit_registry import BitRegistry
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--config", "venue.toml"])
+    # --config here names a venue TOML that config_from_args forwards
+    # verbatim to terrarium_boot's own --config; it need not exist in this
+    # process, since a registry is supplied explicitly rather than
+    # discovered from it (discover_registry() is what loads it for real).
+    assert config_from_args(
+        args, registry=BitRegistry.discover()).config == "venue.toml"
+
+
+def test_control_command_defaults_bit_to_test_bit():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x")
+    cmd = control_command(cfg, ppid=1)
+    assert cmd[cmd.index("--bit") + 1] == "TestBit"
+
+
+def test_control_command_passes_bit_when_set():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x", bit="MetronomeBit")
+    cmd = control_command(cfg, ppid=1)
+    assert cmd[cmd.index("--bit") + 1] == "MetronomeBit"
+
+
+def test_config_from_args_forwards_bit():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit"])
+    assert config_from_args(args).bit == "MetronomeBit"
+
+
+def test_config_from_args_defaults_bit_to_test_bit():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args([])
+    assert config_from_args(args).bit == "TestBit"
+
+
+def test_config_from_args_derives_node_from_test_bit_manifest():
+    """No --node and the default Bit (TestBit): the node comes from
+    bits/test/bit.toml's launch.default_join_role ("player") resolved
+    against launch.nodes, via BitConfig.join_node()."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args([])
+    assert config_from_args(args).node == "TEST_PLAYER_NODE"
+
+
+def test_config_from_args_derives_node_from_metronome_bit_manifest():
+    """bits/metronome/bit.toml's launch.nodes maps player -> METRO_PLAYER_NODE
+    and default_join_role is "player", so join_node() resolves it without
+    any --node."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit"])
+    assert config_from_args(args).node == "METRO_PLAYER_NODE"
+
+
+def test_config_from_args_forwards_node():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--node", "SOME_OTHER_NODE"])
+    assert config_from_args(args).node == "SOME_OTHER_NODE"
+
+
+def test_config_from_args_devices_defaults_from_metronome_bit_manifest():
+    """bits/metronome/bit.toml's launch.default_devices is 2."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit"])
+    assert config_from_args(args).devices == 2
+
+
+def test_config_from_args_devices_defaults_from_test_bit_manifest():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args([])
+    assert config_from_args(args).devices == 1
+
+
+def test_config_from_args_forwards_explicit_devices_over_the_manifest():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit", "--devices", "5"])
+    assert config_from_args(args).devices == 5
+
+
+def test_config_from_args_room_type_defaults_from_metronome_bit_manifest():
+    """bits/metronome/bit.toml's launch.default_room_type is DEMO."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit"])
+    assert config_from_args(args).room_type == "DEMO"
+
+
+def test_config_from_args_forwards_explicit_room_type_over_the_manifest():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "MetronomeBit", "--room", "TEST"])
+    assert config_from_args(args).room_type == "TEST"
+
+
+def test_ci_bound_uses_the_forwarded_setup_seconds_when_it_exceeds_the_manifest():
+    """--ci with no --seconds and no --setup-seconds: --setup-seconds keeps
+    its own 90s default (the controller ruling -- it is forwarded to
+    terrarium_boot unchanged regardless of the manifest), and that is what
+    actually governs how long Control holds SETUP. bits/test/bit.toml's
+    launch.setup_seconds is 0, so deriving the bound from the manifest
+    alone (0+45+15=60) would undercut the real 90s hold -- the bound must
+    be max(0, 90) + 45 + 15 = 150."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci"])
+    assert config_from_args(args).seconds == 90.0 + 45.0 + 15.0
+
+
+def test_ci_bound_uses_an_explicit_setup_seconds_when_it_exceeds_the_manifest():
+    """An explicit --setup-seconds still wins the max() over the
+    manifest's own (here larger) setup_seconds is NOT the point here --
+    MetronomeBit's manifest setup_seconds is 20, so an explicit
+    --setup-seconds 5 is smaller than the manifest and must NOT shrink the
+    bound below what the manifest itself needs: max(20, 5) + 45 + 15 = 80."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--bit", "MetronomeBit", "--setup-seconds", "5"])
+    assert config_from_args(args).seconds == 20.0 + 45.0 + 15.0
+
+
+def test_ci_bound_uses_the_larger_of_manifest_and_forwarded_setup_seconds():
+    """MetronomeBit's manifest setup_seconds (20) is smaller than the
+    forwarded --setup-seconds default (90), so the bound must use 90:
+    max(20, 90) + 45 + 15 = 150."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--bit", "MetronomeBit"])
+    assert config_from_args(args).seconds == 90.0 + 45.0 + 15.0
+
+
+def test_ci_bound_falls_back_to_45s_when_the_manifest_has_no_expected_run_seconds():
+    """bits/test/bit.toml sets no launch.expected_run_seconds, so the bound
+    falls back to the historical 45s default; setup contributes the
+    forwarded --setup-seconds default (90, larger than the manifest's 0),
+    plus the 15s grace: 90+45+15=150."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci"])
+    assert config_from_args(args).seconds == 90.0 + 45.0 + 15.0
+
+
+def test_ci_bound_with_an_explicit_setup_seconds_that_exceeds_the_manifest():
+    """An explicit --setup-seconds larger than TestBit's manifest
+    setup_seconds (0): max(0, 5) + 45 + 15 = 65."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--setup-seconds", "5"])
+    assert config_from_args(args).seconds == 5.0 + 45.0 + 15.0
+
+
+def test_ci_bound_is_overridden_by_an_explicit_seconds():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--bit", "MetronomeBit", "--seconds", "5"])
+    assert config_from_args(args).seconds == 5.0
+
+
+def test_an_unresolvable_node_is_a_config_error_before_anything_spawns():
+    """A Bit with no launch.nodes and no --node has nothing for a spawned
+    device to join -- that has to fail loud before any child is spawned,
+    not surface as a device-join timeout later."""
+    from harness.run_stack import config_from_args, parse_args
+    from control.bit_config import BitConfig, BitIdentity, ConsoleBlock, LaunchConfig, StartCondition
+
+    class _NodelessRegistry:
+        packages = {"NodelessBit": object()}
+
+        def resolve_config(self, name, overrides=None):
+            return BitConfig(
+                identity=BitIdentity(name="NodelessBit"),
+                launch=LaunchConfig(nodes=(), default_join_role=""),
+                start=StartCondition(), console=ConsoleBlock())
+
+    args = parse_args(["--bit", "NodelessBit"])
+    with pytest.raises(SystemExit) as exc_info:
+        config_from_args(args, registry=_NodelessRegistry())
+    assert exc_info.value.code != 0
+
+
+def test_an_unknown_bit_is_a_config_error_before_anything_spawns():
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--bit", "NoSuchBit"])
+    with pytest.raises(SystemExit) as exc_info:
+        config_from_args(args)
+    assert exc_info.value.code != 0
+
+
+def test_list_bits_prints_every_discovered_bit_and_exits_zero(capsys):
+    from harness.run_stack import main
+    import sys as _sys
+
+    argv = ["run_stack.py", "--list-bits"]
+    old_argv = _sys.argv
+    _sys.argv = argv
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+    finally:
+        _sys.argv = old_argv
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "TestBit" in out
+    assert "MetronomeBit" in out
+
+
 _CONTROL_OK_WITH_URLS = (
+    f"{markers.CONTROL_ROOM_LOADED} TEST\n"
     f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
     f"{markers.BROWSE_URL} Terrarium Console at http://127.0.0.1:8901/\n"
     f"{markers.BROWSE_URL} Watch the Room at http://127.0.0.1:8902/\n"
@@ -521,7 +752,8 @@ def test_without_open_urls_no_tab_is_opened(tmp_path):
 def test_a_marker_line_without_a_url_is_ignored_not_crashed(tmp_path):
     """A future emit site that prints the marker but garbles the URL must
     degrade to a missing tab, never take the whole stack down."""
-    control_script = (f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
+    control_script = (f"{markers.CONTROL_ROOM_LOADED} TEST\n"
+                      f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
                       f"{markers.BROWSE_URL} (port not known yet)\n"
                       f"{markers.CONTROL_SETUP_HOLD} for 20s\n")
     popen = ScriptedPopen([control_script, _DEVICE_OK])
@@ -530,6 +762,73 @@ def test_a_marker_line_without_a_url_is_ignored_not_crashed(tmp_path):
 
     assert result.ok is True
     assert result.urls == []
+
+
+_CONTROL_OK_WITH_ROOM_URL = (
+    f"{markers.CONTROL_ROOM_LOADED} TEST\n"
+    f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
+    f"{markers.BROWSE_URL} Terrarium Console at http://127.0.0.1:8901/\n"
+    f"{markers.ROOM_URL} Watch the Room at http://127.0.0.1:8902/\n"
+    f"{markers.CONTROL_SETUP_HOLD} for 20s\n")
+
+
+def test_room_url_is_collected_but_the_opener_is_never_called_without_open(
+        tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK_WITH_ROOM_URL, _DEVICE_OK])
+    opened = []
+    result = run(_cfg(tmp_path), popen=popen, sleep=lambda _s: None,
+                 opener=opened.append)
+
+    assert result.ok is True
+    assert result.room_urls == ["http://127.0.0.1:8902/"]
+    assert result.urls == ["http://127.0.0.1:8901/"]
+    assert opened == []
+
+
+def test_room_url_is_collected_but_the_opener_is_never_called_with_open(
+        tmp_path):
+    """Under --open (open_urls=True), BROWSE_URL lines are still opened,
+    but a ROOM_URL line is collected for the summary and never handed to
+    the opener -- the whole point of splitting the marker."""
+    popen = ScriptedPopen([_CONTROL_OK_WITH_ROOM_URL, _DEVICE_OK])
+    opened = []
+    result = run(_cfg(tmp_path, open_urls=True), popen=popen,
+                 sleep=lambda _s: None, opener=opened.append)
+
+    assert result.ok is True
+    assert result.room_urls == ["http://127.0.0.1:8902/"]
+    assert opened == ["http://127.0.0.1:8901/"]
+
+
+def test_success_summary_labels_browse_and_room_urls_distinctly(
+        tmp_path, capsys, monkeypatch):
+    """main()'s success summary echoes BROWSE_URL results under the
+    existing 'browser surface' label and ROOM_URL results under the new
+    'room surface (open from the Console)' label, so the Room URL is
+    still visible from the terminal even though run_stack never opens
+    it."""
+    import harness.run_stack as run_stack_module
+    import sys as _sys
+    from harness.run_stack import RunResult
+
+    fake_result = RunResult(
+        True, "complete", "", {}, ["http://127.0.0.1:8901/"],
+        ["http://127.0.0.1:8902/"])
+    monkeypatch.setattr(run_stack_module, "run", lambda cfg: fake_result)
+    monkeypatch.setattr(run_stack_module, "ensure_o2litepy", lambda: True)
+
+    argv = ["run_stack.py", "--log-dir", str(tmp_path)]
+    old_argv = _sys.argv
+    _sys.argv = argv
+    try:
+        run_stack_module.main()
+    finally:
+        _sys.argv = old_argv
+
+    out = capsys.readouterr().out
+    assert "browser surface: http://127.0.0.1:8901/" in out
+    assert ("room surface (open from the Console): "
+            "http://127.0.0.1:8902/") in out
 
 
 def test_open_flag_sets_open_urls_and_implies_a_console():
@@ -558,3 +857,328 @@ def test_ci_refuses_open():
 
     with pytest.raises(SystemExit):
         parse_args(["--ci", "--open"])
+
+
+def test_ci_refuses_serve():
+    """Mirrors --ci --open: a headless CI run has nothing to serve for."""
+    from harness.run_stack import parse_args
+
+    with pytest.raises(SystemExit):
+        parse_args(["--ci", "--serve"])
+
+
+def test_serve_is_forwarded_when_console_requested_without_ci():
+    """A console requested outside --ci implies --serve on the child, even
+    without the caller passing --serve explicitly -- an operator who asked
+    for a console has nowhere else to look at it from."""
+    from harness.run_stack import config_from_args, control_command, parse_args
+
+    cfg = config_from_args(parse_args(["--console-port", "8772"]))
+
+    assert "--serve" in control_command(cfg, ppid=1)
+
+
+def test_serve_is_not_forwarded_under_ci_even_with_a_console():
+    from harness.run_stack import config_from_args, control_command, parse_args
+
+    cfg = config_from_args(parse_args(["--ci", "--console-port", "8772"]))
+
+    assert "--serve" not in control_command(cfg, ppid=1)
+
+
+def test_serve_flag_is_forwarded_explicitly_without_a_console():
+    from harness.run_stack import config_from_args, control_command, parse_args
+
+    cfg = config_from_args(parse_args(["--serve"]))
+
+    assert "--serve" in control_command(cfg, ppid=1)
+
+
+def test_serve_is_omitted_by_default():
+    from harness.run_stack import config_from_args, control_command, parse_args
+
+    cfg = config_from_args(parse_args([]))
+
+    assert "--serve" not in control_command(cfg, ppid=1)
+
+
+
+
+class _CompletingControlPopen(ScriptedPopen):
+    """Models a Control whose Bit finished on its own: the child prints the
+    completion marker and exits ZERO. Same construction-time-death shape as
+    _CrashingControlPopen above, and for the same determinism reason."""
+
+    def __call__(self, command, **kwargs):
+        child = super().__call__(command, **kwargs)
+        if "harness.terrarium_boot" in command:
+            child.returncode = 0
+        return child
+
+
+def test_a_self_completed_bit_ends_the_hold_as_success(tmp_path):
+    """A Bit that signals done (MetronomeBit after its 4th judgment) makes
+    terrarium_boot print CONTROL_BIT_COMPLETED and exit 0. That is the run
+    ending on its own, not a crash -- observed live 2026-08-21 (runs/
+    20260821-094252), where a fully successful interactive run exited 1."""
+    script = _CONTROL_OK + f"{markers.CONTROL_BIT_COMPLETED}\n"
+    popen = _CompletingControlPopen([script, _DEVICE_OK])
+    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                      echo=False, seconds=5.0)
+    ticks = iter([0.0] * 20 + [1_000_000.0 * (i + 1) for i in range(30)])
+    result = run(cfg, popen=popen, clock=lambda: next(ticks),
+                 sleep=time.sleep)
+
+    assert result.ok is True
+    assert result.stage == "bit-completed"
+
+
+def test_a_zero_exit_without_the_completion_marker_still_fails(tmp_path):
+    """Exit 0 alone is not proof the run ended on its own -- a markerless
+    zero exit (a child that died quietly) keeps the failure diagnosis."""
+    popen = _CompletingControlPopen([_CONTROL_OK, _DEVICE_OK])
+    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                      echo=False, seconds=5.0)
+    ticks = iter([0.0] * 20 + [1_000_000.0 * (i + 1) for i in range(30)])
+    result = run(cfg, popen=popen, clock=lambda: next(ticks),
+                 sleep=time.sleep)
+
+    assert result.ok is False
+    assert result.stage == "child-exited"
+
+
+class _Proc:
+    """A child whose poll() answer is fixed at construction."""
+
+    def __init__(self, code):
+        self.code = code
+
+    def poll(self):
+        return self.code
+
+
+def _serve_cfg(tmp_path, **kwargs):
+    return StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                       echo=False, seconds=1.0, **kwargs)
+
+
+def test_serve_mode_tolerates_a_clean_device_exit_during_the_hold(tmp_path):
+    """Live 2026-08-21: after a Console abort the released o2_shroom exits
+    with code 0 by design, and _hold read that as `child-exited`, SIGTERMed
+    Control mid-serve and took Arco down with it. In serve mode a clean
+    device exit is the round ending, not the stack failing."""
+    children = {"control": _Proc(None), "ie1": _Proc(0)}
+    ticks = iter([0.0, 0.0, 10.0])
+    dead = _hold(_serve_cfg(tmp_path, serve=True), children,
+                 clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert dead is None
+
+
+def test_serve_mode_still_fails_loud_on_control_or_nonzero_device_exit(tmp_path):
+    ticks = iter([0.0] * 10)
+    dead = _hold(_serve_cfg(tmp_path, serve=True),
+                 {"control": _Proc(0), "ie1": _Proc(None)},
+                 clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert dead == ("control", 0)
+    ticks = iter([0.0] * 10)
+    dead = _hold(_serve_cfg(tmp_path, serve=True),
+                 {"control": _Proc(None), "ie1": _Proc(1)},
+                 clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert dead == ("ie1", 1)
+
+
+def test_one_shot_mode_still_fails_on_a_clean_device_exit(tmp_path):
+    ticks = iter([0.0] * 10)
+    dead = _hold(_serve_cfg(tmp_path, serve=False),
+                 {"control": _Proc(None), "ie1": _Proc(0)},
+                 clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert dead == ("ie1", 0)
+
+
+# --- per-round device respawn (task 3) --------------------------------
+
+
+def test_hold_calls_on_round_once_per_tick_when_given(tmp_path):
+    """_hold's new on_round hook: called once per tick of BOTH loops, and
+    entirely opt-in -- passing nothing (the existing tests above) leaves
+    behavior unchanged."""
+    calls = []
+    ticks = iter([0.0, 0.0, 0.0, 10.0])
+    dead = _hold(_serve_cfg(tmp_path, serve=True),
+                 {"control": _Proc(None)},
+                 clock=lambda: next(ticks), sleep=lambda _s: None,
+                 on_round=lambda: calls.append(1))
+    assert dead is None
+    assert len(calls) >= 1
+
+
+def test_hold_seconds_none_loop_also_calls_on_round(tmp_path):
+    """The `cfg.seconds is None` branch is a second, separate loop in
+    _hold -- on_round must fire there too, not just in the deadline
+    branch."""
+    calls = []
+
+    def fake_sleep(_s):
+        # Kill the child on the second tick so the "hold forever" loop
+        # actually returns instead of spinning.
+        if len(calls) >= 1:
+            children["control"].code = 0
+
+    children = {"control": _Proc(None)}
+    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                      echo=False, serve=True, seconds=None)
+    dead = _hold(cfg, children,
+                 clock=lambda: 0.0, sleep=fake_sleep,
+                 on_round=lambda: calls.append(1))
+    assert dead == ("control", 0)
+    assert len(calls) >= 1
+
+
+class _FakeRegistry:
+    """A BitRegistry double with just enough surface for on_round's
+    resolution: `.packages` (a Mapping tested with `in`) and
+    `.resolve_config(name)` returning a real BitConfig, exactly like the
+    real BitRegistry's own resolve_config."""
+
+    def __init__(self, configs: dict) -> None:
+        self.packages = configs
+        self._configs = configs
+
+    def resolve_config(self, name, overrides=None):
+        return self._configs[name]
+
+
+def _metronome_bit_config():
+    from control.bit_config import (BitConfig, BitIdentity, ConsoleBlock,
+                                    LaunchConfig, StartCondition)
+
+    return BitConfig(
+        identity=BitIdentity(name="MetronomeBit"),
+        launch=LaunchConfig(default_devices=2,
+                            nodes=(("player", "METRO_PLAYER_NODE"),),
+                            default_join_role="player"),
+        start=StartCondition(), console=ConsoleBlock())
+
+
+def _round_loaded_line(bit_name: str) -> str:
+    return f"{markers.CONTROL_ROUND_LOADED} {bit_name}\n"
+
+
+def _serve_run(tmp_path, control_script, *, registry, device_scripts=(),
+               **cfg_kwargs):
+    popen = ScriptedPopen([control_script, *device_scripts])
+    ticks = iter([0.0] * 20 + [1_000_000.0 * (i + 1) for i in range(30)])
+    cfg_kwargs.setdefault("devices", 0)
+    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                      echo=False, serve=True, seconds=1.0,
+                      **cfg_kwargs)
+    result = run(cfg, popen=popen, clock=lambda: next(ticks),
+                 sleep=time.sleep, registry=registry)
+    return result, popen
+
+
+def test_first_round_loaded_line_is_skipped_second_one_respawns(tmp_path):
+    """Round 1's devices were already spawned by the launch path (skipped
+    here via devices=0 to isolate the respawn path), so the FIRST
+    CONTROL_ROUND_LOADED line -- round 1 announcing itself -- must not
+    spawn anything. The second (round 2) must."""
+    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
+    script = (_CONTROL_OK + _round_loaded_line("MetronomeBit")
+             + _round_loaded_line("MetronomeBit"))
+    result, popen = _serve_run(tmp_path, script, registry=registry,
+                               bit="MetronomeBit", node="METRO_PLAYER_NODE")
+
+    dev_names = {cmd[cmd.index("--dev") + 1] for cmd in popen.commands
+                if "--dev" in cmd}
+    assert dev_names == {"ie1-r2", "ie2-r2"}
+
+
+def test_manifest_resolution_spawns_the_bits_default_device_count(tmp_path):
+    """MetronomeBit -> METRO_PLAYER_NODE, 2 children named ie1-r2/ie2-r2,
+    resolved from the just-loaded bit's own manifest -- not cfg.node or
+    cfg.devices, neither of which was given explicitly here."""
+    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
+    script = (_CONTROL_OK + _round_loaded_line("MetronomeBit")
+             + _round_loaded_line("MetronomeBit"))
+    result, popen = _serve_run(tmp_path, script, registry=registry,
+                               bit="MetronomeBit", node="METRO_PLAYER_NODE")
+
+    respawned = [cmd for cmd in popen.commands if "ie1-r2" in cmd
+                or "ie2-r2" in cmd]
+    assert len(respawned) == 2
+    for cmd in respawned:
+        assert cmd[cmd.index("--node") + 1] == "METRO_PLAYER_NODE"
+
+
+def test_explicit_node_and_devices_override_the_manifest(tmp_path):
+    """--node/--devices given explicitly on the CLI must win over whatever
+    the freshly-loaded bit's own manifest says -- node_explicit/
+    devices_explicit are what StackConfig carries to tell the two cases
+    apart."""
+    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
+    script = (_CONTROL_OK + _round_loaded_line("MetronomeBit")
+             + _round_loaded_line("MetronomeBit"))
+    result, popen = _serve_run(
+        tmp_path, script, registry=registry, bit="MetronomeBit",
+        node="OVERRIDE_NODE", node_explicit=True,
+        devices=3, devices_explicit=True,
+        device_scripts=[_DEVICE_OK, _DEVICE_OK, _DEVICE_OK])
+
+    dev_names = {cmd[cmd.index("--dev") + 1] for cmd in popen.commands
+                if "--dev" in cmd}
+    round2 = {name for name in dev_names if name.endswith("-r2")}
+    assert round2 == {"ie1-r2", "ie2-r2", "ie3-r2"}
+    for cmd in popen.commands:
+        if "--dev" in cmd and cmd[cmd.index("--dev") + 1].endswith("-r2"):
+            assert cmd[cmd.index("--node") + 1] == "OVERRIDE_NODE"
+
+
+def test_unknown_bit_on_round_load_warns_and_spawns_nothing(tmp_path, capsys):
+    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
+    script = (_CONTROL_OK + _round_loaded_line("NoSuchBit")
+             + _round_loaded_line("NoSuchBit"))
+    result, popen = _serve_run(tmp_path, script, registry=registry,
+                               bit="MetronomeBit", node="METRO_PLAYER_NODE")
+
+    respawned = [cmd for cmd in popen.commands if "-r2" in " ".join(cmd)]
+    assert respawned == []
+    err = capsys.readouterr().err
+    assert "NoSuchBit" in err
+
+
+def test_url_collection_still_works_alongside_round_load_detection(tmp_path):
+    """The control tee's on_line callback is now a fan-out of collect_url
+    and the round-load detector -- adding the second must not break the
+    first."""
+    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
+    script = (_CONTROL_OK + f"{markers.BROWSE_URL} http://localhost:1234/x\n"
+             + _round_loaded_line("MetronomeBit"))
+    result, popen = _serve_run(tmp_path, script, registry=registry,
+                               bit="MetronomeBit", node="METRO_PLAYER_NODE")
+
+    assert "http://localhost:1234/x" in result.urls
+
+
+def test_dead_child_tolerates_a_respawned_devices_clean_exit_in_serve_mode():
+    """_dead_child's tolerate-clean-devices rule is keyed on the name not
+    being "control" -- a round-2 respawn named ie1-r2 is exactly as
+    tolerated as round 1's ie1."""
+    children = {"control": _Proc(None), "ie1-r2": _Proc(0)}
+    assert _dead_child(children, tolerate_clean_devices=True) is None
+
+def test_flutter_sim_is_spawned_after_control_with_serve_args(tmp_path):
+    popen = ScriptedPopen(
+        [_CONTROL_OK,
+         f"{markers.BROWSE_URL} http://127.0.0.1:8780/?dev=ie1\n"])
+    cfg = _cfg(tmp_path, devices=0, flutter_sim="/repo/tuneshroom", flutter_devices=1)
+    result = run(cfg, popen=popen, sleep=lambda _s: None)
+    assert result.ok, result.detail
+    assert popen.commands[1] == ["/repo/tuneshroom/tool/sim", "serve", "--devices", "1",
+                                 "--link", "ws://127.0.0.1:8771/ws", "--no-open"]
+    assert "http://127.0.0.1:8780/?dev=ie1" in result.urls
+
+
+def test_no_flutter_flags_spawns_nothing_extra(tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK])
+    run(_cfg(tmp_path, devices=0), popen=popen, sleep=lambda _s: None)
+    assert len(popen.commands) == 1

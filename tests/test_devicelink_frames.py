@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("luxaeterna")
 
 import devicelink.agent as devicelink_agent
-from bits.test_bit import TestBit
+from bits.test.test_bit import TestBit
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from devicelink.agent import DeviceLinkAgent
@@ -38,8 +38,17 @@ def _make_rig_running(clk):
     CLOCK_SCHEDULE's 2.0s steps collapse the welcome/LOADING signature into
     a single render_into() call; a fine clock like FINE_CLOCK_SCHEDULE needs
     several poll()s to get there, so this can't just call poll() once like
-    _make_rig() does."""
-    gs = GameServer({"test_bit": TestBit})
+    _make_rig() does.
+
+    gs shares clk with the agent -- control/boot.py's own comment on this
+    ("cue_horizon and clock go in together and MUST match the ones
+    DeviceLinkAgent is built with... Two clock bases is the 2026-08-13
+    live-run bug") is not optional: GameServer.reap_stale(), now called
+    every poll(), reads its own clock against DevicePool.last_seen, which
+    DeviceLinkAgent writes using ITS clock on every touch() call. An
+    unsynced GameServer clock here makes every device look enormously
+    stale on the very next poll()."""
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
@@ -63,9 +72,11 @@ def _make_rig():
     """A freshly joined device on its own iterator over CLOCK_SCHEDULE. Two
     calls to this function see identical clock reads call-for-call, since
     render_into() is the only thing that consumes the clock and each poll()
-    triggers exactly one render_into() per bridge."""
+    triggers exactly one render_into() per bridge.
+
+    gs shares clk with the agent -- see _make_rig_running's docstring."""
     clk = iter(CLOCK_SCHEDULE).__next__
-    gs = GameServer({"test_bit": TestBit})
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")

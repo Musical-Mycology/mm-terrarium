@@ -1,4 +1,15 @@
-"""The Radxa Tuneshroom's devicelink participation.
+"""Devicelink participation for a Shroom-shaped device -- real or Testshroom.
+
+What is a Testshroom: the harness's own instrument type, used in testing.
+Every simulated device this repo spawns (harness/o2_shroom.py, the smoke
+drivers, run_stack's browser canvases) is a Testshroom: a browser-canvas
+instrument with a 12 px GRB surface and the standard gesture verbs. It is
+deliberately NOT defined as "a simulated Tuneshroom": its shape happens to
+match today's Tuneshroom wire, but it is decoupled from what real Tuneshroom
+hardware becomes -- the Testshroom's job is to exercise Control's seams, not
+to track a hardware design. This class is the shared protocol client both
+kinds of device use; the transport half in ``main()`` also runs on the real
+Radxa Tuneshroom.
 
 Socket-free by design: ``handle()`` takes a decoded JSON message and returns the
 address it handled, or ``""`` if it dropped the frame. That keeps the whole
@@ -22,6 +33,7 @@ The wire, from devicelink/protocol.py and devicelink/agent.py:
     down  /<dev>/play    ss   [name, params]
     down  /<dev>/release ""   []
     down  /<dev>/error   ss   [context, message]
+    down  /<dev>/room    b    [blob]   (informational; ignored here)
 
 The gesture and play rows are implemented by the Flutter simulator today;
 this client sends tilt and tap and ignores /<dev>/play. Design Rule 2 requires
@@ -46,9 +58,12 @@ from devicelink import protocol
 
 logger = logging.getLogger(__name__)
 
-# 12 pixels x GRB, per protocol.leds_event. The parts are SK6812 RGBW and the
-# white die is currently unreachable over this wire; see the plan's Task B7,
-# which is a pending decision rather than a bug to fix here.
+# 12 pixels x GRB, per protocol.leds_event: the Testshroom's own declared
+# surface shape. It matches today's Tuneshroom wire but is not defined AS that
+# wire -- if the hardware changes shape, the Testshroom does not have to
+# follow. (Hardware note: the real parts are SK6812 RGBW and the white die is
+# currently unreachable over this wire; see the plan's Task B7, a pending
+# decision rather than a bug to fix here.)
 LED_CHANNELS = 36
 
 # Bound on frames buffered in _pending between ticks. Under normal operation
@@ -72,21 +87,32 @@ class ShroomClient:
 
     def __init__(self, dev: str, node: str, leds=None,
                  on_role: Callable[[dict], None] | None = None,
+                 on_play: Callable[[str, str], None] | None = None,
                  expected_channels: int = LED_CHANNELS) -> None:
         self.dev = dev
         self.node = node
         self.leds = leds
         self.on_role = on_role
+        # /<dev>/play sink, called (name, params) per PlayCue. Optional so
+        # every existing caller is unchanged; a raising sink is logged and
+        # never propagates -- a broken speaker must not kill the session.
+        self.on_play = on_play
         # Frame width this client will accept, in channels. Defaults to the
-        # 12 px x GRB Tuneshroom wire, so every existing caller is unchanged.
-        # The Room simulator passes its RoomProfile.channel_count instead: a
-        # Room is not a Tuneshroom and does not have 36 channels. See
-        # control/room_profile.py.
+        # Testshroom's 12 px x GRB shape, so every existing caller is
+        # unchanged. The Room simulator passes its RoomProfile.channel_count
+        # instead: a Room is not a Testshroom and does not have 36 channels.
+        # See control/room_profile.py.
         self.expected_channels = expected_channels
         self.config: dict | None = None
         self.released = False
         self.last_deny: tuple[str, str] | None = None
         self.last_error: tuple[str, str] | None = None
+        self.last_play: tuple[str, str] | None = None
+        # Latest informational room snapshot (see protocol.room_event).
+        # Stored, not acted on: this client has no node tiles to draw, but
+        # handling the kind keeps the o2lite wire quiet and the data
+        # inspectable.
+        self.last_room: dict | None = None
         # Frames wait here until their declared display time. Control
         # renders; this client only decides WHEN to light up.
         self._frames = TimedQueue()
@@ -113,6 +139,11 @@ class ShroomClient:
 
     def hello(self) -> dict:
         return self._up("hello", "s", [self.dev])
+
+    def canvas(self, url: str) -> dict:
+        """Report the URL of this device's own browser canvas, sent once
+        right after hello. Devices with no canvas simply never send it."""
+        return self._up("canvas", "ss", [self.dev, url])
 
     def join(self) -> dict:
         self.released = False
@@ -157,7 +188,29 @@ class ShroomClient:
         if kind == "error":
             self.last_error = (env.args[0], env.args[1])
             return env.address
+        if kind == "play":
+            return self._on_play(env)
+        if kind == "room":
+            if not env.args or not isinstance(env.args[0], dict):
+                logger.debug("dropping /room with a non-dict payload")
+                return ""
+            self.last_room = env.args[0]
+            return env.address
         return ""
+
+    def _on_play(self, env) -> str:
+        name = env.args[0] if env.args else ""
+        params = env.args[1] if len(env.args) > 1 else ""
+        if not isinstance(name, str) or not isinstance(params, str):
+            logger.debug("dropping /play with non-string arguments")
+            return ""
+        self.last_play = (name, params)
+        if self.on_play is not None:
+            try:
+                self.on_play(name, params)
+            except Exception:
+                logger.exception("on_play sink raised; sample dropped")
+        return env.address
 
     def _on_role(self, env) -> str:
         if not env.args or not isinstance(env.args[0], dict):

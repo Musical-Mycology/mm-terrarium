@@ -339,3 +339,254 @@ def test_main_has_exactly_one_backend_close():
         f"than one means per-exit-path cleanup has crept back into "
         f"main() -- the same defect that let the SIGTERM path go "
         f"uncovered.")
+
+
+def test_main_consults_ensure_o2litepy_before_importing_o2litepy():
+    """When run by hand (outside run_stack, which already ran this same
+    fallback for its children), main() must fall back to the hardcoded
+    arco checkout before giving up -- exactly like run_stack.main() does.
+
+    Asserted by source inspection rather than by running main(), for the
+    same reason as test_main_has_exactly_one_backend_close: main() imports
+    o2litepy, which is absent from this offline suite by design.
+
+    Walks main()'s top-level statements for the ensure_o2litepy() Call and
+    the `from o2litepy import o2lite` ImportFrom, and asserts the former
+    comes first -- so a caller can never reach the production import
+    without having given the fallback a chance to run first.
+    """
+    import ast
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    # Compared by lineno, not by walk() order: walk() is breadth-first, so
+    # a Call nested inside an `if` (one level deeper than a top-level
+    # ImportFrom) can surface after it in walk() even when it appears
+    # earlier in the source.
+    ensure_call_linenos = [
+        node.lineno for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "ensure_o2litepy"
+    ]
+    import_linenos = [
+        node.lineno for node in ast.walk(main)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "o2litepy"
+    ]
+
+    assert ensure_call_linenos, (
+        "main() never calls ensure_o2litepy() -- the fallback to the "
+        "hardcoded arco checkout is only consulted by run_stack's "
+        "children, not by a hand-run o2_shroom.")
+    assert import_linenos, "main() no longer imports o2litepy directly."
+    assert min(ensure_call_linenos) < min(import_linenos), (
+        "main() imports o2litepy before consulting ensure_o2litepy() -- "
+        "the fallback must run first so a hand-run o2_shroom without "
+        "PYTHONPATH set still finds o2litepy in the arco checkout.")
+
+
+def test_next_heartbeat_time_advances_by_the_interval():
+    from harness.o2_shroom import next_heartbeat_time
+    assert next_heartbeat_time(now=10.0, interval=5.0) == 15.0
+
+
+def test_next_heartbeat_time_disabled_by_a_non_positive_interval():
+    from harness.o2_shroom import next_heartbeat_time
+    assert next_heartbeat_time(now=10.0, interval=0.0) == float("inf")
+    assert next_heartbeat_time(now=10.0, interval=-1.0) == float("inf")
+
+
+def test_main_resends_hello_inside_a_while_loop():
+    """Source-inspection, same technique and reason as
+    test_main_has_exactly_one_backend_close: main() imports o2litepy,
+    absent from this offline suite by design. main() has TWO while loops
+    (the clock-sync wait, then the tick loop), and ast.walk's traversal
+    order across sibling subtrees is not a documented guarantee -- so
+    this deliberately does not index into "the first While found".
+    Instead it walks EVERY While node's own subtree for a
+    send_cmd("/game/hello", ...) Call and sums across all of them: since
+    the two loops' subtrees are disjoint, this is equivalent to "how many
+    hello sends live inside some while loop" without needing to identify
+    which loop is which. There must be at least 2 (the join-retry block's
+    existing one, inside the tick loop; plus the heartbeat's own) -- the
+    clock-sync loop has none. That proves the resend is wired into a loop
+    body rather than only sent once at startup.
+
+    Both hello resend sites now go through the local send_hello() helper
+    (so the matching /game/canvas always follows), so this also counts
+    bare send_hello() Call nodes -- a raw send_cmd("/game/hello", ...)
+    inside a while loop no longer exists once both sites are converted."""
+    import ast
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+    while_nodes = [node for node in ast.walk(main)
+                  if isinstance(node, ast.While)]
+    assert while_nodes, "main() must have at least one while loop"
+
+    def _is_hello_send_cmd(node):
+        return (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "send_cmd"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "/game/hello")
+
+    def _is_send_hello_helper(node):
+        return (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "send_hello")
+
+    hello_call_count = sum(
+        1 for w in while_nodes for node in ast.walk(w)
+        if _is_hello_send_cmd(node) or _is_send_hello_helper(node))
+    assert hello_call_count >= 2, (
+        f"expected at least 2 hello resends (send_cmd(\"/game/hello\", ...) "
+        f"or send_hello()) inside some while loop in main() (join-retry's "
+        f"existing one plus the heartbeat's own), found {hello_call_count}")
+
+
+def test_main_follows_every_hello_send_with_a_canvas_send():
+    """The rule under test for this task: wherever /game/hello goes out,
+    /game/canvas must follow immediately after with the device's own
+    watch URL -- so a Control restart (which re-hellos via the heartbeat)
+    re-learns every device's canvas URL, not just the one sent at
+    startup. Source-inspection, same reason as the sibling tests in this
+    file: main() imports o2litepy, absent from this offline suite.
+
+    Checks two things:
+    1. The local send_hello() helper sends /game/hello then /game/canvas,
+       in that order.
+    2. No bare send_cmd("/game/hello", ...) call remains in main() outside
+       the helper's own body -- proving all three hello sites (initial,
+       join-retry resend, heartbeat resend) were converted to go through
+       the helper rather than just some of them.
+    """
+    import ast
+    import inspect
+
+    import harness.o2_shroom
+
+    source = inspect.getsource(harness.o2_shroom)
+    tree = ast.parse(source)
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    send_hello_def = next(
+        (node for node in ast.walk(main)
+         if isinstance(node, ast.FunctionDef) and node.name == "send_hello"),
+        None)
+    assert send_hello_def is not None, (
+        "main() must define a local send_hello() helper")
+
+    def _send_cmd_address(node):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "send_cmd"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)):
+            return None
+        return node.args[0].value
+
+    helper_send_cmd_calls = [
+        node for node in ast.walk(send_hello_def)
+        if _send_cmd_address(node) is not None]
+    helper_addresses = [
+        _send_cmd_address(node) for node in helper_send_cmd_calls]
+    assert helper_addresses == ["/game/hello", "/game/canvas"], (
+        f"send_hello() must send /game/hello then /game/canvas, found "
+        f"{helper_addresses}")
+
+    # Pin the canvas call's own arguments, not just its address: a
+    # regression sending /game/canvas with the wrong typespec, the wrong
+    # dev, or a hardcoded string instead of the computed canvas_url would
+    # still pass the address-only check above.
+    canvas_call = helper_send_cmd_calls[1]
+
+    def _is_args_dev(node):
+        return (isinstance(node, ast.Attribute) and node.attr == "dev"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "args")
+
+    def _is_canvas_url_name(node):
+        return isinstance(node, ast.Name) and node.id == "canvas_url"
+
+    assert len(canvas_call.args) == 5, (
+        f"expected send_cmd(\"/game/canvas\", 0, \"ss\", args.dev, "
+        f"canvas_url), found {len(canvas_call.args)} positional args")
+    address_arg, seq_arg, typespec_arg, dev_arg, url_arg = canvas_call.args
+    assert isinstance(seq_arg, ast.Constant) and seq_arg.value == 0, (
+        "the canvas send_cmd's sequence-number arg must be the literal 0")
+    assert isinstance(typespec_arg, ast.Constant) and \
+        typespec_arg.value == "ss", (
+        "the canvas send_cmd's typespec must be the literal \"ss\"")
+    assert _is_args_dev(dev_arg), (
+        "the canvas send_cmd's dev arg must be args.dev, not a different "
+        "expression")
+    assert _is_canvas_url_name(url_arg), (
+        "the canvas send_cmd's url arg must be the computed canvas_url "
+        "name, not a literal or a different expression")
+
+    helper_node_ids = {id(n) for n in ast.walk(send_hello_def)}
+    bare_hello_calls = [
+        node for node in ast.walk(main)
+        if id(node) not in helper_node_ids
+        and _send_cmd_address(node) == "/game/hello"]
+    assert bare_hello_calls == [], (
+        "found a send_cmd(\"/game/hello\", ...) call in main() outside "
+        "the send_hello() helper -- every hello site must go through "
+        "send_hello() so the canvas send always follows")
+
+    send_hello_call_count = sum(
+        1 for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "send_hello")
+    assert send_hello_call_count >= 3, (
+        f"expected send_hello() to be called at all three hello sites "
+        f"(initial, join-retry resend, heartbeat resend), found "
+        f"{send_hello_call_count} call(s)")
+
+
+def test_main_registers_room_and_play_o2lite_handlers():
+    """Source-inspection, same technique and reason as the tests above:
+    o2lite dispatches only to registered addresses and prints a noisy
+    "no match" drop for everything else. Control legitimately sends
+    /<dev>/room (informational snapshot) and /<dev>/play (PlayCue), so
+    both kinds must be in the method_new registration tuple alongside
+    the original five."""
+    import ast
+    import inspect
+
+    from harness import o2_shroom
+
+    tree = ast.parse(inspect.getsource(o2_shroom.main))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Tuple)
+                and {getattr(el, "value", None) for el in node.elts}
+                >= {"role", "leds", "release"}):
+            kinds = {el.value for el in node.elts}
+            assert "room" in kinds
+            assert "play" in kinds
+            return
+    raise AssertionError("kinds registration tuple not found in main()")
+
+
+def test_build_passes_on_play_through_to_the_client():
+    pytest.importorskip("luxaeterna")
+    client, backend = build(
+        "ie1", "TEST_PLAYER_NODE", "127.0.0.1", 0, serve=False,
+        on_play=lambda name, params: None)
+    assert client.on_play is not None

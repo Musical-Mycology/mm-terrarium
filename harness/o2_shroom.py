@@ -1,4 +1,4 @@
-"""python -m harness.o2_shroom -- a simulated Tuneshroom over real o2lite.
+"""python -m harness.o2_shroom -- a Testshroom over real o2lite.
 
 The acceptance vehicle for docs/superpowers/specs/
 2026-08-12-control-o2lite-and-timed-cues-design.md: a clock-synced O2
@@ -23,8 +23,10 @@ from __future__ import annotations
 import math
 import os
 import queue
+import sys
 
 from harness import markers
+from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.shroom_client import LED_CHANNELS, ShroomClient
 from harness.signals import sigterm_as_keyboard_interrupt
 
@@ -49,6 +51,18 @@ def tilt_sweep(elapsed: float) -> float:
     return SWEEP_DEGREES * (triangle - 1.0)
 
 
+def next_heartbeat_time(now: float, interval: float) -> float:
+    """The next O2 time a heartbeat /game/hello should be resent.
+
+    interval <= 0 disables the heartbeat: returns float('inf') so a
+    `now >= next_heartbeat_time(...)` check in main()'s tick loop never
+    fires again, mirroring --join-retry's own "0 keeps send-once" contract.
+    """
+    if interval <= 0:
+        return float("inf")
+    return now + interval
+
+
 # Seconds after the operator's last drag-tilt before the synthetic sweep
 # resumes. Long enough that hue does not snap back mid-exploration, short
 # enough that an unattended run still animates.
@@ -59,15 +73,19 @@ SWEEP_RESUME_SECONDS = 5.0
 INPUT_QUEUE_MAX = 64
 
 
-def enqueue_input(q: "queue.Queue", msg: dict) -> None:
-    """Queue one browser gesture, dropping the OLDEST on overflow.
+def enqueue_input(q: "queue.Queue", msg: dict, stamp: float | None) -> None:
+    """Queue one browser gesture with its enqueue-time stamp, dropping the
+    OLDEST on overflow.
 
     Runs on WebSimBackend's websocket handler thread, so it must never
     block; drop-oldest keeps the freshest gestures, matching the
-    drop-not-queue rule frame relay already follows elsewhere."""
+    drop-not-queue rule frame relay already follows elsewhere. `stamp` is
+    read on THIS thread, at enqueue time, so it does not absorb the
+    latency of waiting for the next tick's drain (see drain_gestures)."""
+    entry = (stamp, msg)
     while True:
         try:
-            q.put_nowait(msg)
+            q.put_nowait(entry)
             return
         except queue.Full:
             try:
@@ -80,29 +98,35 @@ def drain_gestures(q: "queue.Queue", send, dev: str, now: float):
     """Translate every queued browser gesture into a /game/* send.
 
     `send` has o2lite.send's signature: send(address, time, typespec,
-    *args). Gestures are stamped `now` -- the caller's o2lite clock
-    reading -- because the whole simulator process is the device, so
-    this IS the source stamp (Design Rule 4); the browser hop happened
-    inside the device. Returns `now` if any tilt went out (the caller
-    suspends its synthetic sweep against it), else None. Malformed
-    entries are dropped with one diagnostic per drain, mirroring the
-    engine's drop-this-frame rule."""
+    *args). Each gesture carries its own enqueue-time stamp (see
+    enqueue_input); that stamp is used as the send time when present,
+    with `now` -- the caller's o2lite clock reading -- as the fallback
+    for entries stamped None. Either way the stamp is still a reading
+    taken somewhere inside this simulator process, because the whole
+    simulator process is the device (Design Rule 4); the browser hop
+    happened inside the device, and moving the stamp from drain time to
+    enqueue time only moves it earlier within that same device, not
+    outside it. Returns the stamp of the drained tilt if any tilt went
+    out (the caller suspends its synthetic sweep against it), else None.
+    Malformed entries are dropped with one diagnostic per drain,
+    mirroring the engine's drop-this-frame rule."""
     tilted = None
     complained = False
     while True:
         try:
-            msg = q.get_nowait()
+            stamp, msg = q.get_nowait()
         except queue.Empty:
             return tilted
+        when = stamp if stamp is not None else now
         kind = msg.get("type") if isinstance(msg, dict) else None
         try:
             if kind == "tap":
                 count = max(1, int(msg.get("count", 1)))
-                send("/game/tap", now, "sffi", dev, 1.0, 50.0, count)
+                send("/game/tap", when, "sffi", dev, 1.0, 50.0, count)
             elif kind == "tilt":
                 gamma = max(-90.0, min(90.0, float(msg["gamma"])))
-                send("/game/tilt", now, "sf", dev, gamma)
-                tilted = now
+                send("/game/tilt", when, "sf", dev, gamma)
+                tilted = when
             else:
                 raise ValueError(kind)
         except (KeyError, TypeError, ValueError):
@@ -255,7 +279,8 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
           sim_host: str = "127.0.0.1", sim_port: int = 0,
           serve: bool = True, room_type: str | None = None,
           fixture: str | None = None,
-          input_queue: "queue.Queue | None" = None):
+          input_queue: "queue.Queue | None" = None,
+          clock=None, on_play=None):
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
@@ -263,12 +288,22 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     build()/main() split.
 
     room_type, when given, renders that ROOM's ONE named fixture instead of
-    a Tuneshroom's surface -- fixture is then required. This is the
+    a Testshroom's surface -- fixture is then required. This is the
     --no-join path, where this module stands in for
     harness/room_simulator.py, once per fixture, on the o2lite transport.
 
     input_queue, when given, receives every gesture the browser page sends
     back; see drain_gestures.
+
+    clock, when given, is called ON THE WEBSOCKET HANDLER THREAD to stamp
+    each gesture at enqueue time rather than at the next drain (see
+    enqueue_input). Pass o2lite.time_get: verified against o2litepy's
+    source (arco checkout, o2litepy/o2lite.py) to be a pure read --
+    local_time() (== time.monotonic() - a fixed start offset) plus the
+    already-synced global_minus_local float, no socket I/O and no state
+    mutation -- so it is safe to call from a thread other than the one
+    running the o2lite event loop. If clock is None, gestures are queued
+    with stamp=None and drain_gestures falls back to its own `now`.
     """
     from luxaeterna.backends.websim import WebSimBackend
     from luxaeterna.synth.capability import shroom_capability
@@ -281,16 +316,17 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     else:
         if fixture is None:
             raise ValueError("room_type requires fixture")
-        from control.room_profile import room_profile
-        from control.rooms import RoomType
+        from control.terrarium_config import load_terrarium_config
         from harness.room_surface import to_fixture_capability
 
-        profile = room_profile(RoomType[room_type])
+        profile = load_terrarium_config("terrarium.toml").rooms[room_type].profile
         capability = to_fixture_capability(profile, fixture)
         channels = capability.pixel_count * 3
 
     on_input = (None if input_queue is None
-                else lambda msg: enqueue_input(input_queue, msg))
+                else lambda msg: enqueue_input(
+                    input_queue, msg,
+                    stamp=(clock() if clock is not None else None)))
     backend = WebSimBackend(capability=capability,
                             host=sim_host, port=sim_port, serve=serve,
                             label=dev, on_input=on_input)
@@ -306,7 +342,8 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
                   "by design")
 
     client = ShroomClient(dev, node, leds=WebSimLeds(backend, channels),
-                          on_role=_on_role, expected_channels=channels)
+                          on_role=_on_role, on_play=on_play,
+                          expected_channels=channels)
     return client, backend
 
 
@@ -334,6 +371,16 @@ def main() -> None:
                              "which is the only reliable ordering while the "
                              "upstream /host/clear defect stands (see "
                              "terrarium_boot's --arco-start-audio).")
+    parser.add_argument("--heartbeat-interval", type=float, default=5.0,
+                        help="Resend /game/hello every N seconds while "
+                             "connected, so Control's GameServer.reap_stale "
+                             "does not time this device out for going "
+                             "quiet between gestures. 0 disables the "
+                             "resend (pre-liveness-detection behavior). "
+                             "Applies with or without --no-join: a Room "
+                             "device needs it too, even though "
+                             "reap_stale() never actually reaps a "
+                             "Room-bound dev today.")
     parser.add_argument("--control-horizon", type=float, default=None,
                         help="The horizon Control was run with (its "
                              "--horizon). Used ONLY to turn this device's "
@@ -353,8 +400,8 @@ def main() -> None:
                              "is spawned, so there is no node to tap "
                              "(harness/room_simulator.py's rule, reused).")
     parser.add_argument("--room-type", default=None,
-                        help="Render this RoomType's surface instead of a "
-                             "Tuneshroom's. Only meaningful with --no-join, "
+                        help="Render this Room's (a name in terrarium.toml) surface instead of a "
+                             "Testshroom's. Only meaningful with --no-join, "
                              "which is how this module serves as the Room "
                              "simulator on the o2lite path.")
     parser.add_argument("--fixture", default=None,
@@ -376,19 +423,42 @@ def main() -> None:
     sigterm_as_keyboard_interrupt()
 
     # Lazy, exactly like harness/arco_synth.py: this module must import with
-    # no o2litepy on the path.
+    # no o2litepy on the path. When run by hand (outside run_stack, which
+    # already ran this same fallback for its children), fall back to the
+    # hardcoded arco checkout before giving up.
+    if not ensure_o2litepy():
+        print(f"o2_shroom needs o2litepy and could not find it, even after "
+              f"falling back to {ARCO_PYTHONPATH}. Is the arco checkout "
+              f"present there? Otherwise re-run with PYTHONPATH pointing "
+              f"at it.", file=sys.stderr)
+        raise SystemExit(1)
+
     from o2litepy import o2lite
 
     from devicelink.o2_transport import pull_args
 
+    from harness.sim_audio import build_sim_player
+
     operator_input = queue.Queue(maxsize=INPUT_QUEUE_MAX)
+    # /<dev>/play sink: generated tones through afplay (degrades to a
+    # printed line off-Mac). Without this every PlayCue died on the wire
+    # as an o2lite "no match" drop and the sim was silent by accident.
+    player = build_sim_player()
     client, backend = build(args.dev, args.node,
                             args.sim_host, args.sim_port,
                             room_type=args.room_type, fixture=args.fixture,
-                            input_queue=operator_input)
+                            input_queue=operator_input,
+                            clock=o2lite.time_get,
+                            on_play=lambda name, params: player.play(name))
     backend.open()
-    print(f"{markers.BROWSE_URL} Watch the Shroom at "
-          f"http://{args.sim_host}:{backend.port}/", flush=True)
+    canvas_url = f"http://{args.sim_host}:{backend.port}/"
+    url_marker = markers.ROOM_URL if args.no_join else markers.BROWSE_URL
+    print(f"{url_marker} Watch the Shroom at "
+          f"{canvas_url}", flush=True)
+
+    def send_hello() -> None:
+        o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+        o2lite.send_cmd("/game/canvas", 0, "ss", args.dev, canvas_url)
 
     # ONE cleanup path, covering everything after backend.open(). The guard
     # starts here and not at the tick loop because every step between is
@@ -434,7 +504,8 @@ def main() -> None:
                            "address": f"/{address}",
                            "typespec": typespec or "", "args": values})
 
-        for kind in ("role", "leds", "release", "deny", "error"):
+        for kind in ("role", "leds", "release", "deny", "error",
+                     "room", "play"):
             o2lite.method_new(f"/{args.dev}/{kind}", None, True, on_down, None)
 
         while o2lite.time_get() < 0:       # block until clock sync
@@ -458,11 +529,12 @@ def main() -> None:
             # cleanup from the finally now instead of by hand.
             raise SystemExit(1)
 
-        o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+        send_hello()
         if not args.no_join:
             o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
 
         start = o2lite.time_get()
+        next_heartbeat = next_heartbeat_time(start, args.heartbeat_interval)
         interval = 1.0 / args.tilt_hz
         # Deferred rather than started at `start`: gestures are held off until
         # _gestures_ready(client) -- see that function's docstring for why --
@@ -505,13 +577,16 @@ def main() -> None:
                     # this device in the DevicePool -- a join from a device
                     # Control has never heard of goes nowhere. Retrying only
                     # the join reconnects nothing.
-                    o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+                    send_hello()
                     o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
                     joins_sent += 1
                     next_join = now + args.join_retry
                     if joins_sent % 5 == 0:
                         print(f"{joins_sent} joins unanswered. "
                               f"{join_stall_hint(args.dev)}")
+            if now >= next_heartbeat:
+                send_hello()
+                next_heartbeat = next_heartbeat_time(now, args.heartbeat_interval)
             if not deny_printed and client.last_deny is not None:
                 reason, hint = client.last_deny
                 print(f"{markers.DEVICE_JOIN_DENIED} {reason} ({hint})",

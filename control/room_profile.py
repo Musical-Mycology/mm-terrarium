@@ -13,7 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from control.rooms import RoomType
+from control.functions import FunctionKind, generator_lane
+from control.instrument import (Instrument, InstrumentError,
+                                 validate_instrument,
+                                 validate_instrument_manifests)
 
 # A single luxaeterna Universe is 512 DMX channels, so one BLOCK -- one
 # physical LED device / one controller's worth -- caps at 170 px RGB (see
@@ -68,6 +71,7 @@ class RoomFixture:
     color_order: str
     blocks: tuple[RoomBlock, ...]
     zones: tuple[RoomZone, ...]
+    instrument: Instrument
 
     @property
     def pixel_count(self) -> int:
@@ -147,6 +151,42 @@ class RoomProfile:
                 if intervals[i][0] < intervals[i - 1][1]:
                     raise ValueError(
                         f"fixture {fixture.name!r} has overlapping zones")
+        for fixture in self.fixtures:
+            try:
+                validate_instrument(fixture.instrument)
+                validate_instrument_manifests(fixture.instrument)
+            except InstrumentError as exc:
+                raise ValueError(
+                    f"fixture {fixture.name!r}: {exc}") from exc
+        # A single instrument's own GENERATOR functions are already checked
+        # for lane collisions by validate_instrument (via
+        # validate_function_table), but two DIFFERENT fixtures' instruments
+        # may each declare a generator on the same (dev, status, data1)
+        # lane -- devicelink/agent.py's ambient feed writes every declared
+        # generator into the ONE Room session every tick, so a shared lane
+        # would silently have one fixture's generator overwrite the
+        # other's on alternating ticks. Cross-fixture, so it belongs at the
+        # profile level rather than in validate_instrument, which only ever
+        # sees one instrument at a time.
+        generator_lanes: dict[tuple[str, int, int], str] = {}
+        for fixture in self.fixtures:
+            for fn in fixture.instrument.functions:
+                if fn.kind is not FunctionKind.GENERATOR:
+                    # v0's own rule (validate_instrument) refuses a
+                    # non-GENERATOR function on an instrument, but this
+                    # profile-level sweep must not depend on that having
+                    # run -- an Instrument built directly (bypassing
+                    # validate_instrument) may still carry one, and
+                    # generator_lane() assumes fn.generator is set.
+                    continue
+                lane = generator_lane(fn)
+                if lane in generator_lanes:
+                    raise ValueError(
+                        f"profile {self.surface_id!r}: fixtures "
+                        f"{generator_lanes[lane]!r} and {fixture.name!r} "
+                        f"both declare a generator on lane {lane!r}; two "
+                        f"fixtures' generators may not share a lane")
+                generator_lanes[lane] = fixture.name
 
     @property
     def pixel_count(self) -> int:
@@ -195,67 +235,3 @@ class RoomProfile:
             out.append((fixture.name, offset * 3, fixture.pixel_count * 3))
             offset += fixture.pixel_count
         return tuple(out)
-
-
-# Linear because the real Terrarium array is a single 6 m run, not a ring and
-# a stem. Two fixtures, deliberately asymmetric: the smallest N that
-# exercises fan-out, distinct service names, distinct frame widths and
-# namespaced zones, with asymmetry so same-shape assumptions cannot hide.
-# `main` is the original single-fixture TEST surface, unchanged in shape;
-# `accent` is new.
-ROOM_PROFILES: dict[RoomType, RoomProfile] = {
-    RoomType.TEST: RoomProfile(
-        surface_id="room_test",
-        fixtures=(
-            RoomFixture(
-                name="main", color_order="GRB",
-                blocks=(RoomBlock("main", 0, 60),),
-                zones=(RoomZone("left", 0, 20),
-                      RoomZone("center", 20, 20),
-                      RoomZone("right", 40, 20))),
-            RoomFixture(
-                name="accent", color_order="GRB",
-                blocks=(RoomBlock("accent", 0, 30),),
-                zones=(RoomZone("low", 0, 15),
-                      RoomZone("high", 15, 15))),
-        ),
-    ),
-    RoomType.DEMO: RoomProfile(
-        surface_id="room_demo",
-        fixtures=(
-            RoomFixture(
-                name="array", color_order="GRB",
-                # 144 LED/m x 6 m real array (MM_HARDWARE_DESIGN.md
-                # section 7.1), one block per physical meter run. Synthetic
-                # backend, real scale: unlocked by the per-block cap.
-                blocks=(
-                    RoomBlock("m1", 0, 144), RoomBlock("m2", 144, 144),
-                    RoomBlock("m3", 288, 144), RoomBlock("m4", 432, 144),
-                    RoomBlock("m5", 576, 144), RoomBlock("m6", 720, 144),
-                ),
-                # Gameplay/Console targeting thirds -- deliberately not 1:1
-                # with the 6 blocks: zones and blocks are different axes.
-                zones=(RoomZone("left", 0, 288),
-                      RoomZone("center", 288, 288),
-                      RoomZone("right", 576, 288)),
-            ),
-        ),
-    ),
-}
-
-
-def room_profile(room_type: RoomType) -> RoomProfile:
-    """This Room type's fixture declaration.
-
-    Raises rather than substituting a default, matching
-    control/rooms.py's resolve_room_type(): a Terrarium that cannot render the
-    Room it was configured for must fail at boot, not render the wrong thing
-    all night.
-    """
-    try:
-        return ROOM_PROFILES[room_type]
-    except KeyError:
-        raise NotImplementedError(
-            f"{room_type.name} has no room profile; only "
-            f"{', '.join(t.name for t in ROOM_PROFILES)} is implemented"
-        ) from None

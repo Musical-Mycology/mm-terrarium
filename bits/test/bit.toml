@@ -1,0 +1,27 @@
+[bit]
+name = "TestBit"
+version = "1.0.0"
+description = "Durable reference/regression fixture: scored player + jam jammer"
+entry = "test_bit:TestBit"
+kind = "tool"
+requires_terrarium_api = 1
+
+[launch]
+room_types = ["TEST", "DEMO"]
+default_room_type = "TEST"
+default_devices = 1
+default_join_role = "player"
+
+[launch.nodes]
+player = "TEST_PLAYER_NODE"
+jammer = "TEST_JAM_NODE"
+
+[start]
+when = "immediate"
+
+[console]
+display_name = "Test Bit"
+hidden = true
+
+[defaults]
+run_duration_seconds = 2.0

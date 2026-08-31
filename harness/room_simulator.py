@@ -1,6 +1,7 @@
 """python -m harness.room_simulator -- the TEST-room simulator subprocess.
 
-An ordinary devicelink client, indistinguishable from a real Tuneshroom:
+An ordinary devicelink client -- a Testshroom speaking the same protocol
+as any player device:
 reuses harness/shroom_client.py's ShroomClient unmodified for the wire
 protocol, and renders into luxaeterna's WebSimBackend (a browser canvas)
 instead of real GPIO LEDs. Sends only `/game/hello` -- never `/game/join` --
@@ -56,7 +57,7 @@ class WebSimLeds:
     WebSimBackend's send(frame).
 
     `channels` is the frame width this surface expects. It is a parameter
-    rather than the LED_CHANNELS constant because a Room is not a Tuneshroom:
+    rather than the LED_CHANNELS constant because a Room is not a Testshroom:
     the Room's width comes from its RoomProfile (60 px x 3 = 180), while a
     player device is still 12 px x GRB = 36.
     """
@@ -83,11 +84,10 @@ def build(dev: str, sim_host: str = "127.0.0.1", sim_port: int = 0,
     """
     from luxaeterna.backends.websim import WebSimBackend
 
-    from control.room_profile import room_profile
-    from control.rooms import RoomType
+    from control.terrarium_config import load_terrarium_config
     from harness.room_surface import to_fixture_capability
 
-    profile = room_profile(RoomType[room_type])
+    profile = load_terrarium_config("terrarium.toml").rooms[room_type].profile
     cap = to_fixture_capability(profile, fixture)
     backend = WebSimBackend(capability=cap, host=sim_host, port=sim_port,
                              serve=serve, label=dev)
@@ -115,14 +115,21 @@ def main() -> None:
     parser.add_argument("--sim-host", default="127.0.0.1")
     parser.add_argument("--sim-port", type=int, default=0)
     parser.add_argument("--room-type", default="TEST",
-                        help="Which RoomType's surface to render. Resolved "
-                             "through control/room_profile.py, so the "
+                        help="Which Room's (a name in terrarium.toml) "
+                             "surface to render. Resolved through "
+                             "control/terrarium_config.py, so the "
                              "simulator and Control agree on the shape by "
                              "construction rather than by convention.")
     parser.add_argument("--control-horizon", type=float, default=None,
                         help="The horizon Control was run with, used only to "
                              "report absolute frame latency on exit. Same "
                              "flag and same meaning as harness/o2_shroom.py's.")
+    parser.add_argument("--heartbeat-interval", type=float, default=5.0,
+                        help="Resend /game/hello every N seconds while "
+                             "connected, so Control's GameServer.reap_stale "
+                             "does not time this device out. Same flag and "
+                             "meaning as harness/o2_shroom.py's. 0 disables "
+                             "the resend.")
     parser.add_argument("--samples-out", default=None,
                         help="Write raw per-frame lateness samples here as "
                              "JSON, for python -m harness.sync_bench.")
@@ -139,16 +146,17 @@ def main() -> None:
     client, backend = build(args.dev, args.sim_host, args.sim_port,
                             room_type=args.room_type, fixture=args.fixture)
     backend.open()
-    print(f"{markers.BROWSE_URL} Watch the Room at "
-          f"http://{args.sim_host}:{backend.port}/", flush=True)
+    canvas_url = f"http://{args.sim_host}:{backend.port}/"
+    print(f"{markers.ROOM_URL} Watch the Room at "
+          f"{canvas_url}", flush=True)
 
     if args.identify_blocks:
         import time
 
-        from control.room_profile import room_profile
-        from control.rooms import RoomType
+        from control.terrarium_config import load_terrarium_config
 
-        profile = room_profile(RoomType[args.room_type])
+        profile = load_terrarium_config(
+            "terrarium.toml").rooms[args.room_type].profile
         backend.send(identify_blocks_frame(profile, args.fixture))
         print(f"identify-blocks: {args.fixture} painted; Ctrl-C to exit",
               flush=True)
@@ -164,12 +172,29 @@ def main() -> None:
     async def run() -> None:
         async with websockets.connect(args.server) as ws:
             await ws.send(json.dumps(client.hello()))
+            await ws.send(json.dumps(client.canvas(canvas_url)))
 
             async def pump_down() -> None:
                 async for raw in ws:
                     client.handle(json.loads(raw))
 
-            await asyncio.gather(pump_down(), pump_tick(client))
+            async def pump_heartbeat() -> None:
+                """Resend /game/hello on a timer so Control's
+                GameServer.reap_stale (docs/superpowers/specs/
+                2026-08-25-device-liveness-detection-design.md) never
+                times this Room device out for going quiet -- it only
+                ever sends hello, never join, so it has no gesture
+                traffic of its own to prove it is still alive."""
+                if args.heartbeat_interval <= 0:
+                    return
+                while not client.released:
+                    await asyncio.sleep(args.heartbeat_interval)
+                    if not client.released:
+                        await ws.send(json.dumps(client.hello()))
+                        await ws.send(json.dumps(client.canvas(canvas_url)))
+
+            await asyncio.gather(pump_down(), pump_tick(client),
+                                 pump_heartbeat())
 
     try:
         asyncio.run(run())

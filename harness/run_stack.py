@@ -42,6 +42,7 @@ that the failure is BOUNDED and NAMED rather than a hang.
 from __future__ import annotations
 
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -49,14 +50,20 @@ import time
 import webbrowser
 from dataclasses import dataclass, field
 
+from control.bit_registry import BitRegistry
 from control.process import stop_process
+from control.run_profile import RunProfile, parse_profile
 from control.teardown import TeardownStack
+from control.terrarium_config import load_terrarium_config, resolve_bit_roots
 from harness import markers
+from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.proc_tee import ProcTee
 from harness.signals import sigterm_as_keyboard_interrupt
 
 DEFAULT_ARCO_COMMAND = "/Users/chris/projects/arco/apps/pytest/server"
-PLAYER_NODE = "TEST_PLAYER_NODE"
+# ARCO_PYTHONPATH -- the checkout o2litepy and pyarco live in, the same one
+# DEFAULT_ARCO_COMMAND already hardcodes -- lives in harness/arco_paths.py,
+# shared with harness/o2_shroom.py.
 
 
 @dataclass
@@ -81,7 +88,16 @@ class StackConfig:
     arco_ready_timeout: float = 60.0
     console_port: int | None = None   # None = no Terrarium Console
     room_type: str = "TEST"
+    config: str | None = None         # forwarded to terrarium_boot verbatim
+    bit: str = "TestBit"
+    node: str | None = None
+    node_explicit: bool = False       # True iff --node was passed on the CLI
+    devices_explicit: bool = False    # True iff --devices was passed
     open_urls: bool = False           # open each BROWSE_URL in the browser
+    profile: str | None = None        # forwarded to terrarium_boot verbatim
+    serve: bool = False               # forward --serve to terrarium_boot
+    flutter_sim: str | None = None    # mm-tuneshroom checkout; spawns tool/sim serve
+    flutter_devices: int = 0          # how many Flutter simulator URLs to serve
 
 
 @dataclass
@@ -91,6 +107,17 @@ class RunResult:
     detail: str
     logs: dict = field(default_factory=dict)
     urls: list = field(default_factory=list)
+    room_urls: list = field(default_factory=list)
+
+
+def discover_registry(config_path: str | None) -> BitRegistry:
+    """BitRegistry.scan() over the roots named by config_path's own
+    bit_paths (default terrarium.toml in the CWD -- terrarium_boot's own
+    default, mirrored here since this process forwards --config verbatim
+    rather than defaulting it itself)."""
+    terrarium_config = load_terrarium_config(config_path or "terrarium.toml")
+    roots = resolve_bit_roots(terrarium_config, config_path or "terrarium.toml")
+    return BitRegistry.scan(roots)
 
 
 def control_command(cfg: StackConfig, ppid: int) -> list[str]:
@@ -114,16 +141,44 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
     ]
     if cfg.console_port is not None:
         command += ["--console-port", str(cfg.console_port)]
-    command += ["--room-type", cfg.room_type]
+    if cfg.config is not None:
+        command += ["--config", cfg.config]
+    command += ["--room", cfg.room_type]
+    command += ["--bit", cfg.bit]
+    if cfg.profile is not None:
+        # terrarium_boot re-parses the same file and applies the same
+        # manifest < profile < CLI precedence for its own process's
+        # BitConfig -- run_stack's own resolve_config call above (in
+        # config_from_args) only needs the profile to derive ITS launch
+        # defaults (devices, node, ...), not to run the Bit.
+        command += ["--profile", cfg.profile]
+    if cfg.serve:
+        # terrarium_boot's own effective-serve rule (args.serve or
+        # (console_port set and seconds is None and not hold)) would NOT
+        # fire here on console_port alone: run_stack always passes
+        # --setup-seconds (never --seconds) and --hold, so forwarding
+        # --serve explicitly is what actually makes serve mode happen --
+        # and it keeps intent visible in the child's own argv either way.
+        command += ["--serve"]
     return command
 
 
-def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
-    dev = f"ie{index}"
+def device_command(cfg: StackConfig, index: int, ppid: int, *,
+                   dev: str | None = None, node: str | None = None
+                   ) -> list[str]:
+    """cfg.node is expected to already be resolved (config_from_args does
+    that once, via args.node or BitRegistry.resolve_config(cfg.bit)
+    .join_node()) -- this just forwards it.
+
+    `dev` and `node` let a round-2+ respawn override the o2lite dev id and
+    join node without mutating cfg -- cfg.node stays round 1's resolution,
+    and a respawn resolves its own node fresh from the just-loaded bit."""
+    dev = dev if dev is not None else f"ie{index}"
+    node = node if node is not None else cfg.node
     return [
         sys.executable, "-u", "-m", "harness.o2_shroom",
         "--dev", dev,
-        "--node", PLAYER_NODE,
+        "--node", node,
         "--ensemble", cfg.ensemble,
         "--join-retry", "2.0",
         "--control-horizon", str(cfg.horizon),
@@ -134,10 +189,24 @@ def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
 
 _URL_PATTERN = re.compile(r"http://\S+")
 
+FLUTTER_LINK = "ws://127.0.0.1:8771/ws"   # DeviceLink's fixed port, harness/devicelink_smoke.py
+
+
+def flutter_command(cfg: StackConfig) -> list[str]:
+    """The Flutter simulator launcher's fixed CLI contract (Task 7): an
+    mm-tuneshroom checkout's tool/sim serve, told how many devices to serve
+    and where DeviceLink's websocket is. It is a websocket client, not
+    o2lite -- it never joins run_stack's own DEVICE_CLOCK_SYNCED wait, it
+    just runs alongside the devices for the duration of the hold."""
+    return [os.path.join(cfg.flutter_sim, "tool", "sim"), "serve",
+            "--devices", str(cfg.flutter_devices),
+            "--link", FLUTTER_LINK, "--no-open"]
+
 
 def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, getpid=os.getpid,
-        opener=webbrowser.open) -> RunResult:
+        opener=webbrowser.open, registry: BitRegistry | None = None
+        ) -> RunResult:
     """Bring the stack up, hold it, and tear it down in order.
 
     Every process is registered on the TeardownStack at the moment it is
@@ -151,25 +220,55 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
     processes: dict[str, object] = {}
     logs = {}
     urls: list[str] = []
+    room_urls: list[str] = []
+    round_loads: "queue.Queue[str]" = queue.Queue()
 
     def collect_url(line: str) -> None:
-        """Record (and under --open, open) a child's BROWSE_URL line.
+        """Record a child's BROWSE_URL or ROOM_URL line.
 
         Runs on the child's tee thread. A marker line whose URL cannot be
         parsed degrades to a missing tab, never a crashed stack -- a
         future emit site that garbles its URL is a cosmetic bug, not a
-        run-ending one.
+        run-ending one. ROOM_URL lines are collected for the summary but
+        never handed to the opener -- a Room fixture canvas is reached
+        from the Console's Room card, not an automatic browser tab.
         """
-        if markers.BROWSE_URL not in line:
+        is_browse = markers.BROWSE_URL in line
+        is_room = markers.ROOM_URL in line
+        if not (is_browse or is_room):
             return
         match = _URL_PATTERN.search(line)
         if match is None:
+            return
+        if is_room:
+            room_urls.append(match.group())
             return
         urls.append(match.group())
         if cfg.open_urls:
             opener(match.group())
 
-    def spawn(name: str, command: list[str], watch) -> ProcTee:
+    def on_control_line(line: str) -> None:
+        """Enqueue a round-loaded bit name for on_round to pick up.
+
+        Runs on the control tee's reader thread -- ENQUEUE ONLY. Spawning a
+        respawn child from this thread would make it race the main
+        thread's teardown-stack pushes and _hold's own polling; on_round
+        (invoked from _hold, on the main thread) is what actually spawns.
+        """
+        if markers.CONTROL_ROUND_LOADED not in line:
+            return
+        bit_name = line.split(markers.CONTROL_ROUND_LOADED, 1)[1].strip()
+        round_loads.put(bit_name)
+
+    def control_on_line(line: str) -> None:
+        """Fan-out for the control tee only: URL collection stays intact,
+        and round-loaded detection is added alongside it, not instead of
+        it."""
+        collect_url(line)
+        on_control_line(line)
+
+    def spawn(name: str, command: list[str], watch, *,
+             on_line=None) -> ProcTee:
         process = popen(command, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True,
                         start_new_session=True)
@@ -178,16 +277,77 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         log_path = os.path.join(cfg.log_dir, f"{name}.log")
         logs[name] = log_path
         tee = ProcTee(name, process.stdout, log_path, markers=watch,
-                      echo=cfg.echo, on_line=collect_url)
+                      echo=cfg.echo,
+                      on_line=on_line if on_line is not None else collect_url)
         tee.start()
         tees[name] = tee
         return tee
 
+    round_number = 1              # round 1's devices: the launch path below
+    first_round_load_seen = False  # round 1 also emits CONTROL_ROUND_LOADED
+
+    def spawn_round_devices(bit_name: str) -> None:
+        """The on_round(bit_name) closure: resolves round 2+'s node/device
+        count from the just-loaded bit's manifest (unless the CLI pinned
+        them explicitly) and spawns that many `ie<k>-r<N>` children.
+
+        No readiness gating here -- unlike round 1's device loop in run(),
+        this does not wait for DEVICE_CLOCK_SYNCED/DEVICE_ROLE_GRANTED
+        before returning. _hold's own polling loop is what notices a
+        respawned device's eventual exit.
+        """
+        nonlocal round_number, first_round_load_seen
+        if not first_round_load_seen:
+            first_round_load_seen = True
+            return
+        round_number += 1
+        n = round_number
+        reg = registry if registry is not None else discover_registry(cfg.config)
+        if bit_name not in reg.packages:
+            print(f"round loaded: unknown Bit {bit_name!r}; no devices "
+                 f"respawned for round {n}", file=sys.stderr)
+            return
+        bit_cfg = reg.resolve_config(bit_name)
+        node = cfg.node if cfg.node_explicit else bit_cfg.join_node()
+        if node is None:
+            print(f"round loaded: Bit {bit_name!r} defines no launch.nodes "
+                 f"and no --node was given -- no devices respawned for "
+                 f"round {n}.", file=sys.stderr)
+            return
+        count = (cfg.devices if cfg.devices_explicit
+                else bit_cfg.launch.default_devices)
+        for index in range(1, count + 1):
+            name = f"ie{index}-r{n}"
+            spawn(name, device_command(cfg, index, getpid(), dev=name,
+                                       node=node),
+                 _watch_list("DEVICE_"))
+
+    def drain_rounds() -> None:
+        """What _hold calls each tick: drains every CONTROL_ROUND_LOADED
+        name queued since the last tick, invoking spawn_round_devices once
+        per entry -- never more than one queue drain per tick, but never
+        less either, so a burst of rounds between two slow ticks is not
+        collapsed to just the last one."""
+        while True:
+            try:
+                bit_name = round_loads.get_nowait()
+            except queue.Empty:
+                return
+            spawn_round_devices(bit_name)
+
     try:
         control = spawn("control", control_command(cfg, getpid()),
-                        _watch_list("CONTROL_"))
+                        _watch_list("CONTROL_"), on_line=control_on_line)
 
         for stage, marker, detail in (
+            # Gates on the Room finishing rather than boot completion, which
+            # it now precedes: harness/terrarium_boot.py's build() loads the
+            # Room (Arco, the simulator, the Room bridge) before it even
+            # starts the o2lite transport -- see control/terrarium.py's
+            # Terrarium.load_room.
+            ("control-room-loaded", markers.CONTROL_ROOM_LOADED,
+             "Control never reported its Room loaded. Check arco.log for "
+             "a failed Arco start, and control.log for a load_room refusal."),
             ("control-ready", markers.CONTROL_TRANSPORT_READY,
              "Control never reported its o2lite transport up. Check "
              "arco.log for a failed Arco start, and o2debug.log."),
@@ -195,7 +355,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
              "Control came up but never opened registration."),
         ):
             if not control.wait_for(marker, cfg.ready_timeout, clock, sleep):
-                return RunResult(False, stage, detail, logs, urls)
+                return RunResult(False, stage, detail, logs, urls, room_urls)
 
         devices = []
         for index in range(1, cfg.devices + 1):
@@ -203,11 +363,17 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                 f"ie{index}", device_command(cfg, index, getpid()),
                 _watch_list("DEVICE_")))
 
+        if cfg.flutter_sim and cfg.flutter_devices > 0:
+            # Spawned alongside the devices, not waited on with them: it is
+            # a websocket client of DeviceLink, not an o2lite device, so it
+            # never clock-syncs and must not be part of that wait.
+            spawn("flutter-sim", flutter_command(cfg), _watch_list("DEVICE_"))
+
         for tee in devices:
             ok, failed = _wait_for_marker(tee, markers.DEVICE_CLOCK_SYNCED,
                                           cfg.join_timeout, clock, sleep)
             if failed is not None:
-                return RunResult(False, "device-join", failed, logs, urls)
+                return RunResult(False, "device-join", failed, logs, urls, room_urls)
             if not ok:
                 return RunResult(
                     False, "device-sync",
@@ -219,30 +385,40 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                     f"message because service was not found' means Control "
                     f"was not up yet, and total silence means the socket is "
                     f"dead. See docs/MM_TERRARIUM.md 'Not yet built'.", logs,
-                    urls)
+                    urls, room_urls)
             ok, failed = _wait_for_marker(tee, markers.DEVICE_ROLE_GRANTED,
                                           cfg.join_timeout, clock, sleep)
             if failed is not None:
-                return RunResult(False, "device-join", failed, logs, urls)
+                return RunResult(False, "device-join", failed, logs, urls, room_urls)
             if not ok:
                 return RunResult(
                     False, "device-join",
                     f"{tee.name} synced but was never granted a role. Is "
                     f"Control still in SETUP? `player` is a scored role "
-                    f"and is refused once RUNNING.", logs, urls)
+                    f"and is refused once RUNNING.", logs, urls, room_urls)
 
-        dead = _hold(cfg, processes, clock, sleep)
+        dead = _hold(cfg, processes, clock, sleep,
+                    on_round=drain_rounds if cfg.serve else None)
         if dead is not None:
             name, code = dead
+            # A control child that exits ZERO after announcing the Bit
+            # completed is the run ending on its own (a self-completing
+            # Bit like MetronomeBit), not a crash. wait_for rather than
+            # seen(): _hold notices the exit the instant it happens, which
+            # can be before the tee thread has drained the final lines.
+            if (name == "control" and code == 0
+                    and tees["control"].wait_for(
+                        markers.CONTROL_BIT_COMPLETED, 5.0, clock, sleep)):
+                return RunResult(True, "bit-completed", "", logs, urls, room_urls)
             return RunResult(
                 False, "child-exited",
                 f"{name} exited (code {code!r}) during the hold, before "
                 f"the run ended on its own. Check {name}.log for what "
-                f"happened.", logs, urls)
-        return RunResult(True, "complete", "", logs, urls)
+                f"happened.", logs, urls, room_urls)
+        return RunResult(True, "complete", "", logs, urls, room_urls)
     except KeyboardInterrupt:
         return RunResult(True, "interrupted", "stopped by Ctrl-C",
-                         logs, urls)
+                         logs, urls, room_urls)
     finally:
         for name, exc in teardown.close():
             print(f"teardown step {name!r} failed: {exc!r}", file=sys.stderr)
@@ -338,7 +514,7 @@ def _wait_for_marker(tee: ProcTee, target: str, timeout: float, clock,
 
 
 def _hold(cfg: StackConfig, children: dict[str, object], clock,
-         sleep) -> tuple[str, int] | None:
+         sleep, on_round=None) -> tuple[str, int] | None:
     """Run for --seconds, or until Ctrl-C when no duration was asked for.
 
     Polls every spawned child on each tick and returns as soon as one has
@@ -351,29 +527,65 @@ def _hold(cfg: StackConfig, children: dict[str, object], clock,
     Arco (`arco.poll() is not None`) on every tick of its own loop for the
     same reason: a dead child is news the instant it happens, not news
     worth waiting out the rest of the hold for.
+
+    on_round, when given, is called once per tick (both loops below) and
+    is the hook serve mode uses to react to a queued CONTROL_ROUND_LOADED
+    name -- the queue is drained, and any devices it implies are spawned,
+    entirely on this thread, never on the control tee's reader thread.
+    None (the default) keeps every non-serve caller's behavior unchanged.
     """
+    tolerate = cfg.serve
     if cfg.seconds is None:
         while True:
-            dead = _dead_child(children)
+            dead = _dead_child(children, tolerate_clean_devices=tolerate)
             if dead is not None:
                 return dead
+            if on_round is not None:
+                on_round()
             sleep(0.5)
     deadline = clock() + cfg.seconds
     while clock() < deadline:
-        dead = _dead_child(children)
+        dead = _dead_child(children, tolerate_clean_devices=tolerate)
         if dead is not None:
             return dead
+        if on_round is not None:
+            on_round()
         sleep(0.1)
     return None
 
 
-def _dead_child(children: dict[str, object]) -> tuple[str, int] | None:
+def _dead_child(children: dict[str, object], *,
+                tolerate_clean_devices: bool = False
+                ) -> tuple[str, int] | None:
     """The first child (in spawn order: control, then ie1, ie2, ...)
-    whose process has already exited, paired with its exit code."""
+    whose process has already exited, paired with its exit code.
+
+    tolerate_clean_devices is serve mode's rule: a simulated device exits
+    with code 0 the moment Control releases it (harness/o2_shroom.py loops
+    `while not client.released`), and in a multi-round session that is the
+    round ending, not the stack failing. Live 2026-08-21 a Console abort
+    released ie1, ie1 exited 0, this function reported it, run() SIGTERMed
+    a perfectly healthy Control mid-serve and Arco went down with it. A
+    control exit of any code and a NON-zero device exit still count.
+    Devices that stay up across rounds are a later slice (device
+    reconnection); until then round 2+ under run_stack runs device-less.
+
+    "flutter-sim" (the Flutter simulator launcher spawned by
+    flutter_command) is tolerated unconditionally, serve mode or not: it is
+    a websocket client of DeviceLink, not an o2lite device under Control's
+    own join/release lifecycle, so its clean exit is never the signal that
+    a scored round ended -- it just isn't part of this stack's pass/fail
+    contract the way control and the o2lite devices are.
+    """
     for name, process in children.items():
         code = process.poll()
-        if code is not None:
-            return name, code
+        if code is None:
+            continue
+        if name == "flutter-sim" and code == 0:
+            continue
+        if tolerate_clean_devices and name != "control" and code == 0:
+            continue
+        return name, code
     return None
 
 
@@ -405,8 +617,10 @@ def parse_args(argv=None):
     ap.add_argument("--ci", action="store_true",
                     help="Non-interactive: no terminal echo, a bounded run, "
                          "and a non-zero exit on any failure.")
-    ap.add_argument("--devices", type=int, default=1,
-                    help="How many simulated player devices to join.")
+    ap.add_argument("--devices", type=int, default=None,
+                    help="How many simulated player devices to join. "
+                         "Default: the selected Bit manifest's "
+                         "launch.default_devices.")
     ap.add_argument("--seconds", type=float, default=None,
                     help="How long to hold the stack up. Default: forever "
                          "(Ctrl-C to stop), or 45s under --ci.")
@@ -431,39 +645,137 @@ def parse_args(argv=None):
     ap.add_argument("--open", action="store_true",
                     help="Open a browser tab for every surface as it comes "
                          "up: the Terrarium Console, each Room fixture "
-                         "canvas, and each simulated Tuneshroom canvas. "
+                         "canvas, and each Testshroom canvas. "
                          "Implies a Console on an ephemeral port unless "
                          "--console-port is given. Refused under --ci.")
-    ap.add_argument("--room-type", default="TEST", choices=["TEST", "DEMO"],
-                    help="Which RoomType to boot. DEMO configures the "
-                         "simulated array backend (spec 2026-08-19); its "
+    ap.add_argument("--room", default=None,
+                    help="Which Room (a [rooms.<NAME>] table in --config, "
+                         "default terrarium.toml) to boot. DEMO configures "
+                         "the simulated array backend (spec 2026-08-19); its "
                          "864 px canvas is otherwise identical in kind to "
-                         "TEST's.")
+                         "TEST's. Default: the selected Bit manifest's "
+                         "launch.default_room_type. Forwarded verbatim as "
+                         "terrarium_boot's own --room.")
+    ap.add_argument("--config", default=None, metavar="PATH",
+                    help="The terrarium.toml to boot against, forwarded "
+                         "verbatim to terrarium_boot. Default: "
+                         "terrarium_boot's own default (terrarium.toml in "
+                         "the current directory).")
+    ap.add_argument("--bit", default=None,
+                    help="Which Bit to run, by its discovered manifest name "
+                         "(bits/*/bit.toml). See --list-bits for what's "
+                         "available. Default: the --profile's own "
+                         "[run].bit, else TestBit.")
+    ap.add_argument("--profile", default=None, metavar="PATH",
+                    help="A venue TOML (see profiles/dev-metronome.toml) "
+                         "supplying launch defaults -- bit, room_type, "
+                         "devices, console_port, seconds -- and a "
+                         "[bit.overrides] table forwarded verbatim to "
+                         "terrarium_boot. Precedence is manifest < profile "
+                         "< explicit CLI flags.")
+    ap.add_argument("--list-bits", action="store_true",
+                    help="Print every discovered Bit package (name, "
+                         "version, kind, room types, start condition, "
+                         "description) and any manifest errors, then exit.")
+    ap.add_argument("--serve", action="store_true",
+                    help="Forward --serve to terrarium_boot: hold until "
+                         "Ctrl-C or a child exit instead of a fixed "
+                         "duration. Implied when a console is requested "
+                         "outside --ci. Refused under --ci.")
+    ap.add_argument("--node", default=None,
+                    help="Which node spawned devices join. Default: "
+                         "derived from the selected Bit's manifest "
+                         "(BitConfig.join_node() -- its "
+                         "launch.default_join_role resolved against "
+                         "launch.nodes, or the first node if there is no "
+                         "default role). Set this to override that.")
+    ap.add_argument("--flutter-sim", default=None,
+                    help="Path to an mm-tuneshroom checkout; spawns "
+                         "tool/sim serve alongside the o2lite devices.")
+    ap.add_argument("--flutter-devices", type=int, default=0,
+                    help="How many Flutter simulator URLs to serve "
+                         "(needs --flutter-sim).")
     args = ap.parse_args(argv)
     if args.ci and args.open:
         ap.error("--open makes no sense under --ci: a headless CI run "
                  "has no browser to open tabs in.")
+    if args.ci and args.serve:
+        ap.error("--serve makes no sense under --ci: a headless CI run "
+                 "needs a bounded hold, not one that runs until Ctrl-C or "
+                 "a child exit.")
     return args
 
 
-def config_from_args(args) -> StackConfig:
+def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
+    registry = registry if registry is not None else discover_registry(args.config)
+
+    profile = RunProfile()
+    if args.profile is not None:
+        with open(args.profile, encoding="utf-8") as handle:
+            profile = parse_profile(handle.read(), source=args.profile)
+
+    # manifest < profile < explicit CLI, applied once here.
+    bit = args.bit or profile.bit or "TestBit"
+    if bit not in registry.packages:
+        available = sorted(registry.packages)
+        print(f"unknown Bit {bit!r}; available: {available}",
+             file=sys.stderr)
+        raise SystemExit(1)
+    bit_cfg = registry.resolve_config(bit, profile.overrides or None)
+
+    node = args.node or bit_cfg.join_node()
+    if node is None:
+        print(f"Bit {bit!r} defines no launch.nodes and no --node "
+              f"was given -- a spawned device would have nothing to "
+              f"join.", file=sys.stderr)
+        raise SystemExit(1)
+
+    devices = (args.devices if args.devices is not None
+               else profile.devices if profile.devices is not None
+               else bit_cfg.launch.default_devices)
+    room_type = args.room or profile.room_type or bit_cfg.launch.default_room_type
+
     log_dir = args.log_dir or os.path.join(
         "runs", time.strftime("%Y%m%d-%H%M%S"))
-    seconds = args.seconds
+    seconds = args.seconds if args.seconds is not None else profile.seconds
     if seconds is None and args.ci:
-        seconds = CI_DEFAULT_SECONDS      # an unbounded CI run is a hung job
-    console_port = args.console_port
+        # An unbounded CI run is a hung job. The bound is the setup window
+        # that actually governs the hold -- max(manifest setup_seconds,
+        # forwarded --setup-seconds) -- plus the expected-run window, plus
+        # a 15s grace that covers teardown and the closing fades. The
+        # max() matters: --setup-seconds keeps its own 90s default
+        # regardless of the manifest (see its argparse default above), so
+        # a manifest with a shorter setup_seconds (e.g. TestBit's 0s)
+        # never governs the actual hold -- deriving the bound from the
+        # manifest alone would undercut a run that Control legitimately
+        # holds open for the full forwarded --setup-seconds.
+        seconds = (max(bit_cfg.launch.setup_seconds, args.setup_seconds)
+                  + (bit_cfg.launch.expected_run_seconds or CI_DEFAULT_SECONDS)
+                  + 15.0)
+    console_port = (args.console_port if args.console_port is not None
+                    else profile.console_port)
     if args.open and console_port is None:
         # Port 0: ConsoleServer binds an ephemeral port and terrarium_boot
         # prints the real URL, so the implied Console can never collide.
         console_port = 0
+    # A console requested outside --ci implies --serve: an operator who
+    # asked for a console has nowhere else to watch the run from, so the
+    # hold should run until they say stop, not until a fixed duration
+    # elapses underneath them. --ci is refused together with --serve at
+    # parse time above, so `not args.ci` here is just documenting that
+    # invariant, not re-deriving it.
+    serve = args.serve or (console_port is not None and not args.ci)
     return StackConfig(
         log_dir=log_dir, arco_command=args.arco_command,
-        devices=args.devices, ensemble=args.ensemble,
+        devices=devices, ensemble=args.ensemble,
         setup_seconds=args.setup_seconds, seconds=seconds,
         horizon=args.horizon, echo=not args.ci,
-        console_port=console_port, room_type=args.room_type,
-        open_urls=args.open)
+        console_port=console_port, room_type=room_type, config=args.config,
+        bit=bit, node=node, node_explicit=args.node is not None,
+        devices_explicit=args.devices is not None,
+        open_urls=args.open, profile=args.profile,
+        serve=serve, flutter_sim=args.flutter_sim,
+        flutter_devices=args.flutter_devices)
 
 
 def _failing_log_key(result: RunResult) -> str | None:
@@ -516,20 +828,33 @@ def format_failure(result: RunResult, tail_lines: int = 20) -> str:
 def main() -> None:
     sigterm_as_keyboard_interrupt()
     args = parse_args()
+
+    if args.list_bits:
+        registry = discover_registry(args.config)
+        for row in registry.list_view(include_hidden=True):
+            rooms = ",".join(row["room_types"])
+            print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"
+                 f"{rooms}\t{row['start']['when']}\t{row['description']}")
+        for err in registry.errors_view():
+            print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
+        raise SystemExit(0)
+
     cfg = config_from_args(args)
 
-    try:
-        from o2litepy import o2lite      # noqa: F401 (import is the check)
-    except ImportError:
-        print("run_stack needs o2litepy on the path. Re-run with "
-              "PYTHONPATH=/Users/chris/projects/arco", file=sys.stderr)
-        raise SystemExit(1) from None
+    if not ensure_o2litepy():
+        print(f"run_stack needs o2litepy and could not find it, even after "
+              f"falling back to {ARCO_PYTHONPATH}. Is the arco checkout "
+              f"present there? Otherwise re-run with PYTHONPATH pointing "
+              f"at it.", file=sys.stderr)
+        raise SystemExit(1)
 
     print(f"logs: {cfg.log_dir}")
     result = run(cfg)
     if result.ok:
         for url in result.urls:
             print(f"  browser surface: {url}")
+        for url in result.room_urls:
+            print(f"  room surface (open from the Console): {url}")
         print(f"stack run {result.stage}; logs in {cfg.log_dir}")
         return
     print(format_failure(result), file=sys.stderr)

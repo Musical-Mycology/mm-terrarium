@@ -1,0 +1,40 @@
+[bit]
+name = "MetronomeBit"
+version = "1.0.0"
+description = "Call-and-response rhythm game"
+entry = "metronome_bit:MetronomeBit"
+kind = "r_game"
+author = "Musical Mycology"
+requires_terrarium_api = 1
+
+[launch]
+room_types = ["DEMO"]
+default_room_type = "DEMO"
+default_devices = 2
+setup_seconds = 20
+expected_run_seconds = 45
+transport = "any"
+default_join_role = "player"
+
+[launch.nodes]
+player = "METRO_PLAYER_NODE"
+
+[start]
+when = "players"
+min_scored = 2
+timeout_seconds = 120
+on_timeout = "start"
+
+[console]
+display_name = "Metronome"
+notes = "Players tap back the 4-beat call."
+
+[results]
+keys = ["phrases", "successes"]
+
+[rhythm]
+bpm = 100
+beats_per_cycle = 8
+cycles = 4
+grading_window_ms = 50
+input_offset_ms = 0
