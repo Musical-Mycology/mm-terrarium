@@ -66,7 +66,16 @@ function snapshotMsg() {
   assert.ok(bitPanel.innerHTML.includes("Metronome"), "bit panel should show loaded bit");
   assert.ok(byId.get("roomCard").innerHTML.includes("DEMO"));
   assert.ok(byId.get("registrationCard").innerHTML.includes("2/2"));
-  assert.ok(byId.get("devicesCard").innerHTML.includes("Testshroom 1"));
+  assert.ok(byId.get("registrationCard").innerHTML.includes("Testshroom 1"));
+
+  // shell.showView smoke: nav switches the visible maincol and marks the
+  // active nav button.
+  shell.showView("room");
+  assert.strictEqual(byId.get("viewRoom").hidden, false);
+  assert.strictEqual(byId.get("viewLive").hidden, true);
+  assert.strictEqual(byId.get("navRoom").className, "navbtn active");
+  shell.showView("live");
+  assert.strictEqual(byId.get("viewLive").hidden, false);
 
   // 2. A few room_frame events for the bound fixture -- must only repaint,
   //    never throw or rebuild.

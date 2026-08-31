@@ -17,17 +17,22 @@
   <div class="sidebar">
     <p class="navlabel">Loaded Bit</p>
     <div id="bitPanel"></div>
+    <div id="registrationCard" class="sidecard"></div>
+    <nav class="viewnav">
+      <button id="navLive" class="navbtn active">Live</button>
+      <button id="navRoom" class="navbtn">Room: none</button>
+      <button id="navLog" class="navbtn">Event Log</button>
+    </nav>
   </div>
   <div class="content">
-    <div class="maincol">
-      <section id="roomsPanel" class="roomspanel"></section>
+    <div id="viewLive" class="maincol">
       <div id="roomCard" class="card"></div>
       <div id="bitStatusCard" class="card" hidden></div>
     </div>
-    <div class="rail">
-      <div id="registrationCard" class="card"></div>
-      <div id="devicesCard" class="card"></div>
-      <div id="rolesCard" class="card"></div>
+    <div id="viewRoom" class="maincol" hidden>
+      <section id="roomsPanel" class="roomspanel"></section>
+    </div>
+    <div id="viewLog" class="maincol" hidden>
       <div id="logCard" class="card"></div>
     </div>
   </div>
