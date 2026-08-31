@@ -314,12 +314,24 @@ def collect_stream_cues(streams, dev: str, args: list) -> list[tuple]:
     return out
 
 
-def validate_function_table(function_table, verb_names) -> None:
-    """Shallow structural validation of a Bit's authored FunctionTable.
+def validate_function_table(function_table, verb_names, *, owner="bit") -> None:
+    """Shallow structural validation of an authored FunctionTable.
 
     Called from GameServer.load_bit alongside validate_role_declarations, and
-    raises ValueError with a message locating the offending field, so a typo'd
-    Bit fails as a load-time BitLoadError rather than mid-installation.
+    from validate_instrument, and raises ValueError with a message locating
+    the offending field, so a typo'd Bit or instrument fails as a load-time
+    error rather than mid-installation.
+
+    `owner` distinguishes the two declaration sites: "bit" (default) is a
+    Bit's own FunctionTable, where SCRIPTED is a name-fire (script=()) whose
+    content lives on the resolved instrument and target+condition are
+    required. "instrument" is an instrument's own FunctionTable, where
+    SCRIPTED carries the actual content (a non-empty script, implicitly
+    targeting the instrument's own surface via cues.TARGET only) and may not
+    declare a target or condition. Reserved built-in names (flash/stop/ping,
+    control.builtins.RESERVED_NAMES) are refused for both owners so a
+    built-in can never be shadowed. STREAM is Bit-declared gameplay and is
+    refused on an instrument; GENERATOR is unchanged for either owner.
 
     `verb_names` is the key set of the Bit's verb_handlers(). Cross-referencing
     it here is what makes a declared-but-unimplemented gesture function a load
@@ -329,6 +341,9 @@ def validate_function_table(function_table, verb_names) -> None:
     AudioBridge._apply_midi, and the light half's instrument registry belongs
     to luxaeterna, which Control cannot see.
     """
+    from control.builtins import RESERVED_NAMES  # lazy: builtins imports us
+    if owner not in ("bit", "instrument"):
+        raise ValueError(f"owner must be 'bit' or 'instrument', got {owner!r}")
     if not isinstance(function_table, FunctionTable):
         raise ValueError(
             f"function_table: must be a FunctionTable, "
@@ -366,8 +381,48 @@ def validate_function_table(function_table, verb_names) -> None:
         if not isinstance(function_decl.kind, FunctionKind):
             raise ValueError(
                 f"{where}: kind must be a FunctionKind, got {function_decl.kind!r}")
+        if function_decl.name in RESERVED_NAMES:
+            raise ValueError(
+                f"{where}: {function_decl.name!r} is a reserved built-in "
+                f"name (flash/stop/ping) and may not be declared")
         if function_decl.kind is FunctionKind.SCRIPTED:
-            _validate_scripted(function_decl, allowed_verbs)
+            if owner == "bit":
+                if function_decl.script:
+                    raise ValueError(
+                        f"{where}: a Bit scripted function is a name-fire "
+                        f"and carries no script; content lives on the "
+                        f"instrument (declare script=())")
+                _validate_scripted(function_decl, allowed_verbs)
+            else:
+                if not function_decl.script:
+                    raise ValueError(
+                        f"{where}: an instrument scripted function must "
+                        f"carry a non-empty script")
+                if function_decl.target is not None:
+                    raise ValueError(
+                        f"{where}: target is resolution-time; an instrument "
+                        f"function may not declare one")
+                if function_decl.condition is not None:
+                    raise ValueError(
+                        f"{where}: condition is a Bit concern; an "
+                        f"instrument function may not declare one")
+                if function_decl.generator is not None:
+                    raise ValueError(
+                        f"{where}: generator is only meaningful on a "
+                        f"GENERATOR function, not on SCRIPTED")
+                if function_decl.stream is not None:
+                    raise ValueError(
+                        f"{where}: stream is only meaningful on a STREAM "
+                        f"function, not on SCRIPTED")
+                _validate_script(function_decl)
+                for idx, step in enumerate(function_decl.script):
+                    dev = step.cue.dev if hasattr(step.cue, "dev") \
+                        else step.cue[0]
+                    if dev != TARGET:
+                        raise ValueError(
+                            f"{where} script[{idx}]: instrument scripts "
+                            f"implicitly target their own surface; only "
+                            f"cues.TARGET is legal, got {dev!r}")
         elif function_decl.kind is FunctionKind.GENERATOR:
             _validate_generator(function_decl)
             lane = generator_lane(function_decl)
@@ -378,6 +433,10 @@ def validate_function_table(function_table, verb_names) -> None:
                     f"not share a lane")
             generator_lanes[lane] = function_decl.name
         elif function_decl.kind is FunctionKind.STREAM:
+            if owner == "instrument":
+                raise ValueError(
+                    f"{where}: STREAM functions are Bit-declared gameplay "
+                    f"and may not live on an instrument")
             _validate_stream(function_decl)
             streams.append(function_decl)
     _validate_stream_lane_overlap(streams)

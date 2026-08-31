@@ -84,13 +84,14 @@ def validate_instrument(instrument: Instrument) -> None:
             f"instrument {instrument.name!r}: unknown accepted cue "
             f"kind(s) {bad}; known: {list(CUE_KINDS)}")
     for fn in instrument.functions:
-        if not isinstance(fn, Function) or fn.kind is not FunctionKind.GENERATOR:
+        if not isinstance(fn, Function) or fn.kind not in (
+                FunctionKind.GENERATOR, FunctionKind.SCRIPTED):
             raise InstrumentError(
-                f"instrument {instrument.name!r}: only generator Functions "
-                f"may be declared on an instrument (v0)")
+                f"instrument {instrument.name!r}: only generator and "
+                f"scripted Functions may be declared on an instrument")
     table = FunctionTable(functions={fn.name: fn for fn in instrument.functions})
     try:
-        validate_function_table(table, verb_names=frozenset())
+        validate_function_table(table, verb_names=frozenset(), owner="instrument")
     except ValueError as exc:
         raise InstrumentError(f"instrument {instrument.name!r}: {exc}") from exc
     where = f"instrument {instrument.name!r}"
