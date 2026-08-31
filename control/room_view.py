@@ -15,6 +15,8 @@ assert the node id and role name are absent from the serialized blob.
 
 from __future__ import annotations
 
+from control.functions import FunctionKind
+
 
 def _light_instruments(manifest: dict) -> list[dict]:
     out = []
@@ -62,16 +64,26 @@ def capability_view(profile) -> dict:
 
 
 def _function_view(fn) -> dict:
-    """One declared generator Function, as the Console's fixture card
-    renders it. v0 only allows GENERATOR Functions on an instrument (see
-    control.instrument.validate_instrument), so this is the only shape."""
-    spec = fn.generator
-    return {
-        "name": fn.name,
-        "kind": "generator",
-        "lane": f"cc:{spec.data1}",
-        "period": float(spec.period),
-    }
+    """One declared Function, as the Console's fixture card renders it.
+
+    A GENERATOR keeps its lane/period tag -- the fixture card's only live
+    ambient-animation summary. A SCRIPTED instrument function (the
+    trigger-instrument redesign's addition: e.g. terrarium.toml's dev_strip
+    play_aurora/win/... functions) has no lane or period to summarize, so it
+    gets the same minimal name+kind shape the browser's instrumentTags()
+    already renders every function as (console/static/surface.js: `${fn.name}
+    (${fn.kind})`) -- this module's fixture-card scope is a tag row, not the
+    full script/target/condition detail control/function_view.py's
+    function_view() builds for the Functions panel."""
+    if fn.kind is FunctionKind.GENERATOR:
+        spec = fn.generator
+        return {
+            "name": fn.name,
+            "kind": "generator",
+            "lane": f"cc:{spec.data1}",
+            "period": float(spec.period),
+        }
+    return {"name": fn.name, "kind": fn.kind.name.lower()}
 
 
 def _event_trigger_view(trigger) -> dict:

@@ -1051,14 +1051,11 @@ def test_snapshot_carries_tuneshroom_instrument_functions_and_builtins():
 
 
 def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
-    # NOTE: this exercises ConsoleAgent's builders directly rather than
-    # going through agent.snapshot() -- control/room_view.py's
-    # _function_view still assumes every instrument Function is a
-    # GENERATOR (stale now that dev_strip declares SCRIPTED functions;
-    # see terrarium.toml) and raises before this task's new fields are
-    # even reached. That's a pre-existing bug outside this task's scope,
-    # flagged separately; the instrument_functions/surface_instruments
-    # wiring under test here does not go through room_view at all.
+    # Goes through the public agent.snapshot() path -- this is the exact
+    # scenario (a terrarium-loaded TEST room from the real terrarium.toml,
+    # whose dev_strip fixtures carry SCRIPTED functions) that used to raise
+    # inside control/room_view.py's _function_view before it was made
+    # kind-aware.
     config = load_terrarium_config("terrarium.toml")
     terrarium = make_terrarium(config=config)
     srv = FakeConsoleServer()
@@ -1067,15 +1064,22 @@ def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
     reason = terrarium.load_room("TEST")
     assert reason is None
 
-    instrument_functions = agent._current_instrument_functions()
+    snapshot = agent.snapshot()
+
+    instrument_functions = snapshot["instrument_functions"]
     dev_strip_names = sorted(f["name"] for f in instrument_functions["dev_strip"])
     assert dev_strip_names == [
         "fail_room", "finale", "fireworks_room", "metro_click",
         "metro_downbeat", "metro_pulse_room", "play_aurora", "win"]
 
-    surface_instruments = agent._current_surface_instruments()
+    surface_instruments = snapshot["surface_instruments"]
     assert surface_instruments["sim-main-dev"] == "dev_strip"
     assert surface_instruments["sim-accent-dev"] == "dev_strip"
+
+    # The room panel itself renders each fixture's scripted functions as a
+    # minimal name+kind tag now, rather than raising.
+    fixture_functions = snapshot["room"]["fixtures"][0]["instrument"]["functions"]
+    assert {"name": "play_aurora", "kind": "scripted"} in fixture_functions
 
 
 def test_on_load_warnings_broadcasts_warn_log_events():
