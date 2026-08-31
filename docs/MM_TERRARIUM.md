@@ -3086,6 +3086,79 @@ Design: [`.../2026-08-31-bit-cycle-recycle-and-persistent-testshrooms-design.md`
     per round under `--persist`, not left running against a stale hub
     connection.
 
+### `console/static/toml_edit.js`, `console/static/design_forms.js` -- structured design-form editors (Plan 3 of the Design panel, 2026-08-31)
+
+Design doc:
+[`.../2026-08-31-design-panel-and-instrument-catalog-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-design-panel-and-instrument-catalog-design.md),
+section 4; its Status section records what shipped and what stays v1
+raw-TOML-only.
+
+- **`toml_edit.js` is line-based, comment-preserving, and deliberately not
+  a TOML serializer.** Every reader/writer works over `text.split("\n")`
+  and rewrites (or inserts) individual lines by regex, never parses the
+  whole document into a value tree and re-emits it. The reason: catalog
+  files carry provenance comments (e.g. `# calibrated from ...` above a
+  thresholds table) that a round-trip through a generic TOML
+  parse-then-serialize would have no slot for and would silently drop.
+  `splitBlocks` slices the document into a top-level scalar region plus
+  one block per unindented `[...]`/`[[...]]` header; `getScalar`/
+  `setScalar` read and rewrite one `key = value` line within a block (or
+  append one, matching the block's dominant indentation, when absent).
+  The same file also holds threshold/param-table helpers
+  (`getThresholds`/`setThreshold`, reused by both event and stream
+  triggers), script-step helpers for `[[functions]]` `script = [...]`
+  arrays, and (this slice) ambient-instrument helpers for the
+  `instruments = [...]` inline-table line under `[ambient.light]`/
+  `[ambient.ugen]`.
+- **`design_forms.js` is a second view over `#designText`, not a second
+  copy of the design.** The raw textarea stays the single source of
+  truth; every form control reads its value by re-parsing the textarea's
+  current text with `toml_edit.js`, and every edit writes back through
+  the same transforms via `applyEdit(fn, opts)` -- `fn(text) -> newText`,
+  written into `#designText`, then the whole forms panel rebuilt from the
+  new text. Two directions of sync: raw edits to `#designText` (an
+  `"input"` event) rebuild the forms **debounced 300ms**, so a fast typist
+  doesn't thrash the DOM on every keystroke; form edits write through
+  `applyEdit` immediately and rebuild synchronously, guarded (`guard`, a
+  module-level flag) so that write does not re-trigger the debounced
+  rebuild. Vocab for the capability/cue checkgrids comes from the
+  `design_vocab` key on the wire `"snapshot"` event, cached module-level
+  and reused across rebuilds.
+- **The `data-form-key` focus contract.** `rebuild()` has no in-place
+  patching -- it clears and recreates every control on every edit -- so a
+  naive rebuild would drop focus to `document.body` on every keystroke or
+  toggle. Every form control instead carries a stable `data-form-key`
+  (`"description"`, `"cap:<name>"`, `"trig:<name>:<key>"`,
+  `"fn:<name>:step:<i>:offset"`, `"amb:<kind>:<i>:<field>"`, etc.);
+  `applyEdit` captures `document.activeElement`'s key (plus caret
+  position for text inputs) before rebuilding and restores focus (and the
+  caret) onto whichever freshly-rendered control carries the same key
+  after. **Destructive actions pass `applyEdit(fn, {restoreFocus:
+  false})`** and skip the by-key refocus entirely: removing a row (a
+  script step, a threshold, a function or trigger card) shifts every
+  later row's index down, so the same key now names a *different* row
+  after rebuild -- restoring focus onto it would arm the next row's own
+  destructive control for a stray Enter or double-click.
+- **Ambient editors (this slice) match blocks by header suffix, not
+  exact text**, because shipped catalog files use the fully-qualified
+  header (`[instruments.venue_array.ambient.light]`) while the plan's
+  original shorthand was `[ambient.light]`; `toml_edit.js` accepts either
+  (`.endsWith(".ambient.light]")`/`".ambient.ugen]"` or an exact
+  `"[ambient.light]"`/`"[ambient.ugen]"` match). Each row parses one entry
+  of the block's single `instruments = [ {...}, {...} ]` line (the same
+  inline-table shape script steps use, but on one line instead of one per
+  entry) and rewrites that whole line on any field change -- a ugen row's
+  `drone = { key, velocity }` is a nested inline table rewritten wholesale
+  alongside `instrument`/`program`. An instrument with neither
+  `[ambient.light]` nor `[ambient.ugen]` renders a muted "no ambient
+  declaration (add via raw TOML)" line instead of empty inputs.
+- **v1 raw-TOML-only residues, by design, not oversight:** authoring a
+  brand-new function (generator or scripted) from scratch, rewiring a
+  generator function's lane, and declaring a new ambient block where none
+  exists -- all three stay raw-TOML edits; the forms only ever edit fields
+  of an *existing* block. Each residue is rendered as a muted UI hint next
+  to the relevant section rather than left silently unsupported.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —

@@ -56,6 +56,10 @@ import {
   setScriptStep,
   addScriptStep,
   removeScriptStep,
+  listAmbientLight,
+  listAmbientUgen,
+  setAmbientLightRow,
+  setAmbientUgenRow,
 } from "./toml_edit.js";
 
 let vocab = { capabilities: [], cue_kinds: [] };
@@ -522,6 +526,98 @@ description = ""
 }
 
 SECTION_BUILDERS.push(buildTriggerSection);
+
+// One ambient instrument row: instrument text input plus kind-specific
+// fields (light: target text input; ugen: program/key/velocity number
+// inputs), rewriting the whole `instruments = [...]` line on any change.
+function ambientRow(container, kind, row) {
+  const wrapper = mk("div", "field");
+
+  const instrumentInput = document.createElement("input");
+  instrumentInput.type = "text";
+  instrumentInput.value = row.instrument;
+  instrumentInput.setAttribute("data-form-key", `amb:${kind}:${row.index}:instrument`);
+  wrapper.appendChild(instrumentInput);
+
+  if (kind === "light") {
+    const targetInput = document.createElement("input");
+    targetInput.type = "text";
+    targetInput.value = row.target;
+    targetInput.setAttribute("data-form-key", `amb:${kind}:${row.index}:target`);
+    const onChange = () => {
+      applyEdit((t) => setAmbientLightRow(t, row.index, {
+        instrument: instrumentInput.value,
+        target: targetInput.value,
+      }));
+    };
+    instrumentInput.onchange = onChange;
+    targetInput.onchange = onChange;
+    wrapper.appendChild(targetInput);
+  } else {
+    const programInput = document.createElement("input");
+    programInput.type = "number";
+    programInput.step = "any";
+    programInput.value = row.program != null ? row.program : "";
+    programInput.setAttribute("data-form-key", `amb:${kind}:${row.index}:program`);
+
+    const keyInput = document.createElement("input");
+    keyInput.type = "number";
+    keyInput.step = "any";
+    keyInput.value = row.key != null ? row.key : "";
+    keyInput.setAttribute("data-form-key", `amb:${kind}:${row.index}:key`);
+
+    const velocityInput = document.createElement("input");
+    velocityInput.type = "number";
+    velocityInput.step = "any";
+    velocityInput.value = row.velocity != null ? row.velocity : "";
+    velocityInput.setAttribute("data-form-key", `amb:${kind}:${row.index}:velocity`);
+
+    const onChange = () => {
+      applyEdit((t) => setAmbientUgenRow(t, row.index, {
+        instrument: instrumentInput.value,
+        program: programInput.value,
+        key: keyInput.value,
+        velocity: velocityInput.value,
+      }));
+    };
+    instrumentInput.onchange = onChange;
+    programInput.onchange = onChange;
+    keyInput.onchange = onChange;
+    velocityInput.onchange = onChange;
+    wrapper.appendChild(programInput);
+    wrapper.appendChild(keyInput);
+    wrapper.appendChild(velocityInput);
+  }
+
+  container.appendChild(wrapper);
+}
+
+// Section builder for ambient manifests, pushed onto SECTION_BUILDERS.
+// Renders one row per `[ambient.light]`/`[ambient.ugen]` instruments entry
+// (matched by header suffix so both the shorthand and the shipped
+// fully-qualified `[instruments.<name>.ambient.light]` form resolve). An
+// instrument with neither block renders a muted hint instead -- authoring a
+// new ambient block from scratch stays raw-TOML in v1.
+function buildAmbientSection(container, text) {
+  const lightRows = listAmbientLight(text);
+  const ugenRows = listAmbientUgen(text);
+
+  if (!lightRows && !ugenRows) {
+    container.appendChild(mk("p", "muted", "no ambient declaration (add via raw TOML)"));
+    return;
+  }
+
+  if (lightRows) {
+    container.appendChild(mk("h4", null, "Ambient light"));
+    for (const row of lightRows) ambientRow(container, "light", row);
+  }
+  if (ugenRows) {
+    container.appendChild(mk("h4", null, "Ambient ugen"));
+    for (const row of ugenRows) ambientRow(container, "ugen", row);
+  }
+}
+
+SECTION_BUILDERS.push(buildAmbientSection);
 
 // Re-renders every form section from `text`. With no design open (no
 // selection and/or empty text), renders a single muted placeholder line and

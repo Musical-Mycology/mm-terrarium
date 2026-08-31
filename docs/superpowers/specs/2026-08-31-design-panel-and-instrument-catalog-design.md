@@ -180,12 +180,20 @@ unique value over hand-editing TOML.
 - Section 7 (Console integration): full -- new Design nav view under the
   same ConsoleServer/ConsoleAgent transport, local-admin-only wire
   commands that never ride `uplink`.
-
-**Plan 3 (not this plan):**
-
-- Section 4 (structured editing forms -- capabilities/accepted_cues
-  checkboxes, ambient manifest editors, function/trigger editors). v1
-  shipped raw-TOML editing only.
+- Section 4 (structured editing forms), Plan 3: shipped, with three named
+  v1 residues. `console/static/design_forms.js` (a second view over
+  `#designText`, write-through transforms via `toml_edit.js`) renders
+  live editors for identity (description), capabilities/accepted_cues
+  checkgrids against `design_vocab`, event/stream trigger cards
+  (description, threshold/param fields, add/remove), function cards
+  (generator: waveform/period/lo/hi; scripted: description plus a
+  step-table with add/remove), and ambient manifest rows
+  (`[ambient.light]`/`[ambient.ugen]`, matched by header suffix so the
+  shipped fully-qualified form and the shorthand both resolve). **Named
+  residues, all rendered as muted UI hints rather than left silently
+  unsupported:** authoring a brand-new function from scratch, rewiring a
+  generator function's lane, and declaring a new ambient block where none
+  exists -- all three stay raw-TOML edits in v1.
 
 **Unplanned (section 2, slice 3):** carried-instrument wire support (hello
 gains an optional instrument name; Terrarium ships the full definition

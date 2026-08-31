@@ -287,3 +287,132 @@ export function removeBlock(text, header, name) {
   lines.splice(block.start, block.end - block.start);
   return lines.join("\n");
 }
+
+// -- ambient instruments (listAmbientLight/Ugen, setAmbientLightRow/UgenRow) --
+//
+// `[ambient.light]` / `[ambient.ugen]` tables hold a single
+// `instruments = [ {...}, {...} ]` line -- an inline-table array, same shape
+// as script steps but on one line instead of one line per entry. Shipped
+// catalog files use the fully-qualified header
+// (`[instruments.venue_array.ambient.light]`), so blocks are matched by
+// header suffix (".ambient.light]"/".ambient.ugen]") as well as by the
+// shorthand ("[ambient.light]"/"[ambient.ugen]").
+
+function splitTopLevel(inner) {
+  const parts = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of inner) {
+    if (ch === "{") depth++;
+    if (ch === "}") depth--;
+    if (ch === "," && depth === 0) {
+      parts.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim() !== "") parts.push(cur);
+  return parts.map((p) => p.trim()).filter((p) => p !== "");
+}
+
+function parseInlineEntry(raw) {
+  const body = raw.trim().replace(/^\{\s*/, "").replace(/\s*\}$/, "");
+  const fields = {};
+  for (const kv of splitTopLevel(body)) {
+    const eq = kv.indexOf("=");
+    if (eq === -1) continue;
+    fields[kv.slice(0, eq).trim()] = kv.slice(eq + 1).trim();
+  }
+  return fields;
+}
+
+function unquote(raw) {
+  if (raw == null) return "";
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+const AMBIENT_INSTR_LINE_RE = /^(\s*)instruments\s*=\s*\[(.*)\]\s*$/;
+
+function findAmbientLine(text, kind) {
+  const blocks = splitBlocks(text);
+  const suffix = `.ambient.${kind}]`;
+  const shorthand = `[ambient.${kind}]`;
+  const block = blocks.find(
+    (b) => b.header && (b.header.endsWith(suffix) || b.header === shorthand),
+  );
+  if (!block) return null;
+  const lines = text.split("\n");
+  for (let i = block.start; i < block.end; i++) {
+    const m = lines[i].match(AMBIENT_INSTR_LINE_RE);
+    if (m) return { block, line: i, indent: m[1], inner: m[2] };
+  }
+  return null;
+}
+
+// Returns null when no `[ambient.light]` block (qualified or shorthand)
+// exists; otherwise one row per entry of its `instruments` array.
+export function listAmbientLight(text) {
+  const found = findAmbientLine(text, "light");
+  if (!found) return null;
+  return splitTopLevel(found.inner).map((raw, index) => {
+    const f = parseInlineEntry(raw);
+    return { index, instrument: unquote(f.instrument), target: unquote(f.target) };
+  });
+}
+
+export function setAmbientLightRow(text, index, { instrument, target }) {
+  const found = findAmbientLine(text, "light");
+  if (!found) return text;
+  const entries = splitTopLevel(found.inner);
+  if (index < 0 || index >= entries.length) return text;
+  entries[index] = `{ instrument = ${JSON.stringify(instrument)}, target = ${JSON.stringify(target)} }`;
+  const lines = text.split("\n");
+  lines[found.line] = `${found.indent}instruments = [ ${entries.join(", ")} ]`;
+  return lines.join("\n");
+}
+
+// Returns null when no `[ambient.ugen]` block (qualified or shorthand)
+// exists; otherwise one row per entry, with `key`/`velocity` present only
+// when the entry carries a nested `drone = { ... }` table.
+export function listAmbientUgen(text) {
+  const found = findAmbientLine(text, "ugen");
+  if (!found) return null;
+  return splitTopLevel(found.inner).map((raw, index) => {
+    const f = parseInlineEntry(raw);
+    const row = {
+      index,
+      instrument: unquote(f.instrument),
+      program: f.program != null ? Number(f.program) : null,
+    };
+    if (f.drone != null) {
+      const d = parseInlineEntry(f.drone);
+      row.key = d.key != null ? Number(d.key) : null;
+      row.velocity = d.velocity != null ? Number(d.velocity) : null;
+    }
+    return row;
+  });
+}
+
+// Rewrites the ugen entry at `index` wholesale. A `drone = { key, velocity }`
+// nested table is included only when both `key` and `velocity` are
+// non-empty; otherwise the entry drops (or stays without) a drone.
+export function setAmbientUgenRow(text, index, { instrument, program, key, velocity }) {
+  const found = findAmbientLine(text, "ugen");
+  if (!found) return text;
+  const entries = splitTopLevel(found.inner);
+  if (index < 0 || index >= entries.length) return text;
+  let entry = `{ instrument = ${JSON.stringify(instrument)}, program = ${program}`;
+  if (key !== null && key !== undefined && key !== "" && velocity !== null && velocity !== undefined && velocity !== "") {
+    entry += `, drone = { key = ${key}, velocity = ${velocity} }`;
+  }
+  entry += " }";
+  entries[index] = entry;
+  const lines = text.split("\n");
+  lines[found.line] = `${found.indent}instruments = [ ${entries.join(", ")} ]`;
+  return lines.join("\n");
+}
