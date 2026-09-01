@@ -494,21 +494,17 @@ class DeviceLinkAgent:
         tick's renders run -- so the very next render for `dev` falls back to
         its session frame instead of the stale override. `_last_frames.pop`
         forces a resend even if the session's own frame happens to be
-        unchanged from before the override started. A Room override is keyed
-        by the canonical dev but was fanned out per-fixture on the wire, so
-        its expiry has to clear every bound fixture dev's cache entry too, or
-        only the canonical dev's own slice would re-send."""
+        unchanged from before the override started. Overrides are per
+        fixture now (Task 5): `_overrides` and `_last_frames` are both keyed
+        by the real fixture dev, including for a Room override keyed by the
+        canonical dev, which only ever painted (and only ever needs to
+        re-send) its own slice. No fan-out to other bound fixtures here."""
         now = self._clock()
         for dev, (_rgb, _lvl, expires) in list(self._overrides.items()):
             if expires is None or now < expires:
                 continue
             del self._overrides[dev]
             self._last_frames.pop(dev, None)
-            if dev == self._canonical_room_dev():
-                gs = self.game_server
-                bound = gs.room.bound if gs.room is not None else {}
-                for fixture_dev in bound.values():
-                    self._last_frames.pop(fixture_dev, None)
 
     def _apply_override(self, dev: str, frame: bytes) -> bytes:
         entry = self._overrides.get(dev)

@@ -2101,3 +2101,29 @@ def test_room_override_paints_only_the_canonical_fixtures_slice():
 
     assert set(_last_leds_payload(server, "sim-room-main")) == {round(255 * 0.9)}
     assert _last_leds_payload(server, "sim-room-accent") == accent_before
+
+
+def test_canonical_override_expiry_clears_only_the_canonical_last_frame():
+    """_tick_overrides is per fixture now (Task 5), including for a Room
+    override keyed by the canonical dev: expiry must clear (and so force a
+    resend of) only the canonical fixture's own _last_frames cache entry,
+    not fan out and clear every other bound fixture's entry too. Exercised
+    directly against _tick_overrides/_last_frames rather than through a full
+    render, since the Room's own idle animation can legitimately change a
+    fixture's frame between polls -- that would confound a send-count
+    assertion taken across real time with the cache-clearing behavior this
+    test is actually about."""
+    gs = _room_ready_game_server(
+        bound={"main": "sim-room-main", "accent": "sim-room-accent"})
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    canonical = agent._canonical_room_dev()
+    assert canonical == "sim-room-main"
+    agent._last_frames[canonical] = b"\x01"
+    agent._last_frames["sim-room-accent"] = b"\x02"
+    agent._overrides[canonical] = ((0, 0, 0), 0.0, agent._clock() - 1.0)
+
+    agent._tick_overrides()
+
+    assert canonical not in agent._last_frames
+    assert agent._last_frames.get("sim-room-accent") == b"\x02"
