@@ -1183,7 +1183,7 @@ def test_design_commands_error_without_catalog():
 def test_design_roundtrip_via_agent(tmp_path):
     root = tmp_path / "instruments"
     (root / "drafts").mkdir(parents=True)
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     gs, srv, agent = _server_with_agent(catalog_root=root)
     listed = agent._handle_command({"command": "list_designs"})
     assert listed["event"] == "designs_listed"
@@ -1238,7 +1238,7 @@ class FakeBenchSession:
 def test_bench_commands_error_without_factory(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     gs, srv, agent = _server_with_agent(catalog_root=root)
     reply = agent._handle_command(
         {"command": "bench_start", "state": "published", "name": "glowcap"})
@@ -1248,7 +1248,7 @@ def test_bench_commands_error_without_factory(tmp_path):
 def test_bench_start_replies_bench_started_and_polls_frame(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     t = [0.0]
     gs, srv, agent = _server_with_agent(
         catalog_root=root,
@@ -1280,7 +1280,7 @@ def test_bench_start_missing_entry_refuses(tmp_path):
 def test_bench_fire_unknown_name_returns_error(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     gs, srv, agent = _server_with_agent(
         catalog_root=root,
         bench_session_factory=lambda manifest: FakeBenchSession())
@@ -1293,7 +1293,7 @@ def test_bench_fire_unknown_name_returns_error(tmp_path):
 def test_bench_fire_without_running_bench_refuses(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     gs, srv, agent = _server_with_agent(
         catalog_root=root,
         bench_session_factory=lambda manifest: FakeBenchSession())
@@ -1304,7 +1304,7 @@ def test_bench_fire_without_running_bench_refuses(tmp_path):
 def test_bench_stop_closes_session(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     session = FakeBenchSession()
     gs, srv, agent = _server_with_agent(
         catalog_root=root, bench_session_factory=lambda manifest: session)
@@ -1457,7 +1457,7 @@ def test_replay_trace_rejects_path_traversal_in_session_and_label(tmp_path):
 def test_bench_closes_when_server_reports_zero_clients(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     session = FakeBenchSession()
     gs, srv, agent = _server_with_agent(
         catalog_root=root, bench_session_factory=lambda manifest: session)

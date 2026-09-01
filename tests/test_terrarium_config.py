@@ -497,3 +497,19 @@ def test_event_trigger_missing_name_is_located():
     with pytest.raises(TerrariumConfigError) as exc:
         parse_terrarium_config(bad, source="test")
     assert "instruments.shroomy" in str(exc.value)
+
+
+def test_instrument_pixels_key_parses_onto_the_instrument():
+    config = parse_terrarium_config(EVENT_TRIGGER_CONFIG.replace(
+        'capabilities = ["gesture.tap"]',
+        'capabilities = ["gesture.tap"]\npixels = 12'), source="test")
+    assert config.instruments["shroomy"].pixels == 12
+
+
+def test_instrument_non_int_pixels_is_a_located_config_error():
+    bad = EVENT_TRIGGER_CONFIG.replace(
+        'capabilities = ["gesture.tap"]',
+        'capabilities = ["gesture.tap"]\npixels = "many"')
+    with pytest.raises(TerrariumConfigError) as exc:
+        parse_terrarium_config(bad, source="test")
+    assert "instruments.shroomy" in str(exc.value)
