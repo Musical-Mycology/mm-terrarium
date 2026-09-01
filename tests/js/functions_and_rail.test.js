@@ -67,14 +67,14 @@ const FUNCTIONS = [
   expander.onclick();
   assert.ok(scriptEl.classList.contains("open"), "expander opens the script block");
 
-  // SURFACE card: picker offers "Room" first, then live devices
+  // SURFACE card: picker offers "All" first, then live devices
   const pickerFor = (name) =>
     functions._cardFor(name).children.find((c) => c.className === "firerow").children[0];
   const surfacePicker = pickerFor("flash_device");
-  assert.strictEqual(surfacePicker.options[0].value, "@room");
-  assert.strictEqual(surfacePicker.options[0].textContent, "Room");
+  assert.strictEqual(surfacePicker.options[0].value, "@all");
+  assert.strictEqual(surfacePicker.options[0].textContent, "All");
   assert.deepStrictEqual(
-    [...surfacePicker.options].map((o) => o.value), ["@room", "ie1", "sim-room"]);
+    [...surfacePicker.options].map((o) => o.value), ["@all", "ie1", "sim-room"]);
 
   // a repeat functions_changed with identical content must not rebuild (rule 1)
   const before = functions._cardFor("fireworks_player");
@@ -87,7 +87,7 @@ const FUNCTIONS = [
          devices: [{ dev: "ie1", name: "Testshroom 1", role: "player", muted: true }] });
   assert.strictEqual(functions._cardFor("flash_device"), surfaceCardBefore);
   const refreshedPicker = pickerFor("flash_device");
-  assert.strictEqual(refreshedPicker.options[0].value, "@room");
+  assert.strictEqual(refreshedPicker.options[0].value, "@all");
   assert.strictEqual(refreshedPicker.options[1].textContent, "ie1 (muted)");
 
   // function_fired updates the one line, tags admin-manual

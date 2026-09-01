@@ -47,19 +47,25 @@ class _LazyClassMap(Mapping):
     import raises the registry's existing ManifestError. Both propagate
     unchanged -- the engine's load_bit already wraps whatever bit_class
     raises in BitLoadError, so this class adds no error handling of its
-    own."""
+    own. Disabled packages (bit.enabled = false) are excluded entirely:
+    absent from iteration and a KeyError on access, so nothing can load
+    them."""
 
     def __init__(self, registry: "BitRegistry"):
         self._registry = registry
 
     def __getitem__(self, name: str) -> type:
+        pkg = self._registry.packages[name]     # KeyError for unknown, as before
+        if not pkg.config.identity.enabled:
+            raise KeyError(name)
         return self._registry.bit_class(name)
 
     def __iter__(self):
-        return iter(self._registry.packages)
+        return (n for n, p in self._registry.packages.items()
+                if p.config.identity.enabled)
 
     def __len__(self) -> int:
-        return len(self._registry.packages)
+        return sum(1 for _ in self)
 
 
 class BitRegistry:
@@ -185,6 +191,11 @@ class BitRegistry:
 
     def resolve_config(self, name: str, overrides: dict | None = None) -> BitConfig:
         pkg = self.packages[name]
+        if not pkg.config.identity.enabled:
+            raise ManifestError(
+                source=str(pkg.path / "bit.toml"), key="bit.enabled",
+                message="bit is disabled (enabled = false); flip the "
+                        "manifest to re-enable it")
         if not overrides:
             return pkg.resolved_config()
         merged = merge_overrides(pkg.config, overrides,
@@ -238,6 +249,7 @@ class BitRegistry:
                 "description": config.identity.description,
                 "display_name": config.console.display_name,
                 "hidden": config.console.hidden,
+                "enabled": config.identity.enabled,
                 "room_types": list(config.launch.room_types),
                 "start": {
                     "when": config.start.when,

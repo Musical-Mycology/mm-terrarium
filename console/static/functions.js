@@ -19,7 +19,7 @@ const lastFired = {};                // function name -> its last fire record (s
 let fnDevices = [];                  // {dev, muted} offered by DEVICE/SURFACE pickers
 let currentDeviceTargets = new Map(); // name -> {target, fn} for rendered SURFACE/DEVICE pickers
 const cardByName = new Map();        // function name -> its card element (test hook)
-const ROOM_OPTION = "@room";
+const ALL_OPTION = "@all";
 
 // Instrument-compatibility data, carried on `snapshot`/`functions_changed`
 // (Task 7): instrument name -> [scripted function views]; dev/room-option ->
@@ -76,10 +76,10 @@ function fillDevicePicker(picker, withRoom) {
   const values = [];
   if (withRoom) {
     const option = document.createElement("option");
-    option.value = ROOM_OPTION;
-    option.textContent = "Room";
+    option.value = ALL_OPTION;
+    option.textContent = "All";
     picker.appendChild(option);
-    values.push(ROOM_OPTION);
+    values.push(ALL_OPTION);
   }
   for (const { dev, muted } of fnDevices) {
     const option = document.createElement("option");
@@ -115,6 +115,12 @@ function onDevicesChanged(devices) {
 function isCompatible(fn, surfaceValue) {
   if (fn.script && fn.script.length) return true;
   if (BUILTIN_NAMES.has(fn.name)) return true;
+  if (surfaceValue === ALL_OPTION) {
+    return Object.values(surfaceInstruments).some((instrumentName) => {
+      const fns = instrumentFunctions[instrumentName] || [];
+      return fns.some((f) => f.name === fn.name);
+    });
+  }
   const instrumentName = surfaceInstruments[surfaceLookupKey(surfaceValue)];
   if (!instrumentName) return false;
   const fns = instrumentFunctions[instrumentName] || [];
@@ -162,19 +168,33 @@ function updateInstrumentData(m) {
 
 // ------------------------------------------------------------ diagnostics
 
-// The wire value fillDevicePicker gives the Room option (ROOM_OPTION, i.e.
-// "@room") is what fire_function's `dev` sentinel expects -- surface_instruments
-// keys the Room's instrument as the literal "room" instead, so this is the
-// one seam where the picker value and the surface_instruments lookup key
-// diverge.
+// ALL_OPTION ("@all") names no single surface_instruments entry -- it fans
+// out to the Room plus every device, so there is no one instrument to look
+// up. builtinsFor's ALL_OPTION branch unions across every entry instead of
+// calling this. Any other picker value passes through unchanged.
 function surfaceLookupKey(pickerValue) {
-  return pickerValue === ROOM_OPTION ? "room" : pickerValue;
+  return pickerValue === ALL_OPTION ? null : pickerValue;
+}
+
+// The builtin names available at a picker value: for ALL_OPTION, the union
+// of every surface's builtins (the Room fixture's own entry included, since
+// the union walks every key of surfaceInstruments); otherwise the one
+// surface's own builtins.
+function builtinsFor(pickerValue) {
+  if (pickerValue === ALL_OPTION) {
+    const set = new Set();
+    for (const key of Object.keys(surfaceInstruments)) {
+      for (const n of builtinsMap[surfaceInstruments[key]] || []) set.add(n);
+    }
+    return [...set];
+  }
+  const inst = surfaceInstruments[pickerValue];
+  return inst ? builtinsMap[inst] || [] : [];
 }
 
 function refreshDiagButtons() {
   if (!diagPicker) return;
-  const instrumentName = surfaceInstruments[surfaceLookupKey(diagPicker.value)];
-  const names = instrumentName ? (builtinsMap[instrumentName] || []) : [];
+  const names = builtinsFor(diagPicker.value);
   for (const name of ["flash", "stop", "ping"]) {
     diagButtons[name].disabled = !names.includes(name);
   }

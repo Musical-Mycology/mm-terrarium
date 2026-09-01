@@ -809,5 +809,41 @@ def test_unmatched_verb_is_untouched_by_stream_triggers():
 
 def test_non_numeric_stream_arg_passes_through_untouched_never_raises():
     gs = _joined()
-    assert gs.data("ie1", "tilt", ["not-a-number"]) is None
+    original = ["not-a-number"]
+    assert gs.data("ie1", "tilt", original) is None
     assert gs.bit.received[-1] == ["not-a-number"]
+
+
+# ------------------------------------------------------------- @all target
+
+@pytest.fixture
+def gs_with_room():
+    """A bound Room and no Bit loaded, with testshroom carriable -- the
+    minimal rig for exercising FunctionTarget.SURFACE's @all fan-out."""
+    cfg = load_terrarium_config("terrarium.toml")
+    testshroom = cfg.instruments["testshroom"]
+    gs = GameServer({}, carried_instruments={"testshroom": testshroom})
+    gs.room = _Room({"main": "sim-room-main"})
+    return gs
+
+
+def test_all_target_fans_out_to_room_and_every_device(gs_with_room):
+    gs = gs_with_room                       # room bound; no bit loaded
+    gs.hello("ie1", "", "", instrument="testshroom")
+    gs.hello("ie2", "", "", instrument="testshroom")
+    fired = []
+    gs.add_observer(type("O", (), {
+        "on_function_fired": lambda self, rec: fired.append(rec)})())
+    assert gs.fire_function("flash", fired_by="admin-manual",
+                            dev="@all") is None
+    (rec,) = fired
+    assert set(rec.devs) >= {"ie1", "ie2"}          # every pool dev
+    assert any(d not in ("ie1", "ie2") for d in rec.devs)  # + the room
+
+
+def test_stop_at_all_mutes_everything(gs_with_room):
+    gs = gs_with_room
+    gs.hello("ie1", "", "", instrument="testshroom")
+    gs.fire_function("stop", fired_by="admin-manual", dev="@all")
+    assert "ie1" in gs.muted
+    assert len(gs.muted) >= 2               # the room's canonical dev too

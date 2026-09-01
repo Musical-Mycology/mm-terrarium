@@ -102,6 +102,15 @@ function render() {
   runBtn.onclick = () => wire.send("run", {}, runBtn);
   btnrow.appendChild(runBtn);
 
+  const restartBtn = mk("button", "btn", "Restart");
+  restartBtn.disabled = gated;
+  restartBtn.onclick = () => {
+    wire.confirmTap(restartBtn, { armLabel: "Confirm restart?" }, () => {
+      wire.send("restart", {}, restartBtn);
+    });
+  };
+  btnrow.appendChild(restartBtn);
+
   const abortBtn = mk("button", "btn solid-rose", "Abort");
   abortBtn.disabled = gated;
   abortBtn.onclick = () => {
@@ -333,7 +342,10 @@ function openPicker() {
   head.appendChild(xbtn);
   picker.appendChild(head);
 
-  for (const bitRow of bits) picker.appendChild(buildPickCard(bitRow));
+  for (const bitRow of bits) {
+    if (bitRow.enabled === false) continue;
+    picker.appendChild(buildPickCard(bitRow));
+  }
   for (const err of errors) picker.appendChild(buildErrRow(err));
 
   overlay.appendChild(picker);

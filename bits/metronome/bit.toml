@@ -6,6 +6,7 @@ entry = "metronome_bit:MetronomeBit"
 kind = "r_game"
 author = "Musical Mycology"
 requires_terrarium_api = 1
+enabled = false
 
 [launch]
 room_types = ["DEMO"]

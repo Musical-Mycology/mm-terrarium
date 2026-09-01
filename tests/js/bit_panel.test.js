@@ -59,6 +59,24 @@ const PLAYER_ROLE = {
                   start: { when: "players", min_scored: 2, timeout_seconds: 120, on_timeout: "start" },
                   roles: { scored: 2, shared_open: false, jam_open: false } }] });
 
+  // a disabled bit is excluded from the Load picker
+  send({ event: "bits_listed", errors: [],
+         bits: [{ name: "MetronomeBit", display_name: "Metronome", version: "1.0.0",
+                  kind: "r_game", hidden: false, enabled: true, description: "Call-and-response",
+                  room_types: ["DEMO"], notes: "",
+                  start: { when: "players", min_scored: 2, timeout_seconds: 120, on_timeout: "start" },
+                  roles: { scored: 2, shared_open: false, jam_open: false } },
+                { name: "OffBit", display_name: "Off", version: "1.0.0",
+                  kind: "r_game", hidden: false, enabled: false, description: "Disabled",
+                  room_types: ["DEMO"], notes: "",
+                  start: { when: "players", min_scored: 2, timeout_seconds: 120, on_timeout: "start" },
+                  roles: { scored: 2, shared_open: false, jam_open: false } }] });
+  const pickLoadBtn = findByClass(byId.get("bitPanel"), "btn");
+  pickLoadBtn.onclick();
+  const pickerHtml = byId.get("overlayMount").innerHTML;
+  assert.ok(pickerHtml.includes("Metronome"), "enabled bit should appear in picker");
+  assert.ok(!pickerHtml.includes("Off"), "disabled bit should not appear in picker");
+
   // loading a bit paints the identity card and phase chip
   send({ event: "state_changed", state: "SETUP", loaded_bit: "MetronomeBit" });
   const panel = byId.get("bitPanel");

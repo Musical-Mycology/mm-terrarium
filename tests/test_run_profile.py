@@ -94,7 +94,8 @@ def test_deep_merge_does_not_mutate_its_inputs():
 # --- run_stack.py: --profile flag + precedence ---------------------------
 
 
-def test_run_stack_cli_devices_beats_profile_devices(tmp_path):
+def test_run_stack_cli_devices_beats_profile_devices(
+        tmp_path, metronome_enabled_registry):
     from harness.run_stack import config_from_args, parse_args
 
     profile_path = tmp_path / "venue.toml"
@@ -103,31 +104,33 @@ def test_run_stack_cli_devices_beats_profile_devices(tmp_path):
 
     args = parse_args(
         ["--profile", str(profile_path), "--devices", "1"])
-    cfg = config_from_args(args)
+    cfg = config_from_args(args, registry=metronome_enabled_registry)
     assert cfg.devices == 1
     assert cfg.bit == "MetronomeBit"
     assert cfg.room_type == "DEMO"
 
 
-def test_run_stack_profile_devices_wins_over_the_manifest_default(tmp_path):
+def test_run_stack_profile_devices_wins_over_the_manifest_default(
+        tmp_path, metronome_enabled_registry):
     from harness.run_stack import config_from_args, parse_args
 
     profile_path = tmp_path / "venue.toml"
     profile_path.write_text('[run]\nbit = "MetronomeBit"\ndevices = 4\n')
 
     args = parse_args(["--profile", str(profile_path)])
-    cfg = config_from_args(args)
+    cfg = config_from_args(args, registry=metronome_enabled_registry)
     assert cfg.devices == 4    # not MetronomeBit's manifest default (2)
 
 
-def test_run_stack_profile_bit_wins_when_no_cli_bit_given(tmp_path):
+def test_run_stack_profile_bit_wins_when_no_cli_bit_given(
+        tmp_path, metronome_enabled_registry):
     from harness.run_stack import config_from_args, parse_args
 
     profile_path = tmp_path / "venue.toml"
     profile_path.write_text('[run]\nbit = "MetronomeBit"\n')
 
     args = parse_args(["--profile", str(profile_path)])
-    cfg = config_from_args(args)
+    cfg = config_from_args(args, registry=metronome_enabled_registry)
     assert cfg.bit == "MetronomeBit"
 
 
@@ -149,14 +152,15 @@ def test_run_stack_without_a_profile_still_defaults_bit_to_test_bit():
     assert config_from_args(args).bit == "TestBit"
 
 
-def test_run_stack_forwards_profile_to_the_control_command(tmp_path):
+def test_run_stack_forwards_profile_to_the_control_command(
+        tmp_path, metronome_enabled_registry):
     from harness.run_stack import config_from_args, control_command, parse_args
 
     profile_path = tmp_path / "venue.toml"
     profile_path.write_text('[run]\nbit = "MetronomeBit"\n')
 
     args = parse_args(["--profile", str(profile_path)])
-    cfg = config_from_args(args)
+    cfg = config_from_args(args, registry=metronome_enabled_registry)
     command = control_command(cfg, ppid=1)
     assert command[command.index("--profile") + 1] == str(profile_path)
 
@@ -195,7 +199,7 @@ def _run_main_capturing_build(monkeypatch, argv):
 
 
 def test_terrarium_boot_profile_bpm_reaches_the_resolved_bit_config(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, metronome_enabled_scan):
     """No CLI rhythm override at all -- MetronomeBit's manifest bpm is 100,
     the profile's [bit.overrides.rhythm] sets bpm=80, and nothing on the
     CLI touches rhythm, so 80 must be what main() actually resolves."""
@@ -210,7 +214,7 @@ def test_terrarium_boot_profile_bpm_reaches_the_resolved_bit_config(
 
 
 def test_terrarium_boot_profile_bit_wins_when_no_cli_bit_given(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, metronome_enabled_scan):
     profile_path = tmp_path / "venue.toml"
     profile_path.write_text('[run]\nbit = "MetronomeBit"\n')
 
@@ -230,7 +234,7 @@ def test_terrarium_boot_cli_bit_beats_profile_bit(monkeypatch, tmp_path):
 
 
 def test_terrarium_boot_profile_room_type_wins_over_the_manifest_default(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, metronome_enabled_scan):
     """MetronomeBit's manifest default_room_type is DEMO already, so use
     CaptureBit (TEST-only) with a profile asking for... actually simplest:
     assert the profile's room_type is honored directly."""
@@ -249,7 +253,7 @@ def test_terrarium_boot_without_a_profile_still_defaults_bit_to_test_bit(
 
 
 def test_terrarium_boot_cli_rhythm_override_would_beat_the_profile(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, metronome_enabled_scan):
     """terrarium_boot has no generic CLI override flag for [bit.overrides]
     tables (only --setup-seconds and --seconds/--hold feed the overrides
     dict), so this exercises the one CLI override it does have:

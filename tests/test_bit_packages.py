@@ -1,4 +1,6 @@
-from control.bit_config import parse_manifest
+from dataclasses import replace
+
+from control.bit_config import merge_overrides, parse_manifest
 from control.bit_registry import BitRegistry
 
 
@@ -14,9 +16,18 @@ def test_testbit_package_resolves_and_constructs():
 
 
 def test_metronome_package_rhythm_block_reaches_instance():
+    # MetronomeBit is disabled ([bit] enabled = false) pending redesign, so
+    # resolve_config() refuses it; construct its config directly from the
+    # package's own manifest instead of going through the registry's
+    # enabled gate.
     reg = BitRegistry.discover()
     cls = reg.bit_class("MetronomeBit")
-    fast = cls(reg.resolve_config("MetronomeBit", {"rhythm": {"bpm": 120}}))
+    pkg = reg.packages["MetronomeBit"]
+    base = replace(pkg.resolved_config(), assets_root=pkg.path)
+    fast_cfg = replace(
+        merge_overrides(base, {"rhythm": {"bpm": 120}}, source="test"),
+        assets_root=pkg.path)
+    fast = cls(fast_cfg)
     assert abs(fast.BEAT_S - 0.5) < 1e-9
     default = cls()
     assert abs(default.BEAT_S - 0.6) < 1e-9

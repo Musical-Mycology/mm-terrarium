@@ -3,6 +3,14 @@ import pytest
 from harness.o2_shroom import _gestures_ready, build, tilt_sweep
 
 
+def test_o2_shroom_declares_testshroom_by_default():
+    import inspect
+
+    import harness.o2_shroom as o2s
+    src = inspect.getsource(o2s.main)
+    assert '"--instrument", default="testshroom"' in src
+
+
 def test_tilt_sweep_stays_in_range():
     """gamma is degrees in [-90, 90]: TestBit._on_tilt clamps to that, and a
     sweep that relied on the clamp would silently flatten at both ends."""

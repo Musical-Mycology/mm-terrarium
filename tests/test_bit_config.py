@@ -204,3 +204,21 @@ def test_asset_non_string_value_refused():
     text = MINIMAL + "\n[assets]\nchime = 3\n"
     with pytest.raises(ManifestError):
         parse_manifest(text, source="t")
+
+
+MINIMAL_ENABLED_FALSE = """
+[bit]
+name = "Off"
+entry = "off:Off"
+requires_terrarium_api = 1
+enabled = false
+"""
+
+
+def test_bit_enabled_parses_and_defaults_true():
+    from control.bit_config import parse_manifest
+    off = parse_manifest(MINIMAL_ENABLED_FALSE, source="t")
+    assert off.identity.enabled is False
+    on = parse_manifest(MINIMAL_ENABLED_FALSE.replace(
+        "enabled = false\n", ""), source="t")
+    assert on.identity.enabled is True

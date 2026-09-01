@@ -19,6 +19,10 @@ from dataclasses import dataclass
 # 2026-08-14-load-bearing-timed-cues-design.md section 4.1.
 ROOM = "@room"
 
+# The operator's everything sentinel: room fixtures plus every connected
+# device. Console picker value; resolved in GameServer._resolve_target.
+ALL = "@all"
+
 
 @dataclass(frozen=True)
 class PlayCue:
