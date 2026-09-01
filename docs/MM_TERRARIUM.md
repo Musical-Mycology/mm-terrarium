@@ -2750,7 +2750,11 @@ troubleshooting vocabulary for free.
   `bits/metronome/metronome_bit.py` was such a case; its
   `function_table()` declares no `stop` at all, so MetronomeBit has
   never actually exercised this shadowing path. A future Bit that wants
-  the built-in behavior back just leaves the name undeclared.
+  the built-in behavior back just leaves the name undeclared. **Superseded
+  2026-09-01:** this shadowing-by-design decision is reversed -- see
+  *Per-fixture instruments, operator Stop, and ABORT resilience* below.
+  `validate_function_table` now refuses `RESERVED_NAMES` on Bit
+  FunctionTables too, and TestBit's `stop` is deleted.
 - **The firing ladder lives in `GameServer.fire_function`, per the spec's
   mid-execution-redirect row.** Three rungs, in order: (1) a Bit-declared
   FunctionTable entry with a *non-empty* script fires byte-identical to
@@ -2819,7 +2823,12 @@ troubleshooting vocabulary for free.
   `_current_surface_instruments` documents as mapping to the **first
   bound fixture's instrument** -- correct today because TEST/DEMO rooms
   carry homogeneous fixture instruments, wrong the day a Room mixes
-  instrument types on its fixtures. `console/static/functions.js`'s
+  instrument types on its fixtures. **Superseded 2026-09-01:**
+  `surface_instruments["room"]` and the first-bound-fixture rule are
+  removed -- TEST is now two distinct instruments (`dev_strip_main`/
+  `dev_strip_accent`) and diagnostics resolve per fixture. See
+  *Per-fixture instruments, operator Stop, and ABORT resilience* below.
+  `console/static/functions.js`'s
   device/surface pickers filter compatibility in both directions (a
   picker only offers surfaces the function can actually run on, and a
   card only shows steps/description resolved for the picker's current
@@ -3350,6 +3359,84 @@ the serve-mode console flow; this slice stabilizes the load path. Design:
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **1887 passed, 1 skipped**.
+
+### Per-fixture instruments, operator Stop, and ABORT resilience (2026-09-01)
+First sustained live operator session on the TEST room surfaced four
+defects, worked through with Chris the same day. Design:
+[`.../2026-09-01-per-fixture-instruments-and-diagnostics-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-01-per-fixture-instruments-and-diagnostics-design.md).
+
+- **The Room owns no audio channel.** The prior room-scoped voice (one
+  shared `ArcoSynthPool` voice bound through `RoomBridge`) was a
+  definition error from the Room redesign -- instruments (fixtures) are
+  the only things with audio channels; a Room has audio only because a
+  bound fixture's instrument is playing it. `AudioBridge` now grants a
+  voice per bound fixture (`_room_audio_devs`, one `on_grant`/
+  `_RoomAudioSink` per fixture dev whose instrument declares an
+  `audio.*` capability), falling back to a built-in minimal declaration
+  (`_DEFAULT_FIXTURE_ROLE`) when no ROOM-role Bit audio declaration is
+  loaded. `RoomBridge` loses `feed_audio`/`RoomAudioSink` entirely and is
+  light-only; shutdown releases every granted fixture voice, and the
+  drone loop runs over all of them on RUNNING/UNLOADING. `_room_cues`
+  payloads carry the fixture dev so a MIDI cue sounds on that fixture's
+  own voice, not a shared one. The light half of a fixture-addressed MIDI
+  cue still feeds the one shared `LightSession` only when the dev is the
+  canonical fixture -- light MIDI from a non-canonical fixture dev is
+  dropped at the transport seam (see the deferred item below).
+- **TEST is defined by two distinct instruments.** The shared
+  `instruments/dev_strip.toml` is replaced by `dev_strip_main.toml` and
+  `dev_strip_accent.toml` (identical capabilities), and `terrarium.toml`'s
+  TEST fixtures point at them by name. No behavioral difference today --
+  the point is identity: each fixture resolves its own instrument, its
+  own builtins entry, and its own Console surface row.
+- **Explicit fixture targeting is never collapsed.** In
+  `GameServer.fire_function`, a SURFACE fire at a concrete dev is used
+  as-is; `_collapse_room_fanout` applies only to fanning lanes (ROOM
+  targets, `@all`, PLAYERS). Rungs 2 and 3 resolve per real dev, so a
+  fire aimed at `sim-room-accent` lands on the accent and `@all` reaches
+  every fixture on its own voice/slice, not just the canonical one.
+- **Mute and overrides are per fixture.** `GameServer.muted` holds the
+  real fixture dev; muting fixture F installs a blackout override for F
+  applied to F's slice, purges F's queued light and room-audio cues, and
+  silences F's own voice. `_render_room` applies `_overrides[fixture_dev]`
+  to that fixture's slice only (the whole-frame override keyed by the
+  canonical dev is gone), and `_tick_overrides` expiry runs per fixture.
+  A ROOM-addressed `SolidCue` now paints only the canonical fixture's
+  slice, accepted since no live Bit fires one that way.
+- **Console diagnostics reorder to Stop, Flash, Ping** (Stop is the
+  panic button and now comes first) in both `buildDiagRow` and
+  `refreshDiagButtons`, with `console/protocol.py` and
+  `control/builtins.py` docs aligned. Device pickers for bound fixture
+  devs are now fixture-labeled (e.g. `sim-room-accent (accent)`) via
+  `device_view`'s new `"fixture"` key, and the `surface_instruments["room"]`
+  first-bound-fixture key is removed -- its only consumer was the
+  pre-console-load-stabilization diag Room option.
+- **Reserved names are refused on Bit FunctionTables too**, reversing the
+  2026-08-31 shadowing-by-design decision below: `validate_function_table`
+  now refuses `RESERVED_NAMES` for both the instrument and Bit owners, so
+  a Bit declaring `flash`/`stop`/`ping` fails at load with a located
+  error. TestBit's own `stop` Function is deleted.
+- **ABORT no longer kills the persistent Testshroom.** Every o2lite send
+  inside `harness/o2_shroom.py`'s persistent loop (`reconnect_recheck`'s
+  verify, and the hello/join resends) is now guarded: a send failure
+  while the hub is down (o2litepy's `assert False, "cannot send"`, or any
+  `OSError`) is treated as "hub away", not death -- the device logs the
+  transition once, idles, keeps polling, and re-runs the ownership
+  re-check once o2lite reconnects and stamps a new bridge id.
+  `run_stack` is unchanged: a child exit is still fatal, because after
+  this fix a child exit again means a real crash. The intended post-ABORT
+  flow is restored: ABORT, devices idle in the lobby, Load Room, devices
+  reconnect and rejoin, Load Bit.
+- **Deferred (named follow-up): per-fixture light sessions and
+  cross-fixture light effects.** This slice keeps the Room's light side
+  as ONE shared `LightSession` over the whole concatenated profile.
+  Scripted light at a non-canonical fixture has no light half until each
+  fixture gets its own session over its own slice and the Bit ROOM-role
+  light manifest contract is reworked to match; a design for cross-fixture
+  effects (chases/sweeps spanning main and accent) is part of that later
+  slice.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1903 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 
