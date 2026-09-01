@@ -729,6 +729,10 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         print(f"unknown Bit {bit!r}; available: {available}",
              file=sys.stderr)
         raise SystemExit(1)
+    if not registry.packages[bit].config.identity.enabled:
+        print(f"Bit {bit!r} is disabled (bit.enabled = false in its "
+              f"manifest); re-enable it there to load it.", file=sys.stderr)
+        raise SystemExit(1)
     bit_cfg = registry.resolve_config(bit, profile.overrides or None)
 
     node = args.node or bit_cfg.join_node()

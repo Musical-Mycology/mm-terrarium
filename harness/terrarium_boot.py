@@ -1245,8 +1245,10 @@ def main() -> None:
     if args.list_bits:
         for row in registry.list_view(include_hidden=True):
             rooms = ",".join(row["room_types"])
+            status = "" if row.get("enabled", True) else "\tDISABLED"
             print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"
-                 f"{rooms}\t{row['start']['when']}\t{row['description']}")
+                 f"{rooms}\t{row['start']['when']}\t{row['description']}"
+                 f"{status}")
         for err in registry.errors_view():
             print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
         sys.exit(0)
@@ -1267,6 +1269,11 @@ def main() -> None:
              file=sys.stderr)
         for err in registry.errors_view():
             print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
+        sys.exit(1)
+
+    if not registry.packages[bit].config.identity.enabled:
+        print(f"Bit {bit!r} is disabled (bit.enabled = false in its "
+              f"manifest); re-enable it there to load it.", file=sys.stderr)
         sys.exit(1)
 
     # harness/run_stack.py stops this process with SIGTERM, and the whole

@@ -333,7 +333,10 @@ function openPicker() {
   head.appendChild(xbtn);
   picker.appendChild(head);
 
-  for (const bitRow of bits) picker.appendChild(buildPickCard(bitRow));
+  for (const bitRow of bits) {
+    if (bitRow.enabled === false) continue;
+    picker.appendChild(buildPickCard(bitRow));
+  }
   for (const err of errors) picker.appendChild(buildErrRow(err));
 
   overlay.appendChild(picker);

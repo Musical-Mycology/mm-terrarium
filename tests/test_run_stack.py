@@ -689,8 +689,14 @@ def test_an_unresolvable_node_is_a_config_error_before_anything_spawns():
     from harness.run_stack import config_from_args, parse_args
     from control.bit_config import BitConfig, BitIdentity, ConsoleBlock, LaunchConfig, StartCondition
 
+    class _NodelessPackage:
+        config = BitConfig(
+            identity=BitIdentity(name="NodelessBit"),
+            launch=LaunchConfig(nodes=(), default_join_role=""),
+            start=StartCondition(), console=ConsoleBlock())
+
     class _NodelessRegistry:
-        packages = {"NodelessBit": object()}
+        packages = {"NodelessBit": _NodelessPackage()}
 
         def resolve_config(self, name, overrides=None):
             return BitConfig(
