@@ -144,6 +144,20 @@ view already shows instruments; this is the carried-side sibling).
   path joins the live-Arco checklist).
 - The suite stays fully offline; no luxaeterna or pyarco touched.
 
+## Status
+
+Implemented 2026-08-31, on this branch (`claude/carried-instrument-wire`).
+Deep-dive: `docs/MM_TERRARIUM.md`'s *Carried-instrument wire* entry.
+Contract doc: `docs/carried-instrument-schema.md`. Full suite:
+`.venv/bin/python -m pytest tests -q` -> **1871 passed, 1 skipped**.
+
+Outstanding: the mm-tuneshroom follow-up named in section 5 (the client
+must send `"tuneshroom"` on hello) is not part of this repo and has not
+landed. This branch's breaking change (the carried default flipping from
+`TUNESHROOM` to `DEFAULTSHROOM`) must not reach a real room or real
+hardware until that follow-up ships -- to be spawned as its own task at
+closeout, not fixed here.
+
 ## 7. Out of scope (recorded)
 
 - Draft instruments on the wire.

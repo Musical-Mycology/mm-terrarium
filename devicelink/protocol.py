@@ -104,8 +104,13 @@ def role_event(dev: str, config: dict) -> dict:
     value is non-null/non-empty (never shipped as null):
 
         room_name, terrarium_config_version -- Room provenance stamps.
-        slot, instrument -- the requirement slot a granted join filled and
-            the carried instrument's name that filled it.
+        slot -- the requirement slot a granted join filled.
+        instrument -- the carried instrument that filled it, as a dict
+            (2026-08-31 carried-instrument-wire): {name, capabilities
+            (sorted), pixels, ambient (light/ugen manifests), functions
+            (function_view's wire shape)}. See
+            docs/carried-instrument-schema.md. Omitted for a ROOM join,
+            same never-null discipline as every other stamp here.
         triggers -- {event_trigger_name: {threshold_key: number}} for every
             Task 8 EventTrigger the carried instrument declares (e.g.
             Tuneshroom's "tap"/"shake"): the DEVICE runs the gesture
