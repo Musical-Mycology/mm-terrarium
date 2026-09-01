@@ -81,7 +81,7 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
                    registration, devices, bit_status, room=None,
                    functions=None, terrarium_state=None, rooms=None,
                    instrument_functions=None, surface_instruments=None,
-                   builtins=None, designs=None) -> dict:
+                   builtins=None, designs=None, design_vocab=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
@@ -99,6 +99,7 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "surface_instruments": surface_instruments or {},
         "builtins": builtins or {},
         "designs": designs or [],
+        "design_vocab": design_vocab,
     }
 
 

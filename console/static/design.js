@@ -10,6 +10,7 @@
 // save_design with the selection's name; the server decides that a save on
 // a published name lands as its draft.
 import * as wire from "./wire.js";
+import { rebuild as rebuildForms } from "./design_forms.js";
 
 let lastDesigns = [];      // last-seen designs_listed/designs_changed/snapshot rows
 let current = null;        // {name, state} of the open design, or null
@@ -60,6 +61,13 @@ function render() {
 function onDesignsChanged(designs) {
   lastDesigns = designs || [];
   render();
+}
+
+// Accessor for the currently-open design selection ({name, state}, or null
+// when nothing is open) -- used by design_forms.js to gate form rendering
+// without duplicating design.js's selection tracking.
+export function getSelection() {
+  return current;
 }
 
 // Fills the editor from a `design` event: text, errors, and remembers the
@@ -406,6 +414,7 @@ export function initCalibrate() {
     const provenance = `${selectedCapture.session} on ${new Date().toISOString().slice(0, 10)}`;
     const textEl = document.getElementById("designText");
     textEl.value = applyProposal(textEl.value, selectedCapture.label, lastProposal, provenance);
+    rebuildForms(textEl.value);
   };
 
   replayBtn.onclick = () => {

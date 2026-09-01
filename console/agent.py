@@ -21,7 +21,7 @@ from control.function_view import (
     function_fired_view, functions_view, instrument_functions_view)
 from control.functions import FIRED_BY_ADMIN_MANUAL
 from control.builtins import builtin_functions
-from control.instrument import TUNESHROOM
+from control.instrument import TUNESHROOM, CAPABILITY_VOCABULARY, CUE_KINDS
 
 logger = logging.getLogger(__name__)
 
@@ -454,6 +454,10 @@ class ConsoleAgent:
             surface_instruments=self._last_surface_instruments,
             builtins=self._last_builtins,
             designs=self._design_rows() if self.catalog_root else [],
+            design_vocab={
+                "capabilities": sorted(CAPABILITY_VOCABULARY),
+                "cue_kinds": list(CUE_KINDS),
+            },
         )
 
     def _rooms_view(self) -> list:

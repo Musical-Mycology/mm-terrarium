@@ -1064,6 +1064,15 @@ def test_snapshot_terrarium_fields_are_none_safe_without_terrarium():
     assert snap["rooms"] == []
 
 
+def test_snapshot_carries_design_vocab():
+    gs, srv, agent = _server_with_agent()
+    snap = agent.snapshot()
+    vocab = snap["design_vocab"]
+    assert "light.pixels" in vocab["capabilities"]
+    assert vocab["capabilities"] == sorted(vocab["capabilities"])
+    assert vocab["cue_kinds"] == ["midi", "play", "solid", "mute"]
+
+
 def test_room_lifecycle_event_byte_shapes():
     terrarium = make_terrarium()
     srv = FakeConsoleServer()

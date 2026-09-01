@@ -27,12 +27,23 @@ const TOML_FIXTURE = [
   '  window_ms = 200',
 ].join("\n");
 
+function findByKey(root, key) {
+  if (root.getAttribute && root.getAttribute("data-form-key") === key) return root;
+  for (const c of root.children || []) {
+    const found = findByKey(c, key);
+    if (found) return found;
+  }
+  return null;
+}
+
 (async () => {
   const wire = await import("../../console/static/wire.js");
   const design = await import("../../console/static/design.js");
+  const forms = await import("../../console/static/design_forms.js");
   design.init();
   design.initBench();
   design.initCalibrate();
+  forms.initForms();
   wire.connect({ WebSocketImpl: FakeSocket });
   const sock = FakeSocket.instances.at(-1);
   sock.onopen();
@@ -115,8 +126,9 @@ const TOML_FIXTURE = [
   assert.strictEqual(design.applyProposal(TOML_FIXTURE, "nope", proposal, "s1 on today"), TOML_FIXTURE);
 
   // -- capture_stats: renders a table and enables the buttons -------------
-  send({ event: "snapshot", designs: DESIGNS });
+  send({ event: "snapshot", designs: DESIGNS, design_vocab: { capabilities: [], cue_kinds: [] } });
   design.openDesign({ name: "tuneshroom", state: "draft", text: TOML_FIXTURE, errors: [] });
+  forms.rebuild(TOML_FIXTURE);
 
   const proposeBtn = byId.get("calPropose");
   const replayBtn = byId.get("calReplay");
@@ -147,6 +159,13 @@ const TOML_FIXTURE = [
   const textArea = byId.get("designText");
   assert.ok(textArea.value.includes("# calibrated from s1 on"));
   assert.ok(textArea.value.includes("peak_g = 1.6"));
+
+  // -- forms panel rebuilds after Propose writes the textarea: the trigger
+  // card's peak_g input reflects the new value, not the pre-calibration one.
+  const sections = byId.get("formSections");
+  const peakInput = findByKey(sections, "trig:tap:peak_g");
+  assert.notStrictEqual(peakInput, null);
+  assert.strictEqual(Number(peakInput.value), 1.6, "forms panel must rebuild after Propose, not keep stale threshold");
 
   // -- replay_result: unhides #calPlot and draws the trace -----------------
   const plot = document.getElementById("calPlot");
