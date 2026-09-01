@@ -293,7 +293,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
           serve: bool = True, room_type: str | None = None,
           fixture: str | None = None,
           input_queue: "queue.Queue | None" = None,
-          clock=None, on_play=None):
+          clock=None, on_play=None, instrument: str | None = None):
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
@@ -356,7 +356,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
 
     client = ShroomClient(dev, node, leds=WebSimLeds(backend, channels),
                           on_role=_on_role, on_play=on_play,
-                          expected_channels=channels)
+                          expected_channels=channels, instrument=instrument)
     return client, backend
 
 
@@ -372,6 +372,11 @@ def main() -> None:
     parser.add_argument("--sim-host", default="127.0.0.1")
     parser.add_argument("--sim-port", type=int, default=0)
     parser.add_argument("--tilt-hz", type=float, default=20.0)
+    parser.add_argument("--instrument", default=None,
+                        help="Declare this device's carried instrument on "
+                             "hello (e.g. tuneshroom), re-sent on every "
+                             "heartbeat. Omit to stay undeclared, "
+                             "resolving to defaultshroom.")
     parser.add_argument("--join-retry", type=float, default=0.0,
                         help="Re-send /game/join every N seconds until a "
                              "role, deny or error comes back. 0 (default) "
@@ -474,7 +479,8 @@ def main() -> None:
                             room_type=args.room_type, fixture=args.fixture,
                             input_queue=operator_input,
                             clock=o2lite.time_get,
-                            on_play=lambda name, params: player.play(name))
+                            on_play=lambda name, params: player.play(name),
+                            instrument=args.instrument)
     backend.open()
     canvas_url = f"http://{args.sim_host}:{backend.port}/"
     url_marker = markers.ROOM_URL if args.no_join else markers.BROWSE_URL
@@ -482,7 +488,17 @@ def main() -> None:
           f"{canvas_url}", flush=True)
 
     def send_hello() -> None:
-        o2lite.send_cmd("/game/hello", 0, "s", args.dev)
+        # Re-sent on every heartbeat (see next_heartbeat_time below), so a
+        # declared client's instrument survives GameServer.reap_stale's
+        # liveness re-hello exactly as the initial one did -- the
+        # heartbeat rule this comment refers to never has to fire for a
+        # well-behaved client. Mirrors ShroomClient.hello()'s own
+        # declared/undeclared shape split, kept in step here because this
+        # transport bypasses client.hello() for the real o2lite path.
+        hello_typespec, hello_args = (
+            ("s", (args.dev,)) if client.instrument is None
+            else ("ssss", (args.dev, "", "", client.instrument)))
+        o2lite.send_cmd("/game/hello", 0, hello_typespec, *hello_args)
         o2lite.send_cmd("/game/canvas", 0, "ss", args.dev, canvas_url)
 
     # ONE cleanup path, covering everything after backend.open(). The guard

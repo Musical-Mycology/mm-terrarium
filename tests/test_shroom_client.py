@@ -38,6 +38,24 @@ def test_hello_matches_the_wire():
     assert env.args == [DEV]
 
 
+def test_hello_declares_the_carried_instrument():
+    """A client constructed with instrument= sends the 4-arg hello shape
+    (devicelink/agent.py's _on_hello reads the instrument from args[3]),
+    so a declared Testshroom's identity survives the wire."""
+    env = protocol.decode(client(instrument="tuneshroom").hello())
+    assert env.address == "/game/hello"
+    assert env.typespec == "ssss"
+    assert env.args == [DEV, "", "", "tuneshroom"]
+
+
+def test_hello_without_an_instrument_keeps_the_old_shape():
+    """No instrument= means byte-identical to the pre-declaration hello --
+    an undeclared device must not change shape on the wire."""
+    env = protocol.decode(client().hello())
+    assert env.typespec == "s"
+    assert env.args == [DEV]
+
+
 def test_join_carries_dev_and_node():
     env = protocol.decode(client().join())
     assert env.address == "/game/join"

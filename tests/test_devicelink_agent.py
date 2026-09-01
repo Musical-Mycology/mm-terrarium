@@ -207,6 +207,39 @@ def test_hello_without_a_fourth_arg_still_works(rig):
     assert devices[0].carried.name == "defaultshroom"
 
 
+def test_granted_join_carries_the_declared_instrument_in_the_blob(rig):
+    """End-to-end smoke: a 4-arg hello declaring "tuneshroom" survives
+    through join into the role blob's config["instrument"], and an
+    undeclared client still resolves to "defaultshroom" (Task 4's wire
+    shape, exercised here through the full hello->join->role round trip)."""
+    gs, server, agent = rig
+    gs.load_bit("test_bit")
+
+    server.arrive("c1")
+    server.deliver("c1", "/game/hello", "ssss",
+                   ["ie1", "sim", "1", "tuneshroom"])
+    agent.poll()
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+
+    roles = server.addressed("/ie1/role")
+    assert len(roles) == 1
+    blob = roles[0]["args"][0]
+    assert blob["instrument"]["name"] == "tuneshroom"
+    assert blob["instrument"]["pixels"] == 12
+
+    server.arrive("c2")
+    server.deliver("c2", "/game/hello", "sss", ["ie2", "sim", "1"])
+    agent.poll()
+    server.deliver("c2", "/game/join", "ss", ["ie2", "TEST_PLAYER_NODE"])
+    agent.poll()
+
+    roles2 = server.addressed("/ie2/role")
+    assert len(roles2) == 1
+    blob2 = roles2[0]["args"][0]
+    assert blob2["instrument"]["name"] == "defaultshroom"
+
+
 def test_granted_join_sends_role_blob_byte_identical(rig):
     gs, server, agent = rig
     gs.load_bit("test_bit")
