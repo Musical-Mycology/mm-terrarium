@@ -182,6 +182,31 @@ def test_hello_registers_the_device_in_the_pool(rig):
     assert [d.dev for d in gs.devices.all()] == ["ie1"]
 
 
+def test_hello_with_a_fourth_arg_carries_the_declared_instrument(rig):
+    """A 4-arg hello (dev, name, protoversion, instrument) must reach
+    GameServer.hello's `instrument` parameter, so the resolved carried
+    Instrument is "tuneshroom" rather than the DEFAULTSHROOM fallback."""
+    gs, server, agent = rig
+    server.arrive("c1")
+    server.deliver("c1", "/game/hello", "ssss",
+                   ["ie1", "sim", "1", "tuneshroom"])
+    agent.poll()
+    devices = gs.devices.all()
+    assert len(devices) == 1
+    assert devices[0].carried.name == "tuneshroom"
+
+
+def test_hello_without_a_fourth_arg_still_works(rig):
+    """The old 3-arg hello must keep working -- no instrument declared
+    means `instrument=None` reaches GameServer.hello, which resolves to
+    the DEFAULTSHROOM default rather than raising."""
+    gs, server, agent = rig
+    _hello(server, agent)
+    devices = gs.devices.all()
+    assert len(devices) == 1
+    assert devices[0].carried.name == "defaultshroom"
+
+
 def test_granted_join_sends_role_blob_byte_identical(rig):
     gs, server, agent = rig
     gs.load_bit("test_bit")

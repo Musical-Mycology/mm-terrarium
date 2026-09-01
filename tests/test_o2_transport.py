@@ -80,6 +80,23 @@ def test_draining_twice_does_not_repeat_a_message():
     assert transport.drain_inbound() == []
 
 
+def test_hello_delivers_with_either_the_old_or_new_typespec():
+    """/game/hello is registered with typespec=None ("match any" -- see
+    O2LiteTransport.start), so both the old 3-string-arg hello and the new
+    4-string-arg (dev, name, protoversion, instrument) hello must reach the
+    agent unchanged, with no separate registration needed for either
+    arity."""
+    transport, fake = _started()
+    fake.deliver("/game/hello", "sss", ("ie1", "sim", "1"))
+    fake.deliver("/game/hello", "ssss", ("ie2", "sim", "1", "tuneshroom"))
+    drained = transport.drain_inbound()
+    assert len(drained) == 2
+    _client0, msg0 = drained[0]
+    assert msg0["args"] == ["ie1", "sim", "1"]
+    _client1, msg1 = drained[1]
+    assert msg1["args"] == ["ie2", "sim", "1", "tuneshroom"]
+
+
 def test_a_delivered_message_is_only_seen_after_a_pump():
     """Regression for the live failure: on the real device, Control never
     received anything, because nothing in its tick loop ever called
