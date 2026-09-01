@@ -1,4 +1,4 @@
-"""Capability-derived built-in Functions: flash, stop, ping.
+"""Capability-derived built-in Functions: stop, flash, ping.
 
 Synthesized from an Instrument's capabilities, never authored -- the
 operator's troubleshooting vocabulary is identical at every venue (spec
@@ -21,7 +21,7 @@ PING_OFF_OFFSET = 0.5
 def builtin_functions(instrument) -> dict[str, Function]:
     """The built-ins this instrument's capabilities support, keyed by name.
 
-    flash needs any light.*; stop needs any light.* or audio.*; ping needs
+    stop needs any light.* or audio.*; flash needs any light.*; ping needs
     an audio capability (samples preferred -- sub-20 ms local path -- else
     a short note through the flsyn voice)."""
     caps = instrument.capabilities
