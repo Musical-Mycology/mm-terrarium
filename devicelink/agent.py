@@ -227,8 +227,9 @@ class DeviceLinkAgent:
         pipeline, with no compose_role_config step (there is no Role to
         compose against). An entirely empty ambient declaration (no
         fixture in the profile declares light or audio -- e.g. the TEST
-        profile's dev_strip fixtures) keeps today's behavior: no session
-        at all until a Bit's ROOM role declaration arrives.
+        profile's dev_strip_main/dev_strip_accent fixtures) keeps today's
+        behavior: no session at all until a Bit's ROOM role declaration
+        arrives.
 
         Construction happens eagerly here, at agent-construction time, and
         _render_room() below is what scopes SENDING to whichever fixtures

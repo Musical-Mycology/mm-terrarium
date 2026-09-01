@@ -68,8 +68,9 @@ def _function_view(fn) -> dict:
 
     A GENERATOR keeps its lane/period tag -- the fixture card's only live
     ambient-animation summary. A SCRIPTED instrument function (the
-    trigger-instrument redesign's addition: e.g. terrarium.toml's dev_strip
-    play_aurora/win/... functions) has no lane or period to summarize, so it
+    trigger-instrument redesign's addition: e.g. terrarium.toml's
+    dev_strip_main play_aurora/win/... functions) has no lane or period to
+    summarize, so it
     gets the same minimal name+kind shape the browser's instrumentTags()
     already renders every function as (console/static/surface.js: `${fn.name}
     (${fn.kind})`) -- this module's fixture-card scope is a tag row, not the

@@ -771,7 +771,8 @@ def test_no_room_configured_leaves_room_wiring_inert():
 # --- Ambient rendering (Task 7, spec section 6): a Room with no Bit's ROOM
 # role renders each fixture's own instrument's ambient declaration instead of
 # going unbuilt -- DEMO's `array` fixture declares venue_array (aurora light
-# + flsyn drone); TEST's fixtures declare dev_strip (no ambient). -----------
+# + flsyn drone); TEST's fixtures declare dev_strip_main/dev_strip_accent
+# (no ambient). ---------------------------------------------------------
 
 def _instrument_names(manifest_calls):
     """The `instrument` name of every LightInstrumentDecl LightManifest.
@@ -824,8 +825,9 @@ def test_ambient_session_built_with_no_bit_loaded(monkeypatch):
 
 
 def test_ambient_session_renders_nothing_when_fixtures_declare_no_ambient():
-    """TEST's fixtures are dev_strip, which declares no ambient -- today's
-    no-session behavior must be unchanged when there is nothing to render."""
+    """TEST's fixtures are dev_strip_main/dev_strip_accent, which declare no
+    ambient -- today's no-session behavior must be unchanged when there is
+    nothing to render."""
     gs = GameServer({"TestBit": TestBit})
     gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
 
@@ -837,7 +839,8 @@ def test_ambient_session_renders_nothing_when_fixtures_declare_no_ambient():
 def _animated_ambient_game_server():
     """A DEMO-shaped Room whose one fixture's instrument declares a
     GENERATOR Function on cc:74, no Bit loaded -- the fixture case Task 5's
-    brief carves out (terrarium.toml's shipped dev_strip stays unanimated;
+    brief carves out (terrarium.toml's shipped dev_strip_main/dev_strip_accent
+    stay unanimated;
     this is the animated case the test fixtures carry)."""
     from control.cues import ROOM
     from control.functions import Function, FunctionKind, GeneratorSpec

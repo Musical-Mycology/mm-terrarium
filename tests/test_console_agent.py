@@ -1209,9 +1209,9 @@ def test_snapshot_carries_tuneshroom_instrument_functions_and_builtins():
 def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
     # Goes through the public agent.snapshot() path -- this is the exact
     # scenario (a terrarium-loaded TEST room from the real terrarium.toml,
-    # whose dev_strip fixtures carry SCRIPTED functions) that used to raise
-    # inside control/room_view.py's _function_view before it was made
-    # kind-aware.
+    # whose dev_strip_main/dev_strip_accent fixtures carry SCRIPTED
+    # functions) that used to raise inside control/room_view.py's
+    # _function_view before it was made kind-aware.
     config = load_terrarium_config("terrarium.toml")
     terrarium = make_terrarium(config=config)
     srv = FakeConsoleServer()
@@ -1223,18 +1223,19 @@ def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
     snapshot = agent.snapshot()
 
     instrument_functions = snapshot["instrument_functions"]
-    dev_strip_names = sorted(f["name"] for f in instrument_functions["dev_strip"])
-    assert dev_strip_names == [
+    dev_strip_main_names = sorted(
+        f["name"] for f in instrument_functions["dev_strip_main"])
+    assert dev_strip_main_names == [
         "fail_room", "finale", "fireworks_room", "metro_click",
         "metro_downbeat", "metro_pulse_room", "play_aurora", "win"]
 
     surface_instruments = snapshot["surface_instruments"]
-    assert surface_instruments["sim-main-dev"] == "dev_strip"
+    assert surface_instruments["sim-main-dev"] == "dev_strip_main"
     # The diagnostics row's Room option resolves builtins through the
     # literal "room" key -- the first bound fixture's instrument (TEST's
-    # fixtures carry homogeneous dev_strip instruments).
-    assert surface_instruments["room"] == "dev_strip"
-    assert surface_instruments["sim-accent-dev"] == "dev_strip"
+    # "main" fixture, dev_strip_main).
+    assert surface_instruments["room"] == "dev_strip_main"
+    assert surface_instruments["sim-accent-dev"] == "dev_strip_accent"
 
     # The room panel itself renders each fixture's scripted functions as a
     # minimal name+kind tag now, rather than raising.
