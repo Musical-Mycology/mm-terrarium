@@ -74,7 +74,7 @@ def role_view(role, requirement=None) -> dict:
 
 def device_view(info, role_name, url=None, muted=False) -> dict:
     return {"dev": info.dev, "name": info.name, "role": role_name, "url": url,
-            "muted": muted}
+            "muted": muted, "instrument": info.carried.name}
 
 
 def snapshot_event(*, state, installed_bits, loaded_bit, roles,

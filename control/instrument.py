@@ -20,6 +20,7 @@ CAPABILITY_VOCABULARY: frozenset[str] = frozenset({
     "light.surface",   # a linear multi-zone surface (Room-style array)
     "audio.flsyn",     # an Arco FluidSynth voice reachable
     "audio.samples",   # local sample playback
+    "audio.mic",       # a microphone input reachable
     "gesture.tap",
     "gesture.tilt",
 })
@@ -52,6 +53,7 @@ class Instrument:
     name: str
     description: str = ""
     capabilities: frozenset[str] = frozenset()
+    pixels: int = 0  # 0 = undeclared
     functions: tuple[Function, ...] = ()
     accepted_cues: tuple[str, ...] = ()
     light_manifest: dict = field(default_factory=dict)
@@ -80,6 +82,11 @@ def validate_instrument(instrument: Instrument) -> None:
         raise InstrumentError(
             f"instrument {instrument.name!r}: unknown capability tag(s) "
             f"{sorted(unknown)}; known: {sorted(CAPABILITY_VOCABULARY)}")
+    if "light.pixels" in instrument.capabilities and instrument.pixels < 12:
+        raise InstrumentError(
+            f"instrument {instrument.name!r}: light.pixels requires "
+            f"pixels >= 12 (the DefaultShroom floor), got "
+            f"{instrument.pixels}")
     bad = [k for k in instrument.accepted_cues if k not in CUE_KINDS]
     if bad:
         raise InstrumentError(
@@ -224,7 +231,8 @@ def _fireworks_script():
 TUNESHROOM = Instrument(
     name="tuneshroom",
     description="Handheld 12-LED Tuneshroom (8-ring + 4-stem)",
-    capabilities=frozenset({"light.pixels", "audio.samples",
+    pixels=12,
+    capabilities=frozenset({"light.pixels", "audio.samples", "audio.mic",
                             "gesture.tap", "gesture.tilt"}),
     accepted_cues=("midi", "play", "solid", "mute"),
     functions=(
@@ -257,6 +265,31 @@ TUNESHROOM = Instrument(
                  script=(ScriptStep(0.0, (TARGET, 0xB0, 74, GREEN_CC)),
                          ScriptStep(0.0, (TARGET, 0xB0, 11, LEVEL_BASE)))),
     ),
+    event_triggers=(
+        EventTrigger(
+            name="tap", description="a single or double tap on the shell",
+            thresholds={"peak_g": 2.0, "window_ms": 200, "double_ms": 400}),
+        EventTrigger(
+            name="shake", description="a shake gesture",
+            thresholds={"peak_g": 2.0, "window_ms": 200}),
+    ),
+)
+
+
+# The ecosystem floor: any device with at least 12 addressable pixels and
+# tap/tilt gesture sensing can host this instrument, even if it isn't a
+# real Tuneshroom. Event trigger thresholds are TUNESHROOM's, copied
+# verbatim -- same guessed thresholds, same provenance caveat (see the
+# comment above TUNESHROOM's definition): they are the native TapDetector's
+# current constants, not derived from this instrument's own hardware.
+DEFAULTSHROOM = Instrument(
+    name="defaultshroom",
+    description="Ecosystem floor: any 12-LED instrument host",
+    pixels=12,
+    capabilities=frozenset({"light.pixels", "gesture.tap", "gesture.tilt"}),
+    accepted_cues=("midi", "play", "solid", "mute"),
+    light_manifest={"instruments": [
+        {"instrument": "aurora", "target": "primary"}]},
     event_triggers=(
         EventTrigger(
             name="tap", description="a single or double tap on the shell",

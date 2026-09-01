@@ -18,6 +18,8 @@ this module, so the edge does not close a cycle.
 from copy import deepcopy
 
 from control.audio import WELCOME_INSTRUMENTS
+from control.function_view import function_view
+from control.instrument import Instrument
 from control.roles import Role, RoleTable
 
 # Keys Control composes into the outgoing blob at adoption time; authoring
@@ -132,7 +134,8 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
                         terrarium_config_version: str | None = None,
                         slot: str | None = None,
                         instrument: str | None = None,
-                        event_triggers: tuple = ()) -> dict:
+                        event_triggers: tuple = (),
+                        carried: Instrument | None = None) -> dict:
     """The per-role config blob shipped in /ie<N>/role at adoption time
     (docs/control-gameserver-design.md, player flow step 3). Deep-copied so
     transport/Console consumers can never alias the Bit's declaration. The
@@ -154,7 +157,18 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
     when non-empty it ships as config["triggers"] = {name: thresholds},
     deep-copied so the device-side detector's server-declared thresholds can
     never alias Instrument.event_triggers. Omitted entirely when empty --
-    same never-null discipline as every other stamp here."""
+    same never-null discipline as every other stamp here.
+
+    carried is the granted join's carried Instrument (2026-08-31 carried-
+    instrument-wire, spec section 3); when not None the blob gains
+    config["instrument"] = {name, capabilities (sorted), pixels, ambient
+    (light/ugen manifests), functions (function_view's wire shape)},
+    deep-copied so a generic host's rendering can never alias the
+    Instrument. Omitted entirely when carried is None -- same never-null
+    discipline as every other stamp here. This supersedes the instrument
+    keyword's flat-string stamp for any caller that also passes carried:
+    every granted non-ROOM join does today (GameServer.join), so the
+    section's own "name" field is the sole surviving form of that stamp."""
     light = deepcopy(role.light_manifest)
     light["bit_name"] = bit_name
     light["bit_version"] = bit_version
@@ -180,6 +194,15 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
     if event_triggers:
         config["triggers"] = {t.name: dict(t.thresholds)
                               for t in event_triggers}
+    if carried is not None:
+        config["instrument"] = {
+            "name": carried.name,
+            "capabilities": sorted(carried.capabilities),
+            "pixels": carried.pixels,
+            "ambient": {"light": deepcopy(carried.light_manifest),
+                        "ugen": deepcopy(carried.ugen_manifest)},
+            "functions": [function_view(f) for f in carried.functions],
+        }
     return config
 
 

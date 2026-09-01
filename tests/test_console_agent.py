@@ -1174,6 +1174,35 @@ def test_on_load_warnings_broadcasts_warn_log_events():
                      "message": "function 'x' has no script on instrument 'y'"}]
 
 
+def test_on_device_warning_broadcasts_a_warn_log_event():
+    """Mirrors on_load_warnings' log/event mechanism (same log_event wire
+    shape) for the engine's hello-time unknown-instrument warning."""
+    gs, srv, agent = _server_with_agent()
+    agent.on_device_warning(
+        "device 'ie1' declared unknown instrument 'nope'; using defaultshroom")
+    logs = [m for m in srv.broadcasts if m["event"] == "log"]
+    assert logs == [{"event": "log", "level": "warn",
+                     "message": "device 'ie1' declared unknown instrument "
+                                "'nope'; using defaultshroom"}]
+
+
+def test_device_warning_reaches_the_log_through_the_real_engine_hello():
+    gs, srv, agent = _server_with_agent()
+    gs.hello("ie1", "Shroom One", "1", instrument="nope")
+    logs = [m for m in srv.broadcasts if m["event"] == "log"]
+    assert len(logs) == 1
+    assert logs[0]["level"] == "warn"
+    assert "nope" in logs[0]["message"]
+
+
+def test_device_view_rows_carry_the_instrument_name():
+    gs, srv, agent = _server_with_agent()
+    gs.hello("ie1", "Shroom One", "1")
+    devices = agent._devices_view()
+    ie1 = next(d for d in devices if d["dev"] == "ie1")
+    assert ie1["instrument"] == "defaultshroom"
+
+
 def test_design_commands_error_without_catalog():
     gs, srv, agent = _server_with_agent()
     reply = agent._handle_command({"command": "list_designs"})
@@ -1183,7 +1212,7 @@ def test_design_commands_error_without_catalog():
 def test_design_roundtrip_via_agent(tmp_path):
     root = tmp_path / "instruments"
     (root / "drafts").mkdir(parents=True)
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     gs, srv, agent = _server_with_agent(catalog_root=root)
     listed = agent._handle_command({"command": "list_designs"})
     assert listed["event"] == "designs_listed"
@@ -1238,7 +1267,7 @@ class FakeBenchSession:
 def test_bench_commands_error_without_factory(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     gs, srv, agent = _server_with_agent(catalog_root=root)
     reply = agent._handle_command(
         {"command": "bench_start", "state": "published", "name": "glowcap"})
@@ -1248,7 +1277,7 @@ def test_bench_commands_error_without_factory(tmp_path):
 def test_bench_start_replies_bench_started_and_polls_frame(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     t = [0.0]
     gs, srv, agent = _server_with_agent(
         catalog_root=root,
@@ -1280,7 +1309,7 @@ def test_bench_start_missing_entry_refuses(tmp_path):
 def test_bench_fire_unknown_name_returns_error(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     gs, srv, agent = _server_with_agent(
         catalog_root=root,
         bench_session_factory=lambda manifest: FakeBenchSession())
@@ -1293,7 +1322,7 @@ def test_bench_fire_unknown_name_returns_error(tmp_path):
 def test_bench_fire_without_running_bench_refuses(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     gs, srv, agent = _server_with_agent(
         catalog_root=root,
         bench_session_factory=lambda manifest: FakeBenchSession())
@@ -1304,7 +1333,7 @@ def test_bench_fire_without_running_bench_refuses(tmp_path):
 def test_bench_stop_closes_session(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     session = FakeBenchSession()
     gs, srv, agent = _server_with_agent(
         catalog_root=root, bench_session_factory=lambda manifest: session)
@@ -1457,7 +1486,7 @@ def test_replay_trace_rejects_path_traversal_in_session_and_label(tmp_path):
 def test_bench_closes_when_server_reports_zero_clients(tmp_path):
     root = tmp_path / "instruments"
     root.mkdir()
-    (root / "glowcap.toml").write_text('capabilities = ["light.pixels"]\n')
+    (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     session = FakeBenchSession()
     gs, srv, agent = _server_with_agent(
         catalog_root=root, bench_session_factory=lambda manifest: session)

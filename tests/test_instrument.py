@@ -8,9 +8,10 @@ from control.functions import (
     StreamOutput, StreamSpec,
 )
 from control.instrument import (
-    CAPABILITY_VOCABULARY, CUE_KINDS, CarriedInstrument, Instrument,
-    InstrumentError, InstrumentRequirement, TUNESHROOM, ambient_manifests,
-    satisfies, validate_instrument, validate_instrument_manifests,
+    CAPABILITY_VOCABULARY, CUE_KINDS, CarriedInstrument, DEFAULTSHROOM,
+    Instrument, InstrumentError, InstrumentRequirement, TUNESHROOM,
+    ambient_manifests, satisfies, validate_instrument,
+    validate_instrument_manifests,
 )
 from control.triggers import EventTrigger, StreamTrigger
 
@@ -155,7 +156,7 @@ def test_carried_instrument_pairs_instrument_and_dev():
 def test_vocabulary_and_cue_kinds_are_the_documented_sets():
     assert CAPABILITY_VOCABULARY == frozenset({
         "light.pixels", "light.surface", "audio.flsyn", "audio.samples",
-        "gesture.tap", "gesture.tilt"})
+        "audio.mic", "gesture.tap", "gesture.tilt"})
     assert CUE_KINDS == ("midi", "play", "solid", "mute")
 
 
@@ -216,3 +217,30 @@ def test_ambient_manifests_deep_copies_entries():
     light["instruments"][0]["params"]["key"] = 999
 
     assert entry["params"]["key"] == 1   # the config-held dict is untouched
+
+
+def test_defaultshroom_is_a_valid_12_led_floor():
+    validate_instrument(DEFAULTSHROOM)
+    validate_instrument_manifests(DEFAULTSHROOM)
+    assert DEFAULTSHROOM.name == "defaultshroom"
+    assert DEFAULTSHROOM.pixels == 12
+    assert "light.pixels" in DEFAULTSHROOM.capabilities
+    assert {t.name for t in DEFAULTSHROOM.event_triggers} == {"tap", "shake"}
+    assert DEFAULTSHROOM.light_manifest  # idle glow, not dark
+
+
+def test_tuneshroom_declares_pixels_and_mic():
+    assert TUNESHROOM.pixels == 12
+    assert "audio.mic" in TUNESHROOM.capabilities
+
+
+def test_light_pixels_requires_the_12_led_floor():
+    bad = Instrument(name="tiny", capabilities=frozenset({"light.pixels"}),
+                     pixels=11)
+    with pytest.raises(InstrumentError) as exc:
+        validate_instrument(bad)
+    assert "pixels >= 12" in str(exc.value)
+    validate_instrument(Instrument(
+        name="ok", capabilities=frozenset({"light.pixels"}), pixels=12))
+    validate_instrument(Instrument(  # non-light.pixels exempt
+        name="surface", capabilities=frozenset({"light.surface"})))

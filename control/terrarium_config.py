@@ -308,9 +308,16 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
     ambient = iraw.get("ambient", {})
     light_manifest = ambient.get("light", {})
     ugen_manifest = ambient.get("ugen", {})
+    pixels = iraw.get("pixels", 0)
+    if isinstance(pixels, bool) or not isinstance(pixels, int):
+        raise TerrariumConfigError(
+            source=source, key=key,
+            message=f"instrument {iname!r}: pixels must be an int, got "
+                    f"{pixels!r}")
     instrument = Instrument(
         name=iname,
         description=iraw.get("description", ""),
+        pixels=pixels,
         capabilities=frozenset(iraw.get("capabilities", [])),
         functions=_parse_functions(iname, iraw, source=source, key=key),
         accepted_cues=tuple(iraw.get("accepted_cues", [])),

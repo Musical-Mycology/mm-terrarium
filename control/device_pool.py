@@ -4,7 +4,7 @@ sections 3-4 for last_seen/touch/stale/remove."""
 
 from dataclasses import dataclass, field
 
-from control.instrument import TUNESHROOM, Instrument
+from control.instrument import DEFAULTSHROOM, Instrument
 
 
 @dataclass
@@ -16,11 +16,13 @@ class DeviceInfo:
     # See devicelink/agent.py's _handle(), which touches this on every
     # inbound message, and GameServer.reap_stale(), the only reader.
     last_seen: float = 0.0
-    # The Instrument this device physically is. Every hello'd device is a
-    # standard Tuneshroom today; this field is the seam for future kinds
-    # (a fixed default rather than a per-hello parameter, since nothing yet
-    # negotiates instrument kind at hello time).
-    carried: Instrument = field(default=TUNESHROOM)
+    # The Instrument this device physically is. DEFAULTSHROOM is the
+    # ecosystem floor -- what an undeclared/unrecognized device carries
+    # until hello resolves a real instrument name (GameServer.hello, see
+    # control/engine.py). 2026-08-31 carried-instrument-wire: this default
+    # used to be TUNESHROOM; that is now the resolved value only for a
+    # device that actually declares "tuneshroom" at hello.
+    carried: Instrument = field(default=DEFAULTSHROOM)
 
 
 class DevicePool:
@@ -37,9 +39,25 @@ class DevicePool:
         self._devices: dict[str, DeviceInfo] = {}
 
     def hello(self, dev: str, name: str, protoversion: str,
-             now: float = 0.0) -> DeviceInfo:
-        info = DeviceInfo(dev=dev, name=name, protoversion=protoversion,
-                          last_seen=now)
+             now: float = 0.0, carried: Instrument | None = None) -> DeviceInfo:
+        """Register (or heartbeat) `dev`. `carried` is the resolved
+        Instrument this hello declares, or None when the caller has
+        nothing new to say about it (GameServer.hello passes None both for
+        an actually-undeclared hello and for o2_shroom's liveness
+        re-hello). The heartbeat rule: on an ALREADY-KNOWN dev, carried=
+        None preserves that entry's existing carried instrument rather
+        than resetting it -- a re-hello is proof of life, not a fresh
+        declaration. On an unknown dev, carried=None falls back to
+        DeviceInfo's own default (DEFAULTSHROOM)."""
+        existing = self._devices.get(dev)
+        if carried is None and existing is not None:
+            carried = existing.carried
+        if carried is None:
+            info = DeviceInfo(dev=dev, name=name, protoversion=protoversion,
+                              last_seen=now)
+        else:
+            info = DeviceInfo(dev=dev, name=name, protoversion=protoversion,
+                              last_seen=now, carried=carried)
         self._devices[dev] = info
         return info
 

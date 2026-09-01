@@ -1,5 +1,6 @@
 description = "Handheld 12-LED Tuneshroom (8-ring + 4-stem)"
-capabilities = ["light.pixels", "audio.samples", "gesture.tap", "gesture.tilt"]
+pixels = 12
+capabilities = ["light.pixels", "audio.samples", "audio.mic", "gesture.tap", "gesture.tilt"]
 accepted_cues = ["midi", "play", "solid", "mute"]
 
 [[event_triggers]]

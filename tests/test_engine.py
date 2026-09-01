@@ -5,6 +5,8 @@ import pytest
 from bits.test.test_bit import TestBit
 from control.bit import Bit
 from control.engine import BitLoadError, GameServer, InvalidTransition
+from control.function_view import function_view
+from control.instrument import DEFAULTSHROOM, Instrument, TUNESHROOM
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
@@ -471,6 +473,14 @@ def test_granted_join_carries_composed_config_blob():
             "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
             "shake": {"peak_g": 2.0, "window_ms": 200},
         },
+        "instrument": {
+            "name": "tuneshroom",
+            "capabilities": sorted(TUNESHROOM.capabilities),
+            "pixels": 12,
+            "ambient": {"light": TUNESHROOM.light_manifest,
+                        "ugen": TUNESHROOM.ugen_manifest},
+            "functions": [function_view(f) for f in TUNESHROOM.functions],
+        },
     }
 
 
@@ -763,3 +773,159 @@ def test_reap_stale_on_release_exception_does_not_stop_the_rest():
     assert sorted(reaped) == ["ie1", "ie2"]
     assert gs.devices.known("ie1") is False
     assert gs.devices.known("ie2") is False
+
+
+# --- Task 2: hello resolves the carried instrument -------------------------
+
+
+def test_hello_default_carried_is_defaultshroom():
+    server = GameServer({})
+    server.hello("ie1", "Shroom One", "1")
+    assert server.devices.get("ie1").carried is DEFAULTSHROOM
+
+
+def test_hello_resolves_a_config_declared_instrument_name():
+    glowharp = Instrument(name="glowharp",
+                           capabilities=frozenset({"light.pixels"}))
+    server = GameServer({}, carried_instruments={"glowharp": glowharp})
+    server.hello("ie1", "Shroom One", "1", instrument="glowharp")
+    assert server.devices.get("ie1").carried is glowharp
+
+
+def test_hello_resolves_the_tuneshroom_constant_by_name():
+    server = GameServer({})
+    server.hello("ie1", "Shroom One", "1", instrument="tuneshroom")
+    assert server.devices.get("ie1").carried is TUNESHROOM
+
+
+def test_hello_with_unknown_instrument_name_falls_back_to_defaultshroom_and_warns():
+    warnings = []
+
+    class Obs:
+        def on_device_warning(self, message):
+            warnings.append(message)
+
+    server = GameServer({})
+    server.add_observer(Obs())
+    server.hello("ie1", "Shroom One", "1", instrument="nope")
+    assert server.devices.get("ie1").carried is DEFAULTSHROOM
+    assert len(warnings) == 1
+    assert "ie1" in warnings[0]
+    assert "nope" in warnings[0]
+    assert "defaultshroom" in warnings[0]
+
+
+def test_hello_heartbeat_with_no_instrument_preserves_carried():
+    glowharp = Instrument(name="glowharp",
+                           capabilities=frozenset({"light.pixels"}))
+    server = GameServer({}, carried_instruments={"glowharp": glowharp})
+    server.hello("ie1", "Shroom One", "1", instrument="glowharp")
+    server.hello("ie1", "Shroom One", "1.1")   # heartbeat re-hello
+    assert server.devices.get("ie1").carried is glowharp
+
+
+def test_carried_instruments_merges_defaults_with_config_catalog():
+    glowharp = Instrument(name="glowharp",
+                           capabilities=frozenset({"light.pixels"}))
+    server = GameServer({}, carried_instruments={"glowharp": glowharp})
+    assert server.carried_instruments["tuneshroom"] is TUNESHROOM
+    assert server.carried_instruments["defaultshroom"] is DEFAULTSHROOM
+    assert server.carried_instruments["glowharp"] is glowharp
+
+
+# --- warning dedup: unknown/non-carriable declared name --------------------
+
+
+class _Observer:
+    def __init__(self):
+        self.warnings = []
+
+    def on_device_warning(self, message):
+        self.warnings.append(message)
+
+
+def test_hello_repeated_same_unknown_name_warns_once():
+    server = GameServer({})
+    obs = _Observer()
+    server.add_observer(obs)
+    server.hello("ie1", "Shroom One", "1", instrument="nope")
+    server.hello("ie1", "Shroom One", "1.1", instrument="nope")
+    server.hello("ie1", "Shroom One", "1.2", instrument="nope")
+    assert len(obs.warnings) == 1
+
+
+def test_hello_different_unknown_name_warns_again():
+    server = GameServer({})
+    obs = _Observer()
+    server.add_observer(obs)
+    server.hello("ie1", "Shroom One", "1", instrument="nope")
+    server.hello("ie1", "Shroom One", "1.1", instrument="other-nope")
+    assert len(obs.warnings) == 2
+
+
+def test_hello_unknown_then_resolved_then_same_unknown_warns_again():
+    # Simulate a catalog entry that starts absent (unresolved -- warns),
+    # gets added (resolves -- clears the dedup entry), then disappears
+    # again (regresses to the same unresolved name -- must warn again).
+    server = GameServer({})
+    obs = _Observer()
+    server.add_observer(obs)
+    server.hello("ie1", "Shroom One", "1", instrument="nope")
+    assert len(obs.warnings) == 1
+    server.carried_instruments["nope"] = Instrument(
+        name="nope", capabilities=frozenset({"light.pixels"}))
+    server.hello("ie1", "Shroom One", "1.1", instrument="nope")
+    assert server.devices.get("ie1").carried.name == "nope"
+    del server.carried_instruments["nope"]
+    server.hello("ie1", "Shroom One", "1.2", instrument="nope")
+    assert len(obs.warnings) == 2
+
+
+def test_reap_stale_clears_warned_instrument_dedup_for_removed_dev():
+    server = GameServer({})
+    obs = _Observer()
+    server.add_observer(obs)
+    server.hello("ie1", "Shroom One", "1", instrument="nope")
+    assert len(obs.warnings) == 1
+    server.reap_stale(timeout=0.0)
+    server.hello("ie1", "Shroom One", "1.1", instrument="nope")
+    assert len(obs.warnings) == 2
+
+
+# --- non-carriable resolved instrument (Finding 2) --------------------------
+
+
+def test_hello_with_fixture_only_instrument_falls_back_to_defaultshroom_and_warns():
+    venue_array = Instrument(name="venue_array",
+                              capabilities=frozenset({"light.surface"}))
+    server = GameServer({}, carried_instruments={"venue_array": venue_array})
+    obs = _Observer()
+    server.add_observer(obs)
+    server.hello("ie1", "Shroom One", "1", instrument="venue_array")
+    assert server.devices.get("ie1").carried is DEFAULTSHROOM
+    assert len(obs.warnings) == 1
+    assert "ie1" in obs.warnings[0]
+    assert "venue_array" in obs.warnings[0]
+    assert "defaultshroom" in obs.warnings[0]
+
+
+def test_hello_with_fixture_only_instrument_warns_once_across_heartbeats():
+    venue_array = Instrument(name="venue_array",
+                              capabilities=frozenset({"light.surface"}))
+    server = GameServer({}, carried_instruments={"venue_array": venue_array})
+    obs = _Observer()
+    server.add_observer(obs)
+    server.hello("ie1", "Shroom One", "1", instrument="venue_array")
+    server.hello("ie1", "Shroom One", "1.1", instrument="venue_array")
+    assert len(obs.warnings) == 1
+
+
+def test_hello_with_pixels_config_instrument_still_resolves():
+    glowharp = Instrument(name="glowharp",
+                           capabilities=frozenset({"light.pixels"}))
+    server = GameServer({}, carried_instruments={"glowharp": glowharp})
+    obs = _Observer()
+    server.add_observer(obs)
+    server.hello("ie1", "Shroom One", "1", instrument="glowharp")
+    assert server.devices.get("ie1").carried is glowharp
+    assert obs.warnings == []

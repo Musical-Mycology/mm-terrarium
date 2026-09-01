@@ -1,4 +1,5 @@
 from control.device_pool import DevicePool
+from control.instrument import DEFAULTSHROOM, Instrument
 
 
 def test_hello_registers_a_device():
@@ -99,3 +100,34 @@ def test_clear_drops_every_known_device():
     assert len(pool) == 0
     assert pool.known("ie1") is False
     assert pool.known("ie2") is False
+
+
+def test_hello_default_carried_is_defaultshroom():
+    pool = DevicePool()
+    info = pool.hello("ie1", "Shroom One", "1")
+    assert info.carried is DEFAULTSHROOM
+
+
+def test_hello_stores_a_passed_carried_instrument():
+    pool = DevicePool()
+    glowharp = Instrument(name="glowharp")
+    info = pool.hello("ie1", "Shroom One", "1", carried=glowharp)
+    assert info.carried is glowharp
+
+
+def test_hello_with_carried_none_on_an_unknown_dev_uses_defaultshroom():
+    pool = DevicePool()
+    info = pool.hello("ie1", "Shroom One", "1", carried=None)
+    assert info.carried is DEFAULTSHROOM
+
+
+def test_hello_with_carried_none_on_a_known_dev_preserves_carried():
+    """The heartbeat rule: a re-hello with no declared instrument (e.g.
+    o2_shroom's liveness re-hello) must not reset an already-declared
+    carried instrument back to the default."""
+    pool = DevicePool()
+    glowharp = Instrument(name="glowharp")
+    pool.hello("ie1", "Shroom One", "1", carried=glowharp)
+    info = pool.hello("ie1", "Shroom One", "1.1", carried=None)
+    assert info.carried is glowharp
+    assert info.protoversion == "1.1"

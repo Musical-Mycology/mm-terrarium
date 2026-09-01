@@ -8,6 +8,7 @@ from control.terrarium_config import TerrariumConfigError
 
 GOOD = '''
 description = "a test instrument"
+pixels = 12
 capabilities = ["light.pixels"]
 accepted_cues = ["midi"]
 '''
@@ -144,3 +145,9 @@ def test_publish_refuses_an_invalid_draft_in_place(tmp_path):
     assert reason is not None and "nope" in reason
     assert (root / "drafts" / "wip.toml").exists()
     assert not (root / "wip.toml").exists()
+
+
+def test_shipped_defaultshroom_catalog_file_matches_the_code_constant():
+    from control.instrument import DEFAULTSHROOM
+    cat = load_catalog(Path("instruments"))
+    assert cat.published["defaultshroom"] == DEFAULTSHROOM

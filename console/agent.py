@@ -713,6 +713,15 @@ class ConsoleAgent:
         for warning in warnings:
             self.server.broadcast(protocol.log_event("warn", warning))
 
+    def on_device_warning(self, message: str) -> None:
+        """Engine observer hook (control/engine.py's hello): a device
+        declared an instrument name the install's carried_instruments
+        doesn't know, and hello fell back to defaultshroom. Mirrors
+        on_load_warnings' mechanism exactly -- same `log` wire event, same
+        "warn" level -- rather than a new event kind, since this is the
+        same kind of operator-facing diagnostic."""
+        self.server.broadcast(protocol.log_event("warn", message))
+
     def announce_round_ended(self, bit_name: str, reason: str) -> None:
         """Broadcast a round's outcome into the console event log. Driven
         by the harness round loop (the only place that knows why a round

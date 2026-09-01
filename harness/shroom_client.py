@@ -88,10 +88,18 @@ class ShroomClient:
     def __init__(self, dev: str, node: str, leds=None,
                  on_role: Callable[[dict], None] | None = None,
                  on_play: Callable[[str, str], None] | None = None,
-                 expected_channels: int = LED_CHANNELS) -> None:
+                 expected_channels: int = LED_CHANNELS,
+                 instrument: str | None = None) -> None:
         self.dev = dev
         self.node = node
         self.leds = leds
+        # The carried instrument this client declares on hello(), read by
+        # devicelink/agent.py's _on_hello at args[3]. None (the default)
+        # keeps hello() at its old 1-arg shape, byte-identical for every
+        # existing caller; an undeclared device resolves to
+        # "defaultshroom" on the agent side. See harness/o2_shroom.py's
+        # --instrument for the CLI-threaded case.
+        self.instrument = instrument
         self.on_role = on_role
         # /<dev>/play sink, called (name, params) per PlayCue. Optional so
         # every existing caller is unchanged; a raising sink is logged and
@@ -138,7 +146,16 @@ class ShroomClient:
                               typespec=typespec, args=args))
 
     def hello(self) -> dict:
-        return self._up("hello", "s", [self.dev])
+        """/game/hello. When this client declares an instrument, the
+        shape grows to "ssss" [dev, "", "", instrument] -- name and
+        protoversion are left blank (this client has no use for them),
+        just enough arity to land the instrument at args[3] where
+        devicelink/agent.py's _on_hello reads it. Undeclared clients keep
+        the original "s" [dev] shape byte-identical, so nothing changes
+        for a caller that never opted in."""
+        if self.instrument is None:
+            return self._up("hello", "s", [self.dev])
+        return self._up("hello", "ssss", [self.dev, "", "", self.instrument])
 
     def canvas(self, url: str) -> dict:
         """Report the URL of this device's own browser canvas, sent once
@@ -340,9 +357,14 @@ def main() -> None:
     parser.add_argument("--dev", default="ie1")
     parser.add_argument("--node", default="node-a")
     parser.add_argument("--sensor-hz", type=float, default=20.0)
+    parser.add_argument("--instrument", default=None,
+                        help="Declare this device's carried instrument on "
+                             "hello (e.g. tuneshroom). Omit to stay "
+                             "undeclared, resolving to defaultshroom.")
     args = parser.parse_args()
 
-    client = ShroomClient(args.dev, args.node, leds=ShroomLEDs())
+    client = ShroomClient(args.dev, args.node, leds=ShroomLEDs(),
+                          instrument=args.instrument)
     sensor = open_sensor()
     interval = 1.0 / args.sensor_hz
 

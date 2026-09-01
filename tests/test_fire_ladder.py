@@ -86,9 +86,11 @@ def test_load_warnings_report_target_aware_gaps():
 
 def test_no_room_no_bit_fires_carried_default_instrument():
     # No Bit, no Room -- firing at a connected device that carries the
-    # TUNESHROOM default (light+samples) resolves the builtin "flash"
-    # entirely off the device pool fallback, emitting the PlayCue+SolidCue
-    # pair TUNESHROOM's flash builtin produces.
+    # DEFAULTSHROOM default (2026-08-31 carried-instrument-wire: light +
+    # gesture only, no audio.samples) resolves the builtin "flash" entirely
+    # off the device pool fallback, emitting the SolidCue DEFAULTSHROOM's
+    # flash builtin produces (no chime PlayCue -- DEFAULTSHROOM has no
+    # audio.samples capability).
     gs = GameServer({})
     gs.hello("dev1", "some-device", "1")
     plays = []
@@ -97,7 +99,7 @@ def test_no_room_no_bit_fires_carried_default_instrument():
     gs.on_solid_cue = lambda dev, rgb, level, duration, when: solids.append(dev)
     assert gs.fire_function("flash", fired_by=FIRED_BY_ADMIN_MANUAL,
                             dev="dev1") is None
-    assert plays == [("dev1", "chime")]
+    assert plays == []
     assert solids == ["dev1"]
 
 
@@ -124,8 +126,9 @@ def test_testbit_declared_stop_shadows_builtin_of_the_same_name():
 def test_testbit_undeclared_flash_falls_through_to_builtin():
     # "flash" is not declared by TestBit at all, so even with TestBit
     # loaded and RUNNING the undeclared name falls through the ladder to
-    # the device's carried default instrument's builtin -- TUNESHROOM's
-    # flash (PlayCue chime + SolidCue white), same as the no-Bit case.
+    # the device's carried default instrument's builtin -- DEFAULTSHROOM's
+    # flash (SolidCue white, no chime PlayCue -- 2026-08-31 carried-
+    # instrument-wire), same as the no-Bit case.
     gs = GameServer({"TestBit": TestBit})
     gs.load_bit("TestBit")
     gs.run()
@@ -140,7 +143,7 @@ def test_testbit_undeclared_flash_falls_through_to_builtin():
     gs.add_observer(Obs())
     assert gs.fire_function("flash", fired_by=FIRED_BY_ADMIN_MANUAL,
                             dev="dev1") is None
-    assert plays == [("dev1", "chime")]
+    assert plays == []
     assert solids == ["dev1"]
     assert fired[-1].condition == "builtin"
 

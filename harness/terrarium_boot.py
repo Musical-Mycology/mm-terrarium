@@ -265,7 +265,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
             version="terrarium-boot")
 
     gs = GameServer(bit_registry, room_binding=room_binding,
-                    cue_horizon=config.cue_horizon, clock=clock)
+                    cue_horizon=config.cue_horizon, clock=clock,
+                    carried_instruments=terrarium_config.instruments)
     terrarium = Terrarium(
         terrarium_config, gs, room_binding, boot_config=config,
         arco_command=arco_command, arco_process_cls=arco_process_cls,

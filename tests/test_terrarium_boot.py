@@ -312,6 +312,32 @@ def test_build_passes_the_configured_horizon_to_the_agent():
         shutdown(teardown, terrarium)
 
 
+def test_build_threads_terrarium_config_instruments_into_the_game_server():
+    """A loaded TerrariumConfig's [instruments.*] must reach GameServer's
+    carried_instruments -- otherwise a device's hello can never resolve a
+    config-defined instrument name."""
+    from control.instrument import Instrument
+    from control.terrarium_config import TerrariumConfig
+
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    venue_array = Instrument(name="venue_array")
+    terrarium_config = TerrariumConfig(
+        schema=1, name="terrarium-boot", bit_paths=(),
+        rooms={TEST_SPEC.name: TEST_SPEC},
+        version="terrarium-boot",
+        instruments={"venue_array": venue_array})
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit},
+        arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC, terrarium_config=terrarium_config,
+        host="127.0.0.1", port=0, arco_process_cls=_fake_arco,
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio())
+    try:
+        assert "venue_array" in gs.carried_instruments
+    finally:
+        shutdown(teardown, terrarium)
+
+
 def test_build_can_run_the_agent_on_the_o2lite_transport():
     """The whole point of the slice: device traffic crosses the Arco hub.
     A FakeO2Lite stands in for the connection pyarco owns, so this asserts

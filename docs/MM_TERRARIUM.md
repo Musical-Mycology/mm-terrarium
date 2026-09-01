@@ -2476,7 +2476,11 @@ and its plan
   2026-08-31: `TUNESHROOM` still exists as a code constant, but it is no
   longer the only instrument -- `instruments/tuneshroom.toml`, a published
   catalog entry, is pinned equal to it by test. See the *Instrument catalog
-  and Design panel* entry below.)**
+  and Design panel* entry below. The "every hello'ing device is presumed
+  TUNESHROOM" default is itself superseded, same day, by the
+  carried-instrument wire: `DeviceInfo.carried` now defaults to
+  `DEFAULTSHROOM`, and a device declares a real name on hello or falls to
+  that floor. See the *Carried-instrument wire* entry below.)**
 - **A Fixture is an Instrument plus placement and binding.**
   `RoomFixture.instrument` is now a required field -- a fixture with no
   instrument is not a representable thing. `terrarium.toml` gains
@@ -2817,7 +2821,8 @@ end-to-end pass exercising the ladder's rung 1 against a real Arco stack.
 ### `control/catalog.py`, `control/terrarium_config.py` instrument_paths, `console/static/design.js` -- instrument catalog and Design panel v1 (2026-08-31)
 
 Slices 1-2 of the plan below; slice 3 (carried-instrument wire support) is
-unplanned. Design:
+unplanned. **(Superseded 2026-08-31: slice 3 landed same-day, in its own
+spec and plan. See the *Carried-instrument wire* entry below.)** Design:
 [`.../2026-08-31-design-panel-and-instrument-catalog-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-design-panel-and-instrument-catalog-design.md);
 its Status section records what shipped against what stays Plan 2.
 
@@ -2895,6 +2900,10 @@ its Status section records what shipped against what stays Plan 2.
   (spec sections 4, 5, 6). **Unplanned:** carried-instrument wire support
   (spec section 2, slice 3) -- hello still has no instrument name, and
   `DeviceInfo.carried` still defaults to `TUNESHROOM` unconditionally.
+  **(Superseded 2026-08-31: this slice landed. `DeviceInfo.carried`
+  defaults to `DEFAULTSHROOM`, not `TUNESHROOM`; hello's optional 4th
+  argument declares the carried instrument. See the *Carried-instrument
+  wire* entry below.)**
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **1699 passed, 1 skipped** (up from 1669 passed, 1 skipped).
@@ -3158,6 +3167,89 @@ raw-TOML-only.
   exists -- all three stay raw-TOML edits; the forms only ever edit fields
   of an *existing* block. Each residue is rendered as a muted UI hint next
   to the relevant section rather than left silently unsupported.
+
+### `control/instrument.py` `DEFAULTSHROOM`, hello's 4th argument, the `"instrument"` blob section -- carried-instrument wire (2026-08-31)
+
+Slice 3 of the Design panel arc, the trailing slice named unplanned in the
+*Instrument catalog and Design panel* entry above. Design:
+[`.../2026-08-31-carried-instrument-wire-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-carried-instrument-wire-design.md);
+contract doc: [`docs/carried-instrument-schema.md`](carried-instrument-schema.md).
+
+- **`DEFAULTSHROOM`** (`control/instrument.py`, sibling constant to
+  `TUNESHROOM`) is the ecosystem floor: `"defaultshroom"`, 12 pixels,
+  `{light.pixels, gesture.tap, gesture.tilt}`, all four `accepted_cues`,
+  TUNESHROOM's guessed tap/shake thresholds (same provenance caveat), and a
+  minimal dim-aurora ambient light manifest so an idle unrecognized device
+  is visibly alive rather than dark. Shipped as
+  `instruments/defaultshroom.toml`, pinned equal to the constant by test,
+  the same pattern `instruments/tuneshroom.toml` already follows.
+- **`audio.mic` joins `CAPABILITY_VOCABULARY`.** `TUNESHROOM` gains
+  `pixels = 12` and `audio.mic` (the capability the capture path's mic
+  recording already relies on); `instruments/tuneshroom.toml` updated to
+  stay pinned-equal.
+- **The 12-LED floor is enforced once, at publish/load, never on a
+  device.** `Instrument.pixels` (int, 0 = undeclared) is required whenever
+  `light.pixels` is declared; `validate_instrument` refuses
+  `pixels < 12` for such an instrument. An instrument with no
+  `light.pixels` (e.g. `venue_array`, a fixed surface) is exempt.
+- **`/game/hello` gains an optional 4th argument, the declared instrument
+  name.** Both transports tolerate its absence: the websocket agent
+  (`devicelink/agent.py`'s `_on_hello`) already indexes `args` defensively;
+  o2lite's typespec match-any registration accepts both the old `"s"`/
+  `"sss"` shapes and the new `"ssss"`. `GameServer.hello(dev, name,
+  protoversion, instrument=None)` resolves a declared name against
+  `self.carried_instruments`; an unknown name falls to `DEFAULTSHROOM` and
+  fires `on_device_warning` (logged as a `warn` `log_event` naming the
+  device and the unresolved name); an absent name falls to `DEFAULTSHROOM`
+  silently -- the new documented legacy meaning.
+- **The heartbeat preservation rule.** `DevicePool.hello` receives
+  `carried=None` both for a genuinely undeclared hello and for a liveness
+  re-hello with nothing new to say. On an already-known dev, `carried=None`
+  preserves the existing carried instrument rather than resetting it to
+  the floor -- a re-hello is proof of life, not a fresh declaration. Only
+  an unknown dev with `carried=None` falls to `DeviceInfo`'s own
+  `DEFAULTSHROOM` default.
+- **Breaking change: the carried default flips from `TUNESHROOM` to
+  `DEFAULTSHROOM`.** Before this slice, every hello'ing device was
+  presumed a Tuneshroom with no wire vocabulary to say otherwise. A real
+  Tuneshroom that has not been updated to declare `"tuneshroom"` on hello
+  still joins (both instruments share `light.pixels`/`gesture.tap`/
+  `gesture.tilt` at 12 pixels) but silently loses `audio.mic`,
+  `audio.samples`, and every Tuneshroom-specific scripted Function.
+  **mm-tuneshroom must ship its name declaration before this reaches a
+  real room or real hardware** -- recorded in
+  `docs/carried-instrument-schema.md`'s compatibility section and as a
+  cross-repo follow-up spawned at closeout, not fixed in this repo.
+- **Blob: the composed `/ie<N>/role` config gains `"instrument"`**
+  (`control/role_config.py`'s `compose_role_config`, `carried` keyword),
+  shipped for every granted non-ROOM join: `{name, capabilities (sorted),
+  pixels, ambient (light/ugen manifests), functions (function_view's wire
+  shape)}`, deep-copied so a generic host's rendering can never alias the
+  server's `Instrument`. This supersedes the pre-existing `instrument`
+  keyword's flat-string stamp for any caller that also passes `carried`
+  -- every granted non-ROOM join does today, so the dict's own `"name"`
+  field is the sole surviving form of the old flat-string value. ROOM
+  joins ship nothing, matching the `"triggers"` key's existing rule.
+  `devicelink/protocol.py`'s `role_event` docstring updated to describe
+  the dict shape, not the retired flat string.
+- **Harness support.** `harness/shroom_client.py`'s `ShroomClient` and
+  `harness/o2_shroom.py` both gain an `instrument` constructor
+  parameter/`--instrument` CLI flag; a declared client's hello grows to
+  `"ssss" [dev, "", "", name]`, and o2lite's periodic liveness re-hello
+  re-sends the same declaration. Round-trip tests over both transports
+  prove a declared `tuneshroom` and `defaultshroom` blob resolve
+  correctly, and that an undeclared Testshroom lands on `defaultshroom`.
+- **Console**: the device-view row (`console/protocol.py`) already carried
+  `"instrument": info.carried.name` from the earlier instrument-catalog
+  work; that field now reflects the wire-declared name instead of an
+  always-`TUNESHROOM` value.
+- **Not this slice:** the mm-tuneshroom Dart client's own hello
+  declaration (spawned as its own cross-repo task at closeout), device-side
+  rendering of the shipped ambient manifest, audio format negotiation
+  beyond capability tags, and per-device pixel-count overrides.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1871 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 
