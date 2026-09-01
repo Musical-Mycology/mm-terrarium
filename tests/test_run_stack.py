@@ -336,8 +336,9 @@ def test_device_command_uses_the_configs_node_verbatim(tmp_path):
     assert command[command.index("--node") + 1] == "SOME_OTHER_NODE"
 
 
-def test_device_command_omits_persist_by_default(tmp_path):
-    command = device_command(_cfg(tmp_path, node="TEST_PLAYER_NODE"), 1, 99)
+def test_device_command_omits_persist_when_opted_out(tmp_path):
+    command = device_command(
+        _cfg(tmp_path, node="TEST_PLAYER_NODE", persist_shrooms=False), 1, 99)
 
     assert "--persist" not in command
 
@@ -347,6 +348,27 @@ def test_device_command_forwards_persist_shrooms(tmp_path):
         _cfg(tmp_path, node="TEST_PLAYER_NODE", persist_shrooms=True), 1, 99)
 
     assert "--persist" in command
+
+
+def test_persist_is_the_default_and_opt_out_works():
+    from harness.run_stack import parse_args
+    assert parse_args([]).persist_shrooms is True
+    assert parse_args(["--no-persist-shrooms"]).persist_shrooms is False
+
+
+def test_device_command_forwards_persist_by_default(tmp_path):
+    from harness.run_stack import StackConfig, device_command
+    cfg = StackConfig(log_dir=str(tmp_path))
+    cmd = device_command(cfg, 1, 123)
+    assert "--persist" in cmd
+
+
+def test_no_round_respawn_machinery_remains():
+    import harness.run_stack as rs
+    import inspect
+    src = inspect.getsource(rs)
+    assert "spawn_round_devices" not in src
+    assert "-r{" not in src and "ie1-r2" not in src
 
 
 def test_more_than_one_device_gets_distinct_dev_names(tmp_path):
@@ -1029,177 +1051,6 @@ def test_one_shot_mode_still_fails_on_a_clean_device_exit(tmp_path):
                  clock=lambda: next(ticks), sleep=lambda _s: None)
     assert dead == ("ie1", 0)
 
-
-# --- per-round device respawn (task 3) --------------------------------
-
-
-def test_hold_calls_on_round_once_per_tick_when_given(tmp_path):
-    """_hold's new on_round hook: called once per tick of BOTH loops, and
-    entirely opt-in -- passing nothing (the existing tests above) leaves
-    behavior unchanged."""
-    calls = []
-    ticks = iter([0.0, 0.0, 0.0, 10.0])
-    dead = _hold(_serve_cfg(tmp_path, serve=True),
-                 {"control": _Proc(None)},
-                 clock=lambda: next(ticks), sleep=lambda _s: None,
-                 on_round=lambda: calls.append(1))
-    assert dead is None
-    assert len(calls) >= 1
-
-
-def test_hold_seconds_none_loop_also_calls_on_round(tmp_path):
-    """The `cfg.seconds is None` branch is a second, separate loop in
-    _hold -- on_round must fire there too, not just in the deadline
-    branch."""
-    calls = []
-
-    def fake_sleep(_s):
-        # Kill the child on the second tick so the "hold forever" loop
-        # actually returns instead of spinning.
-        if len(calls) >= 1:
-            children["control"].code = 0
-
-    children = {"control": _Proc(None)}
-    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
-                      echo=False, serve=True, seconds=None)
-    dead = _hold(cfg, children,
-                 clock=lambda: 0.0, sleep=fake_sleep,
-                 on_round=lambda: calls.append(1))
-    assert dead == ("control", 0)
-    assert len(calls) >= 1
-
-
-class _FakeRegistry:
-    """A BitRegistry double with just enough surface for on_round's
-    resolution: `.packages` (a Mapping tested with `in`) and
-    `.resolve_config(name)` returning a real BitConfig, exactly like the
-    real BitRegistry's own resolve_config."""
-
-    def __init__(self, configs: dict) -> None:
-        self.packages = configs
-        self._configs = configs
-
-    def resolve_config(self, name, overrides=None):
-        return self._configs[name]
-
-
-def _metronome_bit_config():
-    from control.bit_config import (BitConfig, BitIdentity, ConsoleBlock,
-                                    LaunchConfig, StartCondition)
-
-    return BitConfig(
-        identity=BitIdentity(name="MetronomeBit"),
-        launch=LaunchConfig(default_devices=2,
-                            nodes=(("player", "METRO_PLAYER_NODE"),),
-                            default_join_role="player"),
-        start=StartCondition(), console=ConsoleBlock())
-
-
-def _round_loaded_line(bit_name: str) -> str:
-    return f"{markers.CONTROL_ROUND_LOADED} {bit_name}\n"
-
-
-def _serve_run(tmp_path, control_script, *, registry, device_scripts=(),
-               **cfg_kwargs):
-    popen = ScriptedPopen([control_script, *device_scripts])
-    ticks = iter([0.0] * 20 + [1_000_000.0 * (i + 1) for i in range(30)])
-    cfg_kwargs.setdefault("devices", 0)
-    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
-                      echo=False, serve=True, seconds=1.0,
-                      **cfg_kwargs)
-    result = run(cfg, popen=popen, clock=lambda: next(ticks),
-                 sleep=time.sleep, registry=registry)
-    return result, popen
-
-
-def test_first_round_loaded_line_is_skipped_second_one_respawns(tmp_path):
-    """Round 1's devices were already spawned by the launch path (skipped
-    here via devices=0 to isolate the respawn path), so the FIRST
-    CONTROL_ROUND_LOADED line -- round 1 announcing itself -- must not
-    spawn anything. The second (round 2) must."""
-    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
-    script = (_CONTROL_OK + _round_loaded_line("MetronomeBit")
-             + _round_loaded_line("MetronomeBit"))
-    result, popen = _serve_run(tmp_path, script, registry=registry,
-                               bit="MetronomeBit", node="METRO_PLAYER_NODE")
-
-    dev_names = {cmd[cmd.index("--dev") + 1] for cmd in popen.commands
-                if "--dev" in cmd}
-    assert dev_names == {"ie1-r2", "ie2-r2"}
-
-
-def test_manifest_resolution_spawns_the_bits_default_device_count(tmp_path):
-    """MetronomeBit -> METRO_PLAYER_NODE, 2 children named ie1-r2/ie2-r2,
-    resolved from the just-loaded bit's own manifest -- not cfg.node or
-    cfg.devices, neither of which was given explicitly here."""
-    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
-    script = (_CONTROL_OK + _round_loaded_line("MetronomeBit")
-             + _round_loaded_line("MetronomeBit"))
-    result, popen = _serve_run(tmp_path, script, registry=registry,
-                               bit="MetronomeBit", node="METRO_PLAYER_NODE")
-
-    respawned = [cmd for cmd in popen.commands if "ie1-r2" in cmd
-                or "ie2-r2" in cmd]
-    assert len(respawned) == 2
-    for cmd in respawned:
-        assert cmd[cmd.index("--node") + 1] == "METRO_PLAYER_NODE"
-
-
-def test_explicit_node_and_devices_override_the_manifest(tmp_path):
-    """--node/--devices given explicitly on the CLI must win over whatever
-    the freshly-loaded bit's own manifest says -- node_explicit/
-    devices_explicit are what StackConfig carries to tell the two cases
-    apart."""
-    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
-    script = (_CONTROL_OK + _round_loaded_line("MetronomeBit")
-             + _round_loaded_line("MetronomeBit"))
-    result, popen = _serve_run(
-        tmp_path, script, registry=registry, bit="MetronomeBit",
-        node="OVERRIDE_NODE", node_explicit=True,
-        devices=3, devices_explicit=True,
-        device_scripts=[_DEVICE_OK, _DEVICE_OK, _DEVICE_OK])
-
-    dev_names = {cmd[cmd.index("--dev") + 1] for cmd in popen.commands
-                if "--dev" in cmd}
-    round2 = {name for name in dev_names if name.endswith("-r2")}
-    assert round2 == {"ie1-r2", "ie2-r2", "ie3-r2"}
-    for cmd in popen.commands:
-        if "--dev" in cmd and cmd[cmd.index("--dev") + 1].endswith("-r2"):
-            assert cmd[cmd.index("--node") + 1] == "OVERRIDE_NODE"
-
-
-def test_unknown_bit_on_round_load_warns_and_spawns_nothing(tmp_path, capsys):
-    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
-    script = (_CONTROL_OK + _round_loaded_line("NoSuchBit")
-             + _round_loaded_line("NoSuchBit"))
-    result, popen = _serve_run(tmp_path, script, registry=registry,
-                               bit="MetronomeBit", node="METRO_PLAYER_NODE")
-
-    respawned = [cmd for cmd in popen.commands if "-r2" in " ".join(cmd)]
-    assert respawned == []
-    err = capsys.readouterr().err
-    assert "NoSuchBit" in err
-
-
-def test_url_collection_still_works_alongside_round_load_detection(tmp_path):
-    """The control tee's on_line callback is now a fan-out of collect_url
-    and the round-load detector -- adding the second must not break the
-    first."""
-    registry = _FakeRegistry({"MetronomeBit": _metronome_bit_config()})
-    script = (_CONTROL_OK + f"{markers.BROWSE_URL} http://localhost:1234/x\n"
-             + _round_loaded_line("MetronomeBit"))
-    result, popen = _serve_run(tmp_path, script, registry=registry,
-                               bit="MetronomeBit", node="METRO_PLAYER_NODE")
-
-    assert "http://localhost:1234/x" in result.urls
-
-
-def test_dead_child_tolerates_a_respawned_devices_clean_exit_in_serve_mode():
-    """_dead_child's tolerate-clean-devices rule is keyed on the name not
-    being "control" -- a round-2 respawn named ie1-r2 is exactly as
-    tolerated as round 1's ie1."""
-    children = {"control": _Proc(None), "ie1-r2": _Proc(0)}
-    assert _dead_child(children, tolerate_clean_devices=True) is None
 
 def test_flutter_sim_is_spawned_after_control_with_serve_args(tmp_path):
     popen = ScriptedPopen(
