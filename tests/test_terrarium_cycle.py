@@ -172,7 +172,8 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     assert not [m for _c, m in srv.sent if m.get("event") == "error"]
     first_arco = terrarium.arco
     assert isinstance(first_arco, FakeArco)
-    # TEST's fixtures are dev_strip, which declares no ambient -- no Bit,
+    # TEST's fixtures are dev_strip_main/dev_strip_accent, which declare no
+    # ambient -- no Bit,
     # no session, today's unchanged behavior (Task 7, spec section 6).
     assert dl_agent._room_light is None
 

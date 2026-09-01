@@ -161,7 +161,7 @@ def test_fixture_instrument_renders_declared_generator_functions():
 
 def test_fixture_instrument_renders_declared_scripted_functions():
     """The trigger-instrument redesign lets an instrument declare SCRIPTED
-    functions too (e.g. terrarium.toml's dev_strip play_aurora/win/...),
+    functions too (e.g. terrarium.toml's dev_strip_main play_aurora/win/...),
     not only GENERATOR ones -- _function_view must render them rather than
     reach for a `.generator` that is None."""
     from control.cues import TARGET

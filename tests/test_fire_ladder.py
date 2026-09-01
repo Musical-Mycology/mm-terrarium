@@ -1,11 +1,14 @@
+import pytest
+
 from bits.metronome.metronome_bit import MetronomeBit
 from bits.test.test_bit import TestBit
-from control.engine import GameServer
+from control.engine import BitLoadError, GameServer
 from control.cues import ROOM
 from control.functions import FIRED_BY_ADMIN_MANUAL
 from control.instrument import TUNESHROOM, Instrument
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.rooms import Room
+from control.state import State
 
 ARR = Instrument(name="arr", capabilities=frozenset({"light.surface",
                                                      "audio.flsyn"}),
@@ -21,6 +24,28 @@ def _gs_with_room():
     gs.room = Room(name="R", profile=PROFILE, node_id="N")
     gs.room.bound["main"] = "fix-dev"
     return gs
+
+
+TWO_FIXTURE_PROFILE = RoomProfile(surface_id="r2", fixtures=(
+    RoomFixture(name="main", color_order="GRB",
+                blocks=(RoomBlock("main", 0, 10),),
+                zones=(RoomZone("all", 0, 10),), instrument=ARR),
+    RoomFixture(name="accent", color_order="GRB",
+                blocks=(RoomBlock("accent", 0, 10),),
+                zones=(RoomZone("all", 0, 10),), instrument=ARR),
+))
+
+
+@pytest.fixture
+def two_fixture_gs():
+    """A bound two-fixture Room, no Bit loaded -- the minimal rig for
+    proving an explicit fixture fire is never collapsed to the canonical
+    dev, and that @all resolves per real dev."""
+    gs = GameServer({})
+    gs.room = Room(name="R2", profile=TWO_FIXTURE_PROFILE, node_id="N2")
+    gs.room.bound["main"] = "main-dev"
+    gs.room.bound["accent"] = "accent-dev"
+    return gs, "main-dev", "accent-dev"
 
 
 def test_builtin_fires_with_no_bit_in_idle():
@@ -103,24 +128,42 @@ def test_no_room_no_bit_fires_carried_default_instrument():
     assert solids == ["dev1"]
 
 
-def test_testbit_declared_stop_shadows_builtin_of_the_same_name():
-    # TestBit is NOT migrated (2026-08-31 redirect): it still declares
-    # "stop" with a non-empty script (a single MuteCue). That non-empty
-    # script is the ladder's rung 1 and shadows the reserved "stop"
-    # built-in entirely -- the FunctionFired record's condition names
-    # TestBit's own declared condition ("operator-stop"), not "builtin".
-    gs = GameServer({"TestBit": TestBit})
-    gs.load_bit("TestBit")   # load_bit lands in SETUP
-    gs.run()
-    gs.hello("dev1", "some-device", "1")
-    fired = []
-    class Obs:
-        def on_function_fired(self, record): fired.append(record)
-    gs.add_observer(Obs())
-    assert gs.fire_function("stop", fired_by=FIRED_BY_ADMIN_MANUAL,
-                            dev="dev1") is None
-    assert "dev1" in gs.muted
-    assert fired[-1].condition == "operator-stop"
+def test_a_bit_declaring_the_reserved_stop_name_is_refused_at_load():
+    # A Bit declaring "stop" can no longer shadow the reserved built-in of
+    # the same name -- validate_function_table now refuses reserved names
+    # for both owners (control/functions.py), so the load fails with a
+    # located ValueError instead of installing a rung-1 override.
+    from control.bit import Bit
+    from control.cues import TARGET, MuteCue
+    from control.functions import (Condition, ConditionSource, Function,
+                                   FunctionKind, FunctionTable, FunctionTarget,
+                                   ScriptStep)
+    from control.roles import RoleTable
+
+    class StopShadowBit(Bit):
+        version = "1"
+
+        @property
+        def role_table(self): return RoleTable(roles={}, node_map={})
+
+        @property
+        def function_table(self):
+            return FunctionTable(functions={"stop": Function(
+                name="stop",
+                description="Latch this surface dark and silent until a "
+                            "Play un-mutes it.",
+                kind=FunctionKind.SCRIPTED,
+                target=FunctionTarget.SURFACE,
+                condition=Condition(name="operator-stop",
+                                    description="Fired by the operator",
+                                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(0.0, MuteCue(TARGET)),))})
+
+    gs = GameServer({})
+    gs.bit_registry["StopShadow"] = StopShadowBit
+    with pytest.raises(BitLoadError, match="reserved built-in"):
+        gs.load_bit("StopShadow")
+    assert gs.state == State.IDLE
 
 
 def test_testbit_undeclared_flash_falls_through_to_builtin():
@@ -160,3 +203,16 @@ def test_unmigrated_bits_load_with_zero_warnings():
     gs2 = GameServer({"MetronomeBit": MetronomeBit})
     gs2.load_bit("MetronomeBit")
     assert gs2.load_warnings == ()
+
+
+def test_explicit_fixture_fire_is_not_collapsed(two_fixture_gs):
+    gs, main_dev, accent_dev = two_fixture_gs
+    gs.fire_function("stop", fired_by="admin-manual", dev=accent_dev)
+    assert accent_dev in gs.muted
+    assert main_dev not in gs.muted
+
+
+def test_all_fire_reaches_every_fixture(two_fixture_gs):
+    gs, main_dev, accent_dev = two_fixture_gs
+    gs.fire_function("stop", fired_by="admin-manual", dev="@all")
+    assert {main_dev, accent_dev} <= gs.muted

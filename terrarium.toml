@@ -12,7 +12,7 @@ backends = ["devicelink"]
   [[rooms.TEST.fixtures]]
   name = "main"
   color_order = "GRB"
-  instrument = "dev_strip"
+  instrument = "dev_strip_main"
     [[rooms.TEST.fixtures.blocks]]
     name = "main"
     start = 0
@@ -33,7 +33,7 @@ backends = ["devicelink"]
   [[rooms.TEST.fixtures]]
   name = "accent"
   color_order = "GRB"
-  instrument = "dev_strip"
+  instrument = "dev_strip_accent"
     [[rooms.TEST.fixtures.blocks]]
     name = "accent"
     start = 0

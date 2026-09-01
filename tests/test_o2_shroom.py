@@ -247,6 +247,40 @@ def test_reconnect_recheck_reports_a_failed_reverification():
     assert "ie1" in problem
 
 
+def test_recheck_treats_negative_bridge_id_as_hub_away(capsys):
+    """Console ABORT hard-stops Arco by design, and o2litepy reads
+    bridge_id as -1 while there is no hub to hold one. That is not a
+    conflict to report -- it is the expected in-between state -- so the
+    re-check must idle rather than attempt a doomed verify."""
+    from harness.o2_shroom import reconnect_recheck
+
+    o2 = _FakeO2Bridge(bridge_id=-1)
+
+    bridge_id, problem = reconnect_recheck(o2, "ie1", 7)
+
+    assert (bridge_id, problem) == (-1, None)
+    assert "hub connection lost" in capsys.readouterr().out
+
+
+def test_recheck_survives_send_failure_during_verify():
+    """verify() itself can send over the now-dead hub connection and hit
+    o2litepy's AssertionError("cannot send") -- e.g. a reconnect landing
+    just as a second ABORT drops the hub again. The re-check must not
+    propagate that; it should idle at the PREVIOUS bridge id so the next
+    lap re-detects the still-mismatched id and retries."""
+    from harness.o2_shroom import reconnect_recheck
+
+    o2 = _FakeO2Bridge(bridge_id=9)
+
+    def dead_verify(o2lite, dev, timeout=None, resend_interval=None):
+        raise AssertionError("cannot send")
+
+    bridge_id, problem = reconnect_recheck(o2, "ie1", 7, verify=dead_verify)
+
+    assert problem is None
+    assert bridge_id == 7   # unchanged, so the next lap re-detects and retries
+
+
 # --- Unanswered-join hinting. The old message pointed at Control even
 # though Control was healthy; the real cause fifteen dropped Control
 # replies traced to was a lost service announcement on the HUB side. -----

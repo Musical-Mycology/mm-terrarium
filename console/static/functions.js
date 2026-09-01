@@ -16,7 +16,7 @@ import * as wire from "./wire.js";
 
 let fnSignature = null;              // JSON of the last-rendered declaration
 const lastFired = {};                // function name -> its last fire record (survives rebuilds)
-let fnDevices = [];                  // {dev, muted} offered by DEVICE/SURFACE pickers
+let fnDevices = [];                  // {dev, muted, fixture} offered by DEVICE/SURFACE pickers
 let currentDeviceTargets = new Map(); // name -> {target, fn} for rendered SURFACE/DEVICE pickers
 const cardByName = new Map();        // function name -> its card element (test hook)
 const ALL_OPTION = "@all";
@@ -81,10 +81,11 @@ function fillDevicePicker(picker, withRoom) {
     picker.appendChild(option);
     values.push(ALL_OPTION);
   }
-  for (const { dev, muted } of fnDevices) {
+  for (const { dev, muted, fixture } of fnDevices) {
     const option = document.createElement("option");
     option.value = dev;
-    option.textContent = muted ? `${dev} (muted)` : dev;
+    const base = fixture ? `${dev} (${fixture})` : dev;
+    option.textContent = muted ? `${base} (muted)` : base;
     picker.appendChild(option);
     values.push(dev);
   }
@@ -93,7 +94,8 @@ function fillDevicePicker(picker, withRoom) {
 }
 
 function onDevicesChanged(devices) {
-  fnDevices = (devices || []).map((d) => ({ dev: d.dev, muted: !!d.muted }));
+  fnDevices = (devices || []).map((d) => (
+    { dev: d.dev, muted: !!d.muted, fixture: d.fixture || null }));
   if (diagPicker) {
     fillDevicePicker(diagPicker, true);
     refreshDiagButtons();
@@ -195,7 +197,8 @@ function builtinsFor(pickerValue) {
 function refreshDiagButtons() {
   if (!diagPicker) return;
   const names = builtinsFor(diagPicker.value);
-  for (const name of ["flash", "stop", "ping"]) {
+  // Stop first: it is the panic button.
+  for (const name of ["stop", "flash", "ping"]) {
     diagButtons[name].disabled = !names.includes(name);
   }
 }
@@ -214,7 +217,8 @@ function buildDiagRow() {
   diagPicker.onchange = refreshDiagButtons;
 
   bar.appendChild(mk("span", "grow"));
-  for (const name of ["flash", "stop", "ping"]) {
+  // Stop first: it is the panic button.
+  for (const name of ["stop", "flash", "ping"]) {
     const btn = mk("button", "btn", name[0].toUpperCase() + name.slice(1));
     btn.onclick = () => wire.send("fire_function", { name, dev: diagPicker.value }, btn);
     diagButtons[name] = btn;

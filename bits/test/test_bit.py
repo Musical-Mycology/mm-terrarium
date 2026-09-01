@@ -5,7 +5,7 @@ section 4.
 """
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, FireFunction, MuteCue, PlayCue, SolidCue
+from control.cues import ROOM, TARGET, FireFunction, PlayCue, SolidCue
 from control.instrument import InstrumentRequirement
 from control.roles import Role, RoleClass, RoleTable
 from control.functions import (
@@ -246,17 +246,6 @@ class TestBit(Bit):
                     ScriptStep(0.0, PlayCue(TARGET, "chime", "")),
                     ScriptStep(0.0, SolidCue(TARGET, (255, 255, 255), 0.9, 5.0)),
                 ),
-            ),
-            "stop": Function(
-                name="stop",
-                description="Latch this surface dark and silent until a "
-                            "Play un-mutes it.",
-                target=FunctionTarget.SURFACE,
-                condition=Condition(
-                    name="operator-stop",
-                    description="Fired by the operator",
-                    source=ConditionSource.ADMIN_MANUAL),
-                script=(ScriptStep(0.0, MuteCue(TARGET)),),
             ),
             "win": Function(
                 name="win",

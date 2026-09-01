@@ -136,6 +136,13 @@ def test_shipped_config_matches_code_profiles_golden():
     assert demo_room.profile.pixel_count == 864
 
 
+def test_test_room_fixtures_carry_distinct_instruments():
+    config = load_terrarium_config(Path("terrarium.toml"))
+    fixtures = config.rooms["TEST"].profile.fixtures
+    names = [f.instrument.name for f in fixtures]
+    assert names == ["dev_strip_main", "dev_strip_accent"]
+
+
 def test_validate_rooms_reports_per_room():
     cfg = load_terrarium_config("terrarium.toml")
     status = validate_rooms(cfg, array_backend_configured=False)

@@ -1,4 +1,4 @@
-description = "Simulated dev strip, no ambient"
+description = "Simulated dev strip (main), no ambient"
 capabilities = ["light.surface", "audio.flsyn"]
 accepted_cues = ["midi", "play", "solid", "mute"]
 

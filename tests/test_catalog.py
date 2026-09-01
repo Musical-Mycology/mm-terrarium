@@ -86,9 +86,9 @@ def test_shipped_tuneshroom_catalog_file_matches_the_code_constant():
 def test_shipped_config_still_resolves_fixture_instruments():
     config = load_terrarium_config("terrarium.toml")
     assert "venue_array" in config.instruments
-    assert "dev_strip" in config.instruments
+    assert "dev_strip_main" in config.instruments
     fixture = config.rooms["TEST"].profile.fixtures[0]
-    assert fixture.instrument.name == "dev_strip"
+    assert fixture.instrument.name == "dev_strip_main"
 
 
 def test_extra_instrument_collision_with_inline_is_located(tmp_path):

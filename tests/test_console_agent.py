@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.bit_config import ManifestError, merge_overrides, parse_manifest
@@ -572,7 +574,7 @@ def test_snapshot_carries_the_loaded_bits_functions():
     names = sorted(t["name"] for t in agent.snapshot()["functions"])
     assert names == ["drift", "flash_device", "jam_hue_neg", "jam_hue_pos",
                      "jam_level_neg", "jam_level_pos", "play_aurora",
-                     "shake_hue", "stop", "tilt_hue", "win"]
+                     "shake_hue", "tilt_hue", "win"]
 
 
 def test_snapshot_functions_is_empty_with_no_bit_loaded():
@@ -1209,9 +1211,9 @@ def test_snapshot_carries_tuneshroom_instrument_functions_and_builtins():
 def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
     # Goes through the public agent.snapshot() path -- this is the exact
     # scenario (a terrarium-loaded TEST room from the real terrarium.toml,
-    # whose dev_strip fixtures carry SCRIPTED functions) that used to raise
-    # inside control/room_view.py's _function_view before it was made
-    # kind-aware.
+    # whose dev_strip_main/dev_strip_accent fixtures carry SCRIPTED
+    # functions) that used to raise inside control/room_view.py's
+    # _function_view before it was made kind-aware.
     config = load_terrarium_config("terrarium.toml")
     terrarium = make_terrarium(config=config)
     srv = FakeConsoleServer()
@@ -1223,18 +1225,18 @@ def test_instrument_functions_and_surface_instruments_for_a_loaded_room():
     snapshot = agent.snapshot()
 
     instrument_functions = snapshot["instrument_functions"]
-    dev_strip_names = sorted(f["name"] for f in instrument_functions["dev_strip"])
-    assert dev_strip_names == [
+    dev_strip_main_names = sorted(
+        f["name"] for f in instrument_functions["dev_strip_main"])
+    assert dev_strip_main_names == [
         "fail_room", "finale", "fireworks_room", "metro_click",
         "metro_downbeat", "metro_pulse_room", "play_aurora", "win"]
 
     surface_instruments = snapshot["surface_instruments"]
-    assert surface_instruments["sim-main-dev"] == "dev_strip"
-    # The diagnostics row's Room option resolves builtins through the
-    # literal "room" key -- the first bound fixture's instrument (TEST's
-    # fixtures carry homogeneous dev_strip instruments).
-    assert surface_instruments["room"] == "dev_strip"
-    assert surface_instruments["sim-accent-dev"] == "dev_strip"
+    assert surface_instruments["sim-main-dev"] == "dev_strip_main"
+    assert surface_instruments["sim-accent-dev"] == "dev_strip_accent"
+    # Each bound fixture resolves through its own dev key now -- the
+    # vestigial literal "room" key is gone entirely.
+    assert "room" not in surface_instruments
 
     # The room panel itself renders each fixture's scripted functions as a
     # minimal name+kind tag now, rather than raising.
@@ -1576,3 +1578,38 @@ def test_bench_closes_when_server_reports_zero_clients(tmp_path):
     reply = agent._handle_command(
         {"command": "bench_start", "state": "published", "name": "glowcap"})
     assert reply["event"] == "bench_started"
+
+
+# --- Task 6: diag order, fixture-labeled pickers, drop the "room" key -----
+
+MAIN_DEV = "sim-main-dev"
+ACCENT_DEV = "sim-accent-dev"
+LOBBY_DEV = "sim-lobby-dev"
+
+
+@pytest.fixture
+def console_agent_with_room():
+    """A GameServer with a Room whose "main"/"accent" fixtures are bound to
+    MAIN_DEV/ACCENT_DEV, plus a third connected device (LOBBY_DEV) that
+    carries no fixture binding at all."""
+    gs = GameServer({"TestBit": TestBit})
+    gs.room = make_room()
+    gs.room.bound = {"main": MAIN_DEV, "accent": ACCENT_DEV}
+    gs.hello(MAIN_DEV, "Main Strip", "1")
+    gs.hello(ACCENT_DEV, "Accent Strip", "1")
+    gs.hello(LOBBY_DEV, "Lobby Strip", "1")
+    srv = FakeConsoleServer()
+    return ConsoleAgent(gs, srv)
+
+
+def test_surface_instruments_has_no_room_key(console_agent_with_room):
+    out = console_agent_with_room._current_surface_instruments()
+    assert "room" not in out
+
+
+def test_devices_view_labels_bound_fixtures(console_agent_with_room):
+    rows = console_agent_with_room._devices_view()
+    by_dev = {r["dev"]: r for r in rows}
+    assert by_dev[MAIN_DEV]["fixture"] == "main"
+    assert by_dev[ACCENT_DEV]["fixture"] == "accent"
+    assert by_dev[LOBBY_DEV]["fixture"] is None

@@ -1,0 +1,142 @@
+description = "Simulated dev strip (accent), no ambient"
+capabilities = ["light.surface", "audio.flsyn"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+
+[[functions]]
+name = "play_aurora"
+kind = "scripted"
+description = "Hue bloom sweep"
+script = [
+{ offset = 0.0, midi = [176, 74, 127] },
+{ offset = 0.5, midi = [176, 74, 40] },
+{ offset = 2.0, midi = [176, 74, 0] },
+]
+
+[[functions]]
+name = "win"
+kind = "scripted"
+description = "Win celebration: sample plus a hue flourish"
+script = [
+{ offset = 0.0, play = "win" },
+{ offset = 0.0, midi = [176, 74, 127] },
+{ offset = 0.3, midi = [176, 74, 60] },
+{ offset = 0.6, midi = [176, 74, 110] },
+{ offset = 1.2, midi = [176, 74, 0] },
+]
+
+[[functions]]
+name = "fireworks_room"
+kind = "scripted"
+description = "Celebratory flashes across the Room"
+script = [
+{ offset = 0.0, midi = [176, 70, 81] },
+{ offset = 0.0, midi = [144, 55, 100] },
+{ offset = 0.08, midi = [128, 55, 0] },
+{ offset = 0.12, midi = [176, 70, 26] },
+{ offset = 0.12, midi = [144, 80, 100] },
+{ offset = 0.2, midi = [128, 80, 0] },
+{ offset = 0.24, midi = [176, 70, 107] },
+{ offset = 0.24, midi = [144, 62, 100] },
+{ offset = 0.32, midi = [128, 62, 0] },
+{ offset = 0.36, midi = [176, 70, 125] },
+{ offset = 0.36, midi = [144, 83, 100] },
+{ offset = 0.44, midi = [128, 83, 0] },
+{ offset = 0.48, midi = [176, 70, 61] },
+{ offset = 0.48, midi = [144, 76, 100] },
+{ offset = 0.5599999999999999, midi = [128, 76, 0] },
+{ offset = 0.6, midi = [176, 70, 20] },
+{ offset = 0.6, midi = [144, 48, 100] },
+{ offset = 0.6799999999999999, midi = [128, 48, 0] },
+{ offset = 0.72, midi = [176, 70, 73] },
+{ offset = 0.72, midi = [144, 55, 100] },
+{ offset = 0.7999999999999999, midi = [128, 55, 0] },
+{ offset = 0.84, midi = [176, 70, 115] },
+{ offset = 0.84, midi = [144, 54, 100] },
+{ offset = 0.9199999999999999, midi = [128, 54, 0] },
+{ offset = 0.96, midi = [176, 70, 125] },
+{ offset = 0.96, midi = [144, 48, 100] },
+{ offset = 1.04, midi = [128, 48, 0] },
+{ offset = 1.08, midi = [176, 70, 53] },
+{ offset = 1.08, midi = [144, 68, 100] },
+{ offset = 1.1600000000000001, midi = [128, 68, 0] },
+{ offset = 1.2, midi = [176, 70, 64] },
+{ offset = 1.2, midi = [144, 73, 100] },
+{ offset = 1.28, midi = [128, 73, 0] },
+{ offset = 1.3199999999999998, midi = [176, 70, 91] },
+{ offset = 1.3199999999999998, midi = [144, 70, 100] },
+{ offset = 1.4, midi = [128, 70, 0] },
+]
+
+[[functions]]
+name = "fail_room"
+kind = "scripted"
+description = "Room flashes a fail cue and restores the click"
+script = [
+{ offset = 0.0, midi = [192, 38, 0] },
+{ offset = 0.0, midi = [176, 74, 0] },
+{ offset = 0.05, midi = [144, 33, 110] },
+{ offset = 0.9, midi = [128, 33, 0] },
+{ offset = 1.0, midi = [192, 115, 0] },
+]
+
+[[functions]]
+name = "finale"
+kind = "scripted"
+description = "Closing rainbow sweep and pad after the last cycle"
+script = [
+{ offset = 0.0, midi = [192, 89, 0] },
+{ offset = 0.0, midi = [176, 21, 127] },
+{ offset = 0.0, midi = [176, 11, 0] },
+{ offset = 0.1, midi = [144, 57, 100] },
+{ offset = 0.5, midi = [176, 74, 0] },
+{ offset = 1.0, midi = [176, 74, 25] },
+{ offset = 1.5, midi = [176, 74, 50] },
+{ offset = 2.0, midi = [176, 74, 76] },
+{ offset = 2.5, midi = [176, 74, 101] },
+{ offset = 3.0, midi = [176, 74, 127] },
+{ offset = 3.5, midi = [176, 74, 101] },
+{ offset = 4.0, midi = [176, 74, 76] },
+{ offset = 4.5, midi = [176, 74, 50] },
+{ offset = 5.0, midi = [176, 74, 25] },
+{ offset = 5.5, midi = [176, 74, 0] },
+{ offset = 6.0, midi = [176, 74, 25] },
+{ offset = 6.5, midi = [176, 74, 50] },
+{ offset = 7.0, midi = [176, 74, 76] },
+{ offset = 7.5, midi = [176, 74, 101] },
+{ offset = 8.0, midi = [176, 74, 127] },
+{ offset = 8.5, midi = [176, 74, 101] },
+{ offset = 9.0, midi = [176, 74, 76] },
+{ offset = 9.5, midi = [176, 74, 50] },
+{ offset = 10.0, midi = [176, 74, 25] },
+{ offset = 10.0, midi = [128, 57, 0] },
+{ offset = 10.0, midi = [176, 21, 0] },
+{ offset = 10.0, midi = [176, 11, 60] },
+]
+
+[[functions]]
+name = "metro_downbeat"
+kind = "scripted"
+description = "Hard click plus the green cc:74 flash on the downbeat"
+script = [
+{ offset = 0.0, midi = [144, 76, 120] },
+{ offset = 0.0, midi = [176, 74, 42] },
+{ offset = 0.1, midi = [128, 76, 0] },
+]
+
+[[functions]]
+name = "metro_click"
+kind = "scripted"
+description = "Soft click on a cycle's call beats 1-3"
+script = [
+{ offset = 0.0, midi = [144, 76, 65] },
+{ offset = 0.1, midi = [128, 76, 0] },
+]
+
+[[functions]]
+name = "metro_pulse_room"
+kind = "scripted"
+description = "Room's every-beat level pulse-then-decay"
+script = [
+{ offset = 0.0, midi = [176, 11, 110] },
+{ offset = 0.15, midi = [176, 11, 60] },
+]

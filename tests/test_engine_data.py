@@ -545,11 +545,11 @@ def test_gesture_verb_condition_on_stream_only_verb_loads():
     from control.functions import FunctionTarget, ScriptStep
 
     scripted = Function(
-        name="flash", description="d", target=FunctionTarget.DEVICE,
+        name="glow", description="d", target=FunctionTarget.DEVICE,
         condition=Condition(name="tilted", description="d",
                             source=ConditionSource.GESTURE_VERB, verb="tilt"),
         script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),))
-    bit = StreamBit({"hue": _stream_fn("hue"), "flash": scripted})
+    bit = StreamBit({"hue": _stream_fn("hue"), "glow": scripted})
     gs = GameServer({"vb": lambda: bit})
     gs.load_bit("vb")   # must not raise
     assert gs.state.name == "SETUP"

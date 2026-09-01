@@ -48,8 +48,8 @@ class GoodFunctionBit(_BaseBit):
     @property
     def function_table(self) -> FunctionTable:
         return FunctionTable(functions={
-            "flash": Function(
-                name="flash", description="Flash the device",
+            "glow": Function(
+                name="glow", description="Glow the device",
                 target=FunctionTarget.DEVICE,
                 condition=Condition(name="tapped", description="Player taps",
                                     source=ConditionSource.GESTURE_VERB,
@@ -65,8 +65,8 @@ class UnimplementedVerbBit(_BaseBit):
     @property
     def function_table(self) -> FunctionTable:
         return FunctionTable(functions={
-            "flash": Function(
-                name="flash", description="Flash the device",
+            "glow": Function(
+                name="glow", description="Glow the device",
                 target=FunctionTarget.DEVICE,
                 condition=Condition(name="wiggled", description="Player wiggles",
                                     source=ConditionSource.GESTURE_VERB,
@@ -90,7 +90,7 @@ def test_a_valid_function_table_loads():
     gs = _server(GoodFunctionBit)
     gs.load_bit("bit")
     assert gs.state == State.SETUP
-    assert "flash" in gs.bit.function_table.functions
+    assert "glow" in gs.bit.function_table.functions
 
 
 def test_a_trigger_naming_an_unimplemented_verb_fails_load():
@@ -134,7 +134,7 @@ class ScriptBit(_BaseBit):
 
     def _on_tap(self, dev, args, at):
         from control.cues import FireFunction
-        return [(dev, 0xB0, 74, 1), FireFunction("flash", dev)]
+        return [(dev, 0xB0, 74, 1), FireFunction("glow", dev)]
 
     def fires(self, at):
         from control.cues import FireFunction
@@ -155,8 +155,8 @@ class ScriptBit(_BaseBit):
                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
                         ScriptStep(0.5, (TARGET, 0xB0, 74, 40)),
                         ScriptStep(2.0, (TARGET, 0xB0, 74, 0)))),
-            "flash": Function(
-                name="flash", description="Flash the tapping device",
+            "glow": Function(
+                name="glow", description="Glow the tapping device",
                 target=FunctionTarget.DEVICE,
                 condition=Condition(name="tapped", description="Player taps",
                                     source=ConditionSource.GESTURE_VERB,
@@ -169,8 +169,8 @@ class ScriptBit(_BaseBit):
                 condition=Condition(name="manual", description="Operator asks",
                                     source=ConditionSource.ADMIN_MANUAL),
                 script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 64)),)),
-            "stop": Function(
-                name="stop", description="Mute the tapped device",
+            "halt": Function(
+                name="halt", description="Mute the tapped device",
                 target=FunctionTarget.DEVICE,
                 condition=Condition(name="manual", description="Operator asks",
                                     source=ConditionSource.ADMIN_MANUAL),
@@ -314,8 +314,8 @@ class GeneratorBit(_BaseBit):
                 generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
                                         waveform="triangle", period=12.0,
                                         lo=0, hi=254)),
-            "flash": Function(
-                name="flash", description="Flash cc:74 on the Room",
+            "glow": Function(
+                name="glow", description="Glow cc:74 on the Room",
                 target=FunctionTarget.ROOM,
                 condition=Condition(name="manual", description="Operator asks",
                                     source=ConditionSource.ADMIN_MANUAL),
@@ -339,9 +339,9 @@ def test_scripted_fire_suppresses_the_generator_lane_it_writes_and_it_resumes():
     at + span, and the generator resumes -- with its phase having kept
     advancing underneath -- once the window closes."""
     gs, light, _ = _running(bit_cls=GeneratorBit, clock=lambda: 100.0)
-    assert gs.fire_function("flash", fired_by="admin-manual") is None
+    assert gs.fire_function("glow", fired_by="admin-manual") is None
     light.clear()
-    gs.tick(0.5)   # elapsed=0.5, at=100.0: inside the flash's 100..102 window
+    gs.tick(0.5)   # elapsed=0.5, at=100.0: inside the glow's 100..102 window
     assert light == []
     gs.tick(2.0)   # elapsed=2.5, at=100.0: still inside the window
     assert light == []
@@ -349,7 +349,7 @@ def test_scripted_fire_suppresses_the_generator_lane_it_writes_and_it_resumes():
 
 def test_generator_resumes_emitting_once_the_suppression_window_closes():
     gs, light, _ = _running(bit_cls=GeneratorBit, clock=lambda: 100.0)
-    assert gs.fire_function("flash", fired_by="admin-manual") is None
+    assert gs.fire_function("glow", fired_by="admin-manual") is None
     light.clear()
     gs._clock = lambda: 102.5   # past at(100.0) + span(2.0)
     gs.tick(0.1)
@@ -362,7 +362,7 @@ def test_fired_by_never_inherits_declared_source():
     gs, _, _ = _running()
     observer = Recorder()
     gs.add_observer(observer)
-    gs.fire_function("flash", fired_by="admin-manual", dev="ie1")
+    gs.fire_function("glow", fired_by="admin-manual", dev="ie1")
     record = observer.fired[0]
     assert record.fired_by == "admin-manual"
     assert record.declared_source == "gesture-verb"
@@ -459,7 +459,7 @@ def test_all_never_lists_a_room_bound_device_twice():
 
 def test_a_device_target_with_no_device_is_refused_not_silently_empty():
     gs, light, _ = _running()
-    reason = gs.fire_function("flash", fired_by="admin-manual")
+    reason = gs.fire_function("glow", fired_by="admin-manual")
     assert reason is not None
     assert "no device given" in reason
     assert light == []
@@ -623,13 +623,13 @@ def test_non_mute_fire_clears_mute_first():
     gs.muted.add("ie1")
     events = []
     gs.on_mute_change = lambda dev, m: events.append((dev, m))
-    assert gs.fire_function("flash", fired_by="admin-manual", dev="ie1") is None
+    assert gs.fire_function("glow", fired_by="admin-manual", dev="ie1") is None
     assert "ie1" not in gs.muted and ("ie1", False) in events
 
 
 def test_mute_fire_does_not_unmute_itself():
     gs, _, _ = _running()
-    assert gs.fire_function("stop", fired_by="admin-manual", dev="ie1") is None
+    assert gs.fire_function("halt", fired_by="admin-manual", dev="ie1") is None
     assert "ie1" in gs.muted
 
 

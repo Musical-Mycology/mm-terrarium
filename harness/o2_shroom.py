@@ -30,6 +30,14 @@ from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.shroom_client import LED_CHANNELS, ShroomClient
 from harness.signals import sigterm_as_keyboard_interrupt
 
+# Printed once per hub-away transition by reconnect_recheck, so run_stack's
+# log watchers -- and a human tailing the console -- can key on one stable
+# string instead of parsing the bridge-id numbers around it. Console ABORT
+# hard-stops Arco by design (the o2 hub), so this is an expected, not an
+# error, condition: the loop below idles and keeps polling until o2lite
+# reconnects and stamps a new positive bridge id.
+HUB_AWAY_NOTE = "hub connection lost; waiting for it to return"
+
 # Degrees. TestBit._on_tilt clamps gamma to [-90, 90] and maps it onto
 # cc:74, which `player` binds to aurora's hue lane.
 SWEEP_DEGREES = 90.0
@@ -224,6 +232,13 @@ def reconnect_recheck(o2lite, dev: str, previous_bridge_id, *, verify=None):
     if current == previous_bridge_id:
         return previous_bridge_id, None
 
+    if current is None or (isinstance(current, int) and current < 0):
+        # The hub itself went away (Console ABORT takes Arco down by
+        # design). Not an error: idle, keep polling, and re-verify when
+        # o2lite reconnects and stamps a real bridge id.
+        print(f"{HUB_AWAY_NOTE} (bridge id {previous_bridge_id} -> {current})")
+        return current, None
+
     print(f"reconnected to the hub (bridge id {previous_bridge_id} -> "
           f"{current}); re-verifying service")
 
@@ -238,7 +253,21 @@ def reconnect_recheck(o2lite, dev: str, previous_bridge_id, *, verify=None):
     # verify_service_ownership's tight defaults. The STARTUP check (in
     # service_conflict) keeps those tight defaults: it runs after clock
     # sync, when the hub is provably alive.
-    if verify(o2lite, dev, timeout=10.0, resend_interval=2.0):
+    #
+    # A reconnect can also land mid-verify just as the hub drops again
+    # (a second ABORT, or the same one still settling), and o2litepy's
+    # send path asserts rather than returning an error in that case --
+    # not a real conflict, just the hub not being there yet. Treat it
+    # the same as the negative-bridge-id case above: idle at the
+    # PREVIOUS bridge id so the next lap re-detects the change and
+    # retries the whole re-check once the hub is truly back.
+    try:
+        verified = verify(o2lite, dev, timeout=10.0, resend_interval=2.0)
+    except (AssertionError, OSError):
+        print(f"{HUB_AWAY_NOTE} (send failed during the ownership re-check; "
+              f"will retry)")
+        return previous_bridge_id, None
+    if verified:
         return current, None
 
     problem = (f"{markers.DEVICE_SERVICE_CONFLICT} {dev!r} is not routed "
@@ -499,8 +528,17 @@ def main() -> None:
         hello_typespec, hello_args = (
             ("s", (args.dev,)) if client.instrument is None
             else ("ssss", (args.dev, "", "", client.instrument)))
-        o2lite.send_cmd("/game/hello", 0, hello_typespec, *hello_args)
-        o2lite.send_cmd("/game/canvas", 0, "ss", args.dev, canvas_url)
+        try:
+            o2lite.send_cmd("/game/hello", 0, hello_typespec, *hello_args)
+            o2lite.send_cmd("/game/canvas", 0, "ss", args.dev, canvas_url)
+        except (AssertionError, OSError):
+            pass   # hub away; the heartbeat/join retry loop resends later
+
+    def send_join() -> None:
+        try:
+            o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
+        except (AssertionError, OSError):
+            pass   # hub away; the heartbeat/join retry loop resends later
 
     # ONE cleanup path, covering everything after backend.open(). The guard
     # starts here and not at the tick loop because every step between is
@@ -573,7 +611,7 @@ def main() -> None:
 
         send_hello()
         if not args.no_join:
-            o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
+            send_join()
 
         start = o2lite.time_get()
         interval = 1.0 / args.tilt_hz
@@ -635,7 +673,7 @@ def main() -> None:
                         # from a device Control has never heard of goes
                         # nowhere. Retrying only the join reconnects nothing.
                         send_hello()
-                        o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
+                        send_join()
                         joins_sent += 1
                         next_join = now + args.join_retry
                         if joins_sent % 5 == 0:
@@ -703,7 +741,7 @@ def main() -> None:
             round_num += 1
             send_hello()
             next_join = o2lite.time_get() + args.join_retry
-            o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
+            send_join()
     except KeyboardInterrupt:
         pass
     finally:

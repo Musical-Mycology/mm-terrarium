@@ -14,7 +14,7 @@ from control.audio import AudioBridge, FakePool
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.room_bridge import FakeRoomAudioSink, FakeRoomLightSink, RoomBridge
+from control.room_bridge import FakeRoomLightSink, RoomBridge
 from control.rooms import Room
 from control.terrarium_config import load_terrarium_config
 
@@ -95,6 +95,46 @@ def rig():
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server)
     return gs, server, agent
+
+
+class _FakeAudioBridge:
+    """In-process room_audio double satisfying the slice of AudioBridge's
+    API DeviceLinkAgent actually calls (on_grant/on_release/feed_midi/
+    start_drone/stop_drone/silence/tick), all dev-keyed. Records every call
+    so per-fixture routing (which real dev got which grant/feed) can be
+    asserted directly, the same role control/audio.py's own FakePool/
+    FakeVoice play at the unit level."""
+
+    def __init__(self) -> None:
+        self.granted: dict[str, object] = {}
+        self.released: list[str] = []
+        self.fed: list[tuple[str, int, int, int]] = []
+        self.droned: set[str] = set()
+        self.silenced: list[str] = []
+        self.ticks = 0
+
+    def on_grant(self, dev, role) -> None:
+        self.granted[dev] = role
+
+    def on_release(self, dev) -> None:
+        self.granted.pop(dev, None)
+        self.droned.discard(dev)
+        self.released.append(dev)
+
+    def feed_midi(self, dev, status, d1, d2) -> None:
+        self.fed.append((dev, status, d1, d2))
+
+    def start_drone(self, dev) -> None:
+        self.droned.add(dev)
+
+    def stop_drone(self, dev) -> None:
+        self.droned.discard(dev)
+
+    def silence(self, dev) -> None:
+        self.silenced.append(dev)
+
+    def tick(self, now=None) -> None:
+        self.ticks += 1
 
 
 def _hello(server, agent, client="c1", dev="ie1"):
@@ -771,7 +811,8 @@ def test_no_room_configured_leaves_room_wiring_inert():
 # --- Ambient rendering (Task 7, spec section 6): a Room with no Bit's ROOM
 # role renders each fixture's own instrument's ambient declaration instead of
 # going unbuilt -- DEMO's `array` fixture declares venue_array (aurora light
-# + flsyn drone); TEST's fixtures declare dev_strip (no ambient). -----------
+# + flsyn drone); TEST's fixtures declare dev_strip_main/dev_strip_accent
+# (no ambient). ---------------------------------------------------------
 
 def _instrument_names(manifest_calls):
     """The `instrument` name of every LightInstrumentDecl LightManifest.
@@ -824,8 +865,9 @@ def test_ambient_session_built_with_no_bit_loaded(monkeypatch):
 
 
 def test_ambient_session_renders_nothing_when_fixtures_declare_no_ambient():
-    """TEST's fixtures are dev_strip, which declares no ambient -- today's
-    no-session behavior must be unchanged when there is nothing to render."""
+    """TEST's fixtures are dev_strip_main/dev_strip_accent, which declare no
+    ambient -- today's no-session behavior must be unchanged when there is
+    nothing to render."""
     gs = GameServer({"TestBit": TestBit})
     gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
 
@@ -834,10 +876,33 @@ def test_ambient_session_renders_nothing_when_fixtures_declare_no_ambient():
     assert agent._room_light is None
 
 
+def test_bitless_bound_fixture_still_gets_an_audio_voice():
+    """The audio grant loop runs BEFORE the ambient early-return, so a bound
+    audio-capable fixture on a Bit-less, ambient-less Room (TEST's
+    dev_strip_main/dev_strip_accent, which declare no ambient at all) still
+    gets its own AudioBridge voice -- the built-ins (ping's note pair,
+    stop's silence) need somewhere to land even with no Bit loaded and no
+    ambient declaration."""
+    gs = GameServer({"TestBit": TestBit})
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    gs.room.bound["main"] = "sim-room-main"
+    audio = _FakeAudioBridge()
+
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+                            room_audio=audio)
+
+    assert agent._room_light is None                    # still no light
+    assert set(audio.granted) == {"sim-room-main"}
+    assert agent._room_audio_devs == {"sim-room-main"}
+
+    assert agent._room_light is None
+
+
 def _animated_ambient_game_server():
     """A DEMO-shaped Room whose one fixture's instrument declares a
     GENERATOR Function on cc:74, no Bit loaded -- the fixture case Task 5's
-    brief carves out (terrarium.toml's shipped dev_strip stays unanimated;
+    brief carves out (terrarium.toml's shipped dev_strip_main/dev_strip_accent
+    stay unanimated;
     this is the animated case the test fixtures carry)."""
     from control.cues import ROOM
     from control.functions import Function, FunctionKind, GeneratorSpec
@@ -1231,11 +1296,13 @@ def test_room_audio_waits_for_its_moment_and_light_does_not():
     Arco from Control with no wire in between."""
     gs = _room_ready_game_server()
     room_bridge = RoomBridge()
-    light, audio = FakeRoomLightSink(), FakeRoomAudioSink()
+    light, audio = FakeRoomLightSink(), _FakeAudioBridge()
     now = [1000.0]
     agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
-                            horizon=0.060, clock=lambda: now[0])
-    room_bridge.bind("sim-room-main", light=light, audio=audio)
+                            room_audio=audio, horizon=0.060,
+                            clock=lambda: now[0])
+    room_bridge.bind("sim-room-main", light=light)
+    audio.fed.clear()   # drop the RUNNING-transition drone start, if any
 
     gs.on_light_cue("sim-room-main", 0xB0, 74, 100, 1000.05)
     assert light.fed == [(0xB0, 74, 100)]     # fed on arrival
@@ -1244,7 +1311,7 @@ def test_room_audio_waits_for_its_moment_and_light_does_not():
 
     now[0] = 1000.06
     agent._render_room()
-    assert audio.fed == [(0xB0, 74, 100)]
+    assert audio.fed == [("sim-room-main", 0xB0, 74, 100)]
 
 
 def test_room_frame_carries_a_time():
@@ -1272,16 +1339,119 @@ def test_a_room_audio_cue_already_past_clamps_and_counts():
     is what the separate horizon-measurement task consumes."""
     gs = _room_ready_game_server()
     room_bridge = RoomBridge()
-    audio = FakeRoomAudioSink()
+    audio = _FakeAudioBridge()
     now = [1000.0]
     agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=room_bridge,
-                            horizon=0.060, clock=lambda: now[0])
-    room_bridge.bind("sim-room-main", light=FakeRoomLightSink(), audio=audio)
+                            room_audio=audio, horizon=0.060,
+                            clock=lambda: now[0])
+    room_bridge.bind("sim-room-main", light=FakeRoomLightSink())
+    audio.fed.clear()
 
     gs.on_light_cue("sim-room-main", 0xB0, 74, 100, 999.0)   # already past
     agent._render_room()
-    assert audio.fed == [(0xB0, 74, 100)]               # released anyway
+    assert audio.fed == [("sim-room-main", 0xB0, 74, 100)]   # released anyway
     assert agent.clamped == 1
+
+
+# --- Per-fixture audio voices: the Room owns no audio channel of its own
+# any more -- every bound, audio-capable fixture gets its own AudioBridge
+# grant, keyed by its own real dev. TEST's main/accent fixtures both declare
+# audio.flsyn (instruments/dev_strip_main.toml, dev_strip_accent.toml), so
+# binding both is what proves two DISTINCT voices, not one shared one. -----
+
+@pytest.fixture
+def two_fixture_agent():
+    """A TestBit-loaded TEST Room with BOTH fixtures bound, wired to a
+    _FakeAudioBridge room_audio so grants/feeds can be asserted per real
+    fixture dev. Both devs are pre-bound on the FakeServer so /leds sends
+    for either fixture are actually recorded (see FakeServer.send's
+    unbound-dev no-op)."""
+    gs = _room_ready_game_server(
+        bound={"main": "sim-room-main", "accent": "sim-room-accent"})
+    audio = _FakeAudioBridge()
+    server = FakeServer()
+    server.bind_dev("sim-room-main", "c-main")
+    server.bind_dev("sim-room-accent", "c-accent")
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge(),
+                            room_audio=audio)
+    return agent, audio, "sim-room-main", "sim-room-accent"
+
+
+def test_every_audio_fixture_gets_its_own_voice(two_fixture_agent):
+    agent, audio, main_dev, accent_dev = two_fixture_agent
+    assert set(audio.granted) == {main_dev, accent_dev}
+    assert agent._room_audio_devs == {main_dev, accent_dev}
+
+
+def test_fixture_midi_feeds_that_fixtures_voice(two_fixture_agent):
+    agent, audio, main_dev, accent_dev = two_fixture_agent
+    agent._on_light_cue(accent_dev, 0x90, 57, 100, when=agent._clock())
+    agent._render_room()
+    assert (accent_dev, 0x90, 57, 100) in audio.fed
+    assert all(f[0] != main_dev for f in audio.fed)
+
+
+def test_mute_of_one_fixture_blacks_only_its_slice(two_fixture_agent):
+    agent, audio, main_dev, accent_dev = two_fixture_agent
+    # Paint main non-black first so the assertion below cannot be satisfied
+    # by an idle Room frame that just happens to already be all zero.
+    agent._on_solid_cue(main_dev, (255, 255, 255), 0.9, 5.0, agent._clock())
+    agent.poll()
+    agent._on_mute_change(accent_dev, True)
+    agent.poll()
+
+    accent_frame = _last_leds_payload(agent.server, accent_dev)
+    main_frame = _last_leds_payload(agent.server, main_dev)
+    assert set(accent_frame) == {0}
+    assert set(main_frame) == {round(255 * 0.9)}
+
+
+def test_mute_of_one_fixture_silences_only_its_voice(two_fixture_agent):
+    agent, audio, main_dev, accent_dev = two_fixture_agent
+    agent._on_mute_change(accent_dev, True)
+    assert audio.silenced == [accent_dev]
+
+
+def test_solid_cue_at_one_fixture_paints_only_its_slice(two_fixture_agent):
+    agent, audio, main_dev, accent_dev = two_fixture_agent
+    agent.poll()   # settle the initial render
+    main_before = _last_leds_payload(agent.server, main_dev)
+
+    agent._on_solid_cue(accent_dev, (255, 255, 255), 0.9, 5.0, agent._clock())
+    agent.poll()
+
+    accent_frame = _last_leds_payload(agent.server, accent_dev)
+    main_frame = _last_leds_payload(agent.server, main_dev)
+    assert set(accent_frame) == {round(255 * 0.9)}
+    assert main_frame == main_before
+
+
+def test_only_the_first_granted_fixture_plays_the_welcome():
+    """The Room welcomes once, not per fixture -- the second (and every
+    later) grant's role is stripped of its welcome declaration before it
+    reaches on_grant. TestBit's room role declares no welcome of its own, so
+    this is asserted at the AudioBridge level instead (per this task's
+    brief), against a role that does."""
+    from control.audio import AudioBridge, FakePool
+    from control.roles import Role, RoleClass
+
+    welcome_role = Role(
+        name="fixture-with-welcome", role_class=RoleClass.ROOM,
+        capacity=None, scored=False,
+        ugen_manifest={"instruments": [{"instrument": "flsyn"}]},
+        welcome={"audio": {"instrument": "chime", "duration": 1.5}})
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+
+    bridge.on_grant("dev1", welcome_role)
+    acquired_after_first = len(pool.acquired)
+    from dataclasses import replace
+    bridge.on_grant("dev2", replace(welcome_role, welcome=None))
+
+    # First grant: one voice for the instrument, one for the welcome cue.
+    assert acquired_after_first == 2
+    # Second grant, welcome stripped: only the instrument voice, no cue.
+    assert len(pool.acquired) == 3
 
 
 # --- Room fixture profile: the Room's session is built from its own
@@ -1910,7 +2080,10 @@ def test_mute_purges_a_pending_timed_cue_so_unmute_does_not_replay_it():
     assert (0xB0, 74, 99) not in seen
 
 
-def test_room_override_covers_every_fixture_slice():
+def test_room_override_paints_only_the_canonical_fixtures_slice():
+    """Overrides are per fixture now (Task 5): a ROOM-addressed SolidCue
+    resolves to the canonical dev and paints only ITS slice, not the whole
+    concatenated frame. See spec section 5's accepted per-fixture delta."""
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
     server = FakeServer()
@@ -1921,9 +2094,36 @@ def test_room_override_covers_every_fixture_slice():
 
     canonical = agent._canonical_room_dev()
     assert canonical == "sim-room-main"
+    accent_before = _last_leds_payload(server, "sim-room-accent")
     agent._on_solid_cue(canonical, (255, 255, 255), 0.9, 5.0,
                         when=agent._clock())
     agent.poll()
 
-    for dev in ("sim-room-main", "sim-room-accent"):
-        assert set(_last_leds_payload(server, dev)) == {round(255 * 0.9)}
+    assert set(_last_leds_payload(server, "sim-room-main")) == {round(255 * 0.9)}
+    assert _last_leds_payload(server, "sim-room-accent") == accent_before
+
+
+def test_canonical_override_expiry_clears_only_the_canonical_last_frame():
+    """_tick_overrides is per fixture now (Task 5), including for a Room
+    override keyed by the canonical dev: expiry must clear (and so force a
+    resend of) only the canonical fixture's own _last_frames cache entry,
+    not fan out and clear every other bound fixture's entry too. Exercised
+    directly against _tick_overrides/_last_frames rather than through a full
+    render, since the Room's own idle animation can legitimately change a
+    fixture's frame between polls -- that would confound a send-count
+    assertion taken across real time with the cache-clearing behavior this
+    test is actually about."""
+    gs = _room_ready_game_server(
+        bound={"main": "sim-room-main", "accent": "sim-room-accent"})
+    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge())
+
+    canonical = agent._canonical_room_dev()
+    assert canonical == "sim-room-main"
+    agent._last_frames[canonical] = b"\x01"
+    agent._last_frames["sim-room-accent"] = b"\x02"
+    agent._overrides[canonical] = ((0, 0, 0), 0.0, agent._clock() - 1.0)
+
+    agent._tick_overrides()
+
+    assert canonical not in agent._last_frames
+    assert agent._last_frames.get("sim-room-accent") == b"\x02"
