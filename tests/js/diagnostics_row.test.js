@@ -62,9 +62,9 @@ const BUILTINS = {
 
   const diagPicker = functions._diagPicker();
   assert.ok(diagPicker, "diagnostics picker should exist");
-  assert.strictEqual(diagPicker.options[0].value, "@room");
+  assert.strictEqual(diagPicker.options[0].value, "@all");
   assert.deepStrictEqual(
-    [...diagPicker.options].map((o) => o.value), ["@room", "ie1", "sim-strip"]);
+    [...diagPicker.options].map((o) => o.value), ["@all", "ie1", "sim-strip"]);
 
   // ---- 2. Button disabled/enabled per selected surface's builtins -------
   // "ie1" -> tuneshroom, which has all three builtins.
@@ -81,24 +81,23 @@ const BUILTINS = {
   assert.strictEqual(functions._diagButton("stop").disabled, true);
   assert.strictEqual(functions._diagButton("ping").disabled, true);
 
-  // "@room" (Room) resolves via surface_instruments["room"] -- the Room's
-  // bound fixture instrument ("arr") declares all three builtins here, so
-  // all three buttons must be enabled, not disabled.
-  assert.strictEqual(diagPicker.options[0].value, "@room");
-  diagPicker.value = "@room";
+  // "@all" (All) unions builtins across every surface_instruments entry --
+  // ie1/tuneshroom, sim-strip/dev_strip, and room/arr between them declare
+  // all three builtins, so all three buttons must be enabled.
+  assert.strictEqual(diagPicker.options[0].value, "@all");
+  diagPicker.value = "@all";
   diagPicker.onchange();
   assert.strictEqual(functions._diagButton("flash").disabled, false);
   assert.strictEqual(functions._diagButton("stop").disabled, false);
   assert.strictEqual(functions._diagButton("ping").disabled, false);
 
   // ---- 3. Click sends the right command ----------------------------------
-  // Room stays selected -- the fire command must keep sending the picker's
-  // own wire value ("@room", the ROOM sentinel), not the surface_instruments
-  // lookup key ("room").
+  // All stays selected -- the fire command must keep sending the picker's
+  // own wire value ("@all", the ALL sentinel).
   const pingBtn = functions._diagButton("ping");
   pingBtn.onclick();
-  const roomSent = sock.sent.at(-1);
-  assert.deepStrictEqual(roomSent, { command: "fire_function", name: "ping", dev: "@room" });
+  const allSent = sock.sent.at(-1);
+  assert.deepStrictEqual(allSent, { command: "fire_function", name: "ping", dev: "@all" });
 
   diagPicker.value = "sim-strip";
   diagPicker.onchange();

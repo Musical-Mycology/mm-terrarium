@@ -12,7 +12,7 @@ import logging
 import time
 
 from control.bit import Bit
-from control.cues import ROOM, FireFunction, LightCue, MuteCue, PlayCue, SolidCue
+from control.cues import ALL, ROOM, FireFunction, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
 from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
@@ -680,13 +680,23 @@ class GameServer:
         """
         if target is FunctionTarget.DEVICE:
             return [dev] if dev else []
-        if target is FunctionTarget.SURFACE and dev != ROOM:
+        if target is FunctionTarget.SURFACE and dev not in (ROOM, ALL):
             return [dev] if dev else []
         room_devs: list[str] = []
         if self.room is not None and self.room.bound:
             profile = self.room.profile
             room_devs = [self.room.bound[f.name] for f in profile.fixtures
                         if f.name in self.room.bound]
+        if target is FunctionTarget.SURFACE and dev == ALL:
+            # The operator's All: room fixtures plus every connected
+            # device (DevicePool, not registration -- a lobby device with
+            # no role still answers flash/stop/ping).
+            out = list(room_devs)
+            room_set = set(room_devs)
+            for info in self.devices.all():
+                if info.dev not in room_set:
+                    out.append(info.dev)
+            return out
         if target in (FunctionTarget.ROOM, FunctionTarget.SURFACE):
             return room_devs
         out = list(room_devs)
