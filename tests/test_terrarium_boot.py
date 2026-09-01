@@ -968,6 +968,39 @@ def test_serve_until_done_lets_closing_devices_finish_their_fade():
     assert agent.polls >= 4
 
 
+def test_room_down_mid_run_returns_no_room_not_arco_exited():
+    """An operator hard-abort unloads the room (Arco dies with it) while
+    `_serve_until_done` polls. The terrarium check must win over the
+    arco.poll() check or the abort misreports as a crash."""
+    from control.state import State
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        state = State.RUNNING
+
+        def tick(self, dt):
+            raise AssertionError("must not tick once the room is down")
+
+    class FakeAgent:
+        closing = 0
+
+        def poll(self):
+            raise AssertionError("must not poll once the room is down")
+
+    class FakeArco:
+        def poll(self):
+            return 1                      # dead process too
+
+    class FakeTerrarium:
+        state = TerrariumState.NO_ROOM
+
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+                               sleep=lambda _s: None,
+                               terrarium=FakeTerrarium())
+    assert reason == "no-room"
+
+
 class _FakeLaunch:
     def __init__(self, setup_seconds):
         self.setup_seconds = setup_seconds
@@ -2042,6 +2075,57 @@ def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
 
     assert reason == "parent-gone"
     assert len(serve_rounds_calls) == 2
+
+
+def test_serve_roomless_stops_clients_on_no_room(monkeypatch):
+    """A `stop_clients` given to `_serve_roomless` must run on every
+    "no-room" lap -- the room went down under live Arco clients (a Console
+    hard abort or `unload_room`), so the transport/pool need to be stopped
+    before the next NO_ROOM wait, not left running against a dead hub."""
+    import harness.terrarium_boot as terrarium_boot_module
+    from control.terrarium import TerrariumState
+    from harness.terrarium_boot import _serve_roomless
+
+    class FakeTerrarium:
+        def __init__(self):
+            self.state = TerrariumState.ROOM_READY
+            self.arco = _FakeArco()
+
+    class FakeGS:
+        state = State.IDLE
+
+        def tick(self, dt):
+            pass
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    terrarium = FakeTerrarium()
+    calls = []
+    serve_rounds_calls = []
+
+    def fake_wait_for_room_ready(agent, terr, **kwargs):
+        return "ready"
+
+    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
+                          console_agent=None, terrarium=None, **_kw):
+        serve_rounds_calls.append(1)
+        if len(serve_rounds_calls) == 1:
+            return "no-room"
+        return "parent-gone"
+
+    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
+                        fake_wait_for_room_ready)
+    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
+                        fake_serve_rounds)
+
+    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium,
+                             stop_clients=lambda: calls.append("stop"),
+                             restart_clients=lambda: None)
+
+    assert reason == "parent-gone"
+    assert calls == ["stop"]
 
 
 def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
