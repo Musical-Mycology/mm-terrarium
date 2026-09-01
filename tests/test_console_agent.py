@@ -1174,6 +1174,35 @@ def test_on_load_warnings_broadcasts_warn_log_events():
                      "message": "function 'x' has no script on instrument 'y'"}]
 
 
+def test_on_device_warning_broadcasts_a_warn_log_event():
+    """Mirrors on_load_warnings' log/event mechanism (same log_event wire
+    shape) for the engine's hello-time unknown-instrument warning."""
+    gs, srv, agent = _server_with_agent()
+    agent.on_device_warning(
+        "device 'ie1' declared unknown instrument 'nope'; using defaultshroom")
+    logs = [m for m in srv.broadcasts if m["event"] == "log"]
+    assert logs == [{"event": "log", "level": "warn",
+                     "message": "device 'ie1' declared unknown instrument "
+                                "'nope'; using defaultshroom"}]
+
+
+def test_device_warning_reaches_the_log_through_the_real_engine_hello():
+    gs, srv, agent = _server_with_agent()
+    gs.hello("ie1", "Shroom One", "1", instrument="nope")
+    logs = [m for m in srv.broadcasts if m["event"] == "log"]
+    assert len(logs) == 1
+    assert logs[0]["level"] == "warn"
+    assert "nope" in logs[0]["message"]
+
+
+def test_device_view_rows_carry_the_instrument_name():
+    gs, srv, agent = _server_with_agent()
+    gs.hello("ie1", "Shroom One", "1")
+    devices = agent._devices_view()
+    ie1 = next(d for d in devices if d["dev"] == "ie1")
+    assert ie1["instrument"] == "defaultshroom"
+
+
 def test_design_commands_error_without_catalog():
     gs, srv, agent = _server_with_agent()
     reply = agent._handle_command({"command": "list_designs"})

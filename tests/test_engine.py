@@ -5,6 +5,7 @@ import pytest
 from bits.test.test_bit import TestBit
 from control.bit import Bit
 from control.engine import BitLoadError, GameServer, InvalidTransition
+from control.instrument import DEFAULTSHROOM, Instrument, TUNESHROOM
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
@@ -763,3 +764,58 @@ def test_reap_stale_on_release_exception_does_not_stop_the_rest():
     assert sorted(reaped) == ["ie1", "ie2"]
     assert gs.devices.known("ie1") is False
     assert gs.devices.known("ie2") is False
+
+
+# --- Task 2: hello resolves the carried instrument -------------------------
+
+
+def test_hello_default_carried_is_defaultshroom():
+    server = GameServer({})
+    server.hello("ie1", "Shroom One", "1")
+    assert server.devices.get("ie1").carried is DEFAULTSHROOM
+
+
+def test_hello_resolves_a_config_declared_instrument_name():
+    glowharp = Instrument(name="glowharp")
+    server = GameServer({}, carried_instruments={"glowharp": glowharp})
+    server.hello("ie1", "Shroom One", "1", instrument="glowharp")
+    assert server.devices.get("ie1").carried is glowharp
+
+
+def test_hello_resolves_the_tuneshroom_constant_by_name():
+    server = GameServer({})
+    server.hello("ie1", "Shroom One", "1", instrument="tuneshroom")
+    assert server.devices.get("ie1").carried is TUNESHROOM
+
+
+def test_hello_with_unknown_instrument_name_falls_back_to_defaultshroom_and_warns():
+    warnings = []
+
+    class Obs:
+        def on_device_warning(self, message):
+            warnings.append(message)
+
+    server = GameServer({})
+    server.add_observer(Obs())
+    server.hello("ie1", "Shroom One", "1", instrument="nope")
+    assert server.devices.get("ie1").carried is DEFAULTSHROOM
+    assert len(warnings) == 1
+    assert "ie1" in warnings[0]
+    assert "nope" in warnings[0]
+    assert "defaultshroom" in warnings[0]
+
+
+def test_hello_heartbeat_with_no_instrument_preserves_carried():
+    glowharp = Instrument(name="glowharp")
+    server = GameServer({}, carried_instruments={"glowharp": glowharp})
+    server.hello("ie1", "Shroom One", "1", instrument="glowharp")
+    server.hello("ie1", "Shroom One", "1.1")   # heartbeat re-hello
+    assert server.devices.get("ie1").carried is glowharp
+
+
+def test_carried_instruments_merges_defaults_with_config_catalog():
+    glowharp = Instrument(name="glowharp")
+    server = GameServer({}, carried_instruments={"glowharp": glowharp})
+    assert server.carried_instruments["tuneshroom"] is TUNESHROOM
+    assert server.carried_instruments["defaultshroom"] is DEFAULTSHROOM
+    assert server.carried_instruments["glowharp"] is glowharp

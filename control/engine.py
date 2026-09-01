@@ -15,8 +15,8 @@ from control.bit import Bit
 from control.cues import ROOM, FireFunction, LightCue, MuteCue, PlayCue, SolidCue
 from control.device_pool import DevicePool
 from control.generator_runner import GeneratorRunner
-from control.instrument import (TUNESHROOM, InstrumentRequirement, cue_kind,
-                                 satisfies)
+from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
+                                 InstrumentRequirement, cue_kind, satisfies)
 from control.registration import JoinResult, RegistrationState
 from control.role_config import compose_role_config, validate_role_declarations
 from control.roles import RoleClass
@@ -82,8 +82,21 @@ def _resolve_room_requirements(requirements, room) -> None:
 
 class GameServer:
     def __init__(self, bit_registry: dict, room_binding=None,
-                 cue_horizon: float = 0.0, clock=time.monotonic):
+                 cue_horizon: float = 0.0, clock=time.monotonic,
+                 carried_instruments: dict | None = None):
         self.bit_registry = bit_registry
+        # dev[str, Instrument]: every Instrument a device's hello may
+        # declare by name, seeded with the two shipped constants (present
+        # even when the caller's own dict is empty/None) and overlaid with
+        # config/catalog instruments the caller supplies. hello() resolves
+        # `instrument` names against this; load_bit's target-aware
+        # name-fire-gap check (below) reads it too instead of building its
+        # own single-entry dict. Never mutated after __init__.
+        self.carried_instruments: dict = {
+            TUNESHROOM.name: TUNESHROOM,
+            DEFAULTSHROOM.name: DEFAULTSHROOM,
+            **(carried_instruments or {}),
+        }
         self.state = State.IDLE
         self.devices = DevicePool()
         # Control-global Room state (see control/rooms.py, control/
@@ -194,8 +207,26 @@ class GameServer:
         snapshot directly."""
         return self._slot_requirements.get(slot)
 
-    def hello(self, dev: str, name: str, protoversion: str) -> None:
-        self.devices.hello(dev, name, protoversion, self._clock())
+    def hello(self, dev: str, name: str, protoversion: str,
+             instrument: str | None = None) -> None:
+        """`instrument` is the name a hello declares carrying, or None when
+        it declares nothing (an unmigrated caller, or o2_shroom's liveness
+        re-hello -- DevicePool.hello's heartbeat rule then preserves
+        whatever this dev already carried). A declared name not found in
+        self.carried_instruments resolves to DEFAULTSHROOM and fires
+        on_device_warning so an operator can see a device asked for
+        something the install doesn't know about."""
+        carried = None
+        if instrument is not None:
+            carried = self.carried_instruments.get(instrument)
+            if carried is None:
+                carried = DEFAULTSHROOM
+                self._notify(
+                    "on_device_warning",
+                    f"device {dev!r} declared unknown instrument "
+                    f"{instrument!r}; using defaultshroom")
+        self.devices.hello(dev, name, protoversion, self._clock(),
+                           carried=carried)
         self._notify("on_devices_change")
 
     def reap_stale(self, timeout: float) -> list[str]:
@@ -333,17 +364,16 @@ class GameServer:
         if self.room is not None:
             for fixture in self.room.profile.fixtures:
                 room_instruments[fixture.instrument.name] = fixture.instrument
-        carried_instruments = {TUNESHROOM.name: TUNESHROOM}
         warnings = []
         for fn in function_table.functions.values():
             if fn.kind is not FunctionKind.SCRIPTED or fn.script:
                 continue
             if fn.target is FunctionTarget.DEVICE:
-                check = carried_instruments
+                check = self.carried_instruments
             elif fn.target is FunctionTarget.ROOM:
                 check = room_instruments
             else:   # SURFACE, ALL, or undeclared target
-                check = {**room_instruments, **carried_instruments}
+                check = {**room_instruments, **self.carried_instruments}
             for iname, inst in check.items():
                 if self._resolve_script_for(fn.name, inst) is None:
                     warnings.append(

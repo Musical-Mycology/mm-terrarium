@@ -209,15 +209,17 @@ class RequiresLessBit(Bit):
 
 
 def test_join_granted_when_carried_instrument_satisfies_slot():
+    # DEFAULTSHROOM (the DeviceInfo.carried default -- 2026-08-31 carried-
+    # instrument-wire) satisfies gesture.tap same as TUNESHROOM did.
     gs = GameServer({"PlayerSlotBit": PlayerSlotBit})
     gs.load_bit("PlayerSlotBit")
     gs.devices.hello("dev1", "device-one", "1.0")
     result = gs.join("dev1", "node1")
     assert result.granted
     assert result.slot == "player"
-    assert result.instrument == "tuneshroom"
+    assert result.instrument == "defaultshroom"
     assert result.config["slot"] == "player"
-    assert result.config["instrument"] == "tuneshroom"
+    assert result.config["instrument"] == "defaultshroom"
 
 
 def test_join_refused_with_reason_when_contract_unsatisfied():
@@ -258,14 +260,17 @@ GESTURELESS_INSTRUMENT = Instrument(
 )
 
 
-def test_testbit_player_join_is_granted_with_tuneshroom_carrier():
+def test_testbit_player_join_is_granted_with_defaultshroom_carrier():
+    # DEFAULTSHROOM (the DeviceInfo.carried default -- 2026-08-31 carried-
+    # instrument-wire) satisfies light.pixels + gesture.tilt same as
+    # TUNESHROOM did.
     gs = GameServer({"TestBit": TestBit})
     gs.load_bit("TestBit")
     gs.devices.hello("dev1", "device-one", "1.0")
     result = gs.join("dev1", "TEST_PLAYER_NODE")
     assert result.granted
     assert result.slot == "player"
-    assert result.instrument == "tuneshroom"
+    assert result.instrument == "defaultshroom"
 
 
 def test_testbit_player_join_refused_when_carrier_lacks_gesture_tilt():
