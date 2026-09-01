@@ -849,9 +849,18 @@ class GameServer:
             if at is None:
                 at = self._clock() + self._horizon
             devs = self._resolve_target(target, dev)
+            # An explicit SURFACE fire at a concrete dev (not the ROOM or
+            # ALL sentinel) names one real fixture on purpose -- it must
+            # never be folded onto the Room's canonical dev, unlike a
+            # Bit-declared ROOM/@all/PLAYERS script, which still collapses
+            # below exactly as before.
+            explicit_surface = (target is FunctionTarget.SURFACE
+                                and dev not in (ROOM, ALL))
             if decl is not None and decl.script:
-                # Rung 1: byte-identical to the pre-ladder code path.
-                cues = expand_script(decl, at, self._collapse_room_fanout(devs))
+                # Rung 1: byte-identical to the pre-ladder code path, except
+                # an explicit-surface fire skips the collapse.
+                fan = devs if explicit_surface else self._collapse_room_fanout(devs)
+                cues = expand_script(decl, at, fan)
                 refusal = self._check_cue_kinds(cues)
                 if refusal is not None:
                     return refusal
@@ -861,10 +870,16 @@ class GameServer:
             else:
                 # Rungs 2/3: per-dev ladder resolution -- built-ins, then
                 # the resolved instrument's own SCRIPTED function, else
-                # skip that dev (never refuse the whole fire for it).
+                # skip that dev (never refuse the whole fire for it). This
+                # loop deliberately never collapses: each resolved dev is
+                # its own surface here, with its own instrument's builtin
+                # or SCRIPTED function, not a stand-in for the Room's
+                # canonical dev. A non-canonical fixture's light half still
+                # reaches this loop; whether it survives to the transport
+                # is a later seam's concern (Task 5).
                 cues = []
                 resolved: list[str] = []
-                for d in self._collapse_room_fanout(devs):
+                for d in devs:
                     fn = self._resolve_script_for(name, self._instrument_for(d))
                     if fn is None:
                         logger.info("function %r: no script resolved for "

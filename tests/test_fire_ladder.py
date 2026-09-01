@@ -26,6 +26,28 @@ def _gs_with_room():
     return gs
 
 
+TWO_FIXTURE_PROFILE = RoomProfile(surface_id="r2", fixtures=(
+    RoomFixture(name="main", color_order="GRB",
+                blocks=(RoomBlock("main", 0, 10),),
+                zones=(RoomZone("all", 0, 10),), instrument=ARR),
+    RoomFixture(name="accent", color_order="GRB",
+                blocks=(RoomBlock("accent", 0, 10),),
+                zones=(RoomZone("all", 0, 10),), instrument=ARR),
+))
+
+
+@pytest.fixture
+def two_fixture_gs():
+    """A bound two-fixture Room, no Bit loaded -- the minimal rig for
+    proving an explicit fixture fire is never collapsed to the canonical
+    dev, and that @all resolves per real dev."""
+    gs = GameServer({})
+    gs.room = Room(name="R2", profile=TWO_FIXTURE_PROFILE, node_id="N2")
+    gs.room.bound["main"] = "main-dev"
+    gs.room.bound["accent"] = "accent-dev"
+    return gs, "main-dev", "accent-dev"
+
+
 def test_builtin_fires_with_no_bit_in_idle():
     gs = _gs_with_room()
     seen = []
@@ -181,3 +203,16 @@ def test_unmigrated_bits_load_with_zero_warnings():
     gs2 = GameServer({"MetronomeBit": MetronomeBit})
     gs2.load_bit("MetronomeBit")
     assert gs2.load_warnings == ()
+
+
+def test_explicit_fixture_fire_is_not_collapsed(two_fixture_gs):
+    gs, main_dev, accent_dev = two_fixture_gs
+    gs.fire_function("stop", fired_by="admin-manual", dev=accent_dev)
+    assert accent_dev in gs.muted
+    assert main_dev not in gs.muted
+
+
+def test_all_fire_reaches_every_fixture(two_fixture_gs):
+    gs, main_dev, accent_dev = two_fixture_gs
+    gs.fire_function("stop", fired_by="admin-manual", dev="@all")
+    assert {main_dev, accent_dev} <= gs.muted
