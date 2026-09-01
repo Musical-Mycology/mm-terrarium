@@ -3370,9 +3370,10 @@ defects, worked through with Chris the same day. Design:
   definition error from the Room redesign -- instruments (fixtures) are
   the only things with audio channels; a Room has audio only because a
   bound fixture's instrument is playing it. `AudioBridge` now grants a
-  voice per bound fixture (`_room_audio_devs`, one `on_grant`/
-  `_RoomAudioSink` per fixture dev whose instrument declares an
-  `audio.*` capability), falling back to a built-in minimal declaration
+  voice per bound fixture (`_room_audio_devs`, one `on_grant` call per
+  fixture dev whose instrument declares an `audio.*` capability, fed
+  directly through `AudioBridge.feed_midi(dev, ...)` with no per-fixture
+  sink object), falling back to a built-in minimal declaration
   (`_DEFAULT_FIXTURE_ROLE`) when no ROOM-role Bit audio declaration is
   loaded. `RoomBridge` loses `feed_audio`/`RoomAudioSink` entirely and is
   light-only; shutdown releases every granted fixture voice, and the
