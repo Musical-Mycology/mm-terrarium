@@ -150,6 +150,28 @@ def test_role_without_a_drone_starts_no_note():
     assert not [s for s in pool.acquired[0].sent if s[0] == "note_on"]
 
 
+def test_silence_stops_drone_and_flushes_voice():
+    pool = FakePool()
+    br = AudioBridge(pool)
+    br.on_grant("dev1", _role(ugens=PLAYER_UGENS))
+    br.start_drone("dev1")
+    voice = pool.acquired[0]
+
+    br.silence("dev1")
+
+    assert ("note_off", 45) in voice.sent
+    assert ("all_off",) in voice.sent
+    # a second silence is a no-op, and the voice is still granted:
+    br.silence("dev1")
+    br.feed_midi("dev1", 0x90, 60, 100)
+    assert ("note_on", 60, 100) in voice.sent
+
+
+def test_silence_of_an_ungranted_device_is_a_noop():
+    pool = FakePool()
+    AudioBridge(pool).silence("nobody")   # must not raise
+
+
 def test_release_stops_the_drone_silences_and_frees_the_voice():
     pool = FakePool()
     br = AudioBridge(pool)

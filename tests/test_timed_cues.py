@@ -55,6 +55,42 @@ class TickRecordingSink:
         pass
 
 
+class TickRecordingAudioBridge:
+    """The room_audio-shaped sibling of TickRecordingSink above: the Room's
+    audio channel is now a per-fixture AudioBridge grant, not a RoomBridge
+    sink, so this double satisfies AudioBridge's dev-keyed surface instead
+    (on_grant/on_release/feed_midi/start_drone/stop_drone/silence/tick).
+    Records the clock reading at which each feed_midi arrived, same as
+    TickRecordingSink, so "audio at `at`, light before it" stays assertable.
+    """
+
+    def __init__(self, clock):
+        self._clock = clock
+        self.fed = []                      # (now, dev, status, d1, d2)
+        self.granted = set()
+
+    def on_grant(self, dev, role):
+        self.granted.add(dev)
+
+    def on_release(self, dev):
+        self.granted.discard(dev)
+
+    def feed_midi(self, dev, status, d1, d2):
+        self.fed.append((self._clock(), dev, status, d1, d2))
+
+    def start_drone(self, dev):
+        pass
+
+    def stop_drone(self, dev):
+        pass
+
+    def silence(self, dev):
+        pass
+
+    def tick(self, now=None):
+        pass
+
+
 def _stack(now):
     """Control with TestBit loaded, the Room bound to 'sim-room', and one
     device joined to the scored `player` role, all on one settable clock.
@@ -88,13 +124,13 @@ def _stack(now):
 
     server = FakeServer()
     room_bridge = RoomBridge()
+    audio = TickRecordingAudioBridge(clock)
     agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
-                            horizon=HORIZON, clock=clock)
+                            room_audio=audio, horizon=HORIZON, clock=clock)
     assert agent._room_light is not None, "the Room session must have built"
 
     light = TickRecordingSink(clock, inner=agent._room_light)
-    audio = TickRecordingSink(clock)
-    room_bridge.bind("sim-room", light=light, audio=audio)
+    room_bridge.bind("sim-room", light=light)
     server.bind_dev("sim-room", "c-room")
 
     server.arrive("c1")
@@ -160,7 +196,7 @@ def test_one_gesture_yields_one_shared_presentation_time():
 
     now[0] = at + TICK
     agent.poll()
-    assert [f[1:] for f in audio.fed] == [(0xB0, 74, 127)]
+    assert [f[1:] for f in audio.fed] == [("sim-room", 0xB0, 74, 127)]
     assert audio.fed[0][0] >= at
     assert audio.fed[0][0] - at <= TICK, "released within one tick of at"
 
@@ -177,7 +213,7 @@ def test_a_late_gesture_clamps_and_counts_rather_than_raising():
     agent.poll()
 
     assert agent.clamped == 1
-    assert [f[1:] for f in audio.fed] == [(0xB0, 74, 127)]   # released anyway
+    assert [f[1:] for f in audio.fed] == [("sim-room", 0xB0, 74, 127)]   # released anyway
 
 
 def test_the_room_animates_with_no_gesture_at_all():

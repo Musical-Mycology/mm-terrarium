@@ -239,6 +239,18 @@ class AudioBridge:
         self.feed_midi(dev, 0x80, entry.drone_key, 0)
         entry.drone_key = None
 
+    def silence(self, dev: str) -> None:
+        """Quiet a granted voice in place: drone off (if sounding) and every
+        note flushed. The grant survives, so the next feed sounds again --
+        this is Stop's audio half, not a release."""
+        entry = self._devices.get(dev)
+        if entry is None:
+            return
+        if entry.drone_key is not None:
+            entry.voice.note_off(entry.drone_key)
+            entry.drone_key = None
+        entry.voice.all_off()
+
     def on_release(self, dev: str) -> None:
         entry = self._devices.pop(dev, None)
         if entry is None:
