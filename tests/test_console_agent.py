@@ -1002,6 +1002,52 @@ def test_unload_room_refusal_is_error_event():
     assert errors[0]["command"] == "unload_room"
 
 
+def test_abort_unloads_the_room_when_terrarium_wired():
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    terrarium.gs.load_bit("RoomCapableBit")
+    terrarium.gs.hello("ie9", "Shroom Nine", "1")
+    terrarium.gs.join("ie9", room_role_name("TEST"))
+    terrarium.gs.run()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    calls = []
+    terrarium.unload_room = lambda force=False: calls.append(force) or None
+
+    error = agent._handle_command({"command": "abort"})
+
+    assert error is None
+    assert terrarium.gs.state.name == "IDLE"
+    assert calls == [True]
+
+
+def test_abort_without_terrarium_stays_bit_only():
+    gs, srv, agent = _server_with_agent()   # terrarium=None
+    gs.load_bit("TestBit")
+    gs.run()
+
+    error = agent._handle_command({"command": "abort"})   # must not raise
+
+    assert error is None
+    assert gs.state.name == "IDLE"
+
+
+def test_abort_reports_unload_refusal():
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    terrarium.gs.load_bit("RoomCapableBit")
+    terrarium.gs.hello("ie9", "Shroom Nine", "1")
+    terrarium.gs.join("ie9", room_role_name("TEST"))
+    terrarium.gs.run()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    terrarium.unload_room = lambda force=False: "already unloading"
+
+    out = agent._handle_command({"command": "abort"})
+
+    assert out["event"] == "error" and "already unloading" in out["message"]
+
+
 def test_load_bit_is_gated_while_room_not_ready():
     terrarium = make_terrarium()
     srv = FakeConsoleServer()
