@@ -452,3 +452,8 @@ def test_replay_result_event_shape():
     result = {"fires": [10], "trace": {"t_ms": [0, 10], "accel_g": [1.0, 3.0]}}
     assert protocol.replay_result_event(result) == {
         "event": "replay_result", "result": result}
+
+
+def test_restart_parses():
+    cmd = protocol.parse_command({"command": "restart"})
+    assert isinstance(cmd, protocol.RestartCommand)

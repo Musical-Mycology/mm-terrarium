@@ -102,6 +102,15 @@ function render() {
   runBtn.onclick = () => wire.send("run", {}, runBtn);
   btnrow.appendChild(runBtn);
 
+  const restartBtn = mk("button", "btn", "Restart");
+  restartBtn.disabled = gated;
+  restartBtn.onclick = () => {
+    wire.confirmTap(restartBtn, { armLabel: "Confirm restart?" }, () => {
+      wire.send("restart", {}, restartBtn);
+    });
+  };
+  btnrow.appendChild(restartBtn);
+
   const abortBtn = mk("button", "btn solid-rose", "Abort");
   abortBtn.disabled = gated;
   abortBtn.onclick = () => {

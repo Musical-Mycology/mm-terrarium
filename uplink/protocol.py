@@ -25,6 +25,11 @@ class AbortCommand:
 
 
 @dataclass
+class RestartCommand:
+    pass
+
+
+@dataclass
 class ListBitsCommand:
     pass
 
@@ -57,6 +62,8 @@ def parse_command(msg: dict):
         return RunCommand()
     if command == "abort":
         return AbortCommand()
+    if command == "restart":
+        return RestartCommand()
     if command == "list_bits":
         return ListBitsCommand()
     if command == "load_room":

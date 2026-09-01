@@ -538,6 +538,11 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
     Exiting the instant state hit IDLE would freeze every device on its
     last frame.
 
+    "restarted" -- a Console RESTART landed mid-round: the engine left
+    IDLE and is now in LOADING/LOADED/SETUP without this function having
+    called run() again. Only a Console restart can do that while this
+    function is running.
+
     "arco-exited" -- the Arco subprocess is gone. Fail loud: silent
     degradation in a venue is worse than a visible stop.
 
@@ -568,6 +573,10 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
         if console_agent is not None:
             console_agent.poll()
         gs.tick(1.0 / 44.0)
+        if gs.state in (State.LOADING, State.LOADED, State.SETUP):
+            # Only a Console restart can put the engine here while this
+            # function is running: run() was already called before entry.
+            return "restarted"
         if gs.state == State.IDLE and not getattr(agent, "closing", 0):
             return "completed"
         sleep(1.0 / 44.0)
@@ -707,6 +716,11 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
         if reason == "no-room":
             _end_round(bit_name, "aborted")
             return "no-room"
+        if reason == "restarted":
+            _end_round(bit_name, "restarted")
+            print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}",
+                 flush=True)
+            continue
         _end_round(bit_name, "completed")
         print("round complete; waiting for next load", flush=True)
 
@@ -1622,6 +1636,24 @@ def main() -> None:
                         parent_pid=args.exit_with_parent,
                         restart_clients=restart_clients,
                         stop_clients=stop_clients)
+                elif effective_serve and reason == "restarted":
+                    print(f"{markers.CONTROL_ROUND_ENDED} "
+                         f"{round1_bit_name} (restarted)", flush=True)
+                    if console_agent is not None:
+                        console_agent.announce_round_ended(
+                            round1_bit_name, "restarted")
+                    print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}",
+                         flush=True)
+                    reason = _serve_roomless(
+                        gs, agent, terrarium,
+                        console_agent=console_agent,
+                        parent_pid=args.exit_with_parent,
+                        restart_clients=restart_clients,
+                        stop_clients=stop_clients)
+                # else: one-shot (non-serve) mode. A "restarted" return
+                # here makes no sense without rounds -- there is no next
+                # round to hand off to -- so it simply falls through to
+                # teardown like "completed" does.
                 _print_round_outcome(reason)
         else:
             # NO_ROOM boot (no --room, a console port instead): wait for

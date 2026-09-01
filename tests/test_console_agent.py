@@ -1048,6 +1048,36 @@ def test_abort_reports_unload_refusal():
     assert out["event"] == "error" and "already unloading" in out["message"]
 
 
+def test_restart_reloads_the_same_bit_with_its_config():
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    terrarium.gs.load_bit("RoomCapableBit")
+    terrarium.gs.hello("ie9", "Shroom Nine", "1")
+    terrarium.gs.join("ie9", room_role_name("TEST"))
+    terrarium.gs.run()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    gs = terrarium.gs
+    name_before = gs.bit_name
+    cfg_before = getattr(gs.bit, "config", None)
+
+    error = agent._handle_command({"command": "restart"})
+
+    assert error is None
+    assert gs.bit_name == name_before
+    assert getattr(gs.bit, "config", None) is cfg_before
+    assert gs.state.name != "IDLE"            # reloaded, not just aborted
+    assert terrarium.state == TerrariumState.ROOM_READY   # Room untouched
+
+
+def test_restart_with_no_bit_is_a_refusal():
+    gs, srv, agent = _server_with_agent()
+
+    out = agent._handle_command({"command": "restart"})
+
+    assert out["event"] == "error" and "no bit loaded" in out["message"]
+
+
 def test_load_bit_is_gated_while_room_not_ready():
     terrarium = make_terrarium()
     srv = FakeConsoleServer()

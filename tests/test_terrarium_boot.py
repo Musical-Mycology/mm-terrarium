@@ -875,6 +875,39 @@ def test_serve_until_done_stops_when_the_bit_completes():
     assert reason == "completed"
 
 
+def test_serve_until_done_reports_restart():
+    """A Console RESTART lands mid-poll: gs.abort()+load_bit() (already run
+    synchronously inside _handle_command) put the engine back in LOADED
+    without this loop ever calling run() again. Only a restart can do
+    that while this function is running."""
+    from control.state import State
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        def __init__(self):
+            self.state = State.RUNNING
+            self.ticks = 0
+
+        def tick(self, dt):
+            self.ticks += 1
+            if self.ticks >= 3:
+                self.state = State.LOADED     # a restart landed mid-poll
+
+    class FakeAgent:
+        closing = 0
+
+        def poll(self):
+            pass
+
+    class FakeArco:
+        def poll(self):
+            return None
+
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+                               sleep=lambda _s: None)
+    assert reason == "restarted"
+
+
 def test_serve_until_done_stops_when_arco_dies():
     """Fail loud: silent degradation in a venue is worse than a stop."""
     from control.state import State

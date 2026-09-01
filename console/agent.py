@@ -201,6 +201,17 @@ class ConsoleAgent:
                     reason = self.terrarium.unload_room(force=True)
                     if reason is not None:
                         return protocol.error_event(name, reason)
+            elif isinstance(command, protocol.RestartCommand):
+                # Soft cycle (2026-09-01 spec section 6): same bit, same
+                # resolved config, Arco and Room untouched. One step
+                # removed from Abort, which takes the room down too.
+                gs = self.game_server
+                if gs.bit_name is None:
+                    return protocol.error_event(name, "no bit loaded")
+                bit_name = gs.bit_name
+                cfg = getattr(gs.bit, "config", None)
+                gs.abort()
+                gs.load_bit(bit_name, config=cfg)
         except (InvalidTransition, BitLoadError) as exc:
             return protocol.error_event(name, str(exc))
         return None
