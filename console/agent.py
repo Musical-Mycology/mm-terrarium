@@ -574,13 +574,10 @@ class ConsoleAgent:
         return instrument_functions_view(self._present_instruments())
 
     def _current_surface_instruments(self) -> dict:
-        """dev/"room" -> instrument name, for every bound Room fixture and
-        every connected device: a bound fixture's dev maps to that
-        fixture's instrument, and every other connected device maps to its
-        carried instrument (TUNESHROOM's name when uncarried). The literal
-        "room" key -- consumed by the diagnostics row's Room option -- maps
-        to the FIRST bound fixture's instrument, and is absent entirely when
-        no Room is loaded or no fixture is bound."""
+        """dev -> instrument name, for every bound Room fixture and every
+        connected device: a bound fixture's dev maps to that fixture's
+        instrument, and every other connected device maps to its carried
+        instrument (TUNESHROOM's name when uncarried)."""
         gs = self.game_server
         # Live off `terrarium.room_binding` when a Terrarium is wired, not
         # `gs.room_binding` -- the same reason _current_room reads
@@ -597,13 +594,6 @@ class ConsoleAgent:
                 dev = room_binding.bound_device(gs.room.name, fixture.name)
                 if dev is not None:
                     out[dev] = fixture.instrument.name
-                    # "room" (the diagnostics row's Room option) takes the
-                    # FIRST bound fixture's instrument: TEST/DEMO rooms carry
-                    # homogeneous fixture instruments today, and this mirrors
-                    # the engine's canonical-room-dev convention. No "room"
-                    # key at all when nothing is bound.
-                    if "room" not in out:
-                        out["room"] = fixture.instrument.name
         for info in gs.devices.all():
             carried = getattr(info, "carried", None)
             out[info.dev] = carried.name if carried is not None else TUNESHROOM.name
@@ -640,6 +630,9 @@ class ConsoleAgent:
         gs = self.game_server
         assignments = gs.registration.assignments if gs.registration else {}
         urls = self._canvas_urls() if self._canvas_urls else {}
+        bound_fixtures = {}
+        if gs.room is not None and gs.room.bound:
+            bound_fixtures = {d: name for name, d in gs.room.bound.items()}
         out = []
         for info in gs.devices.all():
             assigned = assignments.get(info.dev)
@@ -647,7 +640,8 @@ class ConsoleAgent:
             if assigned is not None and assigned[2] != RoleClass.ROOM:
                 role_name = assigned[1]
             out.append(protocol.device_view(
-                info, role_name, urls.get(info.dev), info.dev in gs.muted))
+                info, role_name, urls.get(info.dev), info.dev in gs.muted,
+                bound_fixtures.get(info.dev)))
         return out
 
     def _current_status(self) -> dict:

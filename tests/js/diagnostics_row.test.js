@@ -22,12 +22,11 @@ const INSTRUMENT_FUNCTIONS = {
   tuneshroom: [],
 };
 
-const SURFACE_INSTRUMENTS = { "ie1": "tuneshroom", "sim-strip": "dev_strip", "room": "arr" };
+const SURFACE_INSTRUMENTS = { "ie1": "tuneshroom", "sim-strip": "dev_strip" };
 
 const BUILTINS = {
   tuneshroom: ["flash", "ping", "stop"],
   dev_strip: ["flash"],
-  arr: ["flash", "stop", "ping"],
 };
 
 (async () => {
@@ -66,6 +65,14 @@ const BUILTINS = {
   assert.deepStrictEqual(
     [...diagPicker.options].map((o) => o.value), ["@all", "ie1", "sim-strip"]);
 
+  // Buttons render Stop first -- it is the panic button, and must be
+  // reachable without hunting past Flash/Ping.
+  const diagBar = functions._diagRow().children[1];
+  const buttonTexts = diagBar.children
+    .filter((c) => c.tagName === "button")
+    .map((c) => c.textContent);
+  assert.deepStrictEqual(buttonTexts, ["Stop", "Flash", "Ping"]);
+
   // ---- 2. Button disabled/enabled per selected surface's builtins -------
   // "ie1" -> tuneshroom, which has all three builtins.
   diagPicker.value = "ie1";
@@ -82,8 +89,8 @@ const BUILTINS = {
   assert.strictEqual(functions._diagButton("ping").disabled, true);
 
   // "@all" (All) unions builtins across every surface_instruments entry --
-  // ie1/tuneshroom, sim-strip/dev_strip, and room/arr between them declare
-  // all three builtins, so all three buttons must be enabled.
+  // ie1/tuneshroom and sim-strip/dev_strip between them declare all three
+  // builtins, so all three buttons must be enabled.
   assert.strictEqual(diagPicker.options[0].value, "@all");
   diagPicker.value = "@all";
   diagPicker.onchange();
