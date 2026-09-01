@@ -5,6 +5,7 @@ import pytest
 from bits.test.test_bit import TestBit
 from control.bit import Bit
 from control.engine import BitLoadError, GameServer, InvalidTransition
+from control.function_view import function_view
 from control.instrument import DEFAULTSHROOM, Instrument, TUNESHROOM
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
@@ -471,6 +472,14 @@ def test_granted_join_carries_composed_config_blob():
         "triggers": {
             "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
             "shake": {"peak_g": 2.0, "window_ms": 200},
+        },
+        "instrument": {
+            "name": "tuneshroom",
+            "capabilities": sorted(TUNESHROOM.capabilities),
+            "pixels": 12,
+            "ambient": {"light": TUNESHROOM.light_manifest,
+                        "ugen": TUNESHROOM.ugen_manifest},
+            "functions": [function_view(f) for f in TUNESHROOM.functions],
         },
     }
 

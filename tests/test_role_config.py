@@ -5,6 +5,7 @@ from control.role_config import (
     validate_role_declarations,
     validate_ugen_manifest,
 )
+from control.instrument import DEFAULTSHROOM
 from control.roles import Role, RoleClass, RoleTable
 from control.triggers import EventTrigger
 
@@ -74,6 +75,34 @@ def test_compose_role_config_stamps_slot_and_instrument_when_given():
                                  slot="player", instrument="tuneshroom")
     assert config["slot"] == "player"
     assert config["instrument"] == "tuneshroom"
+
+
+def test_compose_ships_instrument_section_when_carried():
+    config = compose_role_config("Bit", "0.1", make_role(),
+                                 carried=DEFAULTSHROOM)
+    assert config["instrument"] == {
+        "name": "defaultshroom",
+        "capabilities": sorted(DEFAULTSHROOM.capabilities),
+        "pixels": 12,
+        "ambient": {"light": {"instruments": [
+                        {"instrument": "aurora", "target": "primary"}]},
+                    "ugen": {}},
+        "functions": [],
+    }
+
+
+def test_compose_omits_instrument_section_when_carried_is_none():
+    config = compose_role_config("Bit", "0.1", make_role())
+    assert "instrument" not in config
+    config = compose_role_config("Bit", "0.1", make_role(), carried=None)
+    assert "instrument" not in config
+
+
+def test_compose_instrument_section_does_not_alias_the_carried_instrument():
+    config = compose_role_config("Bit", "0.1", make_role(),
+                                 carried=DEFAULTSHROOM)
+    config["instrument"]["ambient"]["light"]["instruments"][0]["target"] = "mutated"
+    assert DEFAULTSHROOM.light_manifest["instruments"][0]["target"] == "primary"
 
 
 def test_validate_accepts_empty_defaults():

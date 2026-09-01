@@ -219,7 +219,11 @@ def test_join_granted_when_carried_instrument_satisfies_slot():
     assert result.slot == "player"
     assert result.instrument == "defaultshroom"
     assert result.config["slot"] == "player"
-    assert result.config["instrument"] == "defaultshroom"
+    # Task 3 (carried-instrument-wire): the flat "instrument" string stamp
+    # is superseded by the instrument section's own "name" field -- every
+    # granted non-ROOM join passes carried= alongside instrument=, so the
+    # section always wins the key.
+    assert result.config["instrument"]["name"] == "defaultshroom"
 
 
 def test_join_refused_with_reason_when_contract_unsatisfied():
@@ -248,7 +252,10 @@ def test_role_without_requires_is_unchanged():
     assert result.slot is None
     assert result.instrument is None
     assert "slot" not in result.config
-    assert "instrument" not in result.config
+    # Task 3 (carried-instrument-wire): the instrument section ships for
+    # every granted non-ROOM join regardless of Role.requires -- unchanged
+    # is about slot gating/stamping, not the carried-instrument section.
+    assert result.config["instrument"]["name"] == "defaultshroom"
 
 
 # --- Task 10: TestBit as the reference exemplar, through the full engine --
@@ -271,6 +278,18 @@ def test_testbit_player_join_is_granted_with_defaultshroom_carrier():
     assert result.granted
     assert result.slot == "player"
     assert result.instrument == "defaultshroom"
+
+
+def test_testbit_jammer_join_ships_the_instrument_section():
+    # Task 3 (carried-instrument-wire): TestBit's requires-less "jammer"
+    # role still gets the full instrument section for an undeclared
+    # (DEFAULTSHROOM-carrying) device.
+    gs = GameServer({"TestBit": TestBit})
+    gs.load_bit("TestBit")
+    gs.devices.hello("dev1", "device-one", "1.0")
+    result = gs.join("dev1", "TEST_JAM_NODE")
+    assert result.granted
+    assert result.config["instrument"]["name"] == "defaultshroom"
 
 
 def test_testbit_player_join_refused_when_carrier_lacks_gesture_tilt():

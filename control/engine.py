@@ -442,7 +442,7 @@ class GameServer:
                 terrarium_config_version=self.provenance.get(
                     "terrarium_config_version"),
                 slot=result.slot, instrument=result.instrument,
-                event_triggers=carried.event_triggers)
+                event_triggers=carried.event_triggers, carried=carried)
             try:
                 self.bit.on_join(dev, result.role)
             except Exception:

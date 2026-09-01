@@ -312,6 +312,9 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
         "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
         "shake": {"peak_g": 2.0, "window_ms": 200},
     }
+    # ...and the instrument section (Task 3) ships the same carried
+    # instrument's full definition under config["instrument"].
+    assert join_result.config["instrument"]["name"] == "tuneshroom"
 
     gs.tick(3.0)   # TestBit's run duration elapses -> COMPLETING -> IDLE
     assert gs.state.name == "IDLE"
