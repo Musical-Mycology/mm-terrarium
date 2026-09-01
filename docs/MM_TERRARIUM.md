@@ -296,6 +296,12 @@ return to a clean waiting state. Landed in the first-slice spec
   UNLOADING is **always reachable even if a Bit hook raises** (deliberate —
   a misbehaving Bit must never wedge Control loaded).
 
+  **(2026-09-01)** This engine-level `abort()` is unchanged. What changed
+  is what the **Console** does around it: a Console-driven abort now also
+  runs `terrarium.unload_room(force=True)` when a Terrarium is wired --
+  Arco goes down (hard stop, guaranteed silence), not just the Bit. See
+  *Console load stabilization* below.
+
 ### `bits/` — reference Bits
 `TestBit` is the **durable reference/regression fixture** (not throwaway): a
 **scored** `shared` role (`player`) and an unscored **jam** role (`jammer`),
@@ -1959,6 +1965,9 @@ full run evidence):
 > step, not a failure). Serve mode now tolerates clean device exits;
 > control death and non-zero device exits still fail loud.
 >
+> **(Superseded 2026-09-01)** The respawn machinery described in this note
+> is deleted, not gated -- see *Console load stabilization* below.
+>
 > **Per-round device respawn, live 2026-08-24:** the device-less-round-2
 > consequence above is gone. `run_stack` watches its Control tee for
 > `markers.CONTROL_ROUND_LOADED` ("round loaded: `<Bit>`", emitted once
@@ -2206,6 +2215,14 @@ The Triggers panel becomes a real operator control surface. Design:
 [`.../2026-08-26-trigger-cards-and-surface-triggers-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-26-trigger-cards-and-surface-triggers-design.md)
 (PR #56). **Live Arco verification is pending** — the spec carries the
 operator checklist; nothing below has been confirmed against real hardware.
+
+> **(Superseded 2026-09-01)** The operator picker's Room aggregate
+> (`@room`) below is now **All** (`@all`) -- room fixtures plus every
+> connected device, lobby included. See *Console load stabilization*
+> below. Separately: this doc's claim elsewhere that MetronomeBit
+> declares its own `stop` and shadows the built-in is stale drift --
+> the current `bits/metronome/metronome_bit.py` `function_table()`
+> declares no `stop` at all.
 
 - **`SolidCue(dev, rgb, level, duration, when=None)`** (`control/cues.py`) —
   a solid-color override applied ON TOP of a surface's rendered session
@@ -2727,10 +2744,13 @@ troubleshooting vocabulary for free.
   "ping"}` is refused **only on instrument declarations**
   (`control/functions.py`'s `owner == "instrument"` branch in the
   validator) -- Bit-declared FunctionTables are not checked, deliberately:
-  `bits/metronome/metronome_bit.py`'s own `stop` gesture predates the
-  built-ins and shadows the built-in `stop` by design when that Bit is
-  loaded. A future Bit that wants the built-in behavior back just leaves
-  the name undeclared.
+  a Bit that declares its own `stop` Function shadows the built-in
+  `stop` by design when that Bit is loaded. **Doc drift, corrected
+  2026-09-01:** this section previously claimed
+  `bits/metronome/metronome_bit.py` was such a case; its
+  `function_table()` declares no `stop` at all, so MetronomeBit has
+  never actually exercised this shadowing path. A future Bit that wants
+  the built-in behavior back just leaves the name undeclared.
 - **The firing ladder lives in `GameServer.fire_function`, per the spec's
   mid-execution-redirect row.** Three rungs, in order: (1) a Bit-declared
   FunctionTable entry with a *non-empty* script fires byte-identical to
@@ -3004,6 +3024,12 @@ stream functions is superseded, not revived.
 ### Bit-cycle room recycle, persistent Testshrooms, and console load fixes (2026-08-31)
 Design: [`.../2026-08-31-bit-cycle-recycle-and-persistent-testshrooms-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-31-bit-cycle-recycle-and-persistent-testshrooms-design.md).
 
+> **(Superseded 2026-09-01)** The automatic per-round recycle described
+> below, and its `_serve_rounds` wiring, were removed 2026-09-01 pending a
+> live round-2-audio verdict; `--persist` is now `run_stack`'s default for
+> spawned Testshrooms, not an opt-in flag. See *Console load
+> stabilization* below.
+
 - **Console `load_bit` overrides bug, fixed.** `console/static/bit.js` was
   sending overrides wrapped as `{table: {...}}` for every dotted override
   key, so every Console-driven `load_bit` with any override failed with
@@ -3249,7 +3275,81 @@ contract doc: [`docs/carried-instrument-schema.md`](carried-instrument-schema.md
   beyond capability tags, and per-device pixel-count overrides.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**1871 passed, 1 skipped**.
+**1871 passed, 1 skipped**. **1887 passed, 1 skipped as of the 2026-09-01
+console-load-stabilization slice** (below).
+
+### Console load stabilization: load-only loads, RESTART/ABORT, All target, testshroom (2026-09-01)
+First sustained live operator session (2026-09-01) surfaced four defects in
+the serve-mode console flow; this slice stabilizes the load path. Design:
+[`.../2026-09-01-console-load-stabilization-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-01-console-load-stabilization-design.md).
+
+- **`[bit] enabled = false` manifest key** (`control/bit_config.py`,
+  default `true`). `BitRegistry.scan` still discovers and parses a
+  disabled package -- its tests and direct imports keep working -- but
+  `lazy_class_map()` excludes it and `resolve_config()` on it returns a
+  located refusal (`ManifestError`, key `bit.enabled`), which is the
+  loadable-ness authority for `run_stack`'s `--bit` path too. Console bit
+  cards omit disabled bits; `--list-bits` prints them with a `disabled`
+  marker so they are not invisible; both CLI launchers refuse a disabled
+  bit with a located message rather than loading it. `bits/metronome/
+  bit.toml` gains `enabled = false` pending its redesign -- no other
+  Metronome change.
+- **`run_stack`'s per-round device respawn is DELETED**, not gated --
+  the `CONTROL_ROUND_LOADED`-driven queue, the respawn spawn path, and
+  the round-numbered `ie<k>-r<N>` naming from the *Console-operator
+  rounds* entry above are gone (supersede note there). `--persist` is
+  now sent to every spawned Testshroom **by default**; the new
+  `--no-persist-shrooms` opts out. Devices are created once, at stack
+  launch, from `--devices N`, and live in the lobby between rounds.
+  Console `load_bit` now loads the Bit and nothing else: no device
+  respawn, no room churn.
+- **Automatic per-round Arco recycle REMOVED** from `_serve_rounds`'s
+  round-end and from `main()`'s round-1 call sites
+  (`harness/terrarium_boot.py`) -- supersedes the *Bit-cycle room
+  recycle* entry above. `Terrarium.recycle_room()`, `_recycle_room()`,
+  and `_restart_room_clients()` remain as callable seams, uncalled,
+  pending the live round-2-audio verdict (RESTART x5, spec section 8): if
+  round-2+ audio on a long-lived Arco proves healthy the machinery goes
+  in a follow-up; if it degrades, the escape hatch is the new heavyweight
+  ABORT.
+- **Room-down resilience.** `_serve_until_done(terrarium=...)` returns
+  `"no-room"`, checked *before* `arco.poll` so an operator ABORT never
+  misreports as an Arco exit. Every `_serve_roomless` lap stops clients
+  (`transport.stop` + `pool.quiesce`, idempotent via `clients_stopped`)
+  on room-down, and `restart_clients` revives them on the next
+  successful `load_room`. The `--room` CLI path falls back into the
+  `NO_ROOM` wait instead of exiting. **Final-review catch:** the
+  `NO_ROOM`-boot call site initially omitted the `stop_clients` wiring;
+  fixed and regression-pinned before merge.
+- **ABORT semantics change: hard stop.** Console abort now runs
+  `gs.abort()` then `terrarium.unload_room(force=True)` when a Terrarium
+  is wired -- Arco goes down, silence is guaranteed, post-state is
+  `NO_ROOM`, and the operator's path back is Load Room (~15 s Arco spawn)
+  then Load Bit. `terrarium=None` callers (terrarium-less embeddings)
+  keep the old bit-only abort, zero behavior change. Uplink abort is
+  unchanged.
+- **RESTART (new).** A console command/button sits between Run and
+  Abort: soft cycle -- capture the loaded Bit's name and the same config
+  object, `gs.abort()`, `load_bit` the same name again. Room and Arco are
+  untouched. `_serve_until_done` returns `"restarted"` (valid from
+  LOADING/LOADED/SETUP) and the serve loop treats it as a fresh round
+  with its own SETUP window, same as a normal reload.
+- **The All target.** The picker's `@room` aggregate is replaced by
+  `@all` ("All") = the Room fixture devices plus every `DevicePool`
+  device -- lobby devices included, deliberately, so flash/stop/ping work
+  even with no Bit loaded. `@all` resolves only in
+  `GameServer._resolve_target`; it is never a wire sentinel Bits see.
+  `cues.ROOM` (`"@room"`) is untouched for Bit-declared ROOM-targeted
+  scripts. Diagnostic buttons enable on any-surface support. Supersedes
+  the *SolidCue overrides* entry's Room-picker description above.
+- **`instruments/testshroom.toml`**: new carried instrument -- 12 px,
+  `light.pixels`, `audio.samples`, tap/tilt gestures, no `audio.mic`.
+  `harness/o2_shroom.py`'s `--instrument` default becomes `"testshroom"`
+  (was `None`; pass an empty string to stay undeclared/defaultshroom), so
+  built-in `ping` and the flash chime now resolve on spawned Testshrooms.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1887 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 
