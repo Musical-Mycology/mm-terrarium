@@ -572,7 +572,7 @@ def test_snapshot_carries_the_loaded_bits_functions():
     names = sorted(t["name"] for t in agent.snapshot()["functions"])
     assert names == ["drift", "flash_device", "jam_hue_neg", "jam_hue_pos",
                      "jam_level_neg", "jam_level_pos", "play_aurora",
-                     "shake_hue", "stop", "tilt_hue", "win"]
+                     "shake_hue", "tilt_hue", "win"]
 
 
 def test_snapshot_functions_is_empty_with_no_bit_loaded():

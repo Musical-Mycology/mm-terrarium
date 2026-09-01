@@ -8,7 +8,7 @@ from bits.test.test_bit import (
     JAMMER_LEVEL_REST,
     TestBit,
 )
-from control.cues import ROOM, FireFunction, MuteCue
+from control.cues import ROOM, FireFunction
 from control.engine import GameServer
 from control.generator_runner import GeneratorRunner
 from control.instrument import InstrumentRequirement
@@ -277,14 +277,14 @@ def test_room_drift_is_a_deterministic_triangle():
         spec, TestBit.ROOM_DRIFT_PERIOD * 3 / 4) == 64
 
 
-SCRIPTED_FUNCTION_NAMES = {"flash_device", "play_aurora", "stop", "win"}
+SCRIPTED_FUNCTION_NAMES = {"flash_device", "play_aurora", "win"}
 STREAM_FUNCTION_NAMES = {
     "tilt_hue", "jam_level_neg", "jam_level_pos", "jam_hue_neg",
     "jam_hue_pos", "shake_hue",
 }
 
 
-def test_testbit_declares_a_room_drift_generator_and_four_surface_triggers():
+def test_testbit_declares_a_room_drift_generator_and_three_surface_triggers():
     table = TestBit().function_table
     assert set(table.functions) == (
         {"drift"} | SCRIPTED_FUNCTION_NAMES | STREAM_FUNCTION_NAMES)
@@ -305,11 +305,6 @@ def test_flash_script_is_chime_plus_white_5s():
     solid = trig.script[1].cue
     assert isinstance(solid, SolidCue)
     assert solid.rgb == (255, 255, 255) and solid.level == 0.9 and solid.duration == 5.0
-
-
-def test_stop_script_is_single_mute():
-    trig = TestBit().function_table.functions["stop"]
-    assert len(trig.script) == 1 and isinstance(trig.script[0].cue, MuteCue)
 
 
 def test_win_sample_declared_on_player_role():

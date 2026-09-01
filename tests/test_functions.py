@@ -75,6 +75,12 @@ def test_an_empty_function_description_is_refused():
         validate_function_table(_table(_function(description="")), VERBS)
 
 
+def test_bit_declared_reserved_name_is_refused():
+    table = _table(_function(name="stop"))
+    with pytest.raises(ValueError, match="reserved built-in"):
+        validate_function_table(table, VERBS, owner="bit")
+
+
 def test_an_empty_condition_description_is_refused():
     bad = _condition(description="")
     with pytest.raises(ValueError, match="description must be non-empty"):
@@ -399,7 +405,7 @@ def test_stream_touching_domain_boundary_gesture_verb_condition_validates():
     """A gesture-verb condition may name a verb that is only ever declared
     by STREAM functions, with no verb_handlers() entry at all."""
     table = FunctionTable(functions={
-        "flash": _function(name="flash", condition=Condition(
+        "glow": _function(name="glow", condition=Condition(
             name="tilted", description="d",
             source=ConditionSource.GESTURE_VERB, verb="tilt")),
         "lo": _stream("lo", verb="tilt", in_lo=-90.0, in_hi=0.0),
