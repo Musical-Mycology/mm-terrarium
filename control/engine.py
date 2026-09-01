@@ -198,6 +198,15 @@ class GameServer:
         # no-op. Empty for an unmigrated Bit (every script non-empty).
         # Reset in _unload.
         self.load_warnings: tuple[str, ...] = ()
+        # Dedup key for hello()'s on_device_warning: (dev, declared name)
+        # pairs already warned about, so a typo'd or non-carriable name
+        # re-declared on every o2 heartbeat re-hello (~5s) warns once
+        # instead of flooding the console log. An entry is dropped the
+        # moment its dev declares a DIFFERENT name (stale) or the current
+        # name resolves successfully, so a fixed declaration that later
+        # regresses warns again. Cleared per-dev on reap_stale removal,
+        # mirroring _clear_stream_trigger_state's placement.
+        self._warned_instruments: set[tuple[str, str]] = set()
 
     def slot_requirement(self, slot: str) -> "InstrumentRequirement | None":
         """Public read of the loaded Bit's requirement for `slot`, or None
@@ -213,18 +222,46 @@ class GameServer:
         it declares nothing (an unmigrated caller, or o2_shroom's liveness
         re-hello -- DevicePool.hello's heartbeat rule then preserves
         whatever this dev already carried). A declared name not found in
-        self.carried_instruments resolves to DEFAULTSHROOM and fires
-        on_device_warning so an operator can see a device asked for
-        something the install doesn't know about."""
+        self.carried_instruments, or found but not carriable (no
+        "light.pixels" capability -- a fixture-only instrument like a
+        Room's light.surface array), resolves to DEFAULTSHROOM and fires
+        on_device_warning (deduped per (dev, name), see
+        self._warned_instruments) so an operator can see a device asked
+        for something the install doesn't know about, or asked to carry
+        something that has no pixels to carry."""
         carried = None
         if instrument is not None:
-            carried = self.carried_instruments.get(instrument)
-            if carried is None:
+            resolved = self.carried_instruments.get(instrument)
+            if resolved is not None and \
+                    "light.pixels" not in resolved.capabilities:
+                resolved = None
+            # This dev's declaration no longer matches an entry warned
+            # about earlier -- drop it so a later regression to that old
+            # name warns again instead of staying silently suppressed.
+            stale = [key for key in self._warned_instruments
+                     if key[0] == dev and key[1] != instrument]
+            for key in stale:
+                self._warned_instruments.discard(key)
+            if resolved is None:
                 carried = DEFAULTSHROOM
-                self._notify(
-                    "on_device_warning",
-                    f"device {dev!r} declared unknown instrument "
-                    f"{instrument!r}; using defaultshroom")
+                key = (dev, instrument)
+                if key not in self._warned_instruments:
+                    self._warned_instruments.add(key)
+                    if instrument in self.carried_instruments:
+                        message = (
+                            f"device {dev!r} declared instrument "
+                            f"{instrument!r} which is not carriable (no "
+                            f"light.pixels); using defaultshroom")
+                    else:
+                        message = (
+                            f"device {dev!r} declared unknown instrument "
+                            f"{instrument!r}; using defaultshroom")
+                    self._notify("on_device_warning", message)
+            else:
+                carried = resolved
+                # Resolved: clear so a later regression to this same name
+                # (e.g. the config entry is later removed) warns again.
+                self._warned_instruments.discard((dev, instrument))
         self.devices.hello(dev, name, protoversion, self._clock(),
                            carried=carried)
         self._notify("on_devices_change")
@@ -267,6 +304,10 @@ class GameServer:
                             "on_release raised for %s during reap; "
                             "continuing", dev)
             self.devices.remove(dev)
+            stale_warned = [key for key in self._warned_instruments
+                            if key[0] == dev]
+            for key in stale_warned:
+                self._warned_instruments.discard(key)
             reaped.append(dev)
         # on_devices_change BEFORE on_registration_change, deliberately: see
         # harness/terrarium_boot.py's _LifecycleLogger. Its "device

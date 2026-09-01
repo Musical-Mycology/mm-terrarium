@@ -47,9 +47,22 @@ the engine at boot):
 
 | `instrument` arg | Resolution | Console-visible |
 |---|---|---|
-| A name found in `carried_instruments` | That `Instrument` | No |
+| A name found in `carried_instruments` and declaring `light.pixels` | That `Instrument` | No |
+| A name found in `carried_instruments` but **not** declaring `light.pixels` (e.g. a Room fixture like `light.surface`, no gestures) | `DEFAULTSHROOM` | Yes -- `on_device_warning` fires, naming the device and instrument and that it is not carriable (no `light.pixels`) |
 | A name **not** found (unknown/typo'd) | `DEFAULTSHROOM` | Yes -- `on_device_warning` fires, logged as a `warn` `log_event` naming the device and the unresolved name |
 | Absent (arg omitted, 3-arg or 1-arg hello) | `DEFAULTSHROOM` | No -- this is the documented legacy meaning, not an error |
+
+Both warning cases above are deduped per `(dev, declared name)`: a device's
+`hello` fires again roughly every 5s on the o2 heartbeat, so warning on
+every occurrence would flood the console log. `GameServer` keeps a small
+`self._warned_instruments` set and warns only the first time a given
+`(dev, name)` pair fails to resolve. An entry is dropped -- so the next
+occurrence warns again -- the moment that dev's declaration changes to a
+different name, the current name resolves successfully, or the dev is
+removed by `reap_stale`. This means a fixed declaration that later
+regresses (the config entry disappears again, or the fixture is
+re-declared as carried) warns again rather than staying silently
+suppressed.
 
 ### The heartbeat preservation rule
 
