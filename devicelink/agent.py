@@ -531,11 +531,15 @@ class DeviceLinkAgent:
         self._last_frames.pop(dev, None)
 
     def _on_mute_change(self, dev: str, muted: bool) -> None:
-        """Latch (or lift) a blackout override at the transport seam. While
-        muted, _feed_breath skips `dev` and _on_light_cue drops its cues --
-        PlayCue suppression already happened engine-side (GameServer.muted).
-        Guarded like every other engine sink here: a failing Room-audio
-        silence must not propagate into the engine tick (boundary rule 2)."""
+        """Latch (or lift) a blackout override at the transport seam, per
+        fixture. While muted, _feed_breath skips `dev` and _on_light_cue
+        drops its cues -- PlayCue suppression already happened engine-side
+        (GameServer.muted). Mute is per fixture now: a Stop at @all arrives
+        as one mute call per real fixture dev (Task 3's engine fan-out), so
+        there is no whole-room special case left here -- each fixture's own
+        queues and voice are purged/silenced independently. Guarded like
+        every other engine sink here: a failing Room-audio silence must not
+        propagate into the engine tick (boundary rule 2)."""
         if muted:
             self._muted.add(dev)
             self._overrides[dev] = ((0, 0, 0), 0.0, None)
@@ -547,24 +551,14 @@ class DeviceLinkAgent:
             # guards on self._muted as a second line of defense, but the
             # purge here is what keeps the queue itself from growing stale.
             self._light_cues.purge(lambda payload: payload[0] == dev)
-            if dev == self._canonical_room_dev() and self._room_bridge is not None:
-                # The Room mutes by its canonical dev, and _room_cues holds
-                # only Room audio tuples -- purge it outright rather than by
-                # predicate.
-                self._room_cues.purge(lambda payload: True)
-                try:
-                    # RoomBridge no longer owns an audio channel (per-fixture
-                    # instruments): silence the canonical dev's own
-                    # AudioBridge voice directly, guarded exactly like the
-                    # feed_audio call this replaces. Task 5 rewrites this
-                    # whole mute path to cover every granted fixture, not
-                    # just the canonical dev.
-                    if (self._room_audio is not None
-                            and dev in self._room_audio_devs):
+            if self._is_room_dev(dev):
+                self._room_cues.purge(lambda payload: payload[0] == dev)
+                if (self._room_audio is not None
+                        and dev in self._room_audio_devs):
+                    try:
                         self._room_audio.silence(dev)
-                except Exception:
-                    logger.exception("mute silence of Room audio failed for %s",
-                                     dev)
+                    except Exception:
+                        logger.exception("mute silence failed for %s", dev)
         else:
             self._muted.discard(dev)
             self._overrides.pop(dev, None)
@@ -631,13 +625,13 @@ class DeviceLinkAgent:
             logger.exception("Room render failed; skipping frame")
             return
         frame = bytes(universe.get_frame()[:self._room_profile.channel_count])
-        frame = self._apply_override(canonical, frame)
         when = at if at is not None else self._clock() + self._horizon
         for name, start, count in self._room_profile.fixture_slices():
             dev = bound.get(name)
             if dev is None:
                 continue   # this fixture is not bound yet -- send to the rest
             slice_ = frame[start:start + count]
+            slice_ = self._apply_override(dev, slice_)
             if slice_ != self._last_frames.get(dev):
                 self._last_frames[dev] = slice_
                 self._emit_room_frame(dev, slice_)

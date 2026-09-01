@@ -1363,11 +1363,16 @@ def test_a_room_audio_cue_already_past_clamps_and_counts():
 def two_fixture_agent():
     """A TestBit-loaded TEST Room with BOTH fixtures bound, wired to a
     _FakeAudioBridge room_audio so grants/feeds can be asserted per real
-    fixture dev."""
+    fixture dev. Both devs are pre-bound on the FakeServer so /leds sends
+    for either fixture are actually recorded (see FakeServer.send's
+    unbound-dev no-op)."""
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
     audio = _FakeAudioBridge()
-    agent = DeviceLinkAgent(gs, FakeServer(), room_bridge=RoomBridge(),
+    server = FakeServer()
+    server.bind_dev("sim-room-main", "c-main")
+    server.bind_dev("sim-room-accent", "c-accent")
+    agent = DeviceLinkAgent(gs, server, room_bridge=RoomBridge(),
                             room_audio=audio)
     return agent, audio, "sim-room-main", "sim-room-accent"
 
@@ -1384,6 +1389,41 @@ def test_fixture_midi_feeds_that_fixtures_voice(two_fixture_agent):
     agent._render_room()
     assert (accent_dev, 0x90, 57, 100) in audio.fed
     assert all(f[0] != main_dev for f in audio.fed)
+
+
+def test_mute_of_one_fixture_blacks_only_its_slice(two_fixture_agent):
+    agent, audio, main_dev, accent_dev = two_fixture_agent
+    # Paint main non-black first so the assertion below cannot be satisfied
+    # by an idle Room frame that just happens to already be all zero.
+    agent._on_solid_cue(main_dev, (255, 255, 255), 0.9, 5.0, agent._clock())
+    agent.poll()
+    agent._on_mute_change(accent_dev, True)
+    agent.poll()
+
+    accent_frame = _last_leds_payload(agent.server, accent_dev)
+    main_frame = _last_leds_payload(agent.server, main_dev)
+    assert set(accent_frame) == {0}
+    assert set(main_frame) == {round(255 * 0.9)}
+
+
+def test_mute_of_one_fixture_silences_only_its_voice(two_fixture_agent):
+    agent, audio, main_dev, accent_dev = two_fixture_agent
+    agent._on_mute_change(accent_dev, True)
+    assert audio.silenced == [accent_dev]
+
+
+def test_solid_cue_at_one_fixture_paints_only_its_slice(two_fixture_agent):
+    agent, audio, main_dev, accent_dev = two_fixture_agent
+    agent.poll()   # settle the initial render
+    main_before = _last_leds_payload(agent.server, main_dev)
+
+    agent._on_solid_cue(accent_dev, (255, 255, 255), 0.9, 5.0, agent._clock())
+    agent.poll()
+
+    accent_frame = _last_leds_payload(agent.server, accent_dev)
+    main_frame = _last_leds_payload(agent.server, main_dev)
+    assert set(accent_frame) == {round(255 * 0.9)}
+    assert main_frame == main_before
 
 
 def test_only_the_first_granted_fixture_plays_the_welcome():
@@ -2040,7 +2080,10 @@ def test_mute_purges_a_pending_timed_cue_so_unmute_does_not_replay_it():
     assert (0xB0, 74, 99) not in seen
 
 
-def test_room_override_covers_every_fixture_slice():
+def test_room_override_paints_only_the_canonical_fixtures_slice():
+    """Overrides are per fixture now (Task 5): a ROOM-addressed SolidCue
+    resolves to the canonical dev and paints only ITS slice, not the whole
+    concatenated frame. See spec section 5's accepted per-fixture delta."""
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
     server = FakeServer()
@@ -2051,9 +2094,10 @@ def test_room_override_covers_every_fixture_slice():
 
     canonical = agent._canonical_room_dev()
     assert canonical == "sim-room-main"
+    accent_before = _last_leds_payload(server, "sim-room-accent")
     agent._on_solid_cue(canonical, (255, 255, 255), 0.9, 5.0,
                         when=agent._clock())
     agent.poll()
 
-    for dev in ("sim-room-main", "sim-room-accent"):
-        assert set(_last_leds_payload(server, dev)) == {round(255 * 0.9)}
+    assert set(_last_leds_payload(server, "sim-room-main")) == {round(255 * 0.9)}
+    assert _last_leds_payload(server, "sim-room-accent") == accent_before
