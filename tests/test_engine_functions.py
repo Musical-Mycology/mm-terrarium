@@ -809,7 +809,9 @@ def test_unmatched_verb_is_untouched_by_stream_triggers():
 
 def test_non_numeric_stream_arg_passes_through_untouched_never_raises():
     gs = _joined()
-    assert gs.data("ie1", "tilt", ["not-a-number"]) is None
+    original = ["not-a-number"]
+    assert gs.data("ie1", "tilt", original) is None
+    assert gs.bit.received[-1] == ["not-a-number"]
 
 
 # ------------------------------------------------------------- @all target
