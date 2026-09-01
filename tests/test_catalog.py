@@ -151,3 +151,13 @@ def test_shipped_defaultshroom_catalog_file_matches_the_code_constant():
     from control.instrument import DEFAULTSHROOM
     cat = load_catalog(Path("instruments"))
     assert cat.published["defaultshroom"] == DEFAULTSHROOM
+
+
+def test_testshroom_catalog_entry_resolves_with_audio_samples():
+    from control.terrarium_config import load_terrarium_config
+    cfg = load_terrarium_config("terrarium.toml")
+    inst = cfg.instruments["testshroom"]
+    assert inst.pixels == 12
+    assert "audio.samples" in inst.capabilities
+    assert "light.pixels" in inst.capabilities      # carriable (engine gate)
+    assert "audio.mic" not in inst.capabilities

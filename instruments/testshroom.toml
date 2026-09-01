@@ -1,0 +1,22 @@
+description = "Harness Testshroom: browser-canvas 12-LED test instrument"
+pixels = 12
+capabilities = ["light.pixels", "audio.samples", "gesture.tap", "gesture.tilt"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+  [ambient]
+  [ambient.light]
+  instruments = [ { instrument = "aurora", target = "primary" } ]
+
+[[event_triggers]]
+name = "tap"
+description = "a single or double tap on the shell"
+  [event_triggers.thresholds]
+  peak_g = 2.0
+  window_ms = 200
+  double_ms = 400
+
+[[event_triggers]]
+name = "shake"
+description = "a shake gesture"
+  [event_triggers.thresholds]
+  peak_g = 2.0
+  window_ms = 200

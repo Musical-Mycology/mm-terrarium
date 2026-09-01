@@ -372,11 +372,12 @@ def main() -> None:
     parser.add_argument("--sim-host", default="127.0.0.1")
     parser.add_argument("--sim-port", type=int, default=0)
     parser.add_argument("--tilt-hz", type=float, default=20.0)
-    parser.add_argument("--instrument", default=None,
+    parser.add_argument("--instrument", default="testshroom",
                         help="Declare this device's carried instrument on "
-                             "hello (e.g. tuneshroom), re-sent on every "
-                             "heartbeat. Omit to stay undeclared, "
-                             "resolving to defaultshroom.")
+                             "hello, re-sent on every heartbeat (default "
+                             "testshroom, the harness's own catalog "
+                             "instrument). Pass an empty string to stay "
+                             "undeclared, resolving to defaultshroom.")
     parser.add_argument("--join-retry", type=float, default=0.0,
                         help="Re-send /game/join every N seconds until a "
                              "role, deny or error comes back. 0 (default) "
@@ -480,7 +481,7 @@ def main() -> None:
                             input_queue=operator_input,
                             clock=o2lite.time_get,
                             on_play=lambda name, params: player.play(name),
-                            instrument=args.instrument)
+                            instrument=args.instrument or None)
     backend.open()
     canvas_url = f"http://{args.sim_host}:{backend.port}/"
     url_marker = markers.ROOM_URL if args.no_join else markers.BROWSE_URL
