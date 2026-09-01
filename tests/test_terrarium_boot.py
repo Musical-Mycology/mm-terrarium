@@ -1623,7 +1623,7 @@ def test_main_defaults_bit_to_test_bit(monkeypatch):
     assert "TestBit" in captured["bit_registry"]
 
 
-def test_main_forwards_bit_flag_to_boot_config(monkeypatch):
+def test_main_forwards_bit_flag_to_boot_config(monkeypatch, metronome_enabled_scan):
     captured = _run_main_capturing_build(
         monkeypatch, ["--bit", "MetronomeBit", "--room", "DEMO"])
     assert captured["config"].bit_name == "MetronomeBit"
@@ -1633,12 +1633,17 @@ def test_main_forwards_bit_flag_to_boot_config(monkeypatch):
 def test_main_hands_build_every_discovered_bit_name(monkeypatch):
     """main() now wires the full registry (via lazy_class_map()) into
     build(), not just the one bit named on the command line -- the Console
-    can load_bit() any discovered package, not only the boot-time default."""
+    can load_bit() any discovered package, not only the boot-time default.
+    A disabled bit (MetronomeBit, pending redesign) is still discovered but
+    excluded from the lazy map, so the expected set is the enabled subset,
+    not every discovered name."""
     from control.bit_registry import BitRegistry
 
     captured = _run_main_capturing_build(monkeypatch, ["--room", "TEST"])
-    all_names = set(BitRegistry.discover().packages)
-    assert set(captured["bit_registry"]) == all_names
+    reg = BitRegistry.discover()
+    enabled_names = {n for n, p in reg.packages.items()
+                      if p.config.identity.enabled}
+    assert set(captured["bit_registry"]) == enabled_names
 
 
 def test_list_bits_prints_every_discovered_package(monkeypatch, capsys):

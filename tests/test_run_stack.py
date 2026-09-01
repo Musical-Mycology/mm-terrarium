@@ -541,10 +541,11 @@ def test_control_command_passes_bit_when_set():
     assert cmd[cmd.index("--bit") + 1] == "MetronomeBit"
 
 
-def test_config_from_args_forwards_bit():
+def test_config_from_args_forwards_bit(metronome_enabled_registry):
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--bit", "MetronomeBit"])
-    assert config_from_args(args).bit == "MetronomeBit"
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).bit == "MetronomeBit"
 
 
 def test_config_from_args_defaults_bit_to_test_bit():
@@ -562,13 +563,15 @@ def test_config_from_args_derives_node_from_test_bit_manifest():
     assert config_from_args(args).node == "TEST_PLAYER_NODE"
 
 
-def test_config_from_args_derives_node_from_metronome_bit_manifest():
+def test_config_from_args_derives_node_from_metronome_bit_manifest(
+        metronome_enabled_registry):
     """bits/metronome/bit.toml's launch.nodes maps player -> METRO_PLAYER_NODE
     and default_join_role is "player", so join_node() resolves it without
     any --node."""
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--bit", "MetronomeBit"])
-    assert config_from_args(args).node == "METRO_PLAYER_NODE"
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).node == "METRO_PLAYER_NODE"
 
 
 def test_config_from_args_forwards_node():
@@ -577,11 +580,13 @@ def test_config_from_args_forwards_node():
     assert config_from_args(args).node == "SOME_OTHER_NODE"
 
 
-def test_config_from_args_devices_defaults_from_metronome_bit_manifest():
+def test_config_from_args_devices_defaults_from_metronome_bit_manifest(
+        metronome_enabled_registry):
     """bits/metronome/bit.toml's launch.default_devices is 2."""
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--bit", "MetronomeBit"])
-    assert config_from_args(args).devices == 2
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).devices == 2
 
 
 def test_config_from_args_devices_defaults_from_test_bit_manifest():
@@ -590,23 +595,29 @@ def test_config_from_args_devices_defaults_from_test_bit_manifest():
     assert config_from_args(args).devices == 1
 
 
-def test_config_from_args_forwards_explicit_devices_over_the_manifest():
+def test_config_from_args_forwards_explicit_devices_over_the_manifest(
+        metronome_enabled_registry):
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--bit", "MetronomeBit", "--devices", "5"])
-    assert config_from_args(args).devices == 5
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).devices == 5
 
 
-def test_config_from_args_room_type_defaults_from_metronome_bit_manifest():
+def test_config_from_args_room_type_defaults_from_metronome_bit_manifest(
+        metronome_enabled_registry):
     """bits/metronome/bit.toml's launch.default_room_type is DEMO."""
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--bit", "MetronomeBit"])
-    assert config_from_args(args).room_type == "DEMO"
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).room_type == "DEMO"
 
 
-def test_config_from_args_forwards_explicit_room_type_over_the_manifest():
+def test_config_from_args_forwards_explicit_room_type_over_the_manifest(
+        metronome_enabled_registry):
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--bit", "MetronomeBit", "--room", "TEST"])
-    assert config_from_args(args).room_type == "TEST"
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).room_type == "TEST"
 
 
 def test_ci_bound_uses_the_forwarded_setup_seconds_when_it_exceeds_the_manifest():
@@ -622,7 +633,8 @@ def test_ci_bound_uses_the_forwarded_setup_seconds_when_it_exceeds_the_manifest(
     assert config_from_args(args).seconds == 90.0 + 45.0 + 15.0
 
 
-def test_ci_bound_uses_an_explicit_setup_seconds_when_it_exceeds_the_manifest():
+def test_ci_bound_uses_an_explicit_setup_seconds_when_it_exceeds_the_manifest(
+        metronome_enabled_registry):
     """An explicit --setup-seconds still wins the max() over the
     manifest's own (here larger) setup_seconds is NOT the point here --
     MetronomeBit's manifest setup_seconds is 20, so an explicit
@@ -630,16 +642,19 @@ def test_ci_bound_uses_an_explicit_setup_seconds_when_it_exceeds_the_manifest():
     bound below what the manifest itself needs: max(20, 5) + 45 + 15 = 80."""
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--ci", "--bit", "MetronomeBit", "--setup-seconds", "5"])
-    assert config_from_args(args).seconds == 20.0 + 45.0 + 15.0
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).seconds == 20.0 + 45.0 + 15.0
 
 
-def test_ci_bound_uses_the_larger_of_manifest_and_forwarded_setup_seconds():
+def test_ci_bound_uses_the_larger_of_manifest_and_forwarded_setup_seconds(
+        metronome_enabled_registry):
     """MetronomeBit's manifest setup_seconds (20) is smaller than the
     forwarded --setup-seconds default (90), so the bound must use 90:
     max(20, 90) + 45 + 15 = 150."""
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--ci", "--bit", "MetronomeBit"])
-    assert config_from_args(args).seconds == 90.0 + 45.0 + 15.0
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).seconds == 90.0 + 45.0 + 15.0
 
 
 def test_ci_bound_falls_back_to_45s_when_the_manifest_has_no_expected_run_seconds():
@@ -660,10 +675,11 @@ def test_ci_bound_with_an_explicit_setup_seconds_that_exceeds_the_manifest():
     assert config_from_args(args).seconds == 5.0 + 45.0 + 15.0
 
 
-def test_ci_bound_is_overridden_by_an_explicit_seconds():
+def test_ci_bound_is_overridden_by_an_explicit_seconds(metronome_enabled_registry):
     from harness.run_stack import config_from_args, parse_args
     args = parse_args(["--ci", "--bit", "MetronomeBit", "--seconds", "5"])
-    assert config_from_args(args).seconds == 5.0
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).seconds == 5.0
 
 
 def test_an_unresolvable_node_is_a_config_error_before_anything_spawns():

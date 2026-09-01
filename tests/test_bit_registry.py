@@ -292,3 +292,33 @@ def test_asset_path_with_no_root_raises():
         '\n[assets]\nchime = "assets/chime.wav"\n', source="t")
     with pytest.raises(ManifestError):
         config.asset_path("chime")
+
+
+def _write_pkg(root, name, enabled):
+    pkg = root / name.lower()
+    pkg.mkdir(parents=True)
+    line = "" if enabled else "enabled = false\n"
+    (pkg / "bit.toml").write_text(
+        f'[bit]\nname = "{name}"\nentry = "m:C"\n'
+        f"requires_terrarium_api = 1\n{line}")
+    return pkg
+
+
+def test_disabled_bit_is_discovered_but_not_loadable(tmp_path):
+    from control.bit_config import ManifestError
+    from control.bit_registry import BitRegistry
+    _write_pkg(tmp_path, "OnBit", True)
+    _write_pkg(tmp_path, "OffBit", False)
+    reg = BitRegistry.scan([tmp_path])
+    assert set(reg.packages) == {"OnBit", "OffBit"}   # still discovered
+    cmap = reg.lazy_class_map()
+    assert set(cmap) == {"OnBit"}                     # not loadable
+    assert len(cmap) == 1
+    import pytest
+    with pytest.raises(KeyError):
+        cmap["OffBit"]
+    with pytest.raises(ManifestError, match="disabled"):
+        reg.resolve_config("OffBit")
+    rows = {r["name"]: r for r in reg.list_view()}
+    assert rows["OffBit"]["enabled"] is False
+    assert rows["OnBit"]["enabled"] is True
