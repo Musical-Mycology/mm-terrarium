@@ -2511,7 +2511,7 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
                             parent_pid=None,
-                            restart_clients=None):
+                            restart_clients=None, stop_clients=None):
         captured["catalog_root"] = console_agent.catalog_root
         raise SystemExit(0)
 
@@ -2557,7 +2557,7 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
                             parent_pid=None,
-                            restart_clients=None):
+                            restart_clients=None, stop_clients=None):
         captured["bench_session_factory"] = console_agent.bench_session_factory
         captured["captures_root"] = console_agent.captures_root
         raise SystemExit(0)
@@ -2574,6 +2574,59 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
 
     assert captured["bench_session_factory"] is not None
     assert captured["captures_root"].name == "captures"
+
+
+def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
+    """main()'s NO_ROOM-boot branch (no --room, a console port given) must
+    pass its own `stop_clients` into `_serve_roomless`, same as every other
+    call site in the file. Otherwise a Console hard ABORT mid-round on a
+    console-only boot returns "no-room" without transport.stop() /
+    pool.quiesce() ever running, and clients_stopped stays False -- so the
+    next load_room's restart_clients() no-ops and the o2lite
+    transport/pool stay wired to a dead hub. Same fake-build/fake-serve
+    harness as the catalog-root and bench-session-factory tests above,
+    but this one captures the full kwargs `_serve_roomless` was called
+    with instead of reaching into the console_agent."""
+    import types
+
+    import harness.terrarium_boot as terrarium_boot_module
+    from control.terrarium import TerrariumState
+
+    class _FakeObservable:
+        room = None
+        state = TerrariumState.NO_ROOM
+
+        def add_observer(self, observer):
+            pass
+
+    def fake_build(config, bit_registry, **kwargs):
+        gs = _FakeObservable()
+        server = types.SimpleNamespace(port=0)
+        agent = types.SimpleNamespace(room_bridge=None, canvas_urls=[])
+        teardown = TeardownStack()
+        terrarium = _FakeObservable()
+        return gs, server, agent, None, teardown, terrarium
+
+    def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
+                            parent_pid=None, restart_clients=None,
+                            stop_clients=None):
+        captured["restart_clients"] = restart_clients
+        captured["stop_clients"] = stop_clients
+        raise SystemExit(0)
+
+    captured = {}
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(terrarium_boot_module, "_serve_roomless",
+                        fake_serve_roomless)
+    monkeypatch.setattr(sys, "argv",
+                        ["terrarium_boot.py", "--console-port", "0"])
+
+    with pytest.raises(SystemExit):
+        terrarium_boot_module.main()
+
+    assert captured["restart_clients"] is not None
+    assert captured["stop_clients"] is not None
+
 
 def test_recycle_room_orders_client_stops_before_unload_and_restarts_after():
     """Client-before-hub (control/teardown.py's invariant): both of

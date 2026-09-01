@@ -1664,7 +1664,8 @@ def main() -> None:
             reason = _serve_roomless(gs, agent, terrarium,
                                      console_agent=console_agent,
                                      parent_pid=args.exit_with_parent,
-                                     restart_clients=restart_clients)
+                                     restart_clients=restart_clients,
+                                     stop_clients=stop_clients)
             _print_round_outcome(reason)
     except KeyboardInterrupt:
         pass
