@@ -1,9 +1,16 @@
 // Design panel: list of declared designs (draft/published pairs) rendered
-// into #designList, a raw-TOML editor (#designText/#designErrors), and the
-// Save/Publish/Clone actions. Wire shapes are Task 5's verbatim: commands
-// list_designs/get_design/save_design/publish_design/clone_design; events
-// designs_listed/design/designs_changed (the snapshot carries the same rows
-// under "designs").
+// into #designList (instruments) and #roomDesignList (rooms), a raw-TOML
+// editor (#designText/#designErrors), and the Save/Publish/Clone actions.
+// Wire shapes are Task 5's verbatim: commands list_designs/get_design/
+// save_design/publish_design/clone_design; events designs_listed/design/
+// designs_changed (the snapshot carries the same rows under "designs").
+//
+// Instruments and rooms share one catalog wire: every row carries a `kind`
+// ("instrument"|"room"), the two lists are the same rows filtered by it,
+// and every command carries the open selection's kind so the server knows
+// which catalog root to read or write. A row or `design` event without a
+// `kind` is an instrument (an older server), which keeps the panel working
+// against a server that predates the rooms catalog.
 //
 // Selecting a published design and hitting Save writes a draft of the same
 // name (the draft-shadowing edit flow) -- the client always sends
@@ -12,8 +19,13 @@
 import * as wire from "./wire.js";
 import { rebuild as rebuildForms } from "./design_forms.js";
 
-let lastDesigns = [];      // last-seen designs_listed/designs_changed/snapshot rows
-let current = null;        // {name, state} of the open design, or null
+let lastDesigns = [];      // last-seen designs_listed/designs_changed/snapshot rows (both kinds)
+let current = null;        // {name, state, kind} of the open design, or null
+
+// A row/event without an explicit kind predates the rooms catalog.
+function kindOf(row) {
+  return (row && row.kind) || "instrument";
+}
 
 function clear(node) {
   node.textContent = "";
@@ -28,32 +40,43 @@ function mk(tag, className, text) {
 
 // -------------------------------------------------------------- rendering
 
-// Pure renderer: one row per design, "<name> [draft|published]", plus an
-// error badge when the entry's error is non-null. `onSelect(design)` fires
-// on row click.
-export function renderDesigns(listEl, designs, onSelect) {
+// Pure renderer: one row per design of `kind`, "<name> [draft|published]",
+// plus an error badge when the entry's error is non-null. Rows of the other
+// kind are skipped, so the same catalog rows paint both lists.
+// `onSelect(design)` fires on row click -- except on a `placeholder` row,
+// which stands in for a catalog that would not load: there is no design
+// behind it, so it reports its error and takes no click at all (asking the
+// server to open "<rooms catalog>" is nonsense, and used to be the very
+// click that re-tripped the failing load).
+export function renderDesigns(listEl, designs, onSelect, kind = "instrument") {
   clear(listEl);
   for (const design of designs) {
-    const row = mk("div", "design-row");
+    if (kindOf(design) !== kind) continue;
+    const row = mk("div", design.placeholder ? "design-row placeholder" : "design-row");
     row.appendChild(mk("span", "name", `${design.name} [${design.state}]`));
     if (design.error) row.appendChild(mk("span", "chip rose err", "error"));
-    row.onclick = () => onSelect(design);
+    if (!design.placeholder) row.onclick = () => onSelect(design);
     listEl.appendChild(row);
   }
 }
 
 function onRowSelect(design) {
-  wire.send("get_design", { state: design.state, name: design.name });
+  wire.send("get_design", { kind: kindOf(design), state: design.state, name: design.name });
 }
 
 function render() {
   const listEl = document.getElementById("designList");
-  renderDesigns(listEl, lastDesigns, onRowSelect);
-  if (current) {
-    for (const [i, design] of lastDesigns.entries()) {
-      if (design.name === current.name && design.state === current.state) {
-        listEl.children[i].classList.add("selected");
-      }
+  const roomListEl = document.getElementById("roomDesignList");
+  renderDesigns(listEl, lastDesigns, onRowSelect, "instrument");
+  renderDesigns(roomListEl, lastDesigns, onRowSelect, "room");
+  if (!current) return;
+  // The selected row lives in whichever list holds the selection's kind,
+  // and its index is into that list's filtered rows, not lastDesigns.
+  const target = current.kind === "room" ? roomListEl : listEl;
+  const rows = lastDesigns.filter((d) => kindOf(d) === current.kind);
+  for (const [i, design] of rows.entries()) {
+    if (design.name === current.name && design.state === current.state) {
+      target.children[i].classList.add("selected");
     }
   }
 }
@@ -63,9 +86,9 @@ function onDesignsChanged(designs) {
   render();
 }
 
-// Accessor for the currently-open design selection ({name, state}, or null
-// when nothing is open) -- used by design_forms.js to gate form rendering
-// without duplicating design.js's selection tracking.
+// Accessor for the currently-open design selection ({name, state, kind}, or
+// null when nothing is open) -- used by design_forms.js to gate form
+// rendering without duplicating design.js's selection tracking.
 export function getSelection() {
   return current;
 }
@@ -73,13 +96,16 @@ export function getSelection() {
 // Fills the editor from a `design` event: text, errors, and remembers the
 // open selection so Save/Publish/Clone know what they're acting on.
 export function openDesign(msg) {
-  current = { name: msg.name, state: msg.state };
+  current = { name: msg.name, state: msg.state, kind: kindOf(msg) };
   document.getElementById("designText").value = msg.text;
   const errEl = document.getElementById("designErrors");
   clear(errEl);
   for (const error of (msg.errors || [])) {
     errEl.appendChild(mk("div", "err", error));
   }
+  // The instrument-only panels re-gate on every selection change.
+  benchButtonsEnabled();
+  calButtonsEnabled();
   render();
 }
 
@@ -93,12 +119,12 @@ export function init() {
   saveBtn.onclick = () => {
     if (!current) return;
     const text = document.getElementById("designText").value;
-    wire.send("save_design", { name: current.name, text }, saveBtn);
+    wire.send("save_design", { kind: current.kind, name: current.name, text }, saveBtn);
   };
 
   publishBtn.onclick = () => {
     if (!current) return;
-    wire.send("publish_design", { name: current.name }, publishBtn);
+    wire.send("publish_design", { kind: current.kind, name: current.name }, publishBtn);
   };
 
   cloneBtn.onclick = () => {
@@ -106,6 +132,7 @@ export function init() {
     const newName = window.prompt("Clone as:");
     if (!newName) return;
     wire.send("clone_design", {
+      kind: current.kind,
       source_state: current.state,
       source_name: current.name,
       new_name: newName,
@@ -129,6 +156,26 @@ export function init() {
 
 const BENCH_TILT_THROTTLE_MS = 100;
 let lastTiltSendAt = 0;
+let benchRunning = false;    // a bench_started with no bench_stop since
+
+// The bench and the calibrate panel both drive instrument-only server
+// paths (bench_start and replay_trace resolve their name in the INSTRUMENT
+// catalog, and a proposal edits an instrument's thresholds), so with a room
+// open they could only ever answer a confusing "no published design".
+// Both gates hang off this one predicate.
+function instrumentOpen() {
+  return !!(current && current.kind !== "room");
+}
+
+// The bench controls' one enable/disable point: Simulate needs an open
+// instrument, Stop and the tilt lane need a RUNNING bench and nothing
+// else. Gating Stop on the selection too would strand a bench started for
+// an instrument the moment the operator clicked over to a room.
+function benchButtonsEnabled() {
+  document.getElementById("benchStart").disabled = !instrumentOpen();
+  document.getElementById("benchStop").disabled = !benchRunning;
+  document.getElementById("benchTilt").disabled = !benchRunning;
+}
 
 // Pure renderer: one button per declared function, labeled by name with a
 // title/tooltip of its description and a builtin/instrument class per its
@@ -165,8 +212,8 @@ export function paintBenchFrame(canvas, channels) {
 function onBenchStarted(functions) {
   const mount = document.getElementById("benchFunctions");
   renderBenchFunctions(mount, functions || [], (cmd) => wire.send(cmd.command, { name: cmd.name }));
-  document.getElementById("benchStop").disabled = false;
-  document.getElementById("benchTilt").disabled = false;
+  benchRunning = true;
+  benchButtonsEnabled();
 }
 
 function onBenchFrame(channels) {
@@ -179,14 +226,14 @@ export function initBench() {
   const tilt = document.getElementById("benchTilt");
 
   startBtn.onclick = () => {
-    if (!current) return;
+    if (!instrumentOpen()) return;
     wire.send("bench_start", { state: current.state, name: current.name }, startBtn);
   };
 
   stopBtn.onclick = () => {
     wire.send("bench_stop", {}, stopBtn);
-    stopBtn.disabled = true;
-    tilt.disabled = true;
+    benchRunning = false;
+    benchButtonsEnabled();
     clear(document.getElementById("benchFunctions"));
   };
 
@@ -204,6 +251,8 @@ export function initBench() {
 
   wire.on("bench_started", (m) => onBenchStarted(m.functions));
   wire.on("bench_frame", (m) => onBenchFrame(m.channels));
+
+  benchButtonsEnabled();
 }
 
 // -------------------------------------------------------------- calibrate
@@ -305,8 +354,9 @@ export function applyProposal(text, trigger, proposal, provenance) {
 
 function calButtonsEnabled() {
   document.getElementById("calPropose").disabled =
-    !(lastProposal && current && current.state === "draft");
-  document.getElementById("calReplay").disabled = !(selectedCapture && selectedCapture.session);
+    !(lastProposal && instrumentOpen() && current.state === "draft");
+  document.getElementById("calReplay").disabled =
+    !(selectedCapture && selectedCapture.session && instrumentOpen());
 }
 
 function onCapturesListed(sessions) {
@@ -410,15 +460,15 @@ export function initCalibrate() {
   refreshBtn.onclick = () => wire.send("list_captures", {}, refreshBtn);
 
   proposeBtn.onclick = () => {
-    if (!current || !lastProposal || !selectedCapture) return;
+    if (!instrumentOpen() || !lastProposal || !selectedCapture) return;
     const provenance = `${selectedCapture.session} on ${new Date().toISOString().slice(0, 10)}`;
     const textEl = document.getElementById("designText");
     textEl.value = applyProposal(textEl.value, selectedCapture.label, lastProposal, provenance);
-    rebuildForms(textEl.value);
+    rebuildForms(textEl.value, current.kind);
   };
 
   replayBtn.onclick = () => {
-    if (!current || !selectedCapture) return;
+    if (!instrumentOpen() || !selectedCapture) return;
     const trigger = window.prompt("Trigger name", "tap");
     if (!trigger) return;
     const row = lastStatsRows.find((r) => r.label === selectedCapture.label) || lastStatsRows[0];

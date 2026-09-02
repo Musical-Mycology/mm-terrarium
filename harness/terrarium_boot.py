@@ -1186,12 +1186,15 @@ def _build_arg_parser():
                          "console is unauthenticated and trusted-LAN only.")
     ap.add_argument("--config", default="terrarium.toml", metavar="PATH",
                     help="The terrarium.toml this run boots against -- its "
-                         "[rooms.<NAME>] tables are the valid --room values. "
-                         "Default: terrarium.toml in the current directory.")
+                         "[rooms.<NAME>] tables and its rooms catalog "
+                         "(room_paths, default rooms/) are the valid --room "
+                         "values. Default: terrarium.toml in the current "
+                         "directory.")
     ap.add_argument("--room", default=None, metavar="NAME",
-                    help="Which Room (a [rooms.<NAME>] table in --config) to "
-                         "load. Unknown names exit with a located error "
-                         "listing every room --config actually defines. "
+                    help="Which Room (a [rooms.<NAME>] table in --config, or "
+                         "a published entry in its rooms catalog) to load. "
+                         "Unknown names exit with a located error listing "
+                         "every room --config actually defines. "
                          "Omitted together with --console-port: this process "
                          "boots to NO_ROOM and waits for the Console to load "
                          "one instead of loading anything itself. Omitted "
@@ -1333,9 +1336,11 @@ def main() -> None:
     console_port = (args.console_port if args.console_port is not None
                     else profile.console_port)
 
-    # --room replaces --room-type: its value is a name in --config's own
-    # [rooms.<NAME>] tables now, not a Bit manifest's launch.default_room_type
-    # -- Rooms are Terrarium-level config (design spec 2026-08-26), so
+    # --room replaces --room-type: its value is a name --config resolves
+    # now, either one of its own [rooms.<NAME>] tables or a published entry
+    # in its rooms catalog (room_paths), not a Bit manifest's
+    # launch.default_room_type -- Rooms are Terrarium-level config (design
+    # spec 2026-08-26), so
     # omitting --room no longer silently falls back to whatever the Bit
     # manifest happened to declare. Omitted with a console, this process
     # boots to NO_ROOM and waits for the Console to load one instead (see
@@ -1526,6 +1531,8 @@ def main() -> None:
             # for the two-clocks bug this guards against.
             catalog_root = (terrarium_config.instrument_roots[0]
                             if terrarium_config.instrument_roots else None)
+            rooms_root = (terrarium_config.room_roots[0]
+                         if terrarium_config.room_roots else None)
             from harness.design_session import bench_session_factory
             console_agent = ConsoleAgent(gs, console_server,
                                          room_controllers=agent.controllers,
@@ -1533,6 +1540,7 @@ def main() -> None:
                                          canvas_urls=agent.canvas_urls,
                                          terrarium=terrarium,
                                          catalog_root=catalog_root,
+                                         rooms_root=rooms_root,
                                          bench_session_factory=bench_session_factory,
                                          captures_root=Path("captures"))
             agent._on_room_frame = console_agent.on_room_frame

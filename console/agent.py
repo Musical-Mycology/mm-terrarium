@@ -40,7 +40,7 @@ class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_controllers=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
                  terrarium=None, catalog_root=None, bench_session_factory=None,
-                 captures_root=None):
+                 captures_root=None, rooms_root=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
@@ -49,6 +49,11 @@ class ConsoleAgent:
         # means no catalog is wired up -- every design command answers
         # error_event rather than crashing on a missing root.
         self.catalog_root = catalog_root
+        # Optional Path to the rooms catalog root (rooms/), the kind="room"
+        # sibling of catalog_root. None means no rooms catalog is wired up --
+        # every kind="room" design command answers error_event rather than
+        # crashing on a missing root.
+        self.rooms_root = rooms_root
         # Optional Callable[[dict], BenchSession] building the session a
         # DesignBench drives -- see control/design_bench.py. None means no
         # bench backend is wired up: every bench command answers error_event
@@ -270,36 +275,103 @@ class ConsoleAgent:
             gs.room_binding.release(room_name, command.fixture)
         return None
 
-    def _design_rows(self) -> list:
+    def _root_for(self, kind: str):
+        return self.catalog_root if kind == "instrument" else self.rooms_root
+
+    def _instruments_for_rooms(self) -> dict:
+        """The instrument set a room file's fixtures resolve against: the
+        wired Terrarium's config when there is one, else the published
+        instrument catalog, else nothing. Never raises: a broken instrument
+        catalog degrades to no instruments (and gets its own error row)
+        rather than taking the rooms half down with it."""
+        if self.terrarium is not None:
+            return dict(self.terrarium.config.instruments)
+        if self.catalog_root is not None:
+            cat, _error = self._load_design_catalog("instrument")
+            return cat.published if cat is not None else {}
+        return {}
+
+    def _load_design_catalog(self, kind: str):
+        """(catalog, error): loads the `kind` catalog, turning the hard
+        failure of an unparseable PUBLISHED entry into an error string.
+        Every design path loads through here -- load_catalog raises for a
+        published entry that will not parse, and the boot loop calls poll()
+        unguarded, so an uncaught one takes the Console down."""
         from control.catalog import load_catalog
-        cat = load_catalog(self.catalog_root)
-        return [protocol.design_row(e) for e in sorted(
-            cat.entries.values(), key=lambda e: (e.name, e.state))]
+        from control.terrarium_config import TerrariumConfigError
+        root = self._root_for(kind)
+        if root is None:
+            return None, ("no instrument catalog" if kind == "instrument"
+                          else "no rooms catalog")
+        try:
+            instruments = self._instruments_for_rooms() if kind == "room" else None
+            return load_catalog(root, kind=kind, instruments=instruments), None
+        except TerrariumConfigError as exc:
+            logger.exception("%s catalog at %s failed to load", kind, root)
+            return None, str(exc)
+
+    def _lookup_instrument_entry(self, command):
+        """(entry, load_error) for the instrument `command` names. Bench and
+        replay are instrument-only paths; both went through a bare
+        load_catalog, which raises on an unparseable published entry."""
+        if self.catalog_root is None:
+            return None, None
+        catalog, error = self._load_design_catalog("instrument")
+        if error is not None:
+            return None, error
+        return catalog.get(command.state, command.name), None
+
+    def _design_rows(self) -> list:
+        rows = []
+        # Instrument rows first, then room rows: the panel groups by kind.
+        for kind in ("instrument", "room"):
+            if self._root_for(kind) is None:
+                continue
+            cat, error = self._load_design_catalog(kind)
+            if cat is None:
+                rows.append(protocol.catalog_error_row(kind, error))
+                continue
+            rows += [protocol.design_row(e) for e in sorted(
+                cat.entries.values(), key=lambda e: (e.name, e.state))]
+        return rows
 
     def _handle_design_command(self, name: str, command) -> dict | None:
-        if self.catalog_root is None:
-            return protocol.error_event(name, "no instrument catalog")
-        from control.catalog import (clone_entry, load_catalog,
-                                     publish_entry, save_draft)
+        root = self._root_for(command.kind)
+        if root is None:
+            return protocol.error_event(
+                name, "no instrument catalog" if command.kind == "instrument"
+                else "no rooms catalog")
+        from control.catalog import clone_entry, publish_entry, save_draft
+        instruments = (self._instruments_for_rooms()
+                       if command.kind == "room" else None)
         if isinstance(command, protocol.ListDesignsCommand):
             return protocol.designs_listed_event(self._design_rows())
         if isinstance(command, protocol.GetDesignCommand):
-            entry = load_catalog(self.catalog_root).get(
-                command.state, command.name)
+            # One unparseable published sibling fails the whole catalog
+            # load, so this answers an error rather than raising out of
+            # poll() -- the mutating branches below never load a catalog.
+            catalog, error = self._load_design_catalog(command.kind)
+            if error is not None:
+                return protocol.error_event(name, error)
+            entry = catalog.get(command.state, command.name)
             if entry is None:
                 return protocol.error_event(
                     name, f"no {command.state} design {command.name!r}")
             text = entry.path.read_text(encoding="utf-8")
             errors = [entry.error] if entry.error else []
-            return protocol.design_event(entry.name, entry.state, text, errors)
+            return protocol.design_event(entry.name, entry.state, text, errors,
+                                         kind=command.kind)
         if isinstance(command, protocol.SaveDesignCommand):
             refusal, _errors = save_draft(
-                self.catalog_root, command.name, command.text)
+                root, command.name, command.text, kind=command.kind,
+                instruments=instruments)
         elif isinstance(command, protocol.PublishDesignCommand):
-            refusal = publish_entry(self.catalog_root, command.name)
+            refusal = publish_entry(root, command.name, kind=command.kind,
+                                    instruments=instruments)
         else:
-            refusal = clone_entry(self.catalog_root, command.source_state,
-                                  command.source_name, command.new_name)
+            refusal = clone_entry(root, command.source_state,
+                                  command.source_name, command.new_name,
+                                  kind=command.kind)
         if refusal is not None:
             return protocol.error_event(name, refusal)
         rows = self._design_rows()
@@ -334,10 +406,10 @@ class ConsoleAgent:
         # BenchStartCommand
         if self.bench_session_factory is None:
             return protocol.error_event(name, "no bench backend")
-        from control.catalog import load_catalog
         from control.design_bench import DesignBench
-        entry = (load_catalog(self.catalog_root).get(command.state, command.name)
-                 if self.catalog_root is not None else None)
+        entry, load_error = self._lookup_instrument_entry(command)
+        if load_error is not None:
+            return protocol.error_event(name, load_error)
         if entry is None:
             return protocol.error_event(
                 name, f"no {command.state} design {command.name!r}")
@@ -410,10 +482,10 @@ class ConsoleAgent:
         # ReplayTraceCommand
         import json
 
-        from control.catalog import load_catalog
         from control.gesture_eval import _accel_g, evaluate_trace
-        entry = (load_catalog(self.catalog_root).get(command.state, command.name)
-                 if self.catalog_root is not None else None)
+        entry, load_error = self._lookup_instrument_entry(command)
+        if load_error is not None:
+            return protocol.error_event(name, load_error)
         if entry is None:
             return protocol.error_event(
                 name, f"no {command.state} design {command.name!r}")
@@ -474,7 +546,8 @@ class ConsoleAgent:
             instrument_functions=self._last_instrument_functions,
             surface_instruments=self._last_surface_instruments,
             builtins=self._last_builtins,
-            designs=self._design_rows() if self.catalog_root else [],
+            designs=(self._design_rows()
+                    if (self.catalog_root or self.rooms_root) else []),
             design_vocab={
                 "capabilities": sorted(CAPABILITY_VOCABULARY),
                 "cue_kinds": list(CUE_KINDS),

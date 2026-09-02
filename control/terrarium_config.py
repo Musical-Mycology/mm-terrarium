@@ -56,6 +56,13 @@ class TerrariumConfig:
     # Console's design panel reads instrument_roots[0], when non-empty, as
     # its catalog_root (harness/terrarium_boot.py's main()).
     instrument_roots: tuple[Path, ...] = ()
+    # [terrarium] room_paths, resolved to filesystem roots the same way
+    # load_terrarium_config resolves them for load_catalog below --
+    # relative to the config file's own directory. Empty from
+    # parse_terrarium_config (no config path to resolve against); the
+    # Console's design panel reads room_roots[0], when non-empty, as
+    # its rooms_root.
+    room_roots: tuple[Path, ...] = ()
 
 
 def load_terrarium_config(path: str) -> TerrariumConfig:
@@ -78,12 +85,36 @@ def load_terrarium_config(path: str) -> TerrariumConfig:
                     source=str(root), key=f"instruments.{name}",
                     message="defined in more than one catalog root")
             extra[name] = inst
-    config = parse_terrarium_config(text, source=path, extra_instruments=extra)
-    return replace(config, instrument_roots=roots)
+    config = parse_terrarium_config(text, source=path, extra_instruments=extra,
+                                    require_rooms=False)
+    room_paths = raw.get("terrarium", {}).get("room_paths", ["rooms"])
+    room_roots = tuple(base / rel for rel in room_paths)
+    rooms = dict(config.rooms)
+    from_catalog: set[str] = set()
+    for root in room_roots:
+        for rname, spec in load_catalog(root, kind="room",
+                                        instruments=config.instruments).published.items():
+            if rname in rooms:
+                # Two different mistakes, two different messages -- the same
+                # split the instrument path makes.
+                raise TerrariumConfigError(
+                    source=str(root), key=f"rooms.{rname}",
+                    message=("defined in more than one rooms catalog root"
+                             if rname in from_catalog else
+                             "defined both inline and in a rooms catalog; pick one home"))
+            rooms[rname] = spec
+            from_catalog.add(rname)
+    if not rooms:
+        raise TerrariumConfigError(
+            source=path, key="rooms",
+            message="at least one room required: a [rooms.<NAME>] table or a "
+                    "rooms catalog entry")
+    return replace(config, rooms=rooms, instrument_roots=roots, room_roots=room_roots)
 
 
 def parse_terrarium_config(text: str, source: str,
-                           extra_instruments: dict[str, Instrument] | None = None
+                           extra_instruments: dict[str, Instrument] | None = None,
+                           *, require_rooms: bool = True
                            ) -> TerrariumConfig:
     try:
         raw = tomllib.loads(text)
@@ -111,10 +142,15 @@ def parse_terrarium_config(text: str, source: str,
                 message="defined both inline and in an instrument catalog; "
                         "pick one home")
         instruments[iname] = inst
-    rooms_raw = raw.get("rooms")
-    if not isinstance(rooms_raw, dict) or not rooms_raw:
+    rooms_raw = raw.get("rooms", {})
+    if not isinstance(rooms_raw, dict):
         raise TerrariumConfigError(source=source, key="rooms",
-                                   message="at least one [rooms.<NAME>] required")
+                                   message="[rooms] must be a table of [rooms.<NAME>] tables")
+    if require_rooms and not rooms_raw:
+        raise TerrariumConfigError(
+            source=source, key="rooms",
+            message="at least one room required: a [rooms.<NAME>] table or a "
+                    "rooms catalog entry")
     rooms: dict[str, RoomSpec] = {}
     for rname, rraw in rooms_raw.items():
         rooms[rname] = _parse_room(rname, rraw, source=source,

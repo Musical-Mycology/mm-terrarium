@@ -41,7 +41,8 @@ __all__ = [
     "functions_changed_event", "function_fired_event", "FireFunctionCommand",
     "ListDesignsCommand", "GetDesignCommand", "SaveDesignCommand",
     "PublishDesignCommand", "CloneDesignCommand",
-    "design_row", "designs_listed_event", "designs_changed_event",
+    "design_row", "catalog_error_row",
+    "designs_listed_event", "designs_changed_event",
     "design_event",
     "BenchStartCommand", "BenchStopCommand", "BenchFireCommand",
     "BenchLaneCommand", "ListCapturesCommand", "CaptureStatsCommand",
@@ -174,24 +175,27 @@ class FireFunctionCommand:
 
 @dataclass
 class ListDesignsCommand:
-    pass
+    kind: str = "instrument"
 
 
 @dataclass
 class GetDesignCommand:
     state: str
     name: str
+    kind: str = "instrument"
 
 
 @dataclass
 class SaveDesignCommand:
     name: str
     text: str
+    kind: str = "instrument"
 
 
 @dataclass
 class PublishDesignCommand:
     name: str
+    kind: str = "instrument"
 
 
 @dataclass
@@ -199,10 +203,23 @@ class CloneDesignCommand:
     source_state: str
     source_name: str
     new_name: str
+    kind: str = "instrument"
 
 
 def design_row(entry) -> dict:
-    return {"name": entry.name, "state": entry.state, "error": entry.error}
+    return {"name": entry.name, "state": entry.state, "error": entry.error,
+            "kind": entry.kind}
+
+
+def catalog_error_row(kind: str, message: str) -> dict:
+    """Synthetic design row standing in for a whole catalog that would not
+    load: a published entry that fails to parse raises rather than
+    collecting its error, so the panel degrades to this one row instead of
+    losing the list. `placeholder` tells the front end there is no design
+    behind the row, so it paints the error but wires no click."""
+    return {"name": "<rooms catalog>" if kind == "room" else "<instrument catalog>",
+            "state": "published", "kind": kind, "error": message,
+            "placeholder": True}
 
 
 def designs_listed_event(designs: list) -> dict:
@@ -213,9 +230,10 @@ def designs_changed_event(designs: list) -> dict:
     return {"event": "designs_changed", "designs": designs}
 
 
-def design_event(name: str, state: str, text: str, errors: list) -> dict:
+def design_event(name: str, state: str, text: str, errors: list,
+                 kind: str = "instrument") -> dict:
     return {"event": "design", "name": name, "state": state,
-            "text": text, "errors": errors}
+            "text": text, "errors": errors, "kind": kind}
 
 
 @dataclass
@@ -287,6 +305,13 @@ def replay_result_event(result: dict) -> dict:
     return {"event": "replay_result", "result": result}
 
 
+def _design_kind(msg: dict) -> str:
+    kind = msg.get("kind", "instrument")
+    if kind not in ("instrument", "room"):
+        raise ValueError("design commands take 'kind' of 'instrument' or 'room'")
+    return kind
+
+
 def parse_admin_command(msg: dict):
     """Console-only admin commands -- never sent by the uplink's remote
     broker. Kept separate from uplink.protocol.parse_command: Room
@@ -322,7 +347,7 @@ def parse_admin_command(msg: dict):
             raise ValueError("fire_function 'dev' must be a string when given")
         return FireFunctionCommand(name=name, dev=dev or None)
     if command == "list_designs":
-        return ListDesignsCommand()
+        return ListDesignsCommand(kind=_design_kind(msg))
     if command == "get_design":
         state = msg.get("state")
         if state not in ("published", "draft"):
@@ -330,7 +355,7 @@ def parse_admin_command(msg: dict):
         name = msg.get("name")
         if not isinstance(name, str) or not name:
             raise ValueError("get_design requires a non-empty string 'name'")
-        return GetDesignCommand(state=state, name=name)
+        return GetDesignCommand(state=state, name=name, kind=_design_kind(msg))
     if command == "save_design":
         name = msg.get("name")
         if not isinstance(name, str) or not name:
@@ -338,12 +363,12 @@ def parse_admin_command(msg: dict):
         text = msg.get("text")
         if not isinstance(text, str):
             raise ValueError("save_design requires a string 'text'")
-        return SaveDesignCommand(name=name, text=text)
+        return SaveDesignCommand(name=name, text=text, kind=_design_kind(msg))
     if command == "publish_design":
         name = msg.get("name")
         if not isinstance(name, str) or not name:
             raise ValueError("publish_design requires a non-empty string 'name'")
-        return PublishDesignCommand(name=name)
+        return PublishDesignCommand(name=name, kind=_design_kind(msg))
     if command == "clone_design":
         source_state = msg.get("source_state")
         if source_state not in ("published", "draft"):
@@ -358,7 +383,8 @@ def parse_admin_command(msg: dict):
             raise ValueError(
                 "clone_design requires a non-empty string 'new_name'")
         return CloneDesignCommand(source_state=source_state,
-                                  source_name=source_name, new_name=new_name)
+                                  source_name=source_name, new_name=new_name,
+                                  kind=_design_kind(msg))
     if command == "bench_start":
         state = msg.get("state")
         if state not in ("published", "draft"):

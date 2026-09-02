@@ -2,8 +2,9 @@
 // Pure, line-based transforms over the small TOML subset the design forms
 // edit: top-level scalars/arrays, `[[event_triggers]]` / `[[stream_triggers]]`
 // / `[[functions]]` array-of-table blocks (each optionally carrying an
-// indented child table such as `[event_triggers.thresholds]`), and
-// `[ambient.light]` / `[ambient.ugen]` tables. No DOM, no wire imports --
+// indented child table such as `[event_triggers.thresholds]`),
+// `[ambient.light]` / `[ambient.ugen]` tables, and a room file's
+// `[[fixtures]]` blocks. No DOM, no wire imports --
 // text in, text or a value out. Every writer returns the input unchanged
 // when its target isn't found, mirroring design.js's applyProposal contract.
 
@@ -414,5 +415,100 @@ export function setAmbientUgenRow(text, index, { instrument, program, key, veloc
   entries[index] = entry;
   const lines = text.split("\n");
   lines[found.line] = `${found.indent}instruments = [ ${entries.join(", ")} ]`;
+  return lines.join("\n");
+}
+
+// -- fixtures ([[fixtures]] blocks in a room file) -------------------------
+//
+// A room's `[[fixtures]]` blocks each carry `[[fixtures.blocks]]` /
+// `[[fixtures.zones]]` children. splitBlocks keeps INDENTED children inside
+// their fixture's block, but an unindented child (equally valid TOML, and
+// what a hand-written flat file looks like) becomes a top-level block of
+// its own -- so moving the bare `[[fixtures]]` ranges would leave the
+// children behind and silently reassign geometry between fixtures.
+// fixtureBlocks therefore extends each fixture's `end` through every
+// following `[[fixtures.` block, so a fixture's children travel with it
+// whatever the indentation. `ownEnd` keeps the fixture's OWN key region
+// (header to first child) so reads and writes of `name` / `instrument`
+// can't stray into a child table.
+
+function fixtureBlocks(text) {
+  const blocks = splitBlocks(text);
+  const out = [];
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].header !== "[[fixtures]]") continue;
+    let end = blocks[i].end;
+    let j = i + 1;
+    while (j < blocks.length && (blocks[j].header || "").startsWith("[[fixtures.")) {
+      end = blocks[j].end;
+      j++;
+    }
+    out.push({ ...blocks[i], ownEnd: blocks[i].end, end });
+  }
+  return out;
+}
+
+// One row per top-level `[[fixtures]]` block, in file order, with the
+// block's own `instrument = "..."` line read out (null when absent).
+export function listFixtures(text) {
+  const lines = text.split("\n");
+  return fixtureBlocks(text).map((b) => {
+    let instrument = null;
+    for (let i = b.start + 1; i < b.ownEnd; i++) {
+      const m = lines[i].match(/^\s*instrument\s*=\s*"([^"]*)"\s*$/);
+      if (m) { instrument = m[1]; break; }
+    }
+    return { name: b.name, instrument, start: b.start, end: b.end };
+  });
+}
+
+// Swaps the fixture at `index` with the one at `index + delta`, each
+// carrying its indented children (and its own trailing blank line, which
+// belongs to the preceding block -- so the result stays valid TOML).
+// Returns the text unchanged when either end of the swap is out of range.
+export function moveFixture(text, index, delta) {
+  const blocks = fixtureBlocks(text);
+  const j = index + delta;
+  if (index < 0 || index >= blocks.length || j < 0 || j >= blocks.length || delta === 0) return text;
+  const lines = text.split("\n");
+  const a = blocks[Math.min(index, j)];
+  const b = blocks[Math.max(index, j)];
+  const before = lines.slice(0, a.start);
+  const aLines = lines.slice(a.start, a.end);
+  const between = lines.slice(a.end, b.start);
+  const bLines = lines.slice(b.start, b.end);
+  const after = lines.slice(b.end);
+  return [...before, ...bLines, ...between, ...aLines, ...after].join("\n");
+}
+
+// Rewrites the `instrument = "..."` line of the fixture at `index`, or adds
+// one when the block has none -- otherwise a fixture missing its instrument
+// could never be repaired through the form's picker (the write would be a
+// silent no-op). A new line goes directly after the block's own
+// `name = "..."` line, or directly after the `[[fixtures]]` header when the
+// block has no name, at the header's indentation. Only an out-of-range
+// index is a no-op.
+export function setFixtureInstrument(text, index, name) {
+  const blocks = fixtureBlocks(text);
+  if (index < 0 || index >= blocks.length) return text;
+  const block = blocks[index];
+  const lines = text.split("\n");
+  for (let i = block.start + 1; i < block.ownEnd; i++) {
+    if (/^\s*instrument\s*=/.test(lines[i])) {
+      lines[i] = lines[i].replace(/=.*$/, `= "${name}"`);
+      return lines.join("\n");
+    }
+  }
+  // Absent. Anchor on the block's OWN name line, matched at the header's
+  // indentation so an indented child table's `name = "..."` (a
+  // `[[fixtures.blocks]]` / `[[fixtures.zones]]` entry) can't be mistaken
+  // for it and land the new line inside that child table.
+  const indent = lines[block.start].match(/^(\s*)/)[1];
+  const ownNameRe = new RegExp(`^${indent}name\\s*=\\s*"[^"]*"\\s*$`);
+  let anchor = block.start;
+  for (let i = block.start + 1; i < block.ownEnd; i++) {
+    if (ownNameRe.test(lines[i])) { anchor = i; break; }
+  }
+  lines.splice(anchor + 1, 0, `${indent}instrument = "${name}"`);
   return lines.join("\n");
 }

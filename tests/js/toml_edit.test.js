@@ -145,5 +145,126 @@ script = [
 
   assert.strictEqual(t.removeBlock(FIXTURE, "[[event_triggers]]", "nope"), FIXTURE);
 
+  // -- fixtures: listFixtures / moveFixture / setFixtureInstrument --------
+  const ROOM = `description = "Two strips"
+backends = ["devicelink"]
+
+[[fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "dev_strip_main"
+  [[fixtures.blocks]]
+  name = "main"
+  start = 0
+  count = 60
+
+[[fixtures]]
+name = "accent"
+color_order = "GRB"
+instrument = "dev_strip_accent"
+  [[fixtures.blocks]]
+  name = "accent"
+  start = 0
+  count = 30
+`;
+  const fx = t.listFixtures(ROOM);
+  assert.deepStrictEqual(fx.map((f) => [f.name, f.instrument]),
+    [["main", "dev_strip_main"], ["accent", "dev_strip_accent"]]);
+
+  const swapped = t.moveFixture(ROOM, 1, -1);
+  assert.deepStrictEqual(t.listFixtures(swapped).map((f) => f.name), ["accent", "main"]);
+  // children travel with their fixture: accent's block still follows accent's header
+  const accentIdx = swapped.indexOf('name = "accent"');
+  const accentBlockIdx = swapped.indexOf("[[fixtures.blocks]]", accentIdx);
+  const mainIdx = swapped.indexOf('name = "main"\ncolor_order');
+  assert.ok(accentIdx < accentBlockIdx && accentBlockIdx < mainIdx, "accent's children precede main");
+  assert.ok(swapped.startsWith('description = "Two strips"'), "top-level scalars untouched");
+  assert.strictEqual(t.moveFixture(ROOM, 0, -1), ROOM, "out of range is a no-op");
+  assert.strictEqual(t.moveFixture(ROOM, 1, 1), ROOM, "out of range is a no-op");
+
+  const repicked = t.setFixtureInstrument(ROOM, 1, "venue_array");
+  assert.deepStrictEqual(t.listFixtures(repicked).map((f) => f.instrument),
+    ["dev_strip_main", "venue_array"]);
+  assert.strictEqual(t.setFixtureInstrument(ROOM, 5, "x"), ROOM, "unknown index is a no-op");
+
+  // A fixture with no `instrument =` line gains one, so the picker can
+  // repair it: after the block's own `name = "..."` line when it has one,
+  // otherwise straight after the `[[fixtures]]` header.
+  const NO_INSTRUMENT = `description = "Bare"
+
+[[fixtures]]
+name = "solo"
+color_order = "GRB"
+  [[fixtures.blocks]]
+  name = "solo"
+  start = 0
+  count = 10
+
+[[fixtures]]
+color_order = "RGB"
+  [[fixtures.zones]]
+  name = "zone"
+`;
+  assert.deepStrictEqual(t.listFixtures(NO_INSTRUMENT).map((f) => f.instrument), [null, null]);
+
+  const named = t.setFixtureInstrument(NO_INSTRUMENT, 0, "dev_strip_main");
+  assert.ok(named.includes('name = "solo"\ninstrument = "dev_strip_main"\ncolor_order = "GRB"'),
+    "instrument line lands right after the fixture's own name line");
+  assert.deepStrictEqual(t.listFixtures(named).map((f) => f.instrument),
+    ["dev_strip_main", null]);
+
+  const unnamed = t.setFixtureInstrument(NO_INSTRUMENT, 1, "venue_array");
+  assert.ok(unnamed.includes('[[fixtures]]\ninstrument = "venue_array"\ncolor_order = "RGB"'),
+    "with no name line the instrument line lands right after the header");
+  assert.deepStrictEqual(t.listFixtures(unnamed).map((f) => f.instrument),
+    [null, "venue_array"]);
+  assert.strictEqual(t.setFixtureInstrument(NO_INSTRUMENT, 2, "x"), NO_INSTRUMENT,
+    "unknown index is still a no-op");
+
+  // A room file written FLAT -- `[[fixtures.blocks]]` children unindented,
+  // which is just as valid TOML -- must still move a fixture with its own
+  // children, not reassign geometry between fixtures.
+  const FLAT = `description = "Flat style"
+backends = ["devicelink"]
+
+[[fixtures]]
+name = "a"
+color_order = "GRB"
+instrument = "dev_strip_main"
+[[fixtures.blocks]]
+name = "a_block"
+start = 0
+count = 60
+
+[[fixtures]]
+name = "b"
+color_order = "GRB"
+instrument = "dev_strip_accent"
+[[fixtures.blocks]]
+name = "b_block"
+start = 0
+count = 30
+`;
+  assert.deepStrictEqual(t.listFixtures(FLAT).map((f) => [f.name, f.instrument]),
+    [["a", "dev_strip_main"], ["b", "dev_strip_accent"]],
+    "flat children do not become fixtures of their own");
+
+  const flatSwapped = t.moveFixture(FLAT, 0, 1);
+  const iB = flatSwapped.indexOf('name = "b"');
+  const iBBlock = flatSwapped.indexOf('name = "b_block"');
+  const iA = flatSwapped.indexOf('name = "a"');
+  const iABlock = flatSwapped.indexOf('name = "a_block"');
+  assert.ok(iB >= 0 && iA >= 0);
+  assert.ok(iB < iBBlock && iBBlock < iA && iA < iABlock,
+    "each flat fixture's block still follows its own header after the move");
+  assert.deepStrictEqual(t.listFixtures(flatSwapped).map((f) => f.name), ["b", "a"]);
+  assert.deepStrictEqual(flatSwapped.split("\n").slice().sort(),
+    FLAT.split("\n").slice().sort(), "the move rewrites no line, it only reorders");
+  assert.strictEqual(t.moveFixture(flatSwapped, 0, 1), FLAT, "moving back round-trips");
+
+  const flatRepicked = t.setFixtureInstrument(FLAT, 1, "venue_array");
+  assert.deepStrictEqual(t.listFixtures(flatRepicked).map((f) => f.instrument),
+    ["dev_strip_main", "venue_array"], "the right flat fixture's line is rewritten");
+
   console.log("toml_edit.test.js OK");
 })();

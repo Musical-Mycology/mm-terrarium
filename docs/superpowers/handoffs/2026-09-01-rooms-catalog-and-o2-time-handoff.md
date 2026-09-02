@@ -1,10 +1,20 @@
 # Handoff: rooms catalog, Design tab Room editor, and luxaeterna O2 time
 
 Paste this file's path into a fresh mm-terrarium session to launch the next
-slice. It is Plans 2 and 3 named in
+slice. It was written to cover Plans 2 and 3 named in
 `docs/superpowers/specs/2026-09-01-per-fixture-light-sessions-design.md`
 sections 6 and 7 (verify merge to main before branching, same as this note
 asks of every successor).
+
+**Plan 2 is done.** It landed on `claude/rooms-catalog-plan2-8f3a1c`,
+commits `fc21c1f` through the final-review fixes, offline suite
+`.venv/bin/python -m pytest tests -q` -> 1986 passed, 1 skipped. See
+`docs/MM_TERRARIUM.md`'s "Rooms catalog, TEST/DEMO migration, Design tab
+Room editor (2026-09-01)" entry and the spec's section 12 Status for the
+landed detail and deviations.
+**Plan 3 (luxaeterna renders at O2 time) remains the scope of this
+handoff** -- everything below Plan 2's section is unchanged and still
+applies.
 
 ## Where Plan 1 left the system
 
@@ -34,7 +44,17 @@ a device binds, because Control's resolver only ever produces bound devs.
 Cue routing by fixture name for a fixture that never binds a device is a
 named follow-up, not part of Plan 2 or 3.
 
-## Scope of Plan 2: rooms catalog and the Design tab Room editor (spec section 6)
+## Scope of Plan 2: rooms catalog and the Design tab Room editor (spec section 6) -- DONE
+
+**Landed** on `claude/rooms-catalog-plan2-8f3a1c`, commits `fc21c1f`
+through the final-review fixes. The four points below are preserved as
+the scope this was planned against; see `docs/MM_TERRARIUM.md`'s "Rooms catalog,
+TEST/DEMO migration, Design tab Room editor (2026-09-01)" entry and the
+spec's section 12 Status for what actually shipped, including the handful
+of deviations from this scope (the `<rooms catalog>` synthetic error row,
+`parse_admin_command` rather than a new `parse_command`, the
+unpublished-instrument picker option, and `setFixtureInstrument` inserting
+a missing line rather than no-op'ing).
 
 1. `rooms/<NAME>.toml` published, `rooms/drafts/<NAME>.toml` drafts,
    mirroring the instrument catalog. `[terrarium] room_paths` (default
@@ -94,7 +114,9 @@ this landing first.
 - luxaeterna `synth/session.py`'s `render_into`: the O2-time change, and the
   ugen/`StatusDirector` audit that goes with it.
 
-## Live checklist status (spec section 10) -- none of this has been run
+## Live checklist status (spec section 10, plus Plan 2's own) -- none of this has been run
+
+Plan 1's checklist (spec section 10):
 
 1. Load TEST with no simulators spawned; both Console strips animate from
    the Bit's ROOM manifest. Not run.
@@ -110,11 +132,27 @@ this landing first.
 7. Stop at `@all`, then ABORT, then Load Room recovery (PR #81's checklist,
    folded in here). Not run.
 
-Run this on MYCOLOGICAL (the dev box with the Arco stack) before merging
-Plan 1, per this slice's task-10 brief's live-verification section, which
-gives the exact boot invocation and step-by-step operator script.
+Plan 2's own live verification (from
+`docs/superpowers/plans/2026-09-01-rooms-catalog-and-room-editor.md`'s
+closing section), also not run:
 
-## Known minors deferred during Plan 1 (see the SDD ledger for full context)
+8. Boot with `--config terrarium.toml --room TEST` (rooms now come from
+   `rooms/TEST.toml`): loads exactly as before. Not run.
+9. Console Design tab: Rooms list shows TEST and DEMO; select TEST; the
+   fixture form shows main then accent with their instruments; Down on
+   main; Save writes `rooms/drafts/TEST.toml`; Publish replaces
+   `rooms/TEST.toml`; reload the Room; the Console strips now list accent
+   first. Not run.
+10. Restore the order (Up, Save, Publish) so the shipped file is
+    unchanged, or `git checkout rooms/TEST.toml`. Not run.
+11. Load DEMO: unchanged. Not run.
+
+Run both checklists on MYCOLOGICAL (the dev box with the Arco stack)
+before merging either plan, per Plan 1's task-10 brief and Plan 2's
+task-6 brief's live-verification sections, which give the exact boot
+invocation and step-by-step operator script.
+
+## Known minors deferred during Plan 1 and Plan 2 (see the SDD ledger for full context)
 
 These were flagged during Plan 1's task execution and deliberately not
 fixed; triage them if you touch the same lines, otherwise they are safe to
@@ -143,6 +181,20 @@ leave:
   `lastPaintByName` entries for a fixture dropped from a live Room are not
   cleaned up (pre-existing shape).
 
+Flagged during Plan 2's task execution, also deliberately not fixed:
+
+- No structured form for a room's blocks/zones -- they stay raw TOML.
+- `bench_start` and `replay_trace` still send no `kind` on the wire.
+- A comment sitting between two `[[fixtures]]` blocks travels with the
+  preceding fixture on a swap (scanned into that fixture's own block, not
+  treated as its own unit).
+- `fixture_controllers` (Plan 1's payload) still has no Console JS
+  consumer.
+- `publish_entry`'s refusal messages don't name which kind (instrument or
+  room) failed to publish.
+- No test for a name collision between two rooms catalog roots (only the
+  inline-vs-catalog collision is tested).
+
 ## House workflow and repo gotchas
 
 - brainstorm -> spec -> writing-plans -> subagent-driven-development with
@@ -150,7 +202,7 @@ leave:
   `(recommended)` pick.
 - Tests ONLY via `.venv/bin/python -m pytest tests -q`; a fresh worktree
   needs `ln -s /Users/chris/projects/mm-terrarium/.venv .venv`. Baseline at
-  this slice's HEAD: 1951 passed, 1 skipped.
+  this slice's HEAD: 1986 passed, 1 skipped.
 - No em dashes in anything authored (docs, comments, commit messages); the
   repo's "--" style is fine.
 - `control/` is pure stdlib; `control/` and `devicelink/` never import

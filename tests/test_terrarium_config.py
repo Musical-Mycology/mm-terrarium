@@ -1,3 +1,5 @@
+import textwrap
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -523,3 +525,223 @@ def test_instrument_non_int_pixels_is_a_located_config_error():
     with pytest.raises(TerrariumConfigError) as exc:
         parse_terrarium_config(bad, source="test")
     assert "instruments.shroomy" in str(exc.value)
+
+
+_INSTRUMENT = '''description = "strip"
+capabilities = ["light.surface"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+'''
+_ROOM = '''description = "Loft"
+backends = ["devicelink"]
+[[fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "strip"
+  [[fixtures.blocks]]
+  name = "main"
+  start = 0
+  count = 10
+'''
+
+
+def _write_tree(tmp_path, config_text, rooms=None):
+    (tmp_path / "instruments").mkdir()
+    (tmp_path / "instruments" / "strip.toml").write_text(_INSTRUMENT)
+    (tmp_path / "rooms").mkdir()
+    for name, text in (rooms or {}).items():
+        (tmp_path / "rooms" / f"{name}.toml").write_text(text)
+    cfg = tmp_path / "terrarium.toml"
+    cfg.write_text(textwrap.dedent(config_text))
+    return str(cfg)
+
+
+_HEAD = '''schema = 1
+[terrarium]
+name = "t"
+'''
+
+
+def test_catalog_rooms_load_from_the_default_rooms_dir(tmp_path):
+    cfg = _write_tree(tmp_path, _HEAD, rooms={"LOFT": _ROOM})
+    config = load_terrarium_config(cfg)
+    assert set(config.rooms) == {"LOFT"}
+    assert config.rooms["LOFT"].profile.surface_id == "room_loft"
+    assert config.room_roots == (tmp_path / "rooms",)
+
+
+def test_room_paths_key_overrides_the_default(tmp_path):
+    (tmp_path / "venues").mkdir()
+    (tmp_path / "venues" / "HALL.toml").write_text(_ROOM)
+    cfg = _write_tree(tmp_path, _HEAD + 'room_paths = ["venues"]\n')
+    config = load_terrarium_config(cfg)
+    assert set(config.rooms) == {"HALL"}
+
+
+def test_inline_and_catalog_rooms_merge(tmp_path):
+    inline = _HEAD + '''
+    [rooms.STAGE]
+    backends = ["devicelink"]
+      [[rooms.STAGE.fixtures]]
+      name = "m"
+      color_order = "GRB"
+      instrument = "strip"
+        [[rooms.STAGE.fixtures.blocks]]
+        name = "m"
+        start = 0
+        count = 4
+    '''
+    cfg = _write_tree(tmp_path, inline, rooms={"LOFT": _ROOM})
+    assert set(load_terrarium_config(cfg).rooms) == {"STAGE", "LOFT"}
+
+
+def test_room_defined_inline_and_in_catalog_is_refused(tmp_path):
+    inline = _HEAD + '''
+    [rooms.LOFT]
+    backends = ["devicelink"]
+      [[rooms.LOFT.fixtures]]
+      name = "m"
+      color_order = "GRB"
+      instrument = "strip"
+        [[rooms.LOFT.fixtures.blocks]]
+        name = "m"
+        start = 0
+        count = 4
+    '''
+    cfg = _write_tree(tmp_path, inline, rooms={"LOFT": _ROOM})
+    with pytest.raises(TerrariumConfigError, match=r"rooms\.LOFT.*both inline and in a rooms catalog"):
+        load_terrarium_config(cfg)
+
+
+def test_room_defined_in_two_catalog_roots_is_refused(tmp_path):
+    # Mirrors the instrument path: a name colliding across two catalog roots
+    # is a different mistake from a name defined both inline and in a
+    # catalog, so it gets its own message.
+    (tmp_path / "venues").mkdir()
+    (tmp_path / "venues" / "LOFT.toml").write_text(_ROOM)
+    cfg = _write_tree(tmp_path, _HEAD + 'room_paths = ["rooms", "venues"]\n',
+                      rooms={"LOFT": _ROOM})
+    with pytest.raises(TerrariumConfigError,
+                       match=r"rooms\.LOFT.*more than one rooms catalog root"):
+        load_terrarium_config(cfg)
+
+
+def test_no_room_anywhere_is_refused(tmp_path):
+    cfg = _write_tree(tmp_path, _HEAD)
+    with pytest.raises(TerrariumConfigError, match="at least one room"):
+        load_terrarium_config(cfg)
+
+
+def test_catalog_room_fixture_may_use_a_catalog_instrument(tmp_path):
+    cfg = _write_tree(tmp_path, _HEAD, rooms={"LOFT": _ROOM})
+    config = load_terrarium_config(cfg)
+    assert config.rooms["LOFT"].profile.fixtures[0].instrument.name == "strip"
+
+
+PRE_MIGRATION = r'''
+schema = 1
+
+[terrarium]
+name = "dev-box"
+bit_paths = ["bits"]
+instrument_paths = ["instruments"]
+
+[rooms.TEST]
+description = "Simulated dev room: main + accent strips"
+backends = ["devicelink"]
+
+  [[rooms.TEST.fixtures]]
+  name = "main"
+  color_order = "GRB"
+  instrument = "dev_strip_main"
+    [[rooms.TEST.fixtures.blocks]]
+    name = "main"
+    start = 0
+    count = 60
+    [[rooms.TEST.fixtures.zones]]
+    name = "left"
+    start = 0
+    count = 20
+    [[rooms.TEST.fixtures.zones]]
+    name = "center"
+    start = 20
+    count = 20
+    [[rooms.TEST.fixtures.zones]]
+    name = "right"
+    start = 40
+    count = 20
+
+  [[rooms.TEST.fixtures]]
+  name = "accent"
+  color_order = "GRB"
+  instrument = "dev_strip_accent"
+    [[rooms.TEST.fixtures.blocks]]
+    name = "accent"
+    start = 0
+    count = 30
+    [[rooms.TEST.fixtures.zones]]
+    name = "low"
+    start = 0
+    count = 15
+    [[rooms.TEST.fixtures.zones]]
+    name = "high"
+    start = 15
+    count = 15
+
+[rooms.DEMO]
+description = "Real-scale 6 m / 864 px Terrarium array, simulated backend"
+backends = ["devicelink", "array"]
+
+  [[rooms.DEMO.fixtures]]
+  name = "array"
+  color_order = "GRB"
+  instrument = "venue_array"
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m1"
+    start = 0
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m2"
+    start = 144
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m3"
+    start = 288
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m4"
+    start = 432
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m5"
+    start = 576
+    count = 144
+    [[rooms.DEMO.fixtures.blocks]]
+    name = "m6"
+    start = 720
+    count = 144
+    [[rooms.DEMO.fixtures.zones]]
+    name = "left"
+    start = 0
+    count = 288
+    [[rooms.DEMO.fixtures.zones]]
+    name = "center"
+    start = 288
+    count = 288
+    [[rooms.DEMO.fixtures.zones]]
+    name = "right"
+    start = 576
+    count = 288
+'''
+
+
+def test_shipped_rooms_come_from_the_catalog_and_match_the_pre_migration_profiles():
+    config = load_terrarium_config("terrarium.toml")
+    assert set(config.rooms) == {"TEST", "DEMO"}
+    before = parse_terrarium_config(PRE_MIGRATION, source="pre-migration",
+                                    extra_instruments=config.instruments)
+    for name in ("TEST", "DEMO"):
+        assert config.rooms[name].profile == before.rooms[name].profile
+        assert config.rooms[name].backends == before.rooms[name].backends
+        assert config.rooms[name].description == before.rooms[name].description
+        assert config.rooms[name].node_id == before.rooms[name].node_id
+    assert not tomllib.loads(open("terrarium.toml").read()).get("rooms")

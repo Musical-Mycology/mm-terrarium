@@ -319,13 +319,35 @@ def test_clone_design_rejects_bad_source_state():
              "source_name": "a", "new_name": "b"})
 
 
+def test_design_commands_default_kind_to_instrument():
+    cmd = protocol.parse_admin_command({"command": "list_designs"})
+    assert cmd.kind == "instrument"
+    cmd = protocol.parse_admin_command({"command": "get_design",
+                                        "state": "draft", "name": "wip"})
+    assert cmd.kind == "instrument"
+
+
+def test_design_commands_parse_an_explicit_room_kind():
+    cmd = protocol.parse_admin_command(
+        {"command": "get_design", "state": "published", "name": "LOFT",
+         "kind": "room"})
+    assert cmd.kind == "room"
+
+
+def test_unknown_design_kind_is_refused():
+    with pytest.raises(ValueError, match="kind"):
+        protocol.parse_admin_command({"command": "list_designs", "kind": "venue"})
+
+
 def test_design_row_shape():
     class FakeEntry:
         name = "glowcap"
         state = "published"
         error = None
+        kind = "instrument"
     assert protocol.design_row(FakeEntry()) == {
-        "name": "glowcap", "state": "published", "error": None}
+        "name": "glowcap", "state": "published", "error": None,
+        "kind": "instrument"}
 
 
 def test_designs_listed_event_shape():
@@ -343,7 +365,7 @@ def test_designs_changed_event_shape():
 def test_design_event_shape():
     assert protocol.design_event("glowcap", "draft", "x = 1", []) == {
         "event": "design", "name": "glowcap", "state": "draft",
-        "text": "x = 1", "errors": []}
+        "text": "x = 1", "errors": [], "kind": "instrument"}
 
 
 def test_bench_start_command_parses():

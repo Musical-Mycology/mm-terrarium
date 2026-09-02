@@ -43,12 +43,12 @@ const DESIGNS = [
   byId.get("designText").value = "x = 2";
   byId.get("designSave").onclick();
   assert.deepStrictEqual(sock.sent.at(-1),
-    { command: "save_design", name: "glowcap", text: "x = 2" });
+    { command: "save_design", kind: "instrument", name: "glowcap", text: "x = 2" });
 
   // -- Publish sends publish_design for the open selection -----------------
   byId.get("designPublish").onclick();
   assert.deepStrictEqual(sock.sent.at(-1),
-    { command: "publish_design", name: "glowcap" });
+    { command: "publish_design", kind: "instrument", name: "glowcap" });
 
   // -- Clone prompts for a new name and sends clone_design with the current
   // selection as source ----------------------------------------------------
@@ -57,7 +57,7 @@ const DESIGNS = [
   globalThis.window.prompt = () => "glowcap_v2";
   byId.get("designClone").onclick();
   assert.deepStrictEqual(sock.sent.at(-1),
-    { command: "clone_design", source_state: "draft",
+    { command: "clone_design", kind: "instrument", source_state: "draft",
       source_name: "glowcap", new_name: "glowcap_v2" });
   if (realPrompt !== undefined) globalThis.window.prompt = realPrompt;
 
@@ -79,6 +79,56 @@ const DESIGNS = [
   // not error and must still reflect the same rows
   send({ event: "designs_changed", designs: DESIGNS });
   assert.ok(byId.get("designList").innerHTML.includes("glowcap"));
+
+  // -- rooms list renders separately and carries kind on every command ----
+  const BOTH = [
+    { name: "tuneshroom", state: "published", error: null, kind: "instrument" },
+    { name: "TEST", state: "published", error: null, kind: "room" },
+  ];
+  send({ event: "designs_changed", designs: BOTH });
+  assert.ok(byId.get("designList").innerHTML.includes("tuneshroom"));
+  assert.ok(!byId.get("designList").innerHTML.includes("TEST"), "rooms stay out of the instrument list");
+  assert.ok(byId.get("roomDesignList").innerHTML.includes("TEST [published]"));
+  assert.ok(!byId.get("roomDesignList").innerHTML.includes("tuneshroom"),
+    "instruments stay out of the rooms list");
+
+  sock.sent.length = 0;
+  byId.get("roomDesignList").children[0].onclick();
+  // FakeSocket.send already JSON.parses, so sent frames are objects
+  const get = sock.sent.at(-1);
+  assert.strictEqual(get.command, "get_design");
+  assert.strictEqual(get.kind, "room");
+  assert.strictEqual(get.name, "TEST");
+
+  design.openDesign({ name: "TEST", state: "published", kind: "room", text: "x = 1", errors: [] });
+  assert.deepStrictEqual(design.getSelection(), { name: "TEST", state: "published", kind: "room" });
+  sock.sent.length = 0;
+  byId.get("designSave").onclick();
+  assert.strictEqual(sock.sent.at(-1).kind, "room");
+
+  // a row without kind is an instrument (older server)
+  design.openDesign({ name: "glowcap", state: "draft", text: "x = 1", errors: [] });
+  assert.strictEqual(design.getSelection().kind, "instrument");
+
+  // -- a placeholder row reports a catalog that would not load ------------
+  // It carries an error badge but no design behind it, so it must not be
+  // clickable: a get_design for "<rooms catalog>" is a nonsense command.
+  const WITH_PLACEHOLDER = [
+    { name: "tuneshroom", state: "published", error: null, kind: "instrument" },
+    { name: "<rooms catalog>", state: "published", kind: "room",
+      error: "rooms/BROKEN.toml: unknown backends", placeholder: true },
+  ];
+  send({ event: "designs_changed", designs: WITH_PLACEHOLDER });
+  const roomRows = byId.get("roomDesignList").children;
+  assert.strictEqual(roomRows.length, 1);
+  const holder = roomRows[0];
+  assert.ok(holder.innerHTML.includes("&lt;rooms catalog&gt;"));
+  assert.ok(holder.innerHTML.includes("err"), "the placeholder shows its error badge");
+  assert.ok(holder.className.includes("placeholder"));
+  sock.sent.length = 0;
+  assert.ok(!holder.onclick, "a placeholder row has no click handler");
+  if (holder.onclick) holder.onclick();
+  assert.strictEqual(sock.sent.length, 0, "clicking a placeholder row sends nothing");
 
   console.log("design_panel: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

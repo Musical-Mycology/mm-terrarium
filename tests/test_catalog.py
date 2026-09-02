@@ -161,3 +161,127 @@ def test_testshroom_catalog_entry_resolves_with_audio_samples():
     assert "audio.samples" in inst.capabilities
     assert "light.pixels" in inst.capabilities      # carriable (engine gate)
     assert "audio.mic" not in inst.capabilities
+
+
+from control.instrument import Instrument
+from control.catalog import Catalog, CatalogEntry, KINDS
+
+STRIP = Instrument(name="strip", capabilities=frozenset({"light.surface"}),
+                   accepted_cues=("midi", "play", "solid", "mute"))
+INSTRUMENTS = {"strip": STRIP}
+
+ROOM_TOML = '''description = "Two strips"
+backends = ["devicelink"]
+
+[[fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "strip"
+  [[fixtures.blocks]]
+  name = "main"
+  start = 0
+  count = 60
+  [[fixtures.zones]]
+  name = "left"
+  start = 0
+  count = 30
+  [[fixtures.zones]]
+  name = "right"
+  start = 30
+  count = 30
+
+[[fixtures]]
+name = "accent"
+color_order = "GRB"
+instrument = "strip"
+  [[fixtures.blocks]]
+  name = "accent"
+  start = 0
+  count = 30
+'''
+
+
+def test_kinds_are_instrument_and_room():
+    assert KINDS == ("instrument", "room")
+
+
+def test_room_catalog_requires_instruments(tmp_path):
+    with pytest.raises(ValueError, match="instruments"):
+        load_catalog(tmp_path, kind="room")
+
+
+def test_published_room_parses_to_a_room_spec(tmp_path):
+    (tmp_path / "LOFT.toml").write_text(ROOM_TOML)
+    cat = load_catalog(tmp_path, kind="room", instruments=INSTRUMENTS)
+    entry = cat.get("published", "LOFT")
+    assert entry.kind == "room" and entry.instrument is None
+    spec = entry.room
+    assert spec.name == "LOFT"
+    assert [f.name for f in spec.profile.fixtures] == ["main", "accent"]
+    assert spec.profile.surface_id == "room_loft"
+    assert cat.published == {"LOFT": spec}
+
+
+def test_published_room_with_unknown_instrument_raises_located(tmp_path):
+    (tmp_path / "LOFT.toml").write_text(ROOM_TOML.replace('"strip"', '"ghost"'))
+    with pytest.raises(TerrariumConfigError, match="ghost"):
+        load_catalog(tmp_path, kind="room", instruments=INSTRUMENTS)
+
+
+def test_room_draft_errors_are_collected_not_raised(tmp_path):
+    drafts = tmp_path / "drafts"
+    drafts.mkdir()
+    (drafts / "LOFT.toml").write_text("description = 1\n[[fixtures]]\nname = 'x'\n")
+    cat = load_catalog(tmp_path, kind="room", instruments=INSTRUMENTS)
+    entry = cat.get("draft", "LOFT")
+    assert entry.room is None and entry.error
+
+
+def test_room_save_draft_reports_room_errors(tmp_path):
+    refusal, errors = save_draft(tmp_path, "LOFT", ROOM_TOML.replace('"strip"', '"ghost"'),
+                                 kind="room", instruments=INSTRUMENTS)
+    assert refusal is None
+    assert any("ghost" in e for e in errors)
+    refusal, errors = save_draft(tmp_path, "LOFT", ROOM_TOML,
+                                 kind="room", instruments=INSTRUMENTS)
+    assert (refusal, errors) == (None, [])
+
+
+def test_room_publish_moves_a_valid_draft(tmp_path):
+    save_draft(tmp_path, "LOFT", ROOM_TOML, kind="room", instruments=INSTRUMENTS)
+    assert publish_entry(tmp_path, "LOFT", kind="room", instruments=INSTRUMENTS) is None
+    assert (tmp_path / "LOFT.toml").is_file()
+    assert not (tmp_path / "drafts" / "LOFT.toml").exists()
+
+
+def test_room_publish_refuses_an_invalid_draft_in_place(tmp_path):
+    save_draft(tmp_path, "LOFT", ROOM_TOML.replace('"strip"', '"ghost"'),
+               kind="room", instruments=INSTRUMENTS)
+    refusal = publish_entry(tmp_path, "LOFT", kind="room", instruments=INSTRUMENTS)
+    assert refusal and "ghost" in refusal
+    assert (tmp_path / "drafts" / "LOFT.toml").is_file()
+
+
+def test_room_clone_names_the_kind_in_its_refusal(tmp_path):
+    refusal = clone_entry(tmp_path, "published", "NOPE", "NEW", kind="room")
+    assert refusal == "no published room named 'NOPE'"
+
+
+def test_instrument_kind_is_the_default_and_unchanged(tmp_path):
+    (tmp_path / "glow.toml").write_text('description = "g"\ncapabilities = ["light.surface"]\n'
+                                        'accepted_cues = ["midi"]\n')
+    cat = load_catalog(tmp_path)
+    assert cat.kind == "instrument"
+    entry = cat.get("published", "glow")
+    assert entry.kind == "instrument" and entry.room is None
+    assert entry.instrument.name == "glow"
+
+
+def test_clone_entry_refuses_an_unknown_kind(tmp_path):
+    # Every other catalog entry point checks the kind before it touches the
+    # filesystem; clone_entry did not, so a typo'd kind quietly cloned an
+    # instrument file into a rooms catalog (or vice versa).
+    (tmp_path / "glowcap.toml").write_text(GOOD)
+    with pytest.raises(ValueError, match="unknown catalog kind"):
+        clone_entry(tmp_path, "published", "glowcap", "glowcap2", kind="widget")
+    assert not (tmp_path / "drafts").exists()

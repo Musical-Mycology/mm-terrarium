@@ -113,12 +113,12 @@ class FakeConsoleServer:
 
 
 def _server_with_agent(catalog_root=None, bench_session_factory=None,
-                       captures_root=None):
+                       captures_root=None, rooms_root=None):
     gs = GameServer({"TestBit": TestBit})
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv, catalog_root=catalog_root,
                          bench_session_factory=bench_session_factory,
-                         captures_root=captures_root)
+                         captures_root=captures_root, rooms_root=rooms_root)
     return gs, srv, agent
 
 
@@ -1320,6 +1320,140 @@ def test_design_command_unrecognized_field_returns_error():
     reply = agent._handle_command({"command": "get_design", "state": "bogus",
                                    "name": "x"})
     assert reply["event"] == "error"
+
+
+ROOM_TOML = '''description = "Loft"
+backends = ["devicelink"]
+[[fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "dev_strip_main"
+  [[fixtures.blocks]]
+  name = "main"
+  start = 0
+  count = 10
+'''
+
+
+def _roots(tmp_path):
+    inst = tmp_path / "instruments"
+    inst.mkdir()
+    (inst / "dev_strip_main.toml").write_text(
+        'description = "s"\ncapabilities = ["light.surface"]\naccepted_cues = ["midi"]\n')
+    rooms = tmp_path / "rooms"
+    rooms.mkdir()
+    (rooms / "LOFT.toml").write_text(ROOM_TOML)
+    return inst, rooms
+
+
+def test_snapshot_designs_carry_both_kinds(tmp_path):
+    inst, rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    rows = {(r["kind"], r["name"]) for r in msg["designs"]}
+    assert rows == {("instrument", "dev_strip_main"), ("room", "LOFT")}
+    # Instrument rows come before room rows -- the panel groups by kind, not
+    # by name, so order is load-bearing here, not incidental.
+    kinds = [r["kind"] for r in msg["designs"]]
+    assert kinds == sorted(kinds, key=lambda k: k != "instrument")
+    assert kinds[0] == "instrument" and kinds[-1] == "room"
+
+
+def test_broken_published_room_file_yields_a_synthetic_error_row(tmp_path, caplog):
+    inst, rooms = _roots(tmp_path)
+    # An unknown backend fails TerrariumConfigError validation for a
+    # PUBLISHED room file, which load_catalog re-raises rather than
+    # collecting as a draft error -- this must not take down the whole
+    # design panel, only degrade the room half of it.
+    (rooms / "BROKEN.toml").write_text('description = "b"\nbackends = ["nope"]\n')
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    with caplog.at_level("ERROR"):
+        agent.poll()
+    _, msg = srv.sent[0]
+    designs = msg["designs"]
+    assert any(r["kind"] == "instrument" and r["name"] == "dev_strip_main"
+              for r in designs)
+    broken = [r for r in designs if r["kind"] == "room"]
+    assert len(broken) == 1
+    row = broken[0]
+    assert row["state"] == "published" and row["name"] == "<rooms catalog>"
+    assert "BROKEN" in row["error"] or "nope" in row["error"]
+    # Flagged as a placeholder so the panel paints it as a fault report
+    # rather than a clickable design row -- there is no design behind it.
+    assert row["placeholder"] is True
+    assert any(record.levelname == "ERROR" for record in caplog.records)
+
+
+def test_get_design_survives_a_broken_sibling_room_file(tmp_path, caplog):
+    # The whole rooms catalog is parsed to answer a get_design for one room,
+    # so an unparseable PUBLISHED sibling used to raise TerrariumConfigError
+    # straight out of poll() -- and the boot loop calls poll() unguarded.
+    # It must answer an error event instead, and the design rows must still
+    # carry the instruments plus the one placeholder row.
+    inst, rooms = _roots(tmp_path)
+    (rooms / "BROKEN.toml").write_text('description = "b"\nbackends = ["nope"]\n')
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "get_design", "kind": "room",
+                       "state": "published", "name": "LOFT"})
+    with caplog.at_level("ERROR"):
+        agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors, "a broken sibling answers an error, not an exception"
+    assert "BROKEN" in errors[-1]["message"] or "nope" in errors[-1]["message"]
+    assert not [m for _c, m in srv.sent if m.get("event") == "design"]
+    rows = agent._design_rows()
+    assert [r["name"] for r in rows] == ["dev_strip_main", "<rooms catalog>"]
+    assert rows[-1]["placeholder"] is True and rows[-1]["kind"] == "room"
+
+
+def test_get_design_for_a_room_returns_its_text_with_kind(tmp_path):
+    inst, rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "get_design", "kind": "room",
+                       "state": "published", "name": "LOFT"})
+    agent.poll()
+    design = [m for _c, m in srv.sent if m.get("event") == "design"][-1]
+    assert design["kind"] == "room" and design["name"] == "LOFT"
+    assert design["text"] == ROOM_TOML and design["errors"] == []
+
+
+def test_save_design_for_a_room_writes_a_draft_and_reports_errors(tmp_path):
+    inst, rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "save_design", "kind": "room", "name": "LOFT",
+                       "text": ROOM_TOML.replace("dev_strip_main", "ghost")})
+    agent.poll()
+    assert (rooms / "drafts" / "LOFT.toml").is_file()
+    changed = [m for _c, m in srv.sent if m.get("event") == "designs_changed"][-1]
+    draft = next(r for r in changed["designs"] if r["kind"] == "room" and r["state"] == "draft")
+    assert "ghost" in draft["error"]
+
+
+def test_room_design_command_without_a_rooms_root_is_an_error(tmp_path):
+    inst, _rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "list_designs", "kind": "room"})
+    agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors and errors[-1]["message"].startswith("no rooms catalog")
+
+
+def test_instrument_design_commands_default_kind(tmp_path):
+    inst, rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "get_design", "state": "published",
+                       "name": "dev_strip_main"})
+    agent.poll()
+    design = [m for _c, m in srv.sent if m.get("event") == "design"][-1]
+    assert design["kind"] == "instrument"
 
 
 class FakeBenchSession:
