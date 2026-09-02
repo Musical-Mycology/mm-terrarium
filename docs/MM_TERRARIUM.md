@@ -2868,7 +2868,7 @@ its Status section records what shipped against what stays Plan 2.
 
 - **Catalog layout: `instruments/*.toml` published, `instruments/drafts/
   *.toml` drafts, name = file stem** (`control/catalog.py`). `load_catalog`
-  keys `InstrumentCatalog.entries` `"<state>:<name>"`, not just `<name>` --
+  keys `Catalog.entries` `"<state>:<name>"`, not just `<name>` --
   a draft edit of a published entry does not shadow the published one, so
   both can be listed and opened at once. A missing catalog root is an
   empty catalog, not an error (a terrarium with no `instruments/` directory
@@ -3610,14 +3610,20 @@ section 6.
 - **`control/catalog.py` is now kind-aware.** `KINDS = ("instrument",
   "room")`; `CatalogEntry` carries `kind` plus a `room` field (a
   `RoomSpec | None`) alongside the existing `instrument` field; `Catalog`
-  replaces `InstrumentCatalog` (kept as a compatibility alias).
+  replaces `InstrumentCatalog` (the compatibility alias is gone; `Catalog`
+  is the only name).
   `load_catalog(root, kind="instrument", instruments=None)` requires
   `instruments` (a `{name: Instrument}` dict) whenever `kind == "room"`,
   because a room file's fixtures resolve their `instrument =` values
   against it -- passing `kind="room"` with no `instruments` raises
   `ValueError`. `save_draft`, `publish_entry` and `clone_entry` all take
   the same `kind` (default `"instrument"`, so every existing instrument
-  caller is unchanged).
+  caller is unchanged), and all four check the kind before touching the
+  filesystem (`clone_entry` copies bytes and never parses, so it checks the
+  kind name only and needs no `instruments`).
+  A room name defined in two different `room_paths` roots is refused with
+  its own message ("defined in more than one rooms catalog root"), distinct
+  from the inline-vs-catalog collision, mirroring the instrument path.
 - **The five Console design commands, their events, and the design rows
   all carry `kind`.** `console/protocol.parse_admin_command` reads an
   optional `"kind"` off each design command message, defaulting to
@@ -3628,17 +3634,34 @@ section 6.
   followed by every room row. A room's fixtures resolve their instruments
   from the wired Terrarium's own config when one is loaded, else from the
   published instrument catalog, else from nothing. A published room file
-  that fails to parse does not blank the whole Rooms panel: `_design_rows`
-  catches the `TerrariumConfigError`, logs it, and appends one synthetic
-  row named `<rooms catalog>` carrying the error instead. `harness/
+  that fails to parse does not blank the whole Rooms panel, and must never
+  reach `poll()` as an exception (the boot loop calls `poll()` unguarded):
+  every design path loads its catalog through
+  `ConsoleAgent._load_design_catalog(kind) -> (catalog | None, error |
+  None)`, which catches the `TerrariumConfigError` and logs it.
+  `_design_rows` turns that error into one synthetic row from
+  `protocol.catalog_error_row(kind, message)` -- named `<rooms catalog>` or
+  `<instrument catalog>`, carrying the error and `"placeholder": True` --
+  and `get_design` (like `bench_start` and `replay_trace`, which resolve
+  their names in the instrument catalog) answers an `error` event instead.
+  `harness/
   terrarium_boot.py` wires `rooms_root` from `terrarium_config.
   room_roots[0]` (when non-empty), and its `--config`/`--room` argparse
   help text now names both the inline `[rooms.<NAME>]` tables and the
   rooms catalog as valid `--room` sources.
 - **The Design tab gets a Rooms list and a fixture-order form.**
-  `#designList` (Instruments) and a new `#roomDesignList` (Rooms) sit side
-  by side, sharing the same raw TOML editor; Save/Publish/Clone all carry
-  the open selection's `kind`. Selecting a room renders ONE structured
+  `#designList` (Instruments) and a new `#roomDesignList` (Rooms) are
+  stacked in the same panel, each under its own heading, sharing the one
+  raw TOML editor below them; Save/Publish/Clone all carry
+  the open selection's `kind`. A `placeholder` row (the catalog-error row
+  above) paints its error badge and a `placeholder` class but takes no
+  click at all, so a catalog that will not load cannot be "opened".
+  With a room open, the instrument-only controls are disabled -- bench
+  Simulate/Stop and the tilt lane, plus calibrate Propose and Replay --
+  and come back when an instrument is open, because `bench_start`,
+  `replay_trace` and the threshold proposal all act on instruments and
+  could otherwise only answer "no published design".
+  Selecting a room renders ONE structured
   section, Fixtures: one row per `[[fixtures]]` entry with its name, an
   instrument `<select>` populated from published instruments (sorted;
   when the fixture's current `instrument` isn't among the published
@@ -3648,13 +3671,20 @@ section 6.
   Blocks and zones stay raw TOML; there is no structured form for them.
   Reordering applies at the next Room load only, never live. `toml_edit.js`
   gained `listFixtures` (one entry per `[[fixtures]]` block), `moveFixture`
-  (swaps two fixtures, each carrying its own indented `[[fixtures.blocks]]`/
+  (swaps two fixtures, each carrying its own `[[fixtures.blocks]]`/
   `[[fixtures.zones]]` children and trailing blank line; an out-of-range
   index is a no-op), and `setFixtureInstrument` (rewrites an existing
   `instrument = "..."` line, or inserts one directly after the fixture's
   own `name = "..."` line -- or after the `[[fixtures]]` header itself
   when the fixture has no name -- so a fixture missing its instrument can
-  still be repaired through the picker). The calibrate Propose path
+  still be repaired through the picker). All three go through one
+  `fixtureBlocks` helper, which extends each `[[fixtures]]` block through
+  the `[[fixtures.` blocks that follow it, so a fixture's children travel
+  with it whether the file indents them or writes them flat (both are valid
+  TOML, and the flat form used to leave the children behind on a swap,
+  silently reassigning geometry between fixtures); each block also keeps an
+  `ownEnd` marking its own key region, so `name`/`instrument` reads and
+  writes never stray into a child table. The calibrate Propose path
   rebuilds the forms with the open design's own `kind`, so proposing
   against a room does not paint the instrument form.
 - **Not done in this slice.** Blocks and zones have no structured form,
@@ -3663,12 +3693,11 @@ section 6.
   with the preceding fixture on a swap (it is scanned into that fixture's
   block, not its own). `fixture_controllers` still has no Console
   consumer. `publish_entry`'s refusal messages don't name which kind
-  failed to publish. There is no test for a name collision between two
-  rooms catalog roots (only the inline-vs-catalog collision is tested).
-  Plan 3 (luxaeterna rendering at O2 time) has not started.
+  failed to publish. Plan 3 (luxaeterna rendering at O2 time) has not
+  started.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**1983 passed, 1 skipped**.
+**1986 passed, 1 skipped** (after the final-review fix wave).
 
 ## Boundary rules (the load-bearing invariants)
 

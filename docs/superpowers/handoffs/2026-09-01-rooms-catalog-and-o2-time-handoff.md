@@ -8,7 +8,7 @@ asks of every successor).
 
 **Plan 2 is done.** It landed on `claude/rooms-catalog-plan2-8f3a1c`,
 commits `fc21c1f..05891cf`, offline suite `.venv/bin/python -m pytest
-tests -q` -> 1983 passed, 1 skipped. See `docs/MM_TERRARIUM.md`'s "Rooms
+tests -q` -> 1986 passed, 1 skipped. See `docs/MM_TERRARIUM.md`'s "Rooms
 catalog, TEST/DEMO migration, Design tab Room editor (2026-09-01)" entry
 and the spec's section 12 Status for the landed detail and deviations.
 **Plan 3 (luxaeterna renders at O2 time) remains the scope of this
@@ -201,7 +201,7 @@ Flagged during Plan 2's task execution, also deliberately not fixed:
   `(recommended)` pick.
 - Tests ONLY via `.venv/bin/python -m pytest tests -q`; a fresh worktree
   needs `ln -s /Users/chris/projects/mm-terrarium/.venv .venv`. Baseline at
-  this slice's HEAD: 1951 passed, 1 skipped.
+  this slice's HEAD: 1986 passed, 1 skipped.
 - No em dashes in anything authored (docs, comments, commit messages); the
   repo's "--" style is fine.
 - `control/` is pure stdlib; `control/` and `devicelink/` never import

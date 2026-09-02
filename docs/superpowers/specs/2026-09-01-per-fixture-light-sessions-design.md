@@ -487,8 +487,9 @@ rather than folded into one parenthetical:
 
 Plan 2 (section 6, rooms catalog and the Design tab Room editor) landed on
 `claude/rooms-catalog-plan2-8f3a1c`, commits `fc21c1f..05891cf`. Offline
-suite: `.venv/bin/python -m pytest tests -q` -> 1983 passed, 1 skipped
-(was 1955 passed, 1 skipped at Plan 1's fix-wave HEAD). See
+suite: `.venv/bin/python -m pytest tests -q` -> 1986 passed, 1 skipped
+after the final-review fix wave (was 1955 passed, 1 skipped at Plan 1's
+fix-wave HEAD). See
 `docs/MM_TERRARIUM.md`'s "Rooms catalog, TEST/DEMO migration, Design tab
 Room editor (2026-09-01)" entry for the landed detail.
 
