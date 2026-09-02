@@ -86,17 +86,32 @@ const FUNCTIONS = [
   assert.strictEqual(tilt.disabled, true);
   assert.strictEqual(byId.get("benchFunctions").children.length, 0);
 
-  // -- bench is instrument-only: a room selection disables its controls ---
-  // bench_start resolves its name in the INSTRUMENT catalog, so firing it
-  // for an open room only ever answers "no published design".
+  // -- Simulate is instrument-only, Stop follows the RUNNING bench --------
+  // bench_start resolves its name in the INSTRUMENT catalog, so it is dead
+  // while a room is open. Stop is not: gating it on the selection too would
+  // strand a bench started for an instrument the moment the operator
+  // clicked over to a room.
+  design.openDesign({ name: "tuneshroom", state: "published", text: "x=1", errors: [] });
+  send({ event: "bench_started", functions: FUNCTIONS });
+  assert.strictEqual(stopBtn.disabled, false);
+
   design.openDesign({ name: "LOFT", state: "published", kind: "room",
     text: "x=1", errors: [] });
   assert.strictEqual(simBtn.disabled, true, "room open: Simulate is disabled");
-  assert.strictEqual(stopBtn.disabled, true, "room open: Stop is disabled");
-  assert.strictEqual(tilt.disabled, true, "room open: the tilt slider is disabled");
+  assert.strictEqual(stopBtn.disabled, false,
+    "room open: a bench that is running can still be stopped");
+  assert.strictEqual(tilt.disabled, false,
+    "room open: the running bench's tilt lane stays live");
+
+  sock.sent.length = 0;
+  stopBtn.onclick();
+  assert.deepStrictEqual(sock.sent.at(-1), { command: "bench_stop" },
+    "Stop still reaches the server with a room open");
+  assert.strictEqual(stopBtn.disabled, true, "stopped: Stop goes back to disabled");
 
   design.openDesign({ name: "tuneshroom", state: "published", text: "x=1", errors: [] });
   assert.strictEqual(simBtn.disabled, false, "instrument open: Simulate is live again");
+  assert.strictEqual(stopBtn.disabled, true, "no bench running: Stop stays disabled");
 
   console.log("design_bench.test.js OK");
 })();

@@ -168,12 +168,13 @@ function instrumentOpen() {
 }
 
 // The bench controls' one enable/disable point: Simulate needs an open
-// instrument, Stop and the tilt lane additionally need a running bench.
+// instrument, Stop and the tilt lane need a RUNNING bench and nothing
+// else. Gating Stop on the selection too would strand a bench started for
+// an instrument the moment the operator clicked over to a room.
 function benchButtonsEnabled() {
-  const live = instrumentOpen();
-  document.getElementById("benchStart").disabled = !live;
-  document.getElementById("benchStop").disabled = !(live && benchRunning);
-  document.getElementById("benchTilt").disabled = !(live && benchRunning);
+  document.getElementById("benchStart").disabled = !instrumentOpen();
+  document.getElementById("benchStop").disabled = !benchRunning;
+  document.getElementById("benchTilt").disabled = !benchRunning;
 }
 
 // Pure renderer: one button per declared function, labeled by name with a

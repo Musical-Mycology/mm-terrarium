@@ -3657,10 +3657,13 @@ section 6.
   above) paints its error badge and a `placeholder` class but takes no
   click at all, so a catalog that will not load cannot be "opened".
   With a room open, the instrument-only controls are disabled -- bench
-  Simulate/Stop and the tilt lane, plus calibrate Propose and Replay --
-  and come back when an instrument is open, because `bench_start`,
-  `replay_trace` and the threshold proposal all act on instruments and
-  could otherwise only answer "no published design".
+  Simulate, plus calibrate Propose and Replay -- and come back when an
+  instrument is open, because `bench_start`, `replay_trace` and the
+  threshold proposal all act on instruments and could otherwise only
+  answer "no published design". Bench Stop and the tilt lane follow the
+  RUNNING bench alone, never the selection, so a bench started for an
+  instrument can still be stopped after the operator clicks over to a
+  room.
   Selecting a room renders ONE structured
   section, Fixtures: one row per `[[fixtures]]` entry with its name, an
   instrument `<select>` populated from published instruments (sorted;

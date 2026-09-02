@@ -7,10 +7,11 @@ sections 6 and 7 (verify merge to main before branching, same as this note
 asks of every successor).
 
 **Plan 2 is done.** It landed on `claude/rooms-catalog-plan2-8f3a1c`,
-commits `fc21c1f..05891cf`, offline suite `.venv/bin/python -m pytest
-tests -q` -> 1986 passed, 1 skipped. See `docs/MM_TERRARIUM.md`'s "Rooms
-catalog, TEST/DEMO migration, Design tab Room editor (2026-09-01)" entry
-and the spec's section 12 Status for the landed detail and deviations.
+commits `fc21c1f` through the final-review fixes, offline suite
+`.venv/bin/python -m pytest tests -q` -> 1986 passed, 1 skipped. See
+`docs/MM_TERRARIUM.md`'s "Rooms catalog, TEST/DEMO migration, Design tab
+Room editor (2026-09-01)" entry and the spec's section 12 Status for the
+landed detail and deviations.
 **Plan 3 (luxaeterna renders at O2 time) remains the scope of this
 handoff** -- everything below Plan 2's section is unchanged and still
 applies.
@@ -45,9 +46,9 @@ named follow-up, not part of Plan 2 or 3.
 
 ## Scope of Plan 2: rooms catalog and the Design tab Room editor (spec section 6) -- DONE
 
-**Landed** on `claude/rooms-catalog-plan2-8f3a1c`, commits
-`fc21c1f..05891cf`. The four points below are preserved as the scope this
-was planned against; see `docs/MM_TERRARIUM.md`'s "Rooms catalog,
+**Landed** on `claude/rooms-catalog-plan2-8f3a1c`, commits `fc21c1f`
+through the final-review fixes. The four points below are preserved as
+the scope this was planned against; see `docs/MM_TERRARIUM.md`'s "Rooms catalog,
 TEST/DEMO migration, Design tab Room editor (2026-09-01)" entry and the
 spec's section 12 Status for what actually shipped, including the handful
 of deviations from this scope (the `<rooms catalog>` synthetic error row,
