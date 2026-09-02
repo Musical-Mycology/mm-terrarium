@@ -8,7 +8,7 @@ from bits.test.test_bit import (
     JAMMER_LEVEL_REST,
     TestBit,
 )
-from control.cues import ROOM, FireFunction, fixture_dev
+from control.cues import ROOM, FireFunction
 from control.engine import GameServer
 from control.generator_runner import GeneratorRunner
 from control.instrument import InstrumentRequirement
@@ -277,13 +277,6 @@ def test_room_drift_is_a_deterministic_triangle():
         spec, TestBit.ROOM_DRIFT_PERIOD * 3 / 4) == 64
 
 
-def test_chase_steps_main_then_accent():
-    fn = TestBit().function_table.functions["chase"]
-    assert [(s.offset, s.cue[0]) for s in fn.script] == [
-        (0.0, fixture_dev("main")), (0.5, fixture_dev("accent")),
-        (1.0, fixture_dev("main")), (1.0, fixture_dev("accent"))]
-
-
 SCRIPTED_FUNCTION_NAMES = {"flash_device", "play_aurora", "win"}
 STREAM_FUNCTION_NAMES = {
     "tilt_hue", "jam_level_neg", "jam_level_pos", "jam_hue_neg",
@@ -294,7 +287,7 @@ STREAM_FUNCTION_NAMES = {
 def test_testbit_declares_a_room_drift_generator_and_three_surface_triggers():
     table = TestBit().function_table
     assert set(table.functions) == (
-        {"drift", "chase"} | SCRIPTED_FUNCTION_NAMES | STREAM_FUNCTION_NAMES)
+        {"drift"} | SCRIPTED_FUNCTION_NAMES | STREAM_FUNCTION_NAMES)
     assert table.functions["drift"].kind is FunctionKind.GENERATOR
     scripted = {name: fn for name, fn in table.functions.items()
                 if name in SCRIPTED_FUNCTION_NAMES}
@@ -302,9 +295,6 @@ def test_testbit_declares_a_room_drift_generator_and_three_surface_triggers():
     streams = {name: fn for name, fn in table.functions.items()
                if name in STREAM_FUNCTION_NAMES}
     assert all(fn.kind is FunctionKind.STREAM for fn in streams.values())
-    chase = table.functions["chase"]
-    assert chase.kind is FunctionKind.SCRIPTED
-    assert chase.target is FunctionTarget.ROOM
 
 
 def test_flash_script_is_chime_plus_white_5s():

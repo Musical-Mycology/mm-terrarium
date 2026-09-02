@@ -23,22 +23,10 @@ def make_room(name="TEST"):
     return Room(name=name, profile=profile, node_id=f"ROOM_{name}_NODE")
 
 
-class _NoChaseBit(TestBit):
-    """TestBit minus chase: chase addresses both TEST fixtures ("main" and
-    "accent") by name, which a deliberately ONE-fixture Room (below) cannot
-    satisfy. This subclass keeps the rest of TestBit's room_manifests intact
-    for the capacity assertion."""
-    @property
-    def function_table(self):
-        table = super().function_table
-        del table.functions["chase"]
-        return table
-
-
 def test_load_bit_synthesizes_room_role_from_active_room():
-    gs = GameServer({"NoChaseBit": _NoChaseBit}, room_binding=RoomBindingRegistry())
+    gs = GameServer({"TestBit": TestBit}, room_binding=RoomBindingRegistry())
     gs.room = make_room()
-    gs.load_bit("NoChaseBit")
+    gs.load_bit("TestBit")
     rname = room_role_name("TEST")
     role = gs.registration.role_table.roles[rname]
     assert role.capacity == 1          # the room above has ONE fixture
