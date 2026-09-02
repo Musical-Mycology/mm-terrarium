@@ -350,6 +350,17 @@ class GameServer:
             # implicit-room-slot join handling, spec Status section).
             role_slots = {role.requires for role in role_table.roles.values()
                           if role.requires not in (None, "room")}
+            # Read and validated once, here, before the room block below --
+            # function_table is a property, so a Bit whose property builds a
+            # fresh object per access could otherwise hand the fixture-
+            # contract checks a different table than the one validated below
+            # and the one self._generators is built from (the same hazard
+            # documented at self._generators' construction, and adversarially
+            # tested by _FlipFunctionTableBit in tests/test_engine_functions.py).
+            # One read, validated immediately, used everywhere after.
+            function_table = bit.function_table
+            validate_function_table(function_table, set(bit.verb_handlers()),
+                                    owner="bit")
             if self.room is not None:
                 light_m, ugen_m = bit.room_manifests()
                 if light_m or ugen_m:
@@ -367,14 +378,14 @@ class GameServer:
                     room_reqs.append(InstrumentRequirement(
                         slot="room", capabilities=frozenset(caps)))
                 _resolve_room_requirements(room_reqs, self.room)
-                missing = self._bit_fixture_names(bit.function_table, light_m) - {
+                missing = self._bit_fixture_names(function_table, light_m) - {
                     f.name for f in self.room.profile.fixtures}
                 if missing:
                     raise ValueError(
                         f"Bit addresses fixtures {sorted(missing)} that Room "
                         f"{self.room.name!r} does not declare; its fixtures are "
                         f"{[f.name for f in self.room.profile.fixtures]}")
-                self._check_generator_lane_collisions(bit.function_table)
+                self._check_generator_lane_collisions(function_table)
             # "room" always counts as a declared slot for Role.requires,
             # whether resolved just above (an active Room) or not (a
             # roomless boot / a Bit with no Room manifests) -- this is a
@@ -386,9 +397,6 @@ class GameServer:
                         f"role {role.name!r} requires undeclared slot "
                         f"{role.requires!r}; declared: {sorted(known_slots)}")
             validate_role_declarations(role_table)
-            function_table = bit.function_table
-            validate_function_table(function_table, set(bit.verb_handlers()),
-                                    owner="bit")
             registration = RegistrationState(role_table)
         except Exception as exc:
             self._set_state(State.IDLE)

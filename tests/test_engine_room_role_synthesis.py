@@ -1,6 +1,6 @@
 import pytest
 
-from control.cues import fixture_dev
+from control.cues import SolidCue, fixture_dev
 from control.engine import BitLoadError, GameServer
 from control.functions import (Condition, ConditionSource, Function, FunctionKind,
                                FunctionTable, FunctionTarget, GeneratorSpec, ScriptStep)
@@ -85,3 +85,28 @@ def test_load_bit_with_no_room_skips_the_fixture_contract():
     gs = GameServer({"B": _FixtureBit})
     gs.load_bit("B")     # roomless boot: nothing to check against
     assert gs.state is State.SETUP
+
+
+class _SolidCueFixtureBit(TestBit):
+    """TestBit plus one script step whose cue is a SolidCue (not a plain
+    tuple) addressed at a fixture the TEST Room lacks -- exercises
+    _bit_fixture_names' `cue.dev` branch, not just the tuple `cue[0]` one."""
+    @property
+    def function_table(self):
+        table = super().function_table
+        table.functions["ceiling_solid"] = Function(
+            name="ceiling_solid", description="d", target=FunctionTarget.ROOM,
+            condition=Condition(name="c", description="d",
+                                source=ConditionSource.ADMIN_MANUAL),
+            script=(ScriptStep(0.0, SolidCue(dev=fixture_dev("ceiling"),
+                                             rgb=(255, 255, 255), level=1.0,
+                                             duration=None)),))
+        return table
+
+
+def test_load_bit_refuses_a_solidcue_that_addresses_a_missing_fixture():
+    gs = GameServer({"B": _SolidCueFixtureBit})
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="N")
+    with pytest.raises(BitLoadError, match="ceiling"):
+        gs.load_bit("B")
+    assert gs.state is State.IDLE
