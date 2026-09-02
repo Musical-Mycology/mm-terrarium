@@ -1,3 +1,4 @@
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -523,3 +524,100 @@ def test_instrument_non_int_pixels_is_a_located_config_error():
     with pytest.raises(TerrariumConfigError) as exc:
         parse_terrarium_config(bad, source="test")
     assert "instruments.shroomy" in str(exc.value)
+
+
+_INSTRUMENT = '''description = "strip"
+capabilities = ["light.surface"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+'''
+_ROOM = '''description = "Loft"
+backends = ["devicelink"]
+[[fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "strip"
+  [[fixtures.blocks]]
+  name = "main"
+  start = 0
+  count = 10
+'''
+
+
+def _write_tree(tmp_path, config_text, rooms=None):
+    (tmp_path / "instruments").mkdir()
+    (tmp_path / "instruments" / "strip.toml").write_text(_INSTRUMENT)
+    (tmp_path / "rooms").mkdir()
+    for name, text in (rooms or {}).items():
+        (tmp_path / "rooms" / f"{name}.toml").write_text(text)
+    cfg = tmp_path / "terrarium.toml"
+    cfg.write_text(textwrap.dedent(config_text))
+    return str(cfg)
+
+
+_HEAD = '''schema = 1
+[terrarium]
+name = "t"
+'''
+
+
+def test_catalog_rooms_load_from_the_default_rooms_dir(tmp_path):
+    cfg = _write_tree(tmp_path, _HEAD, rooms={"LOFT": _ROOM})
+    config = load_terrarium_config(cfg)
+    assert set(config.rooms) == {"LOFT"}
+    assert config.rooms["LOFT"].profile.surface_id == "room_loft"
+    assert config.room_roots == (tmp_path / "rooms",)
+
+
+def test_room_paths_key_overrides_the_default(tmp_path):
+    (tmp_path / "venues").mkdir()
+    (tmp_path / "venues" / "HALL.toml").write_text(_ROOM)
+    cfg = _write_tree(tmp_path, _HEAD + 'room_paths = ["venues"]\n')
+    config = load_terrarium_config(cfg)
+    assert set(config.rooms) == {"HALL"}
+
+
+def test_inline_and_catalog_rooms_merge(tmp_path):
+    inline = _HEAD + '''
+    [rooms.STAGE]
+    backends = ["devicelink"]
+      [[rooms.STAGE.fixtures]]
+      name = "m"
+      color_order = "GRB"
+      instrument = "strip"
+        [[rooms.STAGE.fixtures.blocks]]
+        name = "m"
+        start = 0
+        count = 4
+    '''
+    cfg = _write_tree(tmp_path, inline, rooms={"LOFT": _ROOM})
+    assert set(load_terrarium_config(cfg).rooms) == {"STAGE", "LOFT"}
+
+
+def test_room_defined_inline_and_in_catalog_is_refused(tmp_path):
+    inline = _HEAD + '''
+    [rooms.LOFT]
+    backends = ["devicelink"]
+      [[rooms.LOFT.fixtures]]
+      name = "m"
+      color_order = "GRB"
+      instrument = "strip"
+        [[rooms.LOFT.fixtures.blocks]]
+        name = "m"
+        start = 0
+        count = 4
+    '''
+    cfg = _write_tree(tmp_path, inline, rooms={"LOFT": _ROOM})
+    with pytest.raises(TerrariumConfigError, match=r"rooms\.LOFT.*both inline and in a rooms catalog"):
+        load_terrarium_config(cfg)
+
+
+def test_no_room_anywhere_is_refused(tmp_path):
+    cfg = _write_tree(tmp_path, _HEAD)
+    with pytest.raises(TerrariumConfigError, match="at least one room"):
+        load_terrarium_config(cfg)
+
+
+def test_catalog_room_fixture_may_use_a_catalog_instrument(tmp_path):
+    cfg = _write_tree(tmp_path, _HEAD, rooms={"LOFT": _ROOM})
+    config = load_terrarium_config(cfg)
+    assert config.rooms["LOFT"].profile.fixtures[0].instrument.name == "strip"
