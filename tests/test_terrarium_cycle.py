@@ -90,7 +90,7 @@ class _RoomWiring:
 
     def on_terrarium_state_change(self, old_state, new_state) -> None:
         if new_state is TerrariumState.ROOM_READY:
-            self._agent.rewire_room(self._terrarium.room_bridge)
+            self._agent.rewire_room()
         elif new_state is TerrariumState.NO_ROOM:
             self._agent.unwire_room()
 
@@ -172,17 +172,18 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     assert not [m for _c, m in srv.sent if m.get("event") == "error"]
     first_arco = terrarium.arco
     assert isinstance(first_arco, FakeArco)
-    # TEST's fixtures are dev_strip_main/dev_strip_accent, which declare no
-    # ambient -- no Bit,
-    # no session, today's unchanged behavior (Task 7, spec section 6).
-    assert dl_agent._room_light is None
+    # Every fixture is loaded with its own session from Room load. TEST's
+    # fixtures are dev_strip_main/dev_strip_accent, which declare no ambient
+    # -- with no Bit either, both sessions stand with nothing to render.
+    assert set(dl_agent._fixtures) == {"main", "accent"}
+    assert _last_instruments() == []
 
     # --- console: load_bit TestBit ---
     srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
     agent.poll()
     assert gs.state.name == "SETUP"
     assert not [m for _c, m in srv.sent if m.get("event") == "error"]
-    assert dl_agent._room_light is not None
+    assert set(dl_agent._fixtures) == {"main", "accent"}
     assert "rainbow" in _last_instruments()   # the Bit's own ROOM declaration
 
     # --- console: run ---
@@ -194,9 +195,9 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     gs.tick(3.0)
     assert gs.state.name == "IDLE"
     assert gs.bit is None
-    # Ambient is empty for TEST's fixtures, so the session goes back to
-    # unbuilt once the Bit that declared it is gone.
-    assert dl_agent._room_light is None
+    # Ambient is empty for TEST's fixtures, so the sessions go back to
+    # rendering nothing once the Bit that declared them is gone.
+    assert _last_instruments() == []
     # TestBit's default result() is None, so no bit_completed fires (see
     # tests/test_console_agent.py::test_bit_completed_is_broadcast_on_unload)
     # -- the state transition through COMPLETING/UNLOADING back to IDLE is
@@ -226,7 +227,7 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     # --- ambient leg (Task 7, spec section 6): DEMO's `array` fixture
     # declares venue_array's ambient aurora+drone, so with no Bit loaded the
     # Room renders that instead of going unbuilt. ---
-    assert dl_agent._room_light is not None
+    assert set(dl_agent._fixtures) == {"array"}
     assert "aurora" in _last_instruments()
     # Ambient audio grants a voice and starts its drone the moment the Room
     # reaches ROOM_READY with no Bit loaded -- see devicelink/agent.py's
@@ -239,26 +240,27 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     # --- ambient generator leg: the Room breathes on cc:74 before any Bit
     # is loaded, with no session poked directly -- two ticks of the
     # engine-owned ambient GeneratorRunner (spec section 6/7), read back
-    # off terrarium.room_bridge, the same sink a Bit's own generator later
-    # drives. ---
-    room_bridge = terrarium.room_bridge
+    # off the agent's per-fixture controller read-out, the same one a Bit's
+    # own generator later drives. ---
+    def cc74():
+        return dl_agent.controllers()["array"].get(74)
     clock_value[0] = 3.0
     dl_agent.poll()
-    ambient_value_at_3 = room_bridge.controllers.get(74)
+    ambient_value_at_3 = cc74()
     clock_value[0] = 6.0
     dl_agent.poll()
-    ambient_value_at_6 = room_bridge.controllers.get(74)
+    ambient_value_at_6 = cc74()
     assert ambient_value_at_3 is not None and ambient_value_at_6 is not None
     assert ambient_value_at_3 != ambient_value_at_6
 
     srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
     agent.poll()
-    assert dl_agent._room_light is not None
+    assert set(dl_agent._fixtures) == {"array"}
     assert "rainbow" in _last_instruments()   # the Bit's declaration takes over
     # TestBit's own declared "drift" generator supersedes the ambient one --
-    # _setup_room drops the ambient runner the moment a Bit's ROOM role is
-    # composed (last-start-wins, spec section 7).
-    assert dl_agent._ambient_generators is None
+    # _setup_room drops each fixture's ambient runner the moment a Bit's ROOM
+    # role is composed (last-start-wins, spec section 7).
+    assert dl_agent._fixtures["array"].generators is None
 
     srv.deliver("c1", {"command": "run"})
     agent.poll()
@@ -266,13 +268,14 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
 
     # --- TestBit's declared generator drives cc:74 during RUNNING, engine-
     # dispatched (not through dl_agent.poll()): gs.tick() feeds it straight
-    # through GameServer.on_light_cue into the same room_bridge. clock_value
+    # through GameServer.on_light_cue into the same fixture session.
+    # clock_value
     # is held at 6.0 (left where the ambient leg above last set it) so every
     # `at`/`when` below shares one deterministic instant until advanced. ---
     gs.tick(1.0)   # run_elapsed=1.0
     assert gs.state.name == "RUNNING"
     drift_spec = TestBit().function_table.functions["drift"].generator
-    assert room_bridge.controllers.get(74) == GeneratorRunner.value(drift_spec, 1.0)
+    assert cc74() == GeneratorRunner.value(drift_spec, 1.0)
 
     # --- a play_aurora fire (bit-adjudicated in real play; fired manually
     # here as the same test-local shortcut test_engine_functions.py uses)
@@ -286,22 +289,22 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     assert gs.fire_function("play_aurora", fired_by="admin-manual", dev=ROOM) is None
     # play_aurora's own offset-0.0 step (value 127) is due immediately
     # (when == now == 6.0) and lands synchronously on the same lane.
-    assert room_bridge.controllers.get(74) == 127
+    assert cc74() == 127
     gs.tick(0.1)   # run_elapsed=1.1, at=6.0 -- still inside the 2.0s span
     # The generator's own next tick would emit a different value here; it
     # does not, because the lane is suppressed until at(6.0) + span(2.0).
-    assert room_bridge.controllers.get(74) == 127
+    assert cc74() == 127
     gs.tick(0.05)   # run_elapsed=1.15, at=6.0 -- still suppressed
-    assert room_bridge.controllers.get(74) == 127
+    assert cc74() == 127
 
     # Advance the shared clock past the suppression window (8.0) and drain
     # play_aurora's two remaining deferred script steps (due at 6.5 and 8.0)
     # through dl_agent.poll(), the same way a real device link would.
     clock_value[0] = 9.0
     dl_agent.poll()
-    assert room_bridge.controllers.get(74) == 0   # play_aurora's last step
+    assert cc74() == 0   # play_aurora's last step
     gs.tick(0.05)   # run_elapsed=1.20, at=9.0 -- past the window, drift resumes
-    assert room_bridge.controllers.get(74) == GeneratorRunner.value(drift_spec, 1.20)
+    assert cc74() == GeneratorRunner.value(drift_spec, 1.20)
 
     # --- a joined device's blob carries `triggers`: TUNESHROOM (the default
     # carried instrument gs.join() grants when none is declared) ships its
@@ -324,17 +327,17 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     gs.tick(3.0)   # TestBit's run duration elapses -> COMPLETING -> IDLE
     assert gs.state.name == "IDLE"
     assert gs.bit is None
-    assert dl_agent._room_light is not None
+    assert set(dl_agent._fixtures) == {"array"}
     assert "aurora" in _last_instruments()   # ambient again once the Bit unloads
     # --- ambient animation returns once the Bit unloads: two more ticks,
     # two more distinct values, off the SAME lane the Bit's drift just
     # supplied (spec section 7's resume-at-unload guarantee). ---
     clock_value[0] = 20.0
     dl_agent.poll()
-    ambient_value_at_20 = room_bridge.controllers.get(74)
+    ambient_value_at_20 = cc74()
     clock_value[0] = 23.0
     dl_agent.poll()
-    ambient_value_at_23 = room_bridge.controllers.get(74)
+    ambient_value_at_23 = cc74()
     assert ambient_value_at_20 is not None and ambient_value_at_23 is not None
     assert ambient_value_at_20 != ambient_value_at_23
     # The ambient drone re-grants a FRESH voice on the swap back (mirrors

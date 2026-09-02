@@ -15,7 +15,6 @@ pytest.importorskip("luxaeterna")
 from bits.test.test_bit import TestBit
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.room_bridge import RoomBridge
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room
@@ -26,42 +25,50 @@ HORIZON = 0.060
 TICK = 1.0 / 44.0
 
 
-class TickRecordingSink:
-    """Records the clock reading at which each event arrived, not just the
-    bytes, and forwards to the real sink underneath.
+class TickRecordingSession:
+    """Records the clock reading at which each MIDI feed arrived, not just
+    the bytes, and forwards every call to the real LightSession underneath.
 
     Recording the time is not test convenience: "audio at `at`, light before
     it" is unassertable against a double that only keeps payloads, and
     boundary rule 5 covers what a double OMITS as much as what it permits.
     Forwarding matters too, because the light half has to actually reach the
-    real LightSession or no frame changes and there is nothing to stamp.
+    real LightSession or no frame changes and there is nothing to stamp --
+    which is why this wraps the fixture's own session in place rather than
+    standing in for it (each Room fixture owns a real session now, and
+    _render_room renders through it).
     """
 
-    def __init__(self, clock, inner=None):
+    def __init__(self, clock, inner):
         self._clock = clock
         self._inner = inner
         self.fed = []                      # (now, status, d1, d2)
 
+    @property
+    def state(self):
+        return self._inner.state
+
     def feed_midi(self, status, d1, d2):
         self.fed.append((self._clock(), status, d1, d2))
-        if self._inner is not None:
-            self._inner.feed_midi(status, d1, d2)
+        self._inner.feed_midi(status, d1, d2)
+
+    def render_into(self, universe):
+        self._inner.render_into(universe)
 
     def clear(self):
-        if self._inner is not None:
-            self._inner.clear()
+        self._inner.clear()
 
     def shutdown(self):
         pass
 
 
 class TickRecordingAudioBridge:
-    """The room_audio-shaped sibling of TickRecordingSink above: the Room's
+    """The room_audio-shaped sibling of TickRecordingSession above: the Room's
     audio channel is now a per-fixture AudioBridge grant, not a RoomBridge
     sink, so this double satisfies AudioBridge's dev-keyed surface instead
     (on_grant/on_release/feed_midi/start_drone/stop_drone/silence/tick).
     Records the clock reading at which each feed_midi arrived, same as
-    TickRecordingSink, so "audio at `at`, light before it" stays assertable.
+    TickRecordingSession, so "audio at `at`, light before it" stays assertable.
     """
 
     def __init__(self, clock):
@@ -123,14 +130,13 @@ def _stack(now):
     gs.load_bit("TestBit")
 
     server = FakeServer()
-    room_bridge = RoomBridge()
     audio = TickRecordingAudioBridge(clock)
-    agent = DeviceLinkAgent(gs, server, room_bridge=room_bridge,
+    agent = DeviceLinkAgent(gs, server,
                             room_audio=audio, horizon=HORIZON, clock=clock)
-    assert agent._room_light is not None, "the Room session must have built"
+    assert "main" in agent._fixtures, "the fixture session must have built"
 
-    light = TickRecordingSink(clock, inner=agent._room_light)
-    room_bridge.bind("sim-room", light=light)
+    light = TickRecordingSession(clock, agent._fixtures["main"].session)
+    agent._fixtures["main"].session = light
     server.bind_dev("sim-room", "c-room")
 
     server.arrive("c1")
@@ -140,7 +146,7 @@ def _stack(now):
     agent.poll()
     for _ in range(200):
         if (agent.bridges["ie1"].session.state == "running"
-                and agent._room_light.session.state == "running"):
+                and agent._fixtures["main"].session.state == "running"):
             break
         now[0] += 0.1
         agent.poll()
