@@ -31,7 +31,11 @@ def _light_only_profile(pixel_count=90):
         RoomFixture(name="main", color_order="GRB",
                     blocks=(RoomBlock("main", 0, pixel_count),),
                     zones=(RoomZone("all", 0, pixel_count),),
-                    instrument=LIGHT_ONLY),))
+                    instrument=LIGHT_ONLY),
+        RoomFixture(name="accent", color_order="GRB",
+                    blocks=(RoomBlock("accent", 0, 5),),
+                    zones=(RoomZone("all", 0, 5),),
+                    instrument=LIGHT_ONLY)))
 
 
 def _make_room(profile, name="TEST"):

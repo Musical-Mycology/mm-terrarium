@@ -25,6 +25,19 @@ HORIZON = 0.060
 TICK = 1.0 / 44.0
 
 
+class _NoChaseTestBit(TestBit):
+    """TestBit minus chase: chase addresses both TEST fixtures ("main" and
+    "accent") by name, which this module's deliberately ONE-fixture Room
+    cannot satisfy -- and the tests below pin single-lane presentation-time
+    behavior on the ROOM-targeted tilt_hue stream, which a second fixture
+    would double."""
+    @property
+    def function_table(self):
+        table = super().function_table
+        del table.functions["chase"]
+        return table
+
+
 class TickRecordingSession:
     """Records the clock reading at which each MIDI feed arrived, not just
     the bytes, and forwards every call to the real LightSession underneath.
@@ -118,7 +131,7 @@ def _stack(now):
     """
     clock = lambda: now[0]
     binding = RoomBindingRegistry()
-    gs = GameServer({"TestBit": lambda: TestBit(run_duration=1000.0)},
+    gs = GameServer({"TestBit": lambda: _NoChaseTestBit(run_duration=1000.0)},
                     room_binding=binding, cue_horizon=HORIZON, clock=clock)
     profile = RoomProfile(surface_id="room_test", fixtures=(
         RoomFixture(name="main", color_order="GRB",

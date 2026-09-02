@@ -5,7 +5,7 @@ section 4.
 """
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, FireFunction, PlayCue, SolidCue
+from control.cues import ROOM, TARGET, FireFunction, PlayCue, SolidCue, fixture_dev
 from control.instrument import InstrumentRequirement
 from control.roles import Role, RoleClass, RoleTable
 from control.functions import (
@@ -217,6 +217,22 @@ class TestBit(Bit):
                 generator=GeneratorSpec(
                     dev=ROOM, status=0xB0, data1=74, waveform="triangle",
                     period=self.ROOM_DRIFT_PERIOD, lo=0, hi=127),
+            ),
+            "chase": Function(
+                name="chase",
+                description="Steps a hue flash from main to accent, then clears "
+                            "both: the reference cross-fixture effect, addressed "
+                            "by fixture name against the TEST Room spec",
+                target=FunctionTarget.ROOM,
+                condition=Condition(
+                    name="operator_chase", description="Operator fires it",
+                    source=ConditionSource.ADMIN_MANUAL),
+                script=(
+                    ScriptStep(0.0, (fixture_dev("main"), 0xB0, 74, 127)),
+                    ScriptStep(0.5, (fixture_dev("accent"), 0xB0, 74, 127)),
+                    ScriptStep(1.0, (fixture_dev("main"), 0xB0, 74, 0)),
+                    ScriptStep(1.0, (fixture_dev("accent"), 0xB0, 74, 0)),
+                ),
             ),
             "play_aurora": Function(
                 name="play_aurora",
