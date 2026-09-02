@@ -463,18 +463,34 @@ export function moveFixture(text, index, delta) {
   return [...before, ...bLines, ...between, ...aLines, ...after].join("\n");
 }
 
-// Rewrites the `instrument = "..."` line of the fixture at `index`.
-// Unchanged when the index is out of range or the block declares no
-// instrument.
+// Rewrites the `instrument = "..."` line of the fixture at `index`, or adds
+// one when the block has none -- otherwise a fixture missing its instrument
+// could never be repaired through the form's picker (the write would be a
+// silent no-op). A new line goes directly after the block's own
+// `name = "..."` line, or directly after the `[[fixtures]]` header when the
+// block has no name, at the header's indentation. Only an out-of-range
+// index is a no-op.
 export function setFixtureInstrument(text, index, name) {
   const blocks = fixtureBlocks(text);
   if (index < 0 || index >= blocks.length) return text;
+  const block = blocks[index];
   const lines = text.split("\n");
-  for (let i = blocks[index].start + 1; i < blocks[index].end; i++) {
+  for (let i = block.start + 1; i < block.end; i++) {
     if (/^\s*instrument\s*=/.test(lines[i])) {
       lines[i] = lines[i].replace(/=.*$/, `= "${name}"`);
       return lines.join("\n");
     }
   }
-  return text;
+  // Absent. Anchor on the block's OWN name line, matched at the header's
+  // indentation so an indented child table's `name = "..."` (a
+  // `[[fixtures.blocks]]` / `[[fixtures.zones]]` entry) can't be mistaken
+  // for it and land the new line inside that child table.
+  const indent = lines[block.start].match(/^(\s*)/)[1];
+  const ownNameRe = new RegExp(`^${indent}name\\s*=\\s*"[^"]*"\\s*$`);
+  let anchor = block.start;
+  for (let i = block.start + 1; i < block.end; i++) {
+    if (ownNameRe.test(lines[i])) { anchor = i; break; }
+  }
+  lines.splice(anchor + 1, 0, `${indent}instrument = "${name}"`);
+  return lines.join("\n");
 }

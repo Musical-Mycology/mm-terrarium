@@ -187,5 +187,39 @@ instrument = "dev_strip_accent"
     ["dev_strip_main", "venue_array"]);
   assert.strictEqual(t.setFixtureInstrument(ROOM, 5, "x"), ROOM, "unknown index is a no-op");
 
+  // A fixture with no `instrument =` line gains one, so the picker can
+  // repair it: after the block's own `name = "..."` line when it has one,
+  // otherwise straight after the `[[fixtures]]` header.
+  const NO_INSTRUMENT = `description = "Bare"
+
+[[fixtures]]
+name = "solo"
+color_order = "GRB"
+  [[fixtures.blocks]]
+  name = "solo"
+  start = 0
+  count = 10
+
+[[fixtures]]
+color_order = "RGB"
+  [[fixtures.zones]]
+  name = "zone"
+`;
+  assert.deepStrictEqual(t.listFixtures(NO_INSTRUMENT).map((f) => f.instrument), [null, null]);
+
+  const named = t.setFixtureInstrument(NO_INSTRUMENT, 0, "dev_strip_main");
+  assert.ok(named.includes('name = "solo"\ninstrument = "dev_strip_main"\ncolor_order = "GRB"'),
+    "instrument line lands right after the fixture's own name line");
+  assert.deepStrictEqual(t.listFixtures(named).map((f) => f.instrument),
+    ["dev_strip_main", null]);
+
+  const unnamed = t.setFixtureInstrument(NO_INSTRUMENT, 1, "venue_array");
+  assert.ok(unnamed.includes('[[fixtures]]\ninstrument = "venue_array"\ncolor_order = "RGB"'),
+    "with no name line the instrument line lands right after the header");
+  assert.deepStrictEqual(t.listFixtures(unnamed).map((f) => f.instrument),
+    [null, "venue_array"]);
+  assert.strictEqual(t.setFixtureInstrument(NO_INSTRUMENT, 2, "x"), NO_INSTRUMENT,
+    "unknown index is still a no-op");
+
   console.log("toml_edit.test.js OK");
 })();

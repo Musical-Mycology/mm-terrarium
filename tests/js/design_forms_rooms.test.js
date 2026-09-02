@@ -37,6 +37,19 @@ function findByKey(root, key) {
   return null;
 }
 
+const GHOST_ROOM = `description = "One unpublished strip"
+backends = ["devicelink"]
+
+[[fixtures]]
+name = "solo"
+color_order = "GRB"
+instrument = "ghost_strip"
+  [[fixtures.blocks]]
+  name = "solo"
+  start = 0
+  count = 12
+`;
+
 (async () => {
   const wire = await import("../../console/static/wire.js");
   const design = await import("../../console/static/design.js");
@@ -83,6 +96,10 @@ function findByKey(root, key) {
   const options = Array.from(pick.children).map((o) => o.value);
   assert.deepStrictEqual(options, ["dev_strip_accent", "dev_strip_main", "venue_array"],
     "picker offers published instruments only, sorted");
+  // The fixture's own instrument is the preselected option, not just the
+  // first one a browser would fall back to.
+  assert.strictEqual(pick.options.find((o) => o.selected).value, "dev_strip_accent",
+    "the fixture's published instrument is preselected");
   pick.value = "venue_array";
   pick.onchange();
   text = byId.get("designText").value;
@@ -92,6 +109,21 @@ function findByKey(root, key) {
   // open design's kind, not the instrument default).
   assert.ok(findByKey(panel, "fixture:0:instrument"), "room form survives an edit");
   assert.strictEqual(findByKey(panel, "description"), null, "still no identity field");
+
+  // An instrument the catalog does not publish is shown truthfully: it is
+  // prepended as its own option, marked unpublished and preselected, rather
+  // than letting the browser fall back to showing the first published name.
+  send({ event: "design", name: "GHOST", state: "published", kind: "room",
+         text: GHOST_ROOM, errors: [] });
+  const ghostPick = findByKey(panel, "fixture:0:instrument");
+  const ghostSelected = ghostPick.options.find((o) => o.selected);
+  assert.notStrictEqual(ghostSelected, undefined, "an unpublished instrument still preselects");
+  assert.strictEqual(ghostSelected.value, "ghost_strip");
+  assert.ok(ghostSelected.textContent.includes("unpublished"),
+    "the unpublished option says so");
+  assert.deepStrictEqual(ghostPick.options.map((o) => o.value),
+    ["ghost_strip", "dev_strip_accent", "dev_strip_main", "venue_array"],
+    "the unpublished option is prepended, published names keep their order");
 
   // Opening an instrument design after a room restores the instrument forms.
   send({ event: "design", name: "sketch", state: "draft", kind: "instrument",

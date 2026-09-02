@@ -635,7 +635,8 @@ SECTION_BUILDERS.push(buildAmbientSection);
 
 // The whole structured editor for a room design: the `[[fixtures]]` order,
 // one row each, with the fixture's name, an instrument picker (published
-// instruments from the last catalog rows, sorted), and Up/Down buttons.
+// instruments from the last catalog rows, sorted, plus the fixture's own
+// instrument when that isn't among them), and Up/Down buttons.
 // Rooms carry no description/capabilities/accepted_cues, so none of the
 // instrument identity controls render here.
 //
@@ -659,6 +660,18 @@ function buildFixtureSection(panel, text) {
 
     const pick = document.createElement("select");
     pick.setAttribute("data-form-key", `fixture:${i}:instrument`);
+    // A fixture may name an instrument the catalog does not publish (a
+    // draft-only or deleted one). Offer it as its own leading option rather
+    // than leaving nothing selected -- a browser then falls back to showing
+    // the FIRST published name, which is an instrument the file does not
+    // contain.
+    if (fx.instrument && !published.includes(fx.instrument)) {
+      const missing = document.createElement("option");
+      missing.value = fx.instrument;
+      missing.textContent = `${fx.instrument} (unpublished)`;
+      missing.selected = true;
+      pick.appendChild(missing);
+    }
     for (const name of published) {
       const opt = document.createElement("option");
       opt.value = name;
