@@ -475,11 +475,7 @@ def _pin_server() -> GameServer:
         RoomFixture(name="main", color_order="GRB",
                    blocks=(RoomBlock("main", 0, 10),),
                    zones=(RoomZone("all", 0, 10),),
-                   instrument=GENERIC_SURFACE),
-        RoomFixture(name="accent", color_order="GRB",
-                   blocks=(RoomBlock("accent", 0, 5),),
-                   zones=(RoomZone("all", 0, 5),),
-                   instrument=GENERIC_SURFACE)))
+                   instrument=GENERIC_SURFACE),))
     gs = GameServer({"TestBit": TestBit})
     gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
     gs.room.bound = {"main": "room-dev"}
