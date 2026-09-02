@@ -2278,7 +2278,14 @@ from the Console -- not just once at process start. Design: [`.../
   (schema 1, parsed by `control/terrarium_config.py`'s
   `load_terrarium_config()`/`parse_terrarium_config()`, pure `tomllib`, no
   third-party dependency) declares an installation's rooms as
-  `[rooms.<NAME>]` tables -- name, description, `backends` (a subset of
+  `[rooms.<NAME>]` tables. **(Superseded 2026-09-01: `[rooms.<NAME>]`
+  tables are no longer the only source -- `load_terrarium_config` also
+  merges in every published entry from a rooms catalog (`rooms/<NAME>.toml`,
+  `[terrarium] room_paths`, default `["rooms"]`), with a located error on
+  a name collision between the two, and TEST and DEMO now ship from that
+  catalog rather than as inline tables. See the *Rooms catalog, TEST/DEMO
+  migration, Design tab Room editor* entry below.)** -- name, description,
+  `backends` (a subset of
   `{"devicelink", "array"}`), `node_id`, the room's `RoomProfile` (fixtures/
   blocks/zones), and per-room Arco timing overrides. A room is now
   whatever string names a table in the file; nothing in the type system
@@ -3566,6 +3573,102 @@ instrument on its light side too, not only its audio side. Design:
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **1955 passed, 1 skipped**.
+
+### Rooms catalog, TEST/DEMO migration, Design tab Room editor (2026-09-01)
+Plan 2 of the follow-up named above. Rooms get a file catalog mirroring the
+instrument catalog, TEST and DEMO move into it, and the Design tab gets a
+stubbed Room editor. Design:
+[`.../2026-09-01-per-fixture-light-sessions-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-01-per-fixture-light-sessions-design.md)
+section 6.
+
+- **`rooms/<NAME>.toml` published, `rooms/drafts/<NAME>.toml` drafts,
+  mirroring the instrument catalog exactly** (a tracked `rooms/drafts/
+  .gitkeep`, same as `instruments/drafts/`). `[terrarium] room_paths`
+  (default `["rooms"]`) sits beside `instrument_paths` and resolves
+  relative to the config file's own directory. Inline `[rooms.<NAME>]`
+  tables in `terrarium.toml` still parse; a name defined both inline and
+  in a rooms catalog is a located `TerrariumConfigError` ("defined both
+  inline and in a rooms catalog; pick one home"). The old "at least one
+  `[rooms.<NAME>]` required" rule is now "at least one room required: a
+  `[rooms.<NAME>]` table or a rooms catalog entry", checked against the
+  union of both sources. `TerrariumConfig.room_roots` carries the resolved
+  catalog roots (`room_roots[0]` is what the Console wires as its rooms
+  root). `TerrariumConfig.version` is unchanged: it still hashes only the
+  config file's own text, so editing a room file does not change it, the
+  same rule instrument files already followed.
+- **TEST and DEMO are migrated verbatim.** `rooms/TEST.toml` and
+  `rooms/DEMO.toml` are the former `[rooms.TEST]`/`[rooms.DEMO]` bodies
+  with the header line dropped and one indentation level removed;
+  `terrarium.toml` now holds only `schema` and `[terrarium]` (with an
+  explicit `room_paths = ["rooms"]`, so the file documents its own
+  default rather than relying on it silently).
+  `tests/test_terrarium_config.py::test_shipped_rooms_come_from_the_catalog_and_match_the_pre_migration_profiles`
+  pins the loaded TEST and DEMO `RoomProfile`s equal to the pre-migration
+  ones, parsed from the exact pre-migration `terrarium.toml` text embedded
+  in the test -- this is the regression every live checklist step from
+  Plan 1 depends on.
+- **`control/catalog.py` is now kind-aware.** `KINDS = ("instrument",
+  "room")`; `CatalogEntry` carries `kind` plus a `room` field (a
+  `RoomSpec | None`) alongside the existing `instrument` field; `Catalog`
+  replaces `InstrumentCatalog` (kept as a compatibility alias).
+  `load_catalog(root, kind="instrument", instruments=None)` requires
+  `instruments` (a `{name: Instrument}` dict) whenever `kind == "room"`,
+  because a room file's fixtures resolve their `instrument =` values
+  against it -- passing `kind="room"` with no `instruments` raises
+  `ValueError`. `save_draft`, `publish_entry` and `clone_entry` all take
+  the same `kind` (default `"instrument"`, so every existing instrument
+  caller is unchanged).
+- **The five Console design commands, their events, and the design rows
+  all carry `kind`.** `console/protocol.parse_admin_command` reads an
+  optional `"kind"` off each design command message, defaulting to
+  `"instrument"`, and refuses anything outside `("instrument", "room")`
+  with a `ValueError`; `design_row`/`design_event` add `"kind"` to their
+  payloads. `ConsoleAgent` takes a `rooms_root` constructor argument
+  alongside `catalog_root`; `_design_rows()` returns every instrument row
+  followed by every room row. A room's fixtures resolve their instruments
+  from the wired Terrarium's own config when one is loaded, else from the
+  published instrument catalog, else from nothing. A published room file
+  that fails to parse does not blank the whole Rooms panel: `_design_rows`
+  catches the `TerrariumConfigError`, logs it, and appends one synthetic
+  row named `<rooms catalog>` carrying the error instead. `harness/
+  terrarium_boot.py` wires `rooms_root` from `terrarium_config.
+  room_roots[0]` (when non-empty), and its `--config`/`--room` argparse
+  help text now names both the inline `[rooms.<NAME>]` tables and the
+  rooms catalog as valid `--room` sources.
+- **The Design tab gets a Rooms list and a fixture-order form.**
+  `#designList` (Instruments) and a new `#roomDesignList` (Rooms) sit side
+  by side, sharing the same raw TOML editor; Save/Publish/Clone all carry
+  the open selection's `kind`. Selecting a room renders ONE structured
+  section, Fixtures: one row per `[[fixtures]]` entry with its name, an
+  instrument `<select>` populated from published instruments (sorted;
+  when the fixture's current `instrument` isn't among the published
+  names, it is shown as its own leading option, `"<name> (unpublished)"`,
+  and preselected, rather than silently falling back to the first
+  published name), and Up/Down buttons (disabled at the first/last row).
+  Blocks and zones stay raw TOML; there is no structured form for them.
+  Reordering applies at the next Room load only, never live. `toml_edit.js`
+  gained `listFixtures` (one entry per `[[fixtures]]` block), `moveFixture`
+  (swaps two fixtures, each carrying its own indented `[[fixtures.blocks]]`/
+  `[[fixtures.zones]]` children and trailing blank line; an out-of-range
+  index is a no-op), and `setFixtureInstrument` (rewrites an existing
+  `instrument = "..."` line, or inserts one directly after the fixture's
+  own `name = "..."` line -- or after the `[[fixtures]]` header itself
+  when the fixture has no name -- so a fixture missing its instrument can
+  still be repaired through the picker). The calibrate Propose path
+  rebuilds the forms with the open design's own `kind`, so proposing
+  against a room does not paint the instrument form.
+- **Not done in this slice.** Blocks and zones have no structured form,
+  only raw TOML. `bench_start` and `replay_trace` still send no `kind` on
+  the wire. A comment sitting between two `[[fixtures]]` blocks travels
+  with the preceding fixture on a swap (it is scanned into that fixture's
+  block, not its own). `fixture_controllers` still has no Console
+  consumer. `publish_entry`'s refusal messages don't name which kind
+  failed to publish. There is no test for a name collision between two
+  rooms catalog roots (only the inline-vs-catalog collision is tested).
+  Plan 3 (luxaeterna rendering at O2 time) has not started.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1983 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 

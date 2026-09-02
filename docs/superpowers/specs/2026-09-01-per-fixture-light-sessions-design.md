@@ -485,15 +485,52 @@ rather than folded into one parenthetical:
   authoring time, not regressed by Plan 1. Instrument STREAM outputs are
   unaffected and still accept `@target` and `@room`, per the table.
 
-Plans 2 (section 6, rooms catalog and the Design tab Room editor) and 3
-(section 7, luxaeterna rendering at O2 time) are not started. The
+Plan 2 (section 6, rooms catalog and the Design tab Room editor) landed on
+`claude/rooms-catalog-plan2-8f3a1c`, commits `fc21c1f..05891cf`. Offline
+suite: `.venv/bin/python -m pytest tests -q` -> 1983 passed, 1 skipped
+(was 1955 passed, 1 skipped at Plan 1's fix-wave HEAD). See
+`docs/MM_TERRARIUM.md`'s "Rooms catalog, TEST/DEMO migration, Design tab
+Room editor (2026-09-01)" entry for the landed detail.
+
+Deviations from this document's Plan 2 prose:
+
+- The console-side design-command parser this document's section 6.3
+  describes as `parse_command` is `console/protocol.parse_admin_command`
+  in the shipped code; it already parsed every other admin command, so
+  the `kind` handling was added there rather than in a new function.
+- A published room catalog file that fails to parse does not blank the
+  Rooms panel: `ConsoleAgent._design_rows` catches the located
+  `TerrariumConfigError`, logs it, and appends one synthetic row named
+  `<rooms catalog>` carrying the error, so the Instruments half of the
+  panel and the fault itself both stay visible.
+- The fixture instrument picker in `design_forms.js` offers a fixture's
+  own `instrument` value as a leading, preselected option labelled
+  `"<name> (unpublished)"` when that name isn't among the published
+  instruments, rather than only listing published names -- a browser
+  `<select>` with no matching option silently preselects the first one,
+  which would have shown the wrong instrument as selected.
+- `toml_edit.js`'s `setFixtureInstrument` inserts a missing `instrument =
+  "..."` line (directly after the fixture's own `name = "..."` line, or
+  after the `[[fixtures]]` header when the fixture has no name) rather
+  than being a no-op when the line is absent -- section 6.4's "rewrites
+  that block's `instrument = "..."` line" phrasing assumed the line
+  always exists, which is not true of every hand-authored room file.
+- TEST and DEMO's `surface_id` values (`room_test`, `room_demo`, per
+  Plan 1's own deviation from this document) are unchanged by the
+  migration into the catalog; the pre-migration profile-equality test
+  pins this directly.
+
+Plan 3 (section 7, luxaeterna rendering at O2 time) is not started. The
 interrupt contract (section 8) remains a named follow-up slice, not part
 of either.
 
 Live checklist (section 10): steps 1-3 and 6-7 have code support as of
 Plan 1; step 4's chase now fires through `ChaseBit`, not `TestBit`; step 5
-(rainbow continuity across fixtures) waits on Plan 3. None of the live
-steps have been run against a real Arco stack yet -- see
+(rainbow continuity across fixtures) waits on Plan 3. Plan 2 adds its own
+live verification (Console Design tab Rooms list, fixture reorder,
+publish, reload), described in the plan's closing section. None of
+Plan 1's or Plan 2's live steps have been run against a real Arco stack
+yet -- see
 `docs/superpowers/handoffs/2026-09-01-rooms-catalog-and-o2-time-handoff.md`
 and this task's brief for the live verification procedure to run before
 merge.
