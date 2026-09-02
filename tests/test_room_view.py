@@ -1,7 +1,7 @@
 """The Room read model the Console renders. Pure dict builders, no engine
 imports, mirroring console/protocol.py."""
 
-from control.cues import ROOM
+from control.cues import TARGET
 from control.functions import Function, FunctionKind, GeneratorSpec
 from control.instrument import Instrument
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
@@ -53,7 +53,7 @@ def _room(bound=None):
 
 
 def _view(bound=None):
-    return room_view(_room(bound), TEST_PROFILE, _role(), {74: 93})
+    return room_view(_room(bound), TEST_PROFILE, _role(), {"main": {74: 93}})
 
 
 def test_no_room_configured_yields_none():
@@ -143,7 +143,7 @@ def test_fixture_instrument_renders_declared_generator_functions():
         functions=(Function(
             name="glow", description="ambient breathing glow",
             kind=FunctionKind.GENERATOR,
-            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+            generator=GeneratorSpec(dev=TARGET, status=0xB0, data1=74,
                                     waveform="triangle", period=12.0,
                                     lo=0, hi=127)),))
     profile = RoomProfile(surface_id="room_anim", fixtures=(
@@ -231,6 +231,23 @@ def test_audio_extras_are_preserved():
 
 def test_controllers_are_carried_through():
     assert _view()["controllers"] == {74: 93}
+
+
+def test_room_view_merges_fixture_controllers_first_fixture_wins():
+    """The flat `controllers` map is the per-fixture merge in PROFILE
+    declaration order -- main before accent -- with the first fixture
+    winning any cc both declare. `fixture_controllers` keeps the unmerged
+    view for a per-fixture read-out."""
+    view = room_view(_room(), TEST_PROFILE, None,
+                     {"main": {74: 1}, "accent": {74: 2, 11: 3}})
+    assert view["controllers"] == {74: 1, 11: 3}
+    assert view["fixture_controllers"] == {"main": {74: 1},
+                                           "accent": {74: 2, 11: 3}}
+    # Profile order, not dict-insertion order: the same two fixtures handed
+    # over accent-first must still resolve cc 74 to main's value.
+    reversed_view = room_view(_room(), TEST_PROFILE, None,
+                              {"accent": {74: 2, 11: 3}, "main": {74: 1}})
+    assert reversed_view["controllers"] == {74: 1, 11: 3}
 
 
 def test_no_bit_loaded_yields_capability_with_no_instruments():

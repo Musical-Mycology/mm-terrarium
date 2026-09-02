@@ -78,12 +78,12 @@ def test_resolve_room_spec_returns_the_named_rooms_spec():
     assert spec.node_id == "ROOM_TEST_NODE"
 
 
-def test_build_wires_devicelink_room_bridge_and_simulator():
+def test_build_wires_devicelink_fixture_sessions_and_simulator():
     config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config)
 
     assert gs.room.bound == {"main": "sim-room-main", "accent": "sim-room-accent"}
-    assert agent._room_light is not None
+    assert set(agent._fixtures) == {"main", "accent"}
     assert server.port != 0   # devicelink server actually bound before boot() ran
 
     shutdown(teardown, terrarium)
@@ -173,10 +173,8 @@ def test_shutdown_stops_the_devicelink_server_last(monkeypatch):
     method (teardown.push("devicelink-server", server.stop)), captured at
     push time, so an instance-attribute monkeypatch applied after build()
     returns would land on the instance and never be seen by that
-    already-captured reference -- same reason
-    test_teardown_aborts_the_bit_before_the_room_bridge in
-    tests/test_boot.py patches RoomBridge at the class, and the same
-    pattern test_build_threads_its_clock_into_the_default_room_audio below
+    already-captured reference -- the same pattern
+    test_build_threads_its_clock_into_the_default_room_audio below
     already uses for ArcoSynthPool/AudioBridge.
 
     Records BOTH the server AND Arco's stop into one shared `order` list,
@@ -217,8 +215,8 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
 
     main() cannot be driven directly here (argparse, a live Arco,
     o2litepy), so this calls build() for real with an adopted
-    O2LiteTransport (covering the four build()-level o2lite steps: arco,
-    simulator, room-bridge, bit) and then _register_o2lite_transport --
+    O2LiteTransport (covering the three build()-level o2lite steps: arco,
+    simulator, bit) and then _register_o2lite_transport --
     the exact function main() calls, at the exact point main() calls it:
     after build() returns and after transport.start(). That is the one
     step build()-level tests could not reach on their own.
@@ -229,19 +227,16 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
     because it is Control's own o2lite CLIENT of the same Arco hub the Room
     simulator also talks to -- "no client outlives the hub it is a guest
     on" (control/teardown.py's own invariant) applies to it just as much
-    as to the simulator. Then terrarium.room_stack (bit, room-bridge,
-    simulator, arco). Then the remaining process-level `teardown` (empty
+    as to the simulator. Then terrarium.room_stack (bit, simulator,
+    arco). Then the remaining process-level `teardown` (empty
     here: o2lite mode pushes no devicelink-server, and this test gives no
     console)."""
     from control.engine import GameServer
-    from control.room_bridge import RoomBridge
     from control.teardown import TeardownStack
     from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
     from harness.terrarium_boot import _register_o2lite_transport
 
     order = []
-    monkeypatch.setattr(RoomBridge, "shutdown",
-                        lambda self: order.append("room-bridge"))
     monkeypatch.setattr(GameServer, "abort",
                         lambda self: order.append("bit"))
     monkeypatch.setattr(O2LiteTransport, "stop",
@@ -278,8 +273,7 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
 
     shutdown(teardown, terrarium, pre_room_teardown=pre_room_teardown)
 
-    assert order == ["o2lite-transport", "bit", "room-bridge", "simulator",
-                     "arco"]
+    assert order == ["o2lite-transport", "bit", "simulator", "arco"]
 
 
 def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
@@ -1708,18 +1702,6 @@ def _boom():
     raise OSError("no such process")
 
 
-def test_agent_exposes_its_room_bridge():
-    """main() reaches the bridge through the agent, since build() does not
-    return it and its signature is deliberately unchanged."""
-    from control.room_bridge import RoomBridge
-    config = BootConfig(room_name="TEST", bit_name="TestBit")
-    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config)
-    try:
-        assert isinstance(agent.room_bridge, RoomBridge)
-    finally:
-        teardown.close()
-
-
 def test_console_is_off_by_default():
     """Every existing invocation must be byte-identical."""
     config = BootConfig(room_name="TEST", bit_name="TestBit")
@@ -1835,8 +1817,8 @@ def test_build_wires_on_join_denied_to_the_agent_constructor():
             (dev, node, reason)))
     try:
         # build() already loads TestBit and lets its own simulators join
-        # (see test_build_wires_devicelink_room_bridge_and_simulator above),
-        # so a nonexistent node -- not "no Bit loaded" -- is the reliable
+        # (see test_build_wires_devicelink_fixture_sessions_and_simulator
+        # above), so a nonexistent node -- not "no Bit loaded" -- is the reliable
         # deny here. Drives the real, built agent's own inbound dispatch
         # (_on_join -> _notify_join_denied), not a substitute server.
         agent._on_join("fake-client", "ie1", ["ie1", "NO_SUCH_NODE"])
@@ -2407,15 +2389,16 @@ def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
 
 def test_console_load_room_after_a_no_room_boot_wires_room_rendering():
     """The full path a NO_ROOM boot's Console `load_room` actually takes:
-    build() with no room_spec parks `agent` at room_bridge=None (nothing
-    to render yet), main()'s own _RoomWiring observer is what has to pick
+    build() with no room_spec parks `agent` at no fixture sessions at
+    all (nothing to render yet), main()'s own _RoomWiring observer is
+    what has to pick
     that back up once a Room finally loads THROUGH terrarium -- this test
     drives terrarium.load_room("TEST") directly (the same call
     console.agent.ConsoleAgent's own _load_room makes) rather than a
     scripted console message, since the Terrarium-level wiring is what is
     under test here, not the console wire protocol (see
     tests/test_console_agent.py's own
-    test_room_panel_controllers_read_terrarium_room_bridge_live for that
+    test_room_panel_controllers_come_from_the_injected_callable for that
     side)."""
     from console.agent import ConsoleAgent
     from control.terrarium import TerrariumState
@@ -2435,8 +2418,7 @@ def test_console_load_room_after_a_no_room_boot_wires_room_rendering():
 
     assert terrarium.state is TerrariumState.NO_ROOM
     assert arco is None
-    assert agent._room_light is None
-    assert agent.room_bridge is None
+    assert agent._fixtures == {}
 
     terrarium.add_observer(_RoomWiring(agent, terrarium))
     fake_srv = FakeConsoleServer()
@@ -2446,10 +2428,9 @@ def test_console_load_room_after_a_no_room_boot_wires_room_rendering():
     assert reason is None
     gs.load_bit("TestBit")
 
-    # The devicelink agent's own Room session/bridge, wired live by
+    # The devicelink agent's own per-fixture Room sessions, wired live by
     # _RoomWiring -- not what a snapshot alone can prove.
-    assert agent.room_bridge is terrarium.room_bridge
-    assert agent._room_light is not None
+    assert set(agent._fixtures) == {"main", "accent"}
 
     # The Console's own view: a room payload that is no longer None.
     fake_srv.connect("c1")
@@ -2504,7 +2485,7 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
     def fake_build(config, bit_registry, **kwargs):
         gs = _FakeObservable()
         server = types.SimpleNamespace(port=0)
-        agent = types.SimpleNamespace(room_bridge=None, canvas_urls=[])
+        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
         teardown = TeardownStack()
         terrarium = _FakeObservable()
         return gs, server, agent, None, teardown, terrarium
@@ -2550,7 +2531,7 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
     def fake_build(config, bit_registry, **kwargs):
         gs = _FakeObservable()
         server = types.SimpleNamespace(port=0)
-        agent = types.SimpleNamespace(room_bridge=None, canvas_urls=[])
+        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
         teardown = TeardownStack()
         terrarium = _FakeObservable()
         return gs, server, agent, None, teardown, terrarium
@@ -2602,7 +2583,7 @@ def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
     def fake_build(config, bit_registry, **kwargs):
         gs = _FakeObservable()
         server = types.SimpleNamespace(port=0)
-        agent = types.SimpleNamespace(room_bridge=None, canvas_urls=[])
+        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
         teardown = TeardownStack()
         terrarium = _FakeObservable()
         return gs, server, agent, None, teardown, terrarium

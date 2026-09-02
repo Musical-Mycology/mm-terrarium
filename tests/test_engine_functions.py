@@ -8,7 +8,7 @@ tests/test_engine.py so the existing lifecycle tests stay readable.
 import pytest
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue
+from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue, fixture_dev
 from control.engine import BitLoadError, GameServer
 from control.instrument import CUE_KINDS, TUNESHROOM, Instrument
 from control.roles import Role, RoleClass, RoleTable
@@ -337,7 +337,12 @@ def test_scripted_fire_suppresses_the_generator_lane_it_writes_and_it_resumes():
     """Overlay, not kill (spec section 4): a scripted fire on the same lane
     a generator drives suppresses that generator's emissions until
     at + span, and the generator resumes -- with its phase having kept
-    advancing underneath -- once the window closes."""
+    advancing underneath -- once the window closes.
+
+    _suppress_generator_lanes records the lane under the script's own
+    RESOLVED dev (e.g. "sim-room-main"). GeneratorRunner resolves its own
+    declared lane the same way (Task 5's injected resolver), so the two
+    match."""
     gs, light, _ = _running(bit_cls=GeneratorBit, clock=lambda: 100.0)
     assert gs.fire_function("glow", fired_by="admin-manual") is None
     light.clear()
@@ -399,22 +404,81 @@ def test_function_fired_carries_room_name_from_gs_provenance():
     assert observer.fired[0].room_name == "atrium"
 
 
-def test_a_target_fanout_across_two_bound_fixtures_feeds_the_room_once_per_step():
-    """The Room's TARGET-fanout would double-feed the shared session once per
-    bound fixture if not collapsed -- see control/engine.py's
-    _collapse_room_fanout. Two fixtures bound, three script steps: still
-    exactly 3 light cues, not 6, all addressed to the canonical
-    (first-declared) fixture's dev. The fired record still reports every
-    fixture the trigger's target resolved to, uncollapsed -- collapsing is a
-    fan-out concern, not a reporting one."""
+def test_a_target_fanout_across_two_bound_fixtures_feeds_each_fixture():
+    """Each fixture has its own session now, so a TARGET step fans out to
+    every bound fixture: 3 steps x 2 fixtures = 6 light cues, in profile
+    order within each step. The fired record reports both devs as before."""
     gs, light, _ = _running(bound={"main": "sim-room-main",
                                    "accent": "sim-room-accent"})
     observer = Recorder()
     gs.add_observer(observer)
     assert gs.fire_function("sweep", fired_by="admin-manual") is None
-    assert [c[0] for c in light] == ["sim-room-main"] * 3
+    assert [c[0] for c in light] == ["sim-room-main", "sim-room-accent"] * 3
     assert observer.fired[0].devs == ("sim-room-main", "sim-room-accent")
-    assert observer.fired[0].steps == 3
+    assert observer.fired[0].steps == 6
+
+
+def test_a_room_literal_step_reaches_every_bound_fixture():
+    """A step written literally as cues.ROOM is a broadcast."""
+    gs, light, _ = _running(bound={"main": "sim-room-main",
+                                   "accent": "sim-room-accent"})
+    gs._dispatch_cues([(ROOM, 0xB0, 74, 5)], at=1.0)
+    assert [c[0] for c in light] == ["sim-room-main", "sim-room-accent"]
+
+
+def test_a_fixture_cue_reaches_only_that_fixture():
+    gs, light, _ = _running(bound={"main": "sim-room-main",
+                                   "accent": "sim-room-accent"})
+    gs._dispatch_cues([(fixture_dev("accent"), 0xB0, 74, 5)], at=1.0)
+    assert [c[0] for c in light] == ["sim-room-accent"]
+
+
+def test_a_cue_at_an_unbound_fixture_is_dropped_and_warned_once(caplog):
+    gs, light, _ = _running(bound={"main": "sim-room-main"})
+    with caplog.at_level("WARNING"):
+        gs._dispatch_cues([(fixture_dev("accent"), 0xB0, 74, 5),
+                           (fixture_dev("accent"), 0xB0, 74, 6)], at=1.0)
+    assert light == []
+    assert sum("accent" in r.message for r in caplog.records) == 1
+
+
+class DriftAuroraBit(_BaseBit):
+    """A GENERATOR on ROOM cc:74 plus a SURFACE function that writes
+    TARGET cc:74 -- the minimal rig for proving a scripted fire at one
+    fixture only suppresses that fixture's generator lane."""
+
+    @property
+    def function_table(self) -> FunctionTable:
+        return FunctionTable(functions={
+            "drift": Function(
+                name="drift", description="Ambient drift",
+                kind=FunctionKind.GENERATOR,
+                generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                        waveform="triangle", period=12.0,
+                                        lo=0, hi=254)),
+            "play_aurora": Function(
+                name="play_aurora", description="Aurora sweep",
+                target=FunctionTarget.SURFACE,
+                condition=Condition(name="manual", description="Operator asks",
+                                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
+                        ScriptStep(2.0, (TARGET, 0xB0, 74, 0)))),
+        })
+
+
+def test_scripted_fire_at_one_fixture_suppresses_only_that_fixtures_lane():
+    """The parked finding from PR #81: a Bit generator on ROOM cc:74 keeps
+    driving main while a script fired at the accent writes accent cc:74."""
+    gs, light, _ = _running(bit_cls=DriftAuroraBit,
+                            bound={"main": "sim-room-main",
+                                   "accent": "sim-room-accent"})
+    # DriftAuroraBit declares "drift" on ROOM cc:74 and "play_aurora" as a
+    # SURFACE function whose steps write TARGET cc:74.
+    assert gs.fire_function("play_aurora", fired_by="admin-manual",
+                            dev="sim-room-accent") is None
+    light.clear()
+    gs._dispatch_generator_cues()
+    assert [c[0] for c in light] == ["sim-room-main"]
 
 
 def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
@@ -430,14 +494,13 @@ def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
     gs.add_observer(observer)
     assert gs.fire_function("sweep", fired_by="admin-manual") is None
     assert observer.fired[0].devs == ("sim-room-main", "sim-room-accent")
-    assert [c[0] for c in light] == ["sim-room-main"] * 3
+    assert [c[0] for c in light] == ["sim-room-main", "sim-room-accent"] * 3
 
 
 def test_resolve_target_on_an_unbound_room_returns_nothing():
     """_resolve_target's room_devs block must short-circuit on "is anything
-    bound" before ever walking the profile's fixtures, exactly like its
-    sibling _canonical_room_dev does -- an empty Room must never reach a
-    profile that happens to be misshapen for its own gate."""
+    bound" before ever walking the profile's fixtures -- an empty Room must
+    never reach a profile that happens to be misshapen for its own gate."""
     from control.rooms import Room
 
     gs = GameServer({}, clock=lambda: 0.0)
@@ -616,6 +679,26 @@ def test_mute_cue_latches_and_notifies():
     gs.on_mute_change = lambda dev, m: got.append((dev, m))
     gs._dispatch_cues([MuteCue("ie1")], at=None)
     assert "ie1" in gs.muted and got == [("ie1", True)]
+
+
+def test_room_mute_cue_mutes_every_bound_fixture_with_one_notify():
+    """Minor finding 9: a MuteCue(ROOM) fans out to every bound fixture dev
+    (spec section 4/5's @room fan-out), latching all of them, calling
+    on_mute_change once per dev, but notifying on_devices_change exactly
+    once for the whole dispatch -- not once per fixture."""
+    gs, _, _ = _running(bound={"main": "sim-room-main",
+                               "accent": "sim-room-accent"})
+    mute_calls = []
+    gs.on_mute_change = lambda dev, m: mute_calls.append((dev, m))
+    devices_changes = []
+    gs.add_observer(type("O", (), {
+        "on_devices_change": lambda self: devices_changes.append(1)})())
+
+    gs._dispatch_cues([MuteCue(ROOM)], at=100.0)
+
+    assert gs.muted >= {"sim-room-main", "sim-room-accent"}
+    assert set(mute_calls) == {("sim-room-main", True), ("sim-room-accent", True)}
+    assert len(devices_changes) == 1
 
 
 def test_non_mute_fire_clears_mute_first():

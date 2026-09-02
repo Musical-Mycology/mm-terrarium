@@ -39,8 +39,9 @@ TWO_FIXTURE_PROFILE = RoomProfile(surface_id="r2", fixtures=(
 @pytest.fixture
 def two_fixture_gs():
     """A bound two-fixture Room, no Bit loaded -- the minimal rig for
-    proving an explicit fixture fire is never collapsed to the canonical
-    dev, and that @all resolves per real dev."""
+    proving an explicit fixture fire reaches only that fixture (each has
+    its own light session now, so there is no collapse to speak of), and
+    that @all resolves per real dev."""
     gs = GameServer({})
     gs.room = Room(name="R2", profile=TWO_FIXTURE_PROFILE, node_id="N2")
     gs.room.bound["main"] = "main-dev"
@@ -206,6 +207,9 @@ def test_unmigrated_bits_load_with_zero_warnings():
 
 
 def test_explicit_fixture_fire_is_not_collapsed(two_fixture_gs):
+    """Each fixture has its own light session, so there is no canonical-dev
+    collapse to prove past anymore -- this assertion now holds trivially,
+    a fire at one fixture simply never touches another."""
     gs, main_dev, accent_dev = two_fixture_gs
     gs.fire_function("stop", fired_by="admin-manual", dev=accent_dev)
     assert accent_dev in gs.muted

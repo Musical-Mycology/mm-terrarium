@@ -1,5 +1,12 @@
 """DeviceLinkAgent: translates between the DeviceLink wire protocol and
-GameServer calls, and owns one luxaeterna LightSession per joined device.
+GameServer calls, and owns one luxaeterna LightSession per joined device
+AND one per Room fixture.
+
+A Room is loaded with all its instruments from Room load: every fixture in
+the profile gets its own session over its own strip, bound or not. Devices
+are OUTPUTS that attach to a fixture -- a rendered frame is handed to that
+fixture's current FixtureSinks (control/fixture_sink.py). There is no
+canonical Room dev and no one shared Room session any more.
 
 The device-facing sibling of console.ConsoleAgent -- transport-agnostic (it
 talks to a server object, see devicelink/server.py), so it is fully testable
@@ -13,14 +20,16 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 
 from control.breath import BREATH_CC, breath_cc
+from control.cues import TARGET
 from control.engine import GameServer
+from control.fixture_sink import ConsoleFrameSink, DeviceLinkSink
 from control.functions import FunctionKind
 from control.generator_runner import GeneratorRunner
-from control.instrument import ambient_manifests
-from control.role_config import compose_role_config
+from control.instrument import fixture_ambient
+from control.role_config import compose_role_config, slice_light_manifest
 from control.roles import Role, RoleClass
 from control.room_profile import RoomProfile
 from control.rooms import room_role_name
@@ -28,7 +37,7 @@ from control.state import State
 from control.timed_queue import TimedQueue
 from devicelink import protocol
 from harness.device_bridge import DeviceBridge
-from harness.room_surface import to_capability
+from harness.room_surface import to_fixture_capability
 from luxaeterna.synth.director import CLOSING
 from luxaeterna.synth.manifest import LightManifest
 from luxaeterna.synth.session import build_session
@@ -45,20 +54,20 @@ logger = logging.getLogger(__name__)
 _MAX_CLOSING_FRAMES = 200
 
 
-class _RoomLightSink:
-    """Satisfies control.room_bridge.RoomLightSink. `universe`/`session` are
-    extra, used only by DeviceLinkAgent._render_room() -- RoomBridge itself
-    only ever calls feed_midi()/clear()."""
-
-    def __init__(self, session, universe: Universe) -> None:
-        self.session = session
-        self.universe = universe
-
-    def feed_midi(self, status: int, d1: int, d2: int) -> None:
-        self.session.feed_midi(status, d1, d2)
-
-    def clear(self) -> None:
-        self.session.clear()
+@dataclass
+class _FixtureState:
+    """Everything the agent holds for ONE fixture: its own session over its
+    own strip, the universe it renders into, the live controller read-out
+    the Console shows, the earliest pending presentation time, and the last
+    frame sent (per bound dev, so a rebind forces a resend)."""
+    name: str
+    session: object
+    universe: object
+    controllers: dict = field(default_factory=dict)
+    pending_at: float | None = None
+    last_frame: bytes | None = None
+    last_dev: str | None = None
+    generators: GeneratorRunner | None = None     # ambient only
 
 
 # A minimal flsyn pass-through, granted to a bound audio-capable fixture
@@ -75,7 +84,7 @@ _DEFAULT_FIXTURE_ROLE = Role(
 class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server,
                  capability=None, clock=time.monotonic,
-                 room_bridge=None, room_audio=None, horizon: float = 0.0,
+                 room_audio=None, horizon: float = 0.0,
                  room_profile=None, on_room_frame=None, on_join_denied=None,
                  stale_timeout: float = 15.0):
         self.game_server = game_server
@@ -104,7 +113,9 @@ class DeviceLinkAgent:
         # dev -> the time the NEXT frame emitted for that dev must be
         # displayed, set when a cue is actually applied to its session. See
         # _feed_light_now for the earliest-wins rule and _render_frames for
-        # why it is popped on every render attempt.
+        # why it is popped on every render attempt. PLAYER devices only: a
+        # Room fixture carries its own _FixtureState.pending_at instead,
+        # since each fixture renders on its own now.
         self._pending_at: dict[str, float] = {}
         self.bridges: dict[str, DeviceBridge] = {}
         self._universes: dict[str, Universe] = {}
@@ -113,8 +124,8 @@ class DeviceLinkAgent:
         # override, applied at the two send seams (_render_frames,
         # _render_room) ahead of the changed-frame comparison. A latched mute
         # blackout is just an entry with rgb=(0,0,0), level=0.0, expires=None
-        # -- see _on_mute_change. Keyed by canonical dev for the Room, same
-        # as self._pending_at.
+        # -- see _on_mute_change. Keyed by the real fixture dev for a Room
+        # fixture, the same way _last_frames is.
         self._overrides: dict[str, tuple[tuple[int, int, int], float,
                                          float | None]] = {}
         # devs currently latched mute-blackout. Checked by _feed_breath (skip
@@ -159,7 +170,6 @@ class DeviceLinkAgent:
         # GameServer built the pre-Room way (no room_binding/room) leaves
         # every attribute below at its default and every Room-aware method
         # below a no-op.
-        self._room_bridge = room_bridge
         self._room_audio = room_audio
         # The Room's fixture declaration. None here means "resolve it from the
         # bound Room's type"; an explicit profile is for tests and for a future
@@ -168,31 +178,32 @@ class DeviceLinkAgent:
         # device shape, and sharing one capability between a Tuneshroom and a
         # Room is exactly the confusion this slice removes.
         self._room_profile: RoomProfile | None = room_profile
-        self._room_light = None
-        # Set only on the ambient (no-Bit) branch of _setup_room(), to a
-        # GeneratorRunner over every fixture's instrument's declared
-        # GENERATOR Functions; None whenever a Bit's ROOM role is composed
-        # instead, or when no ambient session is built at all -- last-start-
-        # wins by construction, since _setup_room() rebuilds both the
-        # session and this runner together on every ambient<->Bit swap. See
-        # design spec section 7.
-        self._ambient_generators: GeneratorRunner | None = None
-        # clock() at the moment the CURRENT ambient session was built --
+        # fixture name -> _FixtureState. One entry per fixture in the
+        # profile, built at Room load whether or not a device is bound to
+        # it: the Room is loaded with all its instruments, and a device is
+        # only an output that attaches to a fixture (spec section 5.1).
+        self._fixtures: dict[str, _FixtureState] = {}
+        # clock() at the moment the CURRENT ambient sessions were built --
         # _feed_ambient_generators measures elapsed time from here, mirroring
         # self._breath_origin above.
         self._ambient_start: float | None = None
-        # The devs _setup_room() last granted Room audio to (empty if no
-        # grant is outstanding) -- one entry per bound, audio-capable
-        # fixture, not just the canonical dev (per-fixture instruments).
-        # Cached here rather than recomputed from gs.room at release time
-        # because unwire_room() runs AFTER Terrarium.unload_room() has
-        # already set gs.room = None (see unwire_room's own docstring) --
-        # by then gs.room.bound can no longer be read to find which devs
-        # held a grant.
-        self._room_audio_devs: set[str] = set()
-        # Display-only copy of each changed Room frame, for the Terrarium
-        # Console. Optional and best-effort: None is the default, so a run
-        # without a console constructs and behaves exactly as before.
+        # The fixture NAMES _grant_room_audio() last granted Room audio to
+        # (empty if no grant is outstanding) -- one entry per audio-capable
+        # fixture, bound or not: audio is granted from Room load now, the
+        # same way each fixture's session is (spec section 5.1).
+        # Cached here rather than recomputed from the Room profile at
+        # release time because unwire_room() runs AFTER
+        # Terrarium.unload_room() has already set gs.room = None (see
+        # unwire_room's own docstring) -- by then there is no live profile
+        # to walk to find which fixtures held a grant.
+        self._room_audio_fixtures: set[str] = set()
+        # Display-only copy of each changed fixture frame, for the Terrarium
+        # Console, called as on_room_frame(fixture_name, frame) -- keyed by
+        # fixture NAME, since the Console draws a strip per fixture whether
+        # or not a device is bound to it. Wrapped in a ConsoleFrameSink per
+        # render (see _sinks_for). Optional and best-effort: None is the
+        # default, so a run without a console constructs and behaves exactly
+        # as before.
         #
         # Boundary rule 2 permits this. The rule forbids the console carrying
         # per-device join/tick traffic and requires that gameplay correctness
@@ -210,186 +221,145 @@ class DeviceLinkAgent:
         game_server.on_mute_change = self._on_mute_change
 
     def _setup_room(self) -> None:
-        """Build the Room's real LightSession over the WHOLE concatenated
-        profile (every fixture, bound or not -- see design spec section 2)
-        and, if room_audio was injected, wire its Arco voice. The
-        declare-then-compose pattern every per-role device already uses,
-        just without a JoinResult (there is no join for this path) -- on
-        the Bit-declaration branch, below.
-
-        When no Bit with a ROOM role is loaded (no registration at all, or
-        the loaded Bit's role table has no ROOM role for this Room), the
-        fixtures render their own ambient declaration instead
-        (control.instrument.ambient_manifests, spec section 6) -- fed
-        straight to the same LightManifest.from_dict/build_session
-        pipeline, with no compose_role_config step (there is no Role to
-        compose against). An entirely empty ambient declaration (no
-        fixture in the profile declares light or audio -- e.g. the TEST
-        profile's dev_strip_main/dev_strip_accent fixtures) keeps today's
-        behavior: no session at all until a Bit's ROOM role declaration
-        arrives.
-
-        Construction happens eagerly here, at agent-construction time, and
-        _render_room() below is what scopes SENDING to whichever fixtures
-        are actually bound at the moment -- it reads self.room.bound fresh
-        on every render, so a fixture bound after construction (a late
-        admin tap) is picked up on its next tick with no rebuild."""
+        """One LightSession per fixture, over that fixture's own strip with
+        its LOCAL zone names, for EVERY fixture in the profile whether or
+        not a device is bound (spec section 5.1): the Room is loaded with
+        all its instruments; devices are outputs (_sinks_for). With a Bit
+        ROOM role loaded each fixture gets its slice of the role's light
+        manifest (role_config.slice_light_manifest); otherwise its own
+        instrument's ambient declaration, or an empty manifest."""
         gs = self.game_server
         room = gs.room
+        self._fixtures = {}
+        self._ambient_start = None
         if room is None:
-            # Defensive, mirroring every other branch below: a stale
-            # ambient runner/start-time must not survive a call that finds
-            # no Room to render at all (in practice unwire_room() already
-            # clears these first -- see its own docstring -- but nothing
-            # should depend on that ordering).
-            self._ambient_generators = None
-            self._ambient_start = None
             return
         if self._room_profile is None:
             self._room_profile = room.profile
+        profile = self._room_profile
         role = None
         if gs.registration is not None:
-            role = gs.registration.role_table.roles.get(
-                room_role_name(room.name))
-        ambient_light: dict = {}
-        ambient_ugen: dict = {}
-        if role is None:
-            ambient_light, ambient_ugen = ambient_manifests(self._room_profile)
+            role = gs.registration.role_table.roles.get(room_role_name(room.name))
+        blob = (compose_role_config(gs.bit_name, gs.bit.version, role)
+                if role is not None else None)
+        for fixture in profile.fixtures:
+            if blob is not None:
+                light = slice_light_manifest(blob["light_manifest"], profile, fixture.name)
+                generators = None
+            else:
+                light, _ugen = fixture_ambient(fixture)
+                light = light or {"instruments": []}
+                own = fixture.name
+                # An instrument-owned GENERATOR is validated (control/
+                # functions.py's _validate_generator) to dev=cues.TARGET
+                # only -- an instrument is a type and cannot know a Room's
+                # fixture names, and a room-wide ambient effect is declared
+                # per fixture, not on the instrument. cues.ROOM can never
+                # reach here, so there is nothing to fan out to every
+                # fixture.
+                generators = GeneratorRunner(
+                    [fn for fn in fixture.instrument.functions
+                     if fn.kind is FunctionKind.GENERATOR],
+                    resolve=lambda dev, own=own: [own] if dev == TARGET else [])
+            cap = to_fixture_capability(profile, fixture.name)
+            session = build_session(LightManifest.from_dict(light), cap, clock=self._clock)
+            self._fixtures[fixture.name] = _FixtureState(
+                name=fixture.name, session=session,
+                universe=Universe(channel_count=fixture.pixel_count * 3),
+                generators=generators)
+        if blob is None:
+            self._ambient_start = self._clock()
+        self._grant_room_audio(role)
 
-        # Audio granting happens BEFORE the ambient early-return below, so a
-        # bound audio-capable fixture gets its own voice even when the Room
-        # has no light manifest at all -- the built-ins (ping's note pair,
-        # stop's silence) still need somewhere to land on TEST, whose
-        # dev_strip_main/dev_strip_accent fixtures declare no ambient.
-        if self._room_audio is not None:
-            # Release every previously granted dev (a no-op the first time,
-            # or when nothing was granted -- see AudioBridge.on_release)
-            # before granting fresh, so an ambient<->Bit swap or a fixture
-            # rebind never leaks a stale voice.
-            for d in list(self._room_audio_devs):
-                self._room_audio.on_release(d)
-            self._room_audio_devs.clear()
-            audio_role = role
-            if audio_role is None and ambient_ugen:
-                # Ambient has no Role of its own -- on_grant only ever
-                # reads .ugen_manifest and .welcome off the one it is
-                # given, so a bare stand-in carries the ambient declaration
-                # through the same API rather than widening it for one
-                # caller. See spec section 6.
-                audio_role = Role(name="ambient", role_class=RoleClass.ROOM,
+    def _grant_room_audio(self, role) -> None:
+        """Grant EVERY audio-capable fixture its own AudioBridge voice, from
+        Room load, whether or not a device is bound to it -- the Room is
+        loaded with all its instruments (spec section 5.1), and audio is no
+        different from light in that regard any more. Keyed by fixture
+        NAME now, not by a bound dev: AudioBridge's dev-keyed parameter is
+        simply handed the fixture's name (Task 7). Releases whatever was
+        granted before so an ambient<->Bit swap or a fixture rebind never
+        leaks a stale voice.
+
+        With a Bit's ROOM role loaded every fixture is granted that role;
+        without one, each fixture's OWN ambient ugen declaration is carried
+        through as a bare stand-in Role (on_grant only ever reads
+        .ugen_manifest and .welcome off the one it is given, so this passes
+        the ambient declaration through the same API rather than widening
+        it for one caller -- see spec section 6). A fixture with neither
+        gets the minimal flsyn pass-through, so the built-ins (ping's note
+        pair, stop's silence) always have a voice to land on."""
+        if self._room_audio is None:
+            return
+        # Release every previously granted fixture (a no-op the first time,
+        # or when nothing was granted -- see AudioBridge.on_release) before
+        # granting fresh.
+        for name in list(self._room_audio_fixtures):
+            self._room_audio.on_release(name)
+        self._room_audio_fixtures.clear()
+        first = True
+        for fixture in self._room_profile.fixtures:
+            caps = fixture.instrument.capabilities
+            if not any(c.startswith("audio.") for c in caps):
+                continue
+            _light, ambient_ugen = fixture_ambient(fixture)
+            grant_role = role
+            if grant_role is None and ambient_ugen:
+                grant_role = Role(name="ambient", role_class=RoleClass.ROOM,
                                   capacity=None, scored=False,
                                   ugen_manifest=ambient_ugen)
-            first = True
-            for fixture in self._room_profile.fixtures:
-                d = gs.room.bound.get(fixture.name)
-                if d is None:
-                    continue
-                caps = fixture.instrument.capabilities
-                if not any(c.startswith("audio.") for c in caps):
-                    continue
-                grant_role = audio_role
-                if grant_role is None:
-                    # No Bit ROOM role and no ambient declaration: a
-                    # minimal flsyn pass-through so the built-ins (ping's
-                    # note pair, stop's silence) have a voice to land on.
-                    grant_role = _DEFAULT_FIXTURE_ROLE
-                if not first:
-                    # Only the first granted fixture plays the welcome
-                    # ceremony -- the Room welcomes once, not per fixture.
-                    grant_role = replace(grant_role, welcome=None)
-                self._room_audio.on_grant(d, grant_role)
-                self._room_audio_devs.add(d)
-                if role is None and first and grant_role.ugen_manifest.get(
-                        "instruments"):
-                    # Ambient has no RUNNING transition of its own to start
-                    # the drone from (on_state_change's RUNNING/UNLOADING
-                    # branch is scoped to a loaded Bit) -- ambient sound
-                    # starts the moment the Room is ready, mirroring the
-                    # light side, which likewise renders immediately here
-                    # with no further gate.
-                    self._room_audio.start_drone(d)
-                first = False
+            if grant_role is None:
+                grant_role = _DEFAULT_FIXTURE_ROLE
+            if not first:
+                # Only the first granted fixture plays the welcome ceremony
+                # -- the Room welcomes once, not per fixture.
+                grant_role = replace(grant_role, welcome=None)
+            self._room_audio.on_grant(fixture.name, grant_role)
+            self._room_audio_fixtures.add(fixture.name)
+            if role is None and ambient_ugen and ambient_ugen.get(
+                    "instruments"):
+                # Ambient has no RUNNING transition of its own to start the
+                # drone from (on_state_change's RUNNING/UNLOADING branch is
+                # scoped to a loaded Bit) -- ambient sound starts the moment
+                # the Room is ready, mirroring the light side, which
+                # likewise renders immediately here with no further gate.
+                # Every fixture with its OWN ambient declaration starts its
+                # own drone now, not only the first granted one -- each
+                # fixture's ambient ugen is its own instrument (Task 7); the
+                # welcome ceremony above is still a once-per-Room affair,
+                # but the drone is not.
+                self._room_audio.start_drone(fixture.name)
+            first = False
 
-        if role is not None:
-            blob = compose_role_config(gs.bit_name, gs.bit.version, role)
-            manifest = LightManifest.from_dict(blob["light_manifest"])
-            self._ambient_generators = None
-            self._ambient_start = None
-        else:
-            if not ambient_light and not ambient_ugen:
-                self._ambient_generators = None
-                self._ambient_start = None
-                return
-            manifest = LightManifest.from_dict(
-                ambient_light or {"instruments": []})
-            functions = [fn for fixture in self._room_profile.fixtures
-                        for fn in fixture.instrument.functions
-                        if fn.kind is FunctionKind.GENERATOR]
-            self._ambient_generators = GeneratorRunner(functions)
-            self._ambient_start = self._clock()
-        cap = to_capability(self._room_profile)
-        session = build_session(manifest, cap, clock=self._clock)
-        self._room_light = _RoomLightSink(
-            session, Universe(channel_count=self._room_profile.channel_count))
-        canonical = self._canonical_room_dev()
-        if self._room_bridge is not None:
-            self._room_bridge.bind(canonical, light=self._room_light)
-
-    def _canonical_room_dev(self) -> str | None:
-        """The Room's one dev for MIDI-feed/audio-grant purposes: the
-        first bound fixture in the profile's declaration order. Mirrors
-        GameServer._canonical_room_dev's algorithm as a self-contained
-        copy rather than reaching into the engine's method across the
-        module boundary -- this agent already holds everything the walk
-        needs (self._room_profile, self.game_server.room.bound). Every
-        caller of this method must get the SAME answer for the SAME
-        state, the same way every Room-dev decision in the engine goes
-        through its own single canonical-dev method -- see design spec
-        section 5's 'frame fan-out is the only per-fixture step'."""
-        gs = self.game_server
-        if gs.room is None or not gs.room.bound or self._room_profile is None:
-            return None
-        for fixture in self._room_profile.fixtures:
-            dev = gs.room.bound.get(fixture.name)
-            if dev is not None:
-                return dev
-        return None
-
-    def rewire_room(self, room_bridge) -> None:
-        """Re-run Room setup against gs.room/gs.bit as they stand NOW, and
-        adopt `room_bridge` as this agent's active Room bridge.
+    def rewire_room(self) -> None:
+        """Re-run Room setup against gs.room/gs.bit as they stand NOW.
 
         _setup_room() at __init__ time only ever saw gs.room as of THAT
         instant -- None, for a NO_ROOM boot (harness/terrarium_boot.py's
         main() constructs this agent before any Room is chosen when no
         --room was given and no console command has loaded one yet). Left
         alone, a Room that loads later -- a Console `load_room` -- would
-        never get a light session, an audio grant, or a bound MIDI bridge:
-        every one of those is built once, at construction, and nothing
-        re-triggers _setup_room() on its own.
+        never get its fixture sessions or an audio grant: both are built
+        once, at construction, and nothing re-triggers _setup_room() on its
+        own.
 
         Call this whenever a Room actually finishes loading AFTER
         construction. `_room_profile` is reset to None first so
         _setup_room() re-resolves it from the NEW room rather than reusing
         whatever (nothing, in the NO_ROOM case) was true before -- the same
         "None means resolve it from the bound Room's type" contract
-        `_room_profile`'s own __init__ comment documents. A no-op, same as
-        _setup_room() itself, if no Bit is loaded yet: the light manifest
-        comes from the Bit's role table, so a `load_room` that lands before
-        any `load_bit` leaves the session unbuilt until one is -- harmless,
-        since gs.room being live is already enough for room_view() to stop
-        returning None (see console.agent.ConsoleAgent._current_room), and
-        _handle_command's own LoadBitCommand gate never allows a Bit to load
-        before ROOM_READY.
+        `_room_profile`'s own __init__ comment documents. With no Bit
+        loaded yet, each fixture simply renders its own ambient declaration
+        (or nothing) until a `load_bit` swaps in the Bit's ROOM role -- see
+        _setup_room.
 
         See unwire_room() for the NO_ROOM-entry counterpart."""
-        self._room_bridge = room_bridge
         self._room_profile = None
         self._setup_room()
 
     def unwire_room(self) -> None:
         """The NO_ROOM-entry counterpart to rewire_room(): drop this
-        agent's Room session/bridge/profile so nothing stale renders or
+        agent's fixture sessions and profile so nothing stale renders or
         reports controllers once the Room that produced them is gone.
         Called by the same Terrarium observer that calls rewire_room(), on
         the transition INTO NO_ROOM (a Console `unload_room`).
@@ -405,40 +375,63 @@ class DeviceLinkAgent:
         AudioBridge.on_release/stop_drone -- so this is safe to call
         unconditionally, mirroring _setup_room()'s own guarded call.
 
-        Uses self._room_audio_devs rather than gs.room.bound: by the time the
-        Terrarium observer calls unwire_room(), Terrarium.unload_room has
-        already set gs.room = None (see control/terrarium.py), so gs.room can
-        no longer be read to find which devs held a grant -- _room_audio_devs
-        is the cached record _setup_room() left behind at grant time.
+        Uses self._room_audio_fixtures rather than the Room profile: by the
+        time the Terrarium observer calls unwire_room(), Terrarium.
+        unload_room has already set gs.room = None (see control/
+        terrarium.py), so there is no live profile left to walk to find
+        which fixtures held a grant -- _room_audio_fixtures is the cached
+        record _grant_room_audio() left behind at grant time.
 
-        Also drops the ambient generator runner and its start time, mirroring
-        the audio grant's own cached-at-wire-time cleanup just above: nothing
-        must consult a runner or a start time built for a Room that is gone.
-        _feed_ambient_generators() already no-ops once self._room_bridge is
-        cleared below, so this is redundant defense-in-depth rather than a
-        fix for a reachable bug, but it keeps this agent's Room state
-        entirely reset on every NO_ROOM entry rather than reset-except-for-
-        two-fields."""
+        Also drops the ambient start time along with the fixture states
+        themselves, mirroring the audio grant's own cached-at-wire-time
+        cleanup just above: nothing must consult a runner or a start time
+        built for a Room that is gone."""
         if self._room_audio is not None:
-            for d in list(self._room_audio_devs):
-                self._room_audio.stop_drone(d)
-                self._room_audio.on_release(d)
-            self._room_audio_devs.clear()
-        self._ambient_generators = None
+            for name in list(self._room_audio_fixtures):
+                self._room_audio.stop_drone(name)
+                self._room_audio.on_release(name)
+            self._room_audio_fixtures.clear()
         self._ambient_start = None
-        self._room_light = None
-        self._room_bridge = None
+        self._fixtures = {}
         self._room_profile = None
+        # Mirrors on_state_change's UNLOADING branch: a same-type Room
+        # reloaded within a horizon must not receive a stale cue queued for
+        # the Room that just left.
+        self._room_cues = TimedQueue()
+        self._light_cues = TimedQueue()
 
-    @property
-    def room_bridge(self):
-        """The Room's MIDI fan-out, or None when no Room is configured.
+    def controllers(self) -> dict[str, dict[int, int]]:
+        """Live controller read-out per fixture name, for the Console."""
+        return {name: dict(st.controllers) for name, st in self._fixtures.items()}
 
-        Public because harness/terrarium_boot.py's main() needs it to build a
-        ConsoleAgent: build() does not return it, and build()'s 5-tuple return
-        is unpacked at 16 sites, so widening it would be churn for no gain.
-        """
-        return self._room_bridge
+    def _fixture_for_dev(self, dev: str) -> _FixtureState | None:
+        gs = self.game_server
+        if gs.room is None:
+            return None
+        for name, bound in gs.room.bound.items():
+            if bound == dev:
+                return self._fixtures.get(name)
+        return None
+
+    def _invalidate_frame(self, dev: str) -> None:
+        """Force the next render for `dev` to resend even if unchanged (an
+        override landed or expired)."""
+        self._last_frames.pop(dev, None)
+        st = self._fixture_for_dev(dev)
+        if st is not None:
+            st.last_frame = None
+
+    def _sinks_for(self, name: str, dev: str | None) -> list:
+        """Every sink one fixture's frame goes to right now: the Console's
+        display strip whenever one is wired, and the bound devicelink device
+        when there is one. An unbound fixture still renders -- it just has
+        no device sink."""
+        sinks = []
+        if self._on_room_frame is not None:
+            sinks.append(ConsoleFrameSink(name, self._on_room_frame))
+        if dev is not None:
+            sinks.append(DeviceLinkSink(dev, self._send, protocol.leds_event))
+        return sinks
 
     @property
     def room_audio(self):
@@ -492,19 +485,18 @@ class DeviceLinkAgent:
     def _tick_overrides(self) -> None:
         """Drop any solid override whose duration has elapsed, before this
         tick's renders run -- so the very next render for `dev` falls back to
-        its session frame instead of the stale override. `_last_frames.pop`
+        its session frame instead of the stale override. `_invalidate_frame`
         forces a resend even if the session's own frame happens to be
         unchanged from before the override started. Overrides are per
-        fixture now (Task 5): `_overrides` and `_last_frames` are both keyed
-        by the real fixture dev, including for a Room override keyed by the
-        canonical dev, which only ever painted (and only ever needs to
-        re-send) its own slice. No fan-out to other bound fixtures here."""
+        fixture: `_overrides` is keyed by the real fixture dev, and only that
+        one fixture's cached last frame is cleared. No fan-out to other
+        bound fixtures here."""
         now = self._clock()
         for dev, (_rgb, _lvl, expires) in list(self._overrides.items()):
             if expires is None or now < expires:
                 continue
             del self._overrides[dev]
-            self._last_frames.pop(dev, None)
+            self._invalidate_frame(dev)
 
     def _apply_override(self, dev: str, frame: bytes) -> bytes:
         entry = self._overrides.get(dev)
@@ -524,7 +516,7 @@ class DeviceLinkAgent:
         rather than this tick's stream-frame origin."""
         expires = None if duration is None else when + duration
         self._overrides[dev] = (rgb, level, expires)
-        self._last_frames.pop(dev, None)
+        self._invalidate_frame(dev)
 
     def _on_mute_change(self, dev: str, muted: bool) -> None:
         """Latch (or lift) a blackout override at the transport seam, per
@@ -539,7 +531,7 @@ class DeviceLinkAgent:
         if muted:
             self._muted.add(dev)
             self._overrides[dev] = ((0, 0, 0), 0.0, None)
-            self._last_frames.pop(dev, None)
+            self._invalidate_frame(dev)
             # Drop cues already queued for this dev -- otherwise they drain
             # into the LightSession under the blackout override while
             # muted, and un-mute reveals stale mid-script state instead of
@@ -547,18 +539,19 @@ class DeviceLinkAgent:
             # guards on self._muted as a second line of defense, but the
             # purge here is what keeps the queue itself from growing stale.
             self._light_cues.purge(lambda payload: payload[0] == dev)
-            if self._is_room_dev(dev):
-                self._room_cues.purge(lambda payload: payload[0] == dev)
+            st = self._fixture_for_dev(dev)
+            if st is not None:
+                self._room_cues.purge(lambda payload: payload[0] == st.name)
                 if (self._room_audio is not None
-                        and dev in self._room_audio_devs):
+                        and st.name in self._room_audio_fixtures):
                     try:
-                        self._room_audio.silence(dev)
+                        self._room_audio.silence(st.name)
                     except Exception:
-                        logger.exception("mute silence failed for %s", dev)
+                        logger.exception("mute silence failed for %s", st.name)
         else:
             self._muted.discard(dev)
             self._overrides.pop(dev, None)
-            self._last_frames.pop(dev, None)
+            self._invalidate_frame(dev)
 
     def _tick_audio(self) -> None:
         """Drive AudioBridge.tick() once per poll(): the only place the
@@ -585,56 +578,58 @@ class DeviceLinkAgent:
             logger.exception("room audio tick failed")
 
     def _render_room(self) -> None:
-        if self._room_light is None or self._room_profile is None:
+        """Render EVERY fixture, bound or not, and hand each changed frame
+        to that fixture's own sinks. One session per fixture means one
+        render and one `at` per fixture -- there is no shared frame to slice
+        and no canonical dev to key it by."""
+        if not self._fixtures or self._room_profile is None:
             return
         gs = self.game_server
         bound = gs.room.bound if gs.room is not None else {}
-        if not bound:
-            return
-        canonical = self._canonical_room_dev()
         # Room AUDIO waits here for its moment. Room LIGHT was already fed in
         # _on_light_cue (or _drain_light_cues), because the frame it renders
         # still has to cross the wire to reach the simulator by `at`. One
         # anchor, two releases -- see the 2026-08-14 spec section 2.
         #
-        # Each due cue is tagged with the real fixture dev it came from
-        # (per-fixture instruments): fed to THAT dev's own AudioBridge
-        # voice, not the canonical dev's. A dev that lost its grant since
-        # the cue was queued (a rebind, or a fixture that never carried
-        # audio.* in the first place) is skipped rather than fed.
-        for (cue_dev, status, d1, d2) in self._room_cues.due(self._clock()):
-            if self._room_audio is None or cue_dev not in self._room_audio_devs:
+        # Each due cue is tagged with the fixture NAME it came from
+        # (per-fixture instruments): fed to THAT fixture's own AudioBridge
+        # voice. A fixture that lost its grant since the cue was queued (a
+        # Bit<->ambient swap, or a fixture that never carried audio.* in the
+        # first place) is skipped rather than fed.
+        for (name, status, d1, d2) in self._room_cues.due(self._clock()):
+            if self._room_audio is None or name not in self._room_audio_fixtures:
                 continue
             try:
-                self._room_audio.feed_midi(cue_dev, status, d1, d2)
+                self._room_audio.feed_midi(name, status, d1, d2)
             except Exception:
-                logger.exception("fixture feed_midi failed for %s", cue_dev)
-        # Popped unconditionally, for the same reason _render_frames does it:
-        # a cue that changes no frame must not leave a stale time behind.
-        # Keyed by the canonical dev: every bound fixture's slice shares one
-        # `at`, since they all come from the same single render.
-        at = self._pending_at.pop(canonical, None)
-        universe = self._room_light.universe
-        try:
-            self._room_light.session.render_into(universe)
-        except Exception:
-            logger.exception("Room render failed; skipping frame")
-            return
-        frame = bytes(universe.get_frame()[:self._room_profile.channel_count])
-        when = at if at is not None else self._clock() + self._horizon
-        for name, start, count in self._room_profile.fixture_slices():
-            dev = bound.get(name)
-            if dev is None:
-                continue   # this fixture is not bound yet -- send to the rest
-            slice_ = frame[start:start + count]
-            slice_ = self._apply_override(dev, slice_)
-            if slice_ != self._last_frames.get(dev):
-                self._last_frames[dev] = slice_
-                self._emit_room_frame(dev, slice_)
-                try:
-                    self._send(dev, protocol.leds_event(dev, slice_, when=when))
-                except Exception:
-                    logger.exception("Room leds send failed for %s", dev)
+                logger.exception("fixture feed_midi failed for %s", name)
+        for fixture in self._room_profile.fixtures:
+            st = self._fixtures.get(fixture.name)
+            if st is None:
+                continue
+            dev = bound.get(fixture.name)
+            # Popped unconditionally, for the same reason _render_frames
+            # does it: a cue that changes no frame must not leave a stale
+            # time behind.
+            at, st.pending_at = st.pending_at, None
+            try:
+                st.session.render_into(st.universe)
+            except Exception:
+                logger.exception("fixture %s render failed; skipping frame", fixture.name)
+                continue
+            frame = bytes(st.universe.get_frame()[:fixture.pixel_count * 3])
+            if dev is not None:
+                frame = self._apply_override(dev, frame)
+            if dev != st.last_dev:
+                # A rebind (or a first binding) has to resend even if this
+                # fixture's own bytes have not moved.
+                st.last_dev, st.last_frame = dev, None
+            if frame == st.last_frame:
+                continue
+            st.last_frame = frame
+            when = at if at is not None else self._clock() + self._horizon
+            for sink in self._sinks_for(fixture.name, dev):
+                sink.send_frame(frame, when)
 
     def _notify_join_denied(self, dev: str, node: str, reason: str) -> None:
         """Guarded exactly like on_release and on_light_cue already are: a
@@ -647,35 +642,34 @@ class DeviceLinkAgent:
         except Exception:
             logger.exception("join-denied sink failed for %s", dev)
 
-    def _emit_room_frame(self, dev: str, frame: bytes) -> None:
-        """Guarded exactly like on_release and on_light_cue already are: a
-        failing console must not stop the Room rendering or wedge the tick."""
-        if self._on_room_frame is None:
-            return
-        try:
-            self._on_room_frame(dev, frame)
-        except Exception:
-            logger.exception("room frame sink failed; dropping frame")
-
     def _feed_ambient_generators(self) -> None:
-        """Every tick with no Bit loaded (self._ambient_generators is None
-        otherwise -- see _setup_room), feed each declared GENERATOR
-        Function's current waveform value into the Room's session, through
-        the same feed_light seam a Bit-declared light cue uses (see
-        _feed_light_now) so the Console's live controller read-out sees it
-        too. `dev` on each emitted tuple (cues.ROOM or cues.TARGET) is not
-        consulted: an ambient generator has no per-device routing to make,
-        only the one Room session this method already has."""
-        if self._ambient_generators is None or self._room_bridge is None:
+        """Every tick with no Bit loaded (every fixture's `generators` is
+        None otherwise -- see _setup_room), feed each declared GENERATOR
+        Function's current waveform value into its own fixture's session,
+        recording it in that fixture's controller read-out the same way a
+        Bit-declared light cue does (see _feed_light_now) so the Console
+        sees it too. Each runner resolves TARGET to its own declaring
+        fixture; an instrument-owned generator may not address cues.ROOM
+        (control/functions.py's _validate_generator), so an ambient
+        generator never paints any fixture but its own."""
+        if self._ambient_start is None:
             return
         now = self._clock()
-        start = self._ambient_start if self._ambient_start is not None else now
-        elapsed = now - start
-        for (_dev, status, data1, value) in self._ambient_generators.cues(elapsed, now):
-            try:
-                self._room_bridge.feed_light(status, data1, value)
-            except Exception:
-                logger.exception("ambient generator feed failed")
+        elapsed = now - self._ambient_start
+        for st in self._fixtures.values():
+            if st.generators is None:
+                continue
+            for (name, status, data1, value) in st.generators.cues(elapsed, now):
+                target = self._fixtures.get(name)
+                if target is None:
+                    continue
+                try:
+                    target.session.feed_midi(status, data1, value)
+                except Exception:
+                    logger.exception("ambient generator feed failed for %s", name)
+                    continue
+                if status & 0xF0 == 0xB0:
+                    target.controllers[data1] = value
 
     def _feed_breath(self) -> None:
         """Drive every joined device's breath. Sent on change only, and never
@@ -888,55 +882,54 @@ class DeviceLinkAgent:
         rather than drained: these are cues for a Bit that no longer exists.
 
         SETUP -- the state load_bit() always lands in -- also re-runs
-        _setup_room() if it never built a session: harness/terrarium_boot
-        .py's own NO_ROOM boot can reach ROOM_READY (a Console `load_room`,
-        rewire_room()'d in) BEFORE any Bit is loaded, and (pre-ambient)
-        _setup_room()'s own gate needed gs.bit too (the light manifest came
-        from the Bit's role table) -- so the room session stayed unbuilt
-        until whichever of {load_room, load_bit} happened SECOND.
-        rewire_room() covers the load_room-second case; this covers
+        _setup_room() if it never built any fixture session: harness/
+        terrarium_boot.py's own NO_ROOM boot can reach ROOM_READY (a Console
+        `load_room`, rewire_room()'d in) BEFORE any Bit is loaded, and
+        (pre-ambient) _setup_room()'s own gate needed gs.bit too (the light
+        manifest came from the Bit's role table) -- so the fixture sessions
+        stayed unbuilt until whichever of {load_room, load_bit} happened
+        SECOND. rewire_room() covers the load_room-second case; this covers
         load_bit-second, the order the Console's own ROOM_READY gate on
         LoadBitCommand actually produces in practice (load_room always
-        first). Guarded on `_room_light is None` so an already-wired
-        session (the CLI --room path, an ambient session already standing,
-        or a same-Room Bit swap) is never rebuilt out from under a live
-        render -- LOADED, below, is what rebuilds an ambient session into
-        a Bit's declared one.
+        first). Guarded on `not self._fixtures` so already-standing sessions
+        (the CLI --room path, ambient sessions already running, or a
+        same-Room Bit swap) are never rebuilt out from under a live render
+        -- LOADED, below, is what rebuilds ambient sessions into a Bit's
+        declared ones.
 
-        LOADED/IDLE swap the Room's light+audio declaration between a
-        Bit's ROOM role and the fixtures' own ambient declaration (spec
+        LOADED/IDLE swap each fixture's light+audio declaration between a
+        Bit's ROOM role and the fixture's own ambient declaration (spec
         section 6): LOADED is reached exactly once a Bit's registration
         exists (control/engine.py's load_bit sets `self.registration`
-        before `_set_state(State.LOADED)`), so resetting `_room_light` and
-        re-running `_setup_room()` here is what makes it pick up the ROOM
-        role instead of ambient. IDLE (arrived at only via `_unload()`,
-        which clears `self.registration` back to None before
-        `_set_state(State.IDLE)`) is the mirror: the same reset+rebuild
-        finds no ROOM role any more and falls back to ambient.
-        `_setup_room()` itself is what handles the light rebuild AND the
-        audio re-grant (releasing whatever voice was previously granted to
-        the Room's canonical dev before granting the new declaration), so
-        this is the single seam both directions swap through -- no new
-        engine coupling, just the observer hook this agent already holds.
+        before `_set_state(State.LOADED)`), so re-running `_setup_room()`
+        here is what makes it pick up the ROOM role instead of ambient.
+        IDLE (arrived at only via `_unload()`, which clears
+        `self.registration` back to None before `_set_state(State.IDLE)`)
+        is the mirror: the same rebuild finds no ROOM role any more and
+        falls back to ambient. `_setup_room()` resets `_fixtures` itself and
+        handles the light rebuild AND the audio re-grant (releasing whatever
+        voices were previously granted before granting the new
+        declaration), so this is the single seam both directions swap
+        through -- no new engine coupling, just the observer hook this agent
+        already holds.
         """
         self._broadcast_room()
         gs = self.game_server
-        if new_state == State.SETUP and self._room_light is None:
+        if new_state == State.SETUP and not self._fixtures:
             self._setup_room()
         if new_state in (State.LOADED, State.IDLE):
-            self._room_light = None
             self._setup_room()
         if new_state == State.UNLOADING:
             self._room_cues = TimedQueue()
             self._light_cues = TimedQueue()
-        if self._room_audio is None or gs.room is None or not gs.room.bound:
+        if self._room_audio is None or gs.room is None:
             return
         if new_state == State.RUNNING:
-            for d in list(self._room_audio_devs):
-                self._room_audio.start_drone(d)
+            for name in list(self._room_audio_fixtures):
+                self._room_audio.start_drone(name)
         elif new_state == State.UNLOADING:
-            for d in list(self._room_audio_devs):
-                self._room_audio.stop_drone(d)
+            for name in list(self._room_audio_fixtures):
+                self._room_audio.stop_drone(name)
 
     def _on_release(self, dev: str) -> None:
         """Engine released dev. Kick off the closing fade -- but keep the
@@ -1010,10 +1003,6 @@ class DeviceLinkAgent:
         if not revived:
             self.server.drop_dev(dev)
 
-    def _is_room_dev(self, dev: str) -> bool:
-        gs = self.game_server
-        return gs.room is not None and dev in gs.room.bound.values()
-
     def _feed_light_now(self, dev: str, status: int, d1: int, d2: int,
                         at: float | None) -> None:
         """Apply a light cue to its session and record when the frame it
@@ -1021,22 +1010,32 @@ class DeviceLinkAgent:
 
         Earliest wins: one frame carries every cue applied in a tick, so it
         must not be late for the soonest deadline among them.
+
+        A dev bound to a Room fixture feeds THAT fixture's own session and
+        records the deadline (and the controller read-out) on its own
+        _FixtureState; every other dev is a player device on self.bridges,
+        keyed into self._pending_at as before.
         """
-        if self._is_room_dev(dev) and self._room_bridge is not None:
+        st = self._fixture_for_dev(dev)
+        if st is not None:
             try:
-                self._room_bridge.feed_light(status, d1, d2)
+                st.session.feed_midi(status, d1, d2)
             except Exception:
-                logger.exception("Room feed_light failed")
+                logger.exception("fixture feed_midi failed for %s", dev)
                 return
-        else:
-            bridge = self.bridges.get(dev)
-            if bridge is None or bridge.session is None:
-                return
-            try:
-                bridge.session.feed_midi(status, d1, d2)
-            except Exception:
-                logger.exception("feed_midi for %s failed", dev)
-                return
+            if status & 0xF0 == 0xB0:
+                st.controllers[d1] = d2
+            if at is not None and (st.pending_at is None or at < st.pending_at):
+                st.pending_at = at
+            return
+        bridge = self.bridges.get(dev)
+        if bridge is None or bridge.session is None:
+            return
+        try:
+            bridge.session.feed_midi(status, d1, d2)
+        except Exception:
+            logger.exception("feed_midi for %s failed", dev)
+            return
         if at is None:
             return
         pending = self._pending_at.get(dev)
@@ -1073,20 +1072,20 @@ class DeviceLinkAgent:
         override, or the override's own frame comparison would be racing a
         session state the device can never actually see.
 
-        `_room_cues` now carries `dev` on every entry (per-fixture
-        instruments): each bound fixture dev pushes its own audio tuple, so
-        _render_room's drain can feed the RIGHT fixture's voice. Light,
-        though, is one shared session fed once per render -- a non-canonical
-        room dev's light half is dropped here, right after its audio push,
-        so the same cue is never rendered twice into one session.
+        `_room_cues` carries the fixture NAME on every entry (per-fixture
+        instruments): each bound fixture pushes its own audio tuple keyed by
+        name, so _render_room's drain can feed the RIGHT fixture's voice
+        (AudioBridge is granted by name now -- see _grant_room_audio). Light
+        falls through to _feed_light_now for EVERY room dev now -- each
+        fixture owns its own session, so there is nothing to collapse and no
+        canonical dev to collapse onto.
         """
         if dev in self._muted:
             return
         now = self._clock()
-        if self._is_room_dev(dev) and self._room_bridge is not None:
-            self._room_cues.push(when, (dev, status, data1, data2), now=now)
-            if dev != self._canonical_room_dev():
-                return
+        st = self._fixture_for_dev(dev)
+        if st is not None:
+            self._room_cues.push(when, (st.name, status, data1, data2), now=now)
         feed_at = None if when is None else when - self._horizon
         if feed_at is not None and feed_at > now:
             # A Bit-declared cue further out than one horizon. Hold the

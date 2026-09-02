@@ -17,7 +17,6 @@ from control.arco_process import ArcoProcess
 from control.boot_config import BootConfig
 from control.engine import BitLoadError, GameServer
 from control.room_binding import RoomBindingRegistry
-from control.room_bridge import RoomBridge
 from control.rooms import Room
 from control.run_record import RunRecorder, sweep_stale, _default_spawn_time
 from control.state import State
@@ -44,22 +43,6 @@ class RoomLoadError(Exception):
 class RoomBindingTimeout(Exception):
     """Raised when no device joins as the Room within the configured
     setup window."""
-
-
-def _canonical_room_dev(profile, bound: dict) -> str | None:
-    """The Room's one dev for RoomBridge purposes: the first bound fixture
-    in the profile's declaration order, not dict-insertion order -- the
-    same algorithm as GameServer._canonical_room_dev and
-    DeviceLinkAgent._canonical_room_dev. Extracted as its own function
-    specifically so this guarantee is unit-testable directly, without
-    needing to drive a full load_room() through admin-tap timing to
-    construct a bound dict whose insertion order differs from declaration
-    order."""
-    for fixture in profile.fixtures:
-        dev = bound.get(fixture.name)
-        if dev is not None:
-            return dev
-    return None
 
 
 def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
@@ -196,7 +179,6 @@ class Terrarium:
         self.room: Room | None = None
         self.room_stack: TeardownStack | None = None
         self.arco = None
-        self.room_bridge = None
         self._observers: list = []
 
     def add_observer(self, observer) -> None:
@@ -333,14 +315,7 @@ class Terrarium:
                 except RoomBindingTimeout as exc:
                     raise RoomLoadError(str(exc)) from exc
 
-            room_bridge = RoomBridge()
-            canonical = _canonical_room_dev(room.profile, room.bound)
-            if canonical is not None:
-                room_bridge.bind(canonical)
-            stack.push("room-bridge", room_bridge.shutdown)
-
             self.room = room
-            self.room_bridge = room_bridge
             self.gs.provenance = {"room_name": name,
                                   "terrarium_config_version": self.config.version}
             self._progress("room ready")
@@ -352,7 +327,6 @@ class Terrarium:
             self.gs.room = None
             self.gs.provenance = {}
             self.room = None
-            self.room_bridge = None
             self.arco = None
             self.room_stack = None
             self._set_state(TerrariumState.NO_ROOM)
@@ -382,7 +356,6 @@ class Terrarium:
         self.gs.room = None
         self.gs.provenance = {}
         self.room = None
-        self.room_bridge = None
         self.arco = None
         self.room_stack = None
         self._set_state(TerrariumState.NO_ROOM)

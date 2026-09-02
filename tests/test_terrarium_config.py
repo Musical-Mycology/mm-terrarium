@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from control.cues import ROOM, TARGET
+from control.cues import TARGET
 from control.functions import Function, FunctionKind, GeneratorSpec
 from control.terrarium_config import (
     TerrariumConfigError, load_terrarium_config, parse_terrarium_config,
@@ -304,7 +304,7 @@ accepted_cues = ["midi", "play", "solid", "mute"]
   lo = 0
   hi = 127
     [instruments.venue_array.functions.lane]
-    dev = "room"
+    dev = "target"
     status = 176
     data1 = 74
 
@@ -331,15 +331,18 @@ def test_instrument_functions_table_parses_to_a_function():
     assert inst.functions == (Function(
         name="glow", description="ambient breathing glow",
         kind=FunctionKind.GENERATOR,
-        generator=GeneratorSpec(dev=ROOM, status=176, data1=74,
+        generator=GeneratorSpec(dev=TARGET, status=176, data1=74,
                                 waveform="triangle", period=12.0, lo=0, hi=127),
     ),)
 
 
-def test_instrument_functions_table_dev_target_maps_to_cues_target():
-    text = CONFIG_WITH_GENERATOR_FUNCTION.replace('dev = "room"', 'dev = "target"')
-    cfg = parse_terrarium_config(text, "terrarium.toml")
-    assert cfg.instruments["venue_array"].functions[0].generator.dev == TARGET
+def test_instrument_functions_table_dev_room_is_refused():
+    # An instrument-owned generator may only use cues.TARGET (spec section
+    # 3.2 as amended by the final review): an instrument is a type, not a
+    # placement, so it cannot address cues.ROOM.
+    text = CONFIG_WITH_GENERATOR_FUNCTION.replace('dev = "target"', 'dev = "room"')
+    with pytest.raises(TerrariumConfigError, match="TARGET"):
+        parse_terrarium_config(text, "terrarium.toml")
 
 
 def test_instrument_functions_table_defect_is_located():

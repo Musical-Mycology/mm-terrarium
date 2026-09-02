@@ -5,8 +5,8 @@ import pathlib
 
 import pytest
 
-from control.cues import ROOM
-from control.functions import Function, FunctionKind, FunctionTarget, GeneratorSpec
+from control.cues import ROOM, TARGET
+from control.functions import Function, FunctionKind, GeneratorSpec
 from control.instrument import Instrument
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
@@ -14,12 +14,12 @@ from control.terrarium_config import load_terrarium_config
 from tests.instrument_fixtures import GENERIC_SURFACE
 
 
-def _generator_instrument(name, data1=74, period=12.0):
+def _generator_instrument(name, data1=74, period=12.0, dev=ROOM):
     return Instrument(
         name=name, capabilities=frozenset({"light.surface"}),
         functions=(Function(
             name="glow", description="ambient glow", kind=FunctionKind.GENERATOR,
-            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=data1,
+            generator=GeneratorSpec(dev=dev, status=0xB0, data1=data1,
                                     waveform="triangle", period=period,
                                     lo=0, hi=127)),))
 
@@ -55,53 +55,29 @@ def test_bad_fixture_instrument_fails_profile_construction():
         make_profile(instrument=bad)
 
 
-def test_two_fixtures_sharing_a_generator_lane_are_refused():
-    first = _generator_instrument("first", data1=74)
-    second = _generator_instrument("second", data1=74)   # same cc as `first`
-    with pytest.raises(ValueError) as exc:
-        RoomProfile(surface_id="p", fixtures=(
-            _fixture(name="main", instrument=first),
-            _fixture(name="accent", blocks=(RoomBlock("b2", 0, 30),),
-                     instrument=second)))
-    assert "main" in str(exc.value) and "accent" in str(exc.value)
-    assert "74" in str(exc.value)
+def test_two_fixtures_may_share_a_generator_lane():
+    """Each fixture has its own session and lane space now (spec section
+    3.5); the collision check moved to load_bit, after resolution. Both
+    instruments declare dev=TARGET generators -- the only dev an
+    instrument-owned generator may use (control/functions.py's
+    _validate_generator) -- which is the case that genuinely cannot
+    collide: each instrument's generator writes only its own declaring
+    fixture's lane."""
+    first = _generator_instrument("first", data1=74, dev=TARGET)
+    second = _generator_instrument("second", data1=74, dev=TARGET)
+    profile = RoomProfile(surface_id="r", fixtures=(
+        _fixture("a", instrument=first), _fixture("b", instrument=second)))
+    assert [f.name for f in profile.fixtures] == ["a", "b"]
 
 
 def test_two_fixtures_with_distinct_generator_lanes_are_fine():
-    first = _generator_instrument("first", data1=74)
-    second = _generator_instrument("second", data1=75)   # distinct cc
+    first = _generator_instrument("first", data1=74, dev=TARGET)
+    second = _generator_instrument("second", data1=75, dev=TARGET)   # distinct cc
     profile = RoomProfile(surface_id="p", fixtures=(
         _fixture(name="main", instrument=first),
         _fixture(name="accent", blocks=(RoomBlock("b2", 0, 30),),
                  instrument=second)))
     assert [f.name for f in profile.fixtures] == ["main", "accent"]
-
-
-def test_a_scripted_function_bypassing_validate_instrument_does_not_crash_the_collision_sweep(monkeypatch):
-    """Fix-round-2 regression (Critical finding): the cross-fixture
-    collision sweep must not assume every declared function is a
-    GENERATOR. v0's validate_instrument refuses a non-GENERATOR function on
-    an instrument, and RoomProfile.__post_init__ already calls
-    validate_instrument on every fixture BEFORE the collision sweep runs --
-    so under normal construction a SCRIPTED function is caught there first
-    and the sweep never sees it. That ordering is exactly what the sweep
-    must not depend on (a future reordering, or any other caller that
-    skips validate_instrument, must not resurrect the crash), so this test
-    monkeypatches validate_instrument to a no-op -- the same effect as an
-    Instrument built directly and handed straight to the sweep -- and
-    exercises the sweep on its own: generator_lane() would raise
-    AttributeError on a SCRIPTED function's None .generator if the sweep
-    did not filter by kind first."""
-    import control.room_profile as room_profile_mod
-    monkeypatch.setattr(room_profile_mod, "validate_instrument", lambda inst: None)
-    scripted = Function(name="tap", description="a tap function",
-                        target=FunctionTarget.DEVICE, kind=FunctionKind.SCRIPTED)
-    inst = Instrument(name="scripted_only",
-                      capabilities=frozenset({"light.surface"}),
-                      functions=(scripted,))
-    profile = RoomProfile(surface_id="p", fixtures=(
-        _fixture(name="main", instrument=inst),))
-    assert profile.fixtures[0].instrument.functions == (scripted,)
 
 
 def test_test_room_declares_two_asymmetric_fixtures():

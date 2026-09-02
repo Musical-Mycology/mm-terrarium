@@ -20,41 +20,55 @@ class GeneratorRunner:
     """Evaluates each declared GENERATOR Function's waveform every tick and
     applies per-lane overlay suppression when a scripted Function fires on
     the same lane (spec section 4: "scripted overlays rather than kills").
+
+    Each GENERATOR Function still declares one DECLARED lane (its dev may be
+    the ROOM sentinel or a @fixture:<name> dev); `resolve` maps that declared
+    dev to the concrete devs it lands on (Room fixture binding, Task 4's
+    `_resolve_devs`), and `cues()` emits one tuple per RESOLVED dev per
+    declared lane, suppressed and evaluated per resolved lane so one
+    fixture's overlay never silences another's.
     """
 
-    def __init__(self, functions: Sequence) -> None:
-        # One entry per declared generator, keyed by its element lane
-        # (resolved dev, status, data1) -- validate_function_table already
-        # guarantees no two GENERATOR functions share a lane, so this dict
-        # never silently drops one.
+    def __init__(self, functions: Sequence, resolve=None) -> None:
+        # Declared lanes, keyed by the DECLARED (dev, status, data1);
+        # validate_function_table guarantees no two share one.
         self._generators: dict[tuple[str, int, int], object] = {}
         for fn in functions:
             spec = fn.generator
-            lane = (spec.dev, spec.status, spec.data1)
-            self._generators[lane] = spec
-        # Per-lane suppression window end, on the absolute `at` timeline.
-        # Absent lane == never suppressed.
+            self._generators[(spec.dev, spec.status, spec.data1)] = spec
+        # dev sentinel -> concrete devs. None passes the declared dev
+        # through unchanged (pure unit tests, and the pre-resolution shape).
+        self._resolve = resolve if resolve is not None else (lambda dev: [dev])
+        # CONCRETE (dev, status, data1) -> suppression window end, on the
+        # absolute `at` timeline. Absent lane == never suppressed.
         self._suppressed_until: dict[tuple[str, int, int], float] = {}
 
     def suppress(self, lanes: Iterable[tuple[str, int, int]],
                  until_at: float) -> None:
-        """Skip emission on `lanes` while the dispatch `at` is < until_at.
-        The generator's own phase is untouched -- suppression only gates
-        `cues()`'s output, never the waveform's evolution in elapsed time,
-        so it resumes exactly where it would have been."""
+        """Skip emission on `lanes` (CONCRETE (dev, status, data1) tuples)
+        while the dispatch `at` is < until_at. The generator's own phase is
+        untouched -- suppression only gates `cues()`'s output, never the
+        waveform's evolution in elapsed time, so it resumes exactly where
+        it would have been."""
         for lane in lanes:
             self._suppressed_until[lane] = until_at
 
     def cues(self, elapsed: float, at: float) -> list[tuple]:
-        """One (dev, status, data1, value) per non-suppressed declared
-        lane, evaluated at `elapsed` seconds into the run."""
+        """One (resolved dev, status, data1, value) per non-suppressed
+        RESOLVED lane, evaluated at `elapsed` seconds into the run. The
+        value is computed once per declared lane per tick (not once per
+        resolved dev) and shared across every resolved dev that lane
+        reaches this tick."""
         out: list[tuple] = []
-        for lane, spec in self._generators.items():
-            until = self._suppressed_until.get(lane)
-            if until is not None and at < until:
-                continue
-            dev, status, data1 = lane
-            out.append((dev, status, data1, self.value(spec, elapsed)))
+        for (dev, status, data1), spec in self._generators.items():
+            value = None
+            for resolved in self._resolve(dev):
+                until = self._suppressed_until.get((resolved, status, data1))
+                if until is not None and at < until:
+                    continue
+                if value is None:
+                    value = self.value(spec, elapsed)
+                out.append((resolved, status, data1, value))
         return out
 
     @staticmethod

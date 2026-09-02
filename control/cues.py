@@ -9,6 +9,7 @@ at tuple arity.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 # Sentinel dev id a Bit uses to target the Room. GameServer._resolve_dev turns
@@ -22,6 +23,33 @@ ROOM = "@room"
 # The operator's everything sentinel: room fixtures plus every connected
 # device. Console picker value; resolved in GameServer._resolve_target.
 ALL = "@all"
+
+# Sentinel prefix a Bit uses to address ONE named Room fixture, e.g.
+# "@fixture:accent". Legal only on Bit-owned declarations (an Instrument is a
+# type and cannot know a Room's fixture names). Resolved by
+# GameServer._resolve_devs to that fixture's bound dev, or dropped (logged
+# once per load) while the fixture is unbound. See docs/superpowers/specs/
+# 2026-09-01-per-fixture-light-sessions-design.md section 3.1.
+FIXTURE_PREFIX = "@fixture:"
+_FIXTURE_NAME_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
+
+def fixture_dev(name: str) -> str:
+    """The sentinel dev for fixture `name`. The only place the prefix is
+    spelled when building; fixture_name is the only place when parsing."""
+    if not isinstance(name, str) or not _FIXTURE_NAME_RE.match(name):
+        raise ValueError(f"fixture name {name!r} must match [A-Za-z0-9_-]+")
+    return FIXTURE_PREFIX + name
+
+
+def fixture_name(dev) -> str | None:
+    """The fixture name a sentinel dev addresses, or None when `dev` is not a
+    well-formed fixture sentinel (any other sentinel, a real dev id, a
+    non-string)."""
+    if not isinstance(dev, str) or not dev.startswith(FIXTURE_PREFIX):
+        return None
+    name = dev[len(FIXTURE_PREFIX):]
+    return name if _FIXTURE_NAME_RE.match(name) else None
 
 
 @dataclass(frozen=True)

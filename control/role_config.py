@@ -271,3 +271,65 @@ def validate_ugen_manifest(subject: Role | dict, where: str | None = None) -> No
                         f"{lane_where}: missing required field {req!r}")
             _cc_number(lane["source"], f"{lane_where} source")
             _cc_number(lane["dest"], f"{lane_where} dest")
+
+
+def _fixture(profile, name: str):
+    for fixture in profile.fixtures:
+        if fixture.name == name:
+            return fixture
+    return None
+
+
+def _split_target(target: str, profile, where: str) -> tuple[str | None, str | None]:
+    """(fixture_name, local_zone) for a manifest target. "primary" ->
+    (None, "primary"). "<fixture>" -> (fixture, "primary"). "<fixture>.<zone>"
+    -> (fixture, zone). Anything else is a located ValueError."""
+    if target == "primary":
+        return None, "primary"
+    fixture_part, dot, zone_part = target.partition(".")
+    fixture = _fixture(profile, fixture_part)
+    if fixture is None:
+        raise ValueError(
+            f"{where}: target {target!r} names no fixture of this Room; "
+            f"fixtures: {[f.name for f in profile.fixtures]}")
+    if not dot:
+        return fixture.name, "primary"
+    if not any(z.name == zone_part for z in fixture.zones):
+        raise ValueError(
+            f"{where}: target {target!r} names no zone of fixture "
+            f"{fixture.name!r}; zones: {[z.name for z in fixture.zones]}")
+    return fixture.name, zone_part
+
+
+def manifest_fixture_targets(manifest: dict, profile) -> set[str]:
+    """Every fixture a ROOM-role light manifest addresses by name (as
+    "<fixture>" or "<fixture>.<zone>"). Raises a located ValueError on an
+    unknown fixture or zone. "primary" decls contribute nothing."""
+    out: set[str] = set()
+    for idx, decl in enumerate(manifest.get("instruments", [])):
+        where = f"light_manifest instruments[{idx}]"
+        fixture, _zone = _split_target(decl.get("target", "primary"), profile, where)
+        if fixture is not None:
+            out.add(fixture)
+    return out
+
+
+def slice_light_manifest(manifest: dict, profile, fixture_name: str) -> dict:
+    """The part of a ROOM-role light manifest that binds on ONE fixture,
+    with targets rewritten to that fixture's local zone names (spec section
+    3.3): "primary" and "<fixture>" become "primary"; "<fixture>.<zone>"
+    becomes "<zone>"; decls for other fixtures are dropped. Every other
+    manifest key (bit_name, role, welcome, ...) is carried through.
+    Deep-copied so the session can never alias the Bit's declaration."""
+    out = {k: deepcopy(v) for k, v in manifest.items() if k != "instruments"}
+    kept = []
+    for idx, decl in enumerate(manifest.get("instruments", [])):
+        where = f"light_manifest instruments[{idx}]"
+        fixture, local = _split_target(decl.get("target", "primary"), profile, where)
+        if fixture is not None and fixture != fixture_name:
+            continue
+        new = deepcopy(decl)
+        new["target"] = local
+        kept.append(new)
+    out["instruments"] = kept
+    return out

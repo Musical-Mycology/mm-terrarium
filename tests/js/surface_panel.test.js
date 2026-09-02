@@ -83,7 +83,7 @@ const ROOM = {
   assert.ok(!card.innerHTML.includes("[object Object]"));
 
   // a controllers-only change must NOT rebuild fixture strips (rule 1/3):
-  const stripBefore = surface._canvasFor("sim-room-main");
+  const stripBefore = surface._canvasFor("main");
   const bindCtlBefore = surface._bindCtlFor("main");
   // ...and must NOT rebuild the Instruments grid's cards either -- same bug
   // class as the binding-controls chip/button above, just recurring in the
@@ -91,7 +91,7 @@ const ROOM = {
   const instCardBefore = surface._instCardFor("light", "aurora", "primary");
   send({ event: "room_changed",
          room: { ...ROOM, controllers: { 74: 12 } } });
-  assert.strictEqual(surface._canvasFor("sim-room-main"), stripBefore);
+  assert.strictEqual(surface._canvasFor("main"), stripBefore);
   assert.ok(card.innerHTML.includes("= 12"));
   // ...and must NOT rebuild the binding chip/Release button either (rule 1):
   // a fresh button on every controllers-only tick would silently discard
@@ -104,13 +104,12 @@ const ROOM = {
   assert.ok(!instCardBefore.innerHTML.includes("= 93"));
 
   // rule 3: a shape change on ONE fixture must not touch a sibling fixture
-  // whose shape is unchanged. main (bound, has a dev) is the unchanged
-  // fixture here so its CANVAS identity (via _canvasFor) can actually be
-  // checked -- an unbound fixture has no canvasesByDev entry at all, so
-  // that check is only meaningful for a bound sibling. accent (unbound)
-  // is the one whose shape changes; its binding-controls node identity is
-  // checked too, as an extra (not a substitute) assertion.
-  const mainCanvasBeforeAccentShapeChange = surface._canvasFor("sim-room-main");
+  // whose shape is unchanged. main is the unchanged fixture here, so its
+  // CANVAS identity (via _canvasFor, keyed by fixture NAME) is what is
+  // checked. accent is the one whose shape changes; its binding-controls
+  // node identity is checked too, as an extra (not a substitute)
+  // assertion.
+  const mainCanvasBeforeAccentShapeChange = surface._canvasFor("main");
   const mainBindCtlBefore = surface._bindCtlFor("main");
   send({
     event: "room_changed",
@@ -125,7 +124,7 @@ const ROOM = {
     },
   });
   // accent's shape changed; main's did not -> main's canvas is the SAME node.
-  assert.strictEqual(surface._canvasFor("sim-room-main"), mainCanvasBeforeAccentShapeChange);
+  assert.strictEqual(surface._canvasFor("main"), mainCanvasBeforeAccentShapeChange);
   // main's shape did not change -> its binding controls node survives too.
   assert.strictEqual(surface._bindCtlFor("main"), mainBindCtlBefore);
   assert.ok(card.innerHTML.includes("accent.high (20..39)"));
@@ -215,11 +214,20 @@ const ROOM = {
     send({ event: "room_changed", room: ROOM });
   }
 
-  // frames: GRB decode; unknown dev is a no-op (rule 9)
-  send({ event: "room_frame", dev: "sim-room-main",
+  // frames: GRB decode, keyed by fixture NAME; an unknown fixture is a
+  // no-op (rule 9)
+  send({ event: "room_frame", fixture: "main",
          channels: [255, 0, 0].concat(Array(177).fill(0)) });  // G=255 first px
-  assert.deepStrictEqual(surface._lastPaint("sim-room-main")[0], [0, 255, 0]); // [r,g,b]
-  send({ event: "room_frame", dev: "ghost", channels: [1, 2, 3] }); // no throw
+  assert.deepStrictEqual(surface._lastPaint("main")[0], [0, 255, 0]); // [r,g,b]
+  send({ event: "room_frame", fixture: "ghost", channels: [1, 2, 3] }); // no throw
+
+  // an UNBOUND fixture (dev: null) still has a strip canvas and still
+  // paints: the Room is loaded with all its instruments whether or not a
+  // device is bound, so accent's frames must land too.
+  send({ event: "room_frame", fixture: "accent",
+         channels: [0, 0, 255].concat(Array(87).fill(0)) });  // B=255 first px
+  assert.ok(surface._lastPaint("accent").length > 0);
+  assert.deepStrictEqual(surface._lastPaint("accent")[0], [0, 0, 255]);
 
   // no Room configured
   send({ event: "room_changed", room: null });

@@ -12,13 +12,15 @@ import logging
 import time
 
 from control.bit import Bit
-from control.cues import ALL, ROOM, FireFunction, LightCue, MuteCue, PlayCue, SolidCue
+from control.cues import (ALL, ROOM, FireFunction, LightCue, MuteCue, PlayCue,
+                          SolidCue, fixture_name)
 from control.device_pool import DevicePool
 from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
                                  InstrumentRequirement, cue_kind, satisfies)
 from control.registration import JoinResult, RegistrationState
-from control.role_config import compose_role_config, validate_role_declarations
+from control.role_config import (compose_role_config, manifest_fixture_targets,
+                                 validate_role_declarations)
 from control.roles import RoleClass
 from control.rooms import room_role
 from control.state import State
@@ -154,6 +156,7 @@ class GameServer:
         # _MAX_GESTURE_LEAD). A rising count means a device's clock is wrong.
         self.rejected_stamps = 0
         self._warned_no_room = False     # once-per-Bit-load ROOM drop warning
+        self._warned_unbound: set[str] = set()  # once-per-Bit-load per @fixture drop
         # Provenance stamp for the active Room, set by control/terrarium.py's
         # load_room on success and cleared by unload_room (also on a failed
         # load's unwind). {} outside a Room. join() and fire_function() read
@@ -274,8 +277,9 @@ class GameServer:
         A dev currently bound to a Room fixture is left untouched
         entirely -- Room liveness is a separate, not-yet-designed
         question (section 5 of that spec): reaping it would clear
-        registration.assignments but not room.bound, leaving RoomBridge
-        feeding a fixture whose device no longer exists.
+        registration.assignments but not room.bound, leaving the Room's
+        light sessions rendering to a fixture whose device no longer
+        exists.
 
         Never raises: on_release is guarded exactly like _unload()
         already guards it, so a failing transport cannot wedge this call
@@ -347,6 +351,17 @@ class GameServer:
             # implicit-room-slot join handling, spec Status section).
             role_slots = {role.requires for role in role_table.roles.values()
                           if role.requires not in (None, "room")}
+            # Read and validated once, here, before the room block below --
+            # function_table is a property, so a Bit whose property builds a
+            # fresh object per access could otherwise hand the fixture-
+            # contract checks a different table than the one validated below
+            # and the one self._generators is built from (the same hazard
+            # documented at self._generators' construction, and adversarially
+            # tested by _FlipFunctionTableBit in tests/test_engine_functions.py).
+            # One read, validated immediately, used everywhere after.
+            function_table = bit.function_table
+            validate_function_table(function_table, set(bit.verb_handlers()),
+                                    owner="bit")
             if self.room is not None:
                 light_m, ugen_m = bit.room_manifests()
                 if light_m or ugen_m:
@@ -364,6 +379,14 @@ class GameServer:
                     room_reqs.append(InstrumentRequirement(
                         slot="room", capabilities=frozenset(caps)))
                 _resolve_room_requirements(room_reqs, self.room)
+                missing = self._bit_fixture_names(function_table, light_m) - {
+                    f.name for f in self.room.profile.fixtures}
+                if missing:
+                    raise ValueError(
+                        f"Bit addresses fixtures {sorted(missing)} that Room "
+                        f"{self.room.name!r} does not declare; its fixtures are "
+                        f"{[f.name for f in self.room.profile.fixtures]}")
+                self._check_generator_lane_collisions(function_table)
             # "room" always counts as a declared slot for Role.requires,
             # whether resolved just above (an active Room) or not (a
             # roomless boot / a Bit with no Room manifests) -- this is a
@@ -375,15 +398,13 @@ class GameServer:
                         f"role {role.name!r} requires undeclared slot "
                         f"{role.requires!r}; declared: {sorted(known_slots)}")
             validate_role_declarations(role_table)
-            function_table = bit.function_table
-            validate_function_table(function_table, set(bit.verb_handlers()),
-                                    owner="bit")
             registration = RegistrationState(role_table)
         except Exception as exc:
             self._set_state(State.IDLE)
             raise BitLoadError(f"failed to load Bit {name!r}: {exc}") from exc
         self.bit = bit
         self._warned_no_room = False
+        self._warned_unbound = set()
         self.bit_name = name
         self.registration = registration
         self._slot_requirements = {r.slot: r for r in requirements}
@@ -395,7 +416,8 @@ class GameServer:
         # against (see _FlipFunctionTableBit in tests/test_engine_functions.py).
         self._generators = GeneratorRunner(
             [f for f in function_table.functions.values()
-             if f.kind is FunctionKind.GENERATOR])
+             if f.kind is FunctionKind.GENERATOR],
+            resolve=self._resolve_devs)
         stream_functions: dict[str, list[Function]] = {}
         for f in function_table.functions.values():
             if f.kind is FunctionKind.STREAM:
@@ -634,40 +656,92 @@ class GameServer:
                             FIRED_BY_GESTURE_VERB)
         return None
 
-    def _canonical_room_dev(self) -> str | None:
-        """The Room's one dev for MIDI-feed purposes: the first bound
-        fixture in the profile's declaration order. Room light/audio is one
-        shared session (design spec section 2), so every path that feeds it
-        -- the ROOM cue sentinel and TARGET-fanout across Room fixtures --
-        must resolve to exactly this one dev, never to whichever fixture
-        happened to bind first or most recently."""
+    def _room_devs(self) -> list[str]:
+        """Every bound fixture dev, in the profile's declaration order (the
+        Room's ordered fixture list), never dict/bind order."""
         if self.room is None or not self.room.bound:
-            return None
-        profile = self.room.profile
-        for fixture in profile.fixtures:
-            dev = self.room.bound.get(fixture.name)
-            if dev is not None:
-                return dev
-        return None
+            return []
+        return [self.room.bound[f.name] for f in self.room.profile.fixtures
+                if f.name in self.room.bound]
 
-    def _resolve_dev(self, dev: str) -> str | None:
-        """cues.ROOM -> the Room's canonical dev; anything else passes
-        through.
+    def _resolve_devs(self, dev: str) -> list[str]:
+        """cues.ROOM -> every bound fixture dev (a broadcast); @fixture:<name>
+        -> that fixture's bound dev; anything else passes through as itself.
 
-        Returns None when a ROOM cue has no Room to go to, which the caller
-        treats as a drop, never a raise. Warned once per Bit load rather than
-        once per cue: a 20 Hz gesture stream would otherwise flood the log.
-        """
-        if dev != ROOM:
-            return dev
-        canonical = self._canonical_room_dev()
-        if canonical is None:
-            if not self._warned_no_room:
+        An empty list means drop, never raise. Warned once per Bit load per
+        missing target rather than once per cue: a 20 Hz gesture stream
+        would otherwise flood the log."""
+        if dev == ROOM:
+            devs = self._room_devs()
+            if not devs and not self._warned_no_room:
                 self._warned_no_room = True
                 logger.warning("Bit emitted a ROOM cue with no Room bound; "
                                "dropping (logged once per Bit load)")
-            return None
-        return canonical
+            return devs
+        name = fixture_name(dev)
+        if name is None:
+            return [dev]
+        bound = self.room.bound.get(name) if self.room is not None else None
+        if bound is None:
+            if name not in self._warned_unbound:
+                self._warned_unbound.add(name)
+                logger.warning("cue addressed to fixture %r, which is not "
+                               "bound; dropping (logged once per Bit load)", name)
+            return []
+        return [bound]
+
+    def _bit_fixture_names(self, function_table, light_manifest) -> set[str]:
+        """Every fixture name a Bit's declarations address: @fixture: devs on
+        script steps, generator lanes and stream outputs, plus fixture-scoped
+        light manifest targets (spec section 3.4). manifest_fixture_targets
+        raises on an unknown fixture or zone; load_bit turns that into a
+        BitLoadError like every other declaration defect."""
+        names: set[str] = set()
+        for fn in function_table.functions.values():
+            for step in fn.script:
+                cue = step.cue
+                dev = cue[0] if isinstance(cue, tuple) else cue.dev
+                n = fixture_name(dev)
+                if n is not None:
+                    names.add(n)
+            if fn.generator is not None:
+                n = fixture_name(fn.generator.dev)
+                if n is not None:
+                    names.add(n)
+            if fn.stream is not None:
+                for output in fn.stream.outputs:
+                    n = fixture_name(output.dev)
+                    if n is not None:
+                        names.add(n)
+        if light_manifest:
+            names |= manifest_fixture_targets(light_manifest, self.room.profile)
+        return names
+
+    def _check_generator_lane_collisions(self, function_table) -> None:
+        """Two GENERATOR functions may not write the same CONCRETE fixture
+        lane once resolved against the loaded Room: a @room generator and a
+        @fixture:accent generator on one cc both write the accent (spec
+        section 3.5). Resolution here is by fixture NAME, not bound dev, so
+        an unbound fixture still counts."""
+        fixtures = [f.name for f in self.room.profile.fixtures]
+        owners: dict[tuple[str, int, int], str] = {}
+        for fn in function_table.functions.values():
+            if fn.kind is not FunctionKind.GENERATOR:
+                continue
+            spec = fn.generator
+            if spec.dev == ROOM:
+                targets = fixtures
+            else:
+                n = fixture_name(spec.dev)
+                targets = [n] if n is not None else [spec.dev]
+            for t in targets:
+                lane = (t, spec.status, spec.data1)
+                if lane in owners:
+                    raise ValueError(
+                        f"generators {owners[lane]!r} and {fn.name!r} both "
+                        f"write lane cc:{spec.data1} on fixture {t!r} once "
+                        f"resolved against Room {self.room.name!r}")
+                owners[lane] = fn.name
 
     def _resolve_target(self, target, dev: str | None) -> list[str]:
         """A function's declared target, resolved to the devs it lands on.
@@ -675,18 +749,15 @@ class GameServer:
         Returns every bound Room fixture dev for ROOM, in declaration order
         -- this is the one-method change the N-fixture Room slice makes; no
         Bit's function declaration changes alongside it (design spec section
-        5). This full list is what FunctionFired.devs reports; a script's
-        TARGET fanout is collapsed separately, see _collapse_room_fanout.
+        5). This full list is what FunctionFired.devs reports, and (since
+        each fixture now has its own light session) also what a script's
+        TARGET fanout dispatches to, one cue per resolved dev.
         """
         if target is FunctionTarget.DEVICE:
             return [dev] if dev else []
         if target is FunctionTarget.SURFACE and dev not in (ROOM, ALL):
             return [dev] if dev else []
-        room_devs: list[str] = []
-        if self.room is not None and self.room.bound:
-            profile = self.room.profile
-            room_devs = [self.room.bound[f.name] for f in profile.fixtures
-                        if f.name in self.room.bound]
+        room_devs = self._room_devs()
         if target is FunctionTarget.SURFACE and dev == ALL:
             # The operator's All: room fixtures plus every connected
             # device (DevicePool, not registration -- a lobby device with
@@ -707,63 +778,27 @@ class GameServer:
                 out.append(player)
         return out
 
-    def _collapse_room_fanout(self, devs: list[str]) -> list[str]:
-        """A script step addressed at cues.TARGET fans out to every dev in
-        `devs` (control/functions.py's expand_script), one independent cue
-        per dev. That is correct for player devices, each with its own
-        LightSession, but wrong for the Room: every Room fixture dev in
-        `devs` shares ONE session (design spec section 2), so feeding it
-        once per fixture would double-apply the same relative MIDI. Collapse
-        every Room-fixture dev down to the Room's single canonical dev, keep
-        every other dev untouched and in order."""
-        room_devs = set(self.room.bound.values()) if self.room is not None else set()
-        if not room_devs:
-            return devs
-        canonical = self._canonical_room_dev()
-        out: list[str] = []
-        seen_room = False
-        for d in devs:
-            if d not in room_devs:
-                out.append(d)
-            elif not seen_room:
-                out.append(canonical)
-                seen_room = True
-        return out
-
     def _check_cue_kinds(self, cues) -> str | None:
         """Refuse the whole fire, all-or-nothing (spec section 7), if any
         expanded cue's kind is not in its destination's instrument's
         accepted_cues.
 
-        A device dev is checked against DeviceInfo.carried (TUNESHROOM by
-        default). A dev the Room owns is checked against every Room fixture's
-        instrument -- the Room is one logical surface, so any fixture
-        accepting the kind is enough (the canonical fixture is named in the
-        refusal when none do). An unknown dev (no pool entry, e.g. the Room
-        simulator path) is treated as accepting, matching today's behavior:
-        this gate must never invent a refusal for a dev nothing declared an
-        instrument for."""
-        room_devs = (set(self.room.bound.values())
-                     if self.room is not None and self.room.bound else set())
+        Each cue's dev is resolved to its list of concrete devs (a ROOM cue
+        may resolve to several fixtures), and each resolved dev is checked
+        against its OWN instrument -- a fixture's own instrument, or a
+        device's carried instrument (TUNESHROOM by default). An unknown dev
+        (no pool entry and not a Room fixture) is treated as accepting,
+        matching today's behavior: this gate must never invent a refusal for
+        a dev nothing declared an instrument for."""
         for cue in cues:
-            resolved = self._resolve_dev(cue.dev)
-            if resolved is None:
-                continue
             kind = cue_kind(cue)
-            if resolved in room_devs:
-                fixtures = self.room.profile.fixtures
-                if any(kind in f.instrument.accepted_cues
-                       for f in fixtures):
+            for resolved in self._resolve_devs(cue.dev):
+                inst = self._instrument_for(resolved)
+                if inst is None:
                     continue
-                return (f"instrument {fixtures[0].instrument.name!r} does "
-                        f"not accept {kind!r} cues")
-            info = self.devices.get(resolved)
-            if info is None:
-                continue
-            carried = getattr(info, "carried", None) or TUNESHROOM
-            if kind not in carried.accepted_cues:
-                return (f"instrument {carried.name!r} does not accept "
-                        f"{kind!r} cues")
+                if kind not in inst.accepted_cues:
+                    return (f"instrument {inst.name!r} does not accept "
+                            f"{kind!r} cues")
         return None
 
     def _instrument_for(self, dev: str):
@@ -849,18 +884,11 @@ class GameServer:
             if at is None:
                 at = self._clock() + self._horizon
             devs = self._resolve_target(target, dev)
-            # An explicit SURFACE fire at a concrete dev (not the ROOM or
-            # ALL sentinel) names one real fixture on purpose -- it must
-            # never be folded onto the Room's canonical dev, unlike a
-            # Bit-declared ROOM/@all/PLAYERS script, which still collapses
-            # below exactly as before.
-            explicit_surface = (target is FunctionTarget.SURFACE
-                                and dev not in (ROOM, ALL))
             if decl is not None and decl.script:
-                # Rung 1: byte-identical to the pre-ladder code path, except
-                # an explicit-surface fire skips the collapse.
-                fan = devs if explicit_surface else self._collapse_room_fanout(devs)
-                cues = expand_script(decl, at, fan)
+                # Rung 1: every resolved dev now has its own light session,
+                # so a ROOM target fans out to every bound fixture -- no
+                # collapse to one canonical dev.
+                cues = expand_script(decl, at, devs)
                 refusal = self._check_cue_kinds(cues)
                 if refusal is not None:
                     return refusal
@@ -940,7 +968,6 @@ class GameServer:
         if not function_decl.script:
             return
         span = float(function_decl.script[-1].offset)
-        canonical_room = self._canonical_room_dev()
         lanes = set()
         for cue in cues:
             if isinstance(cue, LightCue):
@@ -949,20 +976,8 @@ class GameServer:
                 dev, status, data1, _ = cue
             else:
                 continue
-            # A GENERATOR's own dev is always the ROOM sentinel or the
-            # unresolved TARGET sentinel (control/functions.py's
-            # _LEGAL_GENERATOR_DEVS) -- it never names a concrete device.
-            # A script step written literally as cues.ROOM stays that
-            # sentinel through expand_script and matches directly; a step
-            # written as cues.TARGET at a Room-targeting Function has
-            # already fanned out to the Room's actual canonical dev by the
-            # time it reaches here (_collapse_room_fanout), so it is folded
-            # back to the same sentinel for lane comparison -- otherwise a
-            # TARGET-authored script could never overlay a ROOM generator on
-            # the shared lane it visibly writes.
-            if canonical_room is not None and dev == canonical_room:
-                dev = ROOM
-            lanes.add((dev, status, data1))
+            for d in self._resolve_devs(dev):
+                lanes.add((d, status, data1))
         if lanes:
             self._generators.suppress(lanes, at + span)
 
@@ -986,8 +1001,10 @@ class GameServer:
         """Route a Bit's cues to the transport-owned sinks.
 
         Two things happen to every cue on the way out. A cue addressed to
-        cues.ROOM is resolved to the Room's bound dev. And a cue that
-        declares no time of its own gets `at`, the presentation time Control
+        cues.ROOM fans out to every bound fixture dev, and a cue addressed
+        to `@fixture:<name>` resolves to that fixture's own bound dev. And
+        a cue that declares no time of its own gets `at`, the presentation
+        time Control
         computed for whatever produced it -- which is what makes "one
         gesture, one T" hold without every Bit having to remember to say so.
         A Bit that DID name a time keeps it, because that is a deliberate
@@ -1017,46 +1034,48 @@ class GameServer:
                                        cue.name, reason)
                     continue
                 if isinstance(cue, SolidCue):
-                    dev = self._resolve_dev(cue.dev)
-                    if dev is None:
-                        continue
+                    sink = self.on_solid_cue
                     when = at if cue.when is None else cue.when
-                    sink, args = self.on_solid_cue, (dev, cue.rgb, cue.level,
-                                                     cue.duration, when)
+                    for dev in self._resolve_devs(cue.dev):
+                        if sink is None:
+                            continue
+                        sink(dev, cue.rgb, cue.level, cue.duration, when)
                 elif isinstance(cue, MuteCue):
-                    dev = self._resolve_dev(cue.dev)
-                    if dev is None:
-                        continue
-                    self.muted.add(dev)
-                    self._notify("on_devices_change")
-                    sink, args = self.on_mute_change, (dev, True)
+                    sink = self.on_mute_change
+                    devs = self._resolve_devs(cue.dev)
+                    if devs:
+                        for dev in devs:
+                            self.muted.add(dev)
+                        self._notify("on_devices_change")
+                    for dev in devs:
+                        if sink is None:
+                            continue
+                        sink(dev, True)
                 elif isinstance(cue, PlayCue):
-                    dev = self._resolve_dev(cue.dev)
-                    if dev is None:
-                        continue
-                    if dev in self.muted:
-                        continue
-                    sink, args = self.on_play_cue, (dev, cue.name, cue.params)
+                    sink = self.on_play_cue
+                    for dev in self._resolve_devs(cue.dev):
+                        if dev in self.muted:
+                            continue
+                        if sink is None:
+                            continue
+                        sink(dev, cue.name, cue.params)
                 elif isinstance(cue, LightCue):
-                    dev = self._resolve_dev(cue.dev)
-                    if dev is None:
-                        continue
+                    sink = self.on_light_cue
                     when = at if cue.when is None else cue.when
-                    sink, args = self.on_light_cue, (dev, cue.status,
-                                                     cue.data1, cue.data2,
-                                                     when)
+                    for dev in self._resolve_devs(cue.dev):
+                        if sink is None:
+                            continue
+                        sink(dev, cue.status, cue.data1, cue.data2, when)
                 else:
                     # The historic plain 4-tuple. It used to mean "apply on
                     # arrival"; it now means "apply at the time Control
                     # computed for this cue's origin".
                     dev_, status, d1, d2 = cue
-                    dev = self._resolve_dev(dev_)
-                    if dev is None:
-                        continue
-                    sink, args = self.on_light_cue, (dev, status, d1, d2, at)
-                if sink is None:
-                    continue
-                sink(*args)
+                    sink = self.on_light_cue
+                    for dev in self._resolve_devs(dev_):
+                        if sink is None:
+                            continue
+                        sink(dev, status, d1, d2, at)
             except Exception:
                 logger.exception("cue dispatch failed; continuing")
 
