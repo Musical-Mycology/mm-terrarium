@@ -86,5 +86,17 @@ const FUNCTIONS = [
   assert.strictEqual(tilt.disabled, true);
   assert.strictEqual(byId.get("benchFunctions").children.length, 0);
 
+  // -- bench is instrument-only: a room selection disables its controls ---
+  // bench_start resolves its name in the INSTRUMENT catalog, so firing it
+  // for an open room only ever answers "no published design".
+  design.openDesign({ name: "LOFT", state: "published", kind: "room",
+    text: "x=1", errors: [] });
+  assert.strictEqual(simBtn.disabled, true, "room open: Simulate is disabled");
+  assert.strictEqual(stopBtn.disabled, true, "room open: Stop is disabled");
+  assert.strictEqual(tilt.disabled, true, "room open: the tilt slider is disabled");
+
+  design.openDesign({ name: "tuneshroom", state: "published", text: "x=1", errors: [] });
+  assert.strictEqual(simBtn.disabled, false, "instrument open: Simulate is live again");
+
   console.log("design_bench.test.js OK");
 })();

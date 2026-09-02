@@ -110,5 +110,25 @@ const DESIGNS = [
   design.openDesign({ name: "glowcap", state: "draft", text: "x = 1", errors: [] });
   assert.strictEqual(design.getSelection().kind, "instrument");
 
+  // -- a placeholder row reports a catalog that would not load ------------
+  // It carries an error badge but no design behind it, so it must not be
+  // clickable: a get_design for "<rooms catalog>" is a nonsense command.
+  const WITH_PLACEHOLDER = [
+    { name: "tuneshroom", state: "published", error: null, kind: "instrument" },
+    { name: "<rooms catalog>", state: "published", kind: "room",
+      error: "rooms/BROKEN.toml: unknown backends", placeholder: true },
+  ];
+  send({ event: "designs_changed", designs: WITH_PLACEHOLDER });
+  const roomRows = byId.get("roomDesignList").children;
+  assert.strictEqual(roomRows.length, 1);
+  const holder = roomRows[0];
+  assert.ok(holder.innerHTML.includes("&lt;rooms catalog&gt;"));
+  assert.ok(holder.innerHTML.includes("err"), "the placeholder shows its error badge");
+  assert.ok(holder.className.includes("placeholder"));
+  sock.sent.length = 0;
+  assert.ok(!holder.onclick, "a placeholder row has no click handler");
+  if (holder.onclick) holder.onclick();
+  assert.strictEqual(sock.sent.length, 0, "clicking a placeholder row sends nothing");
+
   console.log("design_panel: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

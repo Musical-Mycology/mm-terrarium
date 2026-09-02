@@ -420,14 +420,32 @@ export function setAmbientUgenRow(text, index, { instrument, program, key, veloc
 
 // -- fixtures ([[fixtures]] blocks in a room file) -------------------------
 //
-// A room's `[[fixtures]]` blocks each carry their `[[fixtures.blocks]]` /
-// `[[fixtures.zones]]` children as indented lines, so splitBlocks (which
-// only treats an unindented header as a block start) keeps a fixture and
-// its children together as one block -- which is what lets moveFixture
-// reorder a fixture by moving whole line ranges.
+// A room's `[[fixtures]]` blocks each carry `[[fixtures.blocks]]` /
+// `[[fixtures.zones]]` children. splitBlocks keeps INDENTED children inside
+// their fixture's block, but an unindented child (equally valid TOML, and
+// what a hand-written flat file looks like) becomes a top-level block of
+// its own -- so moving the bare `[[fixtures]]` ranges would leave the
+// children behind and silently reassign geometry between fixtures.
+// fixtureBlocks therefore extends each fixture's `end` through every
+// following `[[fixtures.` block, so a fixture's children travel with it
+// whatever the indentation. `ownEnd` keeps the fixture's OWN key region
+// (header to first child) so reads and writes of `name` / `instrument`
+// can't stray into a child table.
 
 function fixtureBlocks(text) {
-  return splitBlocks(text).filter((b) => b.header === "[[fixtures]]");
+  const blocks = splitBlocks(text);
+  const out = [];
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].header !== "[[fixtures]]") continue;
+    let end = blocks[i].end;
+    let j = i + 1;
+    while (j < blocks.length && (blocks[j].header || "").startsWith("[[fixtures.")) {
+      end = blocks[j].end;
+      j++;
+    }
+    out.push({ ...blocks[i], ownEnd: blocks[i].end, end });
+  }
+  return out;
 }
 
 // One row per top-level `[[fixtures]]` block, in file order, with the
@@ -436,7 +454,7 @@ export function listFixtures(text) {
   const lines = text.split("\n");
   return fixtureBlocks(text).map((b) => {
     let instrument = null;
-    for (let i = b.start + 1; i < b.end; i++) {
+    for (let i = b.start + 1; i < b.ownEnd; i++) {
       const m = lines[i].match(/^\s*instrument\s*=\s*"([^"]*)"\s*$/);
       if (m) { instrument = m[1]; break; }
     }
@@ -475,7 +493,7 @@ export function setFixtureInstrument(text, index, name) {
   if (index < 0 || index >= blocks.length) return text;
   const block = blocks[index];
   const lines = text.split("\n");
-  for (let i = block.start + 1; i < block.end; i++) {
+  for (let i = block.start + 1; i < block.ownEnd; i++) {
     if (/^\s*instrument\s*=/.test(lines[i])) {
       lines[i] = lines[i].replace(/=.*$/, `= "${name}"`);
       return lines.join("\n");
@@ -488,7 +506,7 @@ export function setFixtureInstrument(text, index, name) {
   const indent = lines[block.start].match(/^(\s*)/)[1];
   const ownNameRe = new RegExp(`^${indent}name\\s*=\\s*"[^"]*"\\s*$`);
   let anchor = block.start;
-  for (let i = block.start + 1; i < block.end; i++) {
+  for (let i = block.start + 1; i < block.ownEnd; i++) {
     if (ownNameRe.test(lines[i])) { anchor = i; break; }
   }
   lines.splice(anchor + 1, 0, `${indent}instrument = "${name}"`);

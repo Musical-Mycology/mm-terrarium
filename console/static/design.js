@@ -43,15 +43,19 @@ function mk(tag, className, text) {
 // Pure renderer: one row per design of `kind`, "<name> [draft|published]",
 // plus an error badge when the entry's error is non-null. Rows of the other
 // kind are skipped, so the same catalog rows paint both lists.
-// `onSelect(design)` fires on row click.
+// `onSelect(design)` fires on row click -- except on a `placeholder` row,
+// which stands in for a catalog that would not load: there is no design
+// behind it, so it reports its error and takes no click at all (asking the
+// server to open "<rooms catalog>" is nonsense, and used to be the very
+// click that re-tripped the failing load).
 export function renderDesigns(listEl, designs, onSelect, kind = "instrument") {
   clear(listEl);
   for (const design of designs) {
     if (kindOf(design) !== kind) continue;
-    const row = mk("div", "design-row");
+    const row = mk("div", design.placeholder ? "design-row placeholder" : "design-row");
     row.appendChild(mk("span", "name", `${design.name} [${design.state}]`));
     if (design.error) row.appendChild(mk("span", "chip rose err", "error"));
-    row.onclick = () => onSelect(design);
+    if (!design.placeholder) row.onclick = () => onSelect(design);
     listEl.appendChild(row);
   }
 }
@@ -99,6 +103,9 @@ export function openDesign(msg) {
   for (const error of (msg.errors || [])) {
     errEl.appendChild(mk("div", "err", error));
   }
+  // The instrument-only panels re-gate on every selection change.
+  benchButtonsEnabled();
+  calButtonsEnabled();
   render();
 }
 
@@ -149,6 +156,25 @@ export function init() {
 
 const BENCH_TILT_THROTTLE_MS = 100;
 let lastTiltSendAt = 0;
+let benchRunning = false;    // a bench_started with no bench_stop since
+
+// The bench and the calibrate panel both drive instrument-only server
+// paths (bench_start and replay_trace resolve their name in the INSTRUMENT
+// catalog, and a proposal edits an instrument's thresholds), so with a room
+// open they could only ever answer a confusing "no published design".
+// Both gates hang off this one predicate.
+function instrumentOpen() {
+  return !!(current && current.kind !== "room");
+}
+
+// The bench controls' one enable/disable point: Simulate needs an open
+// instrument, Stop and the tilt lane additionally need a running bench.
+function benchButtonsEnabled() {
+  const live = instrumentOpen();
+  document.getElementById("benchStart").disabled = !live;
+  document.getElementById("benchStop").disabled = !(live && benchRunning);
+  document.getElementById("benchTilt").disabled = !(live && benchRunning);
+}
 
 // Pure renderer: one button per declared function, labeled by name with a
 // title/tooltip of its description and a builtin/instrument class per its
@@ -185,8 +211,8 @@ export function paintBenchFrame(canvas, channels) {
 function onBenchStarted(functions) {
   const mount = document.getElementById("benchFunctions");
   renderBenchFunctions(mount, functions || [], (cmd) => wire.send(cmd.command, { name: cmd.name }));
-  document.getElementById("benchStop").disabled = false;
-  document.getElementById("benchTilt").disabled = false;
+  benchRunning = true;
+  benchButtonsEnabled();
 }
 
 function onBenchFrame(channels) {
@@ -199,14 +225,14 @@ export function initBench() {
   const tilt = document.getElementById("benchTilt");
 
   startBtn.onclick = () => {
-    if (!current) return;
+    if (!instrumentOpen()) return;
     wire.send("bench_start", { state: current.state, name: current.name }, startBtn);
   };
 
   stopBtn.onclick = () => {
     wire.send("bench_stop", {}, stopBtn);
-    stopBtn.disabled = true;
-    tilt.disabled = true;
+    benchRunning = false;
+    benchButtonsEnabled();
     clear(document.getElementById("benchFunctions"));
   };
 
@@ -224,6 +250,8 @@ export function initBench() {
 
   wire.on("bench_started", (m) => onBenchStarted(m.functions));
   wire.on("bench_frame", (m) => onBenchFrame(m.channels));
+
+  benchButtonsEnabled();
 }
 
 // -------------------------------------------------------------- calibrate
@@ -325,8 +353,9 @@ export function applyProposal(text, trigger, proposal, provenance) {
 
 function calButtonsEnabled() {
   document.getElementById("calPropose").disabled =
-    !(lastProposal && current && current.state === "draft");
-  document.getElementById("calReplay").disabled = !(selectedCapture && selectedCapture.session);
+    !(lastProposal && instrumentOpen() && current.state === "draft");
+  document.getElementById("calReplay").disabled =
+    !(selectedCapture && selectedCapture.session && instrumentOpen());
 }
 
 function onCapturesListed(sessions) {
@@ -430,7 +459,7 @@ export function initCalibrate() {
   refreshBtn.onclick = () => wire.send("list_captures", {}, refreshBtn);
 
   proposeBtn.onclick = () => {
-    if (!current || !lastProposal || !selectedCapture) return;
+    if (!instrumentOpen() || !lastProposal || !selectedCapture) return;
     const provenance = `${selectedCapture.session} on ${new Date().toISOString().slice(0, 10)}`;
     const textEl = document.getElementById("designText");
     textEl.value = applyProposal(textEl.value, selectedCapture.label, lastProposal, provenance);
@@ -438,7 +467,7 @@ export function initCalibrate() {
   };
 
   replayBtn.onclick = () => {
-    if (!current || !selectedCapture) return;
+    if (!instrumentOpen() || !selectedCapture) return;
     const trigger = window.prompt("Trigger name", "tap");
     if (!trigger) return;
     const row = lastStatsRows.find((r) => r.label === selectedCapture.label) || lastStatsRows[0];

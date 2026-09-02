@@ -183,5 +183,16 @@ function findByKey(root, key) {
   const plotCtx = plot.getContext("2d");
   assert.ok(plotCtx.calls.length > 0, "replay draws something to the plot");
 
+  // -- calibrate is instrument-only: a room selection disables its buttons
+  // replay_trace and the proposal both act on an instrument draft, so they
+  // are dead while a room is open, and live again for an instrument draft.
+  design.openDesign({ name: "LOFT", state: "draft", kind: "room", text: "x=1", errors: [] });
+  assert.strictEqual(proposeBtn.disabled, true, "room open: Propose is disabled");
+  assert.strictEqual(replayBtn.disabled, true, "room open: Replay is disabled");
+
+  design.openDesign({ name: "tuneshroom", state: "draft", text: TOML_FIXTURE, errors: [] });
+  assert.strictEqual(proposeBtn.disabled, false, "instrument draft: Propose is live again");
+  assert.strictEqual(replayBtn.disabled, false, "instrument draft: Replay is live again");
+
   console.log("design_calibrate.test.js OK");
 })();

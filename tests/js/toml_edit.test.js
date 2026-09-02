@@ -221,5 +221,50 @@ color_order = "RGB"
   assert.strictEqual(t.setFixtureInstrument(NO_INSTRUMENT, 2, "x"), NO_INSTRUMENT,
     "unknown index is still a no-op");
 
+  // A room file written FLAT -- `[[fixtures.blocks]]` children unindented,
+  // which is just as valid TOML -- must still move a fixture with its own
+  // children, not reassign geometry between fixtures.
+  const FLAT = `description = "Flat style"
+backends = ["devicelink"]
+
+[[fixtures]]
+name = "a"
+color_order = "GRB"
+instrument = "dev_strip_main"
+[[fixtures.blocks]]
+name = "a_block"
+start = 0
+count = 60
+
+[[fixtures]]
+name = "b"
+color_order = "GRB"
+instrument = "dev_strip_accent"
+[[fixtures.blocks]]
+name = "b_block"
+start = 0
+count = 30
+`;
+  assert.deepStrictEqual(t.listFixtures(FLAT).map((f) => [f.name, f.instrument]),
+    [["a", "dev_strip_main"], ["b", "dev_strip_accent"]],
+    "flat children do not become fixtures of their own");
+
+  const flatSwapped = t.moveFixture(FLAT, 0, 1);
+  const iB = flatSwapped.indexOf('name = "b"');
+  const iBBlock = flatSwapped.indexOf('name = "b_block"');
+  const iA = flatSwapped.indexOf('name = "a"');
+  const iABlock = flatSwapped.indexOf('name = "a_block"');
+  assert.ok(iB >= 0 && iA >= 0);
+  assert.ok(iB < iBBlock && iBBlock < iA && iA < iABlock,
+    "each flat fixture's block still follows its own header after the move");
+  assert.deepStrictEqual(t.listFixtures(flatSwapped).map((f) => f.name), ["b", "a"]);
+  assert.deepStrictEqual(flatSwapped.split("\n").slice().sort(),
+    FLAT.split("\n").slice().sort(), "the move rewrites no line, it only reorders");
+  assert.strictEqual(t.moveFixture(flatSwapped, 0, 1), FLAT, "moving back round-trips");
+
+  const flatRepicked = t.setFixtureInstrument(FLAT, 1, "venue_array");
+  assert.deepStrictEqual(t.listFixtures(flatRepicked).map((f) => f.instrument),
+    ["dev_strip_main", "venue_array"], "the right flat fixture's line is rewritten");
+
   console.log("toml_edit.test.js OK");
 })();
