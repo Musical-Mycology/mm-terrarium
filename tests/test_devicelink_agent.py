@@ -908,11 +908,13 @@ def test_ambient_session_is_empty_when_fixtures_declare_no_ambient(monkeypatch):
 
 
 def test_bitless_bound_fixture_still_gets_an_audio_voice(monkeypatch):
-    """A bound audio-capable fixture on a Bit-less, ambient-less Room
-    (TEST's dev_strip_main/dev_strip_accent, which declare no ambient at
-    all) still gets its own AudioBridge voice -- the built-ins (ping's note
-    pair, stop's silence) need somewhere to land even with no Bit loaded and
-    no ambient declaration."""
+    """An audio-capable fixture on a Bit-less, ambient-less Room (TEST's
+    dev_strip_main/dev_strip_accent, which declare no ambient at all)
+    still gets its own AudioBridge voice, keyed by fixture NAME -- the
+    built-ins (ping's note pair, stop's silence) need somewhere to land
+    even with no Bit loaded and no ambient declaration. `accent` is never
+    bound in this test, and gets a voice too: audio is granted from Room
+    load now, regardless of binding (Task 7)."""
     gs = GameServer({"TestBit": TestBit})
     gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
     gs.room.bound["main"] = "sim-room-main"
@@ -923,9 +925,9 @@ def test_bitless_bound_fixture_still_gets_an_audio_voice(monkeypatch):
 
     # Still nothing to render on either fixture ...
     assert agent._fixtures["main"].session.manifest.instruments == []
-    # ... but the bound one holds a voice.
-    assert set(audio.granted) == {"sim-room-main"}
-    assert agent._room_audio_devs == {"sim-room-main"}
+    # ... but both hold a voice, keyed by name.
+    assert set(audio.granted) == {"main", "accent"}
+    assert agent._room_audio_fixtures == {"main", "accent"}
 
 
 def _animated_ambient_game_server():
@@ -1154,12 +1156,16 @@ def test_a_late_room_cue_applies_and_counts_as_clamped(monkeypatch):
 # Room's Arco drone as the Bit transitions RUNNING/UNLOADING -------------
 
 def test_room_audio_bridge_gets_on_grant_at_setup():
+    """Audio is granted from Room load now, bound or not (Task 7): TEST has
+    two audio-capable fixtures, `main` (bound by _room_ready_game_server)
+    and `accent` (left unbound), so both get their own instrument voice --
+    one instrument per fixture, TestBit's room_test role has no welcome."""
     gs = _room_ready_game_server()
     pool = FakePool()
     room_audio = AudioBridge(pool)
     agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
 
-    assert len(pool.acquired) == 1   # TestBit's room_test role has one instrument
+    assert len(pool.acquired) == 2
 
 
 def test_on_state_change_running_starts_the_drone():
@@ -1322,7 +1328,7 @@ def test_room_audio_waits_for_its_moment_and_light_does_not(monkeypatch):
 
     now[0] = 1000.06
     agent._render_room()
-    assert audio.fed == [("sim-room-main", 0xB0, 74, 100)]
+    assert audio.fed == [("main", 0xB0, 74, 100)]
 
 
 def test_room_frame_carries_a_time():
@@ -1357,7 +1363,7 @@ def test_a_room_audio_cue_already_past_clamps_and_counts():
 
     gs.on_light_cue("sim-room-main", 0xB0, 74, 100, 999.0)   # already past
     agent._render_room()
-    assert audio.fed == [("sim-room-main", 0xB0, 74, 100)]   # released anyway
+    assert audio.fed == [("main", 0xB0, 74, 100)]   # released anyway
     assert agent.clamped == 1
 
 
@@ -1386,16 +1392,34 @@ def two_fixture_agent():
 
 def test_every_audio_fixture_gets_its_own_voice(two_fixture_agent):
     agent, audio, main_dev, accent_dev = two_fixture_agent
-    assert set(audio.granted) == {main_dev, accent_dev}
-    assert agent._room_audio_devs == {main_dev, accent_dev}
+    assert set(audio.granted) == {"main", "accent"}
+    assert agent._room_audio_fixtures == {"main", "accent"}
+
+
+def test_audio_is_granted_for_every_audio_fixture_even_when_unbound(monkeypatch):
+    """Audio is granted from Room load now, the same way each fixture's own
+    session is -- an unbound fixture still holds a voice."""
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    audio = _FakeAudioBridge()
+    DeviceLinkAgent(gs, FakeServer(), room_audio=audio)
+    assert sorted(d for d, _role in audio.granted.items()) == ["accent", "main"]
+
+
+def test_a_fixture_midi_cue_feeds_that_fixtures_voice_by_name(two_fixture_agent):
+    agent, audio, main, accent = two_fixture_agent
+    audio.fed.clear()
+    agent.game_server.on_light_cue(accent, 0x90, 60, 100, None)
+    agent._render_room()
+    assert audio.fed == [("accent", 0x90, 60, 100)]
 
 
 def test_fixture_midi_feeds_that_fixtures_voice(two_fixture_agent):
     agent, audio, main_dev, accent_dev = two_fixture_agent
     agent._on_light_cue(accent_dev, 0x90, 57, 100, when=agent._clock())
     agent._render_room()
-    assert (accent_dev, 0x90, 57, 100) in audio.fed
-    assert all(f[0] != main_dev for f in audio.fed)
+    assert ("accent", 0x90, 57, 100) in audio.fed
+    assert all(f[0] != "main" for f in audio.fed)
 
 
 def test_mute_of_one_fixture_blacks_only_its_slice(two_fixture_agent):
@@ -1416,7 +1440,7 @@ def test_mute_of_one_fixture_blacks_only_its_slice(two_fixture_agent):
 def test_mute_of_one_fixture_silences_only_its_voice(two_fixture_agent):
     agent, audio, main_dev, accent_dev = two_fixture_agent
     agent._on_mute_change(accent_dev, True)
-    assert audio.silenced == [accent_dev]
+    assert audio.silenced == ["accent"]
 
 
 def test_solid_cue_at_one_fixture_paints_only_its_slice(two_fixture_agent):
@@ -1595,6 +1619,50 @@ def test_an_unbound_second_fixture_does_not_block_the_first_from_rendering():
     assert accent_frames == []   # never bound, never sent to
 
 
+def test_a_rebind_forces_a_resend_to_the_new_dev_even_with_an_unchanged_frame():
+    """_render_room's `dev != st.last_dev` check has to catch a rebind even
+    when the fixture's own rendered bytes have not moved -- otherwise the
+    newly-bound dev would never receive a first frame at all. A frozen
+    clock keeps the two renders' bytes byte-identical, isolating the rebind
+    behavior from the Room's own idle animation."""
+    clk = _Clock()
+    gs = _room_ready_game_server(bound={"main": "sim-room-main"})
+    server = FakeServer()
+    server.bind_dev("sim-room-main", "c-main")
+    server.bind_dev("sim-room-main-2", "c-main-2")
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+
+    agent._render_room()
+    assert server.addressed("/sim-room-main/leds")
+
+    gs.room.bound["main"] = "sim-room-main-2"
+    agent._render_room()   # same clock instant: frame bytes are unchanged
+
+    assert server.addressed("/sim-room-main-2/leds")
+
+
+def test_a_raising_fixture_render_does_not_block_the_others_frame(monkeypatch):
+    """One fixture's session raising out of render_into must not stop the
+    other fixture's frame from going out -- _render_room logs and skips the
+    failing fixture per iteration, it does not abort the whole loop."""
+    gs = _room_ready_game_server(
+        bound={"main": "sim-room-main", "accent": "sim-room-accent"})
+    sessions = _fake_sessions(monkeypatch)
+    server = FakeServer()
+    server.bind_dev("sim-room-main", "c-main")
+    server.bind_dev("sim-room-accent", "c-accent")
+    agent = DeviceLinkAgent(gs, server)
+
+    def boom(universe):
+        raise RuntimeError("session exploded")
+    sessions["room_test_main"].render_into = boom
+
+    agent._render_room()
+
+    assert server.addressed("/sim-room-main/leds") == []
+    assert server.addressed("/sim-room-accent/leds")
+
+
 def test_a_room_cue_reaches_every_bound_fixtures_session(monkeypatch):
     """A ROOM-sentinel cue resolves to every bound fixture dev
     (control/engine.py's _resolve_devs), and each of those feeds THAT
@@ -1610,14 +1678,16 @@ def test_a_room_cue_reaches_every_bound_fixtures_session(monkeypatch):
 
 
 def test_an_unchanged_fixture_slice_is_not_resent_after_settling():
-    """_last_frames is keyed per fixture dev, so once the shared session's
-    output is stable, neither fixture keeps resending on every tick.
+    """Each fixture's `last_frame` lives on its own _FixtureState now (Task
+    6), so once each fixture's OWN session output is stable, neither
+    fixture keeps resending on every tick -- there is no shared session or
+    shared last-sent cache to collapse the comparison onto.
 
     TestBit's Room manifest targets "primary" (the whole concatenated
     surface) with one instrument, so there is no way to change only ONE
     fixture's pixels through its real declaration -- proving per-fixture
     selectivity that way is not available at this integration level. What
-    IS provable, and is the same underlying _last_frames mechanism: with
+    IS provable, and is the same underlying last_frame mechanism: with
     no NEW cue and no elapsed time (no breath reaching the Room either --
     TestBit's Room role declares no cc:11 lane, unlike player), a second
     render produces byte-identical output to the first, and NEITHER
@@ -1647,8 +1717,8 @@ def test_an_unchanged_fixture_slice_is_not_resent_after_settling():
     (luxaeterna's LightSession.render_into: t = now - self._start), so a
     frozen clock yields byte-identical output regardless of which
     instrument computed it. This isolates the property actually under
-    test (_last_frames' own comparison logic) from whichever instrument
-    the Room happens to declare."""
+    test (each fixture's own last_frame comparison logic) from whichever
+    instrument the Room happens to declare."""
     clk = _Clock()
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
@@ -2163,13 +2233,9 @@ def test_override_expiry_clears_only_that_fixtures_last_frame():
 
     agent._fixtures["main"].last_frame = b"\x01"
     agent._fixtures["accent"].last_frame = b"\x02"
-    agent._last_frames["sim-room-main"] = b"\x01"
-    agent._last_frames["sim-room-accent"] = b"\x02"
     agent._overrides["sim-room-main"] = ((0, 0, 0), 0.0, agent._clock() - 1.0)
 
     agent._tick_overrides()
 
     assert agent._fixtures["main"].last_frame is None
-    assert "sim-room-main" not in agent._last_frames
     assert agent._fixtures["accent"].last_frame == b"\x02"
-    assert agent._last_frames.get("sim-room-accent") == b"\x02"

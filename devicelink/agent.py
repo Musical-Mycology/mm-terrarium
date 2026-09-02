@@ -187,15 +187,16 @@ class DeviceLinkAgent:
         # _feed_ambient_generators measures elapsed time from here, mirroring
         # self._breath_origin above.
         self._ambient_start: float | None = None
-        # The devs _grant_room_audio() last granted Room audio to (empty if
-        # no grant is outstanding) -- one entry per bound, audio-capable
-        # fixture.
-        # Cached here rather than recomputed from gs.room at release time
-        # because unwire_room() runs AFTER Terrarium.unload_room() has
-        # already set gs.room = None (see unwire_room's own docstring) --
-        # by then gs.room.bound can no longer be read to find which devs
-        # held a grant.
-        self._room_audio_devs: set[str] = set()
+        # The fixture NAMES _grant_room_audio() last granted Room audio to
+        # (empty if no grant is outstanding) -- one entry per audio-capable
+        # fixture, bound or not: audio is granted from Room load now, the
+        # same way each fixture's session is (spec section 5.1).
+        # Cached here rather than recomputed from the Room profile at
+        # release time because unwire_room() runs AFTER
+        # Terrarium.unload_room() has already set gs.room = None (see
+        # unwire_room's own docstring) -- by then there is no live profile
+        # to walk to find which fixtures held a grant.
+        self._room_audio_fixtures: set[str] = set()
         # Display-only copy of each changed fixture frame, for the Terrarium
         # Console, called as on_room_frame(fixture_name, frame) -- keyed by
         # fixture NAME, since the Console draws a strip per fixture whether
@@ -267,9 +268,14 @@ class DeviceLinkAgent:
         self._grant_room_audio(role)
 
     def _grant_room_audio(self, role) -> None:
-        """Grant every bound, audio-capable fixture its own AudioBridge
-        voice, releasing whatever was granted before so an ambient<->Bit
-        swap or a fixture rebind never leaks a stale voice.
+        """Grant EVERY audio-capable fixture its own AudioBridge voice, from
+        Room load, whether or not a device is bound to it -- the Room is
+        loaded with all its instruments (spec section 5.1), and audio is no
+        different from light in that regard any more. Keyed by fixture
+        NAME now, not by a bound dev: AudioBridge's dev-keyed parameter is
+        simply handed the fixture's name (Task 7). Releases whatever was
+        granted before so an ambient<->Bit swap or a fixture rebind never
+        leaks a stale voice.
 
         With a Bit's ROOM role loaded every fixture is granted that role;
         without one, each fixture's OWN ambient ugen declaration is carried
@@ -278,24 +284,17 @@ class DeviceLinkAgent:
         the ambient declaration through the same API rather than widening
         it for one caller -- see spec section 6). A fixture with neither
         gets the minimal flsyn pass-through, so the built-ins (ping's note
-        pair, stop's silence) always have a voice to land on.
-
-        Still keyed by BOUND fixture dev: an unbound fixture holds no
-        voice, because AudioBridge's whole surface is dev-keyed."""
+        pair, stop's silence) always have a voice to land on."""
         if self._room_audio is None:
             return
-        gs = self.game_server
-        # Release every previously granted dev (a no-op the first time, or
-        # when nothing was granted -- see AudioBridge.on_release) before
+        # Release every previously granted fixture (a no-op the first time,
+        # or when nothing was granted -- see AudioBridge.on_release) before
         # granting fresh.
-        for d in list(self._room_audio_devs):
-            self._room_audio.on_release(d)
-        self._room_audio_devs.clear()
+        for name in list(self._room_audio_fixtures):
+            self._room_audio.on_release(name)
+        self._room_audio_fixtures.clear()
         first = True
         for fixture in self._room_profile.fixtures:
-            d = gs.room.bound.get(fixture.name)
-            if d is None:
-                continue
             caps = fixture.instrument.capabilities
             if not any(c.startswith("audio.") for c in caps):
                 continue
@@ -311,16 +310,21 @@ class DeviceLinkAgent:
                 # Only the first granted fixture plays the welcome ceremony
                 # -- the Room welcomes once, not per fixture.
                 grant_role = replace(grant_role, welcome=None)
-            self._room_audio.on_grant(d, grant_role)
-            self._room_audio_devs.add(d)
-            if role is None and first and grant_role.ugen_manifest.get(
+            self._room_audio.on_grant(fixture.name, grant_role)
+            self._room_audio_fixtures.add(fixture.name)
+            if role is None and ambient_ugen and ambient_ugen.get(
                     "instruments"):
                 # Ambient has no RUNNING transition of its own to start the
                 # drone from (on_state_change's RUNNING/UNLOADING branch is
                 # scoped to a loaded Bit) -- ambient sound starts the moment
                 # the Room is ready, mirroring the light side, which
                 # likewise renders immediately here with no further gate.
-                self._room_audio.start_drone(d)
+                # Every fixture with its OWN ambient declaration starts its
+                # own drone now, not only the first granted one -- each
+                # fixture's ambient ugen is its own instrument (Task 7); the
+                # welcome ceremony above is still a once-per-Room affair,
+                # but the drone is not.
+                self._room_audio.start_drone(fixture.name)
             first = False
 
     def rewire_room(self) -> None:
@@ -367,21 +371,22 @@ class DeviceLinkAgent:
         AudioBridge.on_release/stop_drone -- so this is safe to call
         unconditionally, mirroring _setup_room()'s own guarded call.
 
-        Uses self._room_audio_devs rather than gs.room.bound: by the time the
-        Terrarium observer calls unwire_room(), Terrarium.unload_room has
-        already set gs.room = None (see control/terrarium.py), so gs.room can
-        no longer be read to find which devs held a grant -- _room_audio_devs
-        is the cached record _grant_room_audio() left behind at grant time.
+        Uses self._room_audio_fixtures rather than the Room profile: by the
+        time the Terrarium observer calls unwire_room(), Terrarium.
+        unload_room has already set gs.room = None (see control/
+        terrarium.py), so there is no live profile left to walk to find
+        which fixtures held a grant -- _room_audio_fixtures is the cached
+        record _grant_room_audio() left behind at grant time.
 
         Also drops the ambient start time along with the fixture states
         themselves, mirroring the audio grant's own cached-at-wire-time
         cleanup just above: nothing must consult a runner or a start time
         built for a Room that is gone."""
         if self._room_audio is not None:
-            for d in list(self._room_audio_devs):
-                self._room_audio.stop_drone(d)
-                self._room_audio.on_release(d)
-            self._room_audio_devs.clear()
+            for name in list(self._room_audio_fixtures):
+                self._room_audio.stop_drone(name)
+                self._room_audio.on_release(name)
+            self._room_audio_fixtures.clear()
         self._ambient_start = None
         self._fixtures = {}
         self._room_profile = None
@@ -525,14 +530,15 @@ class DeviceLinkAgent:
             # guards on self._muted as a second line of defense, but the
             # purge here is what keeps the queue itself from growing stale.
             self._light_cues.purge(lambda payload: payload[0] == dev)
-            if self._is_room_dev(dev):
-                self._room_cues.purge(lambda payload: payload[0] == dev)
+            st = self._fixture_for_dev(dev)
+            if st is not None:
+                self._room_cues.purge(lambda payload: payload[0] == st.name)
                 if (self._room_audio is not None
-                        and dev in self._room_audio_devs):
+                        and st.name in self._room_audio_fixtures):
                     try:
-                        self._room_audio.silence(dev)
+                        self._room_audio.silence(st.name)
                     except Exception:
-                        logger.exception("mute silence failed for %s", dev)
+                        logger.exception("mute silence failed for %s", st.name)
         else:
             self._muted.discard(dev)
             self._overrides.pop(dev, None)
@@ -576,18 +582,18 @@ class DeviceLinkAgent:
         # still has to cross the wire to reach the simulator by `at`. One
         # anchor, two releases -- see the 2026-08-14 spec section 2.
         #
-        # Each due cue is tagged with the real fixture dev it came from
-        # (per-fixture instruments): fed to THAT dev's own AudioBridge
-        # voice. A dev that lost its grant since the cue was queued (a
-        # rebind, or a fixture that never carried audio.* in the first
-        # place) is skipped rather than fed.
-        for (cue_dev, status, d1, d2) in self._room_cues.due(self._clock()):
-            if self._room_audio is None or cue_dev not in self._room_audio_devs:
+        # Each due cue is tagged with the fixture NAME it came from
+        # (per-fixture instruments): fed to THAT fixture's own AudioBridge
+        # voice. A fixture that lost its grant since the cue was queued (a
+        # Bit<->ambient swap, or a fixture that never carried audio.* in the
+        # first place) is skipped rather than fed.
+        for (name, status, d1, d2) in self._room_cues.due(self._clock()):
+            if self._room_audio is None or name not in self._room_audio_fixtures:
                 continue
             try:
-                self._room_audio.feed_midi(cue_dev, status, d1, d2)
+                self._room_audio.feed_midi(name, status, d1, d2)
             except Exception:
-                logger.exception("fixture feed_midi failed for %s", cue_dev)
+                logger.exception("fixture feed_midi failed for %s", name)
         for fixture in self._room_profile.fixtures:
             st = self._fixtures.get(fixture.name)
             if st is None:
@@ -909,11 +915,11 @@ class DeviceLinkAgent:
         if self._room_audio is None or gs.room is None:
             return
         if new_state == State.RUNNING:
-            for d in list(self._room_audio_devs):
-                self._room_audio.start_drone(d)
+            for name in list(self._room_audio_fixtures):
+                self._room_audio.start_drone(name)
         elif new_state == State.UNLOADING:
-            for d in list(self._room_audio_devs):
-                self._room_audio.stop_drone(d)
+            for name in list(self._room_audio_fixtures):
+                self._room_audio.stop_drone(name)
 
     def _on_release(self, dev: str) -> None:
         """Engine released dev. Kick off the closing fade -- but keep the
@@ -987,10 +993,6 @@ class DeviceLinkAgent:
         if not revived:
             self.server.drop_dev(dev)
 
-    def _is_room_dev(self, dev: str) -> bool:
-        gs = self.game_server
-        return gs.room is not None and dev in gs.room.bound.values()
-
     def _feed_light_now(self, dev: str, status: int, d1: int, d2: int,
                         at: float | None) -> None:
         """Apply a light cue to its session and record when the frame it
@@ -1060,18 +1062,20 @@ class DeviceLinkAgent:
         override, or the override's own frame comparison would be racing a
         session state the device can never actually see.
 
-        `_room_cues` carries `dev` on every entry (per-fixture
-        instruments): each bound fixture dev pushes its own audio tuple, so
-        _render_room's drain can feed the RIGHT fixture's voice. Light falls
-        through to _feed_light_now for EVERY room dev now -- each fixture
-        owns its own session, so there is nothing to collapse and no
+        `_room_cues` carries the fixture NAME on every entry (per-fixture
+        instruments): each bound fixture pushes its own audio tuple keyed by
+        name, so _render_room's drain can feed the RIGHT fixture's voice
+        (AudioBridge is granted by name now -- see _grant_room_audio). Light
+        falls through to _feed_light_now for EVERY room dev now -- each
+        fixture owns its own session, so there is nothing to collapse and no
         canonical dev to collapse onto.
         """
         if dev in self._muted:
             return
         now = self._clock()
-        if self._is_room_dev(dev):
-            self._room_cues.push(when, (dev, status, data1, data2), now=now)
+        st = self._fixture_for_dev(dev)
+        if st is not None:
+            self._room_cues.push(when, (st.name, status, data1, data2), now=now)
         feed_at = None if when is None else when - self._horizon
         if feed_at is not None and feed_at > now:
             # A Bit-declared cue further out than one horizon. Hold the

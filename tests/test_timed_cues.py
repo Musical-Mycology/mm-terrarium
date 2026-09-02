@@ -202,7 +202,7 @@ def test_one_gesture_yields_one_shared_presentation_time():
 
     now[0] = at + TICK
     agent.poll()
-    assert [f[1:] for f in audio.fed] == [("sim-room", 0xB0, 74, 127)]
+    assert [f[1:] for f in audio.fed] == [("main", 0xB0, 74, 127)]
     assert audio.fed[0][0] >= at
     assert audio.fed[0][0] - at <= TICK, "released within one tick of at"
 
@@ -219,7 +219,7 @@ def test_a_late_gesture_clamps_and_counts_rather_than_raising():
     agent.poll()
 
     assert agent.clamped == 1
-    assert [f[1:] for f in audio.fed] == [("sim-room", 0xB0, 74, 127)]   # released anyway
+    assert [f[1:] for f in audio.fed] == [("main", 0xB0, 74, 127)]   # released anyway
 
 
 def test_the_room_animates_with_no_gesture_at_all():
