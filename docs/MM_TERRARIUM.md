@@ -3502,10 +3502,17 @@ instrument on its light side too, not only its audio side. Design:
   `bit.toml`'s `[launch] room_types = ["TEST"]` so it is only ever offered
   against the Room spec it names; `tests/test_chase_bit.py` proves it
   loads on TEST and is refused by name on DEMO. `TestBit` itself is
-  unchanged. Generator-lane collisions are likewise checked post-expansion
-  against the loaded Room: two fixtures' own ambient generators on the
-  same cc do not collide (each writes its own fixture's lane), but a
-  `@room` generator and a `@fixture:accent` generator on the same cc do.
+  unchanged. **(Final-review correction, 2026-09-01: instrument
+  generators are `@target`-only.)** `control/functions.py`'s
+  `_validate_generator` refuses an instrument-owned GENERATOR whose dev is
+  anything but `cues.TARGET`: an instrument is a type, not a placement, so
+  it cannot declare a room-wide ambient effect -- that is authored per
+  fixture instead. Two fixtures' own ambient generators on the same cc
+  therefore cannot collide by construction (each is `@target`, so it can
+  only ever write its own declaring fixture's lane); the Bit-level
+  post-expansion collision check covers what CAN collide -- a `@room`
+  generator and a `@fixture:accent` generator on the same cc, or two
+  Bit-owned `@fixture:` generators on the same cc.
 - **Audio grants are keyed by fixture name from Room load, not by a bound
   dev.** `_grant_room_audio` grants every audio-capable fixture its own
   `AudioBridge` voice whether or not a device is bound to it yet, and now
@@ -3539,9 +3546,26 @@ instrument on its light side too, not only its audio side. Design:
   resolver only ever produces bound devs, so no cue can reach it by name
   alone. Cue routing by fixture name, for a fixture that never binds a
   device, is a named follow-up (spec section 11).
+- **Final-review fix wave (2026-09-01).** Deleting `RoomProfile`'s
+  cross-fixture generator lane rule (above) left a real gap: nothing
+  refused an instrument-owned GENERATOR addressed to `cues.ROOM`, so two
+  fixtures' instruments could each declare a `@room` generator on the same
+  cc and interleave on both strips uncaught. `_validate_generator` now
+  refuses any instrument-owned GENERATOR dev but `cues.TARGET`; the
+  devicelink ambient resolver's now-unreachable `@room` fan-out branch is
+  simplified away (see the corrected bullet above). `unwire_room` now also
+  clears `_room_cues`/`_light_cues` (mirroring `on_state_change`'s
+  UNLOADING branch), so a same-type Room reloaded within a horizon cannot
+  receive a stale cue left queued by the Room that just unloaded. A
+  handful of docstrings (`_dispatch_cues`'s `@room` description,
+  `_FakeAudioBridge`'s fixture-name-keyed note, `control/teardown.py`'s
+  push-order example) and one stale test-local TOML fixture in
+  `tests/test_terrarium_config.py` were also corrected. See the spec's
+  section 12 Status for the full deviation list against this document's
+  section 3.2 table.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**1951 passed, 1 skipped**.
+**1955 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 

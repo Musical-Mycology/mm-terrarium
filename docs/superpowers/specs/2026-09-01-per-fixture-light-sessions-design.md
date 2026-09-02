@@ -429,10 +429,61 @@ transport data flow and sinks, retirements) landed on
 -> 1951 passed, 1 skipped (was 1903 passed, 1 skipped at PR #81 HEAD).
 See `docs/MM_TERRARIUM.md`'s "Per-fixture light sessions,
 `@fixture:<name>` addressing, FixtureSinks (2026-09-01)" entry for the
-landed detail, including deviations from this document's plan-facing
-prose (`chase` lives in a new packaged Bit, `bits/chase/`, rather than on
-`TestBit`, because the load-time fixture contract in section 3.4 refuses
-`TestBit` naming fixtures on the one-fixture DEMO room).
+landed detail.
+
+A final whole-branch review (2026-09-01) found one gap and one
+pre-existing docs/code mismatch in Plan 1, both fixed and re-verified
+before merge. Offline suite after the fix wave: `.venv/bin/python -m
+pytest tests -q` -> 1955 passed, 1 skipped.
+
+Deviations from this document's plan-facing prose, listed individually
+rather than folded into one parenthetical:
+
+- `chase` lives in a new packaged Bit, `bits/chase/` (`ChaseBit`), rather
+  than on `TestBit`, because the load-time fixture contract in section
+  3.4 refuses `TestBit` naming fixtures on the one-fixture DEMO room.
+- The TEST Room's `surface_id` is `room_test` (not `TEST`), and the leds
+  wire shape stays as shipped: `harness/shroom_client.py`'s `_on_leds`
+  reads the channel array from `args[0]` and the presentation time from
+  the separate `env.timestamp` field, not as a combined tuple this
+  document's illustrative prose might suggest.
+- `when` is stamped per fixture, not shared across fixtures from one
+  presentation time: two fixtures rendered in the same tick no longer
+  share a presentation time by construction.
+- An ambient drone starts on EVERY granted fixture whose own ambient ugen
+  declares instruments, each with its own ambient ugen voice, not only
+  the first fixture; the welcome ceremony stays a once-per-Room,
+  first-fixture-only affair.
+- `ConsoleAgent`'s constructor takes `room_controllers` (a callable
+  returning `{fixture_name: {cc: value}}`) in place of `room_bridge`;
+  `room_view` emits `controllers` (the flat merge, first fixture in
+  profile order wins on a collision) alongside `fixture_controllers`
+  verbatim; `room_frame` is keyed by `fixture` (a name), not `dev`.
+- **(Final-review Important finding 1.) Instrument-owned GENERATOR devs
+  are `@target` only, not `@target`/`@room` as this document's section
+  3.2 table states.** An instrument is a type and cannot know a Room's
+  fixture names or how many fixtures will carry it; a room-wide ambient
+  effect is declared per fixture, so an instrument's GENERATOR cannot
+  legally be room-wide either. `control/functions.py`'s
+  `_validate_generator` refuses any instrument-owned GENERATOR dev but
+  `cues.TARGET`, with a located ValueError. This is what makes two
+  fixtures' ambient generators on the same cc uncollidable by
+  construction (each is `@target`-only, so it can only ever write its own
+  declaring fixture's lane) rather than merely uncollided by the shape of
+  today's shipped instruments; `devicelink/agent.py`'s ambient resolver's
+  `@room`-fans-to-every-fixture branch is unreachable under this rule and
+  has been simplified to `[own] if dev == TARGET else []`. No shipped
+  instrument (`instruments/*.toml`, `control/instrument.py`'s
+  `TUNESHROOM`) declares a GENERATOR at all, so this is a validation-time
+  rule with no shipped-content fallout.
+- **(Final-review Important finding 2, docs only; no code change.)
+  Instrument-owned SCRIPTED (script step) devs are `@target` only, not
+  `@target`/`@room` as this document's section 3.2 table states.** This
+  was already true of the landed code (`control/functions.py`'s
+  instrument SCRIPTED branch has always refused anything but
+  `cues.TARGET` on an instrument script step) -- the table was wrong at
+  authoring time, not regressed by Plan 1. Instrument STREAM outputs are
+  unaffected and still accept `@target` and `@room`, per the table.
 
 Plans 2 (section 6, rooms catalog and the Design tab Room editor) and 3
 (section 7, luxaeterna rendering at O2 time) are not started. The
