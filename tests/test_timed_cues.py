@@ -64,7 +64,7 @@ class TickRecordingSession:
 
 class TickRecordingAudioBridge:
     """The room_audio-shaped sibling of TickRecordingSession above: the Room's
-    audio channel is now a per-fixture AudioBridge grant, not a RoomBridge
+    audio channel is now a per-fixture AudioBridge grant, not one Room-wide
     sink, so this double satisfies AudioBridge's dev-keyed surface instead
     (on_grant/on_release/feed_midi/start_drone/stop_drone/silence/tick).
     Records the clock reading at which each feed_midi arrived, same as

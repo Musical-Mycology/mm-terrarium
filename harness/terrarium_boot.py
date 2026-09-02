@@ -313,8 +313,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
             pool.start()
             room_audio = AudioBridge(pool, clock=clock)
 
-        agent = DeviceLinkAgent(gs, server, room_bridge=terrarium.room_bridge,
-                                room_audio=room_audio,
+        agent = DeviceLinkAgent(gs, server, room_audio=room_audio,
                                 horizon=config.cue_horizon, clock=clock,
                                 on_join_denied=on_join_denied,
                                 stale_timeout=config.stale_timeout)
@@ -950,12 +949,12 @@ class _RoomWiring:
     it loads the Room (and the Bit) before ever constructing `agent`, so
     DeviceLinkAgent's own __init__-time _setup_room() sees a live gs.room
     and needs no help. This observer exists for the case build() cannot
-    cover -- a NO_ROOM boot, where `agent` is constructed with
-    room_bridge=None because no Room exists yet. Left unwired, a Room that
-    loads later (a Console `load_room`) would never get a light session,
-    an audio grant, or a bound MIDI bridge, and console.agent.ConsoleAgent's
-    own controllers read-out (which now reads terrarium.room_bridge live,
-    see its _current_room()) would have nothing live to read either --
+    cover -- a NO_ROOM boot, where `agent` is constructed with no fixture
+    sessions at all because no Room exists yet. Left unwired, a Room that
+    loads later (a Console `load_room`) would never get a light session or
+    an audio grant, and console.agent.ConsoleAgent's own controllers
+    read-out (which calls DeviceLinkAgent.controllers() live on every
+    render, see its _current_room()) would have nothing to read either --
     see devicelink.agent.DeviceLinkAgent.rewire_room's own docstring for
     the full picture."""
 
@@ -965,7 +964,7 @@ class _RoomWiring:
 
     def on_terrarium_state_change(self, old_state, new_state) -> None:
         if new_state is TerrariumState.ROOM_READY:
-            self._agent.rewire_room(self._terrarium.room_bridge)
+            self._agent.rewire_room()
         elif new_state is TerrariumState.NO_ROOM:
             self._agent.unwire_room()
 
@@ -1529,7 +1528,7 @@ def main() -> None:
                             if terrarium_config.instrument_roots else None)
             from harness.design_session import bench_session_factory
             console_agent = ConsoleAgent(gs, console_server,
-                                         room_bridge=agent.room_bridge,
+                                         room_controllers=agent.controllers,
                                          clock=clock, registry=registry,
                                          canvas_urls=agent.canvas_urls,
                                          terrarium=terrarium,

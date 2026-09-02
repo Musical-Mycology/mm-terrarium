@@ -277,8 +277,9 @@ class GameServer:
         A dev currently bound to a Room fixture is left untouched
         entirely -- Room liveness is a separate, not-yet-designed
         question (section 5 of that spec): reaping it would clear
-        registration.assignments but not room.bound, leaving RoomBridge
-        feeding a fixture whose device no longer exists.
+        registration.assignments but not room.bound, leaving the Room's
+        light sessions rendering to a fixture whose device no longer
+        exists.
 
         Never raises: on_release is guarded exactly like _unload()
         already guards it, so a failing transport cannot wedge this call

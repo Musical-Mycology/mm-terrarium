@@ -350,24 +350,26 @@ def test_devices_view_carries_muted_flag():
 
 def _room_console(bit_name="TestBit", canvas_urls=None):
     """A GameServer with a bound TEST Room and a loaded Bit, plus a
-    ConsoleAgent wired to a RoomBridge carrying a live cc value.
+    ConsoleAgent wired to a per-fixture controllers callable carrying a
+    live cc value.
 
     TestBit, NOT tests/test_engine.py's RoomCapableBit: that fixture overrides
     role_table and rebuilds the Room role with a bare room_role(...),
     so its light_manifest and ugen_manifest are both empty. TestBit declares
     the real aurora + flsyn Room instruments (bits/test_bit.py), which is what
     these tests are asserting on."""
-    from control.room_bridge import RoomBridge
     binding = RoomBindingRegistry()
     gs = GameServer({bit_name: TestBit}, room_binding=binding)
     gs.room = make_room()
     gs.room.bound = {"main": "sim-room-main"}
     gs.load_bit(bit_name)
-    bridge = RoomBridge()
-    bridge.bind("sim-room-main")
-    bridge.feed_light(0xB0, 74, 93)
+    # Mutable on purpose: tests below change a value in place to prove the
+    # panel reads the callable live rather than a frozen snapshot.
+    live = {"main": {74: 93}}
     srv = FakeConsoleServer()
-    agent = ConsoleAgent(gs, srv, room_bridge=bridge, canvas_urls=canvas_urls)
+    agent = ConsoleAgent(gs, srv, room_controllers=lambda: live,
+                         canvas_urls=canvas_urls)
+    agent._live_controllers = live
     return gs, srv, agent
 
 
@@ -432,7 +434,7 @@ def test_room_changed_broadcasts_only_when_it_changes():
     agent.poll()
     assert [b for b in srv.broadcasts if b["event"] == "room_changed"] == []
 
-    agent._room_bridge.feed_light(0xB0, 74, 12)
+    agent._live_controllers["main"][74] = 12
     agent.poll()
     changed = [b for b in srv.broadcasts if b["event"] == "room_changed"]
     assert len(changed) == 1
@@ -476,7 +478,7 @@ def test_a_dead_console_client_is_dropped_not_retried():
     srv.connect("c1")
     srv.fail_sends_to("c1")
     agent.poll()
-    agent._room_bridge.feed_light(0xB0, 74, 5)
+    agent._live_controllers["main"][74] = 5
     agent.poll()
     assert srv.dropped == ["c1"]
 
@@ -508,22 +510,22 @@ def test_room_frames_are_broadcast_at_the_decimated_rate():
     clock = FakeClock(100.0)
     agent._clock = clock
 
-    agent.on_room_frame("sim-room", bytes(range(180)))
+    agent.on_room_frame("main", bytes(range(180)))
     agent.poll()
     frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
     assert len(frames) == 1
-    assert frames[0]["dev"] == "sim-room"
+    assert frames[0]["fixture"] == "main"
     assert frames[0]["channels"] == list(range(180))
 
     # Too soon: dropped, not queued.
-    agent.on_room_frame("sim-room", bytes(180))
+    agent.on_room_frame("main", bytes(180))
     clock.now += ROOM_FRAME_INTERVAL / 2
     agent.poll()
     assert len([b for b in srv.broadcasts if b["event"] == "room_frame"]) == 1
 
     # Interval elapsed: the LATEST frame goes, the skipped one is gone.
     clock.now += ROOM_FRAME_INTERVAL
-    agent.on_room_frame("sim-room", bytes([7] * 180))
+    agent.on_room_frame("main", bytes([7] * 180))
     agent.poll()
     frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
     assert len(frames) == 2
@@ -537,12 +539,12 @@ def test_two_fixtures_changing_in_the_same_window_both_broadcast():
     agent._clock = clock
 
     # Both fixtures change before the first poll -- the old single-slot
-    # implementation would only ever relay the second call's dev.
-    agent.on_room_frame("sim-room-main", bytes(180))
-    agent.on_room_frame("sim-room-accent", bytes(90))
+    # implementation would only ever relay the second call's fixture.
+    agent.on_room_frame("main", bytes(180))
+    agent.on_room_frame("accent", bytes(90))
     agent.poll()
     frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
-    assert {f["dev"] for f in frames} == {"sim-room-main", "sim-room-accent"}
+    assert {f["fixture"] for f in frames} == {"main", "accent"}
 
     # A later main-only change must still relay on its own -- accent's
     # entry being consumed must not block main's next one, or vice versa.
@@ -551,11 +553,11 @@ def test_two_fixtures_changing_in_the_same_window_both_broadcast():
     # soon" guard -- see test_room_frames_are_broadcast_at_the_decimated_rate
     # above, which sidesteps the same hazard with its own 1.5x net bump.)
     clock.now += ROOM_FRAME_INTERVAL * 2
-    agent.on_room_frame("sim-room-main", bytes([9] * 180))
+    agent.on_room_frame("main", bytes([9] * 180))
     agent.poll()
     frames = [b for b in srv.broadcasts if b["event"] == "room_frame"]
     assert len(frames) == 3
-    assert frames[2]["dev"] == "sim-room-main"
+    assert frames[2]["fixture"] == "main"
     assert frames[2]["channels"] == [9] * 180
 
 
@@ -922,27 +924,23 @@ def test_load_room_command_drives_terrarium_and_broadcasts_room_loaded():
     assert loaded == [{"event": "room_loaded", "name": "TEST"}]
 
 
-def test_room_panel_controllers_read_terrarium_room_bridge_live():
-    """ConsoleAgent constructed with no room_bridge= at all (the NO_ROOM
-    boot shape: harness/terrarium_boot.py's main() builds ConsoleAgent
-    before any Room exists) must still show live controller values once a
-    Room loads THROUGH terrarium -- this panel cannot be reading a frozen
-    __init__-time snapshot (there wasn't one to freeze), only
-    `terrarium.room_bridge` fresh on every render."""
+def test_room_panel_controllers_come_from_the_injected_callable():
+    """The Room panel reads its controllers from the injected callable
+    (DeviceLinkAgent.controllers, per fixture name) on every render, not
+    from a frozen __init__-time snapshot: the flat `controllers` map is
+    the profile-order merge, first fixture winning a conflicting cc, and
+    `fixture_controllers` carries the unmerged per-fixture view."""
     terrarium = make_terrarium()
     srv = FakeConsoleServer()
-    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
-
-    reason = terrarium.load_room("TEST")
-    assert reason is None
-    terrarium.room_bridge.feed_light(0xB0, 74, 93)
-
+    live = {"main": {74: 93}, "accent": {74: 5, 11: 60}}
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium,
+                         room_controllers=lambda: live)
+    assert terrarium.load_room("TEST") is None
     srv.connect("c1")
     agent.poll()
-
     _, msg = srv.sent[0]
-    assert msg["room"] is not None
-    assert msg["room"]["controllers"] == {74: 93}
+    assert msg["room"]["controllers"] == {74: 93, 11: 60}
+    assert msg["room"]["fixture_controllers"] == live
 
 
 def test_load_room_refusal_is_error_event_and_broadcasts_room_load_failed():

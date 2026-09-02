@@ -37,7 +37,7 @@ BENCH_FRAME_INTERVAL = 0.1
 
 
 class ConsoleAgent:
-    def __init__(self, game_server: GameServer, server, room_bridge=None,
+    def __init__(self, game_server: GameServer, server, room_controllers=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
                  terrarium=None, catalog_root=None, bench_session_factory=None,
                  captures_root=None):
@@ -75,11 +75,12 @@ class ConsoleAgent:
         # DeviceLinkAgent.canvas_urls(). None (a GameServer built without a
         # DeviceLinkAgent) yields no URLs anywhere in the Console's views.
         self._canvas_urls = canvas_urls
-        # The Room's live MIDI fan-out, for its controllers read-out. Optional:
-        # a GameServer built the pre-Room way has none, and the panel then
-        # shows the Room's declarations with no live values rather than
-        # failing.
-        self._room_bridge = room_bridge
+        # Optional Callable[[], dict] of fixture name -> {cc: value}, from
+        # DeviceLinkAgent.controllers(), for the Room panel's live
+        # controllers read-out. None (a GameServer built the pre-Room way,
+        # or without a DeviceLinkAgent) means the panel shows the Room's
+        # declarations with no live values rather than failing.
+        self._room_controllers = room_controllers
         self._last_status: dict | None = None
         self._last_room: dict | None = None
         self._last_functions: list | None = None
@@ -87,12 +88,13 @@ class ConsoleAgent:
         self._last_surface_instruments: dict | None = None
         self._last_builtins: dict | None = None
         self._clock = clock
-        # The latest not-yet-broadcast frame per dev. Each dev's entry is
-        # overwritten, not queued: see _broadcast_room_frame and
-        # ROOM_FRAME_INTERVAL above. Keyed by dev, not a single slot --
-        # _render_room() can call on_room_frame for more than one fixture
-        # within one tick, and a single slot silently starves every fixture
-        # but the last one to call in that tick.
+        # The latest not-yet-broadcast frame per fixture NAME. Each
+        # fixture's entry is overwritten, not queued: see
+        # _broadcast_room_frame and ROOM_FRAME_INTERVAL above. Keyed per
+        # fixture, not a single slot -- _render_room() can call
+        # on_room_frame for more than one fixture within one tick, and a
+        # single slot silently starves every fixture but the last one to
+        # call in that tick.
         self._pending_room_frames: dict[str, bytes] = {}
         self._last_room_frame_at = 0.0
         game_server.add_observer(self)
@@ -510,16 +512,20 @@ class ConsoleAgent:
         role = None
         if gs.bit is not None and gs.registration is not None:
             role = gs.registration.role_table.roles.get(room_role_name(gs.room.name))
-        # Live off `terrarium.room_bridge` when a Terrarium is wired, not
-        # the frozen `self._room_bridge` snapshot from __init__: a Room
-        # loaded AFTER construction (a NO_ROOM boot's Console `load_room`)
-        # leaves `self._room_bridge` at whatever it was then -- None, for a
-        # NO_ROOM boot -- and this panel's controllers read-out would stay
-        # permanently empty otherwise. Falls back to the __init__ snapshot
-        # for a caller with no Terrarium (pre-Task-6 construction shape).
-        room_bridge = (self.terrarium.room_bridge if self.terrarium is not None
-                      else self._room_bridge)
-        controllers = getattr(room_bridge, "controllers", {}) or {}
+        # Called fresh on every render rather than snapshotted at __init__:
+        # a Room loaded AFTER construction (a NO_ROOM boot's Console
+        # `load_room`) rebuilds DeviceLinkAgent's fixture states, and a
+        # frozen snapshot of their values would stay permanently empty.
+        # Guarded because this panel is a read-out: a raising source costs
+        # the live values, never the whole Room panel.
+        controllers: dict = {}
+        if self._room_controllers is not None:
+            try:
+                controllers = self._room_controllers() or {}
+            except Exception:
+                logger.exception(
+                    "room controllers source raised; reporting no live values")
+                controllers = {}
         urls = self._canvas_urls() if self._canvas_urls else {}
         return room_view(gs.room, profile, role, controllers, urls)
 
@@ -529,12 +535,14 @@ class ConsoleAgent:
             self._last_room = room
             self.server.broadcast(protocol.room_changed_event(room))
 
-    def on_room_frame(self, dev: str, frame: bytes) -> None:
+    def on_room_frame(self, fixture: str, frame: bytes) -> None:
         """DeviceLinkAgent's display-only frame sink. Called on the tick
         thread, once per changed fixture slice -- so possibly several times
-        per tick, one per dev. Stores the LATEST frame per dev; anything not
-        yet broadcast for that dev is overwritten, never queued."""
-        self._pending_room_frames[dev] = frame
+        per tick, one per fixture NAME (not per dev: an UNBOUND fixture
+        still renders and still gets a Console strip). Stores the LATEST
+        frame per fixture; anything not yet broadcast for that fixture is
+        overwritten, never queued."""
+        self._pending_room_frames[fixture] = frame
 
     def _broadcast_room_frame(self) -> None:
         if not self._pending_room_frames:
@@ -544,8 +552,8 @@ class ConsoleAgent:
             return
         pending, self._pending_room_frames = self._pending_room_frames, {}
         self._last_room_frame_at = now
-        for dev, frame in pending.items():
-            self.server.broadcast(protocol.room_frame_event(dev, frame))
+        for fixture, frame in pending.items():
+            self.server.broadcast(protocol.room_frame_event(fixture, frame))
 
     def _current_functions(self) -> list:
         bit = self.game_server.bit
@@ -580,8 +588,8 @@ class ConsoleAgent:
         instrument (TUNESHROOM's name when uncarried)."""
         gs = self.game_server
         # Live off `terrarium.room_binding` when a Terrarium is wired, not
-        # `gs.room_binding` -- the same reason _current_room reads
-        # `terrarium.room_bridge` rather than a frozen __init__ snapshot:
+        # `gs.room_binding` -- the same reason _current_room calls its
+        # controllers source rather than reading a frozen __init__ snapshot:
         # the Terrarium owns the RoomBindingRegistry that actually records
         # fixture binds (see control/terrarium.py's load_room), and a
         # GameServer built without one (most test doubles) leaves

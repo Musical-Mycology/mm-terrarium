@@ -4,6 +4,12 @@
 // 1/2/3/4/6/9) is the load-bearing part of this file -- a controllers-only
 // room_changed must repaint nothing but live lane values; a room_frame must
 // only ever repaint a canvas, never rebuild DOM.
+//
+// Everything frame-related is keyed by fixture NAME, not by dev: every
+// fixture in the Room profile renders whether or not a device is bound to
+// it, so an UNBOUND fixture gets a strip and paints its frames like any
+// other. The dev is still SHOWN (the binding chip), it is just not an
+// identity anything here is keyed on.
 import * as wire from "./wire.js";
 
 const FRAME_LIVE_MS = 2000;
@@ -12,11 +18,9 @@ const SINGLE_ROW_MAX = 160;
 
 let currentRoom = null;              // last-seen room (or null)
 let fixtureShapes = {};              // fixture name -> last-seen {pixel_count, zones}
-let fixtureNameByDev = {};           // dev -> fixture name, rebuilt every renderRoom
-let fixtureDevByName = {};           // fixture name -> dev, rebuilt every renderRoom
-let canvasesByDev = {};              // dev -> [canvas, ...] (in pixel order across rows)
-let lastPaintByDev = {};             // dev -> [[r,g,b], ...] per pixel
-let lastFrameAt = {};                // dev -> ms timestamp of last room_frame
+let canvasesByName = {};             // fixture name -> [canvas, ...] (in pixel order across rows)
+let lastPaintByName = {};            // fixture name -> [[r,g,b], ...] per pixel
+let lastFrameAt = {};                // fixture name -> ms timestamp of last room_frame
 let armedFixtures = new Set();       // fixture names showing "Armed" until next room_changed
 
 // Structural elements this module owns, cached as module state rather than
@@ -71,12 +75,12 @@ export function _blockRowsFor(fixture) {
 
 // -------------------------------------------------------------- test hooks
 
-export function _canvasFor(dev) {
-  return canvasesByDev[dev];
+export function _canvasFor(name) {
+  return canvasesByName[name];
 }
 
-export function _lastPaint(dev) {
-  return lastPaintByDev[dev];
+export function _lastPaint(name) {
+  return lastPaintByName[name];
 }
 
 // Binding-controls span (the chip + Release/Arm button) for a fixture, so
@@ -142,9 +146,9 @@ function paintCanvas(canvas, pixels) {
   }
 }
 
-function repaintDev(dev) {
-  const canvases = canvasesByDev[dev];
-  const pixels = lastPaintByDev[dev];
+function repaintFixture(name) {
+  const canvases = canvasesByName[name];
+  const pixels = lastPaintByName[name];
   if (!canvases || !pixels) return;
   let offset = 0;
   for (const canvas of canvases) {
@@ -502,10 +506,8 @@ function render() {
     clear(card);
     resetStructure();
     fixtureShapes = {};
-    fixtureNameByDev = {};
-    fixtureDevByName = {};
-    canvasesByDev = {};
-    lastPaintByDev = {};
+    canvasesByName = {};
+    lastPaintByName = {};
     lastFrameAt = {};
     armedFixtures.clear();
     card.appendChild(mk("p", "muted", "No Room configured"));
@@ -538,13 +540,6 @@ function render() {
   head.appendChild(headRight);
   updateFramesChip();
 
-  fixtureNameByDev = {};
-  fixtureDevByName = {};
-  for (const fixture of room.fixtures) {
-    fixtureDevByName[fixture.name] = fixture.dev;
-    if (fixture.dev) fixtureNameByDev[fixture.dev] = fixture.name;
-  }
-
   if (!fixturesMountEl) {
     fixturesMountEl = document.createElement("div");
     body.appendChild(fixturesMountEl);
@@ -564,7 +559,7 @@ function render() {
 
   // Rebuild only fixtures whose own shape changed; reinsert before the
   // nearest later surviving fixture so declaration order is preserved.
-  const newCanvasesByDev = {};
+  const newCanvasesByName = {};
   for (let i = 0; i < room.fixtures.length; i++) {
     const fixture = room.fixtures[i];
     const nextShape = { pixel_count: fixture.pixel_count, zones: fixture.zones,
@@ -589,11 +584,9 @@ function render() {
           }
           bindStateByName.set(fixture.name, nextBindKey);
         }
-        // Preserve the canvas list under the existing dev key(s).
-        for (const [dev, name] of Object.entries(fixtureNameByDev)) {
-          if (name === fixture.name && canvasesByDev[dev]) {
-            newCanvasesByDev[dev] = canvasesByDev[dev];
-          }
+        // Preserve the canvas list under this fixture's own name.
+        if (canvasesByName[fixture.name]) {
+          newCanvasesByName[fixture.name] = canvasesByName[fixture.name];
         }
       }
       fixtureShapes[fixture.name] = nextShape;
@@ -617,10 +610,10 @@ function render() {
     }
     fixtureElByName.set(fixture.name, wrap);
     bindStateByName.set(fixture.name, bindStateKey(fixture));
-    if (fixture.dev) newCanvasesByDev[fixture.dev] = canvases;
+    newCanvasesByName[fixture.name] = canvases;
     fixtureShapes[fixture.name] = nextShape;
   }
-  canvasesByDev = newCanvasesByDev;
+  canvasesByName = newCanvasesByName;
 
   // Instruments accordion (created once, refreshed each render).
   if (!instAccEl) {
@@ -661,8 +654,8 @@ function render() {
 // -------------------------------------------------------------------- frames
 
 function onRoomFrame(msg) {
-  const name = fixtureNameByDev[msg.dev];
-  if (!name) return; // rule 9: unknown dev is a no-op
+  // rule 9: a frame for a fixture this panel has no strip for is a no-op.
+  if (!canvasesByName[msg.fixture]) return;
   const channels = msg.channels || [];
   const pixelCount = Math.floor(channels.length / 3);
   const pixels = [];
@@ -672,9 +665,9 @@ function onRoomFrame(msg) {
     const b = channels[i * 3 + 2] || 0;
     pixels.push([r, g, b]);
   }
-  lastPaintByDev[msg.dev] = pixels;
-  lastFrameAt[msg.dev] = Date.now();
-  repaintDev(msg.dev);
+  lastPaintByName[msg.fixture] = pixels;
+  lastFrameAt[msg.fixture] = Date.now();
+  repaintFixture(msg.fixture);
   updateFramesChip();
 }
 

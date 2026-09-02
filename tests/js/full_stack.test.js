@@ -87,7 +87,7 @@ function snapshotMsg() {
   for (let i = 0; i < 3; i++) {
     const channels = [];
     for (let p = 0; p < 60; p++) channels.push(10 + i, 20 + i, 30 + i);
-    send({ event: "room_frame", dev: "sim-room-main", channels });
+    send({ event: "room_frame", fixture: "main", channels });
   }
 
   // 3. A function fires.

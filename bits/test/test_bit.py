@@ -144,7 +144,7 @@ class TestBit(Bit):
         # renders continuously under cc:74 without the note-triggered strobe
         # TestBit's own docstring already explains. Deliberately no cc:11/
         # level lane (unlike player): breath-feeding the Room is a real,
-        # separable enhancement, not needed to prove RoomBridge renders at
+        # separable enhancement, not needed to prove the Room renders at
         # all. The instrument itself is `rainbow`, not `aurora`: a scrolling
         # hue gradient across the Room's whole concatenated surface, which
         # makes the cross-fixture property -- one declaration, one gradient

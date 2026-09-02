@@ -148,6 +148,15 @@ def room_view(room, profile, role, controllers: dict, canvas_urls=None) -> dict 
     tab reading `room.bound_dev` degrades gracefully to `undefined` rather
     than breaking, and the privacy filters this module's docstring describes
     (node id, role name, registration counts) are unaffected either way.
+
+    `controllers` is DeviceLinkAgent.controllers()'s shape: fixture name ->
+    {cc: value}, one entry per fixture in the profile whether or not a
+    device is bound to it. It is emitted BOTH ways -- `fixture_controllers`
+    verbatim, and `controllers` as the flat merge in profile declaration
+    order, the first fixture winning a cc two fixtures both carry. The flat
+    map is what the Instruments accordion's live-value read-out renders off
+    of, and its lane declarations are Room-wide, so a merge is the only
+    thing it can be shown against.
     """
     if room is None or profile is None:
         return None
@@ -167,10 +176,16 @@ def room_view(room, profile, role, controllers: dict, canvas_urls=None) -> dict 
                         if profile.fixtures else None)
     for entry in instruments:
         entry["instrument_name"] = instrument_name
+    merged: dict[int, int] = {}
+    for fixture in profile.fixtures:
+        for cc, value in (controllers.get(fixture.name) or {}).items():
+            merged.setdefault(cc, value)
     return {
         "room_type": room.name,
         "fixtures": fixtures_view(profile, room, canvas_urls),
         "capability": capability_view(profile),
         "instruments": instruments,
-        "controllers": dict(controllers),
+        "controllers": merged,
+        "fixture_controllers": {name: dict(values)
+                                for name, values in controllers.items()},
     }

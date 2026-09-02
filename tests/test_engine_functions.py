@@ -499,9 +499,8 @@ def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
 
 def test_resolve_target_on_an_unbound_room_returns_nothing():
     """_resolve_target's room_devs block must short-circuit on "is anything
-    bound" before ever walking the profile's fixtures, exactly like its
-    sibling _canonical_room_dev does -- an empty Room must never reach a
-    profile that happens to be misshapen for its own gate."""
+    bound" before ever walking the profile's fixtures -- an empty Room must
+    never reach a profile that happens to be misshapen for its own gate."""
     from control.rooms import Room
 
     gs = GameServer({}, clock=lambda: 0.0)

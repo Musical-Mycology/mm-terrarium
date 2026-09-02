@@ -111,11 +111,15 @@ def room_changed_event(room) -> dict:
     return {"event": "room_changed", "room": room}
 
 
-def room_frame_event(dev: str, channels) -> dict:
-    """One rendered Room frame, for display only. Decimated and droppable:
-    see console/agent.py's ROOM_FRAME_INTERVAL. An int list rather than base64
-    for consistency with devicelink/protocol.py's leds_event."""
-    return {"event": "room_frame", "dev": dev, "channels": list(channels)}
+def room_frame_event(fixture: str, channels) -> dict:
+    """One rendered Room frame, for display only. Keyed by fixture NAME, not
+    by dev: every fixture in the profile renders whether or not a device is
+    bound to it, so an UNBOUND fixture's Console strip still paints.
+    Decimated and droppable: see console/agent.py's ROOM_FRAME_INTERVAL. An
+    int list rather than base64 for consistency with devicelink/protocol.py's
+    leds_event."""
+    return {"event": "room_frame", "fixture": fixture,
+            "channels": list(channels)}
 
 
 def functions_changed_event(functions, instruments=None, surfaces=None,

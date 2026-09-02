@@ -18,11 +18,11 @@ next. The Room simulator is spawned after Arco and therefore stops before
 it. An o2lite transport adopted after boot() returns stops before all of
 them. Nobody maintains that order; it falls out of when things start.
 
-Push order is DELIBERATE, not literally creation order. control/boot.py
-creates Arco, then the GameServer, then the RoomBridge, but the Bit must
-abort before the room bridge it may still cue into during on_unload -- so
-boot() pushes the bridge step and then the Bit step, both after Arco. Push
-points are chosen and documented at each call site.
+Push order is DELIBERATE, not literally creation order. Terrarium.load_room
+brings up Arco, then the Room's fixture simulators, then the Bit -- and the
+Bit must abort before the fixtures it may still cue into during on_unload,
+so unload_room aborts the Bit first and only then unwinds the room stack.
+Push points are chosen and documented at each call site.
 
 WHY NOT contextlib.ExitStack. It unwinds LIFO and does continue past a
 failing callback, but it re-raises the LAST exception and merely chains the
