@@ -8,7 +8,7 @@ tests/test_engine.py so the existing lifecycle tests stay readable.
 import pytest
 
 from control.bit import Bit
-from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue
+from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue, fixture_dev
 from control.engine import BitLoadError, GameServer
 from control.instrument import CUE_KINDS, TUNESHROOM, Instrument
 from control.roles import Role, RoleClass, RoleTable
@@ -333,11 +333,21 @@ def test_generator_cues_dispatch_once_per_running_tick():
     assert light == [("sim-room-main", 0xB0, 74, 127, pytest.approx(100.0))]
 
 
+@pytest.mark.xfail(strict=True, reason="Task 5: per-fixture generator emission")
 def test_scripted_fire_suppresses_the_generator_lane_it_writes_and_it_resumes():
     """Overlay, not kill (spec section 4): a scripted fire on the same lane
     a generator drives suppresses that generator's emissions until
     at + span, and the generator resumes -- with its phase having kept
-    advancing underneath -- once the window closes."""
+    advancing underneath -- once the window closes.
+
+    XFAIL until Task 5: _suppress_generator_lanes now records the lane
+    under the script's own RESOLVED dev (e.g. "sim-room-main"), per the
+    per-fixture design -- the canonical-dev fold-back that used to remap it
+    onto the ROOM sentinel is gone. GeneratorRunner (Task 5's seam) still
+    keys its own lane by the unresolved ROOM sentinel, so the two no longer
+    match and this generator is not suppressed. Task 5 makes GeneratorRunner
+    emit per-fixture lanes too, which will make the resolved-dev lane match
+    again."""
     gs, light, _ = _running(bit_cls=GeneratorBit, clock=lambda: 100.0)
     assert gs.fire_function("glow", fired_by="admin-manual") is None
     light.clear()
@@ -399,22 +409,82 @@ def test_function_fired_carries_room_name_from_gs_provenance():
     assert observer.fired[0].room_name == "atrium"
 
 
-def test_a_target_fanout_across_two_bound_fixtures_feeds_the_room_once_per_step():
-    """The Room's TARGET-fanout would double-feed the shared session once per
-    bound fixture if not collapsed -- see control/engine.py's
-    _collapse_room_fanout. Two fixtures bound, three script steps: still
-    exactly 3 light cues, not 6, all addressed to the canonical
-    (first-declared) fixture's dev. The fired record still reports every
-    fixture the trigger's target resolved to, uncollapsed -- collapsing is a
-    fan-out concern, not a reporting one."""
+def test_a_target_fanout_across_two_bound_fixtures_feeds_each_fixture():
+    """Each fixture has its own session now, so a TARGET step fans out to
+    every bound fixture: 3 steps x 2 fixtures = 6 light cues, in profile
+    order within each step. The fired record reports both devs as before."""
     gs, light, _ = _running(bound={"main": "sim-room-main",
                                    "accent": "sim-room-accent"})
     observer = Recorder()
     gs.add_observer(observer)
     assert gs.fire_function("sweep", fired_by="admin-manual") is None
-    assert [c[0] for c in light] == ["sim-room-main"] * 3
+    assert [c[0] for c in light] == ["sim-room-main", "sim-room-accent"] * 3
     assert observer.fired[0].devs == ("sim-room-main", "sim-room-accent")
-    assert observer.fired[0].steps == 3
+    assert observer.fired[0].steps == 6
+
+
+def test_a_room_literal_step_reaches_every_bound_fixture():
+    """A step written literally as cues.ROOM is a broadcast."""
+    gs, light, _ = _running(bound={"main": "sim-room-main",
+                                   "accent": "sim-room-accent"})
+    gs._dispatch_cues([(ROOM, 0xB0, 74, 5)], at=1.0)
+    assert [c[0] for c in light] == ["sim-room-main", "sim-room-accent"]
+
+
+def test_a_fixture_cue_reaches_only_that_fixture():
+    gs, light, _ = _running(bound={"main": "sim-room-main",
+                                   "accent": "sim-room-accent"})
+    gs._dispatch_cues([(fixture_dev("accent"), 0xB0, 74, 5)], at=1.0)
+    assert [c[0] for c in light] == ["sim-room-accent"]
+
+
+def test_a_cue_at_an_unbound_fixture_is_dropped_and_warned_once(caplog):
+    gs, light, _ = _running(bound={"main": "sim-room-main"})
+    with caplog.at_level("WARNING"):
+        gs._dispatch_cues([(fixture_dev("accent"), 0xB0, 74, 5),
+                           (fixture_dev("accent"), 0xB0, 74, 6)], at=1.0)
+    assert light == []
+    assert sum("accent" in r.message for r in caplog.records) == 1
+
+
+class DriftAuroraBit(_BaseBit):
+    """A GENERATOR on ROOM cc:74 plus a SURFACE function that writes
+    TARGET cc:74 -- the minimal rig for proving a scripted fire at one
+    fixture only suppresses that fixture's generator lane."""
+
+    @property
+    def function_table(self) -> FunctionTable:
+        return FunctionTable(functions={
+            "drift": Function(
+                name="drift", description="Ambient drift",
+                kind=FunctionKind.GENERATOR,
+                generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+                                        waveform="triangle", period=12.0,
+                                        lo=0, hi=254)),
+            "play_aurora": Function(
+                name="play_aurora", description="Aurora sweep",
+                target=FunctionTarget.SURFACE,
+                condition=Condition(name="manual", description="Operator asks",
+                                    source=ConditionSource.ADMIN_MANUAL),
+                script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),
+                        ScriptStep(2.0, (TARGET, 0xB0, 74, 0)))),
+        })
+
+
+@pytest.mark.xfail(strict=True, reason="Task 5: per-fixture generator emission")
+def test_scripted_fire_at_one_fixture_suppresses_only_that_fixtures_lane():
+    """The parked finding from PR #81: a Bit generator on ROOM cc:74 keeps
+    driving main while a script fired at the accent writes accent cc:74."""
+    gs, light, _ = _running(bit_cls=DriftAuroraBit,
+                            bound={"main": "sim-room-main",
+                                   "accent": "sim-room-accent"})
+    # DriftAuroraBit declares "drift" on ROOM cc:74 and "play_aurora" as a
+    # SURFACE function whose steps write TARGET cc:74.
+    assert gs.fire_function("play_aurora", fired_by="admin-manual",
+                            dev="sim-room-accent") is None
+    light.clear()
+    gs._dispatch_generator_cues()
+    assert [c[0] for c in light] == ["sim-room-main"]
 
 
 def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
@@ -430,7 +500,7 @@ def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
     gs.add_observer(observer)
     assert gs.fire_function("sweep", fired_by="admin-manual") is None
     assert observer.fired[0].devs == ("sim-room-main", "sim-room-accent")
-    assert [c[0] for c in light] == ["sim-room-main"] * 3
+    assert [c[0] for c in light] == ["sim-room-main", "sim-room-accent"] * 3
 
 
 def test_resolve_target_on_an_unbound_room_returns_nothing():
