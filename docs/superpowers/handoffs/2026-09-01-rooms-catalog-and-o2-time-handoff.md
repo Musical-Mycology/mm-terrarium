@@ -12,8 +12,7 @@ commits `fc21c1f` through the final-review fixes, offline suite
 `docs/MM_TERRARIUM.md`'s "Rooms catalog, TEST/DEMO migration, Design tab
 Room editor (2026-09-01)" entry and the spec's section 12 Status for the
 landed detail and deviations.
-**Plan 3 (luxaeterna renders at O2 time) remains the scope of this
-handoff** -- everything below Plan 2's section is unchanged and still
+**Plan 3 (luxaeterna renders at O2 time) is done too; only the live checklists remain** -- everything below Plan 2's section is unchanged and still
 applies.
 
 ## Where Plan 1 left the system
@@ -82,7 +81,14 @@ a missing line rather than no-op'ing).
    raw TOML. Changes apply at the next Room load; this is not a live
    control.
 
-## Scope of Plan 3: luxaeterna renders at O2 time (spec section 7, luxaeterna repo)
+## Scope of Plan 3: luxaeterna renders at O2 time (spec section 7, luxaeterna repo) -- DONE
+
+**Landed** 2026-09-02 as luxaeterna PR #18 (branch
+`claude/session-o2-time-7feab3`, plan
+`docs/superpowers/plans/2026-09-02-session-o2-time.md` in that repo).
+The paragraph below is the scope it was planned against; the audit found
+nothing to change beyond `render_into` and is pinned by tests. Spec
+section 10 step 5 is unblocked and still unrun.
 
 `LightSession.render_into` (luxaeterna `synth/session.py`) drops its private
 `_start`; `t` becomes the injected clock's reading, `dt` the delta since the

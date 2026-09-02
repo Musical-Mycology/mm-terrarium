@@ -1714,8 +1714,9 @@ def test_an_unchanged_fixture_slice_is_not_resent_after_settling():
     expect no resend" is no longer a universally true property once the
     Room's instrument can be a perpetually-animating one; "render again at
     the SAME instant, expect no resend" still is, for any instrument,
-    because RenderContext.time is derived from the injected clock
-    (luxaeterna's LightSession.render_into: t = now - self._start), so a
+    because RenderContext.time IS the injected clock's reading
+    (luxaeterna's LightSession.render_into: t = now, since its O2-time
+    slice; before that, t = now - self._start), so a
     frozen clock yields byte-identical output regardless of which
     instrument computed it. This isolates the property actually under
     test (each fixture's own last_frame comparison logic) from whichever
