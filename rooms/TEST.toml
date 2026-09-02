@@ -1,0 +1,40 @@
+description = "Simulated dev room: main + accent strips"
+backends = ["devicelink"]
+
+[[fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "dev_strip_main"
+  [[fixtures.blocks]]
+  name = "main"
+  start = 0
+  count = 60
+  [[fixtures.zones]]
+  name = "left"
+  start = 0
+  count = 20
+  [[fixtures.zones]]
+  name = "center"
+  start = 20
+  count = 20
+  [[fixtures.zones]]
+  name = "right"
+  start = 40
+  count = 20
+
+[[fixtures]]
+name = "accent"
+color_order = "GRB"
+instrument = "dev_strip_accent"
+  [[fixtures.blocks]]
+  name = "accent"
+  start = 0
+  count = 30
+  [[fixtures.zones]]
+  name = "low"
+  start = 0
+  count = 15
+  [[fixtures.zones]]
+  name = "high"
+  start = 15
+  count = 15
