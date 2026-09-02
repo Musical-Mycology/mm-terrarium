@@ -681,6 +681,26 @@ def test_mute_cue_latches_and_notifies():
     assert "ie1" in gs.muted and got == [("ie1", True)]
 
 
+def test_room_mute_cue_mutes_every_bound_fixture_with_one_notify():
+    """Minor finding 9: a MuteCue(ROOM) fans out to every bound fixture dev
+    (spec section 4/5's @room fan-out), latching all of them, calling
+    on_mute_change once per dev, but notifying on_devices_change exactly
+    once for the whole dispatch -- not once per fixture."""
+    gs, _, _ = _running(bound={"main": "sim-room-main",
+                               "accent": "sim-room-accent"})
+    mute_calls = []
+    gs.on_mute_change = lambda dev, m: mute_calls.append((dev, m))
+    devices_changes = []
+    gs.add_observer(type("O", (), {
+        "on_devices_change": lambda self: devices_changes.append(1)})())
+
+    gs._dispatch_cues([MuteCue(ROOM)], at=100.0)
+
+    assert gs.muted >= {"sim-room-main", "sim-room-accent"}
+    assert set(mute_calls) == {("sim-room-main", True), ("sim-room-accent", True)}
+    assert len(devices_changes) == 1
+
+
 def test_non_mute_fire_clears_mute_first():
     gs, _, _ = _running()
     gs.muted.add("ie1")

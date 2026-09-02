@@ -22,7 +22,7 @@ pytest.importorskip("luxaeterna")
 from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.boot_config import BootConfig
-from control.cues import ROOM
+from control.cues import ROOM, TARGET
 from control.engine import GameServer
 from control.audio import AudioBridge, FakePool
 from control.functions import Function, FunctionKind, GeneratorSpec
@@ -61,7 +61,7 @@ _AMBIENT_ARRAY = Instrument(
         name="ambient_drift",
         description="Ambient hue drift across the Room with no Bit loaded",
         kind=FunctionKind.GENERATOR,
-        generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+        generator=GeneratorSpec(dev=TARGET, status=0xB0, data1=74,
                                 waveform="triangle", period=12.0,
                                 lo=0, hi=127)),),
 )

@@ -479,6 +479,17 @@ def test_instrument_generator_may_not_name_a_fixture():
         validate_function_table(table, set(), owner="instrument")
 
 
+def test_instrument_generator_refuses_room_dev():
+    table = FunctionTable(functions={"drift": _gen(dev=ROOM)})
+    with pytest.raises(ValueError, match="TARGET"):
+        validate_function_table(table, set(), owner="instrument")
+
+
+def test_instrument_generator_accepts_target_dev():
+    table = FunctionTable(functions={"drift": _gen(dev=TARGET)})
+    validate_function_table(table, set(), owner="instrument")
+
+
 def test_bit_stream_output_may_name_a_fixture():
     table = FunctionTable(functions={"s": Function(
         name="s", description="d", kind=FunctionKind.STREAM,

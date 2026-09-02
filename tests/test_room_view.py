@@ -1,7 +1,7 @@
 """The Room read model the Console renders. Pure dict builders, no engine
 imports, mirroring console/protocol.py."""
 
-from control.cues import ROOM
+from control.cues import TARGET
 from control.functions import Function, FunctionKind, GeneratorSpec
 from control.instrument import Instrument
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
@@ -143,7 +143,7 @@ def test_fixture_instrument_renders_declared_generator_functions():
         functions=(Function(
             name="glow", description="ambient breathing glow",
             kind=FunctionKind.GENERATOR,
-            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+            generator=GeneratorSpec(dev=TARGET, status=0xB0, data1=74,
                                     waveform="triangle", period=12.0,
                                     lo=0, hi=127)),))
     profile = RoomProfile(surface_id="room_anim", fixtures=(

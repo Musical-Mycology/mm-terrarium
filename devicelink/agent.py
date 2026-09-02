@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass, field, replace
 
 from control.breath import BREATH_CC, breath_cc
-from control.cues import ROOM, TARGET
+from control.cues import TARGET
 from control.engine import GameServer
 from control.fixture_sink import ConsoleFrameSink, DeviceLinkSink
 from control.functions import FunctionKind
@@ -242,7 +242,6 @@ class DeviceLinkAgent:
             role = gs.registration.role_table.roles.get(room_role_name(room.name))
         blob = (compose_role_config(gs.bit_name, gs.bit.version, role)
                 if role is not None else None)
-        fixture_names = [f.name for f in profile.fixtures]
         for fixture in profile.fixtures:
             if blob is not None:
                 light = slice_light_manifest(blob["light_manifest"], profile, fixture.name)
@@ -251,12 +250,17 @@ class DeviceLinkAgent:
                 light, _ugen = fixture_ambient(fixture)
                 light = light or {"instruments": []}
                 own = fixture.name
+                # An instrument-owned GENERATOR is validated (control/
+                # functions.py's _validate_generator) to dev=cues.TARGET
+                # only -- an instrument is a type and cannot know a Room's
+                # fixture names, and a room-wide ambient effect is declared
+                # per fixture, not on the instrument. cues.ROOM can never
+                # reach here, so there is nothing to fan out to every
+                # fixture.
                 generators = GeneratorRunner(
                     [fn for fn in fixture.instrument.functions
                      if fn.kind is FunctionKind.GENERATOR],
-                    resolve=lambda dev, own=own: (
-                        [own] if dev == TARGET else
-                        list(fixture_names) if dev == ROOM else []))
+                    resolve=lambda dev, own=own: [own] if dev == TARGET else [])
             cap = to_fixture_capability(profile, fixture.name)
             session = build_session(LightManifest.from_dict(light), cap, clock=self._clock)
             self._fixtures[fixture.name] = _FixtureState(
@@ -390,6 +394,11 @@ class DeviceLinkAgent:
         self._ambient_start = None
         self._fixtures = {}
         self._room_profile = None
+        # Mirrors on_state_change's UNLOADING branch: a same-type Room
+        # reloaded within a horizon must not receive a stale cue queued for
+        # the Room that just left.
+        self._room_cues = TimedQueue()
+        self._light_cues = TimedQueue()
 
     def controllers(self) -> dict[str, dict[int, int]]:
         """Live controller read-out per fixture name, for the Console."""
@@ -636,12 +645,13 @@ class DeviceLinkAgent:
     def _feed_ambient_generators(self) -> None:
         """Every tick with no Bit loaded (every fixture's `generators` is
         None otherwise -- see _setup_room), feed each declared GENERATOR
-        Function's current waveform value into the session of every fixture
-        it resolves to, recording it in that fixture's controller read-out
-        the same way a Bit-declared light cue does (see _feed_light_now) so
-        the Console sees it too. Each runner resolves TARGET to its own
-        fixture and ROOM to every fixture in the profile, so an ambient
-        generator declared on one instrument can still paint the room."""
+        Function's current waveform value into its own fixture's session,
+        recording it in that fixture's controller read-out the same way a
+        Bit-declared light cue does (see _feed_light_now) so the Console
+        sees it too. Each runner resolves TARGET to its own declaring
+        fixture; an instrument-owned generator may not address cues.ROOM
+        (control/functions.py's _validate_generator), so an ambient
+        generator never paints any fixture but its own."""
         if self._ambient_start is None:
             return
         now = self._clock()

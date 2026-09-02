@@ -19,9 +19,13 @@ it. An o2lite transport adopted after boot() returns stops before all of
 them. Nobody maintains that order; it falls out of when things start.
 
 Push order is DELIBERATE, not literally creation order. Terrarium.load_room
-brings up Arco, then the Room's fixture simulators, then the Bit -- and the
-Bit must abort before the fixtures it may still cue into during on_unload,
-so unload_room aborts the Bit first and only then unwinds the room stack.
+pushes "arco" first, then pushes one simulator per Room fixture, in the
+profile's declaration order, as each fixture binds
+(_bind_room_fast_path). Torn down LIFO, that means the LAST-declared
+fixture's simulator stops first, earlier fixtures' simulators stop next in
+reverse declaration order, and Arco -- pushed before any of them -- stops
+last: Arco is the hub the fixture simulators may still be talking audio
+through while they shut down, so it has to outlive every one of them.
 Push points are chosen and documented at each call site.
 
 WHY NOT contextlib.ExitStack. It unwinds LIFO and does continue past a

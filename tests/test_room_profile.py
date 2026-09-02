@@ -5,7 +5,7 @@ import pathlib
 
 import pytest
 
-from control.cues import ROOM
+from control.cues import ROOM, TARGET
 from control.functions import Function, FunctionKind, GeneratorSpec
 from control.instrument import Instrument
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
@@ -14,12 +14,12 @@ from control.terrarium_config import load_terrarium_config
 from tests.instrument_fixtures import GENERIC_SURFACE
 
 
-def _generator_instrument(name, data1=74, period=12.0):
+def _generator_instrument(name, data1=74, period=12.0, dev=ROOM):
     return Instrument(
         name=name, capabilities=frozenset({"light.surface"}),
         functions=(Function(
             name="glow", description="ambient glow", kind=FunctionKind.GENERATOR,
-            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=data1,
+            generator=GeneratorSpec(dev=dev, status=0xB0, data1=data1,
                                     waveform="triangle", period=period,
                                     lo=0, hi=127)),))
 
@@ -57,17 +57,22 @@ def test_bad_fixture_instrument_fails_profile_construction():
 
 def test_two_fixtures_may_share_a_generator_lane():
     """Each fixture has its own session and lane space now (spec section
-    3.5); the collision check moved to load_bit, after resolution."""
-    first = _generator_instrument("first", data1=74)
-    second = _generator_instrument("second", data1=74)
+    3.5); the collision check moved to load_bit, after resolution. Both
+    instruments declare dev=TARGET generators -- the only dev an
+    instrument-owned generator may use (control/functions.py's
+    _validate_generator) -- which is the case that genuinely cannot
+    collide: each instrument's generator writes only its own declaring
+    fixture's lane."""
+    first = _generator_instrument("first", data1=74, dev=TARGET)
+    second = _generator_instrument("second", data1=74, dev=TARGET)
     profile = RoomProfile(surface_id="r", fixtures=(
         _fixture("a", instrument=first), _fixture("b", instrument=second)))
     assert [f.name for f in profile.fixtures] == ["a", "b"]
 
 
 def test_two_fixtures_with_distinct_generator_lanes_are_fine():
-    first = _generator_instrument("first", data1=74)
-    second = _generator_instrument("second", data1=75)   # distinct cc
+    first = _generator_instrument("first", data1=74, dev=TARGET)
+    second = _generator_instrument("second", data1=75, dev=TARGET)   # distinct cc
     profile = RoomProfile(surface_id="p", fixtures=(
         _fixture(name="main", instrument=first),
         _fixture(name="accent", blocks=(RoomBlock("b2", 0, 30),),

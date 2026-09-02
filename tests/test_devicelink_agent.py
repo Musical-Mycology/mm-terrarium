@@ -100,7 +100,8 @@ def rig():
 class _FakeAudioBridge:
     """In-process room_audio double satisfying the slice of AudioBridge's
     API DeviceLinkAgent actually calls (on_grant/on_release/feed_midi/
-    start_drone/stop_drone/silence/tick), all dev-keyed. Records every call
+    start_drone/stop_drone/silence/tick), all fixture-name-keyed. Records
+    every call
     so per-fixture routing (which real dev got which grant/feed) can be
     asserted directly, the same role control/audio.py's own FakePool/
     FakeVoice play at the unit level."""
@@ -936,7 +937,7 @@ def _animated_ambient_game_server():
     brief carves out (terrarium.toml's shipped dev_strip_main/dev_strip_accent
     stay unanimated;
     this is the animated case the test fixtures carry)."""
-    from control.cues import ROOM
+    from control.cues import TARGET
     from control.functions import Function, FunctionKind, GeneratorSpec
     from control.instrument import Instrument
     from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
@@ -953,7 +954,7 @@ def _animated_ambient_game_server():
         functions=(Function(
             name="glow", description="ambient breathing glow",
             kind=FunctionKind.GENERATOR,
-            generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+            generator=GeneratorSpec(dev=TARGET, status=0xB0, data1=74,
                                     waveform="triangle", period=12.0,
                                     lo=0, hi=127)),))
     profile = RoomProfile(surface_id="room_anim", fixtures=(
@@ -1810,6 +1811,26 @@ def test_unwire_room_clears_a_previously_wired_session():
 
     assert agent._fixtures == {}
     assert agent._room_profile is None
+
+
+def test_unwire_room_drops_queued_cues(monkeypatch):
+    """Minor finding 5: unwire_room() must drop pending room/light cues the
+    same way on_state_change's UNLOADING branch does. A same-type Room
+    reloaded within a horizon must not receive a stale cue queued for the
+    Room that just left -- unwire_room() clears the fixture sessions but,
+    before this fix, left _room_cues/_light_cues standing."""
+    gs, agent, _session = _agent_with_bound_room(monkeypatch)
+    now = agent._clock()
+    agent._on_light_cue("sim-room-main", 0xB0, 74, 40, when=now + 5.0)
+    assert agent._room_cues.pending() == 1
+    assert agent._light_cues.pending() == 1
+
+    agent.unwire_room()
+
+    assert agent._room_cues.pending() == 0
+    assert agent._light_cues.pending() == 0
+    assert agent._room_cues.due(now + 10.0) == []
+    assert agent._light_cues.due(now + 10.0) == []
 
 
 # --- Room frame relay to the Console: an optional, guarded, best-effort

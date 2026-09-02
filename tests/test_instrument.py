@@ -1,6 +1,6 @@
 """tests/test_instrument.py"""
 import pytest
-from control.cues import ROOM, TARGET
+from control.cues import TARGET
 from control.functions import (
     Function, FunctionKind, FunctionTarget, GeneratorSpec, ScriptStep,
     StreamOutput, StreamSpec,
@@ -18,7 +18,7 @@ from control.triggers import EventTrigger, StreamTrigger
 def _generator_fn(name="glow", waveform="triangle", data1=74):
     return Function(
         name=name, description="ambient glow", kind=FunctionKind.GENERATOR,
-        generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=data1,
+        generator=GeneratorSpec(dev=TARGET, status=0xB0, data1=data1,
                                 waveform=waveform, period=12.0, lo=0, hi=127))
 
 
@@ -67,7 +67,7 @@ def test_instrument_generator_functions_validate():
 def test_instrument_generator_function_with_bad_waveform_is_located():
     bad = Function(
         name="glow", description="ambient glow", kind=FunctionKind.GENERATOR,
-        generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=74,
+        generator=GeneratorSpec(dev=TARGET, status=0xB0, data1=74,
                                 waveform="square", period=12.0))
     inst = Instrument(name="glowstrip", functions=(bad,))
     with pytest.raises(InstrumentError, match="glowstrip") as exc:

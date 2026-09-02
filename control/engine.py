@@ -1001,8 +1001,10 @@ class GameServer:
         """Route a Bit's cues to the transport-owned sinks.
 
         Two things happen to every cue on the way out. A cue addressed to
-        cues.ROOM is resolved to the Room's bound dev. And a cue that
-        declares no time of its own gets `at`, the presentation time Control
+        cues.ROOM fans out to every bound fixture dev, and a cue addressed
+        to `@fixture:<name>` resolves to that fixture's own bound dev. And
+        a cue that declares no time of its own gets `at`, the presentation
+        time Control
         computed for whatever produced it -- which is what makes "one
         gesture, one T" hold without every Bit having to remember to say so.
         A Bit that DID name a time keeps it, because that is a deliberate

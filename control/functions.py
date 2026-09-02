@@ -477,6 +477,15 @@ def _validate_generator(function_decl: Function, owner: str) -> None:
     if not isinstance(spec, GeneratorSpec):
         raise ValueError(
             f"{where}: must be a GeneratorSpec, got {type(spec).__name__}")
+    if owner == "instrument" and spec.dev != TARGET:
+        raise ValueError(
+            f"{where}: an instrument-owned generator must use cues.TARGET "
+            f"({TARGET!r}), got {spec.dev!r}. An instrument is a type, not "
+            f"a placement; a room-wide ambient effect is declared per "
+            f"fixture, so an instrument generator cannot address cues.ROOM "
+            f"or a fixture by name -- only the Bit-owned generator lane "
+            f"rule (control/engine.py's _check_generator_lane_collisions) "
+            f"guards against collisions between fixtures")
     if function_decl.target is not None:
         raise ValueError(
             f"function {function_decl.name!r}: target is only meaningful on "
