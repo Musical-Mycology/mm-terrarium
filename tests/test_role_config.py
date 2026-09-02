@@ -505,3 +505,66 @@ def test_validate_rejects_empty_string_entry():
     table = RoleTable(roles={"player": _plain_role(uses=[""])}, node_map={})
     with pytest.raises(ValueError, match="uses"):
         validate_role_declarations(table)
+
+
+from control.instrument import Instrument
+from control.role_config import manifest_fixture_targets, slice_light_manifest
+from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+
+_INST = Instrument(name="strip", capabilities=frozenset({"light.surface"}),
+                   accepted_cues=("midi", "play", "solid", "mute"))
+_PROFILE = RoomProfile(surface_id="r", fixtures=(
+    RoomFixture(name="main", color_order="GRB",
+                blocks=(RoomBlock("b", 0, 60),),
+                zones=(RoomZone("left", 0, 30), RoomZone("right", 30, 30)),
+                instrument=_INST),
+    RoomFixture(name="accent", color_order="GRB",
+                blocks=(RoomBlock("b", 0, 30),),
+                zones=(RoomZone("low", 0, 15), RoomZone("high", 15, 15)),
+                instrument=_INST),
+))
+
+
+def _decl(target, hue=0.1):
+    return {"instrument": "rainbow", "target": target, "params": {"hue": hue},
+            "lanes": [{"source": "cc:74", "dest": "hue"}]}
+
+
+def test_primary_binds_on_every_fixture_as_primary():
+    m = {"instruments": [_decl("primary")], "bit_name": "b"}
+    for name in ("main", "accent"):
+        out = slice_light_manifest(m, _PROFILE, name)
+        assert [d["target"] for d in out["instruments"]] == ["primary"]
+        assert out["bit_name"] == "b"
+
+
+def test_fixture_target_binds_only_on_that_fixture_as_primary():
+    m = {"instruments": [_decl("accent", hue=0.5)]}
+    assert slice_light_manifest(m, _PROFILE, "main")["instruments"] == []
+    out = slice_light_manifest(m, _PROFILE, "accent")["instruments"]
+    assert out == [{**_decl("primary", hue=0.5)}]
+
+
+def test_fixture_zone_target_binds_as_the_local_zone():
+    m = {"instruments": [_decl("main.left")]}
+    out = slice_light_manifest(m, _PROFILE, "main")["instruments"]
+    assert out[0]["target"] == "left"
+    assert slice_light_manifest(m, _PROFILE, "accent")["instruments"] == []
+
+
+def test_slice_does_not_alias_the_source_manifest():
+    m = {"instruments": [_decl("primary")]}
+    out = slice_light_manifest(m, _PROFILE, "main")
+    out["instruments"][0]["params"]["hue"] = 0.9
+    assert m["instruments"][0]["params"]["hue"] == 0.1
+
+
+def test_manifest_fixture_targets_collects_named_fixtures():
+    m = {"instruments": [_decl("primary"), _decl("accent"), _decl("main.right")]}
+    assert manifest_fixture_targets(m, _PROFILE) == {"accent", "main"}
+
+
+@pytest.mark.parametrize("target", ["ceiling", "main.centre", "accent.left", "main."])
+def test_manifest_fixture_targets_refuses_unknown_names(target):
+    with pytest.raises(ValueError, match="instruments\\[0\\]"):
+        manifest_fixture_targets({"instruments": [_decl(target)]}, _PROFILE)

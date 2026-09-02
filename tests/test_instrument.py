@@ -1,6 +1,4 @@
 """tests/test_instrument.py"""
-from dataclasses import dataclass
-
 import pytest
 from control.cues import ROOM, TARGET
 from control.functions import (
@@ -10,9 +8,10 @@ from control.functions import (
 from control.instrument import (
     CAPABILITY_VOCABULARY, CUE_KINDS, CarriedInstrument, DEFAULTSHROOM,
     Instrument, InstrumentError, InstrumentRequirement, TUNESHROOM,
-    ambient_manifests, satisfies, validate_instrument,
+    fixture_ambient, satisfies, validate_instrument,
     validate_instrument_manifests,
 )
+from control.room_profile import RoomBlock, RoomFixture
 from control.triggers import EventTrigger, StreamTrigger
 
 
@@ -21,19 +20,6 @@ def _generator_fn(name="glow", waveform="triangle", data1=74):
         name=name, description="ambient glow", kind=FunctionKind.GENERATOR,
         generator=GeneratorSpec(dev=ROOM, status=0xB0, data1=data1,
                                 waveform=waveform, period=12.0, lo=0, hi=127))
-
-
-@dataclass(frozen=True)
-class _FakeFixture:
-    """A bare stand-in for control.room_profile.RoomFixture: ambient_
-    manifests() only ever reads `.instrument` off a fixture, so a full
-    RoomFixture (blocks, zones, color_order) would just be noise here."""
-    instrument: Instrument
-
-
-@dataclass(frozen=True)
-class _FakeProfile:
-    fixtures: tuple
 
 
 def test_tuneshroom_is_the_standard_carrier_instrument():
@@ -174,49 +160,24 @@ def test_instrument_ambient_ugen_manifest_is_validated():
         validate_instrument_manifests(inst)
 
 
-def test_empty_ambient_manifests_validate():
-    validate_instrument_manifests(TUNESHROOM)
+def test_fixture_ambient_returns_that_fixtures_own_manifests():
+    light = {"instruments": [{"instrument": "aurora", "target": "primary"}]}
+    ugen = {"instruments": [{"instrument": "flsyn", "program": 1}]}
+    inst = Instrument(name="glow", capabilities=frozenset({"light.surface"}),
+                      light_manifest=light, ugen_manifest=ugen)
+    fixture = RoomFixture(name="f", color_order="GRB",
+                          blocks=(RoomBlock("b", 0, 10),), zones=(), instrument=inst)
+    out_light, out_ugen = fixture_ambient(fixture)
+    assert (out_light, out_ugen) == (light, ugen)
+    out_light["instruments"][0]["target"] = "ring"
+    assert inst.light_manifest["instruments"][0]["target"] == "primary"
 
 
-def test_ambient_manifests_concatenates_in_fixture_order():
-    first = Instrument(name="first",
-                       light_manifest={"instruments": [{"instrument": "a"}]},
-                       ugen_manifest={"instruments": [{"instrument": "flsyn",
-                                                        "program": 1}]})
-    second = Instrument(name="second",
-                        light_manifest={"instruments": [{"instrument": "b"}]},
-                        ugen_manifest={"instruments": [{"instrument": "flsyn",
-                                                         "program": 2}]})
-    profile = _FakeProfile(fixtures=(_FakeFixture(first),
-                                     _FakeFixture(second)))
-
-    light, ugen = ambient_manifests(profile)
-
-    assert light == {"instruments": [{"instrument": "a"},
-                                     {"instrument": "b"}]}
-    assert ugen == {"instruments": [{"instrument": "flsyn", "program": 1},
-                                    {"instrument": "flsyn", "program": 2}]}
-
-
-def test_ambient_manifests_empty_when_nothing_declares_anything():
-    profile = _FakeProfile(fixtures=(_FakeFixture(TUNESHROOM),
-                                     _FakeFixture(TUNESHROOM)))
-
-    light, ugen = ambient_manifests(profile)
-
-    assert light == {}
-    assert ugen == {}
-
-
-def test_ambient_manifests_deep_copies_entries():
-    entry = {"instrument": "a", "params": {"key": 1}}
-    inst = Instrument(name="only", light_manifest={"instruments": [entry]})
-    profile = _FakeProfile(fixtures=(_FakeFixture(inst),))
-
-    light, _ = ambient_manifests(profile)
-    light["instruments"][0]["params"]["key"] = 999
-
-    assert entry["params"]["key"] == 1   # the config-held dict is untouched
+def test_fixture_ambient_is_empty_dicts_when_nothing_declared():
+    inst = Instrument(name="bare", capabilities=frozenset({"light.surface"}))
+    fixture = RoomFixture(name="f", color_order="GRB",
+                          blocks=(RoomBlock("b", 0, 10),), zones=(), instrument=inst)
+    assert fixture_ambient(fixture) == ({}, {})
 
 
 def test_defaultshroom_is_a_valid_12_led_floor():

@@ -19,7 +19,7 @@ from control.breath import BREATH_CC, breath_cc
 from control.engine import GameServer
 from control.functions import FunctionKind
 from control.generator_runner import GeneratorRunner
-from control.instrument import ambient_manifests
+from control.instrument import fixture_ambient
 from control.role_config import compose_role_config
 from control.roles import Role, RoleClass
 from control.room_profile import RoomProfile
@@ -220,7 +220,7 @@ class DeviceLinkAgent:
         When no Bit with a ROOM role is loaded (no registration at all, or
         the loaded Bit's role table has no ROOM role for this Room), the
         fixtures render their own ambient declaration instead
-        (control.instrument.ambient_manifests, spec section 6) -- fed
+        (control.instrument.fixture_ambient, spec section 6) -- fed
         straight to the same LightManifest.from_dict/build_session
         pipeline, with no compose_role_config step (there is no Role to
         compose against). An entirely empty ambient declaration (no
@@ -254,7 +254,15 @@ class DeviceLinkAgent:
         ambient_light: dict = {}
         ambient_ugen: dict = {}
         if role is None:
-            ambient_light, ambient_ugen = ambient_manifests(self._room_profile)
+            ambient_light_instruments, ambient_ugen_instruments = [], []
+            for fixture in self._room_profile.fixtures:
+                fl, fu = fixture_ambient(fixture)
+                ambient_light_instruments.extend(fl.get("instruments", []))
+                ambient_ugen_instruments.extend(fu.get("instruments", []))
+            ambient_light = ({"instruments": ambient_light_instruments}
+                             if ambient_light_instruments else {})
+            ambient_ugen = ({"instruments": ambient_ugen_instruments}
+                            if ambient_ugen_instruments else {})
 
         # Audio granting happens BEFORE the ambient early-return below, so a
         # bound audio-capable fixture gets its own voice even when the Room
