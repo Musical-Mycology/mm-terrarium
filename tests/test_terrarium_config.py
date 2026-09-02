@@ -612,6 +612,19 @@ def test_room_defined_inline_and_in_catalog_is_refused(tmp_path):
         load_terrarium_config(cfg)
 
 
+def test_room_defined_in_two_catalog_roots_is_refused(tmp_path):
+    # Mirrors the instrument path: a name colliding across two catalog roots
+    # is a different mistake from a name defined both inline and in a
+    # catalog, so it gets its own message.
+    (tmp_path / "venues").mkdir()
+    (tmp_path / "venues" / "LOFT.toml").write_text(_ROOM)
+    cfg = _write_tree(tmp_path, _HEAD + 'room_paths = ["rooms", "venues"]\n',
+                      rooms={"LOFT": _ROOM})
+    with pytest.raises(TerrariumConfigError,
+                       match=r"rooms\.LOFT.*more than one rooms catalog root"):
+        load_terrarium_config(cfg)
+
+
 def test_no_room_anywhere_is_refused(tmp_path):
     cfg = _write_tree(tmp_path, _HEAD)
     with pytest.raises(TerrariumConfigError, match="at least one room"):

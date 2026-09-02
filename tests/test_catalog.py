@@ -275,3 +275,13 @@ def test_instrument_kind_is_the_default_and_unchanged(tmp_path):
     entry = cat.get("published", "glow")
     assert entry.kind == "instrument" and entry.room is None
     assert entry.instrument.name == "glow"
+
+
+def test_clone_entry_refuses_an_unknown_kind(tmp_path):
+    # Every other catalog entry point checks the kind before it touches the
+    # filesystem; clone_entry did not, so a typo'd kind quietly cloned an
+    # instrument file into a rooms catalog (or vice versa).
+    (tmp_path / "glowcap.toml").write_text(GOOD)
+    with pytest.raises(ValueError, match="unknown catalog kind"):
+        clone_entry(tmp_path, "published", "glowcap", "glowcap2", kind="widget")
+    assert not (tmp_path / "drafts").exists()

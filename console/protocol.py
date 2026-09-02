@@ -41,7 +41,8 @@ __all__ = [
     "functions_changed_event", "function_fired_event", "FireFunctionCommand",
     "ListDesignsCommand", "GetDesignCommand", "SaveDesignCommand",
     "PublishDesignCommand", "CloneDesignCommand",
-    "design_row", "designs_listed_event", "designs_changed_event",
+    "design_row", "catalog_error_row",
+    "designs_listed_event", "designs_changed_event",
     "design_event",
     "BenchStartCommand", "BenchStopCommand", "BenchFireCommand",
     "BenchLaneCommand", "ListCapturesCommand", "CaptureStatsCommand",
@@ -208,6 +209,17 @@ class CloneDesignCommand:
 def design_row(entry) -> dict:
     return {"name": entry.name, "state": entry.state, "error": entry.error,
             "kind": entry.kind}
+
+
+def catalog_error_row(kind: str, message: str) -> dict:
+    """Synthetic design row standing in for a whole catalog that would not
+    load: a published entry that fails to parse raises rather than
+    collecting its error, so the panel degrades to this one row instead of
+    losing the list. `placeholder` tells the front end there is no design
+    behind the row, so it paints the error but wires no click."""
+    return {"name": "<rooms catalog>" if kind == "room" else "<instrument catalog>",
+            "state": "published", "kind": kind, "error": message,
+            "placeholder": True}
 
 
 def designs_listed_event(designs: list) -> dict:

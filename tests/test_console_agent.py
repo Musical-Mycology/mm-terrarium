@@ -1381,7 +1381,33 @@ def test_broken_published_room_file_yields_a_synthetic_error_row(tmp_path, caplo
     row = broken[0]
     assert row["state"] == "published" and row["name"] == "<rooms catalog>"
     assert "BROKEN" in row["error"] or "nope" in row["error"]
+    # Flagged as a placeholder so the panel paints it as a fault report
+    # rather than a clickable design row -- there is no design behind it.
+    assert row["placeholder"] is True
     assert any(record.levelname == "ERROR" for record in caplog.records)
+
+
+def test_get_design_survives_a_broken_sibling_room_file(tmp_path, caplog):
+    # The whole rooms catalog is parsed to answer a get_design for one room,
+    # so an unparseable PUBLISHED sibling used to raise TerrariumConfigError
+    # straight out of poll() -- and the boot loop calls poll() unguarded.
+    # It must answer an error event instead, and the design rows must still
+    # carry the instruments plus the one placeholder row.
+    inst, rooms = _roots(tmp_path)
+    (rooms / "BROKEN.toml").write_text('description = "b"\nbackends = ["nope"]\n')
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "get_design", "kind": "room",
+                       "state": "published", "name": "LOFT"})
+    with caplog.at_level("ERROR"):
+        agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors, "a broken sibling answers an error, not an exception"
+    assert "BROKEN" in errors[-1]["message"] or "nope" in errors[-1]["message"]
+    assert not [m for _c, m in srv.sent if m.get("event") == "design"]
+    rows = agent._design_rows()
+    assert [r["name"] for r in rows] == ["dev_strip_main", "<rooms catalog>"]
+    assert rows[-1]["placeholder"] is True and rows[-1]["kind"] == "room"
 
 
 def test_get_design_for_a_room_returns_its_text_with_kind(tmp_path):

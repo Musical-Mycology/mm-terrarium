@@ -54,13 +54,12 @@ class Catalog:
         return out
 
 
-InstrumentCatalog = Catalog   # compatibility alias; remove after Plan 2 lands
-
-
-def _check_kind(kind: str, instruments) -> None:
+def _check_kind(kind: str, instruments=None, *, parses: bool = True) -> None:
+    """`parses=False` for a caller that only moves bytes around (clone),
+    which needs no instruments to resolve fixture names against."""
     if kind not in KINDS:
         raise ValueError(f"unknown catalog kind {kind!r}; known: {KINDS}")
-    if kind == "room" and instruments is None:
+    if parses and kind == "room" and instruments is None:
         raise ValueError("a room catalog needs the loaded instruments to "
                          "resolve fixture instrument names")
 
@@ -134,6 +133,7 @@ def save_draft(root: Path, name: str, text: str, kind: str = "instrument",
 
 def clone_entry(root: Path, source_state: str, source_name: str,
                  new_name: str, kind: str = "instrument") -> str | None:
+    _check_kind(kind, parses=False)
     refusal = _refuse_name(new_name, kind)
     if refusal:
         return refusal
