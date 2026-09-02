@@ -1354,6 +1354,34 @@ def test_snapshot_designs_carry_both_kinds(tmp_path):
     _, msg = srv.sent[0]
     rows = {(r["kind"], r["name"]) for r in msg["designs"]}
     assert rows == {("instrument", "dev_strip_main"), ("room", "LOFT")}
+    # Instrument rows come before room rows -- the panel groups by kind, not
+    # by name, so order is load-bearing here, not incidental.
+    kinds = [r["kind"] for r in msg["designs"]]
+    assert kinds == sorted(kinds, key=lambda k: k != "instrument")
+    assert kinds[0] == "instrument" and kinds[-1] == "room"
+
+
+def test_broken_published_room_file_yields_a_synthetic_error_row(tmp_path, caplog):
+    inst, rooms = _roots(tmp_path)
+    # An unknown backend fails TerrariumConfigError validation for a
+    # PUBLISHED room file, which load_catalog re-raises rather than
+    # collecting as a draft error -- this must not take down the whole
+    # design panel, only degrade the room half of it.
+    (rooms / "BROKEN.toml").write_text('description = "b"\nbackends = ["nope"]\n')
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    with caplog.at_level("ERROR"):
+        agent.poll()
+    _, msg = srv.sent[0]
+    designs = msg["designs"]
+    assert any(r["kind"] == "instrument" and r["name"] == "dev_strip_main"
+              for r in designs)
+    broken = [r for r in designs if r["kind"] == "room"]
+    assert len(broken) == 1
+    row = broken[0]
+    assert row["state"] == "published" and row["name"] == "<rooms catalog>"
+    assert "BROKEN" in row["error"] or "nope" in row["error"]
+    assert any(record.levelname == "ERROR" for record in caplog.records)
 
 
 def test_get_design_for_a_room_returns_its_text_with_kind(tmp_path):
