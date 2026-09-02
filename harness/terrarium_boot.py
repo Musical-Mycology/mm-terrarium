@@ -1531,6 +1531,8 @@ def main() -> None:
             # for the two-clocks bug this guards against.
             catalog_root = (terrarium_config.instrument_roots[0]
                             if terrarium_config.instrument_roots else None)
+            rooms_root = (terrarium_config.room_roots[0]
+                         if terrarium_config.room_roots else None)
             from harness.design_session import bench_session_factory
             console_agent = ConsoleAgent(gs, console_server,
                                          room_controllers=agent.controllers,
@@ -1538,6 +1540,7 @@ def main() -> None:
                                          canvas_urls=agent.canvas_urls,
                                          terrarium=terrarium,
                                          catalog_root=catalog_root,
+                                         rooms_root=rooms_root,
                                          bench_session_factory=bench_session_factory,
                                          captures_root=Path("captures"))
             agent._on_room_frame = console_agent.on_room_frame

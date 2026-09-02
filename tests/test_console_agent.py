@@ -113,12 +113,12 @@ class FakeConsoleServer:
 
 
 def _server_with_agent(catalog_root=None, bench_session_factory=None,
-                       captures_root=None):
+                       captures_root=None, rooms_root=None):
     gs = GameServer({"TestBit": TestBit})
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv, catalog_root=catalog_root,
                          bench_session_factory=bench_session_factory,
-                         captures_root=captures_root)
+                         captures_root=captures_root, rooms_root=rooms_root)
     return gs, srv, agent
 
 
@@ -1320,6 +1320,86 @@ def test_design_command_unrecognized_field_returns_error():
     reply = agent._handle_command({"command": "get_design", "state": "bogus",
                                    "name": "x"})
     assert reply["event"] == "error"
+
+
+ROOM_TOML = '''description = "Loft"
+backends = ["devicelink"]
+[[fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "dev_strip_main"
+  [[fixtures.blocks]]
+  name = "main"
+  start = 0
+  count = 10
+'''
+
+
+def _roots(tmp_path):
+    inst = tmp_path / "instruments"
+    inst.mkdir()
+    (inst / "dev_strip_main.toml").write_text(
+        'description = "s"\ncapabilities = ["light.surface"]\naccepted_cues = ["midi"]\n')
+    rooms = tmp_path / "rooms"
+    rooms.mkdir()
+    (rooms / "LOFT.toml").write_text(ROOM_TOML)
+    return inst, rooms
+
+
+def test_snapshot_designs_carry_both_kinds(tmp_path):
+    inst, rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    rows = {(r["kind"], r["name"]) for r in msg["designs"]}
+    assert rows == {("instrument", "dev_strip_main"), ("room", "LOFT")}
+
+
+def test_get_design_for_a_room_returns_its_text_with_kind(tmp_path):
+    inst, rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "get_design", "kind": "room",
+                       "state": "published", "name": "LOFT"})
+    agent.poll()
+    design = [m for _c, m in srv.sent if m.get("event") == "design"][-1]
+    assert design["kind"] == "room" and design["name"] == "LOFT"
+    assert design["text"] == ROOM_TOML and design["errors"] == []
+
+
+def test_save_design_for_a_room_writes_a_draft_and_reports_errors(tmp_path):
+    inst, rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "save_design", "kind": "room", "name": "LOFT",
+                       "text": ROOM_TOML.replace("dev_strip_main", "ghost")})
+    agent.poll()
+    assert (rooms / "drafts" / "LOFT.toml").is_file()
+    changed = [m for _c, m in srv.sent if m.get("event") == "designs_changed"][-1]
+    draft = next(r for r in changed["designs"] if r["kind"] == "room" and r["state"] == "draft")
+    assert "ghost" in draft["error"]
+
+
+def test_room_design_command_without_a_rooms_root_is_an_error(tmp_path):
+    inst, _rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "list_designs", "kind": "room"})
+    agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors and errors[-1]["message"].startswith("no rooms catalog")
+
+
+def test_instrument_design_commands_default_kind(tmp_path):
+    inst, rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "get_design", "state": "published",
+                       "name": "dev_strip_main"})
+    agent.poll()
+    design = [m for _c, m in srv.sent if m.get("event") == "design"][-1]
+    assert design["kind"] == "instrument"
 
 
 class FakeBenchSession:

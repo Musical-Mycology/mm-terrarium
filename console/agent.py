@@ -40,7 +40,7 @@ class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_controllers=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
                  terrarium=None, catalog_root=None, bench_session_factory=None,
-                 captures_root=None):
+                 captures_root=None, rooms_root=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
@@ -49,6 +49,11 @@ class ConsoleAgent:
         # means no catalog is wired up -- every design command answers
         # error_event rather than crashing on a missing root.
         self.catalog_root = catalog_root
+        # Optional Path to the rooms catalog root (rooms/), the kind="room"
+        # sibling of catalog_root. None means no rooms catalog is wired up --
+        # every kind="room" design command answers error_event rather than
+        # crashing on a missing root.
+        self.rooms_root = rooms_root
         # Optional Callable[[dict], BenchSession] building the session a
         # DesignBench drives -- see control/design_bench.py. None means no
         # bench backend is wired up: every bench command answers error_event
@@ -270,36 +275,76 @@ class ConsoleAgent:
             gs.room_binding.release(room_name, command.fixture)
         return None
 
+    def _root_for(self, kind: str):
+        return self.catalog_root if kind == "instrument" else self.rooms_root
+
+    def _instruments_for_rooms(self) -> dict:
+        """The instrument set a room file's fixtures resolve against: the
+        wired Terrarium's config when there is one, else the published
+        instrument catalog, else nothing."""
+        if self.terrarium is not None:
+            return dict(self.terrarium.config.instruments)
+        if self.catalog_root is not None:
+            from control.catalog import load_catalog
+            return load_catalog(self.catalog_root).published
+        return {}
+
     def _design_rows(self) -> list:
         from control.catalog import load_catalog
-        cat = load_catalog(self.catalog_root)
-        return [protocol.design_row(e) for e in sorted(
-            cat.entries.values(), key=lambda e: (e.name, e.state))]
+        from control.terrarium_config import TerrariumConfigError
+        rows = []
+        if self.catalog_root is not None:
+            cat = load_catalog(self.catalog_root)
+            rows += [protocol.design_row(e) for e in sorted(
+                cat.entries.values(), key=lambda e: (e.name, e.state))]
+        if self.rooms_root is not None:
+            try:
+                cat = load_catalog(self.rooms_root, kind="room",
+                                   instruments=self._instruments_for_rooms())
+            except TerrariumConfigError as exc:
+                logger.exception("rooms catalog at %s failed to load",
+                                 self.rooms_root)
+                rows.append({"name": "<rooms catalog>", "state": "published",
+                            "kind": "room", "error": str(exc)})
+            else:
+                rows += [protocol.design_row(e) for e in sorted(
+                    cat.entries.values(), key=lambda e: (e.name, e.state))]
+        return rows
 
     def _handle_design_command(self, name: str, command) -> dict | None:
-        if self.catalog_root is None:
-            return protocol.error_event(name, "no instrument catalog")
+        root = self._root_for(command.kind)
+        if root is None:
+            return protocol.error_event(
+                name, "no instrument catalog" if command.kind == "instrument"
+                else "no rooms catalog")
         from control.catalog import (clone_entry, load_catalog,
                                      publish_entry, save_draft)
+        instruments = (self._instruments_for_rooms()
+                       if command.kind == "room" else None)
         if isinstance(command, protocol.ListDesignsCommand):
             return protocol.designs_listed_event(self._design_rows())
         if isinstance(command, protocol.GetDesignCommand):
-            entry = load_catalog(self.catalog_root).get(
+            entry = load_catalog(root, kind=command.kind,
+                                 instruments=instruments).get(
                 command.state, command.name)
             if entry is None:
                 return protocol.error_event(
                     name, f"no {command.state} design {command.name!r}")
             text = entry.path.read_text(encoding="utf-8")
             errors = [entry.error] if entry.error else []
-            return protocol.design_event(entry.name, entry.state, text, errors)
+            return protocol.design_event(entry.name, entry.state, text, errors,
+                                         kind=command.kind)
         if isinstance(command, protocol.SaveDesignCommand):
             refusal, _errors = save_draft(
-                self.catalog_root, command.name, command.text)
+                root, command.name, command.text, kind=command.kind,
+                instruments=instruments)
         elif isinstance(command, protocol.PublishDesignCommand):
-            refusal = publish_entry(self.catalog_root, command.name)
+            refusal = publish_entry(root, command.name, kind=command.kind,
+                                    instruments=instruments)
         else:
-            refusal = clone_entry(self.catalog_root, command.source_state,
-                                  command.source_name, command.new_name)
+            refusal = clone_entry(root, command.source_state,
+                                  command.source_name, command.new_name,
+                                  kind=command.kind)
         if refusal is not None:
             return protocol.error_event(name, refusal)
         rows = self._design_rows()
@@ -474,7 +519,8 @@ class ConsoleAgent:
             instrument_functions=self._last_instrument_functions,
             surface_instruments=self._last_surface_instruments,
             builtins=self._last_builtins,
-            designs=self._design_rows() if self.catalog_root else [],
+            designs=(self._design_rows()
+                    if (self.catalog_root or self.rooms_root) else []),
             design_vocab={
                 "capabilities": sorted(CAPABILITY_VOCABULARY),
                 "cue_kinds": list(CUE_KINDS),

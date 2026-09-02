@@ -2494,6 +2494,7 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
                             parent_pid=None,
                             restart_clients=None, stop_clients=None):
         captured["catalog_root"] = console_agent.catalog_root
+        captured["rooms_root"] = console_agent.rooms_root
         raise SystemExit(0)
 
     captured = {}
@@ -2508,6 +2509,8 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
 
     assert captured["catalog_root"] is not None
     assert captured["catalog_root"].name == "instruments"
+    assert captured["rooms_root"] is not None
+    assert captured["rooms_root"].name == "rooms"
 
 
 def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
