@@ -2,7 +2,7 @@
 waveform evaluation and per-lane overlay suppression. See docs/superpowers/
 specs/2026-08-27-functions-and-trigger-rename-design.md section 4."""
 
-from control.cues import ROOM
+from control.cues import ROOM, fixture_dev
 from control.functions import Function, FunctionKind, GeneratorSpec
 from control.generator_runner import GeneratorRunner
 
@@ -47,3 +47,36 @@ def test_suppression_is_per_lane_not_global():
     runner.suppress([(ROOM, 0xB0, 74)], until_at=105.0)
     cues = runner.cues(elapsed=6.0, at=100.0)
     assert cues == [(ROOM, 0xB0, 75, 254)]
+
+
+def _gen2(dev, data1=74):
+    return Function(name=f"g{data1}", description="d", kind=FunctionKind.GENERATOR,
+                    generator=GeneratorSpec(dev=dev, status=0xB0, data1=data1,
+                                            waveform="triangle", period=4.0, lo=0, hi=100))
+
+
+def _resolve(dev):
+    return ["main-dev", "accent-dev"] if dev == ROOM else (
+        ["accent-dev"] if dev == fixture_dev("accent") else [dev])
+
+
+def test_room_generator_emits_once_per_resolved_fixture():
+    runner = GeneratorRunner([_gen2(ROOM)], resolve=_resolve)
+    assert [c[0] for c in runner.cues(1.0, 10.0)] == ["main-dev", "accent-dev"]
+
+
+def test_suppressing_one_fixture_lane_leaves_the_other_emitting():
+    runner = GeneratorRunner([_gen2(ROOM)], resolve=_resolve)
+    runner.suppress([("accent-dev", 0xB0, 74)], until_at=20.0)
+    assert [c[0] for c in runner.cues(1.0, 10.0)] == ["main-dev"]
+    assert [c[0] for c in runner.cues(1.0, 21.0)] == ["main-dev", "accent-dev"]
+
+
+def test_fixture_generator_emits_only_on_its_fixture():
+    runner = GeneratorRunner([_gen2(fixture_dev("accent"))], resolve=_resolve)
+    assert [c[0] for c in runner.cues(1.0, 10.0)] == ["accent-dev"]
+
+
+def test_no_resolver_passes_devs_through_unchanged():
+    runner = GeneratorRunner([_gen2(ROOM)])
+    assert [c[0] for c in runner.cues(1.0, 10.0)] == [ROOM]

@@ -19,7 +19,8 @@ from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
                                  InstrumentRequirement, cue_kind, satisfies)
 from control.registration import JoinResult, RegistrationState
-from control.role_config import compose_role_config, validate_role_declarations
+from control.role_config import (compose_role_config, manifest_fixture_targets,
+                                 validate_role_declarations)
 from control.roles import RoleClass
 from control.rooms import room_role
 from control.state import State
@@ -366,6 +367,14 @@ class GameServer:
                     room_reqs.append(InstrumentRequirement(
                         slot="room", capabilities=frozenset(caps)))
                 _resolve_room_requirements(room_reqs, self.room)
+                missing = self._bit_fixture_names(bit.function_table, light_m) - {
+                    f.name for f in self.room.profile.fixtures}
+                if missing:
+                    raise ValueError(
+                        f"Bit addresses fixtures {sorted(missing)} that Room "
+                        f"{self.room.name!r} does not declare; its fixtures are "
+                        f"{[f.name for f in self.room.profile.fixtures]}")
+                self._check_generator_lane_collisions(bit.function_table)
             # "room" always counts as a declared slot for Role.requires,
             # whether resolved just above (an active Room) or not (a
             # roomless boot / a Bit with no Room manifests) -- this is a
@@ -398,7 +407,8 @@ class GameServer:
         # against (see _FlipFunctionTableBit in tests/test_engine_functions.py).
         self._generators = GeneratorRunner(
             [f for f in function_table.functions.values()
-             if f.kind is FunctionKind.GENERATOR])
+             if f.kind is FunctionKind.GENERATOR],
+            resolve=self._resolve_devs)
         stream_functions: dict[str, list[Function]] = {}
         for f in function_table.functions.values():
             if f.kind is FunctionKind.STREAM:
@@ -670,6 +680,59 @@ class GameServer:
                                "bound; dropping (logged once per Bit load)", name)
             return []
         return [bound]
+
+    def _bit_fixture_names(self, function_table, light_manifest) -> set[str]:
+        """Every fixture name a Bit's declarations address: @fixture: devs on
+        script steps, generator lanes and stream outputs, plus fixture-scoped
+        light manifest targets (spec section 3.4). manifest_fixture_targets
+        raises on an unknown fixture or zone; load_bit turns that into a
+        BitLoadError like every other declaration defect."""
+        names: set[str] = set()
+        for fn in function_table.functions.values():
+            for step in fn.script:
+                cue = step.cue
+                dev = cue[0] if isinstance(cue, tuple) else cue.dev
+                n = fixture_name(dev)
+                if n is not None:
+                    names.add(n)
+            if fn.generator is not None:
+                n = fixture_name(fn.generator.dev)
+                if n is not None:
+                    names.add(n)
+            if fn.stream is not None:
+                for output in fn.stream.outputs:
+                    n = fixture_name(output.dev)
+                    if n is not None:
+                        names.add(n)
+        if light_manifest:
+            names |= manifest_fixture_targets(light_manifest, self.room.profile)
+        return names
+
+    def _check_generator_lane_collisions(self, function_table) -> None:
+        """Two GENERATOR functions may not write the same CONCRETE fixture
+        lane once resolved against the loaded Room: a @room generator and a
+        @fixture:accent generator on one cc both write the accent (spec
+        section 3.5). Resolution here is by fixture NAME, not bound dev, so
+        an unbound fixture still counts."""
+        fixtures = [f.name for f in self.room.profile.fixtures]
+        owners: dict[tuple[str, int, int], str] = {}
+        for fn in function_table.functions.values():
+            if fn.kind is not FunctionKind.GENERATOR:
+                continue
+            spec = fn.generator
+            if spec.dev == ROOM:
+                targets = fixtures
+            else:
+                n = fixture_name(spec.dev)
+                targets = [n] if n is not None else [spec.dev]
+            for t in targets:
+                lane = (t, spec.status, spec.data1)
+                if lane in owners:
+                    raise ValueError(
+                        f"generators {owners[lane]!r} and {fn.name!r} both "
+                        f"write lane cc:{spec.data1} on fixture {t!r} once "
+                        f"resolved against Room {self.room.name!r}")
+                owners[lane] = fn.name
 
     def _resolve_target(self, target, dev: str | None) -> list[str]:
         """A function's declared target, resolved to the devs it lands on.

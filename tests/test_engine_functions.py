@@ -333,21 +333,16 @@ def test_generator_cues_dispatch_once_per_running_tick():
     assert light == [("sim-room-main", 0xB0, 74, 127, pytest.approx(100.0))]
 
 
-@pytest.mark.xfail(strict=True, reason="Task 5: per-fixture generator emission")
 def test_scripted_fire_suppresses_the_generator_lane_it_writes_and_it_resumes():
     """Overlay, not kill (spec section 4): a scripted fire on the same lane
     a generator drives suppresses that generator's emissions until
     at + span, and the generator resumes -- with its phase having kept
     advancing underneath -- once the window closes.
 
-    XFAIL until Task 5: _suppress_generator_lanes now records the lane
-    under the script's own RESOLVED dev (e.g. "sim-room-main"), per the
-    per-fixture design -- the canonical-dev fold-back that used to remap it
-    onto the ROOM sentinel is gone. GeneratorRunner (Task 5's seam) still
-    keys its own lane by the unresolved ROOM sentinel, so the two no longer
-    match and this generator is not suppressed. Task 5 makes GeneratorRunner
-    emit per-fixture lanes too, which will make the resolved-dev lane match
-    again."""
+    _suppress_generator_lanes records the lane under the script's own
+    RESOLVED dev (e.g. "sim-room-main"). GeneratorRunner resolves its own
+    declared lane the same way (Task 5's injected resolver), so the two
+    match."""
     gs, light, _ = _running(bit_cls=GeneratorBit, clock=lambda: 100.0)
     assert gs.fire_function("glow", fired_by="admin-manual") is None
     light.clear()
@@ -471,7 +466,6 @@ class DriftAuroraBit(_BaseBit):
         })
 
 
-@pytest.mark.xfail(strict=True, reason="Task 5: per-fixture generator emission")
 def test_scripted_fire_at_one_fixture_suppresses_only_that_fixtures_lane():
     """The parked finding from PR #81: a Bit generator on ROOM cc:74 keeps
     driving main while a script fired at the accent writes accent cc:74."""

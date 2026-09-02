@@ -109,7 +109,6 @@ def make_cycle_terrarium():
         simulator_factory=lambda td, fixture: f"sim-{fixture}-dev")
 
 
-@pytest.mark.xfail(strict=True, reason="Task 5: per-fixture generator emission")
 def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     terrarium = make_cycle_terrarium()
     gs = terrarium.gs
