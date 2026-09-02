@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from control.cues import ROOM, TARGET, LightCue, MuteCue, PlayCue, SolidCue
+from control.cues import ROOM, TARGET, LightCue, MuteCue, PlayCue, SolidCue, fixture_name
 
 
 class FunctionTarget(Enum):
@@ -47,7 +47,25 @@ class FunctionKind(Enum):
 WAVEFORMS: frozenset[str] = frozenset({"triangle"})
 STREAM_MODES: frozenset[str] = frozenset({"linear", "abs"})
 
-_LEGAL_GENERATOR_DEVS = (ROOM, TARGET)
+
+def _check_dev(dev, where: str, owner: str) -> None:
+    """A declaration dev is cues.TARGET, cues.ROOM, or (Bit owner only) a
+    well-formed @fixture:<name> sentinel. Device ids are assigned at
+    runtime, so a literal id can never resolve; an Instrument is a type
+    and cannot know a Room's fixture names, so it may not name one."""
+    if dev in (TARGET, ROOM):
+        return
+    if fixture_name(dev) is not None:
+        if owner == "bit":
+            return
+        raise ValueError(
+            f"{where}: {dev!r} names a fixture, but only a Bit may address "
+            f"fixtures (@fixture:<name>); an instrument declaration may use "
+            f"cues.TARGET ({TARGET!r}) or cues.ROOM ({ROOM!r})")
+    raise ValueError(
+        f"{where}: dev must be cues.TARGET ({TARGET!r}), cues.ROOM ({ROOM!r}) "
+        f"or @fixture:<name> on a Bit, got {dev!r}. Device ids are assigned "
+        f"at runtime, so a literal in a static declaration can never resolve")
 
 
 class ConditionSource(Enum):
@@ -76,8 +94,6 @@ FIRED_BY_ADMIN_MANUAL = "admin-manual"
 # the declaration boundary for the same reason: it is cheaper to refuse an odd
 # name at Bit load than to escape it at every consumer.
 _NAME_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
-
-_LEGAL_SCRIPT_DEVS = (TARGET, ROOM)
 
 
 @dataclass(frozen=True)
@@ -387,7 +403,7 @@ def validate_function_table(function_table, verb_names, *, owner="bit") -> None:
                 f"name (flash/stop/ping) and may not be declared")
         if function_decl.kind is FunctionKind.SCRIPTED:
             if owner == "bit":
-                _validate_scripted(function_decl, allowed_verbs)
+                _validate_scripted(function_decl, allowed_verbs, owner)
             else:
                 if not function_decl.script:
                     raise ValueError(
@@ -409,7 +425,7 @@ def validate_function_table(function_table, verb_names, *, owner="bit") -> None:
                     raise ValueError(
                         f"{where}: stream is only meaningful on a STREAM "
                         f"function, not on SCRIPTED")
-                _validate_script(function_decl)
+                _validate_script(function_decl, owner)
                 for idx, step in enumerate(function_decl.script):
                     dev = step.cue.dev if hasattr(step.cue, "dev") \
                         else step.cue[0]
@@ -419,7 +435,7 @@ def validate_function_table(function_table, verb_names, *, owner="bit") -> None:
                             f"implicitly target their own surface; only "
                             f"cues.TARGET is legal, got {dev!r}")
         elif function_decl.kind is FunctionKind.GENERATOR:
-            _validate_generator(function_decl)
+            _validate_generator(function_decl, owner)
             lane = generator_lane(function_decl)
             if lane in generator_lanes:
                 raise ValueError(
@@ -432,12 +448,12 @@ def validate_function_table(function_table, verb_names, *, owner="bit") -> None:
                 raise ValueError(
                     f"{where}: STREAM functions are Bit-declared gameplay "
                     f"and may not live on an instrument")
-            _validate_stream(function_decl)
+            _validate_stream(function_decl, owner)
             streams.append(function_decl)
     _validate_stream_lane_overlap(streams)
 
 
-def _validate_scripted(function_decl: Function, verb_names) -> None:
+def _validate_scripted(function_decl: Function, verb_names, owner: str) -> None:
     where = f"function {function_decl.name!r}"
     if not isinstance(function_decl.target, FunctionTarget):
         raise ValueError(
@@ -452,10 +468,10 @@ def _validate_scripted(function_decl: Function, verb_names) -> None:
             f"{where}: stream is only meaningful on a STREAM function, "
             f"not on SCRIPTED")
     _validate_condition(function_decl, verb_names)
-    _validate_script(function_decl)
+    _validate_script(function_decl, owner)
 
 
-def _validate_generator(function_decl: Function) -> None:
+def _validate_generator(function_decl: Function, owner: str) -> None:
     where = f"function {function_decl.name!r} generator"
     spec = function_decl.generator
     if not isinstance(spec, GeneratorSpec):
@@ -488,13 +504,10 @@ def _validate_generator(function_decl: Function) -> None:
     for label, value in (("status", spec.status), ("data1", spec.data1)):
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:
             raise ValueError(f"{where}: {label} {value!r} must be an int in 0-255")
-    if spec.dev not in _LEGAL_GENERATOR_DEVS:
-        raise ValueError(
-            f"{where}: dev must be cues.ROOM ({ROOM!r}) or cues.TARGET "
-            f"({TARGET!r}), got {spec.dev!r}")
+    _check_dev(spec.dev, where, owner)
 
 
-def _validate_stream(function_decl: Function) -> None:
+def _validate_stream(function_decl: Function, owner: str) -> None:
     where = f"function {function_decl.name!r} stream"
     spec = function_decl.stream
     if not isinstance(spec, StreamSpec):
@@ -526,16 +539,13 @@ def _validate_stream(function_decl: Function) -> None:
     if not isinstance(spec.outputs, tuple) or not spec.outputs:
         raise ValueError(f"{where}: outputs must be a non-empty tuple")
     for idx, output in enumerate(spec.outputs):
-        _validate_stream_output(output, f"{where} outputs[{idx}]")
+        _validate_stream_output(output, f"{where} outputs[{idx}]", owner)
 
 
-def _validate_stream_output(output: StreamOutput, where: str) -> None:
+def _validate_stream_output(output: StreamOutput, where: str, owner: str) -> None:
     if not isinstance(output, StreamOutput):
         raise ValueError(f"{where}: must be a StreamOutput, got {type(output).__name__}")
-    if output.dev not in _LEGAL_GENERATOR_DEVS:
-        raise ValueError(
-            f"{where}: dev must be cues.ROOM ({ROOM!r}) or cues.TARGET "
-            f"({TARGET!r}), got {output.dev!r}")
+    _check_dev(output.dev, where, owner)
     for label, value in (("status", output.status), ("data1", output.data1)):
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:
             raise ValueError(f"{where}: {label} {value!r} must be an int in 0-255")
@@ -608,7 +618,7 @@ def _validate_condition(function_decl: Function, verb_names) -> None:
             f"{SOURCE_WIRE[condition.source]}")
 
 
-def _validate_script(function_decl: Function) -> None:
+def _validate_script(function_decl: Function, owner: str) -> None:
     script = function_decl.script
     if not isinstance(script, tuple):
         raise ValueError(
@@ -622,7 +632,7 @@ def _validate_script(function_decl: Function) -> None:
                 f"{where}: must be a ScriptStep, got {type(step).__name__}")
         offset = _validate_offset(step, where, previous)
         previous = offset
-        _validate_step_cue(step, where)
+        _validate_step_cue(step, where, owner)
 
 
 def _validate_offset(step: ScriptStep, where: str,
@@ -643,7 +653,7 @@ def _validate_offset(step: ScriptStep, where: str,
     return offset
 
 
-def _validate_step_cue(step: ScriptStep, where: str) -> None:
+def _validate_step_cue(step: ScriptStep, where: str, owner: str) -> None:
     cue = step.cue
     if isinstance(cue, LightCue):
         raise ValueError(
@@ -656,10 +666,10 @@ def _validate_step_cue(step: ScriptStep, where: str) -> None:
                 f"{where}: a PlayCue must sit at offset 0. The device owns "
                 f"when a local sample fires and the play path has no queue, so "
                 f"a non-zero offset would be silently ignored")
-        _validate_script_dev(cue.dev, where)
+        _check_dev(cue.dev, where, owner)
         return
     if isinstance(cue, SolidCue):
-        _validate_script_dev(cue.dev, where)
+        _check_dev(cue.dev, where, owner)
         for i, ch in enumerate(cue.rgb):
             if isinstance(ch, bool) or not isinstance(ch, int) or not 0 <= ch <= 255:
                 raise ValueError(f"{where}: rgb[{i}] {ch!r} is outside 0-255")
@@ -678,28 +688,20 @@ def _validate_step_cue(step: ScriptStep, where: str) -> None:
         if float(step.offset) != 0.0:
             raise ValueError(f"{where}: a MuteCue must sit at offset 0; the "
                              f"latch is immediate, an offset would be ignored")
-        _validate_script_dev(cue.dev, where)
+        _check_dev(cue.dev, where, owner)
         return
     if not isinstance(cue, tuple) or len(cue) != 4:
         raise ValueError(
             f"{where}: cue must be a PlayCue or a 4-tuple "
             f"(dev, status, data1, data2), got {cue!r}")
     dev, status, data1, data2 = cue
-    _validate_script_dev(dev, where)
+    _check_dev(dev, where, owner)
     for label, value in (("status", status), ("data1", data1),
                          ("data2", data2)):
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{where}: {label} must be an int, got {value!r}")
         if not 0 <= value <= 255:
             raise ValueError(f"{where}: {label} {value} is outside 0-255")
-
-
-def _validate_script_dev(dev, where: str) -> None:
-    if dev not in _LEGAL_SCRIPT_DEVS:
-        raise ValueError(
-            f"{where}: dev must be cues.TARGET ({TARGET!r}) or cues.ROOM "
-            f"({ROOM!r}), got {dev!r}. Device ids are assigned at runtime, so "
-            f"a literal in a static declaration can never resolve")
 
 
 def expand_script(function_decl: Function, at: float, devs) -> list:
@@ -742,8 +744,9 @@ def expand_script(function_decl: Function, at: float, devs) -> list:
 
 
 def _step_devs(step_dev: str, devs) -> tuple:
-    """TARGET fans out; anything else (in practice ROOM, the only other legal
-    value per _validate_script_dev) passes through as itself."""
+    """TARGET fans out; anything else (in practice ROOM or an @fixture:<name>
+    sentinel, the only other legal values per _check_dev) passes through as
+    itself."""
     if step_dev == TARGET:
         return tuple(devs)
     return (step_dev,)

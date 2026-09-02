@@ -7,7 +7,16 @@ the message and nothing else.
 
 import pytest
 
-from control.cues import ROOM, TARGET, FireFunction, LightCue, MuteCue, PlayCue, SolidCue
+from control.cues import (
+    ROOM,
+    TARGET,
+    FireFunction,
+    LightCue,
+    MuteCue,
+    PlayCue,
+    SolidCue,
+    fixture_dev,
+)
 from control.functions import (
     Condition,
     ConditionSource,
@@ -412,3 +421,67 @@ def test_stream_touching_domain_boundary_gesture_verb_condition_validates():
         "hi": _stream("hi", verb="tilt", in_lo=0.0, in_hi=90.0),
     })
     validate_function_table(table, set())
+
+
+def _admin(name="c"):
+    return Condition(name=name, description="d", source=ConditionSource.ADMIN_MANUAL)
+
+
+def _scripted(step_dev):
+    return FunctionTable(functions={"f": Function(
+        name="f", description="d", target=FunctionTarget.ROOM, condition=_admin(),
+        script=(ScriptStep(0.0, (step_dev, 0xB0, 74, 127)),))})
+
+
+def test_bit_script_step_may_address_a_fixture():
+    validate_function_table(_scripted(fixture_dev("accent")), set(), owner="bit")
+
+
+def test_instrument_script_step_may_not_address_a_fixture():
+    table = FunctionTable(functions={"f": Function(
+        name="f", description="d",
+        script=(ScriptStep(0.0, (fixture_dev("accent"), 0xB0, 74, 127)),))})
+    with pytest.raises(ValueError, match="@fixture"):
+        validate_function_table(table, set(), owner="instrument")
+
+
+@pytest.mark.parametrize("cue", [
+    SolidCue(fixture_dev("main"), (255, 255, 255), 0.9, 1.0),
+    MuteCue(fixture_dev("main")),
+    PlayCue(fixture_dev("main"), "chime"),
+])
+def test_bit_typed_cues_may_address_a_fixture(cue):
+    table = FunctionTable(functions={"f": Function(
+        name="f", description="d", target=FunctionTarget.ROOM, condition=_admin(),
+        script=(ScriptStep(0.0, cue),))})
+    validate_function_table(table, set(), owner="bit")
+
+
+def test_malformed_fixture_sentinel_is_refused_on_a_bit():
+    with pytest.raises(ValueError, match="dev must be"):
+        validate_function_table(_scripted("@fixture:a.b"), set(), owner="bit")
+
+
+def test_bit_generator_may_drive_one_fixture_lane():
+    table = FunctionTable(functions={"g": Function(
+        name="g", description="d", kind=FunctionKind.GENERATOR,
+        generator=GeneratorSpec(dev=fixture_dev("accent"), status=0xB0, data1=74,
+                                waveform="triangle", period=4.0))})
+    validate_function_table(table, set(), owner="bit")
+
+
+def test_instrument_generator_may_not_name_a_fixture():
+    table = FunctionTable(functions={"g": Function(
+        name="g", description="d", kind=FunctionKind.GENERATOR,
+        generator=GeneratorSpec(dev=fixture_dev("accent"), status=0xB0, data1=74,
+                                waveform="triangle", period=4.0))})
+    with pytest.raises(ValueError, match="@fixture"):
+        validate_function_table(table, set(), owner="instrument")
+
+
+def test_bit_stream_output_may_name_a_fixture():
+    table = FunctionTable(functions={"s": Function(
+        name="s", description="d", kind=FunctionKind.STREAM,
+        stream=StreamSpec(verb="tilt", arg=0, in_lo=-90.0, in_hi=90.0, outputs=(
+            StreamOutput(fixture_dev("main"), 0xB0, 74, 0.0, 127.0),)))})
+    validate_function_table(table, {"tilt"}, owner="bit")
