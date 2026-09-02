@@ -1488,7 +1488,11 @@ The Room stops being exactly one bound device. Design:
   surface every tick -- a spatial instrument targeting `primary` sees one
   continuous position axis across every fixture, which is what lets a single
   declaration (luxaeterna's new `rainbow` preset) paint a gradient that
-  crosses fixture boundaries with no seam.
+  crosses fixture boundaries with no seam. **(Superseded 2026-09-01: one
+  `LightSession` per fixture now; see "Per-fixture light sessions,
+  `@fixture:<name>` addressing, FixtureSinks" below. Cross-fixture
+  continuity becomes an authored, per-fixture manifest agreement rather
+  than one shared renderer.)**
 - **`Room.bound` is a fixture map, `RoomBindingRegistry` keys by
   `(RoomType, fixture)`.** Admin arming now names which fixture the next
   Room-node join binds; `RoleClass.ROOM`'s capacity is the profile's own
@@ -3434,10 +3438,110 @@ defects, worked through with Chris the same day. Design:
   fixture gets its own session over its own slice and the Bit ROOM-role
   light manifest contract is reworked to match; a design for cross-fixture
   effects (chases/sweeps spanning main and accent) is part of that later
-  slice.
+  slice. **(Superseded 2026-09-01: landed. See "Per-fixture light
+  sessions, `@fixture:<name>` addressing, FixtureSinks" below.)**
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **1903 passed, 1 skipped**.
+
+### Per-fixture light sessions, `@fixture:<name>` addressing, FixtureSinks (2026-09-01)
+Plan 1 of the follow-up named above. Each Room fixture becomes a complete
+instrument on its light side too, not only its audio side. Design:
+[`.../2026-09-01-per-fixture-light-sessions-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-01-per-fixture-light-sessions-design.md).
+
+- **A Room is an ordered list of named fixtures and owns no session of
+  its own.** `_setup_room` builds one `_FixtureState` per fixture declared
+  in the profile, bound or not, from Room load: its own `LightSession`
+  over `to_fixture_capability(profile, fixture.name)` (local, unprefixed
+  zone names) plus the fixture's own manifest slice. An unbound fixture
+  gets a session and renders like any other; it simply has no device to
+  send frames to.
+- **`FixtureSink` is the seam a rendered frame goes through.**
+  `control/fixture_sink.py` (pure stdlib) declares the `send_frame(frame,
+  when)` protocol and ships two implementations: `ConsoleFrameSink`
+  (present on every fixture from Room load, best-effort, keyed by fixture
+  name) and `DeviceLinkSink` (added when a device binds the fixture,
+  removed on release, sending `protocol.leds_event(dev, frame,
+  when=when)`). A physical controller (a microcontroller o2lite client, or
+  a luxaeterna DMX/Art-Net/Enttec backend) is a later third implementation
+  that touches nothing upstream of this protocol.
+- **`@fixture:<name>` addresses one fixture by name; the Room-spec owner
+  rule gates who may use it.** `control/cues.py`'s `fixture_dev`/
+  `fixture_name` are the only places that spell the `@fixture:` prefix.
+  `validate_function_table` allows `@fixture:<name>` on Bit-owned script
+  steps, generator lanes and stream outputs, and refuses it on
+  instrument-owned functions with a located error -- an Instrument is a
+  type and cannot know a Room's fixture names.
+- **The Bit ROOM role's `light_manifest` slices per fixture by `target`.**
+  `role_config.slice_light_manifest` binds `primary` to every fixture's
+  whole strip, `<fixture>` to that fixture's whole strip (as local target
+  `primary`), and `<fixture>.<zone>` to that fixture's named zone; any
+  other target is a `BitLoadError` naming the decl index and the unknown
+  name. `fixture_ambient` is the per-fixture successor to the retired
+  whole-profile `ambient_manifests(profile)`.
+- **`_resolve_devs` returns a list; `@room` is a broadcast, not a
+  collapse.** `GameServer._resolve_devs` resolves `@room` to every bound
+  fixture dev in declaration order and `@fixture:<name>` to that fixture's
+  bound dev (or drops it with a once-per-load warning if unbound);
+  anything else passes through as a one-element list. `_dispatch_cues`
+  fans one cue per resolved dev.
+- **Per-fixture generator emission closes the PR #81 parked finding.**
+  `GeneratorRunner` is constructed with a resolver so `cues()` emits one
+  tuple per resolved fixture dev per declared lane and `suppress()` keys
+  per fixture lane -- a scripted fire at the accent now suppresses only
+  the accent's lane; the generator keeps driving main untouched.
+- **`load_bit` refuses a Bit that addresses a fixture its Room does not
+  declare.** `GameServer._bit_fixture_names` collects every `@fixture:`
+  dev the Bit's FunctionTable and light manifest name; any name absent
+  from the loaded Room's profile refuses the load with a `BitLoadError`
+  listing the missing names and the Room's real fixture names. This is
+  exactly why the reference chase could not stay on `TestBit`: a
+  `@fixture:main`/`accent` script would refuse to load on the one-fixture
+  DEMO room. The chase now lives in its own packaged Bit, `bits/chase/`
+  (`ChaseBit`, a `TestBit` subclass adding one `chase` Function), with
+  `bit.toml`'s `[launch] room_types = ["TEST"]` so it is only ever offered
+  against the Room spec it names; `tests/test_chase_bit.py` proves it
+  loads on TEST and is refused by name on DEMO. `TestBit` itself is
+  unchanged. Generator-lane collisions are likewise checked post-expansion
+  against the loaded Room: two fixtures' own ambient generators on the
+  same cc do not collide (each writes its own fixture's lane), but a
+  `@room` generator and a `@fixture:accent` generator on the same cc do.
+- **Audio grants are keyed by fixture name from Room load, not by a bound
+  dev.** `_grant_room_audio` grants every audio-capable fixture its own
+  `AudioBridge` voice whether or not a device is bound to it yet, and now
+  starts the ambient drone on EVERY granted fixture whose own ambient ugen
+  declares instruments, not only the first -- the welcome ceremony stays a
+  once-per-Room, first-fixture-only affair.
+- **Each fixture stamps its own `when`.** Two fixtures rendered in the
+  same tick no longer share a presentation time by construction; each
+  fixture's frame carries that fixture's own pending `at`, or clock plus
+  horizon.
+- **`RoomBridge` is retired; the Console keys by fixture name.**
+  `console/agent.py`'s constructor takes `room_controllers` (a callable
+  returning `{fixture_name: {cc: value}}`) in place of `room_bridge`;
+  `room_view` emits `controllers` (the flat merge, first fixture in
+  profile order wins on a collision) alongside `fixture_controllers`
+  verbatim. `room_frame` events carry `"fixture"` (a name) where they
+  used to carry `"dev"`, and the Console's `surface.js` strips are keyed
+  by fixture name, so an unbound fixture still paints.
+- **Retired:** `GameServer._canonical_room_dev`, `_collapse_room_fanout`,
+  the `explicit_surface` special case in `fire_function`, the
+  non-canonical light drop in `_on_light_cue`, `RoomBridge`,
+  `FakeRoomLightSink`, `_RoomLightSink`, whole-profile
+  `ambient_manifests(profile)`, `RoomProfile`'s cross-fixture generator
+  lane rule, and the `room_bridge` plumbing in `control/terrarium.py` and
+  `console/agent.py`. `control/teardown.py`, `control/engine.py` and
+  `bits/test/test_bit.py` had stale RoomBridge/canonical-dev prose
+  reworded to match.
+- **Accepted limitation (spec section 5.2): an unbound fixture renders but
+  receives no Bit cues until a device binds.** Its session (ambient,
+  generators, breath) runs and its Console strip paints, but Control's
+  resolver only ever produces bound devs, so no cue can reach it by name
+  alone. Cue routing by fixture name, for a fixture that never binds a
+  device, is a named follow-up (spec section 11).
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**1951 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 

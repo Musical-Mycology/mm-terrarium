@@ -323,6 +323,7 @@ rides this slice.
 - **N1. Per-fixture cue targeting and named-fixture trigger targets.** Spec
   B's rejection stands. The fixture registry this slice creates makes a
   future named-fixture target validatable, deliberately not taken now.
+  Reversed 2026-09-01, see the per-fixture light sessions spec.
 - **N2. Per-fixture manifests.** One Room role, one manifest; fixture-level
   variation is expressed through namespaced zones.
 - **N3. Audio fan-out.** One drone, one Flsyn channel, single audio sink

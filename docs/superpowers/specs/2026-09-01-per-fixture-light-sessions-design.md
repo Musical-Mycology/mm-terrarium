@@ -419,3 +419,30 @@ Live (Arco stack on the dev box; the spec's checklist, run before merge):
   device.
 - Multiple simultaneous devices per fixture.
 - Room editor beyond the stub: structured blocks and zones forms.
+
+## 12. Status (2026-09-01)
+
+Plan 1 (sections 2-5, 9: addressing, validation, engine data flow,
+transport data flow and sinks, retirements) landed on
+`claude/instrument-topology-triggers-6d2031`, commits
+`eecf78c..f005d1c`. Offline suite: `.venv/bin/python -m pytest tests -q`
+-> 1951 passed, 1 skipped (was 1903 passed, 1 skipped at PR #81 HEAD).
+See `docs/MM_TERRARIUM.md`'s "Per-fixture light sessions,
+`@fixture:<name>` addressing, FixtureSinks (2026-09-01)" entry for the
+landed detail, including deviations from this document's plan-facing
+prose (`chase` lives in a new packaged Bit, `bits/chase/`, rather than on
+`TestBit`, because the load-time fixture contract in section 3.4 refuses
+`TestBit` naming fixtures on the one-fixture DEMO room).
+
+Plans 2 (section 6, rooms catalog and the Design tab Room editor) and 3
+(section 7, luxaeterna rendering at O2 time) are not started. The
+interrupt contract (section 8) remains a named follow-up slice, not part
+of either.
+
+Live checklist (section 10): steps 1-3 and 6-7 have code support as of
+Plan 1; step 4's chase now fires through `ChaseBit`, not `TestBit`; step 5
+(rainbow continuity across fixtures) waits on Plan 3. None of the live
+steps have been run against a real Arco stack yet -- see
+`docs/superpowers/handoffs/2026-09-01-rooms-catalog-and-o2-time-handoff.md`
+and this task's brief for the live verification procedure to run before
+merge.

@@ -646,7 +646,7 @@ footer .mark {
           <tr><td class="mono-cell">devices_changed</td><td>Every hello and reap</td><td>Devices, trigger pickers</td></tr>
           <tr><td class="mono-cell">bit_status</td><td>On change, checked per tick</td><td>Bit status</td></tr>
           <tr><td class="mono-cell">room_changed</td><td>On change, includes live controller values</td><td>Room</td></tr>
-          <tr><td class="mono-cell">room_frame</td><td><strong>Decimated to ~10 Hz</strong>, one per bound fixture</td><td>Room strips</td></tr>
+          <tr><td class="mono-cell">room_frame</td><td><strong>Decimated to ~10 Hz</strong>, one per fixture (bound or not)</td><td>Room strips</td></tr>
           <tr><td class="mono-cell">triggers_changed</td><td>On change, in practice load and unload</td><td>Triggers</td></tr>
           <tr><td class="mono-cell">trigger_fired</td><td>Per fire</td><td>Trigger status lines</td></tr>
           <tr><td class="mono-cell">bit_completed</td><td>On UNLOADING, if result is not None</td><td>Log</td></tr>
@@ -657,7 +657,7 @@ footer .mark {
     </div>
     <p><strong>Room frames are droppable by design.</strong> The Room renders at 44 Hz; the console
       is a monitor and gets roughly 10, with intermediate frames overwritten rather than queued,
-      keyed per device. Nothing gameplay waits on may ever be put behind this panel.</p>
+      keyed per fixture name. Nothing gameplay waits on may ever be put behind this panel.</p>
   </div>
 </section>
 
