@@ -2,8 +2,9 @@
 // Pure, line-based transforms over the small TOML subset the design forms
 // edit: top-level scalars/arrays, `[[event_triggers]]` / `[[stream_triggers]]`
 // / `[[functions]]` array-of-table blocks (each optionally carrying an
-// indented child table such as `[event_triggers.thresholds]`), and
-// `[ambient.light]` / `[ambient.ugen]` tables. No DOM, no wire imports --
+// indented child table such as `[event_triggers.thresholds]`),
+// `[ambient.light]` / `[ambient.ugen]` tables, and a room file's
+// `[[fixtures]]` blocks. No DOM, no wire imports --
 // text in, text or a value out. Every writer returns the input unchanged
 // when its target isn't found, mirroring design.js's applyProposal contract.
 
@@ -415,4 +416,65 @@ export function setAmbientUgenRow(text, index, { instrument, program, key, veloc
   const lines = text.split("\n");
   lines[found.line] = `${found.indent}instruments = [ ${entries.join(", ")} ]`;
   return lines.join("\n");
+}
+
+// -- fixtures ([[fixtures]] blocks in a room file) -------------------------
+//
+// A room's `[[fixtures]]` blocks each carry their `[[fixtures.blocks]]` /
+// `[[fixtures.zones]]` children as indented lines, so splitBlocks (which
+// only treats an unindented header as a block start) keeps a fixture and
+// its children together as one block -- which is what lets moveFixture
+// reorder a fixture by moving whole line ranges.
+
+function fixtureBlocks(text) {
+  return splitBlocks(text).filter((b) => b.header === "[[fixtures]]");
+}
+
+// One row per top-level `[[fixtures]]` block, in file order, with the
+// block's own `instrument = "..."` line read out (null when absent).
+export function listFixtures(text) {
+  const lines = text.split("\n");
+  return fixtureBlocks(text).map((b) => {
+    let instrument = null;
+    for (let i = b.start + 1; i < b.end; i++) {
+      const m = lines[i].match(/^\s*instrument\s*=\s*"([^"]*)"\s*$/);
+      if (m) { instrument = m[1]; break; }
+    }
+    return { name: b.name, instrument, start: b.start, end: b.end };
+  });
+}
+
+// Swaps the fixture at `index` with the one at `index + delta`, each
+// carrying its indented children (and its own trailing blank line, which
+// belongs to the preceding block -- so the result stays valid TOML).
+// Returns the text unchanged when either end of the swap is out of range.
+export function moveFixture(text, index, delta) {
+  const blocks = fixtureBlocks(text);
+  const j = index + delta;
+  if (index < 0 || index >= blocks.length || j < 0 || j >= blocks.length || delta === 0) return text;
+  const lines = text.split("\n");
+  const a = blocks[Math.min(index, j)];
+  const b = blocks[Math.max(index, j)];
+  const before = lines.slice(0, a.start);
+  const aLines = lines.slice(a.start, a.end);
+  const between = lines.slice(a.end, b.start);
+  const bLines = lines.slice(b.start, b.end);
+  const after = lines.slice(b.end);
+  return [...before, ...bLines, ...between, ...aLines, ...after].join("\n");
+}
+
+// Rewrites the `instrument = "..."` line of the fixture at `index`.
+// Unchanged when the index is out of range or the block declares no
+// instrument.
+export function setFixtureInstrument(text, index, name) {
+  const blocks = fixtureBlocks(text);
+  if (index < 0 || index >= blocks.length) return text;
+  const lines = text.split("\n");
+  for (let i = blocks[index].start + 1; i < blocks[index].end; i++) {
+    if (/^\s*instrument\s*=/.test(lines[i])) {
+      lines[i] = lines[i].replace(/=.*$/, `= "${name}"`);
+      return lines.join("\n");
+    }
+  }
+  return text;
 }

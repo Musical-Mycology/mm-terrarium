@@ -145,5 +145,47 @@ script = [
 
   assert.strictEqual(t.removeBlock(FIXTURE, "[[event_triggers]]", "nope"), FIXTURE);
 
+  // -- fixtures: listFixtures / moveFixture / setFixtureInstrument --------
+  const ROOM = `description = "Two strips"
+backends = ["devicelink"]
+
+[[fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "dev_strip_main"
+  [[fixtures.blocks]]
+  name = "main"
+  start = 0
+  count = 60
+
+[[fixtures]]
+name = "accent"
+color_order = "GRB"
+instrument = "dev_strip_accent"
+  [[fixtures.blocks]]
+  name = "accent"
+  start = 0
+  count = 30
+`;
+  const fx = t.listFixtures(ROOM);
+  assert.deepStrictEqual(fx.map((f) => [f.name, f.instrument]),
+    [["main", "dev_strip_main"], ["accent", "dev_strip_accent"]]);
+
+  const swapped = t.moveFixture(ROOM, 1, -1);
+  assert.deepStrictEqual(t.listFixtures(swapped).map((f) => f.name), ["accent", "main"]);
+  // children travel with their fixture: accent's block still follows accent's header
+  const accentIdx = swapped.indexOf('name = "accent"');
+  const accentBlockIdx = swapped.indexOf("[[fixtures.blocks]]", accentIdx);
+  const mainIdx = swapped.indexOf('name = "main"\ncolor_order');
+  assert.ok(accentIdx < accentBlockIdx && accentBlockIdx < mainIdx, "accent's children precede main");
+  assert.ok(swapped.startsWith('description = "Two strips"'), "top-level scalars untouched");
+  assert.strictEqual(t.moveFixture(ROOM, 0, -1), ROOM, "out of range is a no-op");
+  assert.strictEqual(t.moveFixture(ROOM, 1, 1), ROOM, "out of range is a no-op");
+
+  const repicked = t.setFixtureInstrument(ROOM, 1, "venue_array");
+  assert.deepStrictEqual(t.listFixtures(repicked).map((f) => f.instrument),
+    ["dev_strip_main", "venue_array"]);
+  assert.strictEqual(t.setFixtureInstrument(ROOM, 5, "x"), ROOM, "unknown index is a no-op");
+
   console.log("toml_edit.test.js OK");
 })();

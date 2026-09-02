@@ -41,6 +41,15 @@
 // Later tasks hang additional sections off SECTION_BUILDERS -- each entry is
 // `(container, text, apply) -> void`, called against #formSections on every
 // rebuild.
+//
+// Two design kinds share this panel. An instrument design gets the identity
+// / capabilities / cues header plus every SECTION_BUILDERS section; a room
+// design gets one section only -- Fixtures: the room's `[[fixtures]]` order
+// with an instrument picker per fixture, over the same raw TOML editor.
+// `currentKind` tracks the open design's kind (from the `design` event,
+// defaulting to "instrument" for an older server) so that a form edit or a
+// debounced raw->forms rebuild re-renders the SAME kind of form rather than
+// silently falling back to the instrument layout.
 import * as wire from "./wire.js";
 import {
   getScalar,
@@ -60,9 +69,14 @@ import {
   listAmbientUgen,
   setAmbientLightRow,
   setAmbientUgenRow,
+  listFixtures,
+  moveFixture,
+  setFixtureInstrument,
 } from "./toml_edit.js";
 
 let vocab = { capabilities: [], cue_kinds: [] };
+let lastDesigns = [];      // last-seen catalog rows (both kinds) -- populates the fixture instrument picker
+let currentKind = "instrument";  // kind of the open design, from the `design` event
 let guard = false;         // true while applyEdit is writing #designText -- suppresses its "input" listener
 let debounceTimer = null;
 
@@ -117,7 +131,7 @@ export function applyEdit(fn, opts = {}) {
   guard = true;
   textEl.value = newText;
   guard = false;
-  rebuild(newText);
+  rebuild(newText, currentKind);
 
   if (activeKey) {
     const restored = findByFormKey(panel, activeKey);
@@ -619,15 +633,73 @@ function buildAmbientSection(container, text) {
 
 SECTION_BUILDERS.push(buildAmbientSection);
 
-// Re-renders every form section from `text`. With no design open (no
-// selection and/or empty text), renders a single muted placeholder line and
-// no inputs.
-export function rebuild(text) {
+// The whole structured editor for a room design: the `[[fixtures]]` order,
+// one row each, with the fixture's name, an instrument picker (published
+// instruments from the last catalog rows, sorted), and Up/Down buttons.
+// Rooms carry no description/capabilities/accepted_cues, so none of the
+// instrument identity controls render here.
+//
+// Reordering renumbers every later fixture, so Up/Down pass
+// {restoreFocus: false} -- the same rule the destructive controls follow:
+// "fixture:2:up" names a DIFFERENT fixture after the rebuild, and
+// restoring focus onto it would arm the wrong row for a stray Enter.
+function buildFixtureSection(panel, text) {
+  panel.appendChild(mk("h4", null, "Fixtures"));
+  const fixtures = listFixtures(text);
+  if (!fixtures.length) {
+    panel.appendChild(mk("p", "muted", "no [[fixtures]] declared (add via raw TOML)"));
+    return;
+  }
+  const published = lastDesigns
+    .filter((d) => (d.kind || "instrument") === "instrument" && d.state === "published")
+    .map((d) => d.name).sort();
+  fixtures.forEach((fx, i) => {
+    const row = mk("div", "fixture-row");
+    row.appendChild(mk("span", "name", fx.name || `(fixture ${i})`));
+
+    const pick = document.createElement("select");
+    pick.setAttribute("data-form-key", `fixture:${i}:instrument`);
+    for (const name of published) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      if (name === fx.instrument) opt.selected = true;
+      pick.appendChild(opt);
+    }
+    pick.onchange = () => applyEdit((t) => setFixtureInstrument(t, i, pick.value));
+    row.appendChild(pick);
+
+    const up = mk("button", "btn", "Up");
+    up.setAttribute("data-form-key", `fixture:${i}:up`);
+    up.disabled = i === 0;
+    up.onclick = () => applyEdit((t) => moveFixture(t, i, -1), { restoreFocus: false });
+    row.appendChild(up);
+
+    const down = mk("button", "btn", "Down");
+    down.setAttribute("data-form-key", `fixture:${i}:down`);
+    down.disabled = i === fixtures.length - 1;
+    down.onclick = () => applyEdit((t) => moveFixture(t, i, 1), { restoreFocus: false });
+    row.appendChild(down);
+
+    panel.appendChild(row);
+  });
+  panel.appendChild(mk("p", "muted", "Order applies at the next Room load."));
+}
+
+// Re-renders every form section from `text`, laid out for `kind`. With no
+// design open (no selection and/or empty text), renders a single muted
+// placeholder line and no inputs. A room renders only the Fixtures section.
+export function rebuild(text, kind = "instrument") {
   const panel = document.getElementById("formsPanel");
   clear(panel);
 
   if (!text) {
     panel.appendChild(mk("p", "muted", "select a design"));
+    return;
+  }
+
+  if (kind === "room") {
+    buildFixtureSection(panel, text);
     return;
   }
 
@@ -662,14 +734,20 @@ export function rebuild(text) {
 export function initForms() {
   wire.on("snapshot", (m) => {
     if (m.design_vocab) vocab = m.design_vocab;
+    if (m.designs) lastDesigns = m.designs;
   });
-  wire.on("design", (m) => rebuild(m.text));
+  wire.on("designs_listed", (m) => { lastDesigns = m.designs || []; });
+  wire.on("designs_changed", (m) => { lastDesigns = m.designs || []; });
+  wire.on("design", (m) => {
+    currentKind = m.kind || "instrument";
+    rebuild(m.text, currentKind);
+  });
 
   const textEl = document.getElementById("designText");
   textEl.oninput = () => {
     if (guard) return;
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => rebuild(textEl.value), DEBOUNCE_MS);
+    debounceTimer = setTimeout(() => rebuild(textEl.value, currentKind), DEBOUNCE_MS);
   };
 
   rebuild(null);

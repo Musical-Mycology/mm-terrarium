@@ -43,12 +43,12 @@ const DESIGNS = [
   byId.get("designText").value = "x = 2";
   byId.get("designSave").onclick();
   assert.deepStrictEqual(sock.sent.at(-1),
-    { command: "save_design", name: "glowcap", text: "x = 2" });
+    { command: "save_design", kind: "instrument", name: "glowcap", text: "x = 2" });
 
   // -- Publish sends publish_design for the open selection -----------------
   byId.get("designPublish").onclick();
   assert.deepStrictEqual(sock.sent.at(-1),
-    { command: "publish_design", name: "glowcap" });
+    { command: "publish_design", kind: "instrument", name: "glowcap" });
 
   // -- Clone prompts for a new name and sends clone_design with the current
   // selection as source ----------------------------------------------------
@@ -57,7 +57,7 @@ const DESIGNS = [
   globalThis.window.prompt = () => "glowcap_v2";
   byId.get("designClone").onclick();
   assert.deepStrictEqual(sock.sent.at(-1),
-    { command: "clone_design", source_state: "draft",
+    { command: "clone_design", kind: "instrument", source_state: "draft",
       source_name: "glowcap", new_name: "glowcap_v2" });
   if (realPrompt !== undefined) globalThis.window.prompt = realPrompt;
 
@@ -79,6 +79,36 @@ const DESIGNS = [
   // not error and must still reflect the same rows
   send({ event: "designs_changed", designs: DESIGNS });
   assert.ok(byId.get("designList").innerHTML.includes("glowcap"));
+
+  // -- rooms list renders separately and carries kind on every command ----
+  const BOTH = [
+    { name: "tuneshroom", state: "published", error: null, kind: "instrument" },
+    { name: "TEST", state: "published", error: null, kind: "room" },
+  ];
+  send({ event: "designs_changed", designs: BOTH });
+  assert.ok(byId.get("designList").innerHTML.includes("tuneshroom"));
+  assert.ok(!byId.get("designList").innerHTML.includes("TEST"), "rooms stay out of the instrument list");
+  assert.ok(byId.get("roomDesignList").innerHTML.includes("TEST [published]"));
+  assert.ok(!byId.get("roomDesignList").innerHTML.includes("tuneshroom"),
+    "instruments stay out of the rooms list");
+
+  sock.sent.length = 0;
+  byId.get("roomDesignList").children[0].onclick();
+  // FakeSocket.send already JSON.parses, so sent frames are objects
+  const get = sock.sent.at(-1);
+  assert.strictEqual(get.command, "get_design");
+  assert.strictEqual(get.kind, "room");
+  assert.strictEqual(get.name, "TEST");
+
+  design.openDesign({ name: "TEST", state: "published", kind: "room", text: "x = 1", errors: [] });
+  assert.deepStrictEqual(design.getSelection(), { name: "TEST", state: "published", kind: "room" });
+  sock.sent.length = 0;
+  byId.get("designSave").onclick();
+  assert.strictEqual(sock.sent.at(-1).kind, "room");
+
+  // a row without kind is an instrument (older server)
+  design.openDesign({ name: "glowcap", state: "draft", text: "x = 1", errors: [] });
+  assert.strictEqual(design.getSelection().kind, "instrument");
 
   console.log("design_panel: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -1,9 +1,16 @@
 // Design panel: list of declared designs (draft/published pairs) rendered
-// into #designList, a raw-TOML editor (#designText/#designErrors), and the
-// Save/Publish/Clone actions. Wire shapes are Task 5's verbatim: commands
-// list_designs/get_design/save_design/publish_design/clone_design; events
-// designs_listed/design/designs_changed (the snapshot carries the same rows
-// under "designs").
+// into #designList (instruments) and #roomDesignList (rooms), a raw-TOML
+// editor (#designText/#designErrors), and the Save/Publish/Clone actions.
+// Wire shapes are Task 5's verbatim: commands list_designs/get_design/
+// save_design/publish_design/clone_design; events designs_listed/design/
+// designs_changed (the snapshot carries the same rows under "designs").
+//
+// Instruments and rooms share one catalog wire: every row carries a `kind`
+// ("instrument"|"room"), the two lists are the same rows filtered by it,
+// and every command carries the open selection's kind so the server knows
+// which catalog root to read or write. A row or `design` event without a
+// `kind` is an instrument (an older server), which keeps the panel working
+// against a server that predates the rooms catalog.
 //
 // Selecting a published design and hitting Save writes a draft of the same
 // name (the draft-shadowing edit flow) -- the client always sends
@@ -12,8 +19,13 @@
 import * as wire from "./wire.js";
 import { rebuild as rebuildForms } from "./design_forms.js";
 
-let lastDesigns = [];      // last-seen designs_listed/designs_changed/snapshot rows
-let current = null;        // {name, state} of the open design, or null
+let lastDesigns = [];      // last-seen designs_listed/designs_changed/snapshot rows (both kinds)
+let current = null;        // {name, state, kind} of the open design, or null
+
+// A row/event without an explicit kind predates the rooms catalog.
+function kindOf(row) {
+  return (row && row.kind) || "instrument";
+}
 
 function clear(node) {
   node.textContent = "";
@@ -28,12 +40,14 @@ function mk(tag, className, text) {
 
 // -------------------------------------------------------------- rendering
 
-// Pure renderer: one row per design, "<name> [draft|published]", plus an
-// error badge when the entry's error is non-null. `onSelect(design)` fires
-// on row click.
-export function renderDesigns(listEl, designs, onSelect) {
+// Pure renderer: one row per design of `kind`, "<name> [draft|published]",
+// plus an error badge when the entry's error is non-null. Rows of the other
+// kind are skipped, so the same catalog rows paint both lists.
+// `onSelect(design)` fires on row click.
+export function renderDesigns(listEl, designs, onSelect, kind = "instrument") {
   clear(listEl);
   for (const design of designs) {
+    if (kindOf(design) !== kind) continue;
     const row = mk("div", "design-row");
     row.appendChild(mk("span", "name", `${design.name} [${design.state}]`));
     if (design.error) row.appendChild(mk("span", "chip rose err", "error"));
@@ -43,17 +57,22 @@ export function renderDesigns(listEl, designs, onSelect) {
 }
 
 function onRowSelect(design) {
-  wire.send("get_design", { state: design.state, name: design.name });
+  wire.send("get_design", { kind: kindOf(design), state: design.state, name: design.name });
 }
 
 function render() {
   const listEl = document.getElementById("designList");
-  renderDesigns(listEl, lastDesigns, onRowSelect);
-  if (current) {
-    for (const [i, design] of lastDesigns.entries()) {
-      if (design.name === current.name && design.state === current.state) {
-        listEl.children[i].classList.add("selected");
-      }
+  const roomListEl = document.getElementById("roomDesignList");
+  renderDesigns(listEl, lastDesigns, onRowSelect, "instrument");
+  renderDesigns(roomListEl, lastDesigns, onRowSelect, "room");
+  if (!current) return;
+  // The selected row lives in whichever list holds the selection's kind,
+  // and its index is into that list's filtered rows, not lastDesigns.
+  const target = current.kind === "room" ? roomListEl : listEl;
+  const rows = lastDesigns.filter((d) => kindOf(d) === current.kind);
+  for (const [i, design] of rows.entries()) {
+    if (design.name === current.name && design.state === current.state) {
+      target.children[i].classList.add("selected");
     }
   }
 }
@@ -63,9 +82,9 @@ function onDesignsChanged(designs) {
   render();
 }
 
-// Accessor for the currently-open design selection ({name, state}, or null
-// when nothing is open) -- used by design_forms.js to gate form rendering
-// without duplicating design.js's selection tracking.
+// Accessor for the currently-open design selection ({name, state, kind}, or
+// null when nothing is open) -- used by design_forms.js to gate form
+// rendering without duplicating design.js's selection tracking.
 export function getSelection() {
   return current;
 }
@@ -73,7 +92,7 @@ export function getSelection() {
 // Fills the editor from a `design` event: text, errors, and remembers the
 // open selection so Save/Publish/Clone know what they're acting on.
 export function openDesign(msg) {
-  current = { name: msg.name, state: msg.state };
+  current = { name: msg.name, state: msg.state, kind: kindOf(msg) };
   document.getElementById("designText").value = msg.text;
   const errEl = document.getElementById("designErrors");
   clear(errEl);
@@ -93,12 +112,12 @@ export function init() {
   saveBtn.onclick = () => {
     if (!current) return;
     const text = document.getElementById("designText").value;
-    wire.send("save_design", { name: current.name, text }, saveBtn);
+    wire.send("save_design", { kind: current.kind, name: current.name, text }, saveBtn);
   };
 
   publishBtn.onclick = () => {
     if (!current) return;
-    wire.send("publish_design", { name: current.name }, publishBtn);
+    wire.send("publish_design", { kind: current.kind, name: current.name }, publishBtn);
   };
 
   cloneBtn.onclick = () => {
@@ -106,6 +125,7 @@ export function init() {
     const newName = window.prompt("Clone as:");
     if (!newName) return;
     wire.send("clone_design", {
+      kind: current.kind,
       source_state: current.state,
       source_name: current.name,
       new_name: newName,
@@ -414,7 +434,7 @@ export function initCalibrate() {
     const provenance = `${selectedCapture.session} on ${new Date().toISOString().slice(0, 10)}`;
     const textEl = document.getElementById("designText");
     textEl.value = applyProposal(textEl.value, selectedCapture.label, lastProposal, provenance);
-    rebuildForms(textEl.value);
+    rebuildForms(textEl.value, current.kind);
   };
 
   replayBtn.onclick = () => {
