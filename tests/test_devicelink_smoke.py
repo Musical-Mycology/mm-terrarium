@@ -11,14 +11,14 @@ with only cue delivery differing between them.
 Registration (hello/join) rides a real socket, so its timing is not
 controlled -- but ClockFeed.reset() rewinds each rig's render clock back to
 the head of the same explicit schedule right before the comparable
-tilt-sweep segment starts. LightSession.render_into() latches its `_start`
-epoch on the very first clock read (always CLOCK_SCHEDULE[0] for a freshly
-constructed ClockFeed, whatever poll iteration that happens to land on) and
-clamps a negative post-reset dt to a floor, so however many renders
-registration's socket jitter produced, both rigs enter the compared segment
-in the same state: t=0 at the reset, then identical t/dt for every
-subsequent render, call-for-call, since both run the same fixed number of
-polls/ticks per branch.
+tilt-sweep segment starts. LightSession.render_into() hands ugens the
+clock's own reading as t (since luxaeterna PR #18 there is no per-session
+`_start` epoch) and clamps a negative post-reset dt to a floor, so however
+many renders registration's socket jitter produced, both rigs enter the
+compared segment in the same state: t = CLOCK_SCHEDULE[0] at the reset, then
+identical t/dt for every subsequent render, call-for-call, since both replay
+the same explicit schedule and run the same fixed number of polls/ticks per
+branch.
 """
 
 import json

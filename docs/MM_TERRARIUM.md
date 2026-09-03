@@ -3696,8 +3696,9 @@ section 6.
   with the preceding fixture on a swap (it is scanned into that fixture's
   block, not its own). `fixture_controllers` still has no Console
   consumer. `publish_entry`'s refusal messages don't name which kind
-  failed to publish. Plan 3 (luxaeterna rendering at O2 time) has not
-  started.
+  failed to publish. Plan 3 (luxaeterna rendering at O2 time) landed 2026-09-02 as
+  luxaeterna PR #18; see the luxaeterna note under *Relationships to
+  other repos*.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **1986 passed, 1 skipped** (after the final-review fix wave).
@@ -3876,6 +3877,15 @@ yet**; the box does not exist.
   already conform (verified: the 1076-test suite is green against it), but
   any future hand-built capability that under-covers its `pixel_count`
   now fails loudly in luxaeterna instead of silently truncating pixels.
+  A third fact, from luxaeterna PR #18 (2026-09-02, Plan 3 of the
+  per-fixture light sessions spec): `LightSession.render_into` hands ugens
+  the injected clock's reading as `t`, not seconds since that session's
+  first frame. Every fixture session this repo builds shares
+  `DeviceLinkAgent`'s clock (`o2lite.time_get` in o2lite mode), so a
+  `rainbow` on `primary` scrolls as one gradient across `main` and
+  `accent` instead of two ramps offset by their construction skew. Nothing
+  Control-side changed; the live checklist's step 5 (rainbow continuity,
+  measured off the canvases) is now runnable.
 
 ## Not yet built / deferred
 

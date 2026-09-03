@@ -521,13 +521,20 @@ Deviations from this document's Plan 2 prose:
   migration into the catalog; the pre-migration profile-equality test
   pins this directly.
 
-Plan 3 (section 7, luxaeterna rendering at O2 time) is not started. The
-interrupt contract (section 8) remains a named follow-up slice, not part
-of either.
+Plan 3 (section 7, luxaeterna rendering at O2 time) landed 2026-09-02 as
+luxaeterna PR #18 (branch `claude/session-o2-time-7feab3`):
+`LightSession.render_into` passes the clock reading through as `t`, `dt`
+is unchanged (first frame `1e-6`). The audit found no ugen or director
+state that assumed `t` starts at zero: only `LFO`, `Rainbow` and `Noise`
+read `ctx.time`, and each is a phase-from-absolute-time generator; every
+local-origin unit integrates `dt`. The audit is pinned by tests rather
+than by code changes. mm-terrarium's 1986-test suite was run against that
+branch and stayed green; no Control-side change was needed. The
+interrupt contract (section 8) remains a named follow-up slice.
 
 Live checklist (section 10): steps 1-3 and 6-7 have code support as of
 Plan 1; step 4's chase now fires through `ChaseBit`, not `TestBit`; step 5
-(rainbow continuity across fixtures) waits on Plan 3. Plan 2 adds its own
+(rainbow continuity across fixtures) is unblocked by Plan 3 and still unrun. Plan 2 adds its own
 live verification (Console Design tab Rooms list, fixture reorder,
 publish, reload), described in the plan's closing section. None of
 Plan 1's or Plan 2's live steps have been run against a real Arco stack
