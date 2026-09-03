@@ -59,10 +59,11 @@ from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.proc_tee import ProcTee
 from harness.signals import sigterm_as_keyboard_interrupt
 
-DEFAULT_ARCO_COMMAND = "/Users/chris/projects/arco/apps/pytest/server"
+DEFAULT_ARCO_COMMAND = os.path.join(ARCO_PYTHONPATH, "apps/pytest/server")
 # ARCO_PYTHONPATH -- the checkout o2litepy and pyarco live in, the same one
-# DEFAULT_ARCO_COMMAND already hardcodes -- lives in harness/arco_paths.py,
-# shared with harness/o2_shroom.py.
+# DEFAULT_ARCO_COMMAND is built from -- lives in harness/arco_paths.py,
+# shared with harness/o2_shroom.py. Override with MM_ARCO_PATH if arco isn't
+# a sibling checkout of this repo.
 
 
 @dataclass
@@ -523,9 +524,11 @@ def parse_args(argv=None):
 
     ap = argparse.ArgumentParser(
         description="Run the whole Arco stack from one command.",
-        epilog="Needs PYTHONPATH=/Users/chris/projects/arco for pyarco and "
-               "o2litepy. CI mode is BEST-EFFORT: the headless clock-sync "
-               "defect documented in docs/MM_TERRARIUM.md is upstream and "
+        epilog="Needs pyarco and o2litepy importable: found automatically "
+               "when arco is a sibling checkout of this repo, otherwise set "
+               "MM_ARCO_PATH (or PYTHONPATH) to the arco checkout. CI mode "
+               "is BEST-EFFORT: the headless clock-sync defect documented "
+               "in docs/MM_TERRARIUM.md is upstream and "
                "unfixed, and this runner bounds and names it rather than "
                "fixing it.")
     ap.add_argument("--ci", action="store_true",

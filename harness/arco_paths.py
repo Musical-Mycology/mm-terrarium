@@ -12,7 +12,19 @@ from __future__ import annotations
 import os
 import sys
 
-ARCO_PYTHONPATH = "/Users/chris/projects/arco"
+
+def _default_arco_pythonpath() -> str:
+    """MM_ARCO_PATH wins if set; otherwise assume arco is a sibling checkout
+    of this repo (both under the same projects/ directory), which holds on
+    every machine we've onboarded regardless of OS or username."""
+    override = os.environ.get("MM_ARCO_PATH")
+    if override:
+        return override
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(os.path.dirname(repo_root), "arco")
+
+
+ARCO_PYTHONPATH = _default_arco_pythonpath()
 
 
 def _import_o2litepy() -> None:

@@ -35,6 +35,7 @@ from control.terrarium_config import (TerrariumConfig, load_terrarium_config,
 from devicelink.agent import DeviceLinkAgent
 from devicelink.server import DeviceLinkServer
 from harness import markers
+from harness.arco_paths import ARCO_PYTHONPATH
 from harness.o2_shroom import parent_is_gone
 from harness.signals import sigterm_as_keyboard_interrupt
 
@@ -1092,7 +1093,8 @@ def _build_arg_parser():
                     help="How long the Bit stays RUNNING before completing.")
     ap.add_argument("--hold", action="store_true",
                     help="Never auto-complete; run until Ctrl-C.")
-    ap.add_argument("--arco-command", default="/Users/chris/projects/arco/apps/pytest/server")
+    ap.add_argument("--arco-command",
+                    default=os.path.join(ARCO_PYTHONPATH, "apps/pytest/server"))
     ap.add_argument("--arco-start-audio", action="store_true",
                     help="After boot, press Arco's (S)tart key to re-open "
                          "its audio devices. Needs --arco-pty (that is what "

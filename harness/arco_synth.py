@@ -27,7 +27,26 @@ import os
 # testing. FluidR3_GM is the standard GM set (also what Roger Dannenberg's own
 # arco/apps/pytest/miditest.py expects). Do not change the program numbers below
 # to "fix" this; they were correct all along, only the soundfont was wrong.
-DEFAULT_SOUNDFONT = "/Users/chris/projects/fluidsynth/sf2/FluidR3_GM.sf2"
+def _default_soundfont() -> str:
+    """$MM_SOUNDFONT wins if set. Otherwise probe a sibling fluidsynth
+    checkout (mirrors how arco_paths.py finds arco) and the path the
+    fluid-soundfont-gm package installs to on Debian/Ubuntu, in that order,
+    falling back to the sibling-checkout path so a missing-soundfont error
+    points somewhere sensible."""
+    override = os.environ.get("MM_SOUNDFONT")
+    if override:
+        return override
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sibling_checkout = os.path.join(os.path.dirname(repo_root), "fluidsynth",
+                                    "sf2", "FluidR3_GM.sf2")
+    for candidate in (sibling_checkout,
+                      "/usr/share/sounds/sf2/FluidR3_GM.sf2"):
+        if os.path.isfile(candidate):
+            return candidate
+    return sibling_checkout
+
+
+DEFAULT_SOUNDFONT = _default_soundfont()
 
 
 class ArcoVoice:
