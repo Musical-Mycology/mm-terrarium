@@ -419,8 +419,9 @@ session, from one statement. `cc:74` glides aurora's hue and sweeps FluidSynth's
 filter; `cc:11` drives aurora's `level` and the synth's expression, so the
 visible breath and the audible swell are one value rather than two clocks that
 agree. Needs a hand-started Arco server (`apps/pytest/server` is a curses app)
-and `PYTHONPATH=/Users/chris/projects/arco`. Without the flag the demo is
-unchanged and needs no Arco.
+and pyarco/o2litepy importable -- auto-detected when `arco` is a sibling
+checkout of this repo (`harness/arco_paths.py`), otherwise set `MM_ARCO_PATH`.
+Without the flag the demo is unchanged and needs no Arco.
 
 Two operational traps, both hit during live testing:
 
@@ -3803,7 +3804,8 @@ yet**; the box does not exist.
   the luxaeterna precedent: nothing is vendored or submoduled, and
   `control/audio.py` never imports it, so the whole suite still runs offline.
   Its source-of-truth is now settled (2026-08-10): the sibling `arco` checkout's
-  `pyarco/` subdirectory (`PYTHONPATH=/Users/chris/projects/arco`), maintained
+  `pyarco/` subdirectory, auto-detected by `harness/arco_paths.py` (override
+  with `MM_ARCO_PATH` if arco isn't a sibling checkout), maintained
   upstream by Roger Dannenberg in `rbdannenberg/arco` and mirrored to the
   `Musical-Mycology/arco` fork — not a submodule. The earlier standalone
   `Musical-Mycology/pyarco` repo was an independent MM implementation that
