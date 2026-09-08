@@ -200,10 +200,21 @@ timestamp is in the future and delivers it at that time, so a `leds` frame
 reaches its handler at `when`. The app draws on arrival, as it does today.
 Control is unchanged and keeps computing `at = origin + cue_horizon`.
 
-Probe P8 (section 7) found this copy of `o2ws.js` does not in fact hold
+Probe P8 (section 7) found this copy of `o2ws.js` did not in fact hold
 sub-second-future messages -- a rounding bug in `o2ws_schedule_handler`
-delivers them immediately -- so the browser link will need to hold frames
-in its own queue until `when`, and Plan B's Task 5 carries that.
+delivered them immediately. That bug is now patched in our vendored copy
+(round 1, 2026-09-08): it scales the delay to milliseconds before
+rounding, and re-measurement confirms delivery is no longer early.
+Depends on the patched `o2ws.js` this repo vendors; the unpatched
+upstream copy delivers sub-500 ms timestamps immediately. The
+re-measured p99 (806.50 ms) is still well above the "a few milliseconds"
+target, but that run's tab stayed backgrounded (`document.hidden` true)
+under the automated browser tool even after fronting it, which clamps
+timer firing to about once a second and is the likely explanation for
+the ~800 ms floor rather than a defect in the fix itself. Until that is
+confirmed on a real, OS-focused device, the browser link should still
+hold frames in its own queue until `when`, and Plan B's Task 5 carries
+that.
 
 ### 6.4 Failure
 
@@ -256,20 +267,24 @@ tool refused to navigate to a non-127.0.0.1 URL, so this ran page origin
 o2ws but not cross-host). Printed line: `P7 PASS: clock synced from origin
 http://127.0.0.1:8788 to 127.0.0.1:8080`.
 
-**P8 result (2026-09-08).** FAIL. Lateness was consistently negative
-(messages delivered ~150-200 ms *before* their scheduled timestamp, not
-after), over 60 of the planned 100 samples -- collection stalled short of
-100 because the automated browser tool keeps the tab backgrounded
-(`document.hidden` stayed `true` throughout), which Chrome throttles
-`setTimeout`/`setInterval` in; p50 = -196.50 ms, p99 = -158.50 ms, n = 60.
-The throttling only slowed how fast the page could send its 100 test
-messages -- it does not explain the negative sign, and every sample showed
-the same early-delivery pattern. The root cause is in `www/o2ws.js`'s
-`o2ws_schedule_handler` (line 367): `setTimeout(handler, Math.round(timestamp
-- now) * 1000, ...)` rounds the delay to the nearest whole *second* before
-converting to milliseconds, so any delay under 500 ms (the common case for a
-cue horizon) rounds to zero and the message is delivered immediately instead
-of held until `timestamp`. No `error:` lines were logged.
+**P8 result, round 1 (2026-09-08).** The `o2ws_schedule_handler` rounding
+bug identified in the first P8 run is confirmed and fixed in our vendored
+`www/o2ws.js`: it rounded the delay to the nearest whole *second* before
+scaling to milliseconds (`Math.round(timestamp - now) * 1000`), so any
+delay under 500 ms rounded to zero and the message fired immediately. Our
+copy now scales to milliseconds before rounding
+(`Math.round((timestamp - now) * 1000)`). Re-measured with the tab
+fronted via `tabs_select`: lateness is now uniformly positive (late, not
+early), p50 = 800.50 ms, p99 = 806.50 ms, worst = 808.50 ms, n = 100. This
+confirms the sign flip the fix predicts, but the magnitude is not "a few
+milliseconds" -- `document.hidden` still read `true` for the whole run
+even after fronting the tab and clicking into it, so Chrome's
+background-tab timer clamp (roughly one `setTimeout` firing per second)
+still applied and adds a near-constant ~800 ms to every sample. This is an
+artifact of the automated browser-tool harness, not evidence about
+`o2ws.js`'s own logic or about a real, OS-focused device; the live gate
+(a phone on the venue LAN) is the way to confirm the fix's actual
+magnitude. No `error:` lines were logged.
 
 **Live gate (from the migration spec, made concrete):** a phone on the
 venue LAN scans the poster, lands joined in a scored role during SETUP,

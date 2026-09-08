@@ -365,7 +365,8 @@ function o2ws_schedule_handler(handler, timestamp, address, typespec, info) {
     if (o2ws_clock_synchronized) {
         var now = o2ws_time_get();
         if (timestamp > now) {
-            setTimeout(handler, Math.round(timestamp - now) * 1000, timestamp, 
+            // mm-terrarium patch (2026-09-08): scale to ms before rounding; upstream rounds seconds first, so sub-500 ms delays fired immediately.
+            setTimeout(handler, Math.round((timestamp - now) * 1000), timestamp,
                        address, typespec, info);
         }
         else { // Past or at current time, so deliver the message.
