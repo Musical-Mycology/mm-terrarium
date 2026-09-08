@@ -296,9 +296,9 @@ offline suite, then `run_stack --ci`. Record the `o2` commit installed.
 records it in `requirements-dev.txt`; the `deploy/` step clones that
 commit.
 
-**Result (2026-09-08).** Partial pass, on MYCOLOGICAL. `o2` commit
-installed: `f21499e` (`git -C /Users/chris/projects/o2 log -1 --format=%h
--- o2litepy`). In a throwaway venv (`/tmp/p3-venv`), `pip install -e
+**Result (2026-09-08).** Pass, on MYCOLOGICAL. `o2` commit installed:
+`f21499e` (`git -C /Users/chris/projects/o2 log -1 --format=%h --
+o2litepy`). In a throwaway venv (`/tmp/p3-venv`), `pip install -e
 /Users/chris/projects/o2/o2litepy` succeeded and
 `python -c "import o2litepy, inspect; print(inspect.getfile(o2litepy))"`
 resolved to `/Users/chris/projects/o2/o2litepy/src/o2litepy/__init__.py`.
@@ -315,19 +315,25 @@ copy. Phase 3 will need to handle `sys.path` order (or drop
 reach some other way) if it wants the installed `o2` package to win
 while `PYTHONPATH` is still set for `pyarco`.
 
-The live-stack step did not produce a usable pass or fail signal.
-`PYTHONPATH=/Users/chris/projects/arco python -m harness.run_stack --ci
---seconds 20 --devices 1` failed at stage `control-room-loaded`:
-`TerrariumBuildFailure: Arco failed to start: Arco did not report ready
-within 15.0s`, with an empty `arco.log`. To isolate whether this was an
-o2litepy artifact, `./smoke-test.sh --ci --seconds 20 --devices 1` was
-also run with the project `.venv` (the known-good path) and failed
-identically, same stage, same empty `arco.log`. So the failure is
-environmental to this session (this sandboxed shell most likely cannot
-reach the Mac's audio device or a TTY for Arco's curses UI), not caused
-by o2litepy or the throwaway venv. Step 3 needs to be re-run from an
-interactive MYCOLOGICAL shell outside this harness to get a real
-pass/fail on the live stack.
+The live-stack step is green when re-run from this worktree with
+`MM_ARCO_PATH=/Users/chris/projects/arco` and
+`MM_SOUNDFONT=/Users/chris/projects/fluidsynth/sf2/FluidR3_GM.sf2` set
+alongside `PYTHONPATH`:
+
+```
+PYTHONPATH=/Users/chris/projects/arco MM_ARCO_PATH=/Users/chris/projects/arco MM_SOUNDFONT=/Users/chris/projects/fluidsynth/sf2/FluidR3_GM.sf2 /tmp/p3-venv/bin/python -m harness.run_stack --ci --seconds 20 --devices 1
+```
+
+ended with `stack run complete; logs in runs/20260908-094829`. The first
+attempt's live-stack failure was not caused by o2litepy or by sandboxing:
+inside a git worktree, `harness/arco_paths._default_arco_pythonpath`
+guesses a sibling `arco` checkout next to the worktree
+(`.../mm-terrarium/.claude/worktrees/arco`, which does not exist), so the
+Arco binary path resolved wrong and Arco never launched; the same
+worktree-sibling guess happens in
+`harness/arco_synth._default_soundfont` for the FluidSynth soundfont
+path. Setting `MM_ARCO_PATH` and `MM_SOUNDFONT` explicitly overrides both
+guesses and the stack runs clean.
 
 ### P4: o2lite C discovery from a phone (gates Phase 3 step 2, Victor)
 
