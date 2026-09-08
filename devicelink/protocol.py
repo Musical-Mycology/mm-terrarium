@@ -196,6 +196,65 @@ MOTION_AXES = ("ax", "ay", "az", "gx", "gy", "gz")
 
 CAPTURE_ACTIONS = ("open", "close", "abandon")
 
+# o2lite's C library caps a message at 4096 bytes (o2/src/o2lite.h:135).
+# o2litepy allows 8192, but hardware and the FFI link use the C library, so
+# 4096 is the contract. The blob budget leaves headroom for everything else
+# in a /game/telemetry message: the O2 header, the padded address and
+# typespec, dev (up to 31 chars) and t0, and the blob's own length word and
+# padding -- measured well under 128 bytes.
+O2_MAX_MSG_LEN = 4096
+TELEMETRY_BLOB_BUDGET = O2_MAX_MSG_LEN - 128
+
+
+def encode_telemetry_body(body: dict) -> bytes:
+    """Exactly the bytes devicelink/o2_transport.py's to_o2_arg puts in the
+    blob for a batch dict: wire_json.dumps, UTF-8. The size test and the
+    chunker both measure through this so they cannot drift from the wire."""
+    from control.wire_json import dumps   # noqa: PLC0415 (protocol stays light)
+
+    return dumps(body).encode("utf-8")
+
+
+def chunk_telemetry_batch(body: dict, *, first_seq: int, rate: int = 16000,
+                          budget: int = TELEMETRY_BLOB_BUDGET) -> list[dict]:
+    """Split one producer-side batch into wire batches that each encode
+    under `budget` bytes.
+
+    `body` is the batch before framing: capture_id, t_ms, the six axes,
+    optional raw int16le `pcm` bytes with `pcm_t0_ms`, and no seq. Motion
+    samples and PCM frames are split into the same number of equal runs, so
+    chunk i carries the i-th run of each; seq counts up from first_seq and
+    each chunk's pcm_t0_ms advances by the frames already sent, on the
+    audio clock. Re-batching is free by the trace schema (batch boundaries
+    are not semantic), so the decoder needs no change and Trace.append sees
+    consecutive seqs. Raises ValueError when even one-sample chunks do not
+    fit: the producer must send more often.
+    """
+    t_ms = list(body["t_ms"])
+    n = len(t_ms)
+    if n == 0:
+        raise ValueError("a batch needs at least one motion sample")
+    pcm = bytes(body.get("pcm") or b"")
+    frames = len(pcm) // 2
+    for parts in range(1, n + 1):
+        chunks = []
+        for i in range(parts):
+            lo, hi = n * i // parts, n * (i + 1) // parts
+            flo, fhi = frames * i // parts, frames * (i + 1) // parts
+            chunk = {"capture_id": body["capture_id"],
+                     "seq": first_seq + i, "t_ms": t_ms[lo:hi]}
+            for axis in MOTION_AXES:
+                chunk[axis] = list(body[axis][lo:hi])
+            if fhi > flo:
+                chunk["pcm"] = base64.b64encode(pcm[flo * 2:fhi * 2]).decode("ascii")
+                chunk["pcm_t0_ms"] = body["pcm_t0_ms"] + flo * 1000.0 / rate
+            chunks.append(chunk)
+        if all(len(encode_telemetry_body(c)) <= budget for c in chunks):
+            return chunks
+    raise ValueError(
+        f"a single-sample chunk still exceeds {budget} bytes; the producer "
+        f"must send batches more often")
+
 # Everything needed to say WHICH stream a trace came from. Enforced at
 # `open` so a partial block can never reach disk: a threshold derived from a
 # trace whose source is unknown is exactly the mistake www/sensors.js made.

@@ -93,6 +93,21 @@ The audio and motion clocks are independent. Alignment error is on the order
 of one audio buffer, not zero. Do not compute an audio-versus-accelerometer
 lead without accounting for it.
 
+### Chunking (o2lite message cap)
+
+o2lite's C library caps a message at **4096 bytes**, and the base64 PCM of a
+100 ms batch at 16 kHz is 4268 bytes on its own. A producer therefore splits
+each 100 ms window into several batches so that every batch's encoded JSON
+body is at most **3968 bytes** (`devicelink/protocol.py`'s
+`TELEMETRY_BLOB_BUDGET`, 128 bytes of headroom for the O2 header, address,
+typespec, `dev` and `t0`). Motion samples and PCM frames are split into the
+same number of equal runs; `seq` counts up by one per chunk; each chunk's
+`pcm_t0_ms` is the window's `pcm_t0_ms` plus the frames already sent divided
+by the rate. Because re-batching is free (below), the receiver needs no
+knowledge of chunking. `chunk_telemetry_batch` in `devicelink/protocol.py`
+is the reference implementation and `tests/test_telemetry_chunks.py` the
+conformance test a Dart producer can mirror.
+
 ### The `source` block
 
 Required on `open`, and the reason this schema exists at all. **A threshold is

@@ -24,7 +24,7 @@ CAPTURE_NODE = "CAPTURE_NODE"
 # a capture open for the rest of the session.
 IDLE_TIMEOUT_S = 10.0
 
-# Default trace root when no store is supplied, matching harness/capture_smoke.py.
+# Default trace root when no store is supplied (./captures, gitignored).
 CAPTURE_DIR = "./captures"
 
 
