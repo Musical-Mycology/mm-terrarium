@@ -1300,6 +1300,23 @@ prevented the ordering from disagreeing with itself again, and it had.
   (trusted-LAN only, per `terrarium_boot --console-port`'s own help), so
   this is a deliberate convenience/exposure trade specific to this
   dev/test launcher; `--host 127.0.0.1` opts back into loopback-only.
+  **Fix, 2026-09-08:** the `0.0.0.0` default only actually reached the
+  devicelink server and the Console -- `terrarium_boot.build()`'s
+  `_SimulatorFactory` never forwarded `--host` to the Room simulator
+  subprocess it spawns (`harness/room_simulator.py`), so that process's own
+  `--sim-host` stayed at its `127.0.0.1` default regardless of what this
+  launcher was told. The Room's canvas (`WebSimBackend`) bound loopback
+  only, and the "room surface" link the Console shows
+  (`agent.canvas_urls()`, populated by `room_simulator.py`'s `/game/canvas`
+  send) pointed at `127.0.0.1` -- dead from any LAN device other than the
+  host itself, even though the Console and devicelink were genuinely
+  reachable. `build()` now threads its own `host` into
+  `_SimulatorFactory(..., sim_host=host)`, which passes `--sim-host` through
+  to `room_simulator.py`, so the Room canvas binds the same host as
+  everything else on this path. `harness/run_stack.py`'s o2lite path
+  (`_O2SimulatorFactory` / `harness/o2_shroom.py`) has the identical
+  unforwarded-`--sim-host` shape but was left alone -- out of scope for this
+  fix, which targeted `run_websocket_stack.py` specifically.
 - **`harness/markers.py`** -- the readiness contract `run_stack` watches
   for: named constants emitted by `terrarium_boot`/`o2_shroom` and matched
   on both sides by `tests/test_markers.py`. Matching on incidental print
