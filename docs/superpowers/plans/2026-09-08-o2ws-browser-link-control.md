@@ -250,9 +250,12 @@ def test_a_string_containing_etx_is_refused_not_sent(caplog):
     import logging
 
     transport, fake = _started_with("ie-abc123", "o2ws/1")
+    # A dict value would never trip this: wire_json escapes control characters
+    # as \u0003 inside JSON text. Only a plain `s` argument can carry a raw
+    # separator, so that is what the guard has to catch.
     with caplog.at_level(logging.ERROR, logger="devicelink.o2_transport"):
-        transport.send("ie-abc123", {"address": "/ie-abc123/role", "typespec": "b",
-                                     "args": [{"role": "pl\x03ayer"}],
+        transport.send("ie-abc123", {"address": "/ie-abc123/deny", "typespec": "ss",
+                                     "args": ["role\x03full", "try the jam node"],
                                      "timestamp": 0.0})
     assert fake.sent == []
     assert any("0x03" in rec.getMessage() for rec in caplog.records)
