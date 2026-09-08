@@ -127,7 +127,8 @@ class Terrarium:
                  binding_store_path: str | None = None,
                  stack_factory=TeardownStack,
                  runs_dir: str | None = None,
-                 run_id: str | None = None) -> None:
+                 run_id: str | None = None,
+                 arco_ready_timeout: float | None = None) -> None:
         self.config = config
         self.gs = game_server
         self.room_binding = room_binding
@@ -141,6 +142,10 @@ class Terrarium:
         self.binding_store_path = binding_store_path
         self.runs_dir = runs_dir
         self.run_id = run_id
+        # Installation-wide override for how long load_room waits on Arco's
+        # readiness probe (harness/terrarium_boot.py --arco-ready-timeout).
+        # None defers to each RoomSpec's own arco_ready_timeout.
+        self.arco_ready_timeout = arco_ready_timeout
 
         # runs_dir=None (every existing caller/test) means no recording and
         # no default sweep -- zero behavior change. When set, every process
@@ -289,8 +294,11 @@ class Terrarium:
             except Exception as exc:
                 raise RoomLoadError(f"Arco failed to start: {exc}") from exc
             stack.push("arco", arco.shutdown)
+            ready_timeout = (spec.arco_ready_timeout
+                             if self.arco_ready_timeout is None
+                             else self.arco_ready_timeout)
             try:
-                arco.wait_ready(spec.arco_ready_timeout)
+                arco.wait_ready(ready_timeout)
             except Exception as exc:
                 raise RoomLoadError(f"Arco failed to start: {exc}") from exc
             self.arco = arco

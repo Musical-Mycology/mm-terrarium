@@ -133,3 +133,92 @@ def test_fake_popen_records_the_keyword_arguments_it_was_given():
     popen(["cmd"], start_new_session=True)
 
     assert popen.kwargs["start_new_session"] is True
+
+
+def test_wait_ready_reports_a_child_that_exited_before_the_first_probe():
+    """A pty_popen child whose exec fails does os._exit(127) and used to be
+    invisible: the probe just never succeeded and the caller saw a generic
+    ArcoReadyTimeout after the full 15 s, with a 0-byte arco.log. The
+    process is now polled before every probe so an already-dead child
+    fails fast and names its exit status and command."""
+    from control.arco_process import ArcoExited
+
+    clock, sleep = make_clock()
+    popen = FakePopen()
+    probes = []
+    process = ArcoProcess(["/no/such/arco"], popen=popen,
+                          probe=lambda: probes.append(1) or False,
+                          clock=clock, sleep=sleep)
+    process.start()
+    popen.returncode = 127
+
+    with pytest.raises(ArcoExited) as info:
+        process.wait_ready(timeout=15.0)
+
+    assert probes == []                      # failed before probing at all
+    assert "127" in str(info.value)
+    assert "/no/such/arco" in str(info.value)
+    assert clock() < 15.0                    # did not burn the whole budget
+
+
+def test_wait_ready_reports_a_child_that_died_between_probes():
+    from control.arco_process import ArcoExited
+
+    clock, sleep = make_clock()
+    popen = FakePopen()
+    probes = []
+
+    def probe():
+        probes.append(1)
+        if len(probes) == 2:
+            popen.returncode = 1             # dies after the second probe
+        return False
+
+    process = ArcoProcess(["arco-server"], popen=popen, probe=probe,
+                          clock=clock, sleep=sleep)
+    process.start()
+    with pytest.raises(ArcoExited):
+        process.wait_ready(timeout=15.0)
+    assert len(probes) == 2
+
+
+def test_arco_exited_is_an_arco_ready_timeout_for_existing_handlers():
+    """Every caller today catches ArcoReadyTimeout (or Exception); the new
+    failure must land in the same handlers rather than escape past them."""
+    from control.arco_process import ArcoExited
+
+    assert issubclass(ArcoExited, ArcoReadyTimeout)
+
+
+def test_pty_popen_exec_failure_is_loud(tmp_path):
+    """A child that cannot exec used to _exit(127) silently, racing the
+    parent's first poll(). pty_popen now detects the failure synchronously
+    over a close-on-exec pipe, writes the reason into the log (a 0-byte
+    arco.log was the old symptom), reaps the child, and raises: the
+    failure surfaces from ArcoProcess.start(), before any probe runs."""
+    from control.arco_process import ArcoExecFailed, pty_popen
+
+    log = tmp_path / "arco.log"
+    with pytest.raises(ArcoExecFailed) as info:
+        pty_popen([str(tmp_path / "no-such-binary")], log_path=str(log))
+
+    assert "no-such-binary" in str(info.value)
+    assert b"no-such-binary" in log.read_bytes()
+
+
+def test_pty_popen_exec_success_leaves_no_error(tmp_path):
+    from control.arco_process import pty_popen
+
+    process = pty_popen(["/bin/sh", "-c", "exit 3"])
+    assert process.wait(timeout=5.0) == 3
+
+
+def test_start_propagates_a_spawn_failure_to_the_caller():
+    """Terrarium.load_room wraps whatever start() raises as "Arco failed
+    to start: ...", so the exec error must propagate, not be swallowed."""
+    def popen(command):
+        raise OSError(f"cannot exec {command[0]}")
+
+    process = ArcoProcess(["/no/such/arco"], popen=popen)
+    with pytest.raises(OSError, match="/no/such/arco"):
+        process.start()

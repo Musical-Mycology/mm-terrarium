@@ -420,7 +420,16 @@ filter; `cc:11` drives aurora's `level` and the synth's expression, so the
 visible breath and the audible swell are one value rather than two clocks that
 agree. Needs a hand-started Arco server (`apps/pytest/server` is a curses app)
 and pyarco/o2litepy importable -- auto-detected when `arco` is a sibling
-checkout of this repo (`harness/arco_paths.py`), otherwise set `MM_ARCO_PATH`.
+checkout of this repo's **main** checkout (`harness/arco_paths.py`), otherwise
+set `MM_ARCO_PATH`. "Sibling" is resolved through `arco_paths.sibling_path()`,
+which follows a linked git worktree's `.git` file back to the main checkout,
+so a run from `.claude/worktrees/<name>` finds the same `../arco` a run from
+the main checkout does. Before 2026-09-08 it resolved relative to the repo
+root itself, which inside a worktree meant `.claude/worktrees/arco`: the Arco
+binary path did not exist, the pty child exited 127 silently, and the smoke
+test failed with "Arco did not report ready within 15.0s" and a 0-byte
+`arco.log`. Both defaults (arco and the soundfont below) now go through the
+same helper; the env overrides still win.
 Without the flag the demo is unchanged and needs no Arco.
 
 Two operational traps, both hit during live testing:
@@ -3804,8 +3813,9 @@ yet**; the box does not exist.
   the luxaeterna precedent: nothing is vendored or submoduled, and
   `control/audio.py` never imports it, so the whole suite still runs offline.
   Its source-of-truth is now settled (2026-08-10): the sibling `arco` checkout's
-  `pyarco/` subdirectory, auto-detected by `harness/arco_paths.py` (override
-  with `MM_ARCO_PATH` if arco isn't a sibling checkout), maintained
+  `pyarco/` subdirectory, auto-detected by `harness/arco_paths.py` as a
+  sibling of this repo's main checkout, worktree-aware as of 2026-09-08
+  (override with `MM_ARCO_PATH` if arco isn't a sibling checkout), maintained
   upstream by Roger Dannenberg in `rbdannenberg/arco` and mirrored to the
   `Musical-Mycology/arco` fork — not a submodule. The earlier standalone
   `Musical-Mycology/pyarco` repo was an independent MM implementation that
@@ -4144,7 +4154,25 @@ Kept explicit so the doc doesn't over-claim:
   `--arco-ready-timeout` exists because the **first** readiness probe against
   a cold Arco can take ~18 s (it connects, then pyarco's `reset()` times out
   after 5 s) while the second succeeds instantly, so the 15 s default expires
-  inside probe #1 and boot fails with Arco perfectly healthy. And
+  inside probe #1 and boot fails with Arco perfectly healthy. (The flag
+  was **dead from commit ca2d0a9 until 2026-09-08**: it wrote
+  `BootConfig.arco_ready_timeout`, but `Terrarium.load_room` waits on the
+  RoomSpec's `arco_ready_timeout` from `terrarium.toml`, default 15 s. It now
+  reaches the wait as a Terrarium-level override that wins over the spec;
+  `run_stack`'s 60 s default had silently been 15 s the whole time.)
+  A related silent failure is also gone: `pty_popen` now detects an exec
+  failure synchronously over a close-on-exec pipe (the subprocess.Popen
+  trick), writes the reason into `arco.log`, reaps the child, and raises
+  `ArcoExecFailed` from `ArcoProcess.start()`, so a bad `--arco-command`
+  fails in about a second as "Arco failed to start: arco exec failed:
+  <path>: No such file or directory" instead of after the full timeout with
+  a 0-byte log (measured 2026-09-08: 32 s and an empty log before, 1 s and
+  a one-line log after). Writing the message onto the pty was not enough:
+  on macOS the master read reports EIO once the slave closes, so it never
+  reached the log. Belt and braces, `ArcoProcess.wait_ready` also polls the
+  child before every probe and raises `ArcoExited` (a subclass of
+  `ArcoReadyTimeout`, naming the exit status and command) the moment the
+  child is dead for any other reason. And
   `--arco-settle-seconds` exists because that failed probe adds a **second**
   `/host/clear`; the extra teardown can leave `arco.output` None, and
   `ArcoSynthPool.start()` then dies with `'NoneType' object has no attribute
