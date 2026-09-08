@@ -96,8 +96,6 @@ class StackConfig:
     open_urls: bool = False           # open each BROWSE_URL in the browser
     profile: str | None = None        # forwarded to terrarium_boot verbatim
     serve: bool = False               # forward --serve to terrarium_boot
-    flutter_sim: str | None = None    # mm-tuneshroom checkout; spawns tool/sim serve
-    flutter_devices: int = 0          # how many Flutter simulator URLs to serve
     # persist is the load-only-loads default; --no-persist-shrooms opts out
     persist_shrooms: bool = True
 
@@ -187,19 +185,6 @@ def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
 
 _URL_PATTERN = re.compile(r"http://\S+")
 
-FLUTTER_LINK = "ws://127.0.0.1:8771/ws"   # DeviceLink's fixed port, harness/devicelink_smoke.py
-
-
-def flutter_command(cfg: StackConfig) -> list[str]:
-    """The Flutter simulator launcher's fixed CLI contract (Task 7): an
-    mm-tuneshroom checkout's tool/sim serve, told how many devices to serve
-    and where DeviceLink's websocket is. It is a websocket client, not
-    o2lite -- it never joins run_stack's own DEVICE_CLOCK_SYNCED wait, it
-    just runs alongside the devices for the duration of the hold."""
-    return [os.path.join(cfg.flutter_sim, "tool", "sim"), "serve",
-            "--devices", str(cfg.flutter_devices),
-            "--link", FLUTTER_LINK, "--no-open"]
-
 
 def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, getpid=os.getpid,
@@ -287,12 +272,6 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
             devices.append(spawn(
                 f"ie{index}", device_command(cfg, index, getpid()),
                 _watch_list("DEVICE_")))
-
-        if cfg.flutter_sim and cfg.flutter_devices > 0:
-            # Spawned alongside the devices, not waited on with them: it is
-            # a websocket client of DeviceLink, not an o2lite device, so it
-            # never clock-syncs and must not be part of that wait.
-            spawn("flutter-sim", flutter_command(cfg), _watch_list("DEVICE_"))
 
         for tee in devices:
             ok, failed = _wait_for_marker(tee, markers.DEVICE_CLOCK_SYNCED,
@@ -483,19 +462,10 @@ def _dead_child(children: dict[str, object], *,
     control exit of any code and a NON-zero device exit still count.
     Devices that stay up across rounds are a later slice (device
     reconnection); until then round 2+ under run_stack runs device-less.
-
-    "flutter-sim" (the Flutter simulator launcher spawned by
-    flutter_command) is tolerated unconditionally, serve mode or not: it is
-    a websocket client of DeviceLink, not an o2lite device under Control's
-    own join/release lifecycle, so its clean exit is never the signal that
-    a scored round ended -- it just isn't part of this stack's pass/fail
-    contract the way control and the o2lite devices are.
     """
     for name, process in children.items():
         code = process.poll()
         if code is None:
-            continue
-        if name == "flutter-sim" and code == 0:
             continue
         if tolerate_clean_devices and name != "control" and code == 0:
             continue
@@ -605,12 +575,6 @@ def parse_args(argv=None):
                          "launch.default_join_role resolved against "
                          "launch.nodes, or the first node if there is no "
                          "default role). Set this to override that.")
-    ap.add_argument("--flutter-sim", default=None,
-                    help="Path to an mm-tuneshroom checkout; spawns "
-                         "tool/sim serve alongside the o2lite devices.")
-    ap.add_argument("--flutter-devices", type=int, default=0,
-                    help="How many Flutter simulator URLs to serve "
-                         "(needs --flutter-sim).")
     ap.add_argument("--persist-shrooms", dest="persist_shrooms",
                     action="store_true", default=True,
                     help="Launch every player o2_shroom with --persist so "
@@ -702,8 +666,7 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         bit=bit, node=node, node_explicit=args.node is not None,
         devices_explicit=args.devices is not None,
         open_urls=args.open, profile=args.profile,
-        serve=serve, flutter_sim=args.flutter_sim,
-        flutter_devices=args.flutter_devices,
+        serve=serve,
         persist_shrooms=args.persist_shrooms)
 
 

@@ -66,21 +66,6 @@ def test_console_server_send_uses_the_guarded_serialiser():
     assert "json.dumps(" not in text, "console/server.py must use wire_json.dumps"
 
 
-def test_devicelink_payload_survives_a_non_finite_value():
-    """The device wire has real non-Python consumers (phones parsing with
-    JSON.parse, Dart clients with jsonDecode), so it gets the same guard."""
-    import devicelink.server as server_mod
-    text = open(server_mod.__file__).read()
-    assert "json.dumps(" not in text, "devicelink/server.py must use wire_json.dumps"
-
-    from control.wire_json import dumps
-    msg = {"timestamp": float("inf"), "address": "/ie1/leds",
-           "typespec": "b", "args": [1, 2, 3]}
-    out = dumps(msg)
-    assert "Infinity" not in out
-    assert strict_loads(out)["timestamp"] is None
-
-
 @pytest.mark.parametrize("module_name", [
     "uplink.transport", "devicelink.o2_transport", "capture.store",
 ])

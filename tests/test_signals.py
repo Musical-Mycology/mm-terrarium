@@ -23,7 +23,6 @@ def test_it_installs_a_handler_that_raises_keyboard_interrupt():
 
 @pytest.mark.parametrize("module_name", [
     "harness.led_smoke",
-    "harness.room_simulator",
     "harness.o2_shroom",
     "harness.terrarium_boot",
 ])

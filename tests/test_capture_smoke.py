@@ -111,8 +111,7 @@ def test_a_refusal_comes_back_as_an_error_frame(tmp_path):
 
 
 def test_build_wires_the_store_to_the_bit(tmp_path):
-    gs, server, agent, store = build(host="127.0.0.1", port=0,
-                                     capture_dir=tmp_path,
+    gs, server, agent, store = build(capture_dir=tmp_path,
                                      session_id="SESSION")
     try:
         assert store.session_dir == tmp_path / "SESSION"
