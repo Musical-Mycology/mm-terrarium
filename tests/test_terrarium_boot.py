@@ -109,6 +109,30 @@ def test_devicelink_server_starts_before_boot_spawns_the_simulator():
     shutdown(teardown, terrarium)
 
 
+def test_build_threads_host_into_the_simulators_canvas_bind():
+    """A --host 0.0.0.0 run (harness/run_websocket_stack.py's LAN launcher)
+    made the devicelink server and Console LAN-reachable but left
+    room_simulator.py's own --sim-host at its 127.0.0.1 default -- the Room
+    surface link the Console shows (canvas_url in room_simulator.py) was
+    dead from any other machine even though the docs called the whole
+    launcher LAN-ready. build() must pass the SAME host it binds the
+    devicelink server to as the simulator's --sim-host."""
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    sim_popen = FakePopen()
+
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        host="0.0.0.0", port=0,
+        arco_process_cls=_fake_arco, simulator_popen=sim_popen,
+        room_audio=_fake_room_audio())
+
+    launched_command = sim_popen.commands[0]
+    i = launched_command.index("--sim-host")
+    assert launched_command[i + 1] == "0.0.0.0"
+    shutdown(teardown, terrarium)
+
+
 def test_shutdown_tears_down_arco_and_simulator():
     config = BootConfig(room_name="TEST", bit_name="TestBit")
     fake_arco_popen = FakePopen()

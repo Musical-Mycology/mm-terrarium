@@ -73,18 +73,19 @@ class _SimulatorFactory:
 
     def __init__(self, server_url: str, *, popen=subprocess.Popen,
                  horizon: float | None = None,
-                 room_type: str = "TEST") -> None:
+                 room_type: str = "TEST", sim_host: str = "127.0.0.1") -> None:
         self._server_url = server_url
         self._popen = popen
         self._horizon = horizon
         self._room_type = room_type
+        self._sim_host = sim_host
         self.processes: list[SimulatorProcess] = []
 
     def __call__(self, teardown, fixture: str, *, record=None) -> str:
         dev = sim_dev(fixture)
         command = [sys.executable, "-u", "-m", "harness.room_simulator",
                    "--dev", dev, "--server", self._server_url,
-                   "--fixture", fixture]
+                   "--fixture", fixture, "--sim-host", self._sim_host]
         command += ["--room-type", self._room_type]
         if self._horizon is not None:
             # So the Room reports frame latency in absolute terms on exit.
@@ -251,10 +252,18 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         server = transport
 
     if transport is None:
+        # sim_host=host: the Room's own canvas (WebSimBackend, spawned per
+        # fixture by room_simulator.py) must bind the SAME host as the
+        # devicelink server above, not room_simulator's own 127.0.0.1
+        # default. Without this, --host 0.0.0.0 makes the devicelink server
+        # and Console LAN-reachable but leaves the Room-surface link the
+        # Console shows (agent.canvas_urls(), devicelink/agent.py's
+        # _on_canvas) pointing at 127.0.0.1 -- dead from any other machine.
         factory = _SimulatorFactory(f"ws://{host}:{server.port}/ws",
                                     popen=simulator_popen,
                                     horizon=config.cue_horizon,
-                                    room_type=config.room_name or "")
+                                    room_type=config.room_name or "",
+                                    sim_host=host)
     else:
         factory = _O2SimulatorFactory(config.o2_ensemble,
                                       popen=simulator_popen,

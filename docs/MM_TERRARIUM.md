@@ -1287,6 +1287,45 @@ prevented the ordering from disagreeing with itself again, and it had.
   designed. **Postscript, 2026-08-20:** those two "upstream" clock-sync
   failures were the pty starvation above; with it fixed, the same command
   runs green.
+- **`harness/run_websocket_stack.py`** (2026-09-03) -- `python -m
+  harness.run_websocket_stack`, the websocket-transport sibling of
+  `run_stack.py` above: a thin default-setting wrapper (TEST room, TestBit,
+  fixed Console port `:8080`) that delegates straight to
+  `terrarium_boot.main()` in-process rather than supervising it as a
+  subprocess -- no `--devices`/N-simulated-device orchestration exists on
+  this path (only `run_stack.py`'s o2lite side spawns `o2_shroom`
+  clients), so real hardware or a browser Testshroom tab is how a device
+  joins. Still spawns Arco: `terrarium_boot.build()`'s `room_audio` is
+  unconditionally on regardless of `--transport`, so this passes the same
+  `--arco-pty`/`--arco-settle-seconds`/`--arco-ready-timeout` flags
+  `run_stack.py` uses, even though its whole point is the websocket device
+  path rather than o2lite. **Binds `0.0.0.0` by default** (unlike
+  `terrarium_boot.py`'s own `127.0.0.1` default), so a LAN device can
+  actually reach it -- `terrarium_boot` prints the bind address verbatim,
+  so `ws://0.0.0.0:.../ws` is not itself dialable, and this script
+  separately detects and prints the machine's real outbound LAN address
+  (a no-packets-sent UDP-connect trick) so there is one line you can
+  actually type into another device. The Console stays unauthenticated
+  (trusted-LAN only, per `terrarium_boot --console-port`'s own help), so
+  this is a deliberate convenience/exposure trade specific to this
+  dev/test launcher; `--host 127.0.0.1` opts back into loopback-only.
+  **Fix, 2026-09-08:** the `0.0.0.0` default only actually reached the
+  devicelink server and the Console -- `terrarium_boot.build()`'s
+  `_SimulatorFactory` never forwarded `--host` to the Room simulator
+  subprocess it spawns (`harness/room_simulator.py`), so that process's own
+  `--sim-host` stayed at its `127.0.0.1` default regardless of what this
+  launcher was told. The Room's canvas (`WebSimBackend`) bound loopback
+  only, and the "room surface" link the Console shows
+  (`agent.canvas_urls()`, populated by `room_simulator.py`'s `/game/canvas`
+  send) pointed at `127.0.0.1` -- dead from any LAN device other than the
+  host itself, even though the Console and devicelink were genuinely
+  reachable. `build()` now threads its own `host` into
+  `_SimulatorFactory(..., sim_host=host)`, which passes `--sim-host` through
+  to `room_simulator.py`, so the Room canvas binds the same host as
+  everything else on this path. `harness/run_stack.py`'s o2lite path
+  (`_O2SimulatorFactory` / `harness/o2_shroom.py`) has the identical
+  unforwarded-`--sim-host` shape but was left alone -- out of scope for this
+  fix, which targeted `run_websocket_stack.py` specifically.
 - **`harness/markers.py`** -- the readiness contract `run_stack` watches
   for: named constants emitted by `terrarium_boot`/`o2_shroom` and matched
   on both sides by `tests/test_markers.py`. Matching on incidental print
