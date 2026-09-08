@@ -474,18 +474,25 @@ def test_start_refuses_before_pyarco_has_announced_actl():
     assert fake.services == ""          # never wrote over pyarco's slot
 
 
-def test_start_verifies_actl_still_routes_after_claiming_game():
-    """set_services REPLACES (o2lite.py:707). Writing "actl,game" must leave
-    pyarco's control replies working, and O2 refuses a claim silently, so
-    the only proof is a round trip on actl too."""
+def test_start_warns_but_does_not_fail_when_actl_does_not_route_after_claiming_game(caplog):
+    """set_services REPLACES (o2lite.py:707). Writing "actl,game" is expected
+    to leave pyarco's control replies working, but this post-claim check has
+    been observed to miss its reply in the full boot even though pyarco's
+    own /actl/... messages reach the same connection -- the cause is
+    unresolved (tracked in a follow-up). Per controller ruling, this check
+    is a warning, not a fatal error; only the `game` check stays fatal."""
     from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
 
     fake = FakeO2Lite()
     fake.set_services("actl")
     fake.refuse("actl")
     transport = O2LiteTransport()
-    with pytest.raises(RuntimeError, match="actl"):
+    with caplog.at_level("WARNING", logger="devicelink.o2_transport"):
         transport.start(fake, ownership_timeout=0.05, sleep=lambda s: None)
+
+    assert any("actl" in record.getMessage() for record in caplog.records)
+    # transport still started: drain_inbound works against the live o2lite
+    assert transport.drain_inbound() == []
 
 
 def test_services_string_is_pyarco_then_control():

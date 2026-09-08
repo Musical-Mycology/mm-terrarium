@@ -325,6 +325,13 @@ class O2LiteTransport:
         holding `game` would make every device unreachable with no error
         anywhere. See verify_service_ownership on why the round trip is a
         deliberate, one-shot exception to boundary rule 4.
+
+        Does NOT raise if the post-claim check on `actl` fails to route
+        back: in the full boot this check has been observed to miss its
+        reply even though pyarco's own /actl/... messages reach this same
+        connection, and the cause is unresolved (tracked in a follow-up).
+        A failure here only logs a warning and start() still returns
+        normally; the `game` check above is unaffected and stays fatal.
         """
         now = o2lite.time_get()
         if now < 0:
@@ -366,13 +373,14 @@ class O2LiteTransport:
                                         timeout=ownership_timeout,
                                         resend_interval=2.0,
                                         clock=clock, sleep=sleep):
-            self._o2 = None
-            raise RuntimeError(
-                f"claiming {self._services!r} left {PYARCO_SERVICE!r} not "
-                f"routed back to this connection: pyarco's Arco control "
-                f"replies would be lost. set_services replaces the whole "
-                f"string; check SERVICES still names every service this "
-                f"process offers")
+            logger.warning(
+                "claiming %r left %r not routed back to this connection "
+                "within %.0fs: pyarco's Arco control replies may be "
+                "misrouted. This check has been observed to fail in the "
+                "full boot even though pyarco's own /actl/... messages "
+                "reach this same connection; the cause is unresolved and "
+                "tracked in a follow-up. Continuing to start().",
+                self._services, PYARCO_SERVICE, ownership_timeout)
 
     def _on_message(self, address, typespec, info) -> None:
         """o2lite handler.
