@@ -35,9 +35,9 @@ control/     Control+GameServer package (Python, on pyarco)
 bits/        Bit plugin modules (role tables, graph-builders, cues, scoring)
 uplink/      Remote command/telemetry link to a future mm-fairyring broker
 console/     Terrarium Console: local admin panel (HTTP+websocket)
-devicelink/  device-facing websocket transport (simulated Tuneshrooms)
-arcoserver/  Arco server build config for the Terrarium (dspmanifest.txt, prefs)
-www/         deployed web root (simulator build ships here from mm-tuneshroom)
+devicelink/  Control's device-facing transport: the game service on the Arco hub (o2lite)
+arcoserver/  Arco launch dir: arco_server_prefs.json (HTTP root www/, port 8080); Arco's cwd
+www/         what Arco serves: o2ws.js, the clock-sync check page; the simulator web build lands here (Phase 2)
 deploy/      venue provisioning and installation networking
 docs/        repo docs; specs under docs/superpowers/specs/
 ```

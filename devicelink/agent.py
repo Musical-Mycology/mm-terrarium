@@ -853,10 +853,10 @@ class DeviceLinkAgent:
                  gesture_time: float = 0.0) -> None:
         """`gesture_time` is the inbound envelope's timestamp: the device's
         own reading of the O2 clock at the instant of the gesture (Design
-        Rule 4, timestamps at the source). It is 0.0 on the websocket
-        transport, which never stamps, and GameServer falls back to its own
-        clock in that case -- so the transport must pass 0.0 through rather
-        than invent anything.
+        Rule 4, timestamps at the source). It is -1 before o2lite clock
+        sync completes, and GameServer falls back to its own clock in that
+        case -- so the transport must pass it through rather than invent
+        anything.
         """
         reason = self.game_server.data(dev, verb, args,
                                        gesture_time=gesture_time)

@@ -66,10 +66,9 @@ LED_CHANNELS = 36
 _MAX_PENDING_FRAMES = 200
 
 # The engine's own render/tick rate (see harness/terrarium_boot.py's
-# `gs.tick(1.0 / 44.0)` and harness/devicelink_smoke.py's TICK). Frames are
-# rendered at this rate, so ticking a client faster than this buys nothing;
-# ticking much slower would blur "held until its time" into "held until
-# roughly its time".
+# `gs.tick(1.0 / 44.0)`). Frames are rendered at this rate, so ticking a
+# client faster than this buys nothing; ticking much slower would blur
+# "held until its time" into "held until roughly its time".
 _TICK_INTERVAL = 1.0 / 44.0
 
 

@@ -105,8 +105,33 @@ pattern).
 
 ### Phase 1: Terrarium cutover (mm-terrarium, Chris)
 
+**Status:** Landed 2026-09-08 (plan
+`docs/superpowers/plans/2026-09-08-o2lite-cutover-phase-1.md`). Suite at
+HEAD: 1973 passed, 1 skipped (baseline before this plan: 1986 passed, 1
+skipped; the drop is the deleted websocket tests).
+
 Goal: o2lite is the only device wire in this repo, and Arco is ready to
 serve a page.
+
+**Deviations from the plan as approved:**
+
+- `shroom_client.py` was kept rather than deleted. Its `ShroomClient` is
+  the shared wire logic `harness/o2_shroom.py` runs; only its websocket
+  entry point went.
+- `harness/capture_smoke.py` was deleted rather than ported. CaptureBit
+  loads through `run_stack` (`./smoke-test.sh --serve --bit CaptureBit`);
+  the o2lite capture path is pinned by `tests/test_capture_o2.py` until a
+  producer exists.
+- `WebSimLeds` moved to `harness/websim_leds.py` (it lived in
+  `harness/room_simulator.py`, which was deleted).
+- Arco is launched from `arcoserver/` (as its cwd), not merely configured
+  with an `http_root` pointing there, because Arco reads its prefs from
+  its cwd and has no `http_enable` key -- see the *o2lite cutover
+  (2026-09-08)* note in `docs/MM_TERRARIUM.md`'s Landed subsystems for the
+  rest of the run's deviations (`_recycle_room`/`_restart_room_clients`
+  requiring `transport`, the deferred `_o2lite_module()` resolution, the
+  `actl` post-claim check warning instead of failing, and the `www/`
+  symlink O2's HTTP server needs).
 
 1. **Control owns the process's services string.** One o2lite connection
    per process, as today, but the ownership is explicit: after

@@ -1,9 +1,9 @@
 """The o2lite-backed device transport: Control's `game` service on the Arco
 hub.
 
-Satisfies the same small interface DeviceLinkServer does (drain_new_clients
-/ drain_inbound / send / bind_dev / drop_dev), so DeviceLinkAgent is
-unchanged by the swap. See docs/superpowers/specs/
+Satisfies the small transport interface DeviceLinkAgent drives:
+drain_new_clients, drain_inbound, send, bind_dev, drop_dev. See
+docs/superpowers/specs/
 2026-08-12-control-o2lite-and-timed-cues-design.md section 5.1.
 
 o2litepy is NEVER imported at module level here. The caller passes an
@@ -392,7 +392,8 @@ class O2LiteTransport:
         `address` arrives with its leading '/' already stripped, because
         O2lite_handler.__init__ strips it from the registered path and
         _msg_dispatch compares the stripped forms. Re-prefix it so the
-        envelope the agent sees is identical to the websocket transport's.
+        envelope the agent sees keeps the same shape DeviceLinkAgent has
+        always expected.
         """
         try:
             args = pull_args(self._o2, typespec or "")
@@ -443,8 +444,8 @@ class O2LiteTransport:
     def send(self, dev: str, msg: dict) -> None:
         """Send one outbound envelope to `dev`'s own service.
 
-        Unknown dev is a silent no-op, matching DeviceLinkServer: a cue for
-        a device that has gone away must never raise into the engine tick.
+        Unknown dev is a silent no-op: a cue for a device that has gone
+        away must never raise into the engine tick.
         """
         if dev not in self._devs or self._o2 is None:
             return

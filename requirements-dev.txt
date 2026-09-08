@@ -23,10 +23,17 @@ pytest>=8.0
 # stdlib and runs in the core suite either way.
 
 # --- Optional: Arco audio (harness/led_smoke.py --audio, tests/test_arco_synth.py) ---
-# pyarco and o2litepy are NOT pip-installable. They live in the sibling arco
-# checkout and are reached by PYTHONPATH, following the dev/test-only precedent
-# set for luxaeterna. Nothing is vendored or submoduled: pyarco's
-# source-of-truth stays Roger Dannenberg's open decision (bootstrap question 1).
+# pyarco is NOT pip-installable. It lives in the sibling arco checkout and is
+# reached by PYTHONPATH, following the dev/test-only precedent set for
+# luxaeterna. Nothing is vendored or submoduled: pyarco's source-of-truth stays
+# Roger Dannenberg's open decision (bootstrap question 1).
+#
+# o2litepy IS pip-installable, from the o2 repo:
+#     pip install -e /Users/chris/projects/o2/o2litepy
+# (verified 2026-09-08, probe P3 in docs/superpowers/specs/2026-09-08-o2lite-
+# connectivity-migration-design.md). Phase 3 of that migration spec pins it.
+# Until then the PYTHONPATH reach into the arco checkout below remains the
+# path this repo actually uses.
 #
 #     PYTHONPATH=/Users/chris/projects/arco python -m harness.led_smoke --audio
 #

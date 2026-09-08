@@ -74,8 +74,7 @@ class _O2SimulatorFactory:
     """Spawns the Room simulator as an o2lite client. Reuses
     harness/o2_shroom.py with --no-join: Control has already recorded this
     dev as the bound Room before the process is spawned, so there is no
-    Registration Node to tap -- the same rule harness/room_simulator.py
-    follows. Called once per fixture."""
+    Registration Node to tap. Called once per fixture."""
 
     def __init__(self, ensemble: str, *, popen=subprocess.Popen,
                  room_type: str = "TEST") -> None:
@@ -369,8 +368,9 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     (control/registration.py:41-42), and TestBit's `player` is scored, so
     without this window harness/o2_shroom.py is denied every time.
     setup_seconds <= 0 -- the default -- returns immediately, preserving the
-    existing load-straight-into-run behavior. Same shape as
-    harness/devicelink_smoke.py's _wait_in_setup.
+    existing load-straight-into-run behavior. Driven by
+    `./smoke-test.sh --open --devices 1` (harness/run_stack.py), whose
+    --setup-seconds forwards to this same knob.
 
     parent_pid, when given, is checked every tick via
     harness/o2_shroom.py's parent_is_gone -- see F5 in the final review
@@ -768,12 +768,11 @@ def _serve_roomless(gs, agent, terrarium, *, console_agent=None,
 
 
 def _run_duration(args) -> float | None:
-    """Same shape as harness/devicelink_smoke.py's _run_duration: --hold
-    wins over --seconds. Unlike that sibling, a bare invocation (neither
-    flag given) now returns None rather than a hardcoded fallback -- main()
-    only adds a `defaults.run_duration_seconds` override when this returns
-    a value, so an unrequested run leaves the manifest's own default (or,
-    absent one, the Bit's own hardcoded fallback -- TestBit's is still
+    """--hold wins over --seconds. A bare invocation (neither flag given)
+    returns None rather than a hardcoded fallback -- main() only adds a
+    `defaults.run_duration_seconds` override when this returns a value, so
+    an unrequested run leaves the manifest's own default (or, absent one,
+    the Bit's own hardcoded fallback -- TestBit's is still
     RUN_DURATION_SECONDS) untouched."""
     if args.hold:
         return float("inf")
