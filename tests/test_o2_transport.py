@@ -474,25 +474,98 @@ def test_start_refuses_before_pyarco_has_announced_actl():
     assert fake.services == ""          # never wrote over pyarco's slot
 
 
-def test_start_warns_but_does_not_fail_when_actl_does_not_route_after_claiming_game(caplog):
-    """set_services REPLACES (o2lite.py:707). Writing "actl,game" is expected
-    to leave pyarco's control replies working, but this post-claim check has
-    been observed to miss its reply in the full boot even though pyarco's
-    own /actl/... messages reach the same connection -- the cause is
-    unresolved (tracked in a follow-up). Per controller ruling, this check
-    is a warning, not a fatal error; only the `game` check stays fatal."""
+def test_start_refuses_when_actl_does_not_route_after_claiming_game():
+    """set_services REPLACES (o2lite.py:707). Writing "actl,game" must leave
+    pyarco's control replies routed here; if the hub no longer routes
+    `actl` back, Arco's /actl/act replies are lost and every ugen build
+    hangs. Fatal, exactly like the `game` check. This was a warning for a
+    while because the live boot kept failing it: the cause was Arco
+    freezing on its undrained pty during the check (see the pump tests
+    below), not routing."""
     from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
 
     fake = FakeO2Lite()
     fake.set_services("actl")
     fake.refuse("actl")
     transport = O2LiteTransport()
-    with caplog.at_level("WARNING", logger="devicelink.o2_transport"):
+    with pytest.raises(RuntimeError, match="actl"):
         transport.start(fake, ownership_timeout=0.05, sleep=lambda s: None)
+    assert transport.drain_inbound() == []      # not started
 
-    assert any("actl" in record.getMessage() for record in caplog.records)
-    # transport still started: drain_inbound works against the live o2lite
-    assert transport.drain_inbound() == []
+
+def test_ownership_probe_calls_pump_every_iteration():
+    """2026-09-08 root cause of the missing /actl/_svcheck reply: Arco is
+    a curses app on a pty whose output buffer holds 1024 bytes (measured
+    on macOS), and the ownership probe held the process for up to 10s
+    without draining that pty. Arco blocked mid-write, stopped serving
+    O2 entirely, and the hub log showed a 9.7s silence from the moment
+    Control's services were registered until teardown drained the pty.
+    Whether `game` or `actl` failed depended only on when the buffer
+    filled. The probe therefore takes a `pump` hook and calls it once
+    per poll iteration so the caller can drain Arco while it waits."""
+    from devicelink.o2_transport import verify_service_ownership
+
+    fake = _FakeO2LiteAnsweringAfter(sends=2)
+    pumps = []
+    t = {"now": 0.0}
+
+    def clock():
+        return t["now"]
+
+    def sleep(s):
+        t["now"] += s
+
+    ok = verify_service_ownership(fake, "game", timeout=10.0,
+                                  resend_interval=2.0,
+                                  pump=lambda: pumps.append(1),
+                                  clock=clock, sleep=sleep)
+    assert ok is True
+    assert len(pumps) >= 2                      # once per poll, not once
+
+
+def test_start_forwards_pump_to_the_ownership_checks():
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+    pumps = []
+    O2LiteTransport().start(fake, pump=lambda: pumps.append(1))
+    assert pumps                                # the hook was driven
+
+
+def test_verifying_the_same_service_twice_registers_one_handler():
+    """o2litepy's _msg_dispatch calls the FIRST matching handler and
+    method_new appends (o2lite.py:796,908), so a second registration for
+    /<service>/_svcheck never fires. harness/o2_shroom.py's
+    reconnect_recheck re-verifies after every reconnect, so the probe
+    must reuse its handler per (o2lite, service) or every re-check after
+    the first silently times out."""
+    from devicelink.o2_transport import FakeO2Lite, verify_service_ownership
+
+    fake = FakeO2Lite()
+    fake.set_services("actl,game")
+    assert verify_service_ownership(fake, "game") is True
+    assert verify_service_ownership(fake, "game") is True
+    assert verify_service_ownership(fake, "actl") is True
+    paths = [path for path, _ in fake.handlers]
+    assert paths.count("/game/_svcheck") == 1
+    assert paths.count("/actl/_svcheck") == 1
+
+
+def test_the_fake_dispatches_the_first_matching_handler_like_o2litepy():
+    """Boundary rule 5: the old fake kept a dict keyed by path, so a second
+    method_new silently REPLACED the first and hid the append-and-first-
+    match behavior the test above pins."""
+    from devicelink.o2_transport import FakeO2Lite
+
+    fake = FakeO2Lite()
+    fake.set_services("game")
+    seen = []
+    fake.method_new("/game/x", None, True, lambda a, t, i: seen.append("first"), None)
+    fake.method_new("/game/x", None, True, lambda a, t, i: seen.append("second"), None)
+    fake.deliver("/game/x", "", ())
+    fake.poll()
+    assert seen == ["first"]
 
 
 def test_services_string_is_pyarco_then_control():
