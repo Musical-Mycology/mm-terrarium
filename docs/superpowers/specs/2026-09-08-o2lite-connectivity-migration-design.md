@@ -296,6 +296,39 @@ offline suite, then `run_stack --ci`. Record the `o2` commit installed.
 records it in `requirements-dev.txt`; the `deploy/` step clones that
 commit.
 
+**Result (2026-09-08).** Partial pass, on MYCOLOGICAL. `o2` commit
+installed: `f21499e` (`git -C /Users/chris/projects/o2 log -1 --format=%h
+-- o2litepy`). In a throwaway venv (`/tmp/p3-venv`), `pip install -e
+/Users/chris/projects/o2/o2litepy` succeeded and
+`python -c "import o2litepy, inspect; print(inspect.getfile(o2litepy))"`
+resolved to `/Users/chris/projects/o2/o2litepy/src/o2litepy/__init__.py`.
+The offline suite (`env -u PYTHONPATH -u MM_ARCO_PATH python -m pytest
+tests -q -p no:cacheprovider`) passed at the same count as baseline: 1986
+passed, 1 skipped.
+
+`pyarco` still needs `PYTHONPATH=/Users/chris/projects/arco` (it is not
+pip-installable). With that `PYTHONPATH` set and the o2litepy package
+also installed, `PYTHONPATH` wins: `import o2litepy` resolved to
+`/Users/chris/projects/arco/o2litepy/__init__.py`, not the installed
+copy. Phase 3 will need to handle `sys.path` order (or drop
+`arco/o2litepy` from the checkout, or strip `PYTHONPATH`'s o2litepy
+reach some other way) if it wants the installed `o2` package to win
+while `PYTHONPATH` is still set for `pyarco`.
+
+The live-stack step did not produce a usable pass or fail signal.
+`PYTHONPATH=/Users/chris/projects/arco python -m harness.run_stack --ci
+--seconds 20 --devices 1` failed at stage `control-room-loaded`:
+`TerrariumBuildFailure: Arco failed to start: Arco did not report ready
+within 15.0s`, with an empty `arco.log`. To isolate whether this was an
+o2litepy artifact, `./smoke-test.sh --ci --seconds 20 --devices 1` was
+also run with the project `.venv` (the known-good path) and failed
+identically, same stage, same empty `arco.log`. So the failure is
+environmental to this session (this sandboxed shell most likely cannot
+reach the Mac's audio device or a TTY for Arco's curses UI), not caused
+by o2litepy or the throwaway venv. Step 3 needs to be re-run from an
+interactive MYCOLOGICAL shell outside this harness to get a real
+pass/fail on the live stack.
+
 ### P4: o2lite C discovery from a phone (gates Phase 3 step 2, Victor)
 
 **Hypothesis.** The vendored o2lite C library's mDNS discovery finds Arco
