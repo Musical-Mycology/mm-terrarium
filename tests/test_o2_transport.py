@@ -502,3 +502,57 @@ def test_services_string_is_pyarco_then_control():
     assert PYARCO_SERVICE == "actl"
     assert CONTROL_SERVICE == "game"
     assert SERVICES == "actl,game"
+
+
+def test_ownership_check_passes_twice_on_the_same_connection():
+    """Real o2litepy APPENDS handlers (o2lite.py:908) and dispatches to the
+    FIRST match (o2lite.py:809-827); nothing removes one. A per-call
+    closure would therefore be shadowed forever by the first call's, so the
+    second check could never see its own nonce. Registration is once per
+    (connection, service) instead."""
+    from devicelink.o2_transport import verify_service_ownership
+
+    fake = FakeO2Lite()
+    fake.set_services("actl,game")
+
+    assert verify_service_ownership(fake, "game") is True
+    assert verify_service_ownership(fake, "game") is True
+    svcheck = [h for h in fake.handlers if h[0] == "/game/_svcheck"]
+    assert len(svcheck) == 1, "the handler must be registered exactly once"
+
+
+def test_start_succeeds_again_on_the_same_o2lite_after_stop():
+    """The serve-mode room recycle calls transport.start(o2lite) a second
+    time on the SAME connection (harness/terrarium_boot.py
+    _restart_room_clients). Before the fix the first call's svcheck closure
+    stayed first in o2lite's handler list and swallowed the reply, so the
+    fatal `game` check could never pass on a recycle."""
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+
+    transport = O2LiteTransport()
+    transport.start(fake)
+    transport.stop()
+    transport.start(fake)
+
+    assert fake.services == "actl,game"
+    assert transport.drain_inbound() == []
+
+
+def test_the_fake_dispatches_to_the_first_matching_handler():
+    """Boundary rule 5: the double must not be more permissive than the
+    library. o2litepy's _msg_dispatch returns after the first match, so a
+    second handler on the same address is dead code, and a fake that
+    replaced by path would hide exactly that."""
+    fake = FakeO2Lite()
+    fake.set_services("game")
+    fired = []
+    fake.method_new("/game/tap", "s", True,
+                    lambda a, t, i: fired.append("first"), None)
+    fake.method_new("/game/tap", "s", True,
+                    lambda a, t, i: fired.append("second"), None)
+
+    fake.deliver("/game/tap", "s", ("ie1",))
+    fake.poll()
+
+    assert fired == ["first"]

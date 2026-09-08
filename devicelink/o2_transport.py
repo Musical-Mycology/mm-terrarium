@@ -158,13 +158,31 @@ def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
     that is merely blocked (a cold audio-device open, an undrained pty)
     rather than misdiagnosing it as a second claimant after one silent
     2s window.
+
+    Registration is once per (connection, service), not once per call.
+    Real o2litepy APPENDS handlers (o2lite.py:908) and _msg_dispatch calls
+    the FIRST match (o2lite.py:809-827); nothing ever removes one. A
+    per-call closure would therefore be shadowed forever by the first
+    call's closure, so a second start() on the same connection (the
+    serve-mode room recycle in harness/terrarium_boot.py) could never
+    pass. The handler is registered once and appends into a box this call
+    reads and clears. The box lives on the o2lite object rather than in a
+    module-level id() map: a reconnect keeps the same object alive, and a
+    per-test fake gets its own box for free.
     """
-    received = []
+    boxes = getattr(o2lite, "_mm_svcheck_boxes", None)
+    if boxes is None:
+        boxes = {}
+        o2lite._mm_svcheck_boxes = boxes
+    already_registered = service in boxes
+    received = boxes.setdefault(service, [])
+    received.clear()
 
-    def _on_check(address, typespec, info) -> None:
-        received.append(o2lite.get_int32())
+    if not already_registered:
+        def _on_check(address, typespec, info) -> None:
+            received.append(o2lite.get_int32())
 
-    o2lite.method_new(f"/{service}/_svcheck", "i", True, _on_check, None)
+        o2lite.method_new(f"/{service}/_svcheck", "i", True, _on_check, None)
     o2lite.send_cmd(f"/{service}/_svcheck", 0, "i", _OWNERSHIP_NONCE)
 
     deadline = clock() + timeout
@@ -197,7 +215,13 @@ class FakeO2Lite:
         self._now = now
         self.services = ""
         self.sent: list[tuple[str, float, str, tuple]] = []
-        self.handlers: dict[str, object] = {}
+        # APPENDED, never replaced, and matched first-wins -- exactly what
+        # real o2litepy does (method_new appends at o2lite.py:908,
+        # _msg_dispatch returns on the first match at o2lite.py:809-827,
+        # and nothing ever removes a handler). Boundary rule 5: a dict
+        # keyed by path would silently REPLACE, which is more permissive
+        # than the library and hides shadowed-handler bugs.
+        self.handlers: list[tuple[str, str | None, object]] = []
         self.msg_timestamp = 0.0
         self._pull: list = []
         # Messages deliver() has queued but poll() has not yet dispatched --
@@ -231,7 +255,18 @@ class FakeO2Lite:
         return service in claimed and service not in self.refused_services
 
     def method_new(self, path, typespec, full, handler, info) -> None:
-        self.handlers[path] = handler
+        self.handlers.append((path, typespec, handler))
+
+    def _match(self, address: str, typespec: str):
+        """The FIRST registered handler matching address (and typespec, when
+        the handler asked for one). None typespec means "match any"."""
+        for path, want_types, handler in self.handlers:
+            if path != address:
+                continue
+            if want_types is not None and want_types != typespec:
+                continue
+            return handler
+        return None
 
     def send(self, addr, timestamp, *args) -> None:
         typespec = args[0] if len(args) > 1 else ""
@@ -259,7 +294,7 @@ class FakeO2Lite:
         """
         queue, self._queue = self._queue, []
         for address, typespec, args, timestamp in queue:
-            handler = self.handlers.get(address)
+            handler = self._match(address, typespec)
             if handler is None:
                 continue
             self.msg_timestamp = timestamp
@@ -314,7 +349,8 @@ class O2LiteTransport:
 
     def start(self, o2lite, *, ownership_timeout: float = 10.0,
               clock=time.monotonic, sleep=time.sleep) -> None:
-        """Adopt pyarco's already-connected o2lite object and claim the full services string on it.
+        """Adopt pyarco's already-connected o2lite object and claim the
+        full services string on it.
 
         Raises RuntimeError if the clock is not synced: time_get() returns
         -1 before sync, and a cue scheduled against -1 is meaningless.
