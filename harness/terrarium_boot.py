@@ -4,10 +4,9 @@ docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md
 and its follow-up,
 docs/superpowers/specs/2026-08-10-terrarium-visualization-simulator-design.md.
 
-Ordering matters here and is why this script -- not control/boot.py --
-constructs DeviceLinkServer: the server must already be listening before
-boot() calls its simulator_factory, which spawns harness/room_simulator.py
-and expects to connect immediately. See design spec section 6.
+This script constructs the o2lite transport Control rides on (pyarco's
+connection, synced by arco.initialize() inside build()) and starts it after
+build() returns; see build()'s docstring for the ordering.
 """
 
 from __future__ import annotations
@@ -33,7 +32,6 @@ from control.terrarium import Terrarium, TerrariumState
 from control.terrarium_config import (TerrariumConfig, load_terrarium_config,
                                       resolve_bit_roots)
 from devicelink.agent import DeviceLinkAgent
-from devicelink.server import DeviceLinkServer
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH
 from harness.o2_shroom import parent_is_gone
@@ -62,38 +60,6 @@ def sim_dev(fixture: str) -> str:
     which is the entire reason each is spawned as its own client (design
     spec section 3)."""
     return f"sim-room-{fixture}"
-
-
-class _SimulatorFactory:
-    """boot()'s simulator_factory contract is Callable[[TeardownStack, str],
-    str]: (teardown, fixture_name) -> dev, called once per fixture. The
-    factory registers whatever it spawns on the stack it is handed, so an
-    orphaned simulator is impossible by construction. `self.processes` is
-    kept only so tests can inspect the handles."""
-
-    def __init__(self, server_url: str, *, popen=subprocess.Popen,
-                 horizon: float | None = None,
-                 room_type: str = "TEST") -> None:
-        self._server_url = server_url
-        self._popen = popen
-        self._horizon = horizon
-        self._room_type = room_type
-        self.processes: list[SimulatorProcess] = []
-
-    def __call__(self, teardown, fixture: str, *, record=None) -> str:
-        dev = sim_dev(fixture)
-        command = [sys.executable, "-u", "-m", "harness.room_simulator",
-                   "--dev", dev, "--server", self._server_url,
-                   "--fixture", fixture]
-        command += ["--room-type", self._room_type]
-        if self._horizon is not None:
-            # So the Room reports frame latency in absolute terms on exit.
-            command += ["--control-horizon", str(self._horizon)]
-        process = SimulatorProcess(command, popen=self._popen, record=record)
-        process.start()
-        teardown.push(f"simulator-{fixture}", process.shutdown)
-        self.processes.append(process)
-        return dev
 
 
 class _O2SimulatorFactory:
@@ -167,15 +133,15 @@ def make_arco_process_cls(arco_popen, settle: float):
 def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
          room_binding: RoomBindingRegistry, room_spec=None,
          terrarium_config: TerrariumConfig | None = None,
-         host: str = "127.0.0.1",
-         port: int = 0, arco_process_cls=ArcoProcess,
-         simulator_popen=subprocess.Popen, room_audio=None, transport=None,
-         clock=time.monotonic, on_join_denied=None,
+         transport, clock, arco_process_cls=ArcoProcess,
+         simulator_popen=subprocess.Popen, room_audio=None,
+         on_join_denied=None,
          binding_store_path: str | None = None,
          runs_dir: str | None = None, run_id: str | None = None):
     """Construct the whole stack, including a control.terrarium.Terrarium.
     Returns (game_server, devicelink_server, devicelink_agent, arco_process,
-    teardown, terrarium).
+    teardown, terrarium) -- slot 2 is the transport (o2lite is the only
+    mode; there is no separate devicelink server object).
 
     room_spec: the Room to load immediately, exactly like the old boot()
     always did -- given, this behaves as before (arco_process is the live
@@ -200,24 +166,26 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     of -- it needs no live connection to fake). Audio is unconditionally on
     once real (design spec section 3): there is no --audio-style opt-out.
 
-    transport: an already-adopted O2LiteTransport (see
-    devicelink/o2_transport.py), or None for the default websocket
-    DeviceLinkServer. o2lite mode has no socket to listen on -- the
-    connection is pyarco's, already clock-synced by arco.initialize() and
-    started by the caller before this transport was handed in here -- so
-    this function never constructs or starts an O2LiteTransport itself.
+    transport: an already-adopted, not-yet-started O2LiteTransport (see
+    devicelink/o2_transport.py) -- required, not optional: o2lite is the
+    only mode, there is no socket to listen on. The connection is pyarco's,
+    clock-synced by arco.initialize() inside room_audio's ArcoSynthPool.
+    start() below, and the caller starts the transport on it AFTER this
+    function returns -- and therefore registers its teardown then, so it
+    stops before everything registered here. This function never
+    constructs or starts an O2LiteTransport itself.
 
-    clock: threaded straight through to DeviceLinkAgent, whose default is
-    the same time.monotonic -- so omitting this argument changes nothing.
-    It exists so o2lite mode can hand in o2lite.time_get instead: Control
-    stamps every frame's `when` off this clock (agent.py:253), and
-    harness/o2_shroom.py ticks its device off the O2 clock, so the two
-    must read the same clock or `when` is never reachable -- exactly the
-    live-demo bug this parameter fixes. This function still never imports
-    o2litepy itself; the caller (main(), only in the --transport o2lite
-    branch) resolves o2lite.time_get and hands it in as a plain callable,
-    the same way it already hands in the started transport. Also threaded
-    into the default (room_audio=None) AudioBridge below, for the same
+    clock: required, not optional -- an omitted or defaulted clock is
+    exactly how the two-clocks bug of 2026-08-13 happened (Control stamped
+    frames off time.monotonic while the device ticked on the O2 clock).
+    Threaded straight through to DeviceLinkAgent: Control stamps every
+    frame's `when` off this clock (agent.py:253), and harness/o2_shroom.py
+    ticks its device off the O2 clock, so the two must read the same clock
+    or `when` is never reachable. In production this is o2lite.time_get,
+    resolved by main() via _o2lite_module() and handed in as a plain
+    callable, the same way it already hands in the started transport. This
+    function still never imports o2litepy itself. Also threaded into the
+    default (room_audio=None) AudioBridge below, for the same
     reason: DeviceLinkAgent._tick_audio() ticks room_audio against this
     same clock (agent.py), so a welcome cue's due time (set at on_grant,
     against AudioBridge's own clock) and its expiry check (at tick, against
@@ -231,33 +199,15 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     a cue's time is unreachable -- the same failure this parameter was added
     to fix, one layer up."""
     teardown = TeardownStack()
-    if transport is None:
-        server = DeviceLinkServer(host=host, port=port)
-        server.start()
-        # Pushed BEFORE the Terrarium loads a Room so it is torn down LAST.
-        # The Room simulator is a client of this server, and load_room()
-        # spawns it, so registration order is what keeps client-before-
-        # server true here. This is the process-level stack -- everything
-        # a load_room() spawns lives on terrarium.room_stack instead, a
-        # SEPARATE stack, so a mid-run unload_room() never touches this one.
-        teardown.push("devicelink-server", server.stop)
-    else:
-        # o2lite mode: there is no socket to listen on. The connection is
-        # pyarco's, already clock-synced by arco.initialize(), and the
-        # caller started the transport on it -- and therefore the caller
-        # registers its teardown, after this function returns, so it stops
-        # before everything registered here.
-        server = transport
-
-    if transport is None:
-        factory = _SimulatorFactory(f"ws://{host}:{server.port}/ws",
-                                    popen=simulator_popen,
-                                    horizon=config.cue_horizon,
-                                    room_type=config.room_name or "")
-    else:
-        factory = _O2SimulatorFactory(config.o2_ensemble,
-                                      popen=simulator_popen,
-                                      room_type=config.room_name or "")
+    # o2lite mode is the only mode: there is no socket to listen on. The
+    # connection is pyarco's, clock-synced by arco.initialize() inside
+    # room_audio's ArcoSynthPool.start() below, and the caller starts the
+    # transport on it AFTER this function returns -- and therefore
+    # registers its teardown then, so it stops before everything here.
+    server = transport
+    factory = _O2SimulatorFactory(config.o2_ensemble,
+                                  popen=simulator_popen,
+                                  room_type=config.room_name or "")
 
     if terrarium_config is None:
         rooms = {room_spec.name: room_spec} if room_spec is not None else {}
@@ -339,19 +289,15 @@ def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
 
     THREE unwind phases now, in this order:
 
-      1. `pre_room_teardown`, if given -- in o2lite mode this is the o2lite
-         transport ONLY. It must close BEFORE Arco: it is Control's own
-         o2lite client connection to the SAME Arco hub the Room simulator
-         also talks to, and the repo's actual invariant (see
-         control/teardown.py's own docstring) is "no client outlives the
-         hub it is a guest on", not "Arco last". A client that outlives its
-         hub is exactly the PR #24 defect that invariant exists to
-         prevent, and the transport is unambiguously a client of Arco here
-         -- it must go first, ahead of `terrarium.room_stack` (which is
-         where Arco itself lives). None in websocket mode: there is no
-         o2lite transport, and the devicelink server (websocket mode's own
-         hub, the Room simulator's client target there) belongs on
-         `teardown` below, which already closes AFTER the room stack.
+      1. `pre_room_teardown`, if given -- the o2lite transport ONLY. It
+         must close BEFORE Arco: it is Control's own o2lite client
+         connection to the SAME Arco hub the Room simulator also talks to,
+         and the repo's actual invariant (see control/teardown.py's own
+         docstring) is "no client outlives the hub it is a guest on", not
+         "Arco last". A client that outlives its hub is exactly the PR #24
+         defect that invariant exists to prevent, and the transport is
+         unambiguously a client of Arco here -- it must go first, ahead of
+         `terrarium.room_stack` (which is where Arco itself lives).
 
          STEADY STATE EXCEPTION: a mid-run `unload_room` (a Console
          `unload_room`, or `_serve_rounds`'/`_serve_roomless`'s own
@@ -374,13 +320,9 @@ def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
          still-RUNNING Bit is aborted on the way down rather than refusing
          to tear down.
 
-      3. The process-level `teardown` this module owns (the devicelink
-         server in websocket mode, the console) -- neither has a hub
-         dependency on the room stack (the devicelink server IS websocket
-         mode's hub, and closes after its own clients precisely because it
-         was pushed onto `teardown` first, at build() time, and torn down
-         last by this stack's own LIFO order), so ordering it after phase 2
-         is safe either way.
+      3. The process-level `teardown` this module owns (the console) -- it
+         has no hub dependency on the room stack, so ordering it after
+         phase 2 is safe either way.
     """
     if pre_room_teardown is not None:
         for name, exc in pre_room_teardown.close():
@@ -1001,13 +943,8 @@ def _recycle_room(terrarium, *, transport=None, pool=None, o2lite=None):
     Returns None on success, else the reason string (never raises). On
     failure the restarts are skipped: there is no hub to restart against,
     and the caller (the serve-round loop) treats the reason like a
-    Console unload_room -- back to the NO_ROOM wait.
-
-    Websocket mode passes transport=None (the devicelink server is
-    process-scoped, not an Arco client); pool applies in both modes
-    (audio is unconditionally on)."""
-    if transport is not None:
-        transport.stop()
+    Console unload_room -- back to the NO_ROOM wait."""
+    transport.stop()
     if pool is not None:
         pool.quiesce()
     reason = terrarium.recycle_room()
@@ -1035,11 +972,25 @@ def _restart_room_clients(*, transport=None, pool=None,
     try:
         if pool is not None:
             pool.start()
-        if transport is not None:
-            transport.start(o2lite)
+        transport.start(o2lite)
     except Exception as exc:
         return str(exc)
     return None
+
+
+def _o2lite_module():
+    """The o2litepy singleton this process rides on -- pyarco's connection.
+    A module-level seam so the offline main() tests can hand in a
+    FakeO2Lite. Resolved through ensure_o2litepy so a hand-run
+    terrarium_boot finds the sibling arco checkout the way run_stack does."""
+    from harness.arco_paths import ensure_o2litepy
+
+    if not ensure_o2litepy():
+        raise SystemExit("terrarium_boot needs o2litepy and could not find "
+                         "it: set MM_ARCO_PATH to the arco checkout or put "
+                         "it on PYTHONPATH")
+    from o2litepy import o2lite       # noqa: PLC0415 (after ensure_o2litepy)
+    return o2lite
 
 
 def _register_o2lite_transport(teardown, transport) -> None:
@@ -1087,8 +1038,9 @@ def _build_arg_parser():
     import argparse
 
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8771)
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="Console bind address (see --console-port). "
+                         "0.0.0.0 exposes it to the LAN; no auth exists.")
     ap.add_argument("--seconds", type=float, default=None,
                     help="How long the Bit stays RUNNING before completing.")
     ap.add_argument("--hold", action="store_true",
@@ -1157,11 +1109,6 @@ def _build_arg_parser():
                          "with the harness device clients' own "
                          "--heartbeat-interval (default 5 s each): three "
                          "missed heartbeats before a reap.")
-    ap.add_argument("--transport", choices=("websocket", "o2lite"),
-                    default="websocket",
-                    help="websocket: the JSON devicelink shim, no Arco in "
-                         "the device path. o2lite: real O2 through the Arco "
-                         "hub, which requires a running Arco server.")
     ap.add_argument("--setup-seconds", type=float, default=None,
                     help="Hold the Bit in SETUP for this long before "
                          "run(), so a device can join a scored role (e.g. "
@@ -1294,27 +1241,16 @@ def main() -> None:
     # ordered teardown below lives in a finally that a bare SIGTERM skips.
     sigterm_as_keyboard_interrupt()
 
-    transport = None
-    o2lite_module = None
-    clock = time.monotonic
-    if args.transport == "o2lite":
-        from o2litepy import o2lite            # lazy: websocket mode needs no o2litepy
+    from devicelink.o2_transport import O2LiteTransport
 
-        from devicelink.o2_transport import O2LiteTransport
-        # pyarco's ArcoSynthPool.start() runs arco.initialize(), which
-        # connects o2lite and blocks until clock sync. build() does that
-        # while constructing room_audio, so the transport is started after
-        # build() returns rather than before it.
-        transport = O2LiteTransport()
-        o2lite_module = o2lite
-        # Control must stamp frames on the same clock the device ticks
-        # against (harness/o2_shroom.py: client.tick(o2lite.time_get())),
-        # or a frame's `when` is never reachable -- see build()'s clock=
-        # docstring. o2litepy is a module-level singleton (design spec
-        # 2026-08-12 section 5.2), so this is the very same clock
-        # arco.initialize() already synced by the time build() constructs
-        # the agent below.
-        clock = o2lite.time_get
+    o2lite = _o2lite_module()
+    # pyarco's ArcoSynthPool.start() runs arco.initialize(), which connects
+    # o2lite and blocks until clock sync. build() does that while
+    # constructing room_audio, so the transport is started after build()
+    # returns rather than before it. The clock is the very same singleton's
+    # time_get, so Control stamps frames on the clock the device ticks on.
+    transport = O2LiteTransport()
+    clock = o2lite.time_get
 
     # Collect ONLY explicitly-given CLI values into the overrides dict --
     # anything left at its argparse None default falls through to the
@@ -1406,7 +1342,6 @@ def main() -> None:
         arco_command=[args.arco_command],
         room_binding=room_binding, room_spec=room_spec,
         terrarium_config=terrarium_config,
-        host=args.host, port=args.port,
         transport=transport, clock=clock,
         arco_process_cls=arco_process_cls, on_join_denied=_print_join_denied,
         runs_dir=runs_dir, run_id=run_id)
@@ -1426,8 +1361,7 @@ def main() -> None:
         back against the new hub. Idempotent via clients_stopped."""
         if clients_stopped[0]:
             return
-        if transport is not None:
-            transport.stop()
+        transport.stop()
         if pool is not None:
             pool.quiesce()
         clients_stopped[0] = True
@@ -1445,7 +1379,7 @@ def main() -> None:
         double-start."""
         if not clients_stopped[0]:
             return None
-        o2 = o2lite_module if transport is not None else None
+        o2 = o2lite
         reason = _restart_room_clients(transport=transport, pool=pool,
                                        o2lite=o2)
         if reason is None:
@@ -1523,14 +1457,11 @@ def main() -> None:
             # Registered AFTER build(), so it is torn down FIRST. That is
             # correct here rather than an oversight: the console is a
             # monitor shell whose only clients are browsers, outside this
-            # stack entirely. The devicelink server is last because the Room
-            # simulator is its client; nothing in the stack is a client of
-            # the console.
+            # stack entirely.
             teardown.push("console-server", console_server.stop)
-            # clock is main()'s own already-resolved local (time.monotonic
-            # on the websocket path, o2lite.time_get on the o2lite path),
-            # not a fresh time.monotonic -- see build()'s clock= docstring
-            # for the two-clocks bug this guards against.
+            # clock is main()'s own already-resolved o2lite.time_get, not a
+            # fresh time.monotonic -- see build()'s clock= docstring for the
+            # two-clocks bug this guards against.
             catalog_root = (terrarium_config.instrument_roots[0]
                             if terrarium_config.instrument_roots else None)
             rooms_root = (terrarium_config.room_roots[0]
@@ -1548,14 +1479,10 @@ def main() -> None:
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
-        if transport is not None:
-            transport.start(o2lite)            # raises if the clock is unsynced
-            _register_o2lite_transport(pre_room_teardown, transport)
-            print(f"{markers.CONTROL_TRANSPORT_READY} "
-                  f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)
-        else:
-            print(f"DeviceLink listening on ws://{args.host}:{server.port}/ws "
-                  f"(Ctrl-C to stop)")
+        transport.start(o2lite)            # raises if the clock is unsynced
+        _register_o2lite_transport(pre_room_teardown, transport)
+        print(f"{markers.CONTROL_TRANSPORT_READY} "
+              f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)
         if args.arco_start_audio:
             # After Control's own clock sync, so this cannot disturb it.
             console = getattr(arco, "_process", None)

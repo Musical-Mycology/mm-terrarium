@@ -125,7 +125,6 @@ def discover_registry(config_path: str | None) -> BitRegistry:
 def control_command(cfg: StackConfig, ppid: int) -> list[str]:
     command = [
         sys.executable, "-u", "-m", "harness.terrarium_boot",
-        "--transport", "o2lite",
         "--arco-command", cfg.arco_command,
         "--arco-pty",
         "--arco-log", os.path.join(cfg.log_dir, "arco.log"),

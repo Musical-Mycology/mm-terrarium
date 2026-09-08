@@ -189,6 +189,10 @@ def _run_main_capturing_build(monkeypatch, argv):
         raise SystemExit(0)
 
     import harness.terrarium_boot as terrarium_boot_module
+    from devicelink.o2_transport import FakeO2Lite
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+    monkeypatch.setattr(terrarium_boot_module, "_o2lite_module", lambda: fake)
     monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
     monkeypatch.setattr(sys, "argv", ["terrarium_boot.py"] + argv)
 

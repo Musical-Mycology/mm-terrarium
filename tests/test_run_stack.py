@@ -305,7 +305,7 @@ def test_control_command_carries_the_flags_a_headless_run_needs(tmp_path):
     /host/clear that can leave arco.output None."""
     command = control_command(_cfg(tmp_path), 99)
 
-    assert "--transport" in command and "o2lite" in command
+    assert "--transport" not in command
     assert "--arco-pty" in command
     assert "--arco-log" in command
     assert "--arco-settle-seconds" in command
