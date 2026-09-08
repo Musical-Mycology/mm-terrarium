@@ -200,6 +200,11 @@ timestamp is in the future and delivers it at that time, so a `leds` frame
 reaches its handler at `when`. The app draws on arrival, as it does today.
 Control is unchanged and keeps computing `at = origin + cue_horizon`.
 
+Probe P8 (section 7) found this copy of `o2ws.js` does not in fact hold
+sub-second-future messages -- a rounding bug in `o2ws_schedule_handler`
+delivers them immediately -- so the browser link will need to hold frames
+in its own queue until `when`, and Plan B's Task 5 carries that.
+
 ### 6.4 Failure
 
 - Websocket closed: `SimPhase.lost`, existing reload affordance. No
@@ -244,6 +249,27 @@ Control is unchanged and keeps computing `at = origin + cue_horizon`.
   minus the timestamp over a hundred messages. Expected within a few
   milliseconds. If not, the browser needs its own timed queue, and this
   spec's section 6.3 is revised.
+
+**P7 result (2026-09-08).** PASS, via the loopback fallback (the browser
+tool refused to navigate to a non-127.0.0.1 URL, so this ran page origin
+`http://127.0.0.1:8788` against host `127.0.0.1:8080`, proving cross-port
+o2ws but not cross-host). Printed line: `P7 PASS: clock synced from origin
+http://127.0.0.1:8788 to 127.0.0.1:8080`.
+
+**P8 result (2026-09-08).** FAIL. Lateness was consistently negative
+(messages delivered ~150-200 ms *before* their scheduled timestamp, not
+after), over 60 of the planned 100 samples -- collection stalled short of
+100 because the automated browser tool keeps the tab backgrounded
+(`document.hidden` stayed `true` throughout), which Chrome throttles
+`setTimeout`/`setInterval` in; p50 = -196.50 ms, p99 = -158.50 ms, n = 60.
+The throttling only slowed how fast the page could send its 100 test
+messages -- it does not explain the negative sign, and every sample showed
+the same early-delivery pattern. The root cause is in `www/o2ws.js`'s
+`o2ws_schedule_handler` (line 367): `setTimeout(handler, Math.round(timestamp
+- now) * 1000, ...)` rounds the delay to the nearest whole *second* before
+converting to milliseconds, so any delay under 500 ms (the common case for a
+cue horizon) rounds to zero and the message is delivered immediately instead
+of held until `timestamp`. No `error:` lines were logged.
 
 **Live gate (from the migration spec, made concrete):** a phone on the
 venue LAN scans the poster, lands joined in a scored role during SETUP,
