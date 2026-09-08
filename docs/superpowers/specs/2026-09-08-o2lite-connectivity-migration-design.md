@@ -32,18 +32,22 @@ Arco.
 ## 2. End state, in one picture
 
 ```
-Phone browser  --o2ws-->  +--------------+  o2lite (own conn)  Control+GameServer
-Native app     --o2lite-> | Arco server  | <-----------------> offers "game"
-ESP32 Tuneshroom -o2lite> | "arco"       | <-----------------> pyarco
-                          +--------------+  o2lite (own conn)  offers "actl"
+Phone browser  --o2ws-->  +--------------+
+Native app     --o2lite-> | Arco server  |  one o2lite conn   Control+GameServer
+ESP32 Tuneshroom -o2lite> | "arco"       | <----------------> offers "actl,game"
+                          +--------------+                    (pyarco + transport)
   each device offers "ie<N>"
 ```
 
 - **Arco** is the only full-O2 process in the room and the only hub. It
   also serves the browser page over HTTP.
-- **Control** is an o2lite client with its **own** connection offering
-  `game`. pyarco keeps its own connection offering `actl`. Control has no
-  device-facing socket of its own.
+- **Control** is one o2lite client with **one** connection offering both
+  `actl` (pyarco's Arco control) and `game` (the device transport). One
+  connection per process is o2lite's model: the C library keeps its
+  connection in process-wide statics, and `set_services` takes a
+  comma-separated list precisely so a process announces everything it
+  offers over its single link. Control has no device-facing socket of its
+  own.
 - **Devices** reach Arco over three physical links: the o2lite C library on
   hardware, the same C library behind `dart:ffi` in the native app, and
   o2ws (O2 over websocket, `o2ws.js`) in a browser page Arco serves.
@@ -104,10 +108,15 @@ pattern).
 Goal: o2lite is the only device wire in this repo, and Arco is ready to
 serve a page.
 
-1. **Control opens its own o2lite connection** offering only `game`.
-   pyarco's connection and its `actl` service are untouched. The shared
-   `"actl,game"` string, the set_services-replaces trap, and the "guest on
-   pyarco" coupling go away. Depends on probe P1 (section 6).
+1. **Control owns the process's services string.** One o2lite connection
+   per process, as today, but the ownership is explicit: after
+   `arco.initialize()` returns (pyarco has announced `actl`), Control
+   applies the full string `"actl,game"` once, from one constant, and a
+   test pins that pyarco's service name is in it. This closes the
+   set_services-replaces trap (`o2lite.py:707`) without a second
+   connection, which the C library cannot do and which a dead hub would
+   not benefit from anyway, since `_recycle_room` restarts pyarco and the
+   transport together.
 2. **`terrarium_boot` defaults to o2lite** and the websocket branch is
    deleted: `devicelink/server.py`, `harness/room_simulator.py`,
    `harness/shroom_client.py`, `harness/devicelink_smoke.py`, and the
@@ -139,7 +148,7 @@ serve a page.
    maintained" line and the stale claim that the o2lite transport shipping
    `JoinResult.config` is unbuilt (it ships via `devicelink/agent.py`).
 
-**Live gate.** `run_stack --ci` green with Control on its own connection;
+**Live gate.** `run_stack --ci` green with the services string pinned;
 a Testshroom joined, rendering at its declared `when`; a capture round
 trip with PCM reassembled from chunks; `o2wsclocksync.htm` loaded from
 Arco's `www/` reaching clock sync in a browser; and the o2litepy ensemble
@@ -211,8 +220,13 @@ All are documented in `docs/MM_TERRARIUM.md`; they are upstream behavior or
 O2 working as designed, and every phase designs around them:
 
 - **pyarco's reset kills sockets of clients connected before it.**
-  Control's own connection opens after `arco.initialize()` returns, and
-  devices are told to expect a reconnect if they attached earlier.
+  Control shares pyarco's connection, so it is never one of those
+  clients; devices that attached before Control came up re-verify their
+  service after the reconnect o2lite performs for them.
+- **One o2lite connection per process.** Never a second `O2lite()`
+  instance in Control, even though o2litepy would allow it: the C library
+  on hardware and behind FFI cannot, and every client should share one
+  connection model.
 - **A refused service announcement is silent on the client.** Every
   client self-verifies with a self-addressed round trip after announcing.
 - **A UDP send right after `set_services` can be dropped.** First send
@@ -230,27 +244,14 @@ a probe we run ourselves before the phase that depends on it, so any
 question that does go upstream carries a measurement. Every probe is
 throwaway code in the scratchpad or a sibling checkout, never committed.
 
-### P1: two o2lite clients in one process (gates Phase 1 step 1)
+### P1: withdrawn
 
-**Hypothesis.** o2litepy's `O2lite` is a class
-(`arco/o2litepy/o2lite.py:260`) with a module-level singleton
-(`o2lite = O2lite()`, line 1083) that pyarco imports. A second `O2lite()`
-instance in the same process can discover, clock-sync, and offer its own
-service beside the singleton.
-
-**Procedure.** **RUN ON: MYCOLOGICAL**, with `run_stack`'s Arco running.
-A script imports pyarco, calls `arco.initialize()` (singleton, `actl`),
-then constructs `O2lite()` a second time, initializes it against the same
-ensemble, offers `probe`, waits for `time_get() >= 0` on both, and runs
-`verify_service_ownership` against both `actl` and `probe`. Then it pumps
-both for 60 s while sending one `/probe/ping` per second over UDP and TCP.
-
-**Pass.** Both sync, both round-trips return, no message lost over 60 s,
-and killing the second instance leaves pyarco's `actl` replies working.
-
-**If it fails.** Control stays a guest on pyarco's connection. Phase 1
-step 1 becomes "the services string is owned in one place with a test
-that pins it", and the coupling is documented as accepted.
+The first draft probed whether Control could open a second o2lite
+connection beside pyarco's. Withdrawn on review (2026-09-08): one
+connection per process offering several services is o2lite's model, the
+C library cannot do otherwise, and a second connection buys nothing on a
+dead hub. Phase 1 step 1 is the ownership fix instead. The number is kept
+so P2 to P5 keep their names.
 
 ### P2: Arco serves a page and o2ws reaches Control (gates Phase 1 step 7, Phase 2)
 
@@ -324,7 +325,7 @@ detection the unchunked path has.
 ## 7. Sequencing and parallelism
 
 ```
-Chris   P1 P2 P3 ──> Phase 1 ─────────────> www/ serving ──> Phase 3 packaging
+Chris   P2 P3 ─────> Phase 1 ─────────────> www/ serving ──> Phase 3 packaging
 Victor  P4 ──────> Phase 2 (O2wsLink) ────────────────────> Phase 3 (FfiLink)
 ```
 
