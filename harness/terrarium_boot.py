@@ -63,12 +63,11 @@ def sim_dev(fixture: str) -> str:
 
 
 class _O2SimulatorFactory:
-    """Spawns the Room simulator as an o2lite client rather than a
-    websocket one. Reuses harness/o2_shroom.py with --no-join: Control has
-    already recorded this dev as the bound Room before the process is
-    spawned, so there is no Registration Node to tap -- the same rule
-    harness/room_simulator.py follows. Called once per fixture, same as
-    _SimulatorFactory."""
+    """Spawns the Room simulator as an o2lite client. Reuses
+    harness/o2_shroom.py with --no-join: Control has already recorded this
+    dev as the bound Room before the process is spawned, so there is no
+    Registration Node to tap -- the same rule harness/room_simulator.py
+    follows. Called once per fixture."""
 
     def __init__(self, ensemble: str, *, popen=subprocess.Popen,
                  room_type: str = "TEST") -> None:
@@ -78,10 +77,9 @@ class _O2SimulatorFactory:
         self.processes: list[SimulatorProcess] = []
 
     def __call__(self, teardown, fixture: str, *, record=None) -> str:
-        # -u for the same reason _SimulatorFactory passes it: without it
-        # this child's stdout is block-buffered, so its exit report is lost
-        # on an ungraceful exit and harness/run_stack.py cannot watch it for
-        # readiness markers.
+        # -u is required: without it this child's stdout is block-buffered,
+        # so its exit report is lost on an ungraceful exit and
+        # harness/run_stack.py cannot watch it for readiness markers.
         #
         # --exit-with-parent is what stops this subprocess outliving the
         # Terrarium. An orphan keeps its browser canvas open, reconnects to
@@ -929,7 +927,7 @@ def _print_join_denied(dev: str, node: str, reason: str) -> None:
     print(f"join denied: {dev} -> {node} ({reason})", flush=True)
 
 
-def _recycle_room(terrarium, *, transport=None, pool=None, o2lite=None):
+def _recycle_room(terrarium, *, transport, pool=None, o2lite=None):
     """Recycle the active Room with Control's own Arco clients handled in
     the only survivable order. Control is a client of the hub it is about
     to kill, twice over in o2lite mode: the O2LiteTransport (game/actl on
@@ -954,7 +952,7 @@ def _recycle_room(terrarium, *, transport=None, pool=None, o2lite=None):
                                  o2lite=o2lite)
 
 
-def _restart_room_clients(*, transport=None, pool=None,
+def _restart_room_clients(*, transport, pool=None,
                           o2lite=None) -> str | None:
     """The restart half of `_recycle_room` (pool.start() then
     transport.start(o2lite), process-launch order -- see `_recycle_room`'s
@@ -1241,17 +1239,6 @@ def main() -> None:
     # ordered teardown below lives in a finally that a bare SIGTERM skips.
     sigterm_as_keyboard_interrupt()
 
-    from devicelink.o2_transport import O2LiteTransport
-
-    o2lite = _o2lite_module()
-    # pyarco's ArcoSynthPool.start() runs arco.initialize(), which connects
-    # o2lite and blocks until clock sync. build() does that while
-    # constructing room_audio, so the transport is started after build()
-    # returns rather than before it. The clock is the very same singleton's
-    # time_get, so Control stamps frames on the clock the device ticks on.
-    transport = O2LiteTransport()
-    clock = o2lite.time_get
-
     # Collect ONLY explicitly-given CLI values into the overrides dict --
     # anything left at its argparse None default falls through to the
     # selected Bit's manifest (or, absent an override, whatever that
@@ -1336,6 +1323,17 @@ def main() -> None:
     # against. --no-run-records opts back out to pre-Task behavior.
     runs_dir = None if args.no_run_records else args.runs_dir
     run_id = None if runs_dir is None else time.strftime("%Y%m%d-%H%M%S")
+
+    from devicelink.o2_transport import O2LiteTransport
+
+    o2lite = _o2lite_module()
+    # pyarco's ArcoSynthPool.start() runs arco.initialize(), which connects
+    # o2lite and blocks until clock sync. build() does that while
+    # constructing room_audio, so the transport is started after build()
+    # returns rather than before it. The clock is the very same singleton's
+    # time_get, so Control stamps frames on the clock the device ticks on.
+    transport = O2LiteTransport()
+    clock = o2lite.time_get
 
     gs, server, agent, arco, teardown, terrarium = build(
         config, registry.lazy_class_map(),

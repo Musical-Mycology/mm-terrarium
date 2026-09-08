@@ -220,8 +220,8 @@ def test_shutdown_stops_the_simulator_before_arco():
 
 def test_full_o2lite_unwind_order_through_main(monkeypatch):
     """The ordering this whole branch exists to fix, traced end to end
-    through the actual --transport o2lite path harness/run_stack.py
-    drives -- previously verified only by a throwaway script.
+    through the actual o2lite path harness/run_stack.py drives --
+    previously verified only by a throwaway script.
 
     main() cannot be driven directly here (argparse, a live Arco,
     o2litepy), so this calls build() for real with an adopted
@@ -1908,8 +1908,6 @@ def test_unknown_room_flag_exits_naming_test_and_demo(monkeypatch, capsys):
     test_resolve_room_spec_raises_a_located_error_for_an_unknown_room
     above: main() must fail the exact same way, before ever calling
     build()."""
-    import harness.terrarium_boot as terrarium_boot_module
-    _mock_o2lite_module(monkeypatch, terrarium_boot_module)
     monkeypatch.setattr(sys, "argv",
                         ["terrarium_boot.py", "--room", "BOGUS"])
 
@@ -1927,8 +1925,6 @@ def test_no_room_and_no_console_port_is_refused(monkeypatch, capsys):
     Room later -- with no console port either, nothing would ever load
     one, so this is refused up front rather than booting into a NO_ROOM
     idle nothing can ever leave."""
-    import harness.terrarium_boot as terrarium_boot_module
-    _mock_o2lite_module(monkeypatch, terrarium_boot_module)
     monkeypatch.setattr(sys, "argv", ["terrarium_boot.py"])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -2339,7 +2335,12 @@ def test_restart_room_clients_catches_a_raising_start_and_returns_reason():
         def start(self):
             raise RuntimeError("injected pool failure")
 
-    reason = terrarium_boot._restart_room_clients(pool=FailingPool())
+    class FakeTransport:
+        def start(self, o2):
+            pass
+
+    reason = terrarium_boot._restart_room_clients(
+        transport=FakeTransport(), pool=FailingPool())
     assert reason == "injected pool failure"
 
 
@@ -2474,7 +2475,7 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
 
     def fake_build(config, bit_registry, **kwargs):
         gs = _FakeObservable()
-        server = types.SimpleNamespace(port=0)
+        server = object()
         agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
         teardown = TeardownStack()
         terrarium = _FakeObservable()
@@ -2525,7 +2526,7 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
 
     def fake_build(config, bit_registry, **kwargs):
         gs = _FakeObservable()
-        server = types.SimpleNamespace(port=0)
+        server = object()
         agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
         teardown = TeardownStack()
         terrarium = _FakeObservable()
@@ -2579,7 +2580,7 @@ def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
 
     def fake_build(config, bit_registry, **kwargs):
         gs = _FakeObservable()
-        server = types.SimpleNamespace(port=0)
+        server = object()
         agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
         teardown = TeardownStack()
         terrarium = _FakeObservable()
