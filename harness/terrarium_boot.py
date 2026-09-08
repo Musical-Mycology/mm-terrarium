@@ -159,7 +159,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
          simulator_popen=subprocess.Popen, room_audio=None,
          on_join_denied=None,
          binding_store_path: str | None = None,
-         runs_dir: str | None = None, run_id: str | None = None):
+         runs_dir: str | None = None, run_id: str | None = None,
+         arco_ready_timeout: float | None = None):
     """Construct the whole stack, including a control.terrarium.Terrarium.
     Returns (game_server, devicelink_server, devicelink_agent, arco_process,
     teardown, terrarium) -- slot 2 is the transport (o2lite is the only
@@ -244,7 +245,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         terrarium_config, gs, room_binding, boot_config=config,
         arco_command=arco_command, arco_process_cls=arco_process_cls,
         simulator_factory=factory, binding_store_path=binding_store_path,
-        runs_dir=runs_dir, run_id=run_id)
+        runs_dir=runs_dir, run_id=run_id,
+        arco_ready_timeout=arco_ready_timeout)
 
     if room_spec is not None:
         reason = terrarium.load_room(room_spec.name)
@@ -1111,7 +1113,8 @@ def _build_arg_parser():
                          "reset ever happens. Default 0 keeps existing "
                          "behavior.")
     ap.add_argument("--arco-ready-timeout", type=float, default=None,
-                    help="Override BootConfig.arco_ready_timeout (15 s). "
+                    help="Override the room's Arco ready timeout (the "
+                         "RoomSpec's arco_ready_timeout, default 15 s). "
                          "The FIRST readiness probe against a cold Arco can "
                          "take ~18 s -- it connects, then pyarco's reset() "
                          "times out after 5 s ('Could not reset Arco server "
@@ -1327,8 +1330,6 @@ def main() -> None:
                        and "array" in room_spec.backends else None))
     if args.horizon is not None:
         config.cue_horizon = args.horizon
-    if args.arco_ready_timeout is not None:
-        config.arco_ready_timeout = args.arco_ready_timeout
     if args.stale_timeout is not None:
         config.stale_timeout = args.stale_timeout
     room_binding = RoomBindingRegistry()
@@ -1371,7 +1372,11 @@ def main() -> None:
         terrarium_config=terrarium_config,
         transport=transport, clock=clock,
         arco_process_cls=arco_process_cls, on_join_denied=_print_join_denied,
-        runs_dir=runs_dir, run_id=run_id)
+        runs_dir=runs_dir, run_id=run_id,
+        # The CLI override reaches Terrarium.load_room directly. Setting
+        # BootConfig.arco_ready_timeout was a dead end: load_room waits on
+        # the RoomSpec's value, never BootConfig's.
+        arco_ready_timeout=args.arco_ready_timeout)
     room_audio = getattr(agent, "room_audio", None)
     pool = room_audio.pool if room_audio is not None else None
     # `clients_stopped` is shared state between `stop_clients` and

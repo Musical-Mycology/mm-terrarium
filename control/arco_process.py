@@ -29,6 +29,23 @@ class ArcoReadyTimeout(Exception):
     """Raised when Arco doesn't report ready within the configured timeout."""
 
 
+class ArcoExecFailed(OSError):
+    """Raised by pty_popen when the child could not exec the Arco command
+    (typically a path that does not exist or is not executable). Surfaces
+    through ArcoProcess.start() as "Arco failed to start: ..." in
+    Terrarium.load_room, before any readiness probe runs."""
+
+
+class ArcoExited(ArcoReadyTimeout):
+    """Raised by wait_ready when the Arco child has already exited before
+    (or between) readiness probes. A subclass of ArcoReadyTimeout so every
+    existing handler catches it; the distinct type and message exist so a
+    dead child fails FAST and says why, instead of burning the whole
+    timeout and reading as "Arco did not report ready". Exit status 127 is
+    the pty_popen child's exec failure: the command path does not exist
+    or is not executable."""
+
+
 def _default_probe() -> bool:
     """Real readiness probe: lazy pyarco import, mirroring
     harness/arco_synth.py's ArcoSynthPool.start(). A bare connect attempt --
@@ -141,17 +158,47 @@ def pty_popen(command: list[str], log_path: str | None = None,
     import struct
     import termios
 
+    # Exec-failure channel, the same trick subprocess.Popen uses: a pipe
+    # whose write end is close-on-exec (os.pipe() fds are non-inheritable
+    # since Python 3.4). A successful exec closes it and the parent reads
+    # EOF; a failed exec writes the error first. Without this the failure
+    # was SILENT: the child _exit(127)ed in a race with the parent's first
+    # poll(), so the first readiness probe ran anyway and blocked for its
+    # full connect budget, and the message the child wrote onto the pty
+    # never reached the log because on macOS the master read reports EIO
+    # once the slave side closes. Verified 2026-09-08: a nonexistent
+    # --arco-command took 32 s to fail with a 0-byte arco.log.
+    err_r, err_w = os.pipe()
     pid, fd = pty.fork()
     if pid == 0:                             # child: never returns
+        os.close(err_r)
         os.environ.setdefault("TERM", "xterm-256color")
         if cwd:
             os.chdir(cwd)
         try:
             os.execv(command[0], list(command))
-        except Exception:                    # noqa: BLE001 (about to _exit)
+        except Exception as exc:             # noqa: BLE001 (about to _exit)
+            try:
+                os.write(err_w, f"arco exec failed: {command[0]}: {exc}\n"
+                         .encode())
+            except OSError:
+                pass
             os._exit(127)
+    os.close(err_w)
+    error = bytearray()
+    while True:
+        chunk = os.read(err_r, 4096)
+        if not chunk:
+            break
+        error += chunk
+    os.close(err_r)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-    return _PtyProcess(pid, fd, log_path=log_path)
+    process = _PtyProcess(pid, fd, log_path=log_path)
+    if error:
+        process.note(bytes(error))           # into proc.output and the log
+        process.wait(timeout=5.0)            # reap the 127 and close fds
+        raise ArcoExecFailed(error.decode(errors="replace").strip())
+    return process
 
 
 class _PtyProcess:
@@ -177,6 +224,16 @@ class _PtyProcess:
         # needs: a write still sitting in this process's buffer vanishes
         # along with a killed or crashed process and never reaches disk.
         self._log = open(log_path, "ab", buffering=0) if log_path else None
+
+    def note(self, data: bytes) -> None:
+        """Record bytes this process produced on the child's behalf (the
+        exec-failure message) in the same two places its console output
+        goes: the bounded in-memory tail and the log file."""
+        if self._log is not None:
+            self._log.write(data)
+        self.output += data
+        if len(self.output) > _OUTPUT_TAIL_BYTES:
+            del self.output[:-_OUTPUT_TAIL_BYTES]
 
     def _drain(self) -> None:
         import os
@@ -299,11 +356,27 @@ class ArcoProcess:
     def wait_ready(self, timeout: float) -> None:
         deadline = self._clock() + timeout
         while self._clock() < deadline:
+            self._raise_if_exited()
             if self._probe():
                 return
             self._sleep(0.2)
+        self._raise_if_exited()
         raise ArcoReadyTimeout(
             f"Arco did not report ready within {timeout}s")
+
+    def _raise_if_exited(self) -> None:
+        """A child that is already gone can never become ready; report it
+        now, with its exit status and command, rather than after the full
+        timeout. Checked before every probe because the pty_popen child's
+        exec failure (exit 127) is otherwise invisible to this process."""
+        code = self.poll()
+        if code is None:
+            return
+        hint = (" (exec failed: the command path does not exist or is "
+                "not executable)" if code == 127 else "")
+        raise ArcoExited(
+            f"Arco exited with status {code} before reporting ready"
+            f"{hint}; command: {' '.join(self._command)}")
 
     def poll(self):
         """None while the server is still running, else its exit code."""

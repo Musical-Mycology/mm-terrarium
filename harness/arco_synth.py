@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import os
 
+from harness.arco_paths import sibling_path
+
 # Must be a real General MIDI set: program numbers only mean what bits/test_bit.py
 # and control/audio.py's WELCOME_INSTRUMENTS assume (e.g. program 89 = Warm Pad,
 # program 9 = Glockenspiel) if the soundfont follows the GM map. VintageDreamsWaves
@@ -27,18 +29,20 @@ import os
 # testing. FluidR3_GM is the standard GM set (also what Roger Dannenberg's own
 # arco/apps/pytest/miditest.py expects). Do not change the program numbers below
 # to "fix" this; they were correct all along, only the soundfont was wrong.
-def _default_soundfont() -> str:
+def _default_soundfont(*, repo_root: str | None = None,
+                       environ=os.environ) -> str:
     """$MM_SOUNDFONT wins if set. Otherwise probe a sibling fluidsynth
-    checkout (mirrors how arco_paths.py finds arco) and the path the
+    checkout (through arco_paths.sibling_path, the same resolution that
+    finds arco, so it also holds inside a git worktree) and the path the
     fluid-soundfont-gm package installs to on Debian/Ubuntu, in that order,
     falling back to the sibling-checkout path so a missing-soundfont error
     points somewhere sensible."""
-    override = os.environ.get("MM_SOUNDFONT")
+    override = environ.get("MM_SOUNDFONT")
     if override:
         return override
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sibling_checkout = os.path.join(os.path.dirname(repo_root), "fluidsynth",
-                                    "sf2", "FluidR3_GM.sf2")
+    sibling_checkout = os.path.join(
+        sibling_path("fluidsynth", repo_root=repo_root),
+        "sf2", "FluidR3_GM.sf2")
     for candidate in (sibling_checkout,
                       "/usr/share/sounds/sf2/FluidR3_GM.sf2"):
         if os.path.isfile(candidate):
