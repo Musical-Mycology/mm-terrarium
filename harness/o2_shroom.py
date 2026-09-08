@@ -454,9 +454,10 @@ def main() -> None:
                         help="Which Room fixture to render. Required "
                              "together with --room-type.")
     parser.add_argument("--identify-blocks", action="store_true",
-                        help="Debug: skip Control and o2lite entirely; "
-                             "paint each of this fixture's declared blocks "
-                             "a distinct solid color and hold until Ctrl-C, "
+                        help="Debug: skips Control and never connects to "
+                             "the hub; paints each of this fixture's "
+                             "declared blocks a distinct solid color and "
+                             "holds until Ctrl-C, "
                              "so the physical build-out mapping can be "
                              "confirmed visually. Needs --no-join, "
                              "--room-type and --fixture.")

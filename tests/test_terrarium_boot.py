@@ -56,9 +56,10 @@ def _fake_transport():
 
 
 def _mock_o2lite_module(monkeypatch, terrarium_boot_module):
-    """main() now resolves _o2lite_module() unconditionally, before any of
-    its argument-plumbing or --room validation -- there is no more
-    --transport websocket path that skips it. Every test that drives
+    """main() now resolves _o2lite_module() unconditionally, after its
+    argument plumbing and --room validation and immediately before
+    build() -- there is no more --transport websocket path that skips
+    it. Every test that drives
     main() past that point offline (there is no o2litepy here -- see
     ensure_o2litepy()) must stub the seam with a FakeO2Lite that has
     already announced actl, same as _fake_transport()'s own fake."""

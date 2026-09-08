@@ -9,7 +9,8 @@ fixture's current FixtureSinks (control/fixture_sink.py). There is no
 canonical Room dev and no one shared Room session any more.
 
 The device-facing sibling of console.ConsoleAgent -- transport-agnostic (it
-talks to a server object, see devicelink/server.py), so it is fully testable
+talks to a transport object, see devicelink/o2_transport.py), so it is
+fully testable
 offline against an in-process fake. Driven from the engine tick loop via
 poll().
 
@@ -942,8 +943,8 @@ class DeviceLinkAgent:
         _finish_release does for the faded case below."""
         bridge = self.bridges.get(dev)
         if bridge is None:
-            # Send BEFORE drop_dev: both transports' send() treats an
-            # unbound dev as a silent no-op (see devicelink/server.py and
+            # Send BEFORE drop_dev: the transport's send() treats an
+            # unbound dev as a silent no-op (see
             # devicelink/o2_transport.py), so dropping the connection
             # mapping first would swallow this very notification.
             try:

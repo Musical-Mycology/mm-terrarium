@@ -85,6 +85,11 @@ def test_ints_are_accepted_as_floats():
     (_batch(pcm="not base64!!", pcm_t0_ms=0.0), "pcm"),
     (_batch(pcm=base64.b64encode(b"odd").decode(), pcm_t0_ms=0.0), "int16"),
     (_batch(pcm=base64.b64encode(b"\x00\x00").decode()), "pcm_t0_ms"),
+    # Raw bytes where a base64 string belongs, and the reverse: the
+    # docstring promises ValueError for anything malformed, so neither may
+    # escape as a TypeError out of base64/len().
+    (_batch(pcm=[1, 2, 3], pcm_t0_ms=0.0), "base64 string"),
+    (_batch(pcm=b"\x00\x00", pcm_t0_ms=0.0), "base64 string"),
 ])
 def test_malformed_telemetry_is_rejected(args, message):
     with pytest.raises(ValueError) as exc:
