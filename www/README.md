@@ -1,10 +1,14 @@
 # www/ -- what the Arco server serves
 
-Arco is launched from `arcoserver/` with `http_root = ../www` (this
-directory) on port 8080 (`arcoserver/arco_server_prefs.json`). One port
-serves these files and the o2ws websocket upgrade, so a page loaded from
-here reaches the O2 hub with no configuration. Arco's directory index file
-is `index.htm`, not `index.html`.
+Arco is launched from `arcoserver/` with `http_root = www`
+(`arcoserver/arco_server_prefs.json`), reached through the `arcoserver/www`
+symlink to this directory. O2's HTTP server rejects any served path
+containing `..` (`o2/src/websock.cpp:905`), so `http_root` cannot be
+`../www`; the symlink lets Arco's cwd stay at `arcoserver/` while still
+serving this top-level directory. One port (8080) serves these files and
+the o2ws websocket upgrade, so a page loaded from here reaches the O2 hub
+with no configuration. Arco's directory index file is `index.htm`, not
+`index.html`.
 
 - `o2ws.js`: O2 over websockets, from the `o2` repo
   (`test/www/o2WebMonitor/o2ws.js` at commit d4dc921, 2024-08-21; the

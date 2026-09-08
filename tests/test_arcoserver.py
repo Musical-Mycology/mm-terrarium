@@ -26,7 +26,11 @@ def test_prefs_name_the_default_configuration():
 
 def test_http_root_is_the_repo_www_dir_and_port_matches_the_printed_one():
     prefs = _prefs()
-    assert prefs["http_root"] == "../www"
+    assert prefs["http_root"] == "www"
+    # O2's HTTP server rejects any served path containing "..", root
+    # included (o2/src/websock.cpp:905), so http_root must never be a
+    # parent-relative path -- reach www/ through the arcoserver/www symlink.
+    assert ".." not in prefs["http_root"]
     assert prefs["http_port"] == str(ARCO_HTTP_PORT)
     www = os.path.normpath(os.path.join(ARCOSERVER_DIR, prefs["http_root"]))
     assert os.path.isfile(os.path.join(www, "o2ws.js"))
@@ -36,6 +40,12 @@ def test_http_root_is_the_repo_www_dir_and_port_matches_the_printed_one():
 
 def test_http_root_fits_arcos_buffer():
     assert len(_prefs()["http_root"]) < 120       # prefs.cpp:64 char[120]
+
+
+def test_arcoserver_www_is_a_symlink_to_the_top_level_www():
+    link = os.path.join(ARCOSERVER_DIR, "www")
+    assert os.path.islink(link)
+    assert os.readlink(link) == "../www"
 
 
 def test_arco_popen_launches_from_the_arcoserver_dir(monkeypatch):

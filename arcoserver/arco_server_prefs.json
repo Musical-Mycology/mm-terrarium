@@ -3,7 +3,7 @@
     {"__configuration__": "default"}
   ],
   "default": [
-    {"http_root": "../www"},
+    {"http_root": "www"},
     {"http_port": "8080"}
   ]
 }
