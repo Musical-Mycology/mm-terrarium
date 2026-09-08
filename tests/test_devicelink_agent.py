@@ -35,6 +35,7 @@ class FakeServer:
         self.sent = []          # (dev, msg)
         self.broadcasts = []
         self._devs = {}         # dev -> client
+        self.protoversions = {}
 
     def drain_new_clients(self):
         out, self.new_clients = self.new_clients, []
@@ -44,8 +45,9 @@ class FakeServer:
         out, self.inbound = self.inbound, []
         return out
 
-    def bind_dev(self, dev, client):
+    def bind_dev(self, dev, client, protoversion=""):
         self._devs[dev] = client
+        self.protoversions[dev] = protoversion
 
     def drop_dev(self, dev):
         self._devs.pop(dev, None)
@@ -2273,3 +2275,23 @@ def test_agent_requires_a_clock():
     gs = GameServer({"TestBit": TestBit})
     with pytest.raises(TypeError):
         DeviceLinkAgent(gs, FakeServer())
+
+
+def test_hello_protoversion_reaches_the_transport_binding(rig):
+    """The transport picks the wire flavor from what hello announced
+    (devicelink/o2_transport.py wire_flavor); the agent is the only thing
+    that sees the hello, so it must pass the token along at bind time."""
+    gs, server, agent = rig
+    server.arrive("c1")
+    server.deliver("c1", "/game/hello", "ssss",
+                   ["ie-abc123", "flutter-sim", "o2ws/1", "tuneshroom"])
+    agent.poll()
+    assert server.protoversions["ie-abc123"] == "o2ws/1"
+
+
+def test_hello_without_a_protoversion_binds_with_an_empty_one(rig):
+    gs, server, agent = rig
+    server.arrive("c1")
+    server.deliver("c1", "/game/hello", "s", ["ie1"])
+    agent.poll()
+    assert server.protoversions["ie1"] == ""

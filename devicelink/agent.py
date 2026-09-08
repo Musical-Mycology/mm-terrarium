@@ -811,7 +811,7 @@ class DeviceLinkAgent:
         name = args[1] if len(args) > 1 else ""
         protoversion = args[2] if len(args) > 2 else ""
         instrument = args[3] if len(args) > 3 else None
-        self.server.bind_dev(dev, client)
+        self.server.bind_dev(dev, client, protoversion=protoversion)
         self.game_server.hello(dev, name, protoversion, instrument)
         self._send(dev, protocol.room_event(dev, self._room_blob()))
 
