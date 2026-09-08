@@ -174,6 +174,11 @@ Arco, with no Control-side socket anywhere.
    `o2ws_clock_synchronized`, then `/game/hello`. Gesture stamps use
    `o2ws_time_get()`; `/ie<N>/leds` frames are held to their timestamp
    the way `harness/o2_shroom.py` holds them.
+
+   Confirmed 2026-09-08 by probe P2: `o2ws.js` has no blob type, so
+   `/ie<N>/role`, `/ie<N>/room` and `/ie<N>/leds` need either an o2ws
+   blob extension or a string-typed variant before a browser can render.
+   Decide at Phase 2 start.
 5. **Envelope stays.** `Envelope` remains the in-app representation;
    `O2wsLink` converts it to and from o2ws calls using the blob rule in
    section 3.
@@ -278,6 +283,38 @@ file server and the page's o2ws endpoint points at Arco; the probe then
 checks `o2ws.js` accepts a host different from the page's origin. **If it
 fails at o2ws itself,** that is the one finding that goes to Roger, with
 the page and Arco's log attached.
+
+**Result (2026-09-08).** Pass, on MYCOLOGICAL. Arco's cwd was the
+mm-terrarium repo root; `arco_server_prefs.json` there with `http_root`
+set to a scratch directory (`/tmp/p2-www`, kept short because the
+scratchpad path exceeds the 119-character `http_root` cap) and
+`http_port` `8080` was picked up: Arco's console printed `finished
+reading arco_server_prefs.json`, and both pages served over
+`http://127.0.0.1:8080/`.
+
+`o2wsclocksync.htm` (ensemble changed to `arco`) reached
+`o2ws_clock_synchronized: true` and displayed O2 time advancing; the
+browser console showed the full `_o2/ws/cs/get` round trip completing
+before "Clock sync obtained."
+
+The Control round-trip probe (`probe.htm`, offering `ie99`) logged, in
+order: `clock synced, O2 time 51.0805`, `sent /game/hello`, `got
+ie99/room types=b at 0` with `as string: ?`, `sent /game/join`, a second
+`got ie99/room types=b at 0` / `as string: ?`, then `got ie99/role
+types=b`. No `deny` was logged: the join succeeded and yielded a role,
+not a denial. Control's `control.log` for the run confirms both sides:
+`device hello: ie99` and `join granted: ie99 -> player (scored) via
+TEST_PLAYER_NODE`. After the role arrived, Arco began pushing
+`/ie99/leds` frames at roughly 30/s; the browser console logged each as
+`Dropped incoming O2 message: /ie99/leds@<t>,UDP,b,?` (`o2ws_message_handler
+did not find ie99/leds`, since `probe.htm` registered no handler for that
+address) -- consistent with the same blob-decode gap, not a separate
+failure.
+
+Confirmed: `room`, `role`, and `leds` are all `b`-typed and none decode
+in the browser -- `o2ws.js` has no blob type, so `o2ws_get_string()`
+against a blob argument returns `"?"` rather than the composed payload.
+This matches the expected finding in this task's Interfaces section.
 
 ### P3: the `o2` repo's o2litepy installs and runs the suite (gates Phase 3 step 4)
 
