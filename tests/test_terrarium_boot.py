@@ -2317,7 +2317,7 @@ def test_restart_room_clients_starts_pool_then_transport():
             calls.append("pool-start")
 
     class FakeTransport:
-        def start(self, o2):
+        def start(self, o2, *, pump=None):
             calls.append(("transport-start", o2))
 
     o2 = object()
@@ -2339,7 +2339,7 @@ def test_restart_room_clients_catches_a_raising_start_and_returns_reason():
             raise RuntimeError("injected pool failure")
 
     class FakeTransport:
-        def start(self, o2):
+        def start(self, o2, *, pump=None):
             pass
 
     reason = terrarium_boot._restart_room_clients(
@@ -2634,7 +2634,7 @@ def test_recycle_room_orders_client_stops_before_unload_and_restarts_after():
         def stop(self):
             calls.append("transport-stop")
 
-        def start(self, o2):
+        def start(self, o2, *, pump=None):
             calls.append(("transport-start", o2))
 
     class FakePool:
@@ -2683,3 +2683,23 @@ def test_recycle_room_failure_skips_restarts_and_returns_reason():
         FakeTerrarium(), transport=FakeTransport(), pool=FakePool())
     assert reason == "arco failed to start: injected"
     assert "pool-start" not in calls
+
+
+def test_restart_room_clients_forwards_the_arco_pump_to_transport_start():
+    """`transport.start` holds for its ownership probes; Arco's pty must be
+    drained during that hold or Arco freezes (2026-09-08 root cause of
+    the missing /actl/_svcheck reply). The restart helper is the recycle-
+    path caller of start(), so it must pass the pump through too."""
+    import harness.terrarium_boot as terrarium_boot
+
+    calls = []
+
+    class _Transport:
+        def start(self, o2lite, *, pump=None):
+            calls.append(pump)
+
+    pump = object()
+    reason = terrarium_boot._restart_room_clients(
+        transport=_Transport(), pool=None, o2lite=object(), pump=pump)
+    assert reason is None
+    assert calls == [pump]

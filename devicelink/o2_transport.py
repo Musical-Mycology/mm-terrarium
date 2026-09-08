@@ -126,6 +126,7 @@ _OWNERSHIP_POLL_INTERVAL = 0.005
 
 def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
                              resend_interval: float | None = None,
+                             pump=None,
                              clock=time.monotonic, sleep=time.sleep) -> bool:
     """Does `service` actually route back to THIS o2lite connection?
 
@@ -159,6 +160,18 @@ def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
     rather than misdiagnosing it as a second claimant after one silent
     2s window.
 
+    `pump`, if set, is called once per poll iteration. This loop holds the
+    caller's process for up to `timeout` seconds, and when that process
+    also owns Arco's pty (harness/terrarium_boot.py does) nothing else is
+    draining it meanwhile. Arco is a curses app; a pty accepts 1024 bytes
+    of undrained output (measured on macOS, 2026-09-08) and then blocks
+    the writer, and a blocked Arco serves no O2 at all -- including the
+    very reply this loop is waiting for. That was the whole story behind
+    the /actl/_svcheck reply that "never arrived": the hub log showed a
+    9.7s silence starting the instant Control's services registered and
+    ending when teardown drained the pty. Pass the Arco handle's poll()
+    here so the wait cannot freeze the hub it is waiting on.
+
     Registration is once per (connection, service), not once per call.
     Real o2litepy APPENDS handlers (o2lite.py:908) and _msg_dispatch calls
     the FIRST match (o2lite.py:809-827); nothing ever removes one. A
@@ -189,6 +202,8 @@ def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
     next_resend = (clock() + resend_interval
                    if resend_interval is not None else None)
     while True:
+        if pump is not None:
+            pump()
         o2lite.poll()
         if _OWNERSHIP_NONCE in received:
             return True
@@ -347,7 +362,7 @@ class O2LiteTransport:
         self._inbound: list[tuple[object, dict]] = []
         self._devs: dict[str, object] = {}
 
-    def start(self, o2lite, *, ownership_timeout: float = 10.0,
+    def start(self, o2lite, *, ownership_timeout: float = 10.0, pump=None,
               clock=time.monotonic, sleep=time.sleep) -> None:
         """Adopt pyarco's already-connected o2lite object and claim the
         full services string on it.
@@ -362,12 +377,17 @@ class O2LiteTransport:
         anywhere. See verify_service_ownership on why the round trip is a
         deliberate, one-shot exception to boundary rule 4.
 
-        Does NOT raise if the post-claim check on `actl` fails to route
-        back: in the full boot this check has been observed to miss its
-        reply even though pyarco's own /actl/... messages reach this same
-        connection, and the cause is unresolved (tracked in a follow-up).
-        A failure here only logs a warning and start() still returns
-        normally; the `game` check above is unaffected and stays fatal.
+        The post-claim check on `actl` is fatal too: the claim string
+        replaces pyarco's own, and if the hub no longer routes `actl` here
+        every /actl/act reply is lost and the next ugen build hangs. It
+        was demoted to a warning for a while because the full boot kept
+        failing it while reduced reproductions passed; the cause turned
+        out to be Arco freezing on its undrained pty during the check,
+        not routing (see verify_service_ownership's `pump`).
+
+        `pump`, if given, is driven once per probe iteration by both
+        ownership checks: pass the Arco handle's poll() so its pty keeps
+        draining for the whole hold.
         """
         now = o2lite.time_get()
         if now < 0:
@@ -390,7 +410,7 @@ class O2LiteTransport:
                               self._on_message, None)
         if not verify_service_ownership(o2lite, "game",
                                         timeout=ownership_timeout,
-                                        resend_interval=2.0,
+                                        resend_interval=2.0, pump=pump,
                                         clock=clock, sleep=sleep):
             self._o2 = None
             raise RuntimeError(
@@ -407,16 +427,18 @@ class O2LiteTransport:
                 "`sv` being refused.")
         if not verify_service_ownership(o2lite, PYARCO_SERVICE,
                                         timeout=ownership_timeout,
-                                        resend_interval=2.0,
+                                        resend_interval=2.0, pump=pump,
                                         clock=clock, sleep=sleep):
-            logger.warning(
-                "claiming %r left %r not routed back to this connection "
-                "within %.0fs: pyarco's Arco control replies may be "
-                "misrouted. This check has been observed to fail in the "
-                "full boot even though pyarco's own /actl/... messages "
-                "reach this same connection; the cause is unresolved and "
-                "tracked in a follow-up. Continuing to start().",
-                self._services, PYARCO_SERVICE, ownership_timeout)
+            self._o2 = None
+            raise RuntimeError(
+                f"claiming {self._services!r} left {PYARCO_SERVICE!r} not "
+                f"routed back to this connection within "
+                f"{ownership_timeout:.0f}s: Arco's control replies would be "
+                "lost and the next ugen build would hang. Most likely the "
+                "hub is blocked (see the `game` failure text above for the "
+                "cold-audio-open and undrained-pty causes); a genuine "
+                "second claimant of `actl` is the rarer cause and shows as "
+                "this connection's own `sv` being refused in o2debug.log.")
 
     def _on_message(self, address, typespec, info) -> None:
         """o2lite handler.

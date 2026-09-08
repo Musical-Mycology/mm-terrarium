@@ -130,8 +130,10 @@ serve a page.
   (2026-09-08)* note in `docs/MM_TERRARIUM.md`'s Landed subsystems for the
   rest of the run's deviations (`_recycle_room`/`_restart_room_clients`
   requiring `transport`, the deferred `_o2lite_module()` resolution, the
-  `actl` post-claim check warning instead of failing, and the `www/`
-  symlink O2's HTTP server needs).
+  `actl` post-claim check briefly demoted to a warning before its root
+  cause, Arco frozen on an undrained pty during the probe, was fixed and
+  the check made fatal again, and the `www/` symlink O2's HTTP server
+  needs).
 
 1. **Control owns the process's services string.** One o2lite connection
    per process, as today, but the ownership is explicit: after

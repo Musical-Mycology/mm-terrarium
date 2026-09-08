@@ -973,11 +973,18 @@ def _recycle_room(terrarium, *, transport, pool=None, o2lite=None):
     if reason is not None:
         return reason
     return _restart_room_clients(transport=transport, pool=pool,
-                                 o2lite=o2lite)
+                                 o2lite=o2lite, pump=_arco_pump(terrarium))
+
+
+def _arco_pump(terrarium):
+    """The pty-drain hook for transport.start(): the live Arco handle's
+    poll(), or None before a Room (and its Arco) exists."""
+    arco = getattr(terrarium, "arco", None)
+    return arco.poll if arco is not None else None
 
 
 def _restart_room_clients(*, transport, pool=None,
-                          o2lite=None) -> str | None:
+                          o2lite=None, pump=None) -> str | None:
     """The restart half of `_recycle_room` (pool.start() then
     transport.start(o2lite), process-launch order -- see `_recycle_room`'s
     docstring), factored out so `_serve_roomless` can also call it after a
@@ -990,11 +997,17 @@ def _restart_room_clients(*, transport, pool=None,
     Unlike Terrarium's own methods, `pool.start()`/`transport.start()`
     actually raise on failure, so this wraps them and stringifies the
     exception -- callers get the same "reason string, never raises"
-    contract `_recycle_room` promises."""
+    contract `_recycle_room` promises.
+
+    `pump` is handed to transport.start(): its ownership probes hold this
+    process for seconds, and Arco's pty must keep draining through that
+    hold or Arco blocks mid-write and never answers (the 2026-09-08 root
+    cause of the "missing" /actl/_svcheck reply; see
+    devicelink/o2_transport.py's verify_service_ownership)."""
     try:
         if pool is not None:
             pool.start()
-        transport.start(o2lite)
+        transport.start(o2lite, pump=pump)
     except Exception as exc:
         return str(exc)
     return None
@@ -1395,7 +1408,7 @@ def main() -> None:
             return None
         o2 = o2lite
         reason = _restart_room_clients(transport=transport, pool=pool,
-                                       o2lite=o2)
+                                       o2lite=o2, pump=_arco_pump(terrarium))
         if reason is None:
             clients_stopped[0] = False
         return reason
@@ -1493,7 +1506,9 @@ def main() -> None:
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
-        transport.start(o2lite)            # raises if the clock is unsynced
+        # pump=arco.poll drains Arco's pty for the whole ownership hold;
+        # see _restart_room_clients for why that is load-bearing.
+        transport.start(o2lite, pump=arco.poll if arco is not None else None)
         _register_o2lite_transport(pre_room_teardown, transport)
         print(f"{markers.CONTROL_TRANSPORT_READY} "
               f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)

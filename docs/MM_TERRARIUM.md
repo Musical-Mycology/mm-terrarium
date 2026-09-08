@@ -962,6 +962,71 @@ self-addressed round trip before the tick loop starts, so a refused
 announcement fails loud instead of silently. Design:
 `docs/superpowers/specs/2026-08-14-room-simulator-service-collision-design.md`.
 
+**The `/actl/_svcheck` reply that never came back (root-caused 2026-09-08;
+it was Arco frozen on its pty, not routing).** When the o2lite cutover
+made Control the owner of the whole `"actl,game"` services string
+(branch `claude/o2lite-connectivity-migration-b5806a`), `start()` gained
+a second ownership probe, for `actl`, right after the `game` one. In the
+full `./smoke-test.sh --ci` boot the `game` probe returned and the
+`actl` probe timed out every time, while Arco's own `/actl/started`
+still reached the same connection during the wait, and every reduced
+reproduction (initialize + claim + verify, with or without a reset, with
+or without `ArcoSynthPool.start()`) passed. The check was demoted to a
+warning pending a follow-up. Traced with O2's own tracing on both ends
+(`debug_flags` in `arcoserver/arco_server_prefs.json` for the hub,
+`initialize(ensemble, debug_flags="rd")` on Control's connection): the
+hub registered `game` for Control's bridge and then logged **nothing at
+all for 9.7 s**, not one TCP message from Control's socket, until the
+failing boot's teardown drained Arco's pty, at which point the hub woke
+and the log ended. Control's `/game/_svcheck` sends were sitting unread
+in the socket the whole time. On that run the `game` probe failed as
+well; which probe fails depends only on when the pty fills.
+
+The mechanism is the one the *operator/harness handoff* section below
+already names as load-bearing: **every loop that holds while Arco is
+alive must drain Arco's pty**, and `verify_service_ownership`'s wait was
+such a loop. Arco is a curses app on the pty `harness/terrarium_boot.py`
+owns; a macOS pty accepts **1024 bytes** of undrained output (measured
+2026-09-08 with a bare `os.openpty()` writer) and then blocks the
+writer; a blocked Arco serves no O2 at all, including the reply the loop
+is waiting for. The probe polled o2lite for up to 10 s per service, 20 s
+for both, and drained nothing. That is why reduced reproductions passed
+(a freshly started Arco had not printed 1 KB yet; the full boot's
+`reset in progress` / `Starting audio devices` lines and curses redraws
+had) and why the 2026-08-20 resend window only masked it: resending
+does nothing for a hub that cannot read its socket.
+
+Fix: `verify_service_ownership(..., pump=)` drives a caller hook once
+per poll iteration, `O2LiteTransport.start(o2lite, pump=)` hands it to
+both probes, and every `transport.start` call in `harness/terrarium_boot.py`
+(boot, `_recycle_room`, the roomless `restart_clients`) passes the live
+Arco handle's `poll()`, which is the pty drain. Verified live: with the
+pump, both `/game/_svcheck` and `/actl/_svcheck` round-trip within a
+second of the claim and the hub log shows no gap longer than 0.65 s for
+the whole boot; without it, the same boot on the same machine showed
+the 9.7 s silence above. **The `actl` post-claim check is fatal again**,
+exactly like `game`: losing `actl` means every `/actl/act` reply is
+lost and the next ugen build hangs, which is worse than a refused boot.
+
+Two things found alongside, both fixed on the same branch: (1)
+o2litepy's `_msg_dispatch` calls the **first** matching handler and
+`method_new` appends (`o2lite.py:796,908`), so a second
+`verify_service_ownership` on the same service used to register a dead
+second `/<service>/_svcheck` handler and could never see a reply; the
+boot only called it once per service so it was latent there, but
+`harness/o2_shroom.py`'s `reconnect_recheck` re-verifies after every
+reconnect and would have timed out on every re-check after the first.
+The reply handler is now registered once per (o2lite, service) and
+reused. (2) `FakeO2Lite.method_new` kept a dict keyed by path, so a
+re-registration silently *replaced* the first handler: a double more
+permissive than the library (boundary rule 5), and precisely the
+dimension that hid (1). It is an append-only list with first-match
+dispatch now. Not fixed, and worth knowing: the readiness probe's
+`arco.initialize()` and `ArcoSynthPool.start()` also hold without
+draining (the wait is inside pyarco), so a very chatty Arco could still
+freeze during those; neither has been observed to, and the pty is
+nearly empty at that point in the boot.
+
 **The gap that survived this slice was closed 2026-08-14.** All of the above
 was built and unit-tested with nothing driving it end to end; a follow-up
 slice (design:
@@ -1749,6 +1814,11 @@ and operator surface, none in the engine. Design:
   resend every 2 s across a 10 s window (`ownership_timeout` is now the
   total). A genuine second claimant never answers; a blocked hub answers
   when it unblocks. The error names the blocked-hub cause first.
+  (2026-09-08: the probe's own wait was one more loop that held without
+  draining the pty, so it could freeze the very hub it was waiting on;
+  it now takes a `pump` hook and the boot passes Arco's `poll()`. See
+  *The `/actl/_svcheck` reply that never came back* in the o2lite
+  section.)
 - **`o2_shroom` re-verifies its service on any `bridge_id` change** (an
   auto-reconnected device once lost its announcement and heard silence
   forever while fifteen Control replies were dropped hub-side), passes
@@ -3722,12 +3792,12 @@ migration-design.md`, landed. o2lite is now the only device wire.
   player devices.
 - **Services-string ownership.** Control applies the full `"actl,game"`
   string once, from one constant, after `arco.initialize()` returns, and
-  self-verifies the claim. The post-claim `actl` check logs a warning
-  rather than failing the boot: in the full boot the self-check never sees
-  its own reply, even though Arco's own `/actl/...` messages arrive fine
-  on the same connection. Every reduced reproduction of this passed; the
-  cause is unresolved and tracked as a follow-up, not explained away as a
-  feature.
+  self-verifies the claim. The post-claim `actl` check is fatal, like
+  the `game` one. It was a warning for a while because the full boot
+  kept failing it while every reduced reproduction passed; that was Arco
+  frozen on its undrained pty during the probe, root-caused and fixed the
+  same day. See *The `/actl/_svcheck` reply that never came back* in the
+  o2lite section.
 - **One clock.** `DeviceLinkAgent` requires an explicit clock (O2 time);
   `time.monotonic` no longer has a path into device-facing code.
 - **Telemetry chunking.** `/game/telemetry` batches are chunked under
@@ -3800,8 +3870,8 @@ honor them in any new work:
    Arco → `actl`), so Control never messages itself and there is no round trip
    to eliminate. Keep it that way. See design doc § *Message Routing*.
    **One deliberate exception:** `verify_service_ownership`
-   (`devicelink/o2_transport.py:119`) sends Control's own `game` service one
-   self-addressed message at startup. It is not a steady-state message path;
+   (`devicelink/o2_transport.py`) sends each of Control's own services
+   (`game`, then `actl`) one self-addressed message at startup. It is not a steady-state message path;
    it is an assertion that *uses* the no-local-short-circuit property this
    rule documents as a cost -- a message addressed to a service the process
    itself offers only comes back if the hub really routed it there, which is
