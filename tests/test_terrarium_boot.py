@@ -256,6 +256,7 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
     sim_popen = _RecordingPopen("simulator")
 
     fake_o2 = FakeO2Lite()
+    fake_o2.set_services("actl")
     transport = O2LiteTransport()
     transport.start(fake_o2)
 
@@ -339,6 +340,7 @@ def test_build_can_run_the_agent_on_the_o2lite_transport():
     from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
 
     fake = FakeO2Lite()
+    fake.set_services("actl")
     transport = O2LiteTransport()
     transport.start(fake)
 
@@ -473,6 +475,7 @@ def test_o2lite_frame_is_released_across_the_shared_clock():
     from harness.shroom_client import ShroomClient
 
     fake_o2 = FakeO2Lite(now=45.0)          # O2 clock starts near zero
+    fake_o2.set_services("actl")
     transport = O2LiteTransport()
     transport.start(fake_o2)
 

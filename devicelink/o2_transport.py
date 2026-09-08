@@ -60,11 +60,16 @@ def to_o2_arg(type_char: str, value):
         return Blob(bytes(v & 0xFF for v in value))
     return Blob(_json_dumps(value).encode("utf-8"))
 
-# The complete services string. set_services REPLACES rather than appends
-# (o2litepy o2lite.py:707), and pyarco has already claimed "actl"
-# (pyarco/arco_engine.py:98), so Control writes both or silently breaks
-# Arco's control replies.
-SERVICES = "actl,game"
+# The complete services string this PROCESS offers on its one o2lite
+# connection. pyarco announces PYARCO_SERVICE first (arco.initialize(),
+# pyarco/arco_engine.py:98); Control then owns the full string, because
+# set_services REPLACES rather than appends (o2litepy o2lite.py:707).
+# One connection per process is o2lite's model (spec 2026-09-08 section
+# 2): the C library keeps its connection in process statics, so a second
+# connection is not an option on hardware and is not used here either.
+PYARCO_SERVICE = "actl"
+CONTROL_SERVICE = "game"
+SERVICES = f"{PYARCO_SERVICE},{CONTROL_SERVICE}"
 
 # Every /game/* verb the agent routes. Registered as full-path handlers so
 # o2lite dispatches straight into the drain queue.
@@ -309,7 +314,7 @@ class O2LiteTransport:
 
     def start(self, o2lite, *, ownership_timeout: float = 10.0,
               clock=time.monotonic, sleep=time.sleep) -> None:
-        """Adopt an already-connected o2lite object and claim `game` on it.
+        """Adopt pyarco's already-connected o2lite object and claim the full services string on it.
 
         Raises RuntimeError if the clock is not synced: time_get() returns
         -1 before sync, and a cue scheduled against -1 is meaningless.
@@ -326,6 +331,13 @@ class O2LiteTransport:
             raise RuntimeError(
                 "o2lite clock is not synchronized (time_get() < 0); "
                 "Arco must be clock master before Control offers `game`")
+        announced = [name for name in
+                     getattr(o2lite, "services", "").split(",") if name]
+        if PYARCO_SERVICE not in announced:
+            raise RuntimeError(
+                f"pyarco has not announced {PYARCO_SERVICE!r} on this o2lite "
+                f"connection yet (services={announced}); Control's transport "
+                f"must start after arco.initialize() returns")
         self._o2 = o2lite
         o2lite.set_services(self._services)
         for verb in GAME_VERBS:
@@ -350,6 +362,17 @@ class O2LiteTransport:
                 "hub. Check o2debug.log: a frozen hub shows no recent "
                 "lines at all; a conflict shows this connection's own "
                 "`sv` being refused.")
+        if not verify_service_ownership(o2lite, PYARCO_SERVICE,
+                                        timeout=ownership_timeout,
+                                        resend_interval=2.0,
+                                        clock=clock, sleep=sleep):
+            self._o2 = None
+            raise RuntimeError(
+                f"claiming {self._services!r} left {PYARCO_SERVICE!r} not "
+                f"routed back to this connection: pyarco's Arco control "
+                f"replies would be lost. set_services replaces the whole "
+                f"string; check SERVICES still names every service this "
+                f"process offers")
 
     def _on_message(self, address, typespec, info) -> None:
         """o2lite handler.

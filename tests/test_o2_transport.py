@@ -5,6 +5,7 @@ from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
 
 def _started():
     fake = FakeO2Lite()
+    fake.set_services("actl")
     transport = O2LiteTransport()
     transport.start(fake)
     # start() now round-trips a /game/_svcheck handshake through send() to
@@ -310,6 +311,7 @@ def test_start_refuses_when_game_is_held_by_another_process():
     device's: an orphaned Terrarium holding it would make every device
     silently unreachable."""
     fake = FakeO2Lite()
+    fake.set_services("actl")
     fake.refuse("game")
     transport = O2LiteTransport()
     clock, sleep = _fake_clock()
@@ -327,6 +329,8 @@ class _FakeO2LiteAnsweringAfter:
     a real bug: o2lite only calls a registered handler from inside
     poll(). This fake must not be more permissive than the library it
     stands for."""
+
+    services = "actl"
 
     def __init__(self, sends: int) -> None:
         self._sends_to_answer = sends
@@ -370,6 +374,8 @@ class _FakeO2LiteAnsweringAfter:
 class _FakeO2LiteNeverAnswers:
     """Models a genuine second claimant: the hub refuses silently and no
     reply ever arrives, no matter how many times the probe resends."""
+
+    services = "actl"
 
     def __init__(self) -> None:
         self.svcheck_sends = 0
@@ -452,3 +458,40 @@ def test_start_failure_message_names_the_blocked_hub_first():
     assert blocked_pos != -1 and orphan_pos != -1
     assert blocked_pos < orphan_pos
     assert "o2debug.log" in message
+
+
+def test_start_refuses_before_pyarco_has_announced_actl():
+    """Control shares pyarco's o2lite connection. arco.initialize() writes
+    "actl" first (pyarco/arco_engine.py:98); Control then writes the whole
+    string. Starting before that would have Control's set_services erase
+    nothing and then pyarco's later call erase `game`. Fail loud instead."""
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+
+    fake = FakeO2Lite()                 # services == "" : pyarco not yet up
+    transport = O2LiteTransport()
+    with pytest.raises(RuntimeError, match="actl"):
+        transport.start(fake)
+    assert fake.services == ""          # never wrote over pyarco's slot
+
+
+def test_start_verifies_actl_still_routes_after_claiming_game():
+    """set_services REPLACES (o2lite.py:707). Writing "actl,game" must leave
+    pyarco's control replies working, and O2 refuses a claim silently, so
+    the only proof is a round trip on actl too."""
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+    fake.refuse("actl")
+    transport = O2LiteTransport()
+    with pytest.raises(RuntimeError, match="actl"):
+        transport.start(fake, ownership_timeout=0.05, sleep=lambda s: None)
+
+
+def test_services_string_is_pyarco_then_control():
+    from devicelink.o2_transport import (CONTROL_SERVICE, PYARCO_SERVICE,
+                                         SERVICES)
+
+    assert PYARCO_SERVICE == "actl"
+    assert CONTROL_SERVICE == "game"
+    assert SERVICES == "actl,game"
