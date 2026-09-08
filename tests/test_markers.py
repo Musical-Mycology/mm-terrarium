@@ -109,3 +109,15 @@ def _module_for(name: str):
     import harness.terrarium_boot
     return (harness.terrarium_boot if name.startswith("CONTROL_")
             else harness.o2_shroom)
+
+
+def test_arco_www_marker_value():
+    assert markers.ARCO_WWW == "ARCO_WWW:"
+
+
+def test_arco_www_marker_is_emitted_by_terrarium_boot():
+    import inspect
+
+    import harness.terrarium_boot
+
+    assert "markers.ARCO_WWW" in inspect.getsource(harness.terrarium_boot)

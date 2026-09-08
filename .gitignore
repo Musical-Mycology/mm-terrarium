@@ -33,3 +33,5 @@ runs/
 
 # Arco writes this into the cwd on every run of harness/terrarium_boot.py
 o2debug.log
+# Arco's cwd is arcoserver/ now (harness/terrarium_boot.py), so its log lands there
+arcoserver/o2debug.log

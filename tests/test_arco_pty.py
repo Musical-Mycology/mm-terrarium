@@ -30,6 +30,16 @@ def test_a_pty_child_runs_and_reports_its_exit_code():
     proc.wait()
 
 
+def test_pty_popen_changes_directory_for_the_child(tmp_path):
+    """Arco reads arco_server_prefs.json from its cwd, so the pty spawn has
+    to honor cwd the way subprocess.Popen(cwd=...) does. /bin/pwd reports
+    the physical directory, hence resolve()."""
+    proc = pty_popen(["/bin/pwd"], cwd=str(tmp_path))
+    _wait_for_exit(proc)
+    proc.wait()
+    assert str(tmp_path.resolve()).encode() in bytes(proc.output)
+
+
 def test_poll_is_none_while_the_child_is_alive():
     proc = pty_popen(["/bin/sleep", "5"])
     assert proc.poll() is None

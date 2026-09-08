@@ -11,6 +11,7 @@ build() returns; see build()'s docstring for the ordering.
 
 from __future__ import annotations
 
+import functools
 import os
 import subprocess
 import sys
@@ -36,6 +37,13 @@ from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH
 from harness.o2_shroom import parent_is_gone
 from harness.signals import sigterm_as_keyboard_interrupt
+
+# Arco is launched from here so it reads the committed
+# arcoserver/arco_server_prefs.json (Arco reads prefs from its cwd) and
+# serves ../www on ARCO_HTTP_PORT. tests/test_arcoserver.py pins the file.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ARCOSERVER_DIR = os.path.join(REPO_ROOT, "arcoserver")
+ARCO_HTTP_PORT = 8080
 
 
 def resolve_room_spec(room_name: str, config: TerrariumConfig | None = None, *,
@@ -105,6 +113,23 @@ class TerrariumBuildFailure(Exception):
     """A load_room refusal surfaced by build(). Successor to
     control.boot.BootFailure -- boot() (and BootFailure with it) is gone as
     of this Task; build() now drives control.terrarium.Terrarium directly."""
+
+
+def _arco_popen(args):
+    """The popen Arco is spawned with. Both variants launch from
+    ARCOSERVER_DIR; --arco-pty adds the controlling terminal curses needs."""
+    if args.arco_pty:
+        from control import arco_process
+
+        log_path = args.arco_log
+
+        def popen(command):
+            return arco_process.pty_popen(command, log_path=log_path,
+                                          cwd=ARCOSERVER_DIR)
+        return popen
+    if args.arco_log:
+        print("--arco-log needs --arco-pty; ignoring", file=sys.stderr)
+    return functools.partial(subprocess.Popen, cwd=ARCOSERVER_DIR)
 
 
 def make_arco_process_cls(arco_popen, settle: float):
@@ -1301,15 +1326,7 @@ def main() -> None:
     # The settle pause lives in start() because boot() calls start() and
     # wait_ready() back to back with no seam between them -- putting it here
     # keeps control/boot.py free of a harness-only concern.
-    arco_popen = subprocess.Popen
-    if args.arco_pty:
-        from control.arco_process import pty_popen
-        log_path = args.arco_log
-
-        def arco_popen(command):
-            return pty_popen(command, log_path=log_path)
-    elif args.arco_log:
-        print("--arco-log needs --arco-pty; ignoring", file=sys.stderr)
+    arco_popen = _arco_popen(args)
 
     settle = args.arco_settle_seconds
 
@@ -1481,6 +1498,9 @@ def main() -> None:
         _register_o2lite_transport(pre_room_teardown, transport)
         print(f"{markers.CONTROL_TRANSPORT_READY} "
               f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)
+        print(f"{markers.ARCO_WWW} http://127.0.0.1:{ARCO_HTTP_PORT}/ "
+              f"(www/ over Arco's HTTP server; o2ws on the same port)",
+              flush=True)
         if args.arco_start_audio:
             # After Control's own clock sync, so this cannot disturb it.
             console = getattr(arco, "_process", None)
