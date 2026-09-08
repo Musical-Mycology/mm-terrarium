@@ -19,7 +19,6 @@ Boundary rule 2: nothing in here may propagate into the engine tick.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field, replace
 
 from control.breath import BREATH_CC, breath_cc
@@ -82,9 +81,8 @@ _DEFAULT_FIXTURE_ROLE = Role(
 
 
 class DeviceLinkAgent:
-    def __init__(self, game_server: GameServer, server,
-                 capability=None, clock=time.monotonic,
-                 room_audio=None, horizon: float = 0.0,
+    def __init__(self, game_server: GameServer, server, *, clock,
+                 capability=None, room_audio=None, horizon: float = 0.0,
                  room_profile=None, on_room_frame=None, on_join_denied=None,
                  stale_timeout: float = 15.0):
         self.game_server = game_server
@@ -561,10 +559,9 @@ class DeviceLinkAgent:
         pyarco's scheduler -- never runs either.
 
         now=self._clock(), not AudioBridge's own default clock: this
-        agent's clock is whatever harness/terrarium_boot.py's driver loop
-        ticks on (time.monotonic for websocket mode, o2lite.time_get for
-        o2lite), and that is the time base every other per-tick concern
-        here (_feed_breath, _render_frames, _render_room) already reads.
+        agent's clock is o2lite.time_get in production (harness/
+        terrarium_boot.py), and every per-tick concern here (_feed_breath,
+        _render_frames, _render_room) already reads it.
         Passing it explicitly keeps a welcome cue's expiry check on that
         same time base regardless of which clock room_audio itself
         happened to be constructed with -- the frame-timing bug this

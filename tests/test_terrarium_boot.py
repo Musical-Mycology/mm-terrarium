@@ -1711,7 +1711,8 @@ def _lifecycle_rig():
 
     gs = GameServer({"test_bit": TestBit})
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server, on_join_denied=_print_join_denied)
+    agent = DeviceLinkAgent(gs, server, on_join_denied=_print_join_denied,
+                            clock=time.monotonic)
     gs.add_observer(_LifecycleLogger(gs))
     return gs, server, agent
 
@@ -1826,7 +1827,8 @@ def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply(capsys):
     def boom(dev, node, reason):
         raise RuntimeError("sink exploded")
 
-    agent = DeviceLinkAgent(gs, server, on_join_denied=boom)
+    agent = DeviceLinkAgent(gs, server, on_join_denied=boom,
+                            clock=time.monotonic)
     gs.load_bit("test_bit")
     _deliver_hello(server, agent, dev="ie1")
     _deliver_join(server, agent, "ie1", "NO_SUCH_NODE")   # must not raise

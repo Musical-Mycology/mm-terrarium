@@ -6,6 +6,7 @@ phone, no microphone and no hardware."""
 
 import json
 import struct
+import time
 
 import pytest
 
@@ -45,7 +46,7 @@ def test_a_synthetic_device_produces_a_real_trace_on_disk(tmp_path):
                          bit={"name": "capture", "version": "0.1"})
     gs = GameServer({"capture": lambda: CaptureBit(store=store)})
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
     gs.load_bit("capture")
     gs.run()
 
@@ -92,7 +93,7 @@ def test_a_refusal_comes_back_as_an_error_frame(tmp_path):
                          bit={"name": "capture", "version": "0.1"})
     gs = GameServer({"capture": lambda: CaptureBit(store=store)})
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
     gs.load_bit("capture")
     gs.run()
 
