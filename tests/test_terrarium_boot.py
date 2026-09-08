@@ -2708,3 +2708,69 @@ def test_recycle_room_failure_skips_restarts_and_returns_reason():
     reason = terrarium_boot._recycle_room(FakeTerrarium(), pool=FakePool())
     assert reason == "arco failed to start: injected"
     assert "pool-start" not in calls
+
+
+def test_main_forwards_arco_ready_timeout_to_build(monkeypatch):
+    """--arco-ready-timeout was dead since ca2d0a9: main() wrote it onto
+    BootConfig, but Terrarium.load_room waited on the RoomSpec's value.
+    main() now forwards it to build() as the Terrarium-level override."""
+    captured_kwargs = {}
+
+    def fake_build(config, bit_registry, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise SystemExit(0)
+
+    import harness.terrarium_boot as terrarium_boot_module
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["terrarium_boot.py", "--room", "TEST", "--arco-ready-timeout", "60"])
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs["arco_ready_timeout"] == 60.0
+
+
+def test_main_leaves_arco_ready_timeout_unset_without_the_flag(monkeypatch):
+    captured_kwargs = {}
+
+    def fake_build(config, bit_registry, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise SystemExit(0)
+
+    import harness.terrarium_boot as terrarium_boot_module
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--room", "TEST"])
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs["arco_ready_timeout"] is None
+
+
+def test_build_forwards_arco_ready_timeout_into_the_wait():
+    seen = []
+
+    def _recording_arco(command, popen=None, record=None):
+        from control.arco_process import ArcoProcess
+
+        class _Arco(ArcoProcess):
+            def wait_ready(self, timeout):
+                seen.append(timeout)
+                super().wait_ready(timeout)
+
+        return _Arco(command, popen=popen or FakePopen(), probe=lambda: True,
+                     record=record)
+
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit},
+        arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC,
+        host="127.0.0.1", port=0, arco_process_cls=_recording_arco,
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio(),
+        arco_ready_timeout=77.0)
+    shutdown(teardown, terrarium)
+
+    assert seen == [77.0]

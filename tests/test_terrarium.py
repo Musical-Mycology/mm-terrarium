@@ -77,7 +77,7 @@ def make_terrarium(config=None, *, gs=None, room_binding=None,
                    arco_process_cls=None, simulator_factory=None,
                    sweep=None, ownership_probe=None,
                    binding_store_path=None, boot_config=None,
-                   runs_dir=None, run_id=None):
+                   runs_dir=None, run_id=None, arco_ready_timeout=None):
     config = config if config is not None else make_config()
     gs = gs if gs is not None else make_gs()
     room_binding = room_binding if room_binding is not None else RoomBindingRegistry()
@@ -91,7 +91,7 @@ def make_terrarium(config=None, *, gs=None, room_binding=None,
         arco_command=["arco-server"], arco_process_cls=arco_process_cls,
         simulator_factory=simulator_factory, sweep=sweep,
         ownership_probe=ownership_probe, binding_store_path=binding_store_path,
-        runs_dir=runs_dir, run_id=run_id)
+        runs_dir=runs_dir, run_id=run_id, arco_ready_timeout=arco_ready_timeout)
 
 
 def test_boots_in_no_room_and_refuses_load_bit_gating():
@@ -370,3 +370,33 @@ def test_recycle_room_load_failure_reports_and_lands_no_room(monkeypatch):
     reason = terr.recycle_room()
     assert reason == "boom: injected load failure"
     assert terr.state is TerrariumState.NO_ROOM
+
+
+def test_arco_ready_timeout_override_wins_over_the_room_spec():
+    """--arco-ready-timeout was a dead flag: harness/terrarium_boot.py set
+    BootConfig.arco_ready_timeout, but load_room waited on the RoomSpec's
+    value. The Terrarium-level override now reaches the wait."""
+    seen = []
+
+    class RecordingArco(FakeArco):
+        def wait_ready(self, timeout):
+            seen.append(timeout)
+            super().wait_ready(timeout)
+
+    terrarium = make_terrarium(arco_process_cls=RecordingArco,
+                               arco_ready_timeout=42.5)
+    assert terrarium.load_room("TEST") is None
+    assert seen == [42.5]
+
+
+def test_arco_ready_timeout_defaults_to_the_room_spec_value():
+    seen = []
+
+    class RecordingArco(FakeArco):
+        def wait_ready(self, timeout):
+            seen.append(timeout)
+            super().wait_ready(timeout)
+
+    terrarium = make_terrarium(arco_process_cls=RecordingArco)
+    assert terrarium.load_room("TEST") is None
+    assert seen == [terrarium.config.rooms["TEST"].arco_ready_timeout]
