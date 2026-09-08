@@ -25,52 +25,7 @@ from __future__ import annotations
 from harness import markers
 from harness.shroom_client import ShroomClient, pump_tick
 from harness.signals import sigterm_as_keyboard_interrupt
-
-# Fixed identification palette, assigned to blocks in declaration order
-# (red, orange, yellow, green, blue, violet). RGB triples; laid out per the
-# fixture's color_order when painted. Repeats past six blocks.
-BLOCK_PALETTE: tuple[tuple[int, int, int], ...] = (
-    (255, 0, 0), (255, 128, 0), (255, 255, 0),
-    (0, 255, 0), (0, 0, 255), (148, 0, 211),
-)
-
-
-def identify_blocks_frame(profile, fixture_name: str) -> bytes:
-    """One static frame painting each of the fixture's blocks a distinct
-    solid color, so a human can visually confirm the physical build-out
-    mapping on the canvas. Harness-only: the one consumer of block
-    boundaries this slice (blocks are otherwise declarative -- see
-    control/room_profile.py's RoomBlock)."""
-    fixture = next(f for f in profile.fixtures if f.name == fixture_name)
-    order = fixture.color_order.upper()
-    frame = bytearray(fixture.pixel_count * 3)
-    for i, block in enumerate(fixture.blocks):
-        rgb = dict(zip("RGB", BLOCK_PALETTE[i % len(BLOCK_PALETTE)]))
-        px = bytes(rgb[ch] for ch in order)
-        frame[block.start * 3:(block.start + block.count) * 3] = \
-            px * block.count
-    return bytes(frame)
-
-
-class WebSimLeds:
-    """Adapts ShroomClient's leds.show(bytes)/leds.clear() to
-    WebSimBackend's send(frame).
-
-    `channels` is the frame width this surface expects. It is a parameter
-    rather than the LED_CHANNELS constant because a Room is not a Testshroom:
-    the Room's width comes from its RoomProfile (60 px x 3 = 180), while a
-    player device is still 12 px x GRB = 36.
-    """
-
-    def __init__(self, backend, channels: int) -> None:
-        self._backend = backend
-        self._channels = channels
-
-    def show(self, frame: bytes) -> None:
-        self._backend.send(frame)
-
-    def clear(self) -> None:
-        self._backend.send(bytes(self._channels))
+from harness.websim_leds import BLOCK_PALETTE, WebSimLeds, identify_blocks_frame
 
 
 def build(dev: str, sim_host: str = "127.0.0.1", sim_port: int = 0,

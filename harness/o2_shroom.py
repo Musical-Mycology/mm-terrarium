@@ -350,7 +350,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     from luxaeterna.backends.websim import WebSimBackend
     from luxaeterna.synth.capability import shroom_capability
 
-    from harness.room_simulator import WebSimLeds
+    from harness.websim_leds import WebSimLeds
 
     if room_type is None:
         capability = shroom_capability(surface_id=dev)
@@ -455,6 +455,13 @@ def main() -> None:
     parser.add_argument("--fixture", default=None,
                         help="Which Room fixture to render. Required "
                              "together with --room-type.")
+    parser.add_argument("--identify-blocks", action="store_true",
+                        help="Debug: skip Control and o2lite entirely; "
+                             "paint each of this fixture's declared blocks "
+                             "a distinct solid color and hold until Ctrl-C, "
+                             "so the physical build-out mapping can be "
+                             "confirmed visually. Needs --no-join, "
+                             "--room-type and --fixture.")
     parser.add_argument("--exit-with-parent", type=int, default=None,
                         metavar="PID",
                         help="Exit as soon as this process's parent is no "
@@ -562,6 +569,22 @@ def main() -> None:
     # program to be signalled -- and it was the one path the SIGTERM
     # handler did not protect. Measured live on 2026-08-14.
     try:
+        if args.identify_blocks:
+            if not (args.no_join and args.room_type and args.fixture):
+                parser.error("--identify-blocks needs --no-join, "
+                             "--room-type and --fixture")
+            from control.terrarium_config import load_terrarium_config
+            from harness.websim_leds import identify_blocks_frame
+
+            profile = load_terrarium_config(
+                "terrarium.toml").rooms[args.room_type].profile
+            backend.send(identify_blocks_frame(profile, args.fixture))
+            print(f"identify-blocks: {args.fixture} painted; Ctrl-C to "
+                  f"exit", flush=True)
+            while not parent_is_gone(args.exit_with_parent):
+                time.sleep(0.5)
+            return
+
         o2lite.initialize(args.ensemble)
         o2lite.set_services(args.dev)      # the device offers its own ie<N>
 
