@@ -115,7 +115,8 @@ class FakePopen:
         return self.returncode
 
 
-def pty_popen(command: list[str], log_path: str | None = None):
+def pty_popen(command: list[str], log_path: str | None = None,
+              cwd: str | None = None):
     """A subprocess.Popen work-alike that gives the child a real CONTROLLING
     TERMINAL, so Arco's curses init can open /dev/tty.
 
@@ -147,6 +148,9 @@ def pty_popen(command: list[str], log_path: str | None = None):
     proc.output. That is what lets an operator (or a later supervisor) read
     back why Arco never came up, since the pty is owned by this process and
     the operator is not looking at it.
+
+    cwd, when given, is the child's working directory; Arco reads
+    `arco_server_prefs.json` from it.
     """
     import fcntl                             # noqa: PLC0415 (lazy: POSIX-only)
     import os
@@ -169,6 +173,8 @@ def pty_popen(command: list[str], log_path: str | None = None):
     if pid == 0:                             # child: never returns
         os.close(err_r)
         os.environ.setdefault("TERM", "xterm-256color")
+        if cwd:
+            os.chdir(cwd)
         try:
             os.execv(command[0], list(command))
         except Exception as exc:             # noqa: BLE001 (about to _exit)

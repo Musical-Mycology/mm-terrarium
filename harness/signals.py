@@ -7,10 +7,10 @@ module whose cleanup, its measurement summary, or its backend.close() lives
 in a finally loses all of it the moment a supervisor signals it.
 
 Three modules in this repo are signalled with SIGTERM:
-control/simulator_process.py sends it to the Room simulator (whichever of
-harness/room_simulator.py or harness/o2_shroom.py is playing that role),
-and harness/run_stack.py sends it to harness/terrarium_boot.py. A bare
-`kill <pid>` sends it to any of them.
+control/simulator_process.py sends it to the Room simulator
+(harness/o2_shroom.py, playing that role), and harness/run_stack.py sends
+it to harness/terrarium_boot.py. A bare `kill <pid>` sends it to any of
+them.
 
 This lived as an identical six-line copy in harness/led_smoke.py and
 harness/room_simulator.py, and was about to become a third and fourth. The

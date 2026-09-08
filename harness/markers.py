@@ -98,6 +98,9 @@ BROWSE_URL = "BROWSE_URL:"
 # card instead. run_stack collects and echoes these, never opens them.
 ROOM_URL = "ROOM_URL:"
 
+# Arco's HTTP root (www/), printed once Arco is ready.
+ARCO_WWW = "ARCO_WWW:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,

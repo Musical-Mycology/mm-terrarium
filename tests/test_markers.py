@@ -78,15 +78,6 @@ def test_room_url_marker_value():
     assert markers.ROOM_URL == "ROOM_URL:"
 
 
-def test_room_url_marker_is_emitted_by_room_simulator():
-    """The Room fixture canvas is a pop-out reached from the Console's
-    Room card, not an automatic browser tab, so it prints behind
-    markers.ROOM_URL rather than markers.BROWSE_URL."""
-    import harness.room_simulator
-
-    assert "markers.ROOM_URL" in inspect.getsource(harness.room_simulator)
-
-
 def test_o2_shroom_emits_room_url_under_no_join_and_browse_url_otherwise():
     """o2_shroom.py stands in for a Room fixture under --no-join and for a
     player-device Testshroom otherwise -- the marker it prints has to track
@@ -118,3 +109,15 @@ def _module_for(name: str):
     import harness.terrarium_boot
     return (harness.terrarium_boot if name.startswith("CONTROL_")
             else harness.o2_shroom)
+
+
+def test_arco_www_marker_value():
+    assert markers.ARCO_WWW == "ARCO_WWW:"
+
+
+def test_arco_www_marker_is_emitted_by_terrarium_boot():
+    import inspect
+
+    import harness.terrarium_boot
+
+    assert "markers.ARCO_WWW" in inspect.getsource(harness.terrarium_boot)

@@ -1,9 +1,9 @@
 """The o2lite-backed device transport: Control's `game` service on the Arco
 hub.
 
-Satisfies the same small interface DeviceLinkServer does (drain_new_clients
-/ drain_inbound / send / bind_dev / drop_dev), so DeviceLinkAgent is
-unchanged by the swap. See docs/superpowers/specs/
+Satisfies the small transport interface DeviceLinkAgent drives:
+drain_new_clients, drain_inbound, send, bind_dev, drop_dev. See
+docs/superpowers/specs/
 2026-08-12-control-o2lite-and-timed-cues-design.md section 5.1.
 
 o2litepy is NEVER imported at module level here. The caller passes an
@@ -60,11 +60,16 @@ def to_o2_arg(type_char: str, value):
         return Blob(bytes(v & 0xFF for v in value))
     return Blob(_json_dumps(value).encode("utf-8"))
 
-# The complete services string. set_services REPLACES rather than appends
-# (o2litepy o2lite.py:707), and pyarco has already claimed "actl"
-# (pyarco/arco_engine.py:98), so Control writes both or silently breaks
-# Arco's control replies.
-SERVICES = "actl,game"
+# The complete services string this PROCESS offers on its one o2lite
+# connection. pyarco announces PYARCO_SERVICE first (arco.initialize(),
+# pyarco/arco_engine.py:98); Control then owns the full string, because
+# set_services REPLACES rather than appends (o2litepy o2lite.py:707).
+# One connection per process is o2lite's model (spec 2026-09-08 section
+# 2): the C library keeps its connection in process statics, so a second
+# connection is not an option on hardware and is not used here either.
+PYARCO_SERVICE = "actl"
+CONTROL_SERVICE = "game"
+SERVICES = f"{PYARCO_SERVICE},{CONTROL_SERVICE}"
 
 # Every /game/* verb the agent routes. Registered as full-path handlers so
 # o2lite dispatches straight into the drain queue.
@@ -121,6 +126,7 @@ _OWNERSHIP_POLL_INTERVAL = 0.005
 
 def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
                              resend_interval: float | None = None,
+                             pump=None,
                              clock=time.monotonic, sleep=time.sleep) -> bool:
     """Does `service` actually route back to THIS o2lite connection?
 
@@ -153,19 +159,51 @@ def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
     that is merely blocked (a cold audio-device open, an undrained pty)
     rather than misdiagnosing it as a second claimant after one silent
     2s window.
+
+    `pump`, if set, is called once per poll iteration. This loop holds the
+    caller's process for up to `timeout` seconds, and when that process
+    also owns Arco's pty (harness/terrarium_boot.py does) nothing else is
+    draining it meanwhile. Arco is a curses app; a pty accepts 1024 bytes
+    of undrained output (measured on macOS, 2026-09-08) and then blocks
+    the writer, and a blocked Arco serves no O2 at all -- including the
+    very reply this loop is waiting for. That was the whole story behind
+    the /actl/_svcheck reply that "never arrived": the hub log showed a
+    9.7s silence starting the instant Control's services registered and
+    ending when teardown drained the pty. Pass the Arco handle's poll()
+    here so the wait cannot freeze the hub it is waiting on.
+
+    Registration is once per (connection, service), not once per call.
+    Real o2litepy APPENDS handlers (o2lite.py:908) and _msg_dispatch calls
+    the FIRST match (o2lite.py:809-827); nothing ever removes one. A
+    per-call closure would therefore be shadowed forever by the first
+    call's closure, so a second start() on the same connection (the
+    serve-mode room recycle in harness/terrarium_boot.py) could never
+    pass. The handler is registered once and appends into a box this call
+    reads and clears. The box lives on the o2lite object rather than in a
+    module-level id() map: a reconnect keeps the same object alive, and a
+    per-test fake gets its own box for free.
     """
-    received = []
+    boxes = getattr(o2lite, "_mm_svcheck_boxes", None)
+    if boxes is None:
+        boxes = {}
+        o2lite._mm_svcheck_boxes = boxes
+    already_registered = service in boxes
+    received = boxes.setdefault(service, [])
+    received.clear()
 
-    def _on_check(address, typespec, info) -> None:
-        received.append(o2lite.get_int32())
+    if not already_registered:
+        def _on_check(address, typespec, info) -> None:
+            received.append(o2lite.get_int32())
 
-    o2lite.method_new(f"/{service}/_svcheck", "i", True, _on_check, None)
+        o2lite.method_new(f"/{service}/_svcheck", "i", True, _on_check, None)
     o2lite.send_cmd(f"/{service}/_svcheck", 0, "i", _OWNERSHIP_NONCE)
 
     deadline = clock() + timeout
     next_resend = (clock() + resend_interval
                    if resend_interval is not None else None)
     while True:
+        if pump is not None:
+            pump()
         o2lite.poll()
         if _OWNERSHIP_NONCE in received:
             return True
@@ -192,7 +230,13 @@ class FakeO2Lite:
         self._now = now
         self.services = ""
         self.sent: list[tuple[str, float, str, tuple]] = []
-        self.handlers: dict[str, object] = {}
+        # APPENDED, never replaced, and matched first-wins -- exactly what
+        # real o2litepy does (method_new appends at o2lite.py:908,
+        # _msg_dispatch returns on the first match at o2lite.py:809-827,
+        # and nothing ever removes a handler). Boundary rule 5: a dict
+        # keyed by path would silently REPLACE, which is more permissive
+        # than the library and hides shadowed-handler bugs.
+        self.handlers: list[tuple[str, str | None, object]] = []
         self.msg_timestamp = 0.0
         self._pull: list = []
         # Messages deliver() has queued but poll() has not yet dispatched --
@@ -226,7 +270,18 @@ class FakeO2Lite:
         return service in claimed and service not in self.refused_services
 
     def method_new(self, path, typespec, full, handler, info) -> None:
-        self.handlers[path] = handler
+        self.handlers.append((path, typespec, handler))
+
+    def _match(self, address: str, typespec: str):
+        """The FIRST registered handler matching address (and typespec, when
+        the handler asked for one). None typespec means "match any"."""
+        for path, want_types, handler in self.handlers:
+            if path != address:
+                continue
+            if want_types is not None and want_types != typespec:
+                continue
+            return handler
+        return None
 
     def send(self, addr, timestamp, *args) -> None:
         typespec = args[0] if len(args) > 1 else ""
@@ -254,7 +309,7 @@ class FakeO2Lite:
         """
         queue, self._queue = self._queue, []
         for address, typespec, args, timestamp in queue:
-            handler = self.handlers.get(address)
+            handler = self._match(address, typespec)
             if handler is None:
                 continue
             self.msg_timestamp = timestamp
@@ -307,9 +362,10 @@ class O2LiteTransport:
         self._inbound: list[tuple[object, dict]] = []
         self._devs: dict[str, object] = {}
 
-    def start(self, o2lite, *, ownership_timeout: float = 10.0,
+    def start(self, o2lite, *, ownership_timeout: float = 10.0, pump=None,
               clock=time.monotonic, sleep=time.sleep) -> None:
-        """Adopt an already-connected o2lite object and claim `game` on it.
+        """Adopt pyarco's already-connected o2lite object and claim the
+        full services string on it.
 
         Raises RuntimeError if the clock is not synced: time_get() returns
         -1 before sync, and a cue scheduled against -1 is meaningless.
@@ -320,12 +376,31 @@ class O2LiteTransport:
         holding `game` would make every device unreachable with no error
         anywhere. See verify_service_ownership on why the round trip is a
         deliberate, one-shot exception to boundary rule 4.
+
+        The post-claim check on `actl` is fatal too: the claim string
+        replaces pyarco's own, and if the hub no longer routes `actl` here
+        every /actl/act reply is lost and the next ugen build hangs. It
+        was demoted to a warning for a while because the full boot kept
+        failing it while reduced reproductions passed; the cause turned
+        out to be Arco freezing on its undrained pty during the check,
+        not routing (see verify_service_ownership's `pump`).
+
+        `pump`, if given, is driven once per probe iteration by both
+        ownership checks: pass the Arco handle's poll() so its pty keeps
+        draining for the whole hold.
         """
         now = o2lite.time_get()
         if now < 0:
             raise RuntimeError(
                 "o2lite clock is not synchronized (time_get() < 0); "
                 "Arco must be clock master before Control offers `game`")
+        announced = [name for name in
+                     getattr(o2lite, "services", "").split(",") if name]
+        if PYARCO_SERVICE not in announced:
+            raise RuntimeError(
+                f"pyarco has not announced {PYARCO_SERVICE!r} on this o2lite "
+                f"connection yet (services={announced}); Control's transport "
+                f"must start after arco.initialize() returns")
         self._o2 = o2lite
         o2lite.set_services(self._services)
         for verb in GAME_VERBS:
@@ -335,7 +410,7 @@ class O2LiteTransport:
                               self._on_message, None)
         if not verify_service_ownership(o2lite, "game",
                                         timeout=ownership_timeout,
-                                        resend_interval=2.0,
+                                        resend_interval=2.0, pump=pump,
                                         clock=clock, sleep=sleep):
             self._o2 = None
             raise RuntimeError(
@@ -350,6 +425,20 @@ class O2LiteTransport:
                 "hub. Check o2debug.log: a frozen hub shows no recent "
                 "lines at all; a conflict shows this connection's own "
                 "`sv` being refused.")
+        if not verify_service_ownership(o2lite, PYARCO_SERVICE,
+                                        timeout=ownership_timeout,
+                                        resend_interval=2.0, pump=pump,
+                                        clock=clock, sleep=sleep):
+            self._o2 = None
+            raise RuntimeError(
+                f"claiming {self._services!r} left {PYARCO_SERVICE!r} not "
+                f"routed back to this connection within "
+                f"{ownership_timeout:.0f}s: Arco's control replies would be "
+                "lost and the next ugen build would hang. Most likely the "
+                "hub is blocked (see the `game` failure text above for the "
+                "cold-audio-open and undrained-pty causes); a genuine "
+                "second claimant of `actl` is the rarer cause and shows as "
+                "this connection's own `sv` being refused in o2debug.log.")
 
     def _on_message(self, address, typespec, info) -> None:
         """o2lite handler.
@@ -361,7 +450,8 @@ class O2LiteTransport:
         `address` arrives with its leading '/' already stripped, because
         O2lite_handler.__init__ strips it from the registered path and
         _msg_dispatch compares the stripped forms. Re-prefix it so the
-        envelope the agent sees is identical to the websocket transport's.
+        envelope the agent sees keeps the same shape DeviceLinkAgent has
+        always expected.
         """
         try:
             args = pull_args(self._o2, typespec or "")
@@ -412,8 +502,8 @@ class O2LiteTransport:
     def send(self, dev: str, msg: dict) -> None:
         """Send one outbound envelope to `dev`'s own service.
 
-        Unknown dev is a silent no-op, matching DeviceLinkServer: a cue for
-        a device that has gone away must never raise into the engine tick.
+        Unknown dev is a silent no-op: a cue for a device that has gone
+        away must never raise into the engine tick.
         """
         if dev not in self._devs or self._o2 is None:
             return

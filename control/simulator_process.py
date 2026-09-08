@@ -1,9 +1,10 @@
 """SimulatorProcess: spawns and owns a Room simulator subprocess
-(harness/room_simulator.py) for the Terrarium load sequence. Peer to
-control/arco_process.py's ArcoProcess, minus a readiness probe -- the
-simulator's own devicelink connection is retried/owned by the caller's
-sequencing (see docs/superpowers/specs/2026-08-10-terrarium-visualization-
-simulator-design.md section 3), not something boot() blocks on.
+(harness/o2_shroom.py, run with --no-join, one per fixture) for the
+Terrarium load sequence. Peer to control/arco_process.py's ArcoProcess,
+minus a readiness probe -- the simulator's own o2lite connection is
+retried/owned by the caller's sequencing (see docs/superpowers/specs/
+2026-08-10-terrarium-visualization-simulator-design.md section 3), not
+something boot() blocks on.
 """
 
 from __future__ import annotations

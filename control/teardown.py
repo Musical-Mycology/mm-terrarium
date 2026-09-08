@@ -12,11 +12,11 @@ THE INVARIANT, and the one thing to know before editing:
 
     Anything registered LATER is torn down EARLIER.
 
-That is what makes client-before-hub structural. The devicelink server is
-started before boot() and pushed first, so it stops last. Arco is spawned
-next. The Room simulator is spawned after Arco and therefore stops before
-it. An o2lite transport adopted after boot() returns stops before all of
-them. Nobody maintains that order; it falls out of when things start.
+That is what makes client-before-hub structural. Arco is pushed first, so
+it stops last. Each Room fixture's simulator is spawned after Arco and
+therefore stops before it. The o2lite transport, adopted after boot()
+returns, stops before all of them. Nobody maintains that order; it falls
+out of when things start.
 
 Push order is DELIBERATE, not literally creation order. Terrarium.load_room
 pushes "arco" first, then pushes one simulator per Room fixture, in the
@@ -49,7 +49,7 @@ class TeardownStack:
     def push(self, name: str, fn: Callable[[], None]) -> None:
         """Register a teardown step. `name` appears in the failure report,
         so make it the thing an operator would look for in a log: "arco",
-        "simulator", "devicelink-server"."""
+        "simulator", "o2lite-transport"."""
         if self._closed:
             raise RuntimeError(
                 f"cannot push {name!r}: this TeardownStack is already closed, "

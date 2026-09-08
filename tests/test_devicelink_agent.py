@@ -1,6 +1,8 @@
 """DeviceLinkAgent: inbound dispatch and the registration path, against an
 in-process fake server (no sockets -- see test_devicelink_server.py)."""
 
+import time
+
 import pytest
 
 # devicelink.agent imports harness.device_bridge, which needs the sibling
@@ -93,7 +95,7 @@ class RaisingSendServer(FakeServer):
 def rig():
     gs = GameServer({"test_bit": TestBit})
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
     return gs, server, agent
 
 
@@ -358,7 +360,7 @@ def test_denied_join_calls_the_on_join_denied_sink():
     calls = []
     agent = DeviceLinkAgent(gs, server,
                             on_join_denied=lambda dev, node, reason: calls.append(
-                                (dev, node, reason)))
+                                (dev, node, reason)), clock=time.monotonic)
     gs.load_bit("test_bit")
     _hello(server, agent)
     server.deliver("c1", "/game/join", "ss", ["ie1", "NO_SUCH_NODE"])
@@ -376,7 +378,7 @@ def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply():
     def boom(dev, node, reason):
         raise RuntimeError("sink exploded")
 
-    agent = DeviceLinkAgent(gs, server, on_join_denied=boom)
+    agent = DeviceLinkAgent(gs, server, on_join_denied=boom, clock=time.monotonic)
     gs.load_bit("test_bit")
     _hello(server, agent)
     server.deliver("c1", "/game/join", "ss", ["ie1", "NO_SUCH_NODE"])
@@ -649,7 +651,7 @@ def test_play_cue_is_sent_to_the_device():
 
     gs = GameServer({"test_bit": TestBit})
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
     gs.load_bit("test_bit")
 
     client = object()
@@ -682,7 +684,7 @@ def test_play_cue_for_unknown_device_is_dropped():
 
     gs = GameServer({"test_bit": TestBit})
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
     gs.load_bit("test_bit")
     gs.run()
 
@@ -741,7 +743,7 @@ def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
     Room's light never rendered a single frame against a real Arco."""
     gs = _demo_room_ready_game_server()
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
     agent.server.bind_dev("sim-room-array", object())   # simulate the hello handshake
 
     array = next(f for f in DEMO_PROFILE.fixtures if f.name == "array")
@@ -762,7 +764,7 @@ def _agent_with_bound_room(monkeypatch):
     rendered frame."""
     gs = _room_ready_game_server()
     sessions = _fake_sessions(monkeypatch)
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     return gs, agent, sessions["room_test_main"]
 
 
@@ -770,7 +772,7 @@ def test_room_light_session_built_from_bit_declaration():
     gs = _room_ready_game_server()
     server = FakeServer()
 
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
 
     assert set(agent._fixtures) == {"main", "accent"}
 
@@ -816,7 +818,7 @@ def test_room_dev_cue_routes_to_its_fixture_session_not_normal_bridges():
 def test_render_room_sends_leds_event_when_frame_changes():
     gs = _room_ready_game_server()
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
     client = object()
     agent.server.bind_dev("sim-room-main", client)   # simulate the hello handshake
 
@@ -831,7 +833,7 @@ def test_no_room_configured_leaves_room_wiring_inert():
     gs.load_bit("TestBit")
     server = FakeServer()
 
-    agent = DeviceLinkAgent(gs, server)   # no Room configured at all
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)   # no Room configured at all
 
     assert agent._fixtures == {}
     agent._render_room()   # must not raise
@@ -887,7 +889,7 @@ def test_ambient_session_built_with_no_bit_loaded(monkeypatch):
     calls = _spy_on_light_manifest(monkeypatch)
     gs = _demo_room_no_bit_game_server()
 
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
 
     assert set(agent._fixtures) == {"array"}
     assert "aurora" in _instrument_names(calls)
@@ -901,7 +903,7 @@ def test_ambient_session_is_empty_when_fixtures_declare_no_ambient(monkeypatch):
     gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
     _fake_sessions(monkeypatch)
 
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
 
     assert set(agent._fixtures) == {"main", "accent"}
     assert agent._fixtures["main"].session.manifest.instruments == []
@@ -922,7 +924,7 @@ def test_bitless_bound_fixture_still_gets_an_audio_voice(monkeypatch):
     audio = _FakeAudioBridge()
     _fake_sessions(monkeypatch)
 
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=audio)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=audio, clock=time.monotonic)
 
     # Still nothing to render on either fixture ...
     assert agent._fixtures["main"].session.manifest.instruments == []
@@ -1040,7 +1042,7 @@ def test_ambient_generator_unwire_then_rewire_resets_elapsed():
 def test_load_bit_swaps_ambient_for_the_bits_room_declaration(monkeypatch):
     calls = _spy_on_light_manifest(monkeypatch)
     gs = _demo_room_no_bit_game_server()
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     assert "aurora" in _instrument_names([calls[-1]])
 
     gs.load_bit("TestBit")   # TestBit declares DEMO room_manifests -> ROOM role
@@ -1052,7 +1054,7 @@ def test_load_bit_swaps_ambient_for_the_bits_room_declaration(monkeypatch):
 def test_unload_bit_swaps_back_to_ambient(monkeypatch):
     calls = _spy_on_light_manifest(monkeypatch)
     gs = _demo_room_no_bit_game_server()
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     gs.load_bit("TestBit")
     assert "rainbow" in _instrument_names([calls[-1]])
 
@@ -1067,7 +1069,7 @@ def test_ambient_audio_drone_starts_at_room_ready():
     pool = FakePool()
     room_audio = AudioBridge(pool)
 
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio, clock=time.monotonic)
 
     assert len(pool.acquired) == 1
     voice = pool.acquired[0]
@@ -1079,7 +1081,7 @@ def test_ambient_audio_swaps_to_the_bits_drone_at_load(monkeypatch):
     gs = _demo_room_no_bit_game_server()
     pool = FakePool()
     room_audio = AudioBridge(pool)
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio, clock=time.monotonic)
     ambient_voice = pool.acquired[0]
 
     gs.load_bit("TestBit")
@@ -1099,7 +1101,7 @@ def test_unwire_room_releases_the_ambient_audio_grant_and_stops_the_drone():
     gs = _demo_room_no_bit_game_server()
     pool = FakePool()
     room_audio = AudioBridge(pool)
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio, clock=time.monotonic)
     voice = pool.acquired[0]
     assert any(call[0] == "note_on" for call in voice.sent)   # drone is live
 
@@ -1164,7 +1166,7 @@ def test_room_audio_bridge_gets_on_grant_at_setup():
     gs = _room_ready_game_server()
     pool = FakePool()
     room_audio = AudioBridge(pool)
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio, clock=time.monotonic)
 
     assert len(pool.acquired) == 2
 
@@ -1173,7 +1175,7 @@ def test_on_state_change_running_starts_the_drone():
     gs = _room_ready_game_server()
     pool = FakePool()
     room_audio = AudioBridge(pool)
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio, clock=time.monotonic)
 
     agent.on_state_change(State.SETUP, State.RUNNING)
 
@@ -1185,7 +1187,7 @@ def test_on_state_change_unloading_stops_the_drone():
     gs = _room_ready_game_server()
     pool = FakePool()
     room_audio = AudioBridge(pool)
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio, clock=time.monotonic)
     agent.on_state_change(State.SETUP, State.RUNNING)
 
     agent.on_state_change(State.RUNNING, State.UNLOADING)
@@ -1196,7 +1198,7 @@ def test_on_state_change_unloading_stops_the_drone():
 
 def test_no_room_audio_injected_state_change_is_a_noop():
     gs = _room_ready_game_server()
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
 
     agent.on_state_change(State.SETUP, State.RUNNING)   # must not raise
 
@@ -1212,7 +1214,7 @@ def test_poll_ticks_the_room_audio_bridge():
     gs = _room_ready_game_server()
     pool = FakePool()
     room_audio = AudioBridge(pool)
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio, clock=time.monotonic)
     assert pool.polls == 0   # nothing ticks at construction time
 
     agent.poll()
@@ -1222,7 +1224,7 @@ def test_poll_ticks_the_room_audio_bridge():
 
 def test_poll_with_no_room_audio_injected_does_not_raise():
     gs = _room_ready_game_server()
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
 
     agent.poll()   # room_audio defaults to None -- must not raise
 
@@ -1279,7 +1281,7 @@ class _RaisingAudioBridge:
 
 def test_poll_survives_a_raising_audio_tick():
     gs = _room_ready_game_server()
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=_RaisingAudioBridge())
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=_RaisingAudioBridge(), clock=time.monotonic)
 
     agent.poll()   # must not raise; must not wedge the engine tick
 
@@ -1387,7 +1389,7 @@ def two_fixture_agent():
     server = FakeServer()
     server.bind_dev("sim-room-main", "c-main")
     server.bind_dev("sim-room-accent", "c-accent")
-    agent = DeviceLinkAgent(gs, server, room_audio=audio)
+    agent = DeviceLinkAgent(gs, server, room_audio=audio, clock=time.monotonic)
     return agent, audio, "sim-room-main", "sim-room-accent"
 
 
@@ -1403,7 +1405,7 @@ def test_audio_is_granted_for_every_audio_fixture_even_when_unbound(monkeypatch)
     gs = _room_ready_game_server(bound={})
     _fake_sessions(monkeypatch)
     audio = _FakeAudioBridge()
-    DeviceLinkAgent(gs, FakeServer(), room_audio=audio)
+    DeviceLinkAgent(gs, FakeServer(), room_audio=audio, clock=time.monotonic)
     assert sorted(d for d, _role in audio.granted.items()) == ["accent", "main"]
 
 
@@ -1494,7 +1496,7 @@ def test_only_the_first_granted_fixture_plays_the_welcome():
 def test_every_fixture_gets_its_own_session_from_room_load(monkeypatch):
     gs = _room_ready_game_server(bound={})          # nothing bound at all
     sessions = _fake_sessions(monkeypatch)
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
 
     assert agent._room_profile == TEST_PROFILE
     assert set(sessions) == {"room_test_main", "room_test_accent"}
@@ -1508,7 +1510,7 @@ def test_unbound_fixture_renders_to_the_console_and_sends_nothing(monkeypatch):
     frames = []
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server,
-                            on_room_frame=lambda name, frame: frames.append(name))
+                            on_room_frame=lambda name, frame: frames.append(name), clock=time.monotonic)
     agent._render_room()
     assert sorted(frames) == ["accent", "main"]
     assert server.sent == []
@@ -1532,7 +1534,7 @@ def test_a_light_cue_at_the_accent_feeds_only_the_accents_session(monkeypatch):
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
     sessions = _fake_sessions(monkeypatch)
-    DeviceLinkAgent(gs, FakeServer())
+    DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     gs.on_light_cue("sim-room-accent", 0xB0, 74, 99, None)
     assert sessions["room_test_accent"].fed == [(0xB0, 74, 99)]
     assert sessions["room_test_main"].fed == []
@@ -1542,7 +1544,7 @@ def test_controllers_are_recorded_per_fixture(monkeypatch):
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
     _fake_sessions(monkeypatch)
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     gs.on_light_cue("sim-room-accent", 0xB0, 74, 99, None)
     assert agent.controllers() == {"main": {}, "accent": {74: 99}}
 
@@ -1552,7 +1554,7 @@ def test_room_manifest_is_sliced_per_fixture(monkeypatch):
     session must receive one rainbow decl targeting its own `primary`."""
     gs = _room_ready_game_server(bound={"main": "sim-room-main"})
     sessions = _fake_sessions(monkeypatch)
-    DeviceLinkAgent(gs, FakeServer())
+    DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     for key in ("room_test_main", "room_test_accent"):
         decls = sessions[key].manifest.instruments
         assert [(d.instrument, d.target) for d in decls] == [("rainbow", "primary")]
@@ -1568,7 +1570,7 @@ def test_room_frame_is_the_bound_fixtures_own_width():
     gs = _room_ready_game_server()
     server = FakeServer()
     server.bind_dev("sim-room-main", "c-room")
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
 
     for _ in range(3):
         agent.poll()
@@ -1591,7 +1593,7 @@ def test_two_bound_fixtures_each_receive_their_own_width():
     server = FakeServer()
     server.bind_dev("sim-room-main", "c-main")
     server.bind_dev("sim-room-accent", "c-accent")
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
 
     for _ in range(3):
         agent.poll()
@@ -1609,7 +1611,7 @@ def test_an_unbound_second_fixture_does_not_block_the_first_from_rendering():
     gs = _room_ready_game_server(bound={"main": "sim-room-main"})
     server = FakeServer()
     server.bind_dev("sim-room-main", "c-main")
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
 
     for _ in range(3):
         agent.poll()
@@ -1652,7 +1654,7 @@ def test_a_raising_fixture_render_does_not_block_the_others_frame(monkeypatch):
     server = FakeServer()
     server.bind_dev("sim-room-main", "c-main")
     server.bind_dev("sim-room-accent", "c-accent")
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
 
     def boom(universe):
         raise RuntimeError("session exploded")
@@ -1672,7 +1674,7 @@ def test_a_room_cue_reaches_every_bound_fixtures_session(monkeypatch):
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
     sessions = _fake_sessions(monkeypatch)
-    DeviceLinkAgent(gs, FakeServer())
+    DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     gs._dispatch_cues([(ROOM, 0xB0, 74, 7)], at=None)
     assert sessions["room_test_main"].fed == [(0xB0, 74, 7)]
     assert sessions["room_test_accent"].fed == [(0xB0, 74, 7)]
@@ -1749,7 +1751,7 @@ def test_setup_room_builds_the_sessions_even_with_nothing_bound_yet():
     """A late admin tap must not need a session rebuild -- every fixture is
     loaded from Room load regardless of binding state."""
     gs = _room_ready_game_server(bound={})
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
 
     assert set(agent._fixtures) == {"main", "accent"}
     assert agent._room_profile is not None
@@ -1764,7 +1766,7 @@ def test_an_explicit_room_profile_overrides_the_resolved_one():
                    zones=(RoomZone("all", 0, 24),),
                    instrument=GENERIC_SURFACE),))
     gs = _room_ready_game_server()
-    agent = DeviceLinkAgent(gs, FakeServer(), room_profile=profile)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_profile=profile, clock=time.monotonic)
 
     assert set(agent._fixtures) == {"only"}
     assert agent._fixtures["only"].session.cap.pixel_count == 24
@@ -1773,7 +1775,7 @@ def test_an_explicit_room_profile_overrides_the_resolved_one():
 def test_no_room_configured_leaves_the_profile_unset():
     """A GameServer built the pre-Room way must keep working."""
     gs = GameServer({"TestBit": TestBit})
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     assert agent._room_profile is None
     assert agent._fixtures == {}
 
@@ -1787,7 +1789,7 @@ def test_rewire_room_builds_the_sessions_after_a_no_room_boot():
     gs.room/gs.bit both actually exist, exactly as if boot() had always
     known about them."""
     gs = GameServer({"TestBit": TestBit})
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     assert agent._fixtures == {}
 
     gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
@@ -1805,7 +1807,7 @@ def test_unwire_room_clears_a_previously_wired_session():
     leave a stale session/profile behind for the next NO_ROOM wait (or a
     subsequent, differently-shaped Room) to render against."""
     gs = _room_ready_game_server()
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     assert agent._fixtures
 
     agent.unwire_room()
@@ -1842,7 +1844,7 @@ def test_room_frames_reach_the_sink():
     seen = []
     agent = DeviceLinkAgent(
         gs, FakeServer(),
-        on_room_frame=lambda name, frame: seen.append((name, frame)))
+        on_room_frame=lambda name, frame: seen.append((name, frame)), clock=time.monotonic)
 
     for _ in range(3):
         agent.poll()
@@ -1865,7 +1867,7 @@ def test_a_raising_room_frame_sink_does_not_stop_the_leds_going_out():
     def boom(name, frame):
         raise RuntimeError("console exploded")
 
-    agent = DeviceLinkAgent(gs, server, on_room_frame=boom)
+    agent = DeviceLinkAgent(gs, server, on_room_frame=boom, clock=time.monotonic)
 
     for _ in range(3):
         agent.poll()
@@ -1877,7 +1879,7 @@ def test_no_sink_is_the_default_and_changes_nothing():
     gs = _room_ready_game_server()
     server = FakeServer()
     server.bind_dev("sim-room-main", "c-room")
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
 
     for _ in range(3):
         agent.poll()
@@ -1922,7 +1924,7 @@ def test_unloading_still_stops_the_room_drone():
     gs = _room_ready_game_server()
     pool = FakePool()
     room_audio = AudioBridge(pool)
-    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio)
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=room_audio, clock=time.monotonic)
     agent.on_state_change(State.SETUP, State.RUNNING)
     agent.on_state_change(State.RUNNING, State.UNLOADING)
     voice = pool.acquired[0]
@@ -1932,7 +1934,7 @@ def test_unloading_still_stops_the_room_drone():
 def test_unloading_clears_queues_even_with_no_room_audio_injected():
     """The clear sits before the room-audio early return on purpose."""
     gs = _room_ready_game_server()
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     agent._light_cues.push(agent._clock() + 5.0, ("ie1", 0xB0, 74, 1, 0.0),
                            now=agent._clock())
     agent.on_state_change(State.RUNNING, State.UNLOADING)
@@ -2129,7 +2131,7 @@ def test_on_release_with_no_bridge_calls_drop_dev():
     transport's connection mapping."""
     gs = GameServer({"test_bit": TestBit})
     server = FakeServer()
-    agent = DeviceLinkAgent(gs, server)
+    agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
     gs.load_bit("test_bit")
     _hello(server, agent, client="c1", dev="ie1")
     assert "ie1" in server._devs
@@ -2251,7 +2253,7 @@ def test_override_expiry_clears_only_that_fixtures_last_frame():
     about."""
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
-    agent = DeviceLinkAgent(gs, FakeServer())
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
 
     agent._fixtures["main"].last_frame = b"\x01"
     agent._fixtures["accent"].last_frame = b"\x02"
@@ -2261,3 +2263,13 @@ def test_override_expiry_clears_only_that_fixtures_last_frame():
 
     assert agent._fixtures["main"].last_frame is None
     assert agent._fixtures["accent"].last_frame == b"\x02"
+
+
+def test_agent_requires_a_clock():
+    """No default clock. The 2026-08-13 live run went dark because Control
+    stamped frames on time.monotonic while the device ticked on O2 time;
+    the only structural fix is that nobody can construct an agent without
+    saying which clock it reads."""
+    gs = GameServer({"TestBit": TestBit})
+    with pytest.raises(TypeError):
+        DeviceLinkAgent(gs, FakeServer())

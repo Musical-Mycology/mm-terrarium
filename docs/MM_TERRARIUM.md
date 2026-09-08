@@ -45,8 +45,12 @@ hardware fleet.
 > completes, so mm-terrarium has been a **clock-synced o2lite client of Arco**
 > whenever the Room's audio is up. As of the 2026-08-12 slice Control also
 > **offers `game` over that same connection** (`devicelink/o2_transport.py`),
-> so device registration can cross a real O2 hub. The websocket transport
-> remains and is still the default; o2lite is opt-in per run.
+> so device registration can cross a real O2 hub. As of 2026-09-08 (o2lite
+> cutover, Phase 1 of the connectivity migration spec) o2lite is the only
+> device wire: `DeviceLinkServer`, `room_simulator.py`, `devicelink_smoke.py`
+> and `capture_smoke.py` are deleted, `terrarium_boot` has no `--transport`,
+> and Control's transport verifies both `actl` and `game` after claiming the
+> services string.
 >
 > **The o2lite path has been run against a live Arco and observed working**
 > (2026-08-13), which is the first time anything in this repo's device path
@@ -528,19 +532,21 @@ as of its PR #11, so a current editable install has them and no special checkout
 is needed. `tests/test_array_smoke.py` `importorskip`s luxaeterna anyway, so the
 core suite runs without it.
 
-### `devicelink/` — the device-facing websocket transport (Slice 2)
-Control's first device wire. The inbound sibling of `console/`, with the same
-split: `DeviceLinkServer` (socket-only, drain-based) plus `DeviceLinkAgent`
-(transport-agnostic brains, driven from the tick loop). It holds one
-`DeviceBridge` → luxaeterna `LightSession` per joined device, ships
-`JoinResult.config` verbatim as `/<dev>/role`, and streams rendered frames as
-`/<dev>/leds` on change.
+### `devicelink/` -- the device-facing transport (o2lite)
+Control's device wire. The inbound sibling of `console/`, with the same
+split: the transport (`devicelink/o2_transport.py`, o2lite-only as of the
+2026-09-08 cutover) plus `DeviceLinkAgent` (transport-agnostic brains,
+driven from the tick loop). It holds one `DeviceBridge` → luxaeterna
+`LightSession` per joined device, ships `JoinResult.config` verbatim as
+`/<dev>/role`, and streams rendered frames as `/<dev>/leds` on change.
 
 Messages are **JSON envelopes mirroring o2ws field-for-field**
-(`timestamp`/`address`/`typespec`/`args`) — the vocabulary is real, the framing
-is not, so the later swap to o2ws is mechanical. **Arco is not in this path**,
-so nothing here may be read as a hop count or a latency figure. Same trust
-model as the console: trusted LAN, no auth, `127.0.0.1` by default.
+(`timestamp`/`address`/`typespec`/`args`) -- the vocabulary is real, but this
+is now purely the in-process representation `protocol.py` builds and
+`FakeO2Lite`/the tests use; the wire itself is O2 messages over o2lite, not
+JSON frames. **Arco was not in this path** on the deleted websocket wire;
+on o2lite, Arco is the hub every message crosses. Same trust model as the
+console: trusted LAN, no auth, `127.0.0.1` by default.
 
 - `/ie<N>/room` is pushed on hello and on state/registration change; devices
   never request it.
@@ -580,14 +586,8 @@ each `on_release(dev)` call and `data()` wraps each `on_light_cue(...)` call, so
 a failing transport cannot strand the remaining devices or wedge Control in
 `UNLOADING`. That guarantee has its own engine-level regression test.
 
-Driver: `python -m harness.devicelink_smoke --hold`. **Trap:** `main()` calls
-`load_bit()` straight into `run()` with zero real-world gap, and
-`RegistrationState.join()` refuses a **scored** role (e.g. TestBit's
-`player`, node `TEST_PLAYER_NODE`) once `RUNNING` — a phone scanning a QR
-that instant was denied instantly, with no window to join. Pass
-`--setup-seconds N` (default `0`, unchanged behavior) to hold the Bit in
-`SETUP` — polling DeviceLink so joins land — for `N` seconds before `run()`
-closes it; only the unscored jam role stayed joinable without this.
+Driver: `./smoke-test.sh --open --devices 1` (run_stack); `--setup-seconds`
+is the same knob there.
 
 ### `capture/` + `bits/capture/capture_bit.py` — labelled sensor telemetry capture (tool Bit)
 A **tool Bit**, not a production game Bit — it doesn't close the "no
@@ -631,10 +631,6 @@ future slice can derive real thresholds instead of guessing.
   open. `Bit.status()` surfaces live per-label counts and open captures, so
   **the Terrarium Console is a live capture dashboard with zero console-side
   changes**.
-- **`harness/capture_smoke.py`:** the driver, mirroring
-  `devicelink_smoke.py`'s `build()`/`main()` split; `python -m
-  harness.capture_smoke --hold --host 0.0.0.0` for a real phone (same
-  `127.0.0.1`-default / explicit-LAN-opt-in trust model as `devicelink/`).
 - **`tools/trace_stats.py`:** an offline CLI (not part of the runtime) that
   reads a capture session directory and reports peak/deviation-from-rest
   acceleration, time-above-threshold, spike/inter-spike intervals, peak
@@ -646,8 +642,12 @@ future slice can derive real thresholds instead of guessing.
   a future mm-tuneshroom capture client implements against — same pattern as
   `devicelink/protocol.py` ↔ `lib/link/envelope.dart`.
 
-Nothing here is o2lite and nothing here touches Arco: same caveat as
-`devicelink/` throughout.
+The capture path rides the o2lite transport like every verb;
+`tests/test_capture_o2.py` exercises it end to end with a chunked 100 ms
+batch. Telemetry is chunked under o2lite's 4096-byte cap
+(`chunk_telemetry_batch`, `docs/telemetry-trace-schema.md`). No producer
+exists yet (Phase 2/3 of the migration spec); CaptureBit loads with
+`./smoke-test.sh --serve --bit CaptureBit`.
 
 ### `control/rooms.py`, `control/room_binding.py`, `control/room_bridge.py`, `control/boot_config.py`, `control/arco_process.py`, `control/boot.py` — the Room concept and load sequence
 **Room**: a first-class, boot-time concept representing the physical (or
@@ -792,10 +792,13 @@ room* section below. A real-hardware Art-Net venue array remains deferred.
   changes, and matches boundary rule 3 ("the transport only delivers it to
   that device's renderer") more literally than the original prose did.
 - **`harness/terrarium_boot.py`** — the real, runnable end-to-end driver.
-  Constructs `DeviceLinkServer` and starts it **before** calling `boot()`,
-  deliberately: `boot()`'s `simulator_factory` spawns the simulator
-  subprocess, which connects immediately, so the server must already be
-  listening or the connection races server construction. **Teardown is a
+  It used to construct `DeviceLinkServer` and start it **before** calling
+  `boot()`, so the listening socket beat the simulator subprocess that
+  `boot()`'s `simulator_factory` spawns. Since the o2lite cutover there is
+  no server to construct: `main()` builds an `O2LiteTransport` and starts
+  it **after** `build()` returns, on the o2lite connection pyarco has
+  already connected and clock-synced (see the o2lite transport section
+  below). **Teardown is a
   `TeardownStack`, not `control.boot.shutdown()`** (that function was
   deleted -- see the teardown-order section below for why). The real unwind
   is reverse of registration order, and the devicelink server and the
@@ -886,8 +889,9 @@ Control becomes a real O2 participant, and a cue gains a time. Design:
   a two-sided agreement error and wrong for latency, where it would report a
   frame arriving a healthy 80 ms early as 80 ms of error. Every figure it
   produces is a **dev-box figure**; see *Host platform*.
-- **`harness/terrarium_boot.py --transport o2lite`** — opt-in, because it
-  needs a running Arco. `--setup-seconds` holds the Bit in SETUP so a device
+- **`harness/terrarium_boot.py`'s o2lite transport** -- the only mode as of
+  2026-09-08 (there is no `--transport` flag any more); it needs a running
+  Arco. `--setup-seconds` holds the Bit in SETUP so a device
   can join a **scored** role before `run()` closes registration for it
   (`control/registration.py:41-42`); without it a Tuneshroom joining
   `TEST_PLAYER_NODE` is denied every time. The driver now exits when the Bit
@@ -966,6 +970,71 @@ guards this paragraph used to describe one by one; and
 self-addressed round trip before the tick loop starts, so a refused
 announcement fails loud instead of silently. Design:
 `docs/superpowers/specs/2026-08-14-room-simulator-service-collision-design.md`.
+
+**The `/actl/_svcheck` reply that never came back (root-caused 2026-09-08;
+it was Arco frozen on its pty, not routing).** When the o2lite cutover
+made Control the owner of the whole `"actl,game"` services string
+(branch `claude/o2lite-connectivity-migration-b5806a`), `start()` gained
+a second ownership probe, for `actl`, right after the `game` one. In the
+full `./smoke-test.sh --ci` boot the `game` probe returned and the
+`actl` probe timed out every time, while Arco's own `/actl/started`
+still reached the same connection during the wait, and every reduced
+reproduction (initialize + claim + verify, with or without a reset, with
+or without `ArcoSynthPool.start()`) passed. The check was demoted to a
+warning pending a follow-up. Traced with O2's own tracing on both ends
+(`debug_flags` in `arcoserver/arco_server_prefs.json` for the hub,
+`initialize(ensemble, debug_flags="rd")` on Control's connection): the
+hub registered `game` for Control's bridge and then logged **nothing at
+all for 9.7 s**, not one TCP message from Control's socket, until the
+failing boot's teardown drained Arco's pty, at which point the hub woke
+and the log ended. Control's `/game/_svcheck` sends were sitting unread
+in the socket the whole time. On that run the `game` probe failed as
+well; which probe fails depends only on when the pty fills.
+
+The mechanism is the one the *operator/harness handoff* section below
+already names as load-bearing: **every loop that holds while Arco is
+alive must drain Arco's pty**, and `verify_service_ownership`'s wait was
+such a loop. Arco is a curses app on the pty `harness/terrarium_boot.py`
+owns; a macOS pty accepts **1024 bytes** of undrained output (measured
+2026-09-08 with a bare `os.openpty()` writer) and then blocks the
+writer; a blocked Arco serves no O2 at all, including the reply the loop
+is waiting for. The probe polled o2lite for up to 10 s per service, 20 s
+for both, and drained nothing. That is why reduced reproductions passed
+(a freshly started Arco had not printed 1 KB yet; the full boot's
+`reset in progress` / `Starting audio devices` lines and curses redraws
+had) and why the 2026-08-20 resend window only masked it: resending
+does nothing for a hub that cannot read its socket.
+
+Fix: `verify_service_ownership(..., pump=)` drives a caller hook once
+per poll iteration, `O2LiteTransport.start(o2lite, pump=)` hands it to
+both probes, and every `transport.start` call in `harness/terrarium_boot.py`
+(boot, `_recycle_room`, the roomless `restart_clients`) passes the live
+Arco handle's `poll()`, which is the pty drain. Verified live: with the
+pump, both `/game/_svcheck` and `/actl/_svcheck` round-trip within a
+second of the claim and the hub log shows no gap longer than 0.65 s for
+the whole boot; without it, the same boot on the same machine showed
+the 9.7 s silence above. **The `actl` post-claim check is fatal again**,
+exactly like `game`: losing `actl` means every `/actl/act` reply is
+lost and the next ugen build hangs, which is worse than a refused boot.
+
+Two things found alongside, both fixed on the same branch: (1)
+o2litepy's `_msg_dispatch` calls the **first** matching handler and
+`method_new` appends (`o2lite.py:796,908`), so a second
+`verify_service_ownership` on the same service used to register a dead
+second `/<service>/_svcheck` handler and could never see a reply; the
+boot only called it once per service so it was latent there, but
+`harness/o2_shroom.py`'s `reconnect_recheck` re-verifies after every
+reconnect and would have timed out on every re-check after the first.
+The reply handler is now registered once per (o2lite, service) and
+reused. (2) `FakeO2Lite.method_new` kept a dict keyed by path, so a
+re-registration silently *replaced* the first handler: a double more
+permissive than the library (boundary rule 5), and precisely the
+dimension that hid (1). It is an append-only list with first-match
+dispatch now. Not fixed, and worth knowing: the readiness probe's
+`arco.initialize()` and `ArcoSynthPool.start()` also hold without
+draining (the wait is inside pyarco), so a very chatty Arco could still
+freeze during those; neither has been observed to, and the pty is
+nearly empty at that point in the boot.
 
 **The gap that survived this slice was closed 2026-08-14.** All of the above
 was built and unit-tested with nothing driving it end to end; a follow-up
@@ -1104,40 +1173,40 @@ composed into was still wrong on the path that matters most. Design:
   the whole point: **anything registered later is torn down earlier**.
 <!-- diagram:boot-teardown GENERATED by tools/render_diagrams.py -- do not hand-edit -->
 ```ascii
-   ┌────────────────────────────────────┐      
-   │1. pre-room stack: o2lite transport │      
-   │                                    │      
-   └────────────────────────────────────┘      
-                  │                            
-                  ▼                            
-         ┌───────────────────┐                 
-         │2. room stack: Bit │                 
-         │                   │                 
-         └───────────────────┘                 
-                  │                            
-                  ▼                            
-      ┌───────────────────────────┐            
-      │3. room stack: Room bridge │            
-      │                           │            
-      └───────────────────────────┘            
-                  │                            
-                  ▼                            
-    ┌───────────────────────────────┐          
-    │4. room stack: Room simulators │          
-    │                               │          
-    └───────────────────────────────┘          
-                  │                            
-                  ▼                            
-         ┌────────────────────┐                
-         │5. room stack: Arco │                
-         │                    │                
-         └────────────────────┘                
-                  │                            
-                  ▼                            
-┌─────────────────────────────────────────────┐
-│6. process stack: devicelink server, console │
-│                                             │
-└─────────────────────────────────────────────┘
+┌────────────────────────────────────┐
+│1. pre-room stack: o2lite transport │
+│                                    │
+└────────────────────────────────────┘
+               │                      
+               ▼                      
+      ┌───────────────────┐           
+      │2. room stack: Bit │           
+      │                   │           
+      └───────────────────┘           
+               │                      
+               ▼                      
+   ┌───────────────────────────┐      
+   │3. room stack: Room bridge │      
+   │                           │      
+   └───────────────────────────┘      
+               │                      
+               ▼                      
+ ┌───────────────────────────────┐    
+ │4. room stack: Room simulators │    
+ │                               │    
+ └───────────────────────────────┘    
+               │                      
+               ▼                      
+      ┌────────────────────┐          
+      │5. room stack: Arco │          
+      │                    │          
+      └────────────────────┘          
+               │                      
+               ▼                      
+    ┌──────────────────────────┐      
+    │6. process stack: console │      
+    │                          │      
+    └──────────────────────────┘      
 ```
 <!-- /diagram:boot-teardown -->
   Client-before-hub stops being an ordering someone maintains and becomes a
@@ -1163,8 +1232,9 @@ composed into was still wrong on the path that matters most. Design:
   invariant this section describes is still exactly what holds, but the
   o2lite transport's place in it moved out to a **second**, longer-lived
   stack: `harness/terrarium_boot.py`'s `main()` owns a `pre_room_teardown`
-  stack holding only the o2lite transport (o2lite mode) or nothing
-  (websocket mode), separate from `terrarium.room_stack` where Arco and the
+  stack holding the o2lite transport (the only mode as of the 2026-09-08
+  o2lite cutover; a websocket-mode variant that held nothing existed before
+  that), separate from `terrarium.room_stack` where Arco and the
   Room simulator now live across possibly many room loads. `shutdown()`
   closes `pre_room_teardown` **first** -- ahead of `terrarium.room_stack` --
   because the transport is Control's own o2lite client of the same Arco hub
@@ -1287,7 +1357,11 @@ prevented the ordering from disagreeing with itself again, and it had.
   designed. **Postscript, 2026-08-20:** those two "upstream" clock-sync
   failures were the pty starvation above; with it fixed, the same command
   runs green.
-- **`harness/run_websocket_stack.py`** (2026-09-03) -- `python -m
+- **`harness/run_websocket_stack.py`** (2026-09-03; **deleted by the
+  o2lite cutover merge, 2026-09-08**: it passed `--transport websocket`
+  to `terrarium_boot`, and the cutover removed that flag along with the
+  websocket wire, so the launcher could no longer start at all. The
+  entry is kept as history.) -- `python -m
   harness.run_websocket_stack`, the websocket-transport sibling of
   `run_stack.py` above: a thin default-setting wrapper (TEST room, TestBit,
   fixed Console port `:8080`) that delegates straight to
@@ -1325,7 +1399,10 @@ prevented the ordering from disagreeing with itself again, and it had.
   everything else on this path. `harness/run_stack.py`'s o2lite path
   (`_O2SimulatorFactory` / `harness/o2_shroom.py`) has the identical
   unforwarded-`--sim-host` shape but was left alone -- out of scope for this
-  fix, which targeted `run_websocket_stack.py` specifically.
+  fix, which targeted `run_websocket_stack.py` specifically. (The o2lite
+  cutover merge of 2026-09-08 deleted the websocket `_SimulatorFactory`
+  this fix changed, together with the launcher, so only the o2lite side
+  remains; its `--sim-host` shape is still unforwarded.)
 - **`harness/markers.py`** -- the readiness contract `run_stack` watches
   for: named constants emitted by `terrarium_boot`/`o2_shroom` and matched
   on both sides by `tests/test_markers.py`. Matching on incidental print
@@ -1792,6 +1869,11 @@ and operator surface, none in the engine. Design:
   resend every 2 s across a 10 s window (`ownership_timeout` is now the
   total). A genuine second claimant never answers; a blocked hub answers
   when it unblocks. The error names the blocked-hub cause first.
+  (2026-09-08: the probe's own wait was one more loop that held without
+  draining the pty, so it could freeze the very hub it was waiting on;
+  it now takes a `pump` hook and the boot passes Arco's `poll()`. See
+  *The `/actl/_svcheck` reply that never came back* in the o2lite
+  section.)
 - **`o2_shroom` re-verifies its service on any `bridge_id` change** (an
   auto-reconnected device once lost its announcement and heard silence
   forever while fifteen Control replies were dropped hub-side), passes
@@ -3752,6 +3834,61 @@ section 6.
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **1986 passed, 1 skipped** (after the final-review fix wave).
 
+### o2lite cutover (2026-09-08)
+Phase 1 of `docs/superpowers/specs/2026-09-08-o2lite-connectivity-
+migration-design.md`, landed. o2lite is now the only device wire.
+
+- **Deleted:** `devicelink/server.py` (`DeviceLinkServer`),
+  `harness/room_simulator.py`, `harness/shroom_client.py`'s websocket entry
+  point (the `ShroomClient` class itself stayed -- `harness/o2_shroom.py`
+  drives it), `harness/devicelink_smoke.py`, `harness/capture_smoke.py`,
+  and `terrarium_boot`'s `--transport` flag. `harness/o2_shroom.py` is the
+  only Testshroom now, covering both the Room simulator (`--no-join`) and
+  player devices.
+- **Services-string ownership.** Control applies the full `"actl,game"`
+  string once, from one constant, after `arco.initialize()` returns, and
+  self-verifies the claim. The post-claim `actl` check is fatal, like
+  the `game` one. It was a warning for a while because the full boot
+  kept failing it while every reduced reproduction passed; that was Arco
+  frozen on its undrained pty during the probe, root-caused and fixed the
+  same day. See *The `/actl/_svcheck` reply that never came back* in the
+  o2lite section.
+- **One clock.** `DeviceLinkAgent` requires an explicit clock (O2 time);
+  `time.monotonic` no longer has a path into device-facing code.
+- **Telemetry chunking.** `/game/telemetry` batches are chunked under
+  o2lite's 4096-byte cap (`chunk_telemetry_batch`,
+  `docs/telemetry-trace-schema.md`); the capture path is exercised over
+  o2lite end to end by `tests/test_capture_o2.py` (chunked 100 ms batch),
+  though no real producer exists yet.
+- **`arcoserver/` + `www/`.** Arco is launched with `arcoserver/` as its
+  cwd (it reads prefs from its cwd and has no `http_enable` key) and its
+  HTTP server points `http_root` at `"www"`. `arcoserver/www` is a symlink
+  to `../www`, not a relative `../www` path string, because O2's HTTP
+  server rejects any served path containing `..` (`o2/src/websock.cpp:905`),
+  root included. `o2debug.log` now lands in `arcoserver/`.
+- **`--identify-blocks` moved** from the deleted `harness/room_simulator.py`
+  to `harness/o2_shroom.py`.
+- **o2litepy dispatch fact.** o2litepy calls the FIRST matching handler for
+  an address and `method_new` appends, so a second `verify_service_ownership`
+  registered on a service already handled once never sees its own reply.
+  `harness/o2_shroom.py`'s `reconnect_recheck` is exposed to this; tracked
+  as a follow-up.
+- **Live verification (2026-09-08, on MYCOLOGICAL):**
+  `./smoke-test.sh --ci --seconds 20 --devices 1` green from this worktree
+  (`runs/20260908-112809`), with `MM_ARCO_PATH` and `MM_SOUNDFONT`
+  exported -- from a git worktree both must be set explicitly, because
+  `harness/arco_paths.py` and `harness/arco_synth.py` guess a sibling
+  checkout relative to the repo root, which resolves wrong under
+  `.claude/worktrees/` (a follow-up is tracked for this). Serve mode
+  (`./smoke-test.sh --serve --devices 0`) served
+  `http://127.0.0.1:8080/o2wsclocksync.htm` from `arcoserver/www`, clock
+  synced, O2 time advancing.
+- **`--arco-ready-timeout` is a dead flag** since commit `ca2d0a9`:
+  `control/terrarium.py` reads `spec.arco_ready_timeout` from the boot
+  manifest, never the CLI override. Tracked as a follow-up.
+- **Suite at HEAD:** 1973 passed, 1 skipped (down from the 1986/1 baseline
+  above; the drop is the deleted websocket tests).
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -3788,8 +3925,8 @@ honor them in any new work:
    Arco → `actl`), so Control never messages itself and there is no round trip
    to eliminate. Keep it that way. See design doc § *Message Routing*.
    **One deliberate exception:** `verify_service_ownership`
-   (`devicelink/o2_transport.py:119`) sends Control's own `game` service one
-   self-addressed message at startup. It is not a steady-state message path;
+   (`devicelink/o2_transport.py`) sends each of Control's own services
+   (`game`, then `actl`) one self-addressed message at startup. It is not a steady-state message path;
    it is an assertion that *uses* the no-local-short-circuit property this
    rule documents as a cost -- a message addressed to a service the process
    itself offers only comes back if the hub really routed it there, which is
@@ -3883,7 +4020,14 @@ yet**; the box does not exist.
   the `arco/o2litepy/` copy Roger describes as a downstream copy he
   may remove -- the two are byte-identical today, but if the arco copy
   disappears, `ARCO_PYTHONPATH` and every `PYTHONPATH=` recipe in this
-  doc must repoint at the o2 checkout.
+  doc must repoint at the o2 checkout. **Verified 2026-09-08 (probe P3):**
+  the `o2` repo's `o2litepy/` IS pip-installable (`pip install -e
+  /Users/chris/projects/o2/o2litepy` succeeded in a throwaway venv and
+  imports resolved to that checkout). With `PYTHONPATH` also pointing at
+  `arco/o2litepy`, `PYTHONPATH` wins over the installed package, so this
+  repo still runs on the `PYTHONPATH` reach today; Phase 3 of the
+  connectivity migration spec pins the installable package and retires
+  the `PYTHONPATH` fallback.
 - **mm-tuneshroom** — the instrument app and browser simulator. Its web build
   deploys into the Terrarium's `www/` as an artifact; the *application*
   (Dart app, web build, native harness) never contains Terrarium-side
@@ -4219,17 +4363,22 @@ Kept explicit so the doc doesn't over-claim:
 
   Startup is therefore no longer the blocker on a headless run. Device clock
   sync is — see the entry above.
-- **The websocket device wire is still the default.** `--transport o2lite` is
-  opt-in because it requires a running Arco. Both transports are maintained.
+- ~~**The websocket device wire is still the default.** `--transport o2lite`
+  is opt-in because it requires a running Arco. Both transports are
+  maintained.~~ **Closed 2026-09-08** by the o2lite cutover (Phase 1 of the
+  connectivity migration spec): the websocket wire is deleted, o2lite is
+  the only device wire, and `--transport` no longer exists.
 - **Real ugen graph-building on Arco** has a first, provisional slice: the
   Tuneshroom audio demo builds one `Flsyn` and up to 16 voices, driven by a
   role's `ugen_manifest` v0. Still unbuilt: per-role synthesis beyond
   FluidSynth, the real Flsyn-parameterizing manifest schema, audio over the
   device wire, and **real scoring** (`on_complete()` is still a stub hook).
-  (`light_manifest` is no longer a placeholder — v2 schema frozen, validated
-  at load — but nothing *sends* the composed `/ie<N>/role` blob yet: the
-  o2lite transport that reads `JoinResult.config` is still unbuilt; the Arco
-  cue path that plays the welcome audio half now exists in `control/audio.py`.)
+  (`light_manifest` is no longer a placeholder -- v2 schema frozen, validated
+  at load. The composed `/ie<N>/role` blob ships over o2lite via
+  `devicelink/agent.py` (`role_event`), and has since the 2026-08-12 slice;
+  the earlier claim on this line that nothing sends it was stale. The Arco
+  cue path that plays the welcome audio half now exists in
+  `control/audio.py`.)
 - ~~**Real Bits beyond `TestBit`.** No production Bit exists.~~ **Closed
   2026-08-20** by MetronomeBit (see *Landed subsystems*). A general scoring
   framework is still absent; MetronomeBit reports through `result()` only.

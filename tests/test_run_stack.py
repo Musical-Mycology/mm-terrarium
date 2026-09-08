@@ -305,7 +305,7 @@ def test_control_command_carries_the_flags_a_headless_run_needs(tmp_path):
     /host/clear that can leave arco.output None."""
     command = control_command(_cfg(tmp_path), 99)
 
-    assert "--transport" in command and "o2lite" in command
+    assert "--transport" not in command
     assert "--arco-pty" in command
     assert "--arco-log" in command
     assert "--arco-settle-seconds" in command
@@ -1052,19 +1052,14 @@ def test_one_shot_mode_still_fails_on_a_clean_device_exit(tmp_path):
     assert dead == ("ie1", 0)
 
 
-def test_flutter_sim_is_spawned_after_control_with_serve_args(tmp_path):
-    popen = ScriptedPopen(
-        [_CONTROL_OK,
-         f"{markers.BROWSE_URL} http://127.0.0.1:8780/?dev=ie1\n"])
-    cfg = _cfg(tmp_path, devices=0, flutter_sim="/repo/tuneshroom", flutter_devices=1)
-    result = run(cfg, popen=popen, sleep=lambda _s: None)
-    assert result.ok, result.detail
-    assert popen.commands[1] == ["/repo/tuneshroom/tool/sim", "serve", "--devices", "1",
-                                 "--link", "ws://127.0.0.1:8771/ws", "--no-open"]
-    assert "http://127.0.0.1:8780/?dev=ie1" in result.urls
+def test_run_stack_has_no_flutter_websocket_launch():
+    """The Flutter sim was a websocket client of the deleted DeviceLink
+    server. It returns in Phase 2 as a page Arco serves over o2ws."""
+    import inspect
 
+    import harness.run_stack as run_stack
 
-def test_no_flutter_flags_spawns_nothing_extra(tmp_path):
-    popen = ScriptedPopen([_CONTROL_OK])
-    run(_cfg(tmp_path, devices=0), popen=popen, sleep=lambda _s: None)
-    assert len(popen.commands) == 1
+    source = inspect.getsource(run_stack)
+    assert "FLUTTER_LINK" not in source
+    assert "flutter_command" not in source
+    assert "ws://" not in source

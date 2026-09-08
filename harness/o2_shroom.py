@@ -12,7 +12,7 @@ its transport half lives in main() precisely because o2lite replaces it.
 Trap worth knowing: TestBit's `player` is a SCORED role, and
 RegistrationState.join() refuses a scored role once the Bit is RUNNING. The
 driver must hold in SETUP long enough for this client to join, exactly as
-harness/devicelink_smoke.py's --setup-seconds already does.
+harness/run_stack.py's --setup-seconds already does.
 
 Usage (needs a running Arco and PYTHONPATH=/Users/chris/projects/arco):
     python3 -m harness.o2_shroom --dev ie1 --node TEST_PLAYER_NODE
@@ -326,13 +326,12 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
-    headless tests, matching led_smoke.py's and room_simulator.py's
-    build()/main() split.
+    headless tests, matching led_smoke.py's build()/main() split.
 
     room_type, when given, renders that ROOM's ONE named fixture instead of
     a Testshroom's surface -- fixture is then required. This is the
-    --no-join path, where this module stands in for
-    harness/room_simulator.py, once per fixture, on the o2lite transport.
+    --no-join path, where this module is the Room simulator, once per
+    fixture, on the o2lite transport.
 
     input_queue, when given, receives every gesture the browser page sends
     back; see drain_gestures.
@@ -350,7 +349,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     from luxaeterna.backends.websim import WebSimBackend
     from luxaeterna.synth.capability import shroom_capability
 
-    from harness.room_simulator import WebSimLeds
+    from harness.websim_leds import WebSimLeds
 
     if room_type is None:
         capability = shroom_capability(surface_id=dev)
@@ -445,8 +444,7 @@ def main() -> None:
                              "emit no gestures. This is what the Room "
                              "simulator needs: Control has already recorded "
                              "this dev as the bound Room before the process "
-                             "is spawned, so there is no node to tap "
-                             "(harness/room_simulator.py's rule, reused).")
+                             "is spawned, so there is no node to tap.")
     parser.add_argument("--room-type", default=None,
                         help="Render this Room's (a name in terrarium.toml) surface instead of a "
                              "Testshroom's. Only meaningful with --no-join, "
@@ -455,6 +453,14 @@ def main() -> None:
     parser.add_argument("--fixture", default=None,
                         help="Which Room fixture to render. Required "
                              "together with --room-type.")
+    parser.add_argument("--identify-blocks", action="store_true",
+                        help="Debug: skips Control and never connects to "
+                             "the hub; paints each of this fixture's "
+                             "declared blocks a distinct solid color and "
+                             "holds until Ctrl-C, "
+                             "so the physical build-out mapping can be "
+                             "confirmed visually. Needs --no-join, "
+                             "--room-type and --fixture.")
     parser.add_argument("--exit-with-parent", type=int, default=None,
                         metavar="PID",
                         help="Exit as soon as this process's parent is no "
@@ -562,6 +568,22 @@ def main() -> None:
     # program to be signalled -- and it was the one path the SIGTERM
     # handler did not protect. Measured live on 2026-08-14.
     try:
+        if args.identify_blocks:
+            if not (args.no_join and args.room_type and args.fixture):
+                parser.error("--identify-blocks needs --no-join, "
+                             "--room-type and --fixture")
+            from control.terrarium_config import load_terrarium_config
+            from harness.websim_leds import identify_blocks_frame
+
+            profile = load_terrarium_config(
+                "terrarium.toml").rooms[args.room_type].profile
+            backend.send(identify_blocks_frame(profile, args.fixture))
+            print(f"identify-blocks: {args.fixture} painted; Ctrl-C to "
+                  f"exit", flush=True)
+            while not parent_is_gone(args.exit_with_parent):
+                time.sleep(0.5)
+            return
+
         o2lite.initialize(args.ensemble)
         o2lite.set_services(args.dev)      # the device offers its own ie<N>
 

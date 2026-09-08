@@ -4,7 +4,7 @@ renderer needs.
 This module exists so control/room_profile.py can stay import-free. It is the
 Room-scoped peer of harness/device_bridge.py, which already does the same job
 for a player device's role declaration. Both consumers (devicelink/agent.py
-and harness/room_simulator.py) already import from harness/, so this
+and harness/o2_shroom.py) already import from harness/, so this
 introduces no new dependency direction. See
 docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md
 section 4.

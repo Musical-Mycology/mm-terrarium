@@ -5,6 +5,7 @@ from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
 
 def _started():
     fake = FakeO2Lite()
+    fake.set_services("actl")
     transport = O2LiteTransport()
     transport.start(fake)
     # start() now round-trips a /game/_svcheck handshake through send() to
@@ -310,6 +311,7 @@ def test_start_refuses_when_game_is_held_by_another_process():
     device's: an orphaned Terrarium holding it would make every device
     silently unreachable."""
     fake = FakeO2Lite()
+    fake.set_services("actl")
     fake.refuse("game")
     transport = O2LiteTransport()
     clock, sleep = _fake_clock()
@@ -327,6 +329,8 @@ class _FakeO2LiteAnsweringAfter:
     a real bug: o2lite only calls a registered handler from inside
     poll(). This fake must not be more permissive than the library it
     stands for."""
+
+    services = "actl"
 
     def __init__(self, sends: int) -> None:
         self._sends_to_answer = sends
@@ -370,6 +374,8 @@ class _FakeO2LiteAnsweringAfter:
 class _FakeO2LiteNeverAnswers:
     """Models a genuine second claimant: the hub refuses silently and no
     reply ever arrives, no matter how many times the probe resends."""
+
+    services = "actl"
 
     def __init__(self) -> None:
         self.svcheck_sends = 0
@@ -452,3 +458,130 @@ def test_start_failure_message_names_the_blocked_hub_first():
     assert blocked_pos != -1 and orphan_pos != -1
     assert blocked_pos < orphan_pos
     assert "o2debug.log" in message
+
+
+def test_start_refuses_before_pyarco_has_announced_actl():
+    """Control shares pyarco's o2lite connection. arco.initialize() writes
+    "actl" first (pyarco/arco_engine.py:98); Control then writes the whole
+    string. Starting before that would have Control's set_services erase
+    nothing and then pyarco's later call erase `game`. Fail loud instead."""
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+
+    fake = FakeO2Lite()                 # services == "" : pyarco not yet up
+    transport = O2LiteTransport()
+    with pytest.raises(RuntimeError, match="actl"):
+        transport.start(fake)
+    assert fake.services == ""          # never wrote over pyarco's slot
+
+
+def test_start_refuses_when_actl_does_not_route_after_claiming_game():
+    """set_services REPLACES (o2lite.py:707). Writing "actl,game" must leave
+    pyarco's control replies routed here; if the hub no longer routes
+    `actl` back, Arco's /actl/act replies are lost and every ugen build
+    hangs. Fatal, exactly like the `game` check. This was a warning for a
+    while because the live boot kept failing it: the cause was Arco
+    freezing on its undrained pty during the check (see the pump tests
+    below), not routing."""
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+    fake.refuse("actl")
+    transport = O2LiteTransport()
+    with pytest.raises(RuntimeError, match="actl"):
+        transport.start(fake, ownership_timeout=0.05, sleep=lambda s: None)
+    assert transport.drain_inbound() == []      # not started
+
+
+def test_ownership_probe_calls_pump_every_iteration():
+    """2026-09-08 root cause of the missing /actl/_svcheck reply: Arco is
+    a curses app on a pty whose output buffer holds 1024 bytes (measured
+    on macOS), and the ownership probe held the process for up to 10s
+    without draining that pty. Arco blocked mid-write, stopped serving
+    O2 entirely, and the hub log showed a 9.7s silence from the moment
+    Control's services were registered until teardown drained the pty.
+    Whether `game` or `actl` failed depended only on when the buffer
+    filled. The probe therefore takes a `pump` hook and calls it once
+    per poll iteration so the caller can drain Arco while it waits."""
+    from devicelink.o2_transport import verify_service_ownership
+
+    fake = _FakeO2LiteAnsweringAfter(sends=2)
+    pumps = []
+    t = {"now": 0.0}
+
+    def clock():
+        return t["now"]
+
+    def sleep(s):
+        t["now"] += s
+
+    ok = verify_service_ownership(fake, "game", timeout=10.0,
+                                  resend_interval=2.0,
+                                  pump=lambda: pumps.append(1),
+                                  clock=clock, sleep=sleep)
+    assert ok is True
+    assert len(pumps) >= 2                      # once per poll, not once
+
+
+def test_start_forwards_pump_to_the_ownership_checks():
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+    pumps = []
+    O2LiteTransport().start(fake, pump=lambda: pumps.append(1))
+    assert pumps                                # the hook was driven
+
+
+def test_ownership_check_passes_twice_on_the_same_connection():
+    """Real o2litepy APPENDS handlers (o2lite.py:908) and dispatches to the
+    FIRST match (o2lite.py:809-827); nothing removes one. A per-call
+    closure would therefore be shadowed forever by the first call's, so the
+    second check could never see its own nonce. Registration is once per
+    (connection, service) instead."""
+    from devicelink.o2_transport import verify_service_ownership
+
+    fake = FakeO2Lite()
+    fake.set_services("actl,game")
+
+    assert verify_service_ownership(fake, "game") is True
+    assert verify_service_ownership(fake, "game") is True
+    svcheck = [h for h in fake.handlers if h[0] == "/game/_svcheck"]
+    assert len(svcheck) == 1, "the handler must be registered exactly once"
+
+
+def test_start_succeeds_again_on_the_same_o2lite_after_stop():
+    """The serve-mode room recycle calls transport.start(o2lite) a second
+    time on the SAME connection (harness/terrarium_boot.py
+    _restart_room_clients). Before the fix the first call's svcheck closure
+    stayed first in o2lite's handler list and swallowed the reply, so the
+    fatal `game` check could never pass on a recycle."""
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+
+    transport = O2LiteTransport()
+    transport.start(fake)
+    transport.stop()
+    transport.start(fake)
+
+    assert fake.services == "actl,game"
+    assert transport.drain_inbound() == []
+
+
+def test_the_fake_dispatches_to_the_first_matching_handler():
+    """Boundary rule 5: the double must not be more permissive than the
+    library. o2litepy's _msg_dispatch returns after the first match, so a
+    second handler on the same address is dead code, and a fake that
+    replaced by path would hide exactly that."""
+    fake = FakeO2Lite()
+    fake.set_services("game")
+    fired = []
+    fake.method_new("/game/tap", "s", True,
+                    lambda a, t, i: fired.append("first"), None)
+    fake.method_new("/game/tap", "s", True,
+                    lambda a, t, i: fired.append("second"), None)
+
+    fake.deliver("/game/tap", "s", ("ie1",))
+    fake.poll()
+
+    assert fired == ["first"]

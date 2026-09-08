@@ -39,7 +39,8 @@ class TimedQueue:
         # carries no information about the horizon there.
         #
         # It still means what the spec says wherever nothing else schedules
-        # delivery (the websocket transport, and Control's own room cues).
+        # delivery (Control's own room cues; the now-deleted websocket
+        # transport worked this way too).
         # Read `lateness` below rather than this counter when the question is
         # "is the horizon right?".
         self.clamped = 0

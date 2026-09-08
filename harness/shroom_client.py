@@ -8,17 +8,14 @@ deliberately NOT defined as "a simulated Tuneshroom": its shape happens to
 match today's Tuneshroom wire, but it is decoupled from what real Tuneshroom
 hardware becomes -- the Testshroom's job is to exercise Control's seams, not
 to track a hardware design. This class is the shared protocol client both
-kinds of device use; the transport half in ``main()`` also runs on the real
-Radxa Tuneshroom.
+kinds of device use.
 
 Socket-free by design: ``handle()`` takes a decoded JSON message and returns the
 address it handled, or ``""`` if it dropped the frame. That keeps the whole
 protocol surface testable on a laptop, and it matches the engine's rule that a
 malformed frame is "drop this frame", never an error.
 
-The transport half lives in ``main()`` and is deliberately thin, because it is
-the part that gets replaced when o2lite lands. The envelopes here mirror o2ws
-field-for-field already, so that swap is mechanical.
+The process that runs this client is harness/o2_shroom.py.
 
 The wire, from devicelink/protocol.py and devicelink/agent.py:
 
@@ -39,17 +36,11 @@ The gesture and play rows are implemented by the Flutter simulator today;
 this client sends tilt and tap and ignores /<dev>/play. Design Rule 2 requires
 both clients to send byte-identical messages, so the shapes are recorded
 here before this client grows into them.
-
-Usage on the Radxa:
-    python3 -m harness.shroom_client --server ws://10.44.0.10:8081 \
-        --dev ie1 --node node-a
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from collections import deque
 from typing import Callable
 
@@ -75,10 +66,9 @@ LED_CHANNELS = 36
 _MAX_PENDING_FRAMES = 200
 
 # The engine's own render/tick rate (see harness/terrarium_boot.py's
-# `gs.tick(1.0 / 44.0)` and harness/devicelink_smoke.py's TICK). Frames are
-# rendered at this rate, so ticking a client faster than this buys nothing;
-# ticking much slower would blur "held until its time" into "held until
-# roughly its time".
+# `gs.tick(1.0 / 44.0)`). Frames are rendered at this rate, so ticking a
+# client faster than this buys nothing; ticking much slower would blur
+# "held until its time" into "held until roughly its time".
 _TICK_INTERVAL = 1.0 / 44.0
 
 
@@ -312,81 +302,3 @@ class ShroomClient:
         if self.leds is not None:
             self.leds.clear()
         return env.address
-
-
-async def pump_tick(client, interval: float = _TICK_INTERVAL) -> None:
-    """Drive ``client.tick()`` at the render rate until the client releases.
-
-    Shared by every asyncio-based devicelink client loop (this module's own
-    ``main()`` and ``harness/room_simulator.py``); ``harness/o2_shroom.py``
-    is deliberately NOT one of them -- its loop is synchronous o2lite
-    polling, a different shape, not a copy of this one.
-
-    Has to run concurrently with a client's inbound pump, not just once per
-    inbound frame: a frame timed for the future needs ticks to keep landing
-    while the inbound pump sits blocked waiting on the next message.
-
-    Uses time.monotonic(), matching DeviceLinkAgent's default clock
-    (devicelink/agent.py: clock=time.monotonic). Whether that agrees with
-    the sender's own `now` depends on who is driving `client`: true by
-    construction when the caller is a locally-spawned subprocess (e.g.
-    harness/room_simulator.py, always spawned by harness/terrarium_boot.py
-    on Control's own machine), NOT true for a real over-network device
-    (e.g. this module's own Radxa deployment) -- two machines' monotonic()
-    clocks share no epoch. That mismatch is real and unresolved here on
-    purpose; the design spec's o2lite clock is what actually fixes it.
-    This helper just keeps local/simulated runs working in the meantime.
-    """
-    while not client.released:
-        client.tick(time.monotonic())
-        await asyncio.sleep(interval)
-
-
-def main() -> None:
-    """Connect to a DeviceLinkServer and run the sensor-up / LED-down loop."""
-    import argparse
-    import json
-
-    import websockets
-
-    from harness.lis3dh_probe import open_sensor, read_tilt
-    from harness.shroom_leds import ShroomLEDs
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", required=True, help="ws://host:port")
-    parser.add_argument("--dev", default="ie1")
-    parser.add_argument("--node", default="node-a")
-    parser.add_argument("--sensor-hz", type=float, default=20.0)
-    parser.add_argument("--instrument", default=None,
-                        help="Declare this device's carried instrument on "
-                             "hello (e.g. tuneshroom). Omit to stay "
-                             "undeclared, resolving to defaultshroom.")
-    args = parser.parse_args()
-
-    client = ShroomClient(args.dev, args.node, leds=ShroomLEDs(),
-                          instrument=args.instrument)
-    sensor = open_sensor()
-    interval = 1.0 / args.sensor_hz
-
-    async def run() -> None:
-        async with websockets.connect(args.server) as ws:
-            await ws.send(json.dumps(client.hello()))
-            await ws.send(json.dumps(client.join()))
-
-            async def pump_down() -> None:
-                async for raw in ws:
-                    client.handle(json.loads(raw))
-
-            async def pump_up() -> None:
-                while not client.released:
-                    x, _, _ = read_tilt(sensor)
-                    await ws.send(json.dumps(client.tilt(x / 9.81)))
-                    await asyncio.sleep(interval)
-
-            await asyncio.gather(pump_down(), pump_up(), pump_tick(client))
-
-    asyncio.run(run())
-
-
-if __name__ == "__main__":
-    main()

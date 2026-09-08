@@ -548,10 +548,12 @@ class GameServer:
         """Resolve a cue's origin time: the device's own stamp when it is
         usable, else Control's clock.
 
-        Three ways a stamp is unusable, all real. The websocket transport
-        never stamps at all (devicelink/protocol.py's _event defaults
-        timestamp=0.0). o2lite returns -1 until clock sync completes. And a
-        device with a broken clock can send something implausible.
+        Two ways a stamp is unusable, both real. o2lite returns -1 until
+        clock sync completes. And a device with a broken clock can send
+        something implausible. (The websocket transport, deleted in the
+        2026-09-08 o2lite cutover, never stamped at all -- devicelink/
+        protocol.py's _event defaults timestamp=0.0 -- which was a third
+        way; that path no longer exists.)
         """
         now = self._clock()
         if gesture_time is None or gesture_time <= 0:

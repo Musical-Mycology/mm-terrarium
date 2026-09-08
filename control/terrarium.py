@@ -176,8 +176,8 @@ class Terrarium:
         # Called with no arguments to produce each load_room's room-scoped
         # stack; defaults to a fresh TeardownStack. control/boot.py's
         # compat wrapper overrides this to hand back a caller-supplied
-        # stack (harness/terrarium_boot.py starts its DeviceLinkServer
-        # before boot() and needs its own step on the same stack).
+        # stack (harness/terrarium_boot.py adopts the o2lite transport
+        # after boot() and needs its own step on the same stack).
         self.stack_factory = stack_factory
 
         self.state = TerrariumState.NO_ROOM

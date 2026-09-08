@@ -29,6 +29,11 @@ copy.**
 > `luxaeterna/docs/deployment.md` row 1. Every hop count in *Message Routing*
 > below is therefore designed and unmeasured.
 >
+> **Superseded (2026-09-08):** the o2lite cutover landed -- `arcoserver/`
+> now exists and the device wire is o2lite, not a JSON websocket
+> (`devicelink/server.py` is deleted); see `docs/MM_TERRARIUM.md` and
+> `docs/superpowers/specs/2026-09-08-o2lite-connectivity-migration-design.md`.
+>
 > **What changed on 2026-08-06** (Tuneshroom audio, PR #15): there is now a real
 > **Arco server in the picture, but only on an opt-in path**. `pyarco` is
 > imported in exactly one place, lazily inside `ArcoSynthPool.start()`

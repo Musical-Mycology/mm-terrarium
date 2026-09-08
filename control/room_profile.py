@@ -49,7 +49,7 @@ class RoomBlock:
     controller's worth). Purely declarative this slice: no simulator or
     backend consumes block boundaries for output routing yet -- a future
     real per-controller adapter reads them off the profile with no further
-    data-model change needed. Only harness/room_simulator.py's
+    data-model change needed. Only harness/o2_shroom.py's
     --identify-blocks debug tool reads them today. A different axis from
     RoomZone, which is gameplay/Console targeting; blocks are hardware
     composition. See
