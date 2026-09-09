@@ -6,8 +6,11 @@ the old cues(at) per-beat LightCue schedule (click, downbeat flash,
 turn-recovery flash, level pulse-then-decay) must come back through the new
 Function/fires(at) architecture rather than being dropped. Loads a real
 MetronomeBit into a real GameServer with an advancing fake clock and checks
-GameServer.on_light_cue receives the same bytes the old _beat_cues(k)
-produced, stamped at that beat's own grid time -- not the tick's `at`.
+GameServer.on_light_cue receives bytes stamped at that beat's own grid time
+-- not the tick's `at` -- and, for the click, flash and pulse, byte-equivalent
+to what the old _beat_cues(k) produced. metro_recovery is not: since
+2026-09-08 it fires only for a dev in the failed set, and before that dev's
+own pulse (see _beat_fires's docstring).
 """
 from types import SimpleNamespace
 

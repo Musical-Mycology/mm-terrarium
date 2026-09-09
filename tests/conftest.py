@@ -32,11 +32,14 @@ def _reset_terrarium_boot_logging():
 
 def _copy_bits_with_metronome_enabled(dest: Path) -> Path:
     """A tmp copy of the real bits/ tree with MetronomeBit's
-    [bit] enabled = false flipped back on. MetronomeBit ships disabled
-    pending redesign (bits/metronome/bit.toml); tests that need to load
-    it through a registry class map or resolve_config scan this private
-    copy instead of the real manifest, so the shipped disabled state is
-    never weakened."""
+    [bit] enabled = false flipped back on. MetronomeBit has shipped enabled
+    since 2026-09-08 -- its `enabled = false` was removed from
+    bits/metronome/bit.toml, and no redesign was ever specified that would
+    bring it back. This copy, and the replace("enabled = false\n", "") below,
+    are a no-op against today's manifest by design: they exist so that if
+    the bit is ever disabled again, tests that load it through a registry
+    class map or resolve_config keep working instead of breaking on the
+    disabled state."""
     root = dest / "bits"
     shutil.copytree(_REAL_BITS_ROOT, root)
     manifest = root / "metronome" / "bit.toml"

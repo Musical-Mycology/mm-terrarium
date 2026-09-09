@@ -245,8 +245,10 @@ return to a clean waiting state. Landed in the first-slice spec
 ```
 <!-- /diagram:lifecycle -->
 - **Data model:** `RoleTable` (static, Bit-declared: `Role` = name/class/
-  capacity/`scored`/`ugen_manifest`/`light_manifest` — the latter in
-  luxaeterna's **light-manifest v2 wire shape** — plus an optional `welcome`
+  capacity/`scored`/`breath`/`ugen_manifest`/`light_manifest` -- the latter in
+  luxaeterna's **light-manifest v2 wire shape** -- `breath` defaults `True`;
+  a role that drives cc:11 itself opts out of Control's breath (see the
+  MetronomeBit entry) -- plus an optional `welcome`
   pair declaring the role's light+audio adoption ceremony in one place, and
   the node fallback map), `DevicePool` (Control-global, `dev → connection
   info`, survives Bit lifecycles), `RegistrationState` (runtime
@@ -570,7 +572,8 @@ section 3.2.
   never request it.
 
 `DeviceLinkAgent` also ticks `control/breath.py` now, feeding every joined,
-non-closing device's `cc:11` on change. The Tuneshroom audio design originally
+non-closing device's `cc:11` on change -- skipping muted devices and roles
+with `breath = False`. The Tuneshroom audio design originally
 scoped devicelink out entirely, but that was wrong for the light half: once
 `player` declares aurora's `level` param, a connected device that is never fed
 `cc:11` renders a static surface pinned at 0.55 rather than breathing, which is
@@ -1980,7 +1983,8 @@ existing seams. Design:
 [`.../2026-08-20-metronome-bit-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-20-metronome-bit-design.md)
 and its plan `.../plans/2026-08-20-metronome-bit.md`. PR #44.
 
-- **Gameplay:** 100 BPM 4/4 metronome (woodblock, 1 HARD + 3 soft), 8-beat
+- **Gameplay:** 100 BPM by default (`profiles/dev-metronome.toml` runs 80)
+  4/4 metronome (woodblock, 1 HARD + 3 soft), 8-beat
   cycle (4 call + 4 wait) x4 per run, round-robin turns over up to 2
   Tuneshrooms (`RoleClass.UNIQUE`, capacity 2, node `METRO_PLAYER_NODE`).
   A phrase succeeds only when all 4 wait beats get an in-time tap

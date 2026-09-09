@@ -169,6 +169,25 @@ def test_failed_dev_stays_dark_until_next_turn():
     assert any(f.name == "metro_pulse_player" and f.dev == "ie1" for f in later)
 
 
+def test_recovery_fires_before_pulse_on_return_beat():
+    """metro_recovery must be ordered before that beat's own
+    metro_pulse_player -- and the returning dev's pulse must still be
+    emitted on that same beat, not skipped. Beat 16 (cycle 2, pos 0) is
+    ie1's return after cycle 0's failure; this checks it fresh, before
+    anything else has touched that beat, since test_failed_dev_stays_dark_
+    until_next_turn already consumes beat 16 for its own assertions."""
+    bit = _started(players=("ie1", "ie2"))
+    # cycle 0 is ie1's turn; never tap, so it fails the phrase.
+    end = _wait_grid(bit, 0, 3) + 0.2
+    _drain_until(bit, end)
+    assert "ie1" in bit._failed_devs
+
+    recovery = bit._beat_fires(16)
+    names = [f.name for f in recovery]
+    assert names.index("metro_recovery") < names.index("metro_pulse_player")
+    assert any(f.name == "metro_pulse_player" and f.dev == "ie1" for f in recovery)
+
+
 def test_call_beat_tap_spoils_phrase():
     bit = _started()
     call_beat_at = bit._t0 + 0 * 8 * B + 1 * B   # cycle 0, call beat 1

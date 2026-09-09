@@ -1,4 +1,3 @@
-from control.bit_config import parse_manifest
 from control.bit_registry import BitRegistry
 
 

@@ -78,7 +78,6 @@ class BeatTapper:
         ShroomClient's cumulative `clamped`/`lateness` across the same
         reset_for_lobby() seam."""
         self._prev_sum: int | None = None
-        self._prev_channels: int = 0
         self._last_rise_at: float | None = None
         self._t_first: float | None = None
         self.period: float | None = None
@@ -93,7 +92,6 @@ class BeatTapper:
         right now, or None."""
         total = sum(frame)
         prev, self._prev_sum = self._prev_sum, total
-        self._prev_channels = len(frame)
         if prev is None:
             return None
         if total <= prev * (1.0 + RISE_RATIO):
