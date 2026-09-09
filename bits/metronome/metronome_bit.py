@@ -529,7 +529,17 @@ class MetronomeBit(Bit):
         while self._judged_cycles < self.CYCLES:
             c = self._judged_cycles
             deadline = self._grid(c * 8 + 7) + self.TOLERANCE_S + self.JUDGE_SLACK_S
-            if at < deadline:
+            # Compared against `at - cue_horizon`, not `at`, for the same
+            # reason _on_tap subtracts it: `at` is PRESENTATION time, one
+            # horizon ahead of the clock, while a tap arrives in real time.
+            # On `at` alone the deadline fired a whole horizon early, so
+            # JUDGE_SLACK_S -- there to let the last answer beat's tap
+            # travel -- was really JUDGE_SLACK_S minus the horizon, which at
+            # the shipped 60 ms horizon is negative. Measured live in
+            # runs/20260908-221016: cycle 0 closed `fail (3 hits)` and its
+            # fourth tap (`err +8.1 ms`, well inside tolerance) was logged
+            # immediately after.
+            if at - self.cue_horizon < deadline:
                 break
             dev = self._turn_dev(c)
             if dev is not None:
