@@ -192,6 +192,23 @@ def stage_web_build(src_dir: str, www_dir: str) -> str:
         os.unlink(dst)
     shutil.rmtree(dst, ignore_errors=True)
     shutil.copytree(src_dir, dst)
+    # A default Flutter build writes <base href="/"> into index.html, but
+    # the Terrarium serves this app under /app/ (www_server.py on 8788).
+    # With the wrong base href, the page fetches flutter_bootstrap.js,
+    # o2ws.js, main.dart.js and every other asset from the www root instead
+    # of www/app/: 404s across the board, black page. Confirmed live
+    # 2026-09-08 (runs/20260908-222351). `tool/sim build --base-href /app/`
+    # produces the right index.html directly; this rewrite makes a plain
+    # `tool/sim build` work too.
+    index_path = os.path.join(dst, "index.html")
+    with open(index_path, encoding="utf-8") as f:
+        index_html = f.read()
+    if '<base href="/">' in index_html:
+        index_html = index_html.replace('<base href="/">', '<base href="/app/">')
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(index_html)
+        print("--web-build: rewrote <base href> to /app/ (the page is "
+              "served under /app/)")
     return dst
 
 
@@ -568,7 +585,9 @@ def parse_args(argv=None):
                          f"to Arco on 8080.")
     ap.add_argument("--web-build", default=None, metavar="DIR",
                     help="Copy a Flutter web build into www/app/ before "
-                         "starting; the Terrarium serves it to phones.")
+                         "starting; the Terrarium serves it to phones. A "
+                         "default Flutter build's base href is rewritten "
+                         "to /app/.")
     ap.add_argument("--open", action="store_true",
                     help="Open a browser tab for every surface as it comes "
                          "up: the Terrarium Console, each Room fixture "

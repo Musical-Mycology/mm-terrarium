@@ -1138,3 +1138,46 @@ def test_stage_web_build_refuses_a_dir_without_an_index(tmp_path):
     src.mkdir()
     with pytest.raises(SystemExit):
         stage_web_build(str(src), str(tmp_path / "www"))
+
+
+def test_stage_web_build_rewrites_default_base_href_to_app(tmp_path):
+    """A default `tool/sim build` writes <base href="/">, so the page served
+    at /app/index.html fetches flutter_bootstrap.js, o2ws.js, main.dart.js
+    and every asset from the www root instead of www/app/: 404, black page.
+    Confirmed live 2026-09-08 (runs/20260908-222351)."""
+    from harness.run_stack import stage_web_build
+    src = tmp_path / "build" / "web"
+    src.mkdir(parents=True)
+    (src / "index.html").write_text(
+        '<html><head><base href="/"></head><body></body></html>',
+        encoding="utf-8")
+    www = tmp_path / "www"
+    stage_web_build(str(src), str(www))
+    assert (www / "app" / "index.html").read_text(encoding="utf-8") == (
+        '<html><head><base href="/app/"></head><body></body></html>')
+
+
+def test_stage_web_build_leaves_an_app_base_href_untouched(tmp_path):
+    """`tool/sim build --base-href /app/` already writes the right thing;
+    staging it must be idempotent."""
+    from harness.run_stack import stage_web_build
+    src = tmp_path / "build" / "web"
+    src.mkdir(parents=True)
+    original = '<html><head><base href="/app/"></head><body></body></html>'
+    (src / "index.html").write_text(original, encoding="utf-8")
+    www = tmp_path / "www"
+    stage_web_build(str(src), str(www))
+    assert (www / "app" / "index.html").read_text(
+        encoding="utf-8") == original
+
+
+def test_stage_web_build_leaves_an_index_without_base_untouched(tmp_path):
+    from harness.run_stack import stage_web_build
+    src = tmp_path / "build" / "web"
+    src.mkdir(parents=True)
+    original = '<html><head></head><body></body></html>'
+    (src / "index.html").write_text(original, encoding="utf-8")
+    www = tmp_path / "www"
+    stage_web_build(str(src), str(www))
+    assert (www / "app" / "index.html").read_text(
+        encoding="utf-8") == original
