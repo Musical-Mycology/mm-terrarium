@@ -21,7 +21,9 @@ Why a phase-lock and not a counter: fireworks (12 bloom flashes in 1.4 s
 on a winning player) are rises too, and a failed player goes dark for a
 whole cycle and sees no pulses at all. Indexing each accepted rise by
 TIME against the locked grid survives both; counting rises survives
-neither.
+neither. The grid itself is the thing to protect: a flash near enough to
+a gridpoint is taken AS that beat, but only a rise landing within
+REFINE_FRACTION of its prediction is allowed to redefine the period.
 """
 
 from __future__ import annotations
@@ -46,6 +48,14 @@ RISE_GAP_S = 0.18
 DARK_SUM_FRACTION = 0.05   # below this fraction of full-white, a frame is dark
 ACCEPT_FRACTION = 0.2      # a rise within this fraction of a period of a
                            # predicted beat IS that beat
+# ...but only a rise within THIS fraction of it may redefine the grid.
+# MEASURED (runs/20260908-221609): a real beat lands 1 to 8 ms off its
+# prediction, ~1% of a 0.75 s period, while a bloom flash from the fireworks
+# a winning player gets lands ~110 ms off (15%) and is still close enough to
+# be taken as that beat. Refining from the flash moved the period 0.7515 ->
+# 0.7378 -> 0.7227 in two flashes and every later beat fell outside
+# ACCEPT_FRACTION: the device tapped beats 4-7 and then nothing until 23.
+REFINE_FRACTION = 0.05
 MIN_PERIOD_S = 0.2
 MAX_PERIOD_S = 2.0
 
@@ -127,9 +137,13 @@ class BeatTapper:
         if k <= self._last_index:
             return None              # already handled this beat
         predicted = self._t_first + k * self.period
-        if abs(now - predicted) > ACCEPT_FRACTION * self.period:
+        error = abs(now - predicted)
+        if error > ACCEPT_FRACTION * self.period:
             return None              # a flash, not a beat
-        self.period = (now - self._t_first) / k
+        if error <= REFINE_FRACTION * self.period:
+            # Close enough to be the beat itself, not something riding on
+            # it, so it is safe to take the grid from here.
+            self.period = (now - self._t_first) / k
         self._last_index = k
         return self._tap_if_answer(k)
 

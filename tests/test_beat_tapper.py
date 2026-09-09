@@ -91,6 +91,27 @@ def test_a_dark_spell_re_indexes_by_time():
     assert tapped == [20, 21, 22, 23]
 
 
+def test_a_firework_taken_as_a_beat_does_not_drag_the_period():
+    """MEASURED, runs/20260908-221609: the 12 bloom flashes a winning
+    player gets land on the next cycle's call beats, near enough to a
+    gridpoint to be taken AS that beat -- 110 ms early on beat 8 there. The
+    old code rewrote the period from every accepted rise, so that one flash
+    moved a 0.7515 s period to 0.7378, the next flash moved it to 0.7227,
+    and every real beat after it fell outside the window: ie2 tapped beats
+    4-7 and then nothing until beat 23. A rise this far off its prediction
+    is still that beat -- but it may not redefine the grid."""
+    tapper = BeatTapper()
+    tapper.observe(frame(BASE), 10.0)
+    pulse_train(tapper, 20.0, 8)
+    period_before = tapper.period
+    flash = 20.0 + 8 * BEAT - 0.110         # a bloom flash, 110 ms early
+    tapper.observe(frame(200), flash)
+    tapper.observe(frame(BASE), flash + 0.08)
+    assert abs(tapper.period - period_before) < 1e-9
+    results = pulse_train(tapper, 20.0 + 10 * BEAT, 6)
+    assert [r for _, r in results if r is not None] == [12, 13, 14, 15]
+
+
 def test_period_is_refined_over_the_long_baseline():
     tapper = BeatTapper()
     tapper.observe(frame(BASE), 10.0)
