@@ -129,6 +129,13 @@ class MetronomeBit(Bit):
             capacity=2,
             scored=True,
             uses=["tap"],
+            # This Bit drives cc:11 itself, every beat (metro_pulse_player:
+            # 60 -> 110, back to 60 after 150 ms). Control's breath is on
+            # the same lane and is fed on every tick, so leaving it on
+            # overwrites the pulse within a frame or two and the player's
+            # light is the breath, not the beat -- see the 20260908-214919
+            # run, where no tap ever landed because no beat was visible.
+            breath=False,
             light_manifest={
                 "instruments": [
                     {"instrument": "aurora", "target": "primary",

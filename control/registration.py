@@ -14,6 +14,9 @@ class JoinResult:
     role: str | None = None
     role_class: RoleClass | None = None
     scored: bool | None = None
+    # Role.breath, carried out to DeviceLinkAgent so it knows whether to
+    # drive this device's cc:11 breath. None on a denial, like `scored`.
+    breath: bool | None = None
     reason: str | None = None
     hint: str | None = None
     # The instrument-requirement slot this join filled, and the carried
@@ -51,7 +54,8 @@ class RegistrationState:
                 continue
             self._assign(dev, node, role)
             return JoinResult(granted=True, role=role.name,
-                               role_class=role.role_class, scored=role.scored)
+                               role_class=role.role_class, scored=role.scored,
+                               breath=role.breath)
 
         if last_full_role is not None:
             return JoinResult(granted=False, reason=f"{last_full_role} at capacity")
