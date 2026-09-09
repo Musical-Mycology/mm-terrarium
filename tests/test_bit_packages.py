@@ -24,7 +24,9 @@ def test_metronome_package_rhythm_block_reaches_instance():
     assert abs(fast.BEAT_S - 0.5) < 1e-9
     default = cls()
     assert abs(default.BEAT_S - 0.6) < 1e-9
-    assert abs(fast.LEAD_IN_S - 0.5) < 1e-9
+    # The lead-in is a beat PLUS the adoption ceremony it has to clear
+    # (MetronomeBit.WELCOME_S, luxaeterna's 1.5 s sys:loaded signature).
+    assert abs(fast.LEAD_IN_S - (1.5 + 0.5)) < 1e-9
 
 
 def test_metronome_package_is_enabled():

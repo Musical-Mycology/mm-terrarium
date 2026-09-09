@@ -63,7 +63,17 @@ def _finale_script():
 BEAT_S = 0.6                 # 100 BPM
 BEATS_PER_CYCLE = 8          # 4 call + 4 wait
 CYCLES = 4
-LEAD_IN_S = BEAT_S
+# luxaeterna plays a 1.5 s `sys:loaded` adoption ceremony on the player's
+# own strip the moment the role is granted (luxaeterna synth/status.py
+# _sig_loaded: a flash and two soft green pulses). Its brightness swamps
+# this Bit's own every-beat pulse, so the count-in has to start after it --
+# a human sees no beat under it, and the harness's synthetic player
+# (harness/beat_tapper.py) locks onto the ceremony's pulses instead of the
+# beat grid, which is what the live run of 2026-09-08 (runs/20260908-214919)
+# did. The run only begins once the last scored player has joined, so
+# clearing 1.5 s from the run's own start clears every player's ceremony.
+WELCOME_S = 1.5
+LEAD_IN_S = WELCOME_S + BEAT_S
 TOLERANCE_S = 0.050
 INPUT_OFFSET_S = 0.0         # calibration knob, subtracted from tap `at`
 JUDGE_SLACK_S = 0.050
@@ -84,6 +94,7 @@ class MetronomeBit(Bit):
     BEAT_S = BEAT_S
     BEATS_PER_CYCLE = BEATS_PER_CYCLE
     CYCLES = CYCLES
+    WELCOME_S = WELCOME_S
     LEAD_IN_S = LEAD_IN_S
     TOLERANCE_S = TOLERANCE_S
     INPUT_OFFSET_S = INPUT_OFFSET_S
@@ -102,7 +113,7 @@ class MetronomeBit(Bit):
         if config and config.rhythm:
             r = config.rhythm
             self.BEAT_S = 60.0 / r.bpm
-            self.LEAD_IN_S = self.BEAT_S
+            self.LEAD_IN_S = WELCOME_S + self.BEAT_S
             self.BEATS_PER_CYCLE = r.beats_per_cycle
             self.CYCLES = r.cycles
             self.TOLERANCE_S = r.grading_window_ms / 1000.0

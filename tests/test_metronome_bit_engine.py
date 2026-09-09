@@ -17,6 +17,10 @@ from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
 
 B = MetronomeBit.BEAT_S
+# The run's own start to beat 0. Longer than one beat since LEAD_IN_S has to
+# clear luxaeterna's 1.5 s adoption ceremony (MetronomeBit.WELCOME_S), so
+# ticking one beat is no longer enough to reach beat 0's emission.
+LEAD_IN = MetronomeBit.LEAD_IN_S
 
 
 class _Room:
@@ -60,7 +64,7 @@ def _tick(gs, clk, seconds, step=0.05):
 
 def test_downbeat_fires_hard_click_and_green_flash_at_beat_grid_time():
     gs, clk, light = _running()
-    _tick(gs, clk, B)               # one beat: anchors t0, fires beat 0
+    _tick(gs, clk, LEAD_IN)         # anchors t0, then fires beat 0
     grid0 = gs.bit._t0
     assert grid0 is not None and grid0 > 100.0
 
@@ -81,7 +85,7 @@ def test_downbeat_fires_hard_click_and_green_flash_at_beat_grid_time():
 
 def test_pulse_decay_rides_room_and_player_at_beat_grid_time():
     gs, clk, light = _running()
-    _tick(gs, clk, B)
+    _tick(gs, clk, LEAD_IN)
     grid0 = gs.bit._t0
 
     pulses = [c for c in light if c[1] == 0xB0 and c[2] == 11
@@ -96,7 +100,7 @@ def test_pulse_decay_rides_room_and_player_at_beat_grid_time():
 
 def test_soft_click_on_call_beats_1_to_3_at_their_own_grid_time():
     gs, clk, light = _running()
-    _tick(gs, clk, 4 * B)            # beats 0..3
+    _tick(gs, clk, LEAD_IN + 3 * B)  # beats 0..3
     grid0 = gs.bit._t0
 
     softs = sorted(
@@ -108,7 +112,7 @@ def test_soft_click_on_call_beats_1_to_3_at_their_own_grid_time():
 
 def test_a_beat_fires_exactly_once_even_across_extra_ticks():
     gs, clk, light = _running()
-    _tick(gs, clk, B)                # fires beat 0
+    _tick(gs, clk, LEAD_IN)          # fires beat 0
     before = len(light)
     gs.tick(0.001)                   # no new beat gridpoint crossed
     gs.tick(0.001)
