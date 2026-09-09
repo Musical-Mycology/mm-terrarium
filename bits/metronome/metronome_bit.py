@@ -7,6 +7,7 @@ lifecycle scaffolding later tasks fill in -- no gameplay logic yet.
 
 from __future__ import annotations
 
+import logging
 import random
 
 from control.bit import Bit
@@ -20,6 +21,8 @@ from control.functions import (
     FunctionTable,
     FunctionTarget,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _fireworks_script():
@@ -380,7 +383,16 @@ class MetronomeBit(Bit):
     def _on_tap(self, dev: str, args: list, at: float) -> list:
         if self._t0 is None or self._done:
             return []
-        t = at - self.INPUT_OFFSET_S
+        # `at` is the presentation time of this tap's consequence: the
+        # device's own stamp plus the installation's cue_horizon (stamped
+        # on this Bit by GameServer.load_bit). The beat grid is in
+        # presentation time too, and each beat is PRESENTED at its
+        # gridpoint, so the tap's own moment is `at - cue_horizon`. The
+        # 2026-08-20 design claimed the horizon cancelled here; it cancels
+        # for this Bit's own cues, not for input (spec 2026-09-08 section
+        # 1.3). INPUT_OFFSET_S stays what it was: a knob for real
+        # input-path latency, not for the horizon.
+        t = at - self.cue_horizon - self.INPUT_OFFSET_S
         cycle = self._current_cycle(t)
         if cycle is None or dev != self._turn_dev(cycle):
             return []
@@ -392,6 +404,8 @@ class MetronomeBit(Bit):
             if best_err is None or abs(err) < abs(best_err):
                 best_w, best_err = w, err
         self._tap_errors_ms.append(round(best_err * 1000.0, 1))
+        logger.info("tap %s cycle %d beat %d err %+.1f ms",
+                    dev, cycle, best_w, best_err * 1000.0)
         if abs(best_err) <= self.TOLERANCE_S:
             phrase["hits"].add(best_w)
         else:
@@ -494,6 +508,9 @@ class MetronomeBit(Bit):
             if dev is not None:
                 phrase = self._phrase_for(c)
                 success = phrase["hits"] == {0, 1, 2, 3} and not phrase["spoiled"]
+                logger.info("cycle %d %s: %s (%d hits, spoiled=%s)",
+                            c, dev, "success" if success else "fail",
+                            len(phrase["hits"]), phrase["spoiled"])
                 if success:
                     out.append(FireFunction("fireworks_player", dev))
                     out.append(FireFunction("fireworks_room"))

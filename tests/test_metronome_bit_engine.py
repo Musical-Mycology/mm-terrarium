@@ -113,3 +113,30 @@ def test_a_beat_fires_exactly_once_even_across_extra_ticks():
     gs.tick(0.001)                   # no new beat gridpoint crossed
     gs.tick(0.001)
     assert len(light) == before
+
+
+def test_a_tap_made_when_a_wait_beat_is_presented_is_judged_on_time():
+    """A physically perfect tap: stamped at the instant Control PRESENTS a
+    wait beat. GameServer.data() adds cue_horizon to that stamp before the
+    handler sees it, so without Bit.cue_horizon the Bit read every perfect
+    tap as +horizon (60 ms, outside its 50 ms window). Reproduced live
+    2026-09-08; see the spec section 1.3."""
+    clk = SimpleNamespace(t=100.0)
+    gs = GameServer({"metro": MetronomeBit}, clock=lambda: clk.t,
+                    cue_horizon=0.060)
+    gs.room = _Room({"main": "sim-room-main"})
+    gs.on_light_cue = lambda *a: None
+    gs.load_bit("metro")
+    gs.hello("ie1", "sim", "1")
+    gs.join("ie1", "METRO_PLAYER_NODE")
+    gs.run()
+    bit = gs.bit
+    while bit._t0 is None:
+        _tick(gs, clk, 0.01, step=0.01)
+    presented = bit._grid(4)            # cycle 0, wait beat 0
+    while clk.t < presented - 1e-9:
+        _tick(gs, clk, 0.01, step=0.01)
+    clk.t = presented
+    assert gs.data("ie1", "tap", ["ie1", 1.0, 50.0, 1],
+                   gesture_time=presented) is None
+    assert bit._tap_errors_ms == [0.0]

@@ -149,3 +149,31 @@ def test_call_beat_tap_spoils_phrase():
     fires = _drain_until(bit, _wait_grid(bit, 0, 3) + 0.2)
     assert ("fail_player", "ie1") in [(f.name, f.dev) for f in fires]
     assert bit._successes.get("ie1", 0) == 0
+
+
+def test_tap_subtracts_the_stamped_cue_horizon():
+    bit = _started()
+    bit.cue_horizon = 0.060
+    # The engine hands `at = tap moment + horizon`; the tap moment is the
+    # gridpoint itself.
+    bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1], _wait_grid(bit, 0, 0) + 0.060)
+    assert bit._tap_errors_ms == [0.0]
+
+
+def test_cue_horizon_defaults_to_zero_so_existing_judgment_is_unchanged():
+    bit = _started()
+    assert bit.cue_horizon == 0.0
+    bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1], _wait_grid(bit, 0, 2) + 0.010)
+    assert bit._tap_errors_ms == [10.0]
+
+
+def test_taps_and_verdicts_are_logged_at_info(caplog):
+    import logging
+    bit = _started()
+    with caplog.at_level(logging.INFO, logger="bits.metronome.metronome_bit"):
+        bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1], _wait_grid(bit, 0, 1) + 0.004)
+        # past cycle 0's judge deadline: grid(7) + TOLERANCE + JUDGE_SLACK
+        bit.fires(bit._grid(7) + bit.TOLERANCE_S + bit.JUDGE_SLACK_S + 0.001)
+    messages = [r.getMessage() for r in caplog.records]
+    assert "tap ie1 cycle 0 beat 1 err +4.0 ms" in messages
+    assert any(m.startswith("cycle 0 ie1: fail") for m in messages)
