@@ -3922,8 +3922,12 @@ itself is Plan B, in `mm-tuneshroom` (see *Not yet built* below).
   tree Arco serves on 8080) over plain HTTP on **port 8788**, bound to
   `0.0.0.0` because guests are on the venue LAN and the tree is static
   files with no state -- the Console's loopback trust model does not
-  apply here. It starts before Control's transport and is torn down with
-  it, and it prints `WWW_URL: http://<lan-ip>:8788/ (guest page; o2ws
+  apply here. It starts before Control's transport, but it is torn down on
+  the process-level teardown stack (shutdown phase 3, alongside the Console
+  server) rather than with the transport (phase 1): it is a plain HTTP
+  server with no dependency on the Arco hub, so nothing about it has to
+  close ahead of Arco. A port it cannot bind is a warning, not a fatal
+  boot error. It prints `WWW_URL: http://<lan-ip>:8788/ (guest page; o2ws
   goes to Arco on <port>)`, collected by `run_stack` like `BROWSE_URL`.
   `terrarium_boot --www-port` (`0` disables it) and `run_stack
   --www-port`/`--web-build DIR` (copies a Flutter web build into

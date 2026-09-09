@@ -19,6 +19,8 @@ with no configuration. Arco's directory index file is `index.htm`, not
   milliseconds, so any timestamp under 500 ms ahead was delivered
   immediately; our copy rounds after scaling. Reported upstream;
   re-apply if the file is refreshed from the `o2` repo.
+- `index.htm`: Arco's directory index file (it does not serve
+  `index.html`), a placeholder page linking to the clock check.
 - `o2wsclocksync.htm`: the `o2` repo's clock-sync check page, ensemble set
   to `arco`. Open it to confirm the browser reaches the hub.
 - `app/` (gitignored): the mm-tuneshroom guest app, built with `tool/sim

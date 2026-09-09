@@ -227,9 +227,10 @@ target, but that run's tab stayed backgrounded (`document.hidden` true)
 under the automated browser tool even after fronting it, which clamps
 timer firing to about once a second and is the likely explanation for
 the ~800 ms floor rather than a defect in the fix itself. Until that is
-confirmed on a real, OS-focused device, the browser link should still
-hold frames in its own queue until `when`, and Plan B's Task 5 carries
-that.
+confirmed on a real, OS-focused device, the size of the effect is
+unknown. No browser-side queue unless the phone live gate measures p99
+lateness above 10 ms; P8's magnitude could not be measured in the
+automation browser.
 
 ### 6.4 Failure
 
