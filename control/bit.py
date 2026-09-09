@@ -37,6 +37,17 @@ class Bit(ABC):
     # shared across every instance of a Bit that doesn't override it.
     room_types: set[str] = {"TEST"}
 
+    # The installation's presentation lead, in seconds: for every `at` the
+    # engine hands this Bit (a verb handler's `at`, fires(at)), `at` is the
+    # gesture's own stamp (or Control's clock) PLUS this lead. Stamped by
+    # GameServer.load_bit from BootConfig.cue_horizon. A Bit that emits cues
+    # never needs it: cues are already in presentation time. A Bit that
+    # grades INPUT against presented output does: a tap made at the instant
+    # a beat is presented arrives as `at = beat + cue_horizon`, so the
+    # tap's own moment is `at - cue_horizon`. Default 0.0 keeps every
+    # hand-constructed test Bit exact.
+    cue_horizon: float = 0.0
+
     @property
     @abstractmethod
     def role_table(self) -> RoleTable:

@@ -7,6 +7,7 @@ lifecycle scaffolding later tasks fill in -- no gameplay logic yet.
 
 from __future__ import annotations
 
+import logging
 import random
 
 from control.bit import Bit
@@ -20,6 +21,8 @@ from control.functions import (
     FunctionTable,
     FunctionTarget,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _fireworks_script():
@@ -60,7 +63,17 @@ def _finale_script():
 BEAT_S = 0.6                 # 100 BPM
 BEATS_PER_CYCLE = 8          # 4 call + 4 wait
 CYCLES = 4
-LEAD_IN_S = BEAT_S
+# luxaeterna plays a 1.5 s `sys:loaded` adoption ceremony on the player's
+# own strip the moment the role is granted (luxaeterna synth/status.py
+# _sig_loaded: a flash and two soft green pulses). Its brightness swamps
+# this Bit's own every-beat pulse, so the count-in has to start after it --
+# a human sees no beat under it, and the harness's synthetic player
+# (harness/beat_tapper.py) locks onto the ceremony's pulses instead of the
+# beat grid, which is what the live run of 2026-09-08 (runs/20260908-214919)
+# did. The run only begins once the last scored player has joined, so
+# clearing 1.5 s from the run's own start clears every player's ceremony.
+WELCOME_S = 1.5
+LEAD_IN_S = WELCOME_S + BEAT_S
 TOLERANCE_S = 0.050
 INPUT_OFFSET_S = 0.0         # calibration knob, subtracted from tap `at`
 JUDGE_SLACK_S = 0.050
@@ -81,6 +94,7 @@ class MetronomeBit(Bit):
     BEAT_S = BEAT_S
     BEATS_PER_CYCLE = BEATS_PER_CYCLE
     CYCLES = CYCLES
+    WELCOME_S = WELCOME_S
     LEAD_IN_S = LEAD_IN_S
     TOLERANCE_S = TOLERANCE_S
     INPUT_OFFSET_S = INPUT_OFFSET_S
@@ -99,7 +113,7 @@ class MetronomeBit(Bit):
         if config and config.rhythm:
             r = config.rhythm
             self.BEAT_S = 60.0 / r.bpm
-            self.LEAD_IN_S = self.BEAT_S
+            self.LEAD_IN_S = self.WELCOME_S + self.BEAT_S
             self.BEATS_PER_CYCLE = r.beats_per_cycle
             self.CYCLES = r.cycles
             self.TOLERANCE_S = r.grading_window_ms / 1000.0
@@ -126,6 +140,13 @@ class MetronomeBit(Bit):
             capacity=2,
             scored=True,
             uses=["tap"],
+            # This Bit drives cc:11 itself, every beat (metro_pulse_player:
+            # 60 -> 110, back to 60 after 150 ms). Control's breath is on
+            # the same lane and is fed on every tick, so leaving it on
+            # overwrites the pulse within a frame or two and the player's
+            # light is the breath, not the beat -- see the 20260908-214919
+            # run, where no tap ever landed because no beat was visible.
+            breath=False,
             light_manifest={
                 "instruments": [
                     {"instrument": "aurora", "target": "primary",
@@ -380,7 +401,16 @@ class MetronomeBit(Bit):
     def _on_tap(self, dev: str, args: list, at: float) -> list:
         if self._t0 is None or self._done:
             return []
-        t = at - self.INPUT_OFFSET_S
+        # `at` is the presentation time of this tap's consequence: the
+        # device's own stamp plus the installation's cue_horizon (stamped
+        # on this Bit by GameServer.load_bit). The beat grid is in
+        # presentation time too, and each beat is PRESENTED at its
+        # gridpoint, so the tap's own moment is `at - cue_horizon`. The
+        # 2026-08-20 design claimed the horizon cancelled here; it cancels
+        # for this Bit's own cues, not for input (spec 2026-09-08 section
+        # 1.3). INPUT_OFFSET_S stays what it was: a knob for real
+        # input-path latency, not for the horizon.
+        t = at - self.cue_horizon - self.INPUT_OFFSET_S
         cycle = self._current_cycle(t)
         if cycle is None or dev != self._turn_dev(cycle):
             return []
@@ -392,6 +422,8 @@ class MetronomeBit(Bit):
             if best_err is None or abs(err) < abs(best_err):
                 best_w, best_err = w, err
         self._tap_errors_ms.append(round(best_err * 1000.0, 1))
+        logger.info("tap %s cycle %d beat %d err %+.1f ms",
+                    dev, cycle, best_w, best_err * 1000.0)
         if abs(best_err) <= self.TOLERANCE_S:
             phrase["hits"].add(best_w)
         else:
@@ -405,14 +437,29 @@ class MetronomeBit(Bit):
     def _beat_fires(self, k: int) -> list:
         """FireFunctions for global beat `k`, each stamped with that beat's
         own grid time (`at=self._grid(k)`) rather than the dispatching
-        fires(at) call's `at`. Byte-equivalent to the old _beat_cues(k)'s
-        LightCue output: same devs, same statuses, same data1/data2, same
-        relative offsets baked into the metro_* Function scripts declared
-        above -- reached through FireFunction.at instead of LightCue.when.
+        fires(at) call's `at`, reached through FireFunction.at instead of
+        the LightCue.when the pre-Function version of this Bit used. One
+        deliberate departure from that byte-for-byte equivalence: see the
+        metro_recovery block below, which used to fire on every downbeat and
+        cancel that beat's own pulse.
         """
         t = self._grid(k)
         pos = k % self.BEATS_PER_CYCLE
         out = []
+
+        # A cycle's downbeat brings its turn dev back from a previous
+        # failure: green again, level back to base (metro_recovery). Emitted
+        # BEFORE the pulse below and only for a dev that actually failed,
+        # both for the same reason -- metro_recovery writes cc:11 too, the
+        # very lane the pulse uses, so an unconditional recovery on every
+        # downbeat overwrote that beat's pulse with LEVEL_BASE and the turn
+        # player's downbeat was the one beat of their cycle that did not
+        # show. Ordered first, the recovery is what the pulse rises FROM.
+        if pos == 0:
+            dev = self._turn_dev(k // self.BEATS_PER_CYCLE)
+            if dev is not None and dev in self._failed_devs:
+                self._failed_devs.discard(dev)
+                out.append(FireFunction("metro_recovery", dev=dev, at=t))
 
         # Every beat: level pulse-then-decay on ROOM and every non-failed
         # player (metro_pulse_room / metro_pulse_player scripts).
@@ -430,12 +477,6 @@ class MetronomeBit(Bit):
             out.append(FireFunction("metro_downbeat", at=t))
         elif pos in (1, 2, 3):
             out.append(FireFunction("metro_click", at=t))
-
-        if pos == 0:
-            dev = self._turn_dev(k // self.BEATS_PER_CYCLE)
-            if dev is not None:
-                self._failed_devs.discard(dev)
-                out.append(FireFunction("metro_recovery", dev=dev, at=t))
 
         return out
 
@@ -488,12 +529,25 @@ class MetronomeBit(Bit):
         while self._judged_cycles < self.CYCLES:
             c = self._judged_cycles
             deadline = self._grid(c * 8 + 7) + self.TOLERANCE_S + self.JUDGE_SLACK_S
-            if at < deadline:
+            # Compared against `at - cue_horizon`, not `at`, for the same
+            # reason _on_tap subtracts it: `at` is PRESENTATION time, one
+            # horizon ahead of the clock, while a tap arrives in real time.
+            # On `at` alone the deadline fired a whole horizon early, so
+            # JUDGE_SLACK_S -- there to let the last answer beat's tap
+            # travel -- was really JUDGE_SLACK_S minus the horizon, which at
+            # the shipped 60 ms horizon is negative. Measured live in
+            # runs/20260908-221016: cycle 0 closed `fail (3 hits)` and its
+            # fourth tap (`err +8.1 ms`, well inside tolerance) was logged
+            # immediately after.
+            if at - self.cue_horizon < deadline:
                 break
             dev = self._turn_dev(c)
             if dev is not None:
                 phrase = self._phrase_for(c)
                 success = phrase["hits"] == {0, 1, 2, 3} and not phrase["spoiled"]
+                logger.info("cycle %d %s: %s (%d hits, spoiled=%s)",
+                            c, dev, "success" if success else "fail",
+                            len(phrase["hits"]), phrase["spoiled"])
                 if success:
                     out.append(FireFunction("fireworks_player", dev))
                     out.append(FireFunction("fireworks_room"))

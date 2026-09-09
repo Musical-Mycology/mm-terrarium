@@ -164,6 +164,12 @@ class DeviceLinkAgent:
         # renderer has to be fed cc:11 or it renders a static surface.
         self._breath_origin = self._clock()
         self._last_breath: dict[str, int] = {}
+        # devs whose granted role set Role.breath=False (control/roles.py):
+        # the Bit drives cc:11 itself and the breath would overwrite it on
+        # the same lane every tick. Recorded at _on_join from the JoinResult
+        # and cleared at _finish_release, exactly the way _last_breath is,
+        # so a rejoin under a different role always re-reads the flag.
+        self._breathless: set[str] = set()
         # Room wiring (see design spec section 5). None of this exists
         # unless a Room is both configured and already bound -- a
         # GameServer built the pre-Room way (no room_binding/room) leaves
@@ -678,6 +684,8 @@ class DeviceLinkAgent:
                 continue
             if dev in self._muted:
                 continue
+            if dev in self._breathless:
+                continue
             if self._last_breath.get(dev) == value:
                 continue
             self._last_breath[dev] = value
@@ -840,6 +848,10 @@ class DeviceLinkAgent:
         # A rejoining device must not be starved of its first breath by a
         # stale entry from its previous session.
         self._last_breath.pop(dev, None)
+        # Re-read on every join: a rejoin can land on a different role.
+        self._breathless.discard(dev)
+        if result.breath is False:
+            self._breathless.add(dev)
         # This rejoin is itself the "proof of life" that made _handle() add
         # dev to _closing_revived a moment ago (dev was still in _closing
         # when that check ran, just above the pop() this same rejoin just
@@ -990,6 +1002,7 @@ class DeviceLinkAgent:
         self._last_frames.pop(dev, None)
         self._closing.pop(dev, None)
         self._last_breath.pop(dev, None)
+        self._breathless.discard(dev)
         self._canvas_urls.pop(dev, None)
         # Send BEFORE drop_dev, same reasoning as _on_release's no-bridge
         # branch above: dropping the connection mapping first would make

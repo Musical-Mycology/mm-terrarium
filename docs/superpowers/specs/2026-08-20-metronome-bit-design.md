@@ -110,6 +110,16 @@ beat grid entirely in `at`-space and the horizon offset cancels.
   accumulated elapsed time; tests can drive the whole game at exact times
   with no clock.
 
+> **Status 2026-09-08:** the "horizon offset cancels" claim above was
+> wrong for input. A tap made at the instant a beat is presented arrives
+> as `at = gridpoint + cue_horizon`, so every perfect tap graded +60 ms
+> late. Fixed by `Bit.cue_horizon` (stamped by the engine on the loaded
+> Bit) and `t_tap = at - cue_horizon - INPUT_OFFSET_S`. The lead-in above
+> is no longer one beat either: the count-in has to clear luxaeterna's
+> 1.5 s `sys:loaded` adoption ceremony, so `LEAD_IN_S = WELCOME_S +
+> BEAT_S` and `t0 = at + LEAD_IN_S` is the ceremony plus one beat. See
+> `2026-09-08-metronome-bit-on-o2lite-design.md`.
+
 ## 5. Game state machine (inside the Bit)
 
 Phases per 8-beat cycle: `CALL` (beats 1-4) -> `WAIT` (beats 5-8) ->

@@ -2870,3 +2870,38 @@ def test_start_www_server_warns_and_carries_on_when_the_port_is_taken(capsys):
     assert ("WARNING: guest page not served: www server could not bind "
             "port 8788: ") in captured.err
     assert teardown.close() == []
+
+
+def test_configure_logging_routes_engine_warnings_to_the_stream():
+    import io
+    import logging
+    from harness.terrarium_boot import configure_logging
+    stream = io.StringIO()
+    handler = configure_logging(stream=stream)
+    try:
+        logging.getLogger("control.engine").warning("refusing gesture stamp")
+        assert "WARNING control.engine: refusing gesture stamp" in stream.getvalue()
+        logging.getLogger("bits.metronome.metronome_bit").info("tap ie1")
+        assert "INFO bits.metronome.metronome_bit: tap ie1" in stream.getvalue()
+    finally:
+        logging.getLogger().removeHandler(handler)
+
+
+def test_configure_logging_is_idempotent():
+    import logging
+    from harness.terrarium_boot import configure_logging
+    first = configure_logging()
+    try:
+        assert configure_logging() is first
+        ours = [h for h in logging.getLogger().handlers
+                if getattr(h, "terrarium_boot", False)]
+        assert ours == [first]
+    finally:
+        logging.getLogger().removeHandler(first)
+
+
+def test_main_configures_logging_first():
+    import inspect
+    import harness.terrarium_boot as mod
+    src = inspect.getsource(mod.main)
+    assert src.index("configure_logging()") < src.index("_build_arg_parser()")

@@ -6,8 +6,11 @@ the old cues(at) per-beat LightCue schedule (click, downbeat flash,
 turn-recovery flash, level pulse-then-decay) must come back through the new
 Function/fires(at) architecture rather than being dropped. Loads a real
 MetronomeBit into a real GameServer with an advancing fake clock and checks
-GameServer.on_light_cue receives the same bytes the old _beat_cues(k)
-produced, stamped at that beat's own grid time -- not the tick's `at`.
+GameServer.on_light_cue receives bytes stamped at that beat's own grid time
+-- not the tick's `at` -- and, for the click, flash and pulse, byte-equivalent
+to what the old _beat_cues(k) produced. metro_recovery is not: since
+2026-09-08 it fires only for a dev in the failed set, and before that dev's
+own pulse (see _beat_fires's docstring).
 """
 from types import SimpleNamespace
 
@@ -17,6 +20,10 @@ from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
 
 B = MetronomeBit.BEAT_S
+# The run's own start to beat 0. Longer than one beat since LEAD_IN_S has to
+# clear luxaeterna's 1.5 s adoption ceremony (MetronomeBit.WELCOME_S), so
+# ticking one beat is no longer enough to reach beat 0's emission.
+LEAD_IN = MetronomeBit.LEAD_IN_S
 
 
 class _Room:
@@ -60,7 +67,7 @@ def _tick(gs, clk, seconds, step=0.05):
 
 def test_downbeat_fires_hard_click_and_green_flash_at_beat_grid_time():
     gs, clk, light = _running()
-    _tick(gs, clk, B)               # one beat: anchors t0, fires beat 0
+    _tick(gs, clk, LEAD_IN)         # anchors t0, then fires beat 0
     grid0 = gs.bit._t0
     assert grid0 is not None and grid0 > 100.0
 
@@ -81,7 +88,7 @@ def test_downbeat_fires_hard_click_and_green_flash_at_beat_grid_time():
 
 def test_pulse_decay_rides_room_and_player_at_beat_grid_time():
     gs, clk, light = _running()
-    _tick(gs, clk, B)
+    _tick(gs, clk, LEAD_IN)
     grid0 = gs.bit._t0
 
     pulses = [c for c in light if c[1] == 0xB0 and c[2] == 11
@@ -96,7 +103,7 @@ def test_pulse_decay_rides_room_and_player_at_beat_grid_time():
 
 def test_soft_click_on_call_beats_1_to_3_at_their_own_grid_time():
     gs, clk, light = _running()
-    _tick(gs, clk, 4 * B)            # beats 0..3
+    _tick(gs, clk, LEAD_IN + 3 * B)  # beats 0..3
     grid0 = gs.bit._t0
 
     softs = sorted(
@@ -108,8 +115,35 @@ def test_soft_click_on_call_beats_1_to_3_at_their_own_grid_time():
 
 def test_a_beat_fires_exactly_once_even_across_extra_ticks():
     gs, clk, light = _running()
-    _tick(gs, clk, B)                # fires beat 0
+    _tick(gs, clk, LEAD_IN)          # fires beat 0
     before = len(light)
     gs.tick(0.001)                   # no new beat gridpoint crossed
     gs.tick(0.001)
     assert len(light) == before
+
+
+def test_a_tap_made_when_a_wait_beat_is_presented_is_judged_on_time():
+    """A physically perfect tap: stamped at the instant Control PRESENTS a
+    wait beat. GameServer.data() adds cue_horizon to that stamp before the
+    handler sees it, so without Bit.cue_horizon the Bit read every perfect
+    tap as +horizon (60 ms, outside its 50 ms window). Reproduced live
+    2026-09-08; see the spec section 1.3."""
+    clk = SimpleNamespace(t=100.0)
+    gs = GameServer({"metro": MetronomeBit}, clock=lambda: clk.t,
+                    cue_horizon=0.060)
+    gs.room = _Room({"main": "sim-room-main"})
+    gs.on_light_cue = lambda *a: None
+    gs.load_bit("metro")
+    gs.hello("ie1", "sim", "1")
+    gs.join("ie1", "METRO_PLAYER_NODE")
+    gs.run()
+    bit = gs.bit
+    while bit._t0 is None:
+        _tick(gs, clk, 0.01, step=0.01)
+    presented = bit._grid(4)            # cycle 0, wait beat 0
+    while clk.t < presented - 1e-9:
+        _tick(gs, clk, 0.01, step=0.01)
+    clk.t = presented
+    assert gs.data("ie1", "tap", ["ie1", 1.0, 50.0, 1],
+                   gesture_time=presented) is None
+    assert bit._tap_errors_ms == [0.0]

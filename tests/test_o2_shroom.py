@@ -804,3 +804,42 @@ def test_main_reinitializes_heartbeat_from_the_current_round(monkeypatch):
         "re-arm from the pre-round-loop clock read (`start`), which is in "
         "the past by round 2+ -- seed it from a fresh per-round "
         "o2lite.time_get() instead.")
+
+
+# --- The role's `uses` list decides which synthetic gestures run. ---------
+
+from harness.o2_shroom import wants_verb
+
+
+def test_wants_verb_follows_the_roles_uses_list():
+    cfg = {"uses": ["tap"]}
+    assert wants_verb(cfg, "tap") is True
+    assert wants_verb(cfg, "tilt") is False
+
+
+def test_wants_verb_is_permissive_when_uses_is_absent_or_empty():
+    """Legacy roles that declare no `uses` keep today's tilt sweep."""
+    assert wants_verb({}, "tilt") is True
+    assert wants_verb({"uses": []}, "tilt") is True
+    assert wants_verb(None, "tilt") is True
+
+
+def test_build_threads_on_show_into_the_leds():
+    seen = []
+    client, backend = build("ie1", serve=False,
+                            on_show=lambda frame, now: seen.append(frame))
+    client.leds.show(bytes(36))
+    assert seen == [bytes(36)]
+
+
+def test_main_gates_the_tilt_sweep_and_the_tapper_on_uses():
+    """Source-level pin, in the style of test_main_has_exactly_one_backend_close:
+    the tick loop consults wants_verb for both gestures and the tapper is
+    wired to the leds' on_show."""
+    import inspect
+    import harness.o2_shroom as mod
+    src = inspect.getsource(mod.main)
+    assert 'wants_verb(client.config, "tilt")' in src
+    assert 'wants_verb(client.config, "tap")' in src
+    assert "BeatTapper(" in src
+    assert "on_show=" in src

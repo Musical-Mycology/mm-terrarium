@@ -80,3 +80,43 @@ def test_o2_shroom_exposes_identify_blocks():
     source = inspect.getsource(o2_shroom)
     assert "--identify-blocks" in source
     assert "identify_blocks_frame(" in source
+
+
+def test_on_show_sees_each_displayed_frame_with_the_clock_reading():
+    backend = FakeBackend()
+    seen = []
+    leds = WebSimLeds(backend, channels=36,
+                      on_show=lambda frame, now: seen.append((frame, now)),
+                      clock=lambda: 42.5)
+
+    leds.show(bytes(range(36)))
+
+    assert backend.sent == [bytes(range(36))]
+    assert seen == [(bytes(range(36)), 42.5)]
+
+
+def test_on_show_without_a_clock_passes_none():
+    seen = []
+    leds = WebSimLeds(FakeBackend(), channels=36,
+                      on_show=lambda frame, now: seen.append(now))
+    leds.show(bytes(36))
+    assert seen == [None]
+
+
+def test_clear_does_not_call_on_show():
+    seen = []
+    leds = WebSimLeds(FakeBackend(), channels=36,
+                      on_show=lambda frame, now: seen.append(frame))
+    leds.clear()
+    assert seen == []
+
+
+def test_a_raising_on_show_never_stops_the_frame(caplog):
+    backend = FakeBackend()
+
+    def boom(frame, now):
+        raise RuntimeError("tapper broke")
+
+    leds = WebSimLeds(backend, channels=36, on_show=boom)
+    leds.show(bytes(36))
+    assert backend.sent == [bytes(36)]

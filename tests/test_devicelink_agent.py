@@ -2,6 +2,7 @@
 in-process fake server (no sockets -- see test_devicelink_server.py)."""
 
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -635,6 +636,61 @@ def test_breath_is_only_sent_when_the_value_changes():
     agent.poll()
     breaths = [m for m in seen if m[1] == BREATH_CC]
     assert len(breaths) == 1
+
+
+def _agent_with_a_breathless_device(dev="ie1"):
+    """_agent_with_joined_device's sibling, with TEST_PLAYER_NODE's role
+    declaring Role.breath=False. Mutated on the registration's own role-table
+    snapshot (the same object GameServer.join composes from), because a Bit
+    rebuilds role_table on every property access."""
+    clk = _Clock()
+    gs = GameServer({"test_bit": TestBit}, clock=clk)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+    gs.load_bit("test_bit")
+    table = gs.registration.role_table.roles
+    name = gs.registration.role_table.node_map["TEST_PLAYER_NODE"][0]
+    table[name] = replace(table[name], breath=False)
+    _hello(server, agent, client="c1", dev=dev)
+    server.deliver("c1", "/game/join", "ss", [dev, "TEST_PLAYER_NODE"])
+    agent.poll()
+    return gs, server, agent, dev, clk
+
+
+def test_a_role_that_opts_out_of_the_breath_is_never_fed_cc11():
+    """Role.breath=False (control/roles.py) says the Bit drives cc:11
+    itself. Control's breath is on that same lane and is fed every tick, so
+    without the opt-out it overwrites the Bit's own values within a frame or
+    two -- exactly what made MetronomeBit's every-beat pulse invisible in
+    the live run of 2026-09-08. Non-vacuous the same way the closing test
+    below is: clk.advance(1.0) guarantees a changed breath value, and the
+    identical advance DOES produce one in
+    test_joined_device_receives_the_breath_on_cc11."""
+    gs, server, agent, dev, clk = _agent_with_a_breathless_device()
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+    clk.advance(1.0)
+    agent.poll()
+    assert not [m for m in seen if m[1] == BREATH_CC]
+
+
+def test_a_breathless_dev_breathes_again_when_it_rejoins_a_breathing_role():
+    """The flag is a property of the role a dev currently holds, not of the
+    dev. Put the breathing role back and rejoin: without the discard in
+    _on_join the device would stay breathless for the rest of the process."""
+    gs, server, agent, dev, clk = _agent_with_a_breathless_device()
+    assert dev in agent._breathless
+    table = gs.registration.role_table.roles
+    name = gs.registration.role_table.node_map["TEST_PLAYER_NODE"][0]
+    table[name] = replace(table[name], breath=True)
+    server.deliver("c1", "/game/join", "ss", [dev, "TEST_PLAYER_NODE"])
+    agent.poll()
+    assert dev not in agent._breathless
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+    clk.advance(1.0)
+    agent.poll()
+    assert [m for m in seen if m[1] == BREATH_CC]
 
 
 def test_a_closing_device_is_not_fed_the_breath():

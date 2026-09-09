@@ -28,6 +28,19 @@ def _names(fires):
     return [(f.name, f.dev, f.at) for f in fires]
 
 
+def _through_beat_zero(bit, at=100.0):
+    """Anchor the grid at `at` and return every FireFunction emitted up to
+    and including beat 0's. fires() emits a beat one beat before its
+    gridpoint, and LEAD_IN_S is longer than one beat (it has to clear
+    luxaeterna's 1.5 s adoption ceremony, MetronomeBit.WELCOME_S), so the
+    anchoring call alone no longer reaches beat 0."""
+    out = list(bit.fires(at))
+    while bit._next_beat == 0:
+        at += B
+        out.extend(bit.fires(at))
+    return out
+
+
 def test_anchor_set_on_first_fires_call():
     bit = _started()
     bit.fires(100.0)
@@ -36,7 +49,7 @@ def test_anchor_set_on_first_fires_call():
 
 def test_beat_zero_fires_downbeat_and_pulses_at_its_own_grid_time():
     bit = _started()
-    fires = bit.fires(100.0)
+    fires = _through_beat_zero(bit)
     grid0 = bit._t0
     names = _names(fires)
     assert ("metro_downbeat", None, grid0) in names
@@ -62,15 +75,15 @@ def test_soft_clicks_on_beats_1_to_3_and_none_on_wait_beats():
 
 def test_a_beat_fires_exactly_once():
     bit = _started()
-    bit.fires(100.0)
+    assert [f for f in _through_beat_zero(bit) if f.at == bit._t0]
     grid0 = bit._t0
-    again = [f for f in bit.fires(100.0) if f.at == grid0]
+    again = [f for f in bit.fires(100.0 + B) if f.at == grid0]
     assert again == []                 # beat 0 not re-emitted
 
 
 def test_green_pulse_rides_every_beat_on_room_and_players():
     bit = _started(players=("ie1", "ie2"))
-    fires = bit.fires(100.0)
+    fires = _through_beat_zero(bit)
     grid0 = bit._t0
     pulse_devs = set()
     for f in fires:

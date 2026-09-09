@@ -33,6 +33,34 @@ def _tap_all_four(bit, cycle, dev="ie1", err=0.0):
         bit._on_tap(dev, [dev, 1.0, 50.0, 1], _wait_grid(bit, cycle, w) + err)
 
 
+def test_a_cycle_is_not_judged_until_a_horizon_past_its_slack():
+    """fires(at) is handed PRESENTATION time -- the clock plus the
+    installation's cue_horizon (Bit.cue_horizon) -- while a tap arrives in
+    real time and is stamped with the device's own display reading. Judging
+    on `at` therefore ran every cycle's deadline a whole horizon early, so
+    JUDGE_SLACK_S (50 ms, there to let the last answer beat's tap travel)
+    was really 50 - 60 = -10 ms of it. Measured live in
+    runs/20260908-221016: cycle 0 closed as `fail (3 hits)` and its fourth
+    tap, `err +8.1 ms`, was logged immediately AFTER the judgment.
+
+    Here: the tap for the last answer beat lands one slack after its
+    gridpoint, which is inside the window JUDGE_SLACK_S names."""
+    bit = _started()
+    bit.cue_horizon = 0.060
+    late = bit.JUDGE_SLACK_S
+    for w in range(3):
+        bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1],
+                    _wait_grid(bit, 0, w) + bit.cue_horizon)
+    # The engine is one horizon ahead of the clock, so this is the fires()
+    # `at` at the moment the fourth tap is still in flight.
+    _drain_until(bit, _wait_grid(bit, 0, 3) + late + bit.cue_horizon - 0.001)
+    assert bit._judged_cycles == 0, "cycle 0 judged before its slack ran out"
+    bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1],
+                _wait_grid(bit, 0, 3) + bit.cue_horizon)
+    fires = _drain_until(bit, _wait_grid(bit, 0, 3) + late + 2 * bit.cue_horizon)
+    assert ("fireworks_player", "ie1") in [(f.name, f.dev) for f in fires]
+
+
 def test_all_four_in_time_taps_fire_fireworks():
     bit = _started()
     _tap_all_four(bit, 0, err=0.049)
@@ -141,6 +169,25 @@ def test_failed_dev_stays_dark_until_next_turn():
     assert any(f.name == "metro_pulse_player" and f.dev == "ie1" for f in later)
 
 
+def test_recovery_fires_before_pulse_on_return_beat():
+    """metro_recovery must be ordered before that beat's own
+    metro_pulse_player -- and the returning dev's pulse must still be
+    emitted on that same beat, not skipped. Beat 16 (cycle 2, pos 0) is
+    ie1's return after cycle 0's failure; this checks it fresh, before
+    anything else has touched that beat, since test_failed_dev_stays_dark_
+    until_next_turn already consumes beat 16 for its own assertions."""
+    bit = _started(players=("ie1", "ie2"))
+    # cycle 0 is ie1's turn; never tap, so it fails the phrase.
+    end = _wait_grid(bit, 0, 3) + 0.2
+    _drain_until(bit, end)
+    assert "ie1" in bit._failed_devs
+
+    recovery = bit._beat_fires(16)
+    names = [f.name for f in recovery]
+    assert names.index("metro_recovery") < names.index("metro_pulse_player")
+    assert any(f.name == "metro_pulse_player" and f.dev == "ie1" for f in recovery)
+
+
 def test_call_beat_tap_spoils_phrase():
     bit = _started()
     call_beat_at = bit._t0 + 0 * 8 * B + 1 * B   # cycle 0, call beat 1
@@ -149,3 +196,31 @@ def test_call_beat_tap_spoils_phrase():
     fires = _drain_until(bit, _wait_grid(bit, 0, 3) + 0.2)
     assert ("fail_player", "ie1") in [(f.name, f.dev) for f in fires]
     assert bit._successes.get("ie1", 0) == 0
+
+
+def test_tap_subtracts_the_stamped_cue_horizon():
+    bit = _started()
+    bit.cue_horizon = 0.060
+    # The engine hands `at = tap moment + horizon`; the tap moment is the
+    # gridpoint itself.
+    bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1], _wait_grid(bit, 0, 0) + 0.060)
+    assert bit._tap_errors_ms == [0.0]
+
+
+def test_cue_horizon_defaults_to_zero_so_existing_judgment_is_unchanged():
+    bit = _started()
+    assert bit.cue_horizon == 0.0
+    bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1], _wait_grid(bit, 0, 2) + 0.010)
+    assert bit._tap_errors_ms == [10.0]
+
+
+def test_taps_and_verdicts_are_logged_at_info(caplog):
+    import logging
+    bit = _started()
+    with caplog.at_level(logging.INFO, logger="bits.metronome.metronome_bit"):
+        bit._on_tap("ie1", ["ie1", 1.0, 50.0, 1], _wait_grid(bit, 0, 1) + 0.004)
+        # past cycle 0's judge deadline: grid(7) + TOLERANCE + JUDGE_SLACK
+        bit.fires(bit._grid(7) + bit.TOLERANCE_S + bit.JUDGE_SLACK_S + 0.001)
+    messages = [r.getMessage() for r in caplog.records]
+    assert "tap ie1 cycle 0 beat 1 err +4.0 ms" in messages
+    assert any(m.startswith("cycle 0 ie1: fail") for m in messages)

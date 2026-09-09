@@ -60,6 +60,15 @@ class Role:
     # cue path (no consumer yet; shape frozen so Bit authors declare both
     # together from day one).
     welcome: dict | None = None
+    # Whether Control's breath (control/breath.py, cc:11 as a 6 s triangle)
+    # should be driven on a device holding this role. True for every role
+    # that lets its light idle on that envelope. A Bit that drives cc:11
+    # itself must set this False, or the per-tick breath overwrites its own
+    # values on the same lane and the role's light becomes the breath --
+    # MetronomeBit's every-beat pulse (cc:11 60 -> 110 -> 60) is exactly
+    # that case. Declarative data like `scored`: the engine reads the flag,
+    # never the Bit's internals.
+    breath: bool = True
     # Names the instrument-requirement slot (control/instrument.py's
     # InstrumentRequirement.slot, resolved at load_bit) this role's join must
     # gate on -- e.g. "room" for the implicit/explicit Room slot. None (the
