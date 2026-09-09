@@ -58,12 +58,18 @@ from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.proc_tee import ProcTee
 from harness.signals import sigterm_as_keyboard_interrupt
+from harness.www_server import WWW_PORT
 
 DEFAULT_ARCO_COMMAND = os.path.join(ARCO_PYTHONPATH, "apps/pytest/server")
 # ARCO_PYTHONPATH -- the checkout o2litepy and pyarco live in, the same one
 # DEFAULT_ARCO_COMMAND is built from -- lives in harness/arco_paths.py,
 # shared with harness/o2_shroom.py. Override with MM_ARCO_PATH if arco isn't
 # a sibling checkout of this repo.
+
+# The same expression terrarium_boot.py uses for its own REPO_ROOT; kept
+# separate rather than imported since run_stack does not import
+# terrarium_boot.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 @dataclass
@@ -98,6 +104,8 @@ class StackConfig:
     serve: bool = False               # forward --serve to terrarium_boot
     # persist is the load-only-loads default; --no-persist-shrooms opts out
     persist_shrooms: bool = True
+    www_port: int = WWW_PORT          # forwarded to terrarium_boot; 0 disables
+    web_build: str | None = None      # copied into www/app/ before run()
 
 
 @dataclass
@@ -140,6 +148,7 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
     ]
     if cfg.console_port is not None:
         command += ["--console-port", str(cfg.console_port)]
+    command += ["--www-port", str(cfg.www_port)]
     if cfg.config is not None:
         command += ["--config", cfg.config]
     command += ["--room", cfg.room_type]
@@ -160,6 +169,23 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
         # and it keeps intent visible in the child's own argv either way.
         command += ["--serve"]
     return command
+
+
+def stage_web_build(src_dir: str, www_dir: str) -> str:
+    """Replace www/app/ with a copy of a Flutter web build (mm-tuneshroom's
+    `tool/sim build` writes build/web/). Refuses a directory with no
+    index.html so a typo cannot serve an empty app."""
+    import shutil
+
+    if not os.path.isfile(os.path.join(src_dir, "index.html")):
+        print(f"--web-build {src_dir!r} has no index.html; run "
+              f"`tool/sim build` in mm-tuneshroom and point at build/web",
+              file=sys.stderr)
+        raise SystemExit(2)
+    dst = os.path.join(www_dir, "app")
+    shutil.rmtree(dst, ignore_errors=True)
+    shutil.copytree(src_dir, dst)
+    return dst
 
 
 def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
@@ -215,7 +241,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         never handed to the opener -- a Room fixture canvas is reached
         from the Console's Room card, not an automatic browser tab.
         """
-        is_browse = markers.BROWSE_URL in line
+        is_browse = markers.BROWSE_URL in line or markers.WWW_URL in line
         is_room = markers.ROOM_URL in line
         if not (is_browse or is_room):
             return
@@ -528,6 +554,14 @@ def parse_args(argv=None):
     ap.add_argument("--console-port", type=int, default=None,
                     help="Serve the Terrarium Console on this port and print "
                          "its URL. Off by default.")
+    ap.add_argument("--www-port", type=int, default=WWW_PORT,
+                    help=f"Serve www/ (the guest page) on this port, bound to "
+                         f"the LAN. Default {WWW_PORT}; 0 disables. Phones "
+                         f"scan a QR pointing here; their o2ws websocket goes "
+                         f"to Arco on 8080.")
+    ap.add_argument("--web-build", default=None, metavar="DIR",
+                    help="Copy a Flutter web build into www/app/ before "
+                         "starting; the Terrarium serves it to phones.")
     ap.add_argument("--open", action="store_true",
                     help="Open a browser tab for every surface as it comes "
                          "up: the Terrarium Console, each Room fixture "
@@ -667,7 +701,8 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         devices_explicit=args.devices is not None,
         open_urls=args.open, profile=args.profile,
         serve=serve,
-        persist_shrooms=args.persist_shrooms)
+        persist_shrooms=args.persist_shrooms,
+        www_port=args.www_port, web_build=args.web_build)
 
 
 def _failing_log_key(result: RunResult) -> str | None:
@@ -739,6 +774,9 @@ def main() -> None:
               f"present there? Otherwise re-run with PYTHONPATH pointing "
               f"at it.", file=sys.stderr)
         raise SystemExit(1)
+
+    if cfg.web_build:
+        stage_web_build(cfg.web_build, os.path.join(REPO_ROOT, "www"))
 
     print(f"logs: {cfg.log_dir}")
     result = run(cfg)

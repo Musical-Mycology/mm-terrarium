@@ -121,3 +121,24 @@ def test_arco_www_marker_is_emitted_by_terrarium_boot():
     import harness.terrarium_boot
 
     assert "markers.ARCO_WWW" in inspect.getsource(harness.terrarium_boot)
+
+
+def test_www_url_marker_value():
+    assert markers.WWW_URL == "WWW_URL:"
+
+
+def test_www_url_marker_is_emitted_by_terrarium_boot():
+    import inspect
+
+    import harness.terrarium_boot
+
+    assert "markers.WWW_URL" in inspect.getsource(harness.terrarium_boot)
+
+
+def test_www_url_marker_is_distinct_from_every_other_marker():
+    others = list(markers.READY_MARKERS.values()) + \
+        list(markers.FAILURE_MARKERS.values()) + \
+        [markers.BROWSE_URL, markers.ROOM_URL, markers.ARCO_WWW]
+    for other in others:
+        assert not markers.WWW_URL.startswith(other)
+        assert not other.startswith(markers.WWW_URL)

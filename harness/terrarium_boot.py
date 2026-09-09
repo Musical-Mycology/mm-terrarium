@@ -37,6 +37,7 @@ from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH
 from harness.o2_shroom import parent_is_gone
 from harness.signals import sigterm_as_keyboard_interrupt
+from harness.www_server import WWW_PORT, WwwServer, lan_ip
 
 # Arco is launched from here so it reads the committed
 # arcoserver/arco_server_prefs.json (Arco reads prefs from its cwd) and
@@ -129,6 +130,22 @@ def _arco_popen(args):
     if args.arco_log:
         print("--arco-log needs --arco-pty; ignoring", file=sys.stderr)
     return functools.partial(subprocess.Popen, cwd=ARCOSERVER_DIR)
+
+
+def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip):
+    """Serve www/ to guest phones (spec section 4.1). Independent of Arco
+    and the transport; constructed through `server_cls` so the wiring is
+    testable without a socket. Returns the server, or None when
+    --www-port 0 turned it off."""
+    if args.www_port == 0:
+        return None
+    server = server_cls(os.path.join(REPO_ROOT, "www"), host="0.0.0.0",
+                        port=args.www_port)
+    server.start()
+    teardown.push("www-server", server.stop)
+    print(f"{markers.WWW_URL} {server.url(ip())} "
+          f"(guest page; o2ws goes to Arco on {ARCO_HTTP_PORT})", flush=True)
+    return server
 
 
 def make_arco_process_cls(arco_popen, settle: float):
@@ -1171,6 +1188,11 @@ def _build_arg_parser():
                          "default, so an existing invocation is unchanged. "
                          "Binds --host, which defaults to 127.0.0.1: the "
                          "console is unauthenticated and trusted-LAN only.")
+    ap.add_argument("--www-port", type=int, default=WWW_PORT,
+                    help=f"Serve www/ (the guest page) on this port, bound to "
+                         f"the LAN. Default {WWW_PORT}; 0 disables. Phones "
+                         f"scan a QR pointing here; their o2ws websocket goes "
+                         f"to Arco on {ARCO_HTTP_PORT}.")
     ap.add_argument("--config", default="terrarium.toml", metavar="PATH",
                     help="The terrarium.toml this run boots against -- its "
                          "[rooms.<NAME>] tables and its rooms catalog "
@@ -1511,6 +1533,7 @@ def main() -> None:
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
+        www_server = _start_www_server(args, teardown)
         # pump=arco.poll drains Arco's pty for the whole ownership hold;
         # see _restart_room_clients for why that is load-bearing.
         transport.start(o2lite, pump=arco.poll if arco is not None else None)
