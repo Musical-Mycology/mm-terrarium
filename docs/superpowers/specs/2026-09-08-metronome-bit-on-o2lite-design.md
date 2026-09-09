@@ -1,13 +1,57 @@
 # MetronomeBit on the o2lite stack -- design
 
 **Date:** 2026-09-08
-**Status:** approved for implementation under the autonomous flow (the
-operator asked for brainstorm -> spec -> plan -> subagent-driven
-development and was not available to review this file before the plan
-was written; the PR carries the review).
+**Status:** implemented and live-verified 2026-09-08 on MYCOLOGICAL.
+Approved for implementation under the autonomous flow (the operator asked
+for brainstorm -> spec -> plan -> subagent-driven development and was not
+available to review this file before the plan was written; the PR carries
+the review).
 **Scope:** get `bits/metronome/metronome_bit.py` working end to end on the
 post-cutover transport (Phase 1 o2lite, Phase 2 o2ws browser guests), and
 make the headless smoke test prove it.
+
+Headless gate `runs/20260908-221925`: both joins granted, 16 taps per
+device on the answer beats only, tap errors **+0.5 .. +11.7 ms** against
+the 50 ms window, all four cycles successful, fireworks and finale, `Bit
+completed; tearing down`, exit 0. Browser gate over o2ws:
+`runs/20260908-222351` (black page, the base-href defect below),
+`runs/20260908-222554` (guest `ie-3xhkee` joined over `o2ws/1`, granted
+`player`, round RUNNING with two players, Bit cues rendered on its canvas)
+and `runs/20260908-222831` (guest `ie-4mtjy4`, 11 taps judged, one
+in-window at -30.8 ms, the rest off-grid from the hidden tab's ~1 s timer
+clamp against a 0.7 s click cadence). Section 5's third item stands: a
+real phone on the venue LAN is still Chris's check.
+
+**Deviations from section 2, all found by the live runs** (carried into
+`docs/MM_TERRARIUM.md`'s MetronomeBit entry):
+
+- Section 2.2's tap-bias fix was correct but not sufficient: five further
+  root causes stood between a judged tap and a playable game. (1)
+  `DeviceLinkAgent._feed_breath` drove `control/breath.py`'s cc:11
+  triangle on every joined device, overwriting the beat pulse on the same
+  lane, so `control/roles.py` gained `Role.breath` (default `True`,
+  carried to the agent on `JoinResult`) and MetronomeBit's `player` opts
+  out. (2) The count-in ran under luxaeterna's 1.5 s `sys:loaded`
+  adoption ceremony, so `LEAD_IN_S = WELCOME_S + BEAT_S`, not one beat.
+  (3) `metro_recovery` cancelled the turn device's own downbeat pulse; it
+  now fires only for a device in the failed set, and before the pulse.
+  (4) The judgment deadline compared presentation `at` with taps in real
+  time, making `JUDGE_SLACK_S` effectively -10 ms; it now compares
+  `at - cue_horizon`. (5) Section 2.3's tapper constants were wrong
+  against real frames, below.
+- Section 2.3's `RISE_RATIO = 0.25` assumed a step; luxaeterna slews the
+  60 -> 110 pulse over ~150 ms, whose steepest single-frame rise is +11%.
+  `RISE_RATIO` is 0.05, with a new `RISE_GAP_S = 0.18` (one slewed pulse
+  counts as one rise) and a new `REFINE_FRACTION = 0.05`, so a firework
+  flash may be accepted as a beat but may not redefine the period (it
+  dragged 0.7515 -> 0.7227 in the live trace and destroyed the lock).
+  `ACCEPT_FRACTION` stayed 0.2.
+- `BeatTapper.taps` is cumulative across lobby rounds (`reset()` keeps
+  it), matching `ShroomClient`'s other cumulative diagnostics; zeroing it
+  made a run that had sent taps exit `beat taps sent: 0`.
+- Section 5's browser gate needs the build served under `/app/`:
+  `tool/sim build --base-href /app/`, and `run_stack.stage_web_build` now
+  rewrites a default build's `<base href="/">` when staging one.
 
 ## 1. What a live run showed
 
