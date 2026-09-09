@@ -1,24 +1,34 @@
 # Browser guests over o2ws: Phase 2 of the connectivity migration
 
 **Date:** 2026-09-08
-**Status:** Control side landed (Plan A, this branch); browser side
-pending (Plan B in `mm-tuneshroom`). Refines Phase 2 of
+**Status:** Control side landed as PR #91; browser side landed on
+mm-tuneshroom `claude/o2ws-link`. Refines Phase 2 of
 `2026-09-08-o2lite-connectivity-migration-design.md` with what Phase 1 and
 probe P2 taught; where the two disagree, this document wins for Phase 2.
 
-**Deviations found while landing Plan A:**
+**Deviations found while landing Plan A and Plan B:**
 
 - Section 5's retry-once on a refused browser service name is dropped for
-  Plan B: the device id is fixed before the link connects, so there is
-  nothing left to retry against.
-- The vendored `www/o2ws.js` carries a one-line patch beyond what section
-  6.3 describes: `o2ws_schedule_handler` rounded the scheduling delay to
-  whole seconds before scaling to milliseconds (an upstream defect,
-  reported to Roger by email 2026-09-11); our copy scales to milliseconds first. See
-  the P8 result below.
+  Plan B: the device id is fixed before the link connects, so a refused
+  name reads as a lost link and a new page load mints a new id -- there
+  is nothing left to retry against.
+- The vendored `www/o2ws.js` carries three patches beyond what section
+  6.3 describes, all upstream defects. (1) was reported to Roger by
+  email 2026-09-11 and acknowledged the same day; (2) and (3) are not
+  yet reported. (1)
+  `o2ws_schedule_handler` rounded the scheduling delay to whole seconds
+  before scaling to milliseconds -- our copy scales to milliseconds
+  first (see the P8 result below); (2) deferred handlers now keep their
+  own message fields instead of sharing state across deferrals; (3) the
+  `o2ws_on_error` hook name. The mm-tuneshroom copy of `web/o2ws.js` is
+  required to stay byte-identical to this one below its header.
 - Section 4.1 named `netifaces` for the LAN-IP lookup; the implementation
   (`harness/www_server.py`'s `lan_ip()`) uses a UDP-connect probe instead
   (no packet is sent), so the runtime carries no new dependency.
+- `SimController.start()` (mm-tuneshroom) gained a bail-out so a failed
+  `connect()` reads as lost rather than hanging.
+- `JsO2wsBridge.initialize` (mm-tuneshroom) refuses to run when a socket
+  already exists on the page; reload the page to reconnect.
 **Repos touched:** `mm-terrarium` (wire flavor in the transport, a static
 page server, launcher flags, docs), `mm-tuneshroom` (`lib/link/` o2ws link,
 join parameters, hello token). Arco and o2 are unchanged.
