@@ -57,16 +57,22 @@ class BeatTapper:
         # Set by the caller once the granted role's `uses` lists `tap`. A
         # role property, not lock state, so reset() leaves it alone.
         self.armed = False
+        # Cumulative across lobby rounds -- see reset().
+        self.taps = 0
         self.reset()
 
     def reset(self) -> None:
+        """Forget this round's beat grid. `taps` deliberately survives: it is
+        the process-wide exit diagnostic harness/o2_shroom.py prints once at
+        the end (`beat taps sent: N`), across every lobby round, exactly like
+        ShroomClient's cumulative `clamped`/`lateness` across the same
+        reset_for_lobby() seam."""
         self._prev_sum: int | None = None
         self._prev_channels: int = 0
         self._last_rise_at: float | None = None
         self._t_first: float | None = None
         self.period: float | None = None
         self._last_index: int = -1
-        self.taps = 0
 
     @property
     def locked(self) -> bool:

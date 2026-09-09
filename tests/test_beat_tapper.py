@@ -115,9 +115,16 @@ def test_an_implausible_first_interval_restarts_the_lock():
     assert tapped == [4, 5, 6, 7]
 
 
-def test_reset_forgets_the_lock():
+def test_reset_forgets_the_lock_but_keeps_the_tap_count():
+    """A --persist Testshroom resets between lobby rounds. The lock belongs
+    to one round's beat grid and must go; `taps` is the process-wide exit
+    diagnostic (harness/o2_shroom.py prints `beat taps sent: N` in its
+    finally block) and must not, exactly like ShroomClient's cumulative
+    `clamped`/`lateness` across the same reset_for_lobby() seam."""
     tapper = BeatTapper()
     tapper.observe(frame(BASE), 10.0)
     pulse_train(tapper, 20.0, 8)
+    assert tapper.taps == 4
     tapper.reset()
-    assert not tapper.locked and tapper.taps == 0
+    assert not tapper.locked
+    assert tapper.taps == 4
