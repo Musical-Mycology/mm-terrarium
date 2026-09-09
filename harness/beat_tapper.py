@@ -26,7 +26,23 @@ neither.
 
 from __future__ import annotations
 
-RISE_RATIO = 0.25          # a frame this much brighter than the last is a rise
+# A frame this much brighter than the last is a rise. MEASURED against real
+# aurora frames (tests/test_metronome_bit_live_frames.py renders them): the
+# renderer slews the cc:11 60 -> 110 pulse over ~150 ms, so at the 44 Hz
+# frame rate the STEEPEST single-frame step of a real beat is only +11%
+# (sum 1500 -> 1668 on a 36-channel frame, then 1.08, 1.07, 1.05, 1.03 as
+# it climbs to 2280). Between beats the surface decays, 0.8% to 1.5% per
+# frame. 0.05 sits between the two with room on both sides. The old 0.25
+# was calibrated on the synthetic step frames of tests/test_beat_tapper.py
+# and saw no beat at all in a live run.
+RISE_RATIO = 0.05
+# Rises closer together than this are the same slewed pulse, not two beats.
+# The ramp above spans ~150 ms and produces a rise on every frame of it;
+# the shortest beat this class will lock to is MIN_PERIOD_S (0.2 s), so
+# anything in between separates the two unambiguously. Measured in TIME,
+# not in consecutive frames: the renderer sends nothing while the surface
+# is unchanged, so "the previous frame" can be a third of a second ago.
+RISE_GAP_S = 0.18
 DARK_SUM_FRACTION = 0.05   # below this fraction of full-white, a frame is dark
 ACCEPT_FRACTION = 0.2      # a rise within this fraction of a period of a
                            # predicted beat IS that beat
@@ -46,6 +62,7 @@ class BeatTapper:
     def reset(self) -> None:
         self._prev_sum: int | None = None
         self._prev_channels: int = 0
+        self._last_rise_at: float | None = None
         self._t_first: float | None = None
         self.period: float | None = None
         self._last_index: int = -1
@@ -65,6 +82,15 @@ class BeatTapper:
             return None
         if total <= prev * (1.0 + RISE_RATIO):
             return None
+        # One slewed pulse climbs over several frames and so trips the test
+        # above several times; only its ONSET is the beat. Recorded whether
+        # or not this rise is acted on, so a from-black rise cannot leave a
+        # gap that lets its own continuation read as a fresh beat.
+        continuation = (self._last_rise_at is not None
+                        and now - self._last_rise_at <= RISE_GAP_S)
+        self._last_rise_at = now
+        if continuation:
+            return None
         from_black = prev < DARK_SUM_FRACTION * 255 * len(frame)
         return self._rise(now, from_black)
 
@@ -79,8 +105,13 @@ class BeatTapper:
             if from_black:
                 return None
             interval = now - self._t_first
-            if not (MIN_PERIOD_S <= interval <= MAX_PERIOD_S):
-                self._t_first = now  # restart from this rise
+            if interval < MIN_PERIOD_S:
+                # Too soon to be the next beat: a stray flash between beats.
+                # Keep the earlier rise as the anchor -- it is still the best
+                # candidate for beat 0 -- rather than sliding onto the flash.
+                return None
+            if interval > MAX_PERIOD_S:
+                self._t_first = now  # too long ago; restart from this rise
                 self._last_index = 0
                 return None
             self.period = interval
