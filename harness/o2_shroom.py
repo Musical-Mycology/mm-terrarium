@@ -77,6 +77,17 @@ def next_heartbeat_time(now: float, interval: float) -> float:
 SWEEP_RESUME_SECONDS = 5.0
 
 
+def wants_verb(config: dict | None, verb: str) -> bool:
+    """Whether the granted role wants this synthetic gesture. The role blob
+    carries the Bit's `uses` list (control/role_config.py); a role that
+    declares one gets only what it lists -- MetronomeBit's player lists
+    `tap` alone, and driving it with tilts earned an `unknown verb 'tilt'`
+    error on every run. A role that declares nothing keeps the legacy
+    tilt sweep, so hand-built Bits are unchanged."""
+    uses = (config or {}).get("uses") or []
+    return not uses or verb in uses
+
+
 def lobby_round_over(client, persist: bool) -> str | None:
     """The per-tick round-over decision, factored pure so it is testable
     with no socket (this module's convention -- see next_heartbeat_time).
@@ -322,7 +333,8 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
           serve: bool = True, room_type: str | None = None,
           fixture: str | None = None,
           input_queue: "queue.Queue | None" = None,
-          clock=None, on_play=None, instrument: str | None = None):
+          clock=None, on_play=None, instrument: str | None = None,
+          on_show=None):
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
@@ -345,6 +357,9 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     mutation -- so it is safe to call from a thread other than the one
     running the o2lite event loop. If clock is None, gestures are queued
     with stamp=None and drain_gestures falls back to its own `now`.
+
+    on_show, when given, is WebSimLeds' displayed-frame hook, called
+    (frame, clock()) -- see harness/websim_leds.py.
     """
     from luxaeterna.backends.websim import WebSimBackend
     from luxaeterna.synth.capability import shroom_capability
@@ -382,7 +397,9 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
             print("role has no light declaration -- canvas stays dark "
                   "by design")
 
-    client = ShroomClient(dev, node, leds=WebSimLeds(backend, channels),
+    client = ShroomClient(dev, node,
+                          leds=WebSimLeds(backend, channels,
+                                          on_show=on_show, clock=clock),
                           on_role=_on_role, on_play=on_play,
                           expected_channels=channels, instrument=instrument)
     return client, backend
@@ -510,13 +527,33 @@ def main() -> None:
     # printed line off-Mac). Without this every PlayCue died on the wire
     # as an o2lite "no match" drop and the sim was silent by accident.
     player = build_sim_player()
+
+    from harness.beat_tapper import BeatTapper
+
+    # The synthetic player for a call-and-response role (MetronomeBit):
+    # taps on the answer beats it sees in its own light. Armed only once
+    # the granted role's `uses` says `tap` (see the tick loop below).
+    tapper = BeatTapper()
+
+    def _on_frame(frame: bytes, now) -> None:
+        if not tapper.armed or now is None:
+            return
+        beat = tapper.observe(frame, now)
+        if beat is None:
+            return
+        # Stamped at the display tick's own clock reading -- the moment
+        # this device showed the beat -- never Control's receipt time.
+        o2lite.send("/game/tap", now, "sffi", args.dev, 1.0, 50.0, 1)
+        print(f"tap sent: beat {beat} at {now:.3f}", flush=True)
+
     client, backend = build(args.dev, args.node,
                             args.sim_host, args.sim_port,
                             room_type=args.room_type, fixture=args.fixture,
                             input_queue=operator_input,
                             clock=o2lite.time_get,
                             on_play=lambda name, params: player.play(name),
-                            instrument=args.instrument or None)
+                            instrument=args.instrument or None,
+                            on_show=_on_frame)
     backend.open()
     canvas_url = f"http://{args.sim_host}:{backend.port}/"
     url_marker = markers.ROOM_URL if args.no_join else markers.BROWSE_URL
@@ -735,12 +772,17 @@ def main() -> None:
                         # different fixes.
                         print(f"{markers.DEVICE_ROLE_GRANTED} {joins_sent} "
                               f"join(s); gestures starting at {now:.3f}", flush=True)
+                        # The role decides which synthetic gestures run.
+                        tapper.armed = wants_verb(client.config, "tap")
+                        if tapper.armed:
+                            print("role uses tap: beat tapper armed", flush=True)
                     operator = drain_gestures(operator_input, o2lite.send,
                                               args.dev, now)
                     if operator is not None:
                         last_operator_tilt = operator
-                    sweeping = (last_operator_tilt is None
-                                or now - last_operator_tilt >= SWEEP_RESUME_SECONDS)
+                    sweeping = (wants_verb(client.config, "tilt")
+                                and (last_operator_tilt is None
+                                     or now - last_operator_tilt >= SWEEP_RESUME_SECONDS))
                     if now >= next_tilt:
                         if sweeping:
                             gamma = tilt_sweep(now - start)
@@ -760,6 +802,8 @@ def main() -> None:
             print(f"round {round_num} released; returning to lobby",
                   flush=True)
             client.reset_for_lobby()
+            tapper.reset()
+            tapper.armed = False
             round_num += 1
             send_hello()
             next_join = o2lite.time_get() + args.join_retry
@@ -768,6 +812,7 @@ def main() -> None:
         pass
     finally:
         print(f"frames displayed late: {client.clamped}")
+        print(f"beat taps sent: {tapper.taps}")
         _report_latency(client, args.control_horizon, args.samples_out)
         backend.close()
 
