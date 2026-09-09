@@ -34,27 +34,6 @@ TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
                      node_id="ROOM_TEST_NODE", profile=TEST_PROFILE)
 
 
-@pytest.fixture(autouse=True)
-def _reset_terrarium_boot_logging():
-    """main() now calls configure_logging() as its first statement, which
-    installs a handler on the ROOT logger that lives for the rest of the
-    process -- deliberately, so a live run's diagnostics keep reaching
-    control.log for good. In this test file that same persistence leaks
-    across tests: any test that drives main() (even one that raises
-    SystemExit from a monkeypatched build(), before doing anything else)
-    installs a real handler pointed at sys.stderr, and a later
-    configure_logging() call -- being idempotent by design -- then hands
-    that stale handler back instead of installing a fresh one against the
-    stream a test passed in. Strip anything configure_logging tagged
-    after every test so each test starts clean."""
-    import logging
-    yield
-    root = logging.getLogger()
-    for handler in list(root.handlers):
-        if getattr(handler, "terrarium_boot", False):
-            root.removeHandler(handler)
-
-
 def _fake_arco(command, popen=None, record=None):
     from control.arco_process import ArcoProcess
     return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda: True,
