@@ -14,11 +14,24 @@ with no configuration. Arco's directory index file is `index.htm`, not
   (`test/www/o2WebMonitor/o2ws.js` at commit d4dc921, 2024-08-21; the
   newest copy, with the optional host argument and the due-timestamp
   delivery fix). Text frames only: strings, times, doubles, floats, ints.
-  No blob type (probe P2, 2026-09-08). Patched here (2026-09-08):
-  `o2ws_schedule_handler` rounded the delay in seconds before scaling to
-  milliseconds, so any timestamp under 500 ms ahead was delivered
-  immediately; our copy rounds after scaling. Reported upstream;
-  re-apply if the file is refreshed from the `o2` repo.
+  No blob type (probe P2, 2026-09-08). Three upstream defects are patched
+  here (2026-09-08), each marked with a `// mm-terrarium patch` comment;
+  all three were reported to Roger, and all three must be re-applied if the
+  file is refreshed from the `o2` repo:
+  1. Rounding order in `o2ws_schedule_handler`: upstream rounded the delay
+     in seconds before scaling to milliseconds, so any timestamp under
+     500 ms ahead was delivered immediately. Our copy rounds after scaling.
+  2. Deferred-handler field snapshot, same function: the `o2ws_get_*`
+     getters `shift()` off the single global `o2ws_message_fields`, which
+     `o2ws_message_handler` reassigns for every inbound message, so a
+     handler deferred by `setTimeout` read whichever payload arrived in the
+     meantime. Our copy captures the fields array before scheduling and
+     restores the global inside the deferred closure.
+  3. `o2ws_on_error` naming: the websocket `onerror` path called
+     `o2ws_error`, guarded by `typeof o2ws_error === 'function'`, but the
+     documented application hook (header comment, and every other call
+     site) is `o2ws_on_error`, so the guard never passed and the page never
+     saw an abnormal-close error. Our copy calls `o2ws_on_error`.
 - `index.htm`: Arco's directory index file (it does not serve
   `index.html`), a placeholder page linking to the clock check.
 - `o2wsclocksync.htm`: the `o2` repo's clock-sync check page, ensemble set
