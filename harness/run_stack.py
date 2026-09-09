@@ -192,7 +192,28 @@ def stage_web_build(src_dir: str, www_dir: str) -> str:
         os.unlink(dst)
     shutil.rmtree(dst, ignore_errors=True)
     shutil.copytree(src_dir, dst)
+    _rewrite_base_href(os.path.join(dst, "index.html"))
     return dst
+
+
+def _rewrite_base_href(index_html_path: str) -> None:
+    """`flutter build web` writes `<base href="/">` into index.html, but the
+    guest page is served under /app/ (see stage_web_build's caller), so every
+    relative asset URL (flutter_bootstrap.js, main.dart.js, canvaskit/,
+    assets/) resolves against the server root instead and 404s -- the engine
+    never boots. Rewrite the copied index.html's base href to /app/ so those
+    URLs resolve where the file actually lives."""
+    with open(index_html_path, encoding="utf-8") as f:
+        html = f.read()
+    old_tag = '<base href="/">'
+    new_tag = '<base href="/app/">'
+    if old_tag not in html:
+        print(f"stage_web_build: no {old_tag!r} tag found in "
+              f"{index_html_path!r}; leaving it unchanged", file=sys.stderr)
+        return
+    html = html.replace(old_tag, new_tag)
+    with open(index_html_path, "w", encoding="utf-8") as f:
+        f.write(html)
 
 
 def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:

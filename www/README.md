@@ -42,3 +42,6 @@ with no configuration. Arco's directory index file is `index.htm`, not
   own static server (`WWW_URL`, port 8788, correct MIME types); the page
   opens its o2ws websocket to Arco on 8080. Arco also serves this tree but
   labels every file text/html, which the Flutter build cannot load under.
+  The copy rewrites `index.html`'s `<base href="/">` to `<base href="/app/">`
+  (the page is served under `/app/`, not the server root), so a plain
+  `tool/sim build` is enough -- no `--base-href` flag needed.

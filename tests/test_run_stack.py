@@ -1138,3 +1138,36 @@ def test_stage_web_build_refuses_a_dir_without_an_index(tmp_path):
     src.mkdir()
     with pytest.raises(SystemExit):
         stage_web_build(str(src), str(tmp_path / "www"))
+
+
+def test_stage_web_build_rewrites_base_href_to_app(tmp_path):
+    """flutter build web writes <base href="/">, but the guest page is
+    served under /app/, so relative asset URLs (flutter_bootstrap.js etc.)
+    must resolve against /app/ instead or they 404 and the engine never
+    boots."""
+    from harness.run_stack import stage_web_build
+    src = tmp_path / "build" / "web"
+    src.mkdir(parents=True)
+    (src / "index.html").write_text(
+        '<html><head><base href="/"></head><body></body></html>',
+        encoding="utf-8")
+    www = tmp_path / "www"
+    dst = stage_web_build(str(src), str(www))
+    text = (tmp_path / "www" / "app" / "index.html").read_text(
+        encoding="utf-8")
+    assert '<base href="/app/">' in text
+    assert '<base href="/">' not in text
+    assert dst == str(www / "app")
+
+
+def test_stage_web_build_leaves_index_without_base_tag_unchanged(tmp_path):
+    from harness.run_stack import stage_web_build
+    src = tmp_path / "build" / "web"
+    src.mkdir(parents=True)
+    original = "<html><head></head><body>no base tag here</body></html>"
+    (src / "index.html").write_text(original, encoding="utf-8")
+    www = tmp_path / "www"
+    stage_web_build(str(src), str(www))
+    text = (tmp_path / "www" / "app" / "index.html").read_text(
+        encoding="utf-8")
+    assert text == original
