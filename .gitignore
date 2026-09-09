@@ -35,3 +35,7 @@ runs/
 o2debug.log
 # Arco's cwd is arcoserver/ now (harness/terrarium_boot.py), so its log lands there
 arcoserver/o2debug.log
+
+# The Flutter web build the Terrarium serves to guest phones; copied in
+# by `run_stack --web-build DIR`, never committed.
+www/app/

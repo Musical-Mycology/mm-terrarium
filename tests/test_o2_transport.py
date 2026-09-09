@@ -585,3 +585,178 @@ def test_the_fake_dispatches_to_the_first_matching_handler():
     fake.poll()
 
     assert fired == ["first"]
+
+
+def _started_with(dev, protoversion):
+    transport, fake = _started()
+    transport.bind_dev(dev, object(), protoversion=protoversion)
+    return transport, fake
+
+
+def test_wire_flavor_is_string_only_for_o2ws_protoversions():
+    from devicelink.o2_transport import wire_flavor
+
+    assert wire_flavor("o2ws/1") == "string"
+    assert wire_flavor("o2ws/2-beta") == "string"
+    assert wire_flavor("1") == "blob"
+    assert wire_flavor("") == "blob"
+    assert wire_flavor("O2WS/1") == "blob"       # exact prefix, no case folding
+
+
+def test_a_role_config_goes_to_a_browser_as_the_same_json_text():
+    """Spec section 3.2: `s`, the identical JSON text the blob would hold."""
+    import json
+
+    transport, fake = _started_with("ie-abc123", "o2ws/1")
+    config = {"bit_name": "TestBit", "role": "player",
+              "light_manifest": {"instruments": []}}
+    transport.send("ie-abc123", {"address": "/ie-abc123/role", "typespec": "b",
+                                 "args": [config], "timestamp": 0.0})
+    addr, _ts, typespec, args = fake.sent[0]
+    assert addr == "/ie-abc123/role"
+    assert typespec == "s"
+    assert isinstance(args[0], str)
+    assert json.loads(args[0]) == config
+
+
+def test_an_led_frame_goes_to_a_browser_as_base64_with_its_timestamp():
+    import base64
+
+    transport, fake = _started_with("ie-abc123", "o2ws/1")
+    frame = [255, 0, 128] * 12
+    transport.send("ie-abc123", {"address": "/ie-abc123/leds", "typespec": "b",
+                                 "args": [frame], "timestamp": 41.5})
+    _addr, ts, typespec, args = fake.sent[0]
+    assert ts == 41.5
+    assert typespec == "s"
+    assert base64.b64decode(args[0]) == bytes(frame)
+
+
+def test_a_room_blob_goes_to_a_browser_as_json_text():
+    import json
+
+    transport, fake = _started_with("ie-abc123", "o2ws/1")
+    blob = {"state": "SETUP", "roles": []}
+    transport.send("ie-abc123", {"address": "/ie-abc123/room", "typespec": "b",
+                                 "args": [blob], "timestamp": 0.0})
+    _addr, _ts, typespec, args = fake.sent[0]
+    assert typespec == "s"
+    assert json.loads(args[0]) == blob
+
+
+def test_non_blob_messages_are_identical_for_a_browser():
+    transport, fake = _started_with("ie-abc123", "o2ws/1")
+    transport.send("ie-abc123", {"address": "/ie-abc123/deny", "typespec": "ss",
+                                 "args": ["role full", "try the jam node"],
+                                 "timestamp": 0.0})
+    _addr, _ts, typespec, args = fake.sent[0]
+    assert typespec == "ss"
+    assert args == ("role full", "try the jam node")
+
+
+def test_a_blob_flavor_device_is_unchanged_by_the_flavor_machinery():
+    """Hardware and Testshrooms send protoversion "1" or "" and must see
+    exactly what they saw before this task: a Blob with size and data."""
+    transport, fake = _started_with("ie1", "1")
+    transport.send("ie1", {"address": "/ie1/leds", "typespec": "b",
+                           "args": [[1, 2, 3] * 12], "timestamp": 0.0})
+    _addr, _ts, typespec, args = fake.sent[0]
+    assert typespec == "b"
+    assert args[0].size == 36
+
+
+def test_bind_dev_without_a_protoversion_means_blob():
+    transport, fake = _started()
+    transport.bind_dev("ie1", object())
+    transport.send("ie1", {"address": "/ie1/role", "typespec": "b",
+                           "args": [{"role": "player"}], "timestamp": 0.0})
+    assert fake.sent[0][2] == "b"
+
+
+def test_a_string_containing_etx_is_refused_not_sent(caplog):
+    """o2ws fields end at byte 0x03; a value carrying one would corrupt the
+    frame. Refuse and log; never raise into the engine tick."""
+    import logging
+
+    transport, fake = _started_with("ie-abc123", "o2ws/1")
+    # A dict value would never trip this: wire_json escapes control
+    # characters inside JSON text. Only a plain `s` argument can carry a
+    # raw separator, so that is what the guard has to catch.
+    with caplog.at_level(logging.ERROR, logger="devicelink.o2_transport"):
+        transport.send("ie-abc123", {"address": "/ie-abc123/deny", "typespec": "ss",
+                                     "args": ["role" + chr(3) + "full", "try the jam node"],
+                                     "timestamp": 0.0})
+    assert fake.sent == []
+    assert any("0x03" in rec.getMessage() for rec in caplog.records)
+
+
+def test_drop_dev_forgets_the_flavor():
+    transport, fake = _started_with("ie-abc123", "o2ws/1")
+    transport.drop_dev("ie-abc123")
+    transport.bind_dev("ie-abc123", object())        # rebound without a flavor
+    transport.send("ie-abc123", {"address": "/ie-abc123/role", "typespec": "b",
+                                 "args": [{"role": "player"}], "timestamp": 0.0})
+    assert fake.sent[0][2] == "b"
+
+
+def test_to_string_arg_matches_to_o2_arg_s_two_way_rule():
+    """The JSON-versus-base64 choice must not drift between flavors: bytes
+    and int lists are base64, everything else is the JSON to_o2_arg makes."""
+    import base64
+    import json
+
+    from devicelink.o2_transport import to_o2_arg, to_string_arg
+
+    for value in (b"\x00\xff", [0, 255, 7], {"a": 1}, ["x", "y"], "plain"):
+        blob = to_o2_arg("b", value)
+        as_string = to_string_arg(value)
+        if isinstance(value, (bytes, list)) and not any(isinstance(v, str) for v in value):
+            assert base64.b64decode(as_string) == bytes(blob.data)
+        else:
+            assert json.loads(as_string) == json.loads(bytes(blob.data).decode("utf-8"))
+
+
+def test_rebinding_without_a_protoversion_keeps_the_known_flavor():
+    """devicelink/agent.py's _on_join re-binds an already-known dev with the
+    2-argument form, immediately before the join grant's role blob goes
+    out. That re-bind must not erase the flavor hello announced, or a
+    browser's role is sent as a blob it has no way to read."""
+    transport, fake = _started_with("ie-abc123", "o2ws/1")
+    transport.bind_dev("ie-abc123", object())          # the join re-bind
+    transport.send("ie-abc123", {"address": "/ie-abc123/role", "typespec": "b",
+                                 "args": [{"role": "player"}],
+                                 "timestamp": 0.0})
+    assert fake.sent[0][2] == "s"
+
+
+def test_the_etx_guard_leaves_a_blob_flavor_device_byte_identical(caplog):
+    """0x03 only ends a field in an o2ws TEXT frame. A blob-flavor device
+    (hardware, a Testshroom) never sees one, so the guard must not touch
+    its traffic: the same deny that a browser is refused goes out unchanged
+    here."""
+    import logging
+
+    transport, fake = _started_with("ie1", "1")
+    with caplog.at_level(logging.ERROR, logger="devicelink.o2_transport"):
+        transport.send("ie1", {"address": "/ie1/deny", "typespec": "ss",
+                               "args": ["role" + chr(3) + "full", "try jam"],
+                               "timestamp": 0.0})
+    assert len(fake.sent) == 1
+    assert fake.sent[0][2] == "ss"
+    assert fake.sent[0][3] == ("role" + chr(3) + "full", "try jam")
+    assert caplog.records == []
+
+
+def test_an_argument_count_that_does_not_match_the_typespec_is_refused(caplog):
+    """zip() would truncate to the shorter side and send a message the
+    device cannot parse. Refuse and log, in both flavors."""
+    import logging
+
+    for protoversion in ("1", "o2ws/1"):
+        transport, fake = _started_with("ie1", protoversion)
+        with caplog.at_level(logging.ERROR, logger="devicelink.o2_transport"):
+            caplog.clear()
+            transport.send("ie1", {"address": "/ie1/deny", "typespec": "ss",
+                                   "args": ["role"], "timestamp": 0.0})
+        assert fake.sent == []
+        assert any("typespec" in rec.getMessage() for rec in caplog.records)

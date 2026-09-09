@@ -11,6 +11,14 @@ counterpart is mm-tuneshroom lib/link/envelope.dart -- change both together.
 The telemetry-capture verbs at the foot of this file (/game/capture and
 /game/telemetry) are specified in docs/telemetry-trace-schema.md, which is
 also the contract mm-tuneshroom lib/capture/ implements against.
+
+Wire flavor (2026-09-08, spec 2026-09-08-o2ws-browser-link-design.md):
+a device whose /game/hello protoversion starts with "o2ws/" receives
+/<dev>/role and /<dev>/room as `s` (the identical JSON text) and
+/<dev>/leds as `s` (base64 of the identical bytes, same timestamp),
+because o2ws carries no blob type. Every other device and every other
+message is unchanged. The rewrite lives in devicelink/o2_transport.py's
+O2LiteTransport.send; this module's builders still produce `b`.
 """
 
 from __future__ import annotations

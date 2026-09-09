@@ -35,6 +35,7 @@ class FakeServer:
         self.sent = []          # (dev, msg)
         self.broadcasts = []
         self._devs = {}         # dev -> client
+        self.protoversions = {}
 
     def drain_new_clients(self):
         out, self.new_clients = self.new_clients, []
@@ -44,8 +45,14 @@ class FakeServer:
         out, self.inbound = self.inbound, []
         return out
 
-    def bind_dev(self, dev, client):
+    def bind_dev(self, dev, client, *, protoversion=""):
+        # Keyword-only, mirroring O2LiteTransport.bind_dev, and it records a
+        # protoversion only when one was given: agent's _on_join re-binds
+        # with the 2-argument form, and the real transport must not lose a
+        # browser's wire flavor there.
         self._devs[dev] = client
+        if protoversion:
+            self.protoversions[dev] = protoversion
 
     def drop_dev(self, dev):
         self._devs.pop(dev, None)
@@ -2273,3 +2280,42 @@ def test_agent_requires_a_clock():
     gs = GameServer({"TestBit": TestBit})
     with pytest.raises(TypeError):
         DeviceLinkAgent(gs, FakeServer())
+
+
+def test_hello_protoversion_reaches_the_transport_binding(rig):
+    """The transport picks the wire flavor from what hello announced
+    (devicelink/o2_transport.py wire_flavor); the agent is the only thing
+    that sees the hello, so it must pass the token along at bind time."""
+    gs, server, agent = rig
+    server.arrive("c1")
+    server.deliver("c1", "/game/hello", "ssss",
+                   ["ie-abc123", "flutter-sim", "o2ws/1", "tuneshroom"])
+    agent.poll()
+    assert server.protoversions["ie-abc123"] == "o2ws/1"
+
+
+def test_hello_without_a_protoversion_binds_with_an_empty_one(rig):
+    """Nothing announced means nothing recorded, which the transport reads
+    back as the blob flavor -- see bind_dev on why an empty token never
+    overwrites a recorded one."""
+    gs, server, agent = rig
+    server.arrive("c1")
+    server.deliver("c1", "/game/hello", "s", ["ie1"])
+    agent.poll()
+    assert server.protoversions.get("ie1", "") == ""
+
+
+def test_a_join_after_hello_keeps_the_browsers_wire_flavor(rig):
+    """_on_join re-binds the same dev with no protoversion, and the role
+    blob in the join grant goes out right after it. If that re-bind cleared
+    the flavor the browser announced at hello, its role would be sent as a
+    blob it cannot read."""
+    gs, server, agent = rig
+    gs.load_bit("test_bit")
+    server.arrive("c1")
+    server.deliver("c1", "/game/hello", "ssss",
+                   ["ie-abc123", "flutter-sim", "o2ws/1", "tuneshroom"])
+    agent.poll()
+    server.deliver("c1", "/game/join", "ss", ["ie-abc123", "TEST_PLAYER_NODE"])
+    agent.poll()
+    assert server.protoversions["ie-abc123"] == "o2ws/1"

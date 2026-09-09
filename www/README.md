@@ -14,8 +14,18 @@ with no configuration. Arco's directory index file is `index.htm`, not
   (`test/www/o2WebMonitor/o2ws.js` at commit d4dc921, 2024-08-21; the
   newest copy, with the optional host argument and the due-timestamp
   delivery fix). Text frames only: strings, times, doubles, floats, ints.
-  No blob type (probe P2, 2026-09-08).
+  No blob type (probe P2, 2026-09-08). Patched here (2026-09-08):
+  `o2ws_schedule_handler` rounded the delay in seconds before scaling to
+  milliseconds, so any timestamp under 500 ms ahead was delivered
+  immediately; our copy rounds after scaling. Reported upstream;
+  re-apply if the file is refreshed from the `o2` repo.
+- `index.htm`: Arco's directory index file (it does not serve
+  `index.html`), a placeholder page linking to the clock check.
 - `o2wsclocksync.htm`: the `o2` repo's clock-sync check page, ensemble set
   to `arco`. Open it to confirm the browser reaches the hub.
-- `index.htm`: placeholder. The mm-tuneshroom web build deploys here in
-  Phase 2 of `docs/superpowers/specs/2026-09-08-o2lite-connectivity-migration-design.md`.
+- `app/` (gitignored): the mm-tuneshroom guest app, built with `tool/sim
+  build` there and copied here by `./smoke-test.sh --web-build
+  /path/to/mm-tuneshroom/build/web`. Phones load it from the Terrarium's
+  own static server (`WWW_URL`, port 8788, correct MIME types); the page
+  opens its o2ws websocket to Arco on 8080. Arco also serves this tree but
+  labels every file text/html, which the Flutter build cannot load under.

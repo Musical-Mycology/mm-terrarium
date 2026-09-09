@@ -1,6 +1,7 @@
 import pytest
 
 import argparse
+import os
 import sys
 import time
 
@@ -2770,3 +2771,102 @@ def test_build_forwards_arco_ready_timeout_into_the_wait():
     shutdown(teardown, terrarium)
 
     assert seen == [77.0]
+
+
+def test_parser_www_port_defaults_to_the_documented_port():
+    from harness.terrarium_boot import _build_arg_parser
+    from harness.www_server import WWW_PORT
+
+    args = _build_arg_parser().parse_args(["--room", "TEST"])
+    assert args.www_port == WWW_PORT
+    assert _build_arg_parser().parse_args(["--room", "TEST", "--www-port", "0"]).www_port == 0
+
+
+def test_start_www_server_starts_pushes_teardown_and_prints_the_url(capsys):
+    """The static server has no dependency on Arco or the transport, so it
+    is wired through one helper that can be tested without main(): it
+    constructs the server on www/, starts it, registers its stop on the
+    teardown stack, and prints the WWW_URL line run_stack collects."""
+    import argparse
+
+    from control.teardown import TeardownStack
+    import harness.terrarium_boot as tb
+
+    events = []
+
+    class FakeWww:
+        def __init__(self, root, host="0.0.0.0", port=0):
+            events.append(("new", root, host, port))
+
+        def start(self):
+            events.append(("start",))
+
+        def stop(self):
+            events.append(("stop",))
+
+        @property
+        def port(self):
+            return 8788
+
+        def url(self, host=None):
+            return f"http://{host}:8788/"
+
+    teardown = TeardownStack()
+    args = argparse.Namespace(www_port=8788)
+    server = tb._start_www_server(args, teardown, server_cls=FakeWww,
+                                  ip=lambda: "10.0.0.5")
+    assert server is not None
+    assert events[0] == ("new", os.path.join(tb.REPO_ROOT, "www"), "0.0.0.0", 8788)
+    assert events[1] == ("start",)
+    out = capsys.readouterr().out
+    assert f"{tb.markers.WWW_URL} http://10.0.0.5:8788/" in out
+    teardown.close()
+    assert events[-1] == ("stop",)
+
+
+def test_start_www_server_is_off_when_the_port_is_zero(capsys):
+    import argparse
+
+    from control.teardown import TeardownStack
+    import harness.terrarium_boot as tb
+
+    class MustNotConstruct:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("no server when --www-port is 0")
+
+    server = tb._start_www_server(argparse.Namespace(www_port=0), TeardownStack(),
+                                  server_cls=MustNotConstruct,
+                                  ip=lambda: "10.0.0.5")
+    assert server is None
+    assert tb.markers.WWW_URL not in capsys.readouterr().out
+
+
+def test_start_www_server_warns_and_carries_on_when_the_port_is_taken(capsys):
+    """A stale process holding 8788 must not stop the stack from booting for
+    the devices already on the wire: the guest page is one surface. Warn,
+    return None, and push nothing onto the teardown stack -- there is no
+    running server to stop."""
+    import argparse
+
+    from control.teardown import TeardownStack
+    import harness.terrarium_boot as tb
+
+    class BusyPort:
+        def __init__(self, root, host="0.0.0.0", port=0):
+            pass
+
+        def start(self):
+            raise OSError(48, "Address already in use")
+
+        def stop(self):
+            raise AssertionError("nothing to stop: start() never succeeded")
+
+    teardown = TeardownStack()
+    server = tb._start_www_server(argparse.Namespace(www_port=8788), teardown,
+                                  server_cls=BusyPort, ip=lambda: "10.0.0.5")
+    assert server is None
+    captured = capsys.readouterr()
+    assert tb.markers.WWW_URL not in captured.out
+    assert ("WARNING: guest page not served: www server could not bind "
+            "port 8788: ") in captured.err
+    assert teardown.close() == []

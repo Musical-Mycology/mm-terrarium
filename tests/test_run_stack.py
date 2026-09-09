@@ -1063,3 +1063,78 @@ def test_run_stack_has_no_flutter_websocket_launch():
     assert "FLUTTER_LINK" not in source
     assert "flutter_command" not in source
     assert "ws://" not in source
+
+
+def test_control_command_forwards_www_port():
+    from harness.run_stack import StackConfig, control_command
+    cfg = StackConfig(log_dir="/tmp/x", www_port=9000)
+    cmd = control_command(cfg, ppid=1)
+    assert cmd[cmd.index("--www-port") + 1] == "9000"
+
+
+def test_www_port_defaults_to_the_documented_port():
+    from harness.run_stack import StackConfig
+    from harness.www_server import WWW_PORT
+    assert StackConfig(log_dir="/tmp/x").www_port == WWW_PORT
+
+
+def test_www_url_lines_are_collected_and_opened(tmp_path):
+    script = (_CONTROL_OK_WITH_URLS.replace(
+        f"{markers.CONTROL_SETUP_HOLD} for 20s\n",
+        f"{markers.WWW_URL} http://10.0.0.5:8788/ (guest page)\n"
+        f"{markers.CONTROL_SETUP_HOLD} for 20s\n"))
+    popen = ScriptedPopen([script, _DEVICE_OK_WITH_URL])
+    opened = []
+    result = run(_cfg(tmp_path, open_urls=True), popen=popen,
+                 sleep=lambda _s: None, opener=opened.append)
+    assert result.ok is True
+    assert "http://10.0.0.5:8788/" in result.urls
+    assert "http://10.0.0.5:8788/" in opened
+
+
+def test_stage_web_build_replaces_www_app(tmp_path):
+    from harness.run_stack import stage_web_build
+    src = tmp_path / "build" / "web"
+    src.mkdir(parents=True)
+    (src / "index.html").write_text("new", encoding="utf-8")
+    www = tmp_path / "www"
+    (www / "app").mkdir(parents=True)
+    (www / "app" / "stale.js").write_text("old", encoding="utf-8")
+    dst = stage_web_build(str(src), str(www))
+    assert dst == str(www / "app")
+    assert (www / "app" / "index.html").read_text(encoding="utf-8") == "new"
+    assert not (www / "app" / "stale.js").exists()
+
+
+def test_stage_web_build_replaces_a_symlinked_app_dir(tmp_path):
+    """www/app is gitignored, so an operator may have symlinked it at their
+    Flutter build directory. shutil.rmtree cannot remove a symlink, and
+    ignore_errors hides that, so without an explicit unlink copytree either
+    fails on the existing destination or writes through the link into the
+    build tree."""
+    import os
+
+    from harness.run_stack import stage_web_build
+    src = tmp_path / "build" / "web"
+    src.mkdir(parents=True)
+    (src / "index.html").write_text("new", encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep.js").write_text("untouched", encoding="utf-8")
+    www = tmp_path / "www"
+    www.mkdir()
+    os.symlink(elsewhere, www / "app")
+    dst = stage_web_build(str(src), str(www))
+    assert dst == str(www / "app")
+    assert not os.path.islink(www / "app")
+    assert (www / "app" / "index.html").read_text(encoding="utf-8") == "new"
+    assert not (www / "app" / "keep.js").exists()
+    assert (elsewhere / "keep.js").read_text(encoding="utf-8") == "untouched"
+
+
+def test_stage_web_build_refuses_a_dir_without_an_index(tmp_path):
+    from harness.run_stack import stage_web_build
+    src = tmp_path / "empty"
+    src.mkdir()
+    with pytest.raises(SystemExit):
+        stage_web_build(str(src), str(tmp_path / "www"))

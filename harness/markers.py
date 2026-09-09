@@ -101,6 +101,11 @@ ROOM_URL = "ROOM_URL:"
 # Arco's HTTP root (www/), printed once Arco is ready.
 ARCO_WWW = "ARCO_WWW:"
 
+# The Terrarium's own static server for the guest page (www/ on the LAN
+# with correct MIME types; spec 2026-09-08-o2ws-browser-link-design.md
+# section 4.1). Collected and opened by run_stack like BROWSE_URL.
+WWW_URL = "WWW_URL:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,

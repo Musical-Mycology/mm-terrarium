@@ -186,6 +186,11 @@ filter re-verified live with a second O2 host on the LAN.
 Goal: a phone that scans a QR lands in the instrument, joined over o2ws to
 Arco, with no Control-side socket anywhere.
 
+Refined by `2026-09-08-o2ws-browser-link-design.md`: where the two
+disagree, that spec wins for Phase 2 (per-device string wire flavor
+instead of a blob extension, the Terrarium serving the page instead of
+Arco, and the QR URL pointing at the Terrarium's static server).
+
 1. **`O2wsLink implements DeviceLink`** inside `lib/link/`, wrapping
    `o2ws.js` through JS interop. It is the web counterpart of the
    `FfiLink` the seam's docstring anticipated. Nothing above `lib/link/`
