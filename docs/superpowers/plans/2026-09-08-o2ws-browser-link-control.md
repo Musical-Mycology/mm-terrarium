@@ -953,10 +953,17 @@ Expected: green; count = previous + 11 (three marker tests, three terrarium_boot
 
 ```bash
 cd /Users/chris/projects/mm-terrarium/.claude/worktrees/o2ws-browser-link
-./smoke-test.sh --ci --seconds 20 --devices 1 2>&1 | grep -E "WWW_URL|ARCO_WWW|stack run complete|FATAL"
+./smoke-test.sh --ci --seconds 20 --devices 1
+grep -E "WWW_URL|ARCO_WWW|stack run complete|FATAL" runs/<stamp>/control.log
 ```
 
-Expected: a `WWW_URL: http://<lan-ip>:8788/` line and a green finish. Then `curl -sI http://<lan-ip>:8788/o2ws.js | grep -i content-type` while a `--serve` stack is up: `text/javascript`.
+Under `--ci` the child's stdout is not echoed to the terminal, so the markers
+are not there to grep from the command's own output; they land in
+`runs/<stamp>/control.log` for the run just started (`<stamp>` is the
+directory `--ci` prints or the newest under `runs/`). Expected: a `WWW_URL:
+http://<lan-ip>:8788/` line and a green finish. Then `curl -sI
+http://<lan-ip>:8788/o2ws.js | grep -i content-type` while a `--serve` stack
+is up: `text/javascript`.
 
 - [ ] **Step 6: Commit**
 
@@ -997,7 +1004,10 @@ git commit -m "docs: o2ws browser link, Control side; wire flavor table, static 
 
 ## Live verification (after Task 6; RUN ON: MYCOLOGICAL)
 
-1. `./smoke-test.sh --ci --seconds 20 --devices 1` green with `WWW_URL` printed.
+1. `./smoke-test.sh --ci --seconds 20 --devices 1` green, with `WWW_URL`
+   found by grepping `runs/<stamp>/control.log` afterward, not the
+   command's own stdout: under `--ci` the child's stdout is not echoed to
+   the terminal (same fix as Task 5's Step 5 above).
 2. With `./smoke-test.sh --serve --devices 1` up, from a phone on the same LAN open `http://<lan-ip>:8788/o2wsclocksync.htm`: O2 time advances (this page uses the same-origin default, so it will NOT sync from 8788; that is expected and is exactly why the guest app passes the `o2ws` host. Open `http://<lan-ip>:8080/o2wsclocksync.htm` instead to see sync). Record which one you opened.
 3. The full guest flow needs Plan B. Until it lands, the Control side's live proof is the probe page from Task 1 served at `http://<lan-ip>:8788/probe78.htm` (recreate it, do not commit it): hello with `"o2ws/1"` should produce a `/ie-probe7/room` message whose single argument is JSON text, not `?`. Extend the probe page for this: send `/game/hello "ssss" ie-probe7 probe o2ws/1 testshroom` after clock sync, register `/ie-probe7/room` with typespec `"s"`, and log `o2ws_get_string().slice(0, 40)`; the expected output starts with `{`.
 

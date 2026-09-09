@@ -548,6 +548,24 @@ JSON frames. **Arco was not in this path** on the deleted websocket wire;
 on o2lite, Arco is the hub every message crosses. Same trust model as the
 console: trusted LAN, no auth, `127.0.0.1` by default.
 
+**Wire flavor (2026-09-08).** A browser guest cannot receive an o2lite
+blob (o2ws has no blob type), so a device whose hello `protoversion`
+starts with `o2ws/` gets a string-typed rewrite of the three
+blob-carrying messages instead; everything else, and every other message,
+is unchanged:
+
+| Message | blob flavor (hardware, native, Testshroom) | string flavor (`o2ws/*`) |
+|---|---|---|
+| `/<dev>/role` | `b`, UTF-8 JSON of the composed config | `s`, the identical JSON text |
+| `/<dev>/room` | `b`, UTF-8 JSON of the room blob | `s`, the identical JSON text |
+| `/<dev>/leds` | `b`, raw channel bytes; message timestamp is the presentation time | `s`, base64 of the identical bytes; same timestamp |
+
+The rewrite lives entirely in `O2LiteTransport.send`, keyed by the
+protoversion `_on_hello` hands to `bind_dev`; `DeviceLinkAgent` and
+`protocol.py` are unchanged and stay the vocabulary's source of truth.
+See `docs/superpowers/specs/2026-09-08-o2ws-browser-link-design.md`
+section 3.2.
+
 - `/ie<N>/room` is pushed on hello and on state/registration change; devices
   never request it.
 
@@ -3886,8 +3904,66 @@ migration-design.md`, landed. o2lite is now the only device wire.
 - **`--arco-ready-timeout` is a dead flag** since commit `ca2d0a9`:
   `control/terrarium.py` reads `spec.arco_ready_timeout` from the boot
   manifest, never the CLI override. Tracked as a follow-up.
-- **Suite at HEAD:** 1973 passed, 1 skipped (down from the 1986/1 baseline
-  above; the drop is the deleted websocket tests).
+- **Suite at HEAD:** 2030 passed, 1 skipped. (The 1973/1 figure above was
+  this slice's own landing point; `main` has since grown to 2000/1 through
+  unrelated merges, and the browser-link Control-side work in the next
+  entry adds the rest.)
+
+### Browser guests over o2ws, Control side (2026-09-08)
+Plan A of `docs/superpowers/specs/2026-09-08-o2ws-browser-link-design.md`
+(Phase 2 of the migration spec above, refined). A browser cannot run the
+o2lite C library, so it joins as an o2ws guest of the same Arco hub; this
+slice is everything on the Control side of that link. The browser app
+itself is Plan B, in `mm-tuneshroom` (see *Not yet built* below).
+
+- **The wire flavor** is documented in the `devicelink/` section above
+  (the rule, the three-row table, `O2LiteTransport.send`).
+- **`harness/www_server.py`** serves the repo's `www/` tree (the same
+  tree Arco serves on 8080) over plain HTTP on **port 8788**, bound to
+  `0.0.0.0` because guests are on the venue LAN and the tree is static
+  files with no state -- the Console's loopback trust model does not
+  apply here. It starts before Control's transport and is torn down with
+  it, and it prints `WWW_URL: http://<lan-ip>:8788/ (guest page; o2ws
+  goes to Arco on <port>)`, collected by `run_stack` like `BROWSE_URL`.
+  `terrarium_boot --www-port` (`0` disables it) and `run_stack
+  --www-port`/`--web-build DIR` (copies a Flutter web build into
+  `www/app/`, replacing what was there) are the new flags.
+  **Why the Terrarium serves the page rather than Arco:** O2's HTTP
+  server labels every file it serves `text/html`
+  (`o2/src/websock.cpp`), which a Flutter web build's `.wasm` and module
+  scripts refuse to load under. `harness/www_server.py` uses Python's
+  `mimetypes`, so `.wasm` gets `application/wasm` and `.js` gets
+  `text/javascript` (confirmed live: `curl -sI
+  http://127.0.0.1:8788/o2ws.js` returns `text/javascript`). Arco keeps
+  serving `www/` on 8080 for o2ws itself and the plain clock-sync page;
+  a browser never needs to fetch the app from there.
+- **Probe P7 (cross-origin o2ws): PASS.** A page served from
+  `127.0.0.1:8788` clock-synced against Arco on `127.0.0.1:8080` --
+  browsers apply no cross-origin rule to a websocket open. The automated
+  browser tool refused to navigate to the LAN address, so this ran
+  loopback-to-loopback, proving cross-port o2ws but not cross-host.
+- **Probe P8 (timed delivery): rounding bug found and patched, magnitude
+  deferred.** The upstream `www/o2ws.js` (`o2ws_schedule_handler`)
+  rounded the scheduling delay to the nearest whole *second* before
+  scaling to milliseconds, so any timestamp under 500 ms ahead was
+  delivered immediately instead of held. Our vendored copy is patched to
+  scale to milliseconds before rounding (one line; upstream defect,
+  report to Roger pending). Re-measurement after the patch could not
+  establish the fix's real magnitude in the automation browser: its tab
+  stays `document.hidden` even when fronted, which clamps timer firing to
+  about once a second and adds a near-constant delay to every sample.
+  Confirming the actual magnitude needs a real, OS-focused device and is
+  deferred to the Plan B live gate (a phone on the venue LAN).
+
+**Deviations from the spec, recorded here rather than only in the spec's
+Status:**
+
+- The spec's retry-once-on-a-refused-service-name behavior (section 5) is
+  dropped for Plan B: the browser's device id is fixed before the link
+  connects, so there is nothing to retry against.
+- Section 4.1 named `netifaces` for the LAN-IP lookup; the implementation
+  (`harness/www_server.py`'s `lan_ip()`) uses a UDP-connect probe instead
+  (no packet is actually sent), so this adds no new runtime dependency.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -4086,6 +4162,12 @@ yet**; the box does not exist.
 
 Kept explicit so the doc doesn't over-claim:
 
+- **The browser app itself** (Plan B in `mm-tuneshroom`: `lib/link/`'s
+  `O2wsLink`, the codec, `web/index.html`, join-parameter minting) **and
+  the live gate with a phone** are not built here. This slice
+  (*Browser guests over o2ws, Control side* above) is the Control-side
+  half only -- the wire flavor, the static server, and the two probes;
+  see `docs/superpowers/specs/2026-09-08-o2ws-browser-link-design.md`.
 - ~~**Timed cues are plumbed but not load-bearing.**~~ **Closed 2026-08-14.**
   See *`devicelink/o2_transport.py`, `control/timed_queue.py`,
   `harness/o2_shroom.py`* above for what landed and *`cue_horizon`'s default
