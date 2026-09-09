@@ -301,9 +301,10 @@ function o2ws_initialize(ensemble, host=document.location.host) {
         o2ws_websocket.onclose = function(evt) { o2ws_close_handler(evt) };
         o2ws_websocket.onmessage = function(evt) { o2ws_message_handler(evt) };
         o2ws_websocket.onerror = function(evt) {
-            if (typeof o2ws_error === 'function')
-                o2ws_error("Websocket to O2 host was closed " +
-                           "abnormally by the host") };
+            // mm-terrarium patch (2026-09-08): call o2ws_on_error, the documented application hook; upstream calls an undefined o2ws_error here, so the page never saw this error.
+            if (typeof o2ws_on_error === 'function')
+                o2ws_on_error("Websocket to O2 host was closed " +
+                              "abnormally by the host") };
         o2ws_method_new("/_o2/id", "i", true, o2ws_id_handler, null);
         o2ws_method_new("/_o2/cs/put", "it", true, o2ws_csput_handler, null);
         o2ws_send_start("/_o2/ws/dy", 0.0, "s", true);
@@ -366,8 +367,12 @@ function o2ws_schedule_handler(handler, timestamp, address, typespec, info) {
         var now = o2ws_time_get();
         if (timestamp > now) {
             // mm-terrarium patch (2026-09-08): scale to ms before rounding; upstream rounds seconds first, so sub-500 ms delays fired immediately.
-            setTimeout(handler, Math.round((timestamp - now) * 1000), timestamp,
-                       address, typespec, info);
+            // mm-terrarium patch (2026-09-08): snapshot o2ws_message_fields and restore it in the deferred handler; upstream lets the next inbound message reassign the global, so a scheduled handler's o2ws_get_* read the wrong payload.
+            var fields = o2ws_message_fields;
+            setTimeout(function () {
+                           o2ws_message_fields = fields;
+                           handler(timestamp, address, typespec, info);
+                       }, Math.round((timestamp - now) * 1000));
         }
         else { // Past or at current time, so deliver the message.
             handler(timestamp, address, typespec, info);
