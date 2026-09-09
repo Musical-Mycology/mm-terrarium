@@ -183,6 +183,13 @@ def stage_web_build(src_dir: str, www_dir: str) -> str:
               file=sys.stderr)
         raise SystemExit(2)
     dst = os.path.join(www_dir, "app")
+    # www/app is gitignored and an operator may well have symlinked it at
+    # the Flutter build directory. rmtree cannot remove a symlink (it
+    # raises NotADirectoryError, which ignore_errors swallows), so
+    # copytree would then fail on an existing destination, or worse write
+    # through the link into the build tree. Unlink first.
+    if os.path.islink(dst):
+        os.unlink(dst)
     shutil.rmtree(dst, ignore_errors=True)
     shutil.copytree(src_dir, dst)
     return dst

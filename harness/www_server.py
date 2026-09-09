@@ -13,6 +13,7 @@ the Console.
 from __future__ import annotations
 
 import functools
+import logging
 import socket
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -27,13 +28,30 @@ def lan_ip() -> str:
     A UDP socket "connected" to a routable address never sends a packet;
     the kernel just picks the interface and source address it would use.
     That is the address a phone on the venue LAN can reach.
+
+    With no route out, the probe either raises or hands back the unspecified
+    address 0.0.0.0 (or nothing at all), none of which a phone can open.
+    All three collapse to the loopback fallback, and every fallback is
+    logged: the printed WWW_URL then says 127.0.0.1, which reads as a
+    working link but reaches no guest, so the operator needs to be told the
+    host has no LAN address rather than left to debug the phone.
     """
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         probe.connect(("10.255.255.255", 1))
         ip = probe.getsockname()[0]
-    except OSError:
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "no LAN address found (%s); serving the guest page on 127.0.0.1, "
+            "which no phone can reach", exc)
         ip = "127.0.0.1"
+    else:
+        if not ip or ip == "0.0.0.0":
+            logging.getLogger(__name__).warning(
+                "no LAN address found (the interface probe returned %r); "
+                "serving the guest page on 127.0.0.1, which no phone can "
+                "reach", ip)
+            ip = "127.0.0.1"
     finally:
         probe.close()
     return ip

@@ -15,6 +15,7 @@ the path.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import time
@@ -52,8 +53,6 @@ def to_string_arg(value) -> str:
     for raw bytes (bytes, or a list of ints, the LED frame), the identical
     JSON text for anything else (role and room). Mirrors to_o2_arg's
     two-way rule exactly so the choice cannot drift between flavors."""
-    import base64
-
     if isinstance(value, (bytes, bytearray)):
         return base64.b64encode(bytes(value)).decode("ascii")
     if isinstance(value, list) and all(isinstance(v, int) for v in value):
@@ -530,7 +529,15 @@ class O2LiteTransport:
                 f"dev id {dev!r} is not a valid O2 service name "
                 f"(1..{MAX_DEV_LEN} characters)")
         self._devs[dev] = client
-        self._protoversions[dev] = str(protoversion or "")
+        # Only RECORD a flavor when one was actually announced. `hello`
+        # carries the protoversion; `join` (devicelink/agent.py's _on_join)
+        # re-binds the same dev with the 2-argument form and no
+        # protoversion, so an unconditional write here would erase a
+        # browser's known flavor and send the join grant's role out as a
+        # blob a browser cannot read. A device's flavor is announced once,
+        # at hello, and forgotten only by drop_dev.
+        if protoversion:
+            self._protoversions[dev] = str(protoversion)
         flavor = wire_flavor(protoversion)
         if flavor == "string" and protoversion not in self._flavors_seen:
             self._flavors_seen.add(protoversion)
@@ -554,19 +561,33 @@ class O2LiteTransport:
             return
         typespec = msg.get("typespec", "")
         raw_args = msg.get("args", [])
+        if len(typespec) != len(raw_args):
+            # zip() would silently truncate to the shorter of the two and
+            # send a message the device cannot parse. Refuse instead, in
+            # both flavors: a malformed envelope is a Control-side bug, and
+            # a logged refusal is findable where a short message is not.
+            logger.error("refusing %s to %s: typespec %r wants %d arguments, "
+                         "envelope carries %d",
+                         msg.get("address"), dev, typespec, len(typespec),
+                         len(raw_args))
+            return
         flavor = wire_flavor(self._protoversions.get(dev, ""))
         if flavor == "string" and "b" in typespec:
-            args = [to_string_arg(v) if t == "b" else v
+            args = [to_string_arg(v) if t == "b" else to_o2_arg(t, v)
                     for t, v in zip(typespec, raw_args)]
             typespec = typespec.replace("b", "s")
         else:
             args = [to_o2_arg(t, v) for t, v in zip(typespec, raw_args)]
-        for t, v in zip(typespec, args):
-            if t in "sS" and isinstance(v, str) and ETX in v:
-                logger.error("refusing %s to %s: a string argument contains "
-                             "byte 0x03, the o2ws field separator",
-                             msg.get("address"), dev)
-                return
+        if flavor == "string":
+            # 0x03 ends an o2ws text field, so only the string flavor can be
+            # corrupted by one. A blob-flavor device stays byte-identical to
+            # what it saw before the flavor machinery existed.
+            for t, v in zip(typespec, args):
+                if t in "sS" and isinstance(v, str) and ETX in v:
+                    logger.error("refusing %s to %s: a string argument "
+                                 "contains byte 0x03, the o2ws field "
+                                 "separator", msg.get("address"), dev)
+                    return
         try:
             self._o2.send(msg["address"], msg.get("timestamp", 0.0),
                           typespec, *args)

@@ -66,3 +66,32 @@ def test_stop_is_idempotent(tmp_path):
     server.start()
     server.stop()
     server.stop()
+
+
+def test_lan_ip_falls_back_to_loopback_when_the_probe_finds_no_address(
+        monkeypatch, caplog):
+    """An unspecified 0.0.0.0 from getsockname is not an address a phone can
+    open, so it means the same thing as the probe raising: no LAN. Both take
+    the loopback fallback, and the fallback is logged, because the printed
+    WWW_URL would otherwise read as a working link that reaches no guest."""
+    import logging
+    import socket as socket_module
+
+    import harness.www_server as www_server
+
+    class NoRouteSocket:
+        def connect(self, address):
+            return None
+
+        def getsockname(self):
+            return ("0.0.0.0", 0)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(www_server.socket, "socket",
+                        lambda *a, **kw: NoRouteSocket())
+    with caplog.at_level(logging.WARNING, logger="harness.www_server"):
+        assert www_server.lan_ip() == "127.0.0.1"
+    assert any("no LAN address" in rec.getMessage() for rec in caplog.records)
+    assert socket_module is www_server.socket        # module, not shadowed

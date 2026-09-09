@@ -2839,3 +2839,34 @@ def test_start_www_server_is_off_when_the_port_is_zero(capsys):
                                   ip=lambda: "10.0.0.5")
     assert server is None
     assert tb.markers.WWW_URL not in capsys.readouterr().out
+
+
+def test_start_www_server_warns_and_carries_on_when_the_port_is_taken(capsys):
+    """A stale process holding 8788 must not stop the stack from booting for
+    the devices already on the wire: the guest page is one surface. Warn,
+    return None, and push nothing onto the teardown stack -- there is no
+    running server to stop."""
+    import argparse
+
+    from control.teardown import TeardownStack
+    import harness.terrarium_boot as tb
+
+    class BusyPort:
+        def __init__(self, root, host="0.0.0.0", port=0):
+            pass
+
+        def start(self):
+            raise OSError(48, "Address already in use")
+
+        def stop(self):
+            raise AssertionError("nothing to stop: start() never succeeded")
+
+    teardown = TeardownStack()
+    server = tb._start_www_server(argparse.Namespace(www_port=8788), teardown,
+                                  server_cls=BusyPort, ip=lambda: "10.0.0.5")
+    assert server is None
+    captured = capsys.readouterr()
+    assert tb.markers.WWW_URL not in captured.out
+    assert ("WARNING: guest page not served: www server could not bind "
+            "port 8788: ") in captured.err
+    assert teardown.close() == []

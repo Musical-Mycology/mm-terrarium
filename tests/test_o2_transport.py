@@ -714,3 +714,49 @@ def test_to_string_arg_matches_to_o2_arg_s_two_way_rule():
             assert base64.b64decode(as_string) == bytes(blob.data)
         else:
             assert json.loads(as_string) == json.loads(bytes(blob.data).decode("utf-8"))
+
+
+def test_rebinding_without_a_protoversion_keeps_the_known_flavor():
+    """devicelink/agent.py's _on_join re-binds an already-known dev with the
+    2-argument form, immediately before the join grant's role blob goes
+    out. That re-bind must not erase the flavor hello announced, or a
+    browser's role is sent as a blob it has no way to read."""
+    transport, fake = _started_with("ie-abc123", "o2ws/1")
+    transport.bind_dev("ie-abc123", object())          # the join re-bind
+    transport.send("ie-abc123", {"address": "/ie-abc123/role", "typespec": "b",
+                                 "args": [{"role": "player"}],
+                                 "timestamp": 0.0})
+    assert fake.sent[0][2] == "s"
+
+
+def test_the_etx_guard_leaves_a_blob_flavor_device_byte_identical(caplog):
+    """0x03 only ends a field in an o2ws TEXT frame. A blob-flavor device
+    (hardware, a Testshroom) never sees one, so the guard must not touch
+    its traffic: the same deny that a browser is refused goes out unchanged
+    here."""
+    import logging
+
+    transport, fake = _started_with("ie1", "1")
+    with caplog.at_level(logging.ERROR, logger="devicelink.o2_transport"):
+        transport.send("ie1", {"address": "/ie1/deny", "typespec": "ss",
+                               "args": ["role" + chr(3) + "full", "try jam"],
+                               "timestamp": 0.0})
+    assert len(fake.sent) == 1
+    assert fake.sent[0][2] == "ss"
+    assert fake.sent[0][3] == ("role" + chr(3) + "full", "try jam")
+    assert caplog.records == []
+
+
+def test_an_argument_count_that_does_not_match_the_typespec_is_refused(caplog):
+    """zip() would truncate to the shorter side and send a message the
+    device cannot parse. Refuse and log, in both flavors."""
+    import logging
+
+    for protoversion in ("1", "o2ws/1"):
+        transport, fake = _started_with("ie1", protoversion)
+        with caplog.at_level(logging.ERROR, logger="devicelink.o2_transport"):
+            caplog.clear()
+            transport.send("ie1", {"address": "/ie1/deny", "typespec": "ss",
+                                   "args": ["role"], "timestamp": 0.0})
+        assert fake.sent == []
+        assert any("typespec" in rec.getMessage() for rec in caplog.records)

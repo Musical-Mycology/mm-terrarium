@@ -1106,6 +1106,32 @@ def test_stage_web_build_replaces_www_app(tmp_path):
     assert not (www / "app" / "stale.js").exists()
 
 
+def test_stage_web_build_replaces_a_symlinked_app_dir(tmp_path):
+    """www/app is gitignored, so an operator may have symlinked it at their
+    Flutter build directory. shutil.rmtree cannot remove a symlink, and
+    ignore_errors hides that, so without an explicit unlink copytree either
+    fails on the existing destination or writes through the link into the
+    build tree."""
+    import os
+
+    from harness.run_stack import stage_web_build
+    src = tmp_path / "build" / "web"
+    src.mkdir(parents=True)
+    (src / "index.html").write_text("new", encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep.js").write_text("untouched", encoding="utf-8")
+    www = tmp_path / "www"
+    www.mkdir()
+    os.symlink(elsewhere, www / "app")
+    dst = stage_web_build(str(src), str(www))
+    assert dst == str(www / "app")
+    assert not os.path.islink(www / "app")
+    assert (www / "app" / "index.html").read_text(encoding="utf-8") == "new"
+    assert not (www / "app" / "keep.js").exists()
+    assert (elsewhere / "keep.js").read_text(encoding="utf-8") == "untouched"
+
+
 def test_stage_web_build_refuses_a_dir_without_an_index(tmp_path):
     from harness.run_stack import stage_web_build
     src = tmp_path / "empty"
