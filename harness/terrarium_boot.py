@@ -12,6 +12,7 @@ build() returns; see build()'s docstring for the ordering.
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import subprocess
 import sys
@@ -38,6 +39,33 @@ from harness.arco_paths import ARCO_PYTHONPATH
 from harness.o2_shroom import parent_is_gone
 from harness.signals import sigterm_as_keyboard_interrupt
 from harness.www_server import WWW_PORT, WwwServer, lan_ip
+
+LOG_FORMAT = "%(levelname)s %(name)s: %(message)s"
+
+
+def configure_logging(level: int = logging.INFO, stream=None) -> logging.Handler:
+    """Route every `logging` call in the Control process to stderr, which
+    run_stack merges into control.log. Nothing configured the root logger
+    before 2026-09-08, so every logger.warning in control/engine.py and
+    devicelink/agent.py (refused gesture stamps, ROOM cues with no Room
+    bound, dropped frames) was silently discarded in a live run. INFO is
+    quiet here: three info sites exist in the runtime path, plus
+    MetronomeBit's per-tap judgment lines, which are the point.
+
+    Idempotent: a second call returns the handler the first installed,
+    so tests that call main() do not stack handlers."""
+    root = logging.getLogger()
+    for existing in root.handlers:
+        if getattr(existing, "terrarium_boot", False):
+            return existing
+    handler = logging.StreamHandler(stream or sys.stderr)
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    handler.terrarium_boot = True
+    root.addHandler(handler)
+    if root.level == logging.NOTSET or root.level > level:
+        root.setLevel(level)
+    return handler
+
 
 # Arco is launched from here so it reads the committed
 # arcoserver/arco_server_prefs.json (Arco reads prefs from its cwd) and
@@ -1266,6 +1294,7 @@ def _build_arg_parser():
 
 
 def main() -> None:
+    configure_logging()
     ap = _build_arg_parser()
     args = ap.parse_args()
     effective_serve = _effective_serve(args)
