@@ -403,6 +403,9 @@ class GameServer:
             self._set_state(State.IDLE)
             raise BitLoadError(f"failed to load Bit {name!r}: {exc}") from exc
         self.bit = bit
+        # See Bit.cue_horizon: the one place the presentation lead reaches
+        # a Bit, so `origin + horizon` still lives only in data()/tick().
+        bit.cue_horizon = self._horizon
         self._warned_no_room = False
         self._warned_unbound = set()
         self.bit_name = name
