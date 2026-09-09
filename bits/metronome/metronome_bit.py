@@ -437,14 +437,29 @@ class MetronomeBit(Bit):
     def _beat_fires(self, k: int) -> list:
         """FireFunctions for global beat `k`, each stamped with that beat's
         own grid time (`at=self._grid(k)`) rather than the dispatching
-        fires(at) call's `at`. Byte-equivalent to the old _beat_cues(k)'s
-        LightCue output: same devs, same statuses, same data1/data2, same
-        relative offsets baked into the metro_* Function scripts declared
-        above -- reached through FireFunction.at instead of LightCue.when.
+        fires(at) call's `at`, reached through FireFunction.at instead of
+        the LightCue.when the pre-Function version of this Bit used. One
+        deliberate departure from that byte-for-byte equivalence: see the
+        metro_recovery block below, which used to fire on every downbeat and
+        cancel that beat's own pulse.
         """
         t = self._grid(k)
         pos = k % self.BEATS_PER_CYCLE
         out = []
+
+        # A cycle's downbeat brings its turn dev back from a previous
+        # failure: green again, level back to base (metro_recovery). Emitted
+        # BEFORE the pulse below and only for a dev that actually failed,
+        # both for the same reason -- metro_recovery writes cc:11 too, the
+        # very lane the pulse uses, so an unconditional recovery on every
+        # downbeat overwrote that beat's pulse with LEVEL_BASE and the turn
+        # player's downbeat was the one beat of their cycle that did not
+        # show. Ordered first, the recovery is what the pulse rises FROM.
+        if pos == 0:
+            dev = self._turn_dev(k // self.BEATS_PER_CYCLE)
+            if dev is not None and dev in self._failed_devs:
+                self._failed_devs.discard(dev)
+                out.append(FireFunction("metro_recovery", dev=dev, at=t))
 
         # Every beat: level pulse-then-decay on ROOM and every non-failed
         # player (metro_pulse_room / metro_pulse_player scripts).
@@ -462,12 +477,6 @@ class MetronomeBit(Bit):
             out.append(FireFunction("metro_downbeat", at=t))
         elif pos in (1, 2, 3):
             out.append(FireFunction("metro_click", at=t))
-
-        if pos == 0:
-            dev = self._turn_dev(k // self.BEATS_PER_CYCLE)
-            if dev is not None:
-                self._failed_devs.discard(dev)
-                out.append(FireFunction("metro_recovery", dev=dev, at=t))
 
         return out
 
