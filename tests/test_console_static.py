@@ -6,7 +6,7 @@ from pathlib import Path
 STATIC = Path(__file__).resolve().parent.parent / "console" / "static"
 
 MODULES = {"wire.js", "shell.js", "bit.js", "surface.js", "functions.js",
-           "rail.js"}
+           "rail.js", "join.js"}
 
 
 def _text_assets() -> str:
@@ -78,3 +78,17 @@ def test_bit_picker_sends_a_room_with_load_bit():
     assert "Arco restarts" in js
     assert "loads Room" in js
     assert "closeOverlay()" in js
+
+
+def test_join_card_is_mounted_and_initialised():
+    html = (STATIC / "index.html").read_text()
+    assert 'id="joinCard"' in html
+    shell = (STATIC / "shell.js").read_text()
+    assert 'from "./join.js"' in shell
+    assert "initJoin()" in shell
+    js = (STATIC / "join.js").read_text()
+    assert 'wire.on("join_changed"' in js
+    assert "tuneshroom_cmd" in js
+    assert "qr_svg" in js
+    assert "native_note" in js
+    assert "app_present" in js
