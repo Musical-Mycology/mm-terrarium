@@ -37,7 +37,7 @@ __all__ = [
     "state_changed_event", "role_view", "device_view", "snapshot_event",
     "devices_changed_event", "bit_status_event", "log_event",
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
-    "room_changed_event", "room_frame_event",
+    "room_changed_event", "join_changed_event", "room_frame_event",
     "functions_changed_event", "function_fired_event", "FireFunctionCommand",
     "ListDesignsCommand", "GetDesignCommand", "SaveDesignCommand",
     "PublishDesignCommand", "CloneDesignCommand",
@@ -84,7 +84,7 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
                    registration, devices, bit_status, room=None,
                    functions=None, terrarium_state=None, rooms=None,
                    instrument_functions=None, surface_instruments=None,
-                   builtins=None, designs=None, design_vocab=None) -> dict:
+                   builtins=None, designs=None, design_vocab=None, join=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
@@ -103,6 +103,7 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "builtins": builtins or {},
         "designs": designs or [],
         "design_vocab": design_vocab,
+        "join": join,
     }
 
 
@@ -110,6 +111,13 @@ def room_changed_event(room) -> dict:
     """The Room panel's read model. `room` is control.room_view.room_view()'s
     output, or None when no Room is configured."""
     return {"event": "room_changed", "room": room}
+
+
+def join_changed_event(join) -> dict:
+    """The Join card's read model changed (a Bit loaded or unloaded).
+    `join` is control.join_info.build_join_info()'s output, or None when
+    no join provider is wired up."""
+    return {"event": "join_changed", "join": join}
 
 
 def room_frame_event(fixture: str, channels) -> dict:

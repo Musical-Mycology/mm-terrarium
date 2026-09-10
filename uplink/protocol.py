@@ -12,6 +12,11 @@ from dataclasses import dataclass
 class LoadBitCommand:
     name: str
     overrides: dict | None = None
+    # Which Room to load the Bit into. None keeps the active Room (and is
+    # refused with "no room loaded" when there is none). A different name
+    # than the active Room makes the Console agent unload and reload the
+    # Room first (spec 2026-09-10 section 4).
+    room: str | None = None
 
 
 @dataclass
@@ -57,7 +62,10 @@ def parse_command(msg: dict):
         overrides = msg.get("overrides")
         if overrides is not None and not isinstance(overrides, dict):
             raise ValueError("load_bit 'overrides' must be a dict when given")
-        return LoadBitCommand(name=name, overrides=overrides)
+        room = msg.get("room")
+        if room is not None and not isinstance(room, str):
+            raise ValueError("load_bit 'room' must be a string when given")
+        return LoadBitCommand(name=name, overrides=overrides, room=room)
     if command == "run":
         return RunCommand()
     if command == "abort":

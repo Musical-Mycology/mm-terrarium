@@ -251,6 +251,8 @@ class BitRegistry:
                 "hidden": config.console.hidden,
                 "enabled": config.identity.enabled,
                 "room_types": list(config.launch.room_types),
+                "default_room_type": config.launch.default_room_type,
+                "nodes": dict(config.launch.nodes),
                 "start": {
                     "when": config.start.when,
                     "min_scored": config.start.min_scored,

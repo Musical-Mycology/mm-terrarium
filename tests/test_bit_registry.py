@@ -67,6 +67,8 @@ def test_list_view_shape_and_hidden_filter(tmp_path):
     row = reg.list_view()[0]
     assert row["start"]["when"] == "immediate"
     assert row["room_types"] == ["TEST"]
+    assert row["default_room_type"] == "TEST"
+    assert isinstance(row["nodes"], dict)
 
 
 def test_lazy_class_map_imports_only_on_access(tmp_path):
@@ -322,3 +324,14 @@ def test_disabled_bit_is_discovered_but_not_loadable(tmp_path):
     rows = {r["name"]: r for r in reg.list_view()}
     assert rows["OffBit"]["enabled"] is False
     assert rows["OnBit"]["enabled"] is True
+
+
+def test_list_view_carries_default_room_and_nodes_for_testbit():
+    from pathlib import Path
+    from control.bit_registry import BitRegistry
+    registry = BitRegistry.scan([Path("bits")])
+    row = next(r for r in registry.list_view(include_hidden=True)
+               if r["name"] == "TestBit")
+    assert row["default_room_type"] == "TEST"
+    assert row["nodes"] == {"player": "TEST_PLAYER_NODE",
+                            "jammer": "TEST_JAM_NODE"}
