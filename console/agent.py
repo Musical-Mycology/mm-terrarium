@@ -40,7 +40,7 @@ class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_controllers=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
                  terrarium=None, catalog_root=None, bench_session_factory=None,
-                 captures_root=None, rooms_root=None):
+                 captures_root=None, rooms_root=None, join_info=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
@@ -80,6 +80,13 @@ class ConsoleAgent:
         # DeviceLinkAgent.canvas_urls(). None (a GameServer built without a
         # DeviceLinkAgent) yields no URLs anywhere in the Console's views.
         self._canvas_urls = canvas_urls
+        # Optional Callable[[], dict | None] building the Join card's read
+        # model (control/join_info.py's build_join_info), from
+        # harness/terrarium_boot.py. None (every embedding without a guest
+        # page) yields join=None in the snapshot and no join_changed
+        # events. Called at snapshot time and on every LOADED / IDLE
+        # transition, so it always reads the Bit that is loaded NOW.
+        self._join_info = join_info
         # Optional Callable[[], dict] of fixture name -> {cc: value}, from
         # DeviceLinkAgent.controllers(), for the Room panel's live
         # controllers read-out. None (a GameServer built the pre-Room way,
@@ -586,6 +593,7 @@ class ConsoleAgent:
                 "capabilities": sorted(CAPABILITY_VOCABULARY),
                 "cue_kinds": list(CUE_KINDS),
             },
+            join=self._join_view(),
         )
 
     def _rooms_view(self) -> list:
@@ -604,6 +612,9 @@ class ConsoleAgent:
              "status": reasons.get(name), "active": name == active_name}
             for name, spec in self.terrarium.config.rooms.items()
         ]
+
+    def _join_view(self) -> dict | None:
+        return self._join_info() if self._join_info is not None else None
 
     def _current_room(self) -> dict | None:
         """Build the Room panel payload, or None when no Room is configured.
@@ -784,6 +795,11 @@ class ConsoleAgent:
             terrarium_state=terrarium_state))
         if new_state == State.UNLOADING:
             self._broadcast_bit_completed()
+        # The Join card reads the loaded Bit's nodes: it changes exactly
+        # when a Bit becomes loaded and when the engine returns to IDLE.
+        if (new_state in (State.LOADED, State.IDLE)
+                and self._join_info is not None):
+            self.server.broadcast(protocol.join_changed_event(self._join_info()))
 
     # --- terrarium observer callbacks ---------------------------------------
     def on_terrarium_state_change(self, old_state: TerrariumState,

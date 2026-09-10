@@ -1939,3 +1939,54 @@ def test_load_bit_room_load_refusal_stops_before_load_bit():
     assert _events(srv, "room_load_failed") == [
         {"event": "room_load_failed", "name": "TEST",
          "reason": "another Console owns this room"}]
+
+
+def test_snapshot_join_is_none_without_a_provider():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    assert msg["join"] is None
+
+
+def test_snapshot_join_comes_from_the_injected_provider():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    join = {"www_url": "http://10.0.0.7:8788/app/", "nodes": []}
+    agent = ConsoleAgent(gs, srv, join_info=lambda: join)
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    assert msg["join"] == join
+
+
+def test_join_changed_is_broadcast_on_loaded_and_on_idle():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    calls = []
+
+    def provider():
+        calls.append(gs.bit_name)
+        return {"bit": gs.bit_name, "nodes": []}
+
+    agent = ConsoleAgent(gs, srv, join_info=provider)
+    gs.load_bit("TestBit")
+    joins = [m for m in srv.broadcasts if m.get("event") == "join_changed"]
+    assert joins == [{"event": "join_changed",
+                      "join": {"bit": "TestBit", "nodes": []}}]
+    gs.abort()
+    joins = [m for m in srv.broadcasts if m.get("event") == "join_changed"]
+    assert joins[-1] == {"event": "join_changed",
+                         "join": {"bit": None, "nodes": []}}
+    assert len(joins) == 2
+
+
+def test_no_join_changed_without_a_provider():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    ConsoleAgent(gs, srv)
+    gs.load_bit("TestBit")
+    gs.abort()
+    assert [m for m in srv.broadcasts if m.get("event") == "join_changed"] == []
