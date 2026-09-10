@@ -184,17 +184,20 @@ class ConsoleAgent:
             return None
         try:
             if isinstance(command, protocol.LoadBitCommand):
-                if (self.terrarium is not None
-                        and self.terrarium.state is not TerrariumState.ROOM_READY):
-                    return protocol.error_event(name, "no room loaded")
-                if self.registry is None:
-                    self.game_server.load_bit(command.name)
-                else:
+                cfg = None
+                if self.registry is not None:
                     try:
                         cfg = self.registry.resolve_config(
                             command.name, command.overrides)
                     except (ManifestError, KeyError) as exc:
                         return protocol.error_event(name, str(exc))
+                if self.terrarium is not None:
+                    reason = self._ensure_room_for_bit(command, cfg)
+                    if reason is not None:
+                        return protocol.error_event(name, reason)
+                if cfg is None:
+                    self.game_server.load_bit(command.name)
+                else:
                     self.game_server.load_bit(command.name, config=cfg)
             elif isinstance(command, protocol.RunCommand):
                 self.game_server.run()
@@ -233,6 +236,37 @@ class ConsoleAgent:
         if reason is not None:
             self.server.broadcast(protocol.room_load_failed_event(name, reason))
         return reason
+
+    def _ensure_room_for_bit(self, command, cfg) -> str | None:
+        """Spec 2026-09-10 section 4: bring the Terrarium to the Room a
+        load_bit asks for, or leave the active one alone. Returns a
+        refusal reason (None on success). Order matters: the support check
+        runs BEFORE any Room is touched, so an unsupported request never
+        costs an Arco restart. A different target than the active Room
+        aborts any loaded Bit, unloads (force), then loads; every step's
+        refusal stops the sequence with no load_bit afterwards."""
+        terrarium = self.terrarium
+        active = (terrarium.room.name
+                  if terrarium.state is TerrariumState.ROOM_READY else None)
+        target = command.room if command.room is not None else active
+        if target is None:
+            return "no room loaded"
+        if cfg is not None and target not in cfg.launch.room_types:
+            return f"Bit {command.name!r} does not support room {target!r}"
+        if target == active:
+            return None
+        if terrarium.state not in (TerrariumState.NO_ROOM,
+                                   TerrariumState.ROOM_READY):
+            return (f"room is {terrarium.state.name.lower()}; try again "
+                    f"once it settles")
+        gs = self.game_server
+        if gs.state is not State.IDLE:
+            gs.abort()
+        if terrarium.state is TerrariumState.ROOM_READY:
+            reason = terrarium.unload_room(force=True)
+            if reason is not None:
+                return reason
+        return self._load_room(target)
 
     def _handle_admin_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
