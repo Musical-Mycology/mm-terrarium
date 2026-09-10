@@ -67,3 +67,12 @@ def test_css_defines_the_status_palette_and_faces():
     for token in ("#7a9e6e", "#d96680", "#c07850",   # sage/rose/terracotta
                   "Londrina Solid", "Atkinson Hyperlegible", "JetBrains Mono"):
         assert token in css
+
+
+def test_bit_picker_sends_a_room_with_load_bit():
+    js = (STATIC / "bit.js").read_text()
+    assert 'room: select.value' in js or "room: roomSelect.value" in js
+    assert "default_room_type" in js
+    assert "roomSettled" in js
+    assert "no configured room supports this Bit" in js
+    assert "Arco restarts" in js
