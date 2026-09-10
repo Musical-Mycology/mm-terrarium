@@ -1581,14 +1581,14 @@ def main() -> None:
     # console-frame sink two functions below still does that (build() never
     # took an on_room_frame parameter), but on_join_denied has one, so
     # production wiring uses it rather than reaching past it.
-    gs.add_observer(_LifecycleLogger(gs))
-
     join_info = _join_info_provider(gs, ensemble=config.o2_ensemble,
                                     www_port=args.www_port)
     gs.add_observer(_JoinLogger(join_info))
     # Round 1's Bit (if any) loaded inside build(), before the observer
     # above existed; announce its join rows once here.
     _print_join_urls(join_info)
+
+    gs.add_observer(_LifecycleLogger(gs))
 
     # build() already loaded round 1's Bit together with its Room, exactly
     # like the old boot() always did -- see build()'s own docstring. A
