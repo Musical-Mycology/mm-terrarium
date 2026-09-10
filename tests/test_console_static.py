@@ -76,3 +76,5 @@ def test_bit_picker_sends_a_room_with_load_bit():
     assert "roomSettled" in js
     assert "no configured room supports this Bit" in js
     assert "Arco restarts" in js
+    assert "loads Room" in js
+    assert "closeOverlay()" in js

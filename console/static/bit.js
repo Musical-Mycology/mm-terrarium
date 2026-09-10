@@ -344,6 +344,7 @@ function buildPickCard(bitRow) {
   card.appendChild(hint);
   const paintHint = () => {
     if (choices.length === 0) hint.textContent = "no configured room supports this Bit";
+    else if (active === null && choices.length > 0) hint.textContent = "loads Room: Arco starts (about 15 s)";
     else if (select.value !== active) hint.textContent = "switches Room: Arco restarts (about 15 s)";
     else hint.textContent = "";
   };
@@ -469,11 +470,19 @@ export function init() {
   wire.on("bit_status", (m) => renderStatus(m.status || {}));
   wire.on("room_loaded", (m) => {
     rooms = rooms.map((r) => Object.assign({}, r, { active: r.name === m.name }));
+    // Cards capture the active room at build time, so close and rebuild the picker.
+    closeOverlay();
     render();
   });
   wire.on("room_unloaded", () => {
     rooms = rooms.map((r) => Object.assign({}, r, { active: false }));
+    // Cards capture the active room at build time, so close and rebuild the picker.
+    closeOverlay();
     render();
   });
-  wire.on("room_load_failed", () => render());
+  wire.on("room_load_failed", () => {
+    // Cards capture the active room at build time, so close and rebuild the picker.
+    closeOverlay();
+    render();
+  });
 }
