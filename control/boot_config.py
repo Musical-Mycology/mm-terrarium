@@ -14,7 +14,9 @@ from control.bit_config import BitConfig
 @dataclass
 class BootConfig:
     room_name: str
-    bit_name: str
+    # None means "load no Bit": build() loads the Room (if any) and leaves
+    # the engine IDLE for the Console to load one (terrarium_boot --no-bit).
+    bit_name: str | None
     # The resolved BitConfig (manifest + any launch-time overrides) for
     # bit_name, threaded through to GameServer.load_bit() so a Bit's
     # __init__ sees its own manifest defaults (e.g. TestBit's

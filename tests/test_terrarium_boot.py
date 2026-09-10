@@ -14,6 +14,7 @@ from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.state import State
 from control.teardown import TeardownStack
+from control.terrarium import TerrariumState
 from control.terrarium_config import RoomSpec
 from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
                                     _run_duration, build, main,
@@ -2905,3 +2906,101 @@ def test_main_configures_logging_first():
     import harness.terrarium_boot as mod
     src = inspect.getsource(mod.main)
     assert src.index("configure_logging()") < src.index("_build_arg_parser()")
+
+
+def test_build_with_no_bit_loads_the_room_and_leaves_the_engine_idle():
+    """--no-bit (spec 2026-09-10 section 3): a BootConfig with bit_name
+    None loads the Room exactly as before and skips load_bit."""
+    config = BootConfig(room_name="TEST", bit_name=None)
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config)
+    try:
+        assert terrarium.state == TerrariumState.ROOM_READY
+        assert gs.state is State.IDLE
+        assert gs.bit_name is None
+    finally:
+        teardown.close()
+
+
+def test_no_bit_is_refused_without_a_console(monkeypatch, capsys):
+    import harness.terrarium_boot as terrarium_boot_module
+    _mock_o2lite_module(monkeypatch, terrarium_boot_module)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--no-bit"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    assert "nothing would ever load a Bit" in capsys.readouterr().err
+
+
+def test_no_bit_is_refused_together_with_bit_or_profile(monkeypatch):
+    import harness.terrarium_boot as terrarium_boot_module
+    _mock_o2lite_module(monkeypatch, terrarium_boot_module)
+    for extra in (["--bit", "TestBit"],
+                  ["--profile", "profiles/dev-metronome.toml"]):
+        monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--no-bit",
+                                          "--console-port", "0"] + extra)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+
+
+def test_no_bit_with_a_console_builds_a_bitless_boot_config(monkeypatch):
+    captured = _run_main_capturing_build(
+        monkeypatch, ["--no-bit", "--console-port", "0", "--room", "TEST"])
+    assert captured["config"].bit_name is None
+    assert captured["config"].bit_config is None
+    assert captured["config"].room_name == "TEST"
+
+
+def test_no_bit_without_a_room_builds_a_no_room_boot_config(monkeypatch):
+    captured = _run_main_capturing_build(
+        monkeypatch, ["--no-bit", "--console-port", "0"])
+    assert captured["config"].bit_name is None
+    assert captured["config"].room_name is None
+
+
+def test_no_bit_forces_serve_mode():
+    from harness.terrarium_boot import _build_arg_parser, _effective_serve
+    ap = _build_arg_parser()
+    args = ap.parse_args(["--no-bit", "--console-port", "0", "--hold"])
+    assert _effective_serve(args) is True
+
+
+def test_wait_for_room_ready_prints_the_no_room_marker_once(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _wait_for_room_ready
+
+    class FlippingTerrarium:
+        def __init__(self):
+            self.polls = 0
+            self.state = TerrariumState.NO_ROOM
+
+    class Agent:
+        def __init__(self, terrarium):
+            self._t = terrarium
+
+        def poll(self):
+            self._t.polls += 1
+            if self._t.polls >= 2:
+                self._t.state = TerrariumState.ROOM_READY
+
+    terrarium = FlippingTerrarium()
+    reason = _wait_for_room_ready(Agent(terrarium), terrarium,
+                                  sleep=lambda _s: None)
+    assert reason == "ready"
+    out = capsys.readouterr().out
+    assert out.count(markers.CONTROL_NO_ROOM_WAIT) == 1
+
+
+def test_wait_for_room_ready_prints_nothing_when_already_ready(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _wait_for_room_ready
+
+    class Ready:
+        state = TerrariumState.ROOM_READY
+
+    class Agent:
+        def poll(self):
+            raise AssertionError("must not poll when already ready")
+
+    assert _wait_for_room_ready(Agent(), Ready()) == "ready"
+    assert markers.CONTROL_NO_ROOM_WAIT not in capsys.readouterr().out

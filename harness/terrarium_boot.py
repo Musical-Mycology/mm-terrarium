@@ -314,26 +314,30 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         # be SETUP (via GameServer.load_bit) the instant build() returns
         # with a room_spec. A NO_ROOM build (room_spec is None) loads no
         # Bit either: main() defers that to whenever a Room actually
-        # exists (see harness/terrarium_boot.py's main()).
-        try:
-            bit_cls = bit_registry.get(config.bit_name)
-            if bit_cls is None:
-                raise TerrariumBuildFailure(f"unknown Bit {config.bit_name!r}")
-            if terrarium.room.name not in bit_cls.room_types:
-                raise TerrariumBuildFailure(
-                    f"Bit {config.bit_name!r} does not support "
-                    f"{terrarium.room.name}")
-            gs.load_bit(config.bit_name, config=config.bit_config)
-        except BitLoadError as exc:
-            if terrarium.state is TerrariumState.ROOM_READY:
-                terrarium.unload_room(force=True)
-            teardown.close()
-            raise TerrariumBuildFailure(f"Bit load failed: {exc}") from exc
-        except BaseException:
-            if terrarium.state is TerrariumState.ROOM_READY:
-                terrarium.unload_room(force=True)
-            teardown.close()
-            raise
+        # exists (see harness/terrarium_boot.py's main()). A bit_name of
+        # None (terrarium_boot --no-bit) loads the Room only and leaves
+        # the engine IDLE for the Console to load a Bit into.
+        if config.bit_name is not None:
+            try:
+                bit_cls = bit_registry.get(config.bit_name)
+                if bit_cls is None:
+                    raise TerrariumBuildFailure(
+                        f"unknown Bit {config.bit_name!r}")
+                if terrarium.room.name not in bit_cls.room_types:
+                    raise TerrariumBuildFailure(
+                        f"Bit {config.bit_name!r} does not support "
+                        f"{terrarium.room.name}")
+                gs.load_bit(config.bit_name, config=config.bit_config)
+            except BitLoadError as exc:
+                if terrarium.state is TerrariumState.ROOM_READY:
+                    terrarium.unload_room(force=True)
+                teardown.close()
+                raise TerrariumBuildFailure(f"Bit load failed: {exc}") from exc
+            except BaseException:
+                if terrarium.state is TerrariumState.ROOM_READY:
+                    terrarium.unload_room(force=True)
+                teardown.close()
+                raise
 
     try:
         if room_audio is None:
@@ -762,6 +766,7 @@ def _wait_for_room_ready(agent, terrarium, *, console_agent=None,
     inner `_serve_rounds` call returns "no-room") -- or "parent-gone"."""
     if terrarium.state is TerrariumState.ROOM_READY:
         return "ready"
+    print(markers.CONTROL_NO_ROOM_WAIT, flush=True)
     while True:
         if parent_is_gone(parent_pid):
             return "parent-gone"
@@ -1109,9 +1114,11 @@ def _effective_serve(args) -> bool:
     `--hold`/`--seconds` are bounded/one-shot intents -- a console with
     neither implies rounds instead. `harness/run_stack.py --ci` never
     passes `--serve` (its one-shot semantics are unchanged), and this
-    process itself has no --ci."""
-    return bool(args.serve or (args.console_port is not None
-                               and args.seconds is None and not args.hold))
+    process itself has no --ci. --no-bit always serves: with no round-1
+    Bit there is nothing but rounds to run."""
+    return bool(args.serve or getattr(args, "no_bit", False)
+                or (args.console_port is not None
+                    and args.seconds is None and not args.hold))
 
 
 def _print_round_outcome(reason: str) -> None:
@@ -1256,6 +1263,13 @@ def _build_arg_parser():
                          "room_types. See --list-bits for what's available. "
                          "Default: the --profile's own [run].bit, else "
                          "TestBit.")
+    ap.add_argument("--no-bit", action="store_true",
+                    help="Load no Bit at all: boot the Room given by "
+                         "--room (or to NO_ROOM without one) and wait for "
+                         "the Console to load a Bit. Requires "
+                         "--console-port; refused together with --bit or "
+                         "--profile. Implies --serve. This is what "
+                         "./terrarium.sh runs.")
     ap.add_argument("--profile", default=None, metavar="PATH",
                     help="A venue TOML (see profiles/dev-metronome.toml) "
                          "supplying launch defaults -- bit, room_type, "
@@ -1314,6 +1328,13 @@ def main() -> None:
             print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
         sys.exit(0)
 
+    if args.no_bit and (args.bit is not None or args.profile is not None):
+        ap.error("--no-bit cannot be combined with --bit or --profile")
+    if args.no_bit and args.console_port is None:
+        print("--no-bit given with no --console-port to load a Bit from; "
+              "nothing would ever load a Bit", file=sys.stderr)
+        sys.exit(1)
+
     profile = RunProfile()
     if args.profile is not None:
         with open(args.profile, encoding="utf-8") as handle:
@@ -1321,10 +1342,11 @@ def main() -> None:
 
     # manifest < profile < explicit CLI, applied once here -- the same
     # precedence harness/run_stack.py's config_from_args applies for its
-    # own launcher fields.
-    bit = args.bit or profile.bit or "TestBit"
+    # own launcher fields. --no-bit short-circuits all of it: no Bit is
+    # resolved, so nothing below can refuse one.
+    bit = None if args.no_bit else (args.bit or profile.bit or "TestBit")
 
-    if bit not in registry.packages:
+    if bit is not None and bit not in registry.packages:
         available = sorted(registry.packages)
         print(f"unknown Bit {bit!r}; available: {available}",
              file=sys.stderr)
@@ -1332,7 +1354,7 @@ def main() -> None:
             print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
         sys.exit(1)
 
-    if not registry.packages[bit].config.identity.enabled:
+    if bit is not None and not registry.packages[bit].config.identity.enabled:
         print(f"Bit {bit!r} is disabled (bit.enabled = false in its "
               f"manifest); re-enable it there to load it.", file=sys.stderr)
         sys.exit(1)
@@ -1358,7 +1380,8 @@ def main() -> None:
     if run_duration is not None:
         overrides["defaults"] = {"run_duration_seconds": run_duration}
     overrides = deep_merge_overrides(profile.overrides, overrides)
-    cfg = registry.resolve_config(bit, overrides or None)
+    cfg = (None if bit is None
+           else registry.resolve_config(bit, overrides or None))
 
     console_port = (args.console_port if args.console_port is not None
                     else profile.console_port)
@@ -1527,7 +1550,7 @@ def main() -> None:
         # itself exactly once. Gated on effective_serve because one-shot
         # mode has no "rounds" to announce; see _serve_rounds for every
         # later round's line.
-        if effective_serve:
+        if effective_serve and gs.bit_name is not None:
             print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}", flush=True)
 
     # Once build() has returned, Arco and the simulator (if a Room was
@@ -1594,7 +1617,7 @@ def main() -> None:
             else:
                 print("--arco-start-audio needs --arco-pty; ignoring",
                       file=sys.stderr)
-        if room_spec is not None:
+        if room_spec is not None and gs.bit_name is not None:
             # Captured now, before any wait/run/abort: gs.bit_name is None
             # again by round end (the engine clears it on unload), and this
             # is round 1's only chance to still name it for the
@@ -1692,11 +1715,12 @@ def main() -> None:
                 # teardown like "completed" does.
                 _print_round_outcome(reason)
         else:
-            # NO_ROOM boot (no --room, a console port instead): wait for
-            # the Console to load a Room, then serve rounds against it --
-            # same round machinery as the --room CLI path falls into after
-            # its own round 1, looping back to this same wait whenever the
-            # room is unloaded mid-serve (see _serve_roomless).
+            # NO_ROOM boot (no --room, a console port instead) OR a --no-bit
+            # boot with a Room already loaded: wait for the Console to load
+            # a Room (immediate when one is up), then serve rounds against
+            # it -- _wait_for_load sits in IDLE until the Console loads a
+            # Bit -- looping back to the NO_ROOM wait whenever the room is
+            # unloaded mid-serve (see _serve_roomless).
             reason = _serve_roomless(gs, agent, terrarium,
                                      console_agent=console_agent,
                                      parent_pid=args.exit_with_parent,
