@@ -24,6 +24,7 @@ from control.bit_config import StartCondition
 from control.bit_registry import BitRegistry
 from control.boot_config import BootConfig
 from control.engine import BitLoadError, GameServer
+from control.join_info import build_join_info
 from control.room_binding import RoomBindingRegistry
 from control.run_profile import RunProfile, deep_merge_overrides, parse_profile
 from control.simulator_process import SimulatorProcess
@@ -929,6 +930,55 @@ class _LifecycleLogger:
         self._last_assignments = current_assignments
 
 
+def _join_info_provider(gs, *, ensemble: str, www_port: int, ip=lan_ip,
+                        app_root: str | None = None):
+    """The Console's Join card provider (console.agent.ConsoleAgent
+    join_info=) and _JoinLogger's source: control/join_info.py's
+    build_join_info over the LAN address, the two ports, the ensemble and
+    the loaded Bit's launch.nodes, read fresh on every call. Returns None
+    when the guest page is off (--www-port 0): there is nothing to join
+    through. `app_root` is the www/ directory; app_present is whether a
+    Flutter build sits under its app/."""
+    root = app_root if app_root is not None else os.path.join(REPO_ROOT, "www")
+
+    def provider():
+        if www_port == 0:
+            return None
+        cfg = getattr(gs.bit, "config", None)
+        nodes = tuple(cfg.launch.nodes) if cfg is not None else ()
+        return build_join_info(
+            lan_ip=ip(), www_port=www_port, arco_http_port=ARCO_HTTP_PORT,
+            ensemble=ensemble, bit_name=gs.bit_name, nodes=nodes,
+            app_present=os.path.isfile(os.path.join(root, "app", "index.html")))
+
+    return provider
+
+
+def _print_join_urls(provider) -> None:
+    """One markers.JOIN_URL line per node of the loaded Bit; silent when
+    the provider yields nothing (guest page off, or no Bit)."""
+    info = provider()
+    if not info:
+        return
+    for row in info["nodes"]:
+        print(f"{markers.JOIN_URL} {row['role']} {row['node']} {row['url']}",
+              flush=True)
+
+
+class _JoinLogger:
+    """GameServer observer: prints the JOIN_URL lines whenever a Bit reaches
+    LOADED (a Console load in serve mode). Round 1's CLI-selected Bit loads
+    inside build(), before any observer exists, so main() calls
+    _print_join_urls once for it explicitly, like CONTROL_ROOM_LOADED."""
+
+    def __init__(self, provider):
+        self._provider = provider
+
+    def on_state_change(self, old_state, new_state) -> None:
+        if new_state is State.LOADED:
+            _print_join_urls(self._provider)
+
+
 class _TerrariumLogger:
     """Prints control.terrarium.Terrarium's Room lifecycle to Control's
     stdout: a `room loading: <stage>` line per progress notification (NOT
@@ -1533,6 +1583,13 @@ def main() -> None:
     # production wiring uses it rather than reaching past it.
     gs.add_observer(_LifecycleLogger(gs))
 
+    join_info = _join_info_provider(gs, ensemble=config.o2_ensemble,
+                                    www_port=args.www_port)
+    gs.add_observer(_JoinLogger(join_info))
+    # Round 1's Bit (if any) loaded inside build(), before the observer
+    # above existed; announce its join rows once here.
+    _print_join_urls(join_info)
+
     # build() already loaded round 1's Bit together with its Room, exactly
     # like the old boot() always did -- see build()'s own docstring. A
     # NO_ROOM boot (room_spec is None) skips that: console.agent
@@ -1592,7 +1649,8 @@ def main() -> None:
                                          catalog_root=catalog_root,
                                          rooms_root=rooms_root,
                                          bench_session_factory=bench_session_factory,
-                                         captures_root=Path("captures"))
+                                         captures_root=Path("captures"),
+                                         join_info=join_info)
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)

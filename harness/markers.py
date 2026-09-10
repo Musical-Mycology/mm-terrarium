@@ -112,6 +112,12 @@ ARCO_WWW = "ARCO_WWW:"
 # section 4.1). Collected and opened by run_stack like BROWSE_URL.
 WWW_URL = "WWW_URL:"
 
+# One line per registration node of the Bit that just loaded:
+# "JOIN_URL: <role> <node> <url>". The same rows the Console's Join card
+# shows, for a headless box. Echoed by run_stack, never waited on (a
+# variable count per load, like BROWSE_URL).
+JOIN_URL = "JOIN_URL:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,

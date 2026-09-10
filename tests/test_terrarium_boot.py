@@ -4,11 +4,13 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
 
 from bits.test.test_bit import TestBit
 from control.arco_process import FakePopen
 from control.audio import AudioBridge, FakePool
 from control.boot_config import BootConfig
+from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
@@ -2474,6 +2476,8 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
     class _FakeObservable:
         room = None
         state = TerrariumState.NO_ROOM
+        bit = None
+        bit_name = None
 
         def add_observer(self, observer):
             pass
@@ -2525,6 +2529,8 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
     class _FakeObservable:
         room = None
         state = TerrariumState.NO_ROOM
+        bit = None
+        bit_name = None
 
         def add_observer(self, observer):
             pass
@@ -2579,6 +2585,8 @@ def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
     class _FakeObservable:
         room = None
         state = TerrariumState.NO_ROOM
+        bit = None
+        bit_name = None
 
         def add_observer(self, observer):
             pass
@@ -3004,3 +3012,66 @@ def test_wait_for_room_ready_prints_nothing_when_already_ready(capsys):
 
     assert _wait_for_room_ready(Agent(), Ready()) == "ready"
     assert markers.CONTROL_NO_ROOM_WAIT not in capsys.readouterr().out
+
+
+def test_join_info_provider_reads_the_loaded_bits_nodes(tmp_path):
+    from harness.terrarium_boot import _join_info_provider
+    from control.bit_registry import BitRegistry
+
+    registry = BitRegistry.scan([Path("bits")])
+    gs = GameServer({"TestBit": TestBit})
+    provider = _join_info_provider(gs, ensemble="arco", www_port=8788,
+                                   ip=lambda: "10.0.0.7",
+                                   app_root=str(tmp_path))
+
+    info = provider()
+    assert info["bit"] is None
+    assert info["nodes"] == []
+    assert info["www_url"] == "http://10.0.0.7:8788/app/"
+    assert info["app_present"] is False
+
+    gs.load_bit("TestBit", config=registry.resolve_config("TestBit"))
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "index.html").write_text("<html></html>")
+    info = provider()
+    assert info["bit"] == "TestBit"
+    assert [(r["role"], r["node"]) for r in info["nodes"]] == [
+        ("jammer", "TEST_JAM_NODE"), ("player", "TEST_PLAYER_NODE")]
+    assert info["app_present"] is True
+    assert info["nodes"][0]["url"].startswith("http://10.0.0.7:8788/app/?")
+
+
+def test_join_info_provider_is_none_when_the_guest_page_is_off():
+    from harness.terrarium_boot import _join_info_provider
+    gs = GameServer({"TestBit": TestBit})
+    provider = _join_info_provider(gs, ensemble="arco", www_port=0,
+                                   ip=lambda: "10.0.0.7", app_root="/nowhere")
+    assert provider() is None
+
+
+def test_join_logger_prints_one_join_url_line_per_node_on_loaded(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _JoinLogger
+
+    info = {"nodes": [
+        {"role": "player", "node": "N1", "url": "http://h:8788/app/?node=N1"},
+        {"role": "jammer", "node": "N2", "url": "http://h:8788/app/?node=N2"},
+    ]}
+    gs = GameServer({"TestBit": TestBit})
+    gs.add_observer(_JoinLogger(lambda: info))
+    gs.load_bit("TestBit")
+    out = capsys.readouterr().out
+    assert f"{markers.JOIN_URL} player N1 http://h:8788/app/?node=N1" in out
+    assert f"{markers.JOIN_URL} jammer N2 http://h:8788/app/?node=N2" in out
+    assert out.count(markers.JOIN_URL) == 2
+    gs.abort()
+    assert markers.JOIN_URL not in capsys.readouterr().out
+
+
+def test_join_logger_is_silent_when_the_provider_returns_none(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _JoinLogger
+    gs = GameServer({"TestBit": TestBit})
+    gs.add_observer(_JoinLogger(lambda: None))
+    gs.load_bit("TestBit")
+    assert markers.JOIN_URL not in capsys.readouterr().out
