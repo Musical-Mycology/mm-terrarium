@@ -183,9 +183,11 @@ double-tap, and the Mushica cue table is updated to say so.
 **(recommended)** Eight 250 mm segments of 12 V SK6812 RGBW strip at 60 px/m
 (15 px each, 120 px total, one data line chained top to bottom), diffusion
 film over each, end-glow fiber bundles fed from the segments, PAR lights
-plugged in and set by hand. An ESP32 in the base, same firmware image with
-`TOWER` build flags: service `ie<N>`, 120-pixel renderer, no sensors, no
-speaker, mains supply.
+plugged in and set by hand. **The same ESP32-P4 (+C6) board as the
+Tuneshroom, in the base**, same firmware image with `TOWER` build flags:
+service `ie<N>`, 120-pixel renderer, no sensors, no speaker, mains supply.
+One board type across every Instrument means one image, one flash runbook
+and one spares pool; the S3 exists only as the 4.1 fallback.
 
 - 120 px × 0.025 A full white = **3.0 A at 12 V**. A 12 V 5 A supply with a
   fuse and injection at both ends of the chain covers it with margin. The
@@ -314,9 +316,10 @@ RGBW 60 px/m strip, per-LED addressable, confirmed in the listing body ·
 12 V 5 A supply with barrel and fuse holder · 3-pin JST and 18 AWG for
 injection · diffusion film sheets · three end-glow fiber bundles · 2100 mm
 mast (aluminum channel or PVC) and a weighted base · PAR lights ×2 with
-stands · a classic ESP32 or S3 dev board ×2 (the 4.1 fallback and the Tower
-controller) · 3D-print filament or ETC print time for connectors and
-responders · props per the Tower definition.
+stands · one more ESP32-P4 (+C6) board if fewer than two are on hand (the
+Tower controller is the same board as the Tuneshroom) · one ESP32-S3 dev
+board (the 4.1 fallback only) · 3D-print filament or ETC print time for
+connectors and responders · props per the Tower definition.
 
 **Tuneshroom consumables:** 18650 cells ×4 with holders, MT3608 ×4, TP4056
 ×4, copper tape for the touch pad, silicone and pigment for the body. Confirm

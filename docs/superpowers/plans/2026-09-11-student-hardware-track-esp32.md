@@ -132,7 +132,8 @@ git commit -m "docs(hardware): bench AP settings and verified O2 host discovery"
 | Mast: 25 mm aluminium channel or 32 mm PVC, 2100 mm | 1 | joins at 700 mm if shipped short |
 | Weighted base plate | 1 | |
 | PAR light (LED, mains, manual colour) with stand | 2 | not DMX-controlled for Dec 4 |
-| ESP32-S3 dev board (Tower controller and the Task 0.3 fallback) | 2 | |
+| ESP32-P4 (+C6) dev board, same as the Tuneshroom's, for the Tower base | 1 if fewer than 2 on hand | count the Amazon delivery first |
+| ESP32-S3 dev board (Task 0.3 fallback only) | 1 | |
 | 74AHCT125 level shifter breakout | 2 | 3.3 V data to 5 V/12 V strip |
 | Filament or ETC print time for connectors and responders | as needed | |
 
@@ -185,8 +186,9 @@ board = esp32-p4-evboard
 build_flags = ${env.build_flags} -DDEVICE_NAME=\"ie1\" -DTUNESHROOM=1 -DPIXEL_COUNT=12
 
 [env:tower]
+; Same board as the Tuneshroom: one image, one flash runbook, one spares pool.
 platform = espressif32@^6.10
-board = esp32-s3-devkitc-1
+board = esp32-p4-evboard
 build_flags = ${env.build_flags} -DDEVICE_NAME=\"ie9\" -DTOWER=1 -DPIXEL_COUNT=120
 
 ; Fallback target for the Tuneshroom if the P4 radio path fails the Sep 18
@@ -1102,7 +1104,7 @@ TOWER ? 2.4f : 0.6f)`. Build both: `pio run -e tuneshroom && pio run -e tower`.
 
 - [ ] **Step 3: First light on the Tower chain (with Sophia, after Task B3 Step 3)**
 
-Flash an S3 with `tower`; `./terrarium.sh --room TEST`; for this check only
+Flash the second P4 with `tower`; `./terrarium.sh --room TEST`; for this check only
 build with `-DJOIN_NODE=\"TEST_PLAYER_NODE\" -DPIXEL_COUNT=60` so the
 TEST room's `main` fixture width matches, load Chase. Expected: the first
 60 Tower pixels chase; `LATE 0`.
@@ -1213,8 +1215,9 @@ Task A7 limiter: **11.4 V or higher** (under 5 % drop). Record the reading.
 
 - [ ] **Step 3: Controller in the base**
 
-S3 board, 74AHCT125 on the data line, 12 V supply to the strip only, USB or
-a 5 V buck to the board. Run Task A7 Step 3 here.
+ESP32-P4 (+C6) board, the same part as the Tuneshroom's, 74AHCT125 on the
+data line, 12 V supply to the strip only, USB or a 5 V buck to the board.
+Run Task A7 Step 3 here.
 
 - [ ] **Step 4: Diffusion film over each segment, fiber bundles fed from segments 2, 4 and 6, PAR lights on stands set to a fixed colour, props per the Tower definition**
 
@@ -2013,7 +2016,7 @@ git commit -m "docs(hardware): cold-start protocol and Dry Run 2 numbers"
 
 - [ ] **Step 1: Add a `firmware/` section to `docs/MM_TERRARIUM.md` under *Landed subsystems*: the two build targets, the thin-device rule, the verbs and their arg shapes, the limiter figures, the measured latency and stamp numbers with their dates**
 
-- [ ] **Step 2: In `MM_HARDWARE_DESIGN.md` §11, add rows for the ESP32-P4 (+C6), the ESP32-S3, the Tower strip and supply; mark the Radxa row as spare stock and the Pi 5 venue box and 864 px array rows as post-show**
+- [ ] **Step 2: In `MM_HARDWARE_DESIGN.md` §11, add rows for the ESP32-P4 (+C6) as the controller of every Instrument including the Tower, the ESP32-S3 as fallback stock, the Tower strip and supply; mark the Radxa row as spare stock and the Pi 5 venue box and 864 px array rows as post-show**
 
 - [ ] **Step 3: Run `/mm-deepdive-sync` in mm-terrarium and commit both repos**
 

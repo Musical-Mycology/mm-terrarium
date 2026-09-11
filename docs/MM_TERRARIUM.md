@@ -4261,7 +4261,11 @@ honor them in any new work:
 ## Host platform (gotcha)
 
 The venue target is **bare-metal Linux on a Raspberry Pi 5** with a mandatory
-I2S DAC HAT. **Virtualized hosts are ruled out for bring-up:** both O2 discovery
+I2S DAC HAT. **For the 2026-12-04 show the Terrarium runs on a Mac instead**
+(decided 2026-09-11; the Pi 5 box is deferred past the show), and the
+Instruments it talks to are ESP32 devices on o2lite firmware, not Radxa
+boards; see the 2026-09-11 student hardware track spec. The rule below is
+unchanged by that. **Virtualized hosts are ruled out for bring-up:** both O2 discovery
 and Art-Net-to-WLED are UDP on the LAN, and a NAT'd VM or **WSL2** host sits on
 its own virtual subnet, so neither arrives. Treat WSL2 as a non-starter rather
 than something to work around.
@@ -4794,12 +4798,15 @@ Kept explicit so the doc doesn't over-claim:
   [`.../2026-07-21-terrarium-console-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-21-terrarium-console-design.md).
 - Tuneshroom audio:
   [`.../2026-08-06-tuneshroom-audio-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-06-tuneshroom-audio-design.md).
-- Student hardware track (the physical build feeding the 2026-12-04 show):
-  [`.../2026-08-06-student-hardware-track-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-06-student-hardware-track-design.md)
+- Student hardware track (the physical build feeding the 2026-12-04 show),
+  **ESP32 revision of 2026-09-11**:
+  [`.../2026-09-11-student-hardware-track-esp32-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-11-student-hardware-track-esp32-design.md)
   and its plan
-  [`.../plans/2026-08-06-student-hardware-track.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-08-06-student-hardware-track.md).
-  These are where the venue-box, LED-array and Tuneshroom builds, their gates,
-  and their acceptance criteria live.
+  [`.../plans/2026-09-11-student-hardware-track-esp32.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-09-11-student-hardware-track-esp32.md).
+  These are where the Tuneshroom firmware, the Tower fixture, the Mushica
+  Bit, their gates and their acceptance criteria live. The 2026-08-06 pair
+  (Radxa Tuneshroom, Pi 5 venue box, 864 px Art-Net array) is superseded
+  and kept for its reasoning; none of its tasks were started.
 - Room concept and load sequence (spec 1 of 2 toward the Terrarium
   Visualization Simulator):
   [`.../2026-08-10-room-concept-and-load-sequence-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md)
