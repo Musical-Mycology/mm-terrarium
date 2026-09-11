@@ -259,10 +259,10 @@ class Terrarium:
         if self.state != TerrariumState.NO_ROOM:
             return f"cannot load {name!r}: Terrarium is {self.state.value}, not no_room"
 
-        self.loading_room = name
         self._set_state(TerrariumState.ROOM_LOADING)
         stack = None
         try:
+            self.loading_room = name
             self._progress("validating")
             spec = self.config.rooms.get(name)
             if spec is None:

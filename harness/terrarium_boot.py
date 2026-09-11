@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 from control.arco_process import ArcoProcess
 from control.bit_config import StartCondition

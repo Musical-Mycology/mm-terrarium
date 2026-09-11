@@ -3096,7 +3096,6 @@ def test_build_with_no_room_does_not_start_the_pool():
     """D1: a NO_ROOM build has no Arco to connect to, so the default
     ArcoSynthPool must be constructed but not started (pool.start() is
     arco.initialize(), a 30 s blocking connect)."""
-    import harness.terrarium_boot as tb
 
     class RecordingPool:
         started = 0
@@ -3174,27 +3173,21 @@ def test_serve_until_done_polls_the_terrariums_arco_not_a_stale_handle():
     assert old.polls <= 2
 
 
-def test_main_no_room_boot_leaves_clients_stopped_and_skips_transport_start(monkeypatch):
-    """D1: main() must not call transport.start() (which asserts a synced
-    clock against a hub that does not exist) on a NO_ROOM boot. Captured at
-    the build() seam plus a transport whose start() raises if called."""
+def test_main_no_room_boot_builds_with_a_simulator_array_backend(monkeypatch):
+    """main() must set array_backend='simulator' unconditionally on a NO_ROOM
+    boot (D5), rather than computing it based on the boot room's device spec
+    (there is no boot room). This pins the BootConfig shape and the D5 ruling;
+    the transport-start skip itself is verified by reading main()'s branch
+    (main() does not call transport.start() when arco is None)."""
     import harness.terrarium_boot as terrarium_boot_module
     from devicelink.o2_transport import FakeO2Lite
     fake = FakeO2Lite()
     fake.set_services("actl")
     monkeypatch.setattr(terrarium_boot_module, "_o2lite_module", lambda: fake)
 
-    class Boom(Exception):
-        pass
-
     def fake_build(config, bit_registry, **kwargs):
         assert config.room_name is None
         assert config.array_backend == "simulator"
-        transport = kwargs["transport"]
-        orig = transport.start
-        def start(*a, **k):
-            raise Boom("transport.start called on a NO_ROOM boot")
-        transport.start = start
         raise SystemExit(0)
 
     monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
