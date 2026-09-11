@@ -456,6 +456,10 @@ Two operational traps, both hit during live testing:
    server's audio re-open then fails with PortAudio `-9988, Invalid stream
    pointer`. Practical consequence: restart the Arco server before each run of
    `--audio`. This is upstream in Arco, not something this repo can fix.
+   **Reported to Roger 2026-09-11** (by email, alongside the o2ws.js
+   rounding patch and the pyarco re-initialize limit; two questions asked:
+   whether `reset()` in `initialize()` is meant to be unconditional, and
+   whether the failed audio re-open after `/host/clear` on macOS is known).
    **Note (2026-08-31):** in serve mode, `Terrarium`'s bit-cycle room
    recycle now performs this restart automatically once per round (see the
    *bit-cycle room recycle* entry near the end of this file) -- the trap and
@@ -4075,7 +4079,7 @@ itself is Plan B, in `mm-tuneshroom` (see *Not yet built* below).
   scaling to milliseconds, so any timestamp under 500 ms ahead was
   delivered immediately instead of held. Our vendored copy is patched to
   scale to milliseconds before rounding (one line; upstream defect,
-  report to Roger pending). Re-measurement after the patch could not
+  reported to Roger by email 2026-09-11). Re-measurement after the patch could not
   establish the fix's real magnitude in the automation browser: its tab
   stays `document.hidden` even when fronted, which clamps timer firing to
   about once a second and adds a near-constant delay to every sample.
@@ -4184,7 +4188,10 @@ Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`
   and `finish()` cannot prepare a restart -- an upstream pyarco
   constraint, already flagged to Roger in the 2026-09-01
   console-load-stabilization spec (`arco.initialize()` second-run
-  behavior goes upstream to Roger) -- so a Control process can talk to
+  behavior goes upstream to Roger) and **reported to him by email
+  2026-09-11** (source line, both error signatures, the live counts, and
+  what a re-initializable `initialize()` or a real `finish()` would need
+  to do) -- so a Control process can talk to
   exactly one Arco until pyarco/o2litepy support re-initialization. The
   Console now refuses a Room switch outright (`_ensure_room_for_bit`
   returns before touching the active Room) and names the restart
