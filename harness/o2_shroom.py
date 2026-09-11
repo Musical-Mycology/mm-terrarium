@@ -306,6 +306,14 @@ def join_stall_hint(dev: str) -> str:
             f'"/{dev}/... service was not found").')
 
 
+HANDSHAKE_RETAP_S = 2.0
+
+
+def invite_seen(frame: bytes) -> bool:
+    """A lobby invite is a solid white override on every pixel."""
+    return len(frame) >= 3 and all(b >= 200 for b in frame)
+
+
 def _gestures_ready(client) -> bool:
     """True once Control's granted-role reply has actually reached this
     client, i.e. once ShroomClient._on_role() has set client.config (see
@@ -495,9 +503,15 @@ def main() -> None:
                              "reconnect_recheck re-verifies the service). "
                              "Implies --join-retry 2.0 when --join-retry "
                              "is 0. Meaningless with --no-join.")
+    parser.add_argument("--handshake", action="store_true",
+                        help="Hello without joining; double-tap on the "
+                             "first invite (a solid white frame) and let "
+                             "the lobby join this device (spec 5). Ignores "
+                             "--node.")
     args = parser.parse_args()
     if args.persist and args.join_retry <= 0:
         args.join_retry = 2.0
+    explicit_join = not args.no_join and not args.handshake
 
     # control/simulator_process.py shuts this process down with SIGTERM when
     # it is playing the Room simulator, and finally blocks do not run on a
@@ -520,13 +534,21 @@ def main() -> None:
 
     from devicelink.o2_transport import pull_args
 
-    from harness.sim_audio import build_sim_player
+    from harness.sim_audio import KeyedChimePlayer, build_sim_player, play_key
 
     operator_input = queue.Queue(maxsize=INPUT_QUEUE_MAX)
     # /<dev>/play sink: generated tones through afplay (degrades to a
     # printed line off-Mac). Without this every PlayCue died on the wire
     # as an o2lite "no match" drop and the sim was silent by accident.
     player = build_sim_player()
+    keyed = KeyedChimePlayer(player.sink) if hasattr(player, "sink") else None
+
+    def _play(name: str, params: str) -> None:
+        key = play_key(params)
+        if name == "chime" and key is not None and keyed is not None:
+            keyed.play(key)
+        else:
+            player.play(name)
 
     from harness.beat_tapper import BeatTapper
 
@@ -535,7 +557,12 @@ def main() -> None:
     # the granted role's `uses` says `tap` (see the tick loop below).
     tapper = BeatTapper()
 
+    invite_flag = [False]
+    last_handshake_tap = [None]
+
     def _on_frame(frame: bytes, now) -> None:
+        if args.handshake and client.config is None and invite_seen(frame):
+            invite_flag[0] = True
         if not tapper.armed or now is None:
             return
         beat = tapper.observe(frame, now)
@@ -551,7 +578,7 @@ def main() -> None:
                             room_type=args.room_type, fixture=args.fixture,
                             input_queue=operator_input,
                             clock=o2lite.time_get,
-                            on_play=lambda name, params: player.play(name),
+                            on_play=_play,
                             instrument=args.instrument or None,
                             on_show=_on_frame)
     backend.open()
@@ -669,7 +696,7 @@ def main() -> None:
             raise SystemExit(1)
 
         send_hello()
-        if not args.no_join:
+        if explicit_join:
             send_join()
 
         start = o2lite.time_get()
@@ -699,7 +726,7 @@ def main() -> None:
             # Only ever set when --join-retry is on, so the default path
             # still sends exactly one join.
             next_join = (o2lite.time_get() + args.join_retry
-                         if args.join_retry > 0 and not args.no_join else None)
+                         if args.join_retry > 0 and explicit_join else None)
             joins_sent = 1
 
             outcome = None
@@ -763,6 +790,14 @@ def main() -> None:
                 outcome = lobby_round_over(client, args.persist)
                 if outcome is not None:
                     break
+                if (args.handshake and invite_flag[0] and client.config is None
+                        and (last_handshake_tap[0] is None
+                             or now - last_handshake_tap[0] >= HANDSHAKE_RETAP_S)):
+                    o2lite.send("/game/tap", now, "sffi", args.dev, 1.0, 50.0, 2)
+                    last_handshake_tap[0] = now
+                    print(f"handshake: invite seen, double-tap sent at {now:.3f}",
+                          flush=True)
+                invite_flag[0] = False
                 if not args.no_join and _gestures_ready(client):
                     if next_tilt is None:
                         next_tilt = now   # first tilt fires now the role is in
@@ -806,8 +841,9 @@ def main() -> None:
             tapper.armed = False
             round_num += 1
             send_hello()
-            next_join = o2lite.time_get() + args.join_retry
-            send_join()
+            if explicit_join:
+                next_join = o2lite.time_get() + args.join_retry
+                send_join()
     except KeyboardInterrupt:
         pass
     finally:

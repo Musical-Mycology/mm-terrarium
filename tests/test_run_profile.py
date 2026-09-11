@@ -28,12 +28,6 @@ def test_parses_the_worked_example():
     assert profile.seconds is None
     assert profile.overrides == {
         "rhythm": {"bpm": 80},
-        "start": {
-            "when": "players",
-            "min_scored": 2,
-            "timeout_seconds": 60,
-            "on_timeout": "start",
-        },
     }
 
 

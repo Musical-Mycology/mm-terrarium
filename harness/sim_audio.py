@@ -91,6 +91,38 @@ class AfplaySink:
             print(f"play: {name}", flush=True)
 
 
+def play_key(params: str) -> int | None:
+    """The ceremony's `key=<midi>` play-cue params, or None."""
+    for part in (params or "").split():
+        if part.startswith("key="):
+            try:
+                return int(part[4:])
+            except ValueError:
+                return None
+    return None
+
+
+def chime_wav_for_key(key: int) -> bytes:
+    """A two-segment chime at the given MIDI key: the fundamental then a
+    fifth above, so the lobby's bell and the device's chime agree."""
+    f = 440.0 * 2.0 ** ((int(key) - 69) / 12.0)
+    return tone_wav([(f, 0.12), (f * 1.5, 0.18)])
+
+
+class KeyedChimePlayer:
+    """Plays chime_wav_for_key through an AfplaySink, one cached WAV per key."""
+
+    def __init__(self, sink) -> None:
+        self._sink = sink
+        self._cache: dict[int, bytes] = {}
+
+    def play(self, key: int) -> None:
+        data = self._cache.get(key)
+        if data is None:
+            data = self._cache[key] = chime_wav_for_key(key)
+        self._sink.write(f"chime-{key}", data)
+
+
 def build_sim_player(runner=None) -> SamplePlayer:
     """A preloaded SamplePlayer over the generated tone set."""
     player = SamplePlayer(
