@@ -58,9 +58,9 @@ def test_build_join_info_shape():
                                    arco_http_port=8080, ensemble="arco",
                                    node="METRO_PLAYER_NODE")
     assert row["qr_svg"] == f"<svg>{row['url']}</svg>"
-    assert row["tuneshroom_cmd"] == tuneshroom_command(
-        lan_ip="10.0.0.7", arco_http_port=8080, ensemble="arco",
-        node="METRO_PLAYER_NODE")
+    expected = tuneshroom_command(lan_ip="10.0.0.7", arco_http_port=8080,
+                                  ensemble="arco", node="METRO_PLAYER_NODE")
+    assert row["tuneshroom_cmd"] == expected
 
 
 def test_no_bit_yields_no_node_rows_but_still_the_guest_url():

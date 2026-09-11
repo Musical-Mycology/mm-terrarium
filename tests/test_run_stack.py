@@ -1224,6 +1224,7 @@ def test_no_bit_ci_is_bounded():
     cfg = config_from_args(parse_args(["--no-bit", "--ci"]))
     assert cfg.seconds is not None
     assert cfg.echo is False
+    assert cfg.serve is False       # the implied Console never implies serve under --ci
 
 
 def test_control_command_under_no_bit_omits_bit_and_forwards_the_flag(tmp_path):

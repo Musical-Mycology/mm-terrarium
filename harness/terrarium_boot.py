@@ -1074,7 +1074,15 @@ class _RoomWiring:
     again or, on a later successful retry, calls this observer's own
     `on_clients_restarted()` to finish the rewire this method skipped (see
     that method's docstring -- Important #3 review finding: without this,
-    a Room stuck at "restarted late" never gets its audio grant at all)."""
+    a Room stuck at "restarted late" never gets its audio grant at all).
+
+    The two paths meet when ROOM_READY re-fires while a rewire is still
+    pending: main()'s restart_clients closure calls on_clients_restarted()
+    from INSIDE a successful restart, so by the time restart_clients()
+    returns here the rewire has already happened. The ROOM_READY branch
+    checks for exactly that (pending going True to False across the call)
+    and does not rewire a second time -- one Room, one light session, one
+    audio grant."""
 
     def __init__(self, agent, terrarium, restart_clients=None) -> None:
         self._agent = agent
@@ -1085,12 +1093,18 @@ class _RoomWiring:
     def on_terrarium_state_change(self, old_state, new_state) -> None:
         if new_state is TerrariumState.ROOM_READY:
             if self._restart_clients is not None:
+                was_pending = self._pending_rewire
                 reason = self._restart_clients()
                 if reason is not None:
                     self._pending_rewire = True
                     logging.getLogger(__name__).error(
                         "room clients failed to restart: %s", reason)
                     return
+                if was_pending and not self._pending_rewire:
+                    # on_clients_restarted() ran inside that restart and
+                    # already did this rewire (see the class docstring).
+                    return
+            self._pending_rewire = False
             self._agent.rewire_room()
         elif new_state is TerrariumState.NO_ROOM:
             self._pending_rewire = False
