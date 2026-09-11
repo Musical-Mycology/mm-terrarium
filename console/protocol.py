@@ -38,6 +38,7 @@ __all__ = [
     "devices_changed_event", "bit_status_event", "log_event",
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
     "room_changed_event", "join_changed_event", "room_frame_event",
+    "lobby_changed_event",
     "functions_changed_event", "function_fired_event", "FireFunctionCommand",
     "ListDesignsCommand", "GetDesignCommand", "SaveDesignCommand",
     "PublishDesignCommand", "CloneDesignCommand",
@@ -84,7 +85,8 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
                    registration, devices, bit_status, room=None,
                    functions=None, terrarium_state=None, rooms=None,
                    instrument_functions=None, surface_instruments=None,
-                   builtins=None, designs=None, design_vocab=None, join=None) -> dict:
+                   builtins=None, designs=None, design_vocab=None, join=None,
+                   lobby=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
@@ -104,6 +106,7 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "designs": designs or [],
         "design_vocab": design_vocab,
         "join": join,
+        "lobby": lobby,
     }
 
 
@@ -118,6 +121,11 @@ def join_changed_event(join) -> dict:
     `join` is control.join_info.build_join_info()'s output, or None when
     no join provider is wired up."""
     return {"event": "join_changed", "join": join}
+
+
+def lobby_changed_event(lobby: str | None) -> dict:
+    """The lobby is WAITING / FULL while a Bit sits in SETUP, else None."""
+    return {"event": "lobby_changed", "lobby": lobby}
 
 
 def room_frame_event(fixture: str, channels) -> dict:

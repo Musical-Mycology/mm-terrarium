@@ -269,3 +269,37 @@ def test_shutdown_releases_a_still_sounding_welcome_voice():
     br.on_grant("dev1", _role(ugens=PLAYER_UGENS, welcome=WELCOME))
     br.shutdown()
     assert len(pool.released) == 2                       # drone voice and cue voice
+
+
+from control.audio import WELCOME_INSTRUMENTS
+
+
+def test_bell_is_a_known_welcome_instrument():
+    assert WELCOME_INSTRUMENTS["bell"] == (14, 69, 100)
+
+
+def test_play_note_uses_a_transient_voice_and_frees_it_after_duration():
+    pool = FakePool()
+    br = AudioBridge(pool, clock=_clock_from([10.0, 10.5, 11.0, 11.5]))
+    br.play_note(14, 71, 100, 1.0)                     # clock 10.0
+    voice = pool.acquired[0]
+    assert voice.sent[:2] == [("program", 14), ("note_on", 71, 100)]
+    br.tick()                                          # clock 10.5: still sounding
+    assert pool.released == []
+    br.tick()                                          # clock 11.0: due
+    assert ("note_off", 71) in voice.sent
+    assert pool.released == [voice]
+
+
+def test_set_control_bypasses_the_lane_map():
+    pool = FakePool()
+    br = AudioBridge(pool, clock=_clock_from([0.0] * 4))
+    role = _role(ugens={"instruments": [{"instrument": "flsyn", "program": 89,
+                                         "lanes": [{"source": "cc:74", "dest": "cc:74"}]}]})
+    br.on_grant("fx", role)
+    voice = pool.acquired[0]
+    br.feed_midi("fx", 0xB0, 11, 100)                  # undeclared lane: dropped
+    assert ("cc", 11, 100) not in voice.sent
+    br.set_control("fx", 11, 100)
+    assert ("cc", 11, 100) in voice.sent
+    br.set_control("nobody", 11, 1)                    # unknown dev: no-op

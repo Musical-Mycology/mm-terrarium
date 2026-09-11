@@ -308,7 +308,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
 
     gs = GameServer(bit_registry, room_binding=room_binding,
                     cue_horizon=config.cue_horizon, clock=clock,
-                    carried_instruments=terrarium_config.instruments)
+                    carried_instruments=terrarium_config.instruments,
+                    admin_devices=terrarium_config.admin_devices)
     terrarium = Terrarium(
         terrarium_config, gs, room_binding, boot_config=config,
         arco_command=arco_command, arco_process_cls=arco_process_cls,
@@ -504,16 +505,24 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
 
     Returns "expired", "parent-gone", "state-changed", "players-met",
     "timeout-start", or "timeout-abort".
+
+    An "admin" condition holds with no deadline of its own: `setup_seconds`
+    is ignored for the expiry check (a zero/negative value no longer
+    short-circuits this into an immediate "expired") and the countdown
+    print says so instead of counting down, since there is nothing to
+    count down to -- the hold only ends on a state change or the
+    condition's own timeout_seconds via start_decision.
     """
-    if setup_seconds <= 0:
+    admin = condition is not None and condition.when == "admin"
+    if setup_seconds <= 0 and not admin:
         return "expired"
     initial_bit_name = getattr(gs, "bit_name", None) if gs is not None else None
     start = clock()
-    deadline = start + setup_seconds
+    deadline = None if admin else start + setup_seconds
     next_countdown = start + 15.0
     while True:
         now = clock()
-        if now >= deadline:
+        if deadline is not None and now >= deadline:
             return "expired"
         if parent_is_gone(parent_pid):
             return "parent-gone"
@@ -561,7 +570,10 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                 if decision == "abort":
                     return "timeout-abort"
         if now >= next_countdown:
-            print(f"SETUP open, {deadline - now:.0f}s remaining", flush=True)
+            if deadline is None:
+                print("SETUP open, waiting for an admin start", flush=True)
+            else:
+                print(f"SETUP open, {deadline - now:.0f}s remaining", flush=True)
             next_countdown = now + 15.0
         sleep(1.0 / 44.0)
 
@@ -973,10 +985,13 @@ def _join_info_provider(gs, *, ensemble: str, www_port: int, ip=lan_ip,
             return None
         cfg = getattr(gs.bit, "config", None)
         nodes = tuple(cfg.launch.nodes) if cfg is not None else ()
+        start_key = (cfg.start.key if cfg is not None
+                    and cfg.start.when == "admin" else None)
         return build_join_info(
             lan_ip=ip(), www_port=www_port, arco_http_port=ARCO_HTTP_PORT,
             ensemble=ensemble, bit_name=gs.bit_name, nodes=nodes,
-            app_present=os.path.isfile(os.path.join(root, "app", "index.html")))
+            app_present=os.path.isfile(os.path.join(root, "app", "index.html")),
+            start_key=start_key)
 
     return provider
 
@@ -990,6 +1005,8 @@ def _print_join_urls(provider) -> None:
     for row in info["nodes"]:
         print(f"{markers.JOIN_URL} {row['role']} {row['node']} {row['url']}",
               flush=True)
+    if info.get("start"):
+        print(f"{markers.START_URL} {info['start']['url']}", flush=True)
 
 
 class _JoinLogger:
@@ -1794,7 +1811,9 @@ def main() -> None:
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
-        _start_www_server(args, teardown)
+        www = _start_www_server(args, teardown)
+        if www is not None:
+            agent.start_requests = www.start_requests
         # pump=arco.poll drains Arco's pty for the whole ownership hold;
         # see _restart_room_clients for why that is load-bearing.
         if arco is not None:
@@ -1829,7 +1848,10 @@ def main() -> None:
             # CONTROL_ROUND_ENDED announcement below.
             round1_bit_name = gs.bit_name
             setup_seconds = cfg.launch.setup_seconds
-            if setup_seconds > 0:
+            if cfg.start.when == "admin":
+                print(f"{markers.CONTROL_SETUP_HOLD} until an admin start "
+                      f"-- join now", flush=True)
+            elif setup_seconds > 0:
                 print(f"{markers.CONTROL_SETUP_HOLD} for {setup_seconds:g}s "
                       f"-- join now", flush=True)
             reason = _wait_in_setup(agent, setup_seconds,

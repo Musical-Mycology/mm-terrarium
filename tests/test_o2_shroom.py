@@ -843,3 +843,13 @@ def test_main_gates_the_tilt_sweep_and_the_tapper_on_uses():
     assert 'wants_verb(client.config, "tap")' in src
     assert "BeatTapper(" in src
     assert "on_show=" in src
+
+
+from harness.o2_shroom import invite_seen
+
+
+def test_invite_seen_is_a_solid_white_frame():
+    assert invite_seen(bytes([255] * 36))
+    assert invite_seen(bytes([250, 255, 252] * 12))
+    assert not invite_seen(bytes([255, 0, 255] * 12))
+    assert not invite_seen(b"")

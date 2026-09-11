@@ -46,8 +46,11 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 import webbrowser
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit, urlunsplit
 
 from control.bit_registry import BitRegistry
 from control.process import stop_process
@@ -107,6 +110,8 @@ class StackConfig:
     persist_shrooms: bool = True
     www_port: int = WWW_PORT          # forwarded to terrarium_boot; 0 disables
     web_build: str | None = None      # copied into www/app/ before run()
+    start_after_grant: bool = False   # GET the admin START_URL once granted
+    handshake_devices: int = 0        # first N devices join via --handshake
 
 
 @dataclass
@@ -235,10 +240,18 @@ def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
     ]
     if cfg.persist_shrooms:
         command += ["--persist"]
+    if index <= cfg.handshake_devices:
+        command += ["--handshake"]
     return command
 
 
 _URL_PATTERN = re.compile(r"http://\S+")
+
+
+def _loopback(url: str) -> str:
+    parts = urlsplit(url)
+    netloc = f"127.0.0.1:{parts.port}" if parts.port else "127.0.0.1"
+    return urlunsplit(parts._replace(netloc=netloc))
 
 
 def _control_stages(cfg: StackConfig) -> tuple[tuple[str, str, str], ...]:
@@ -287,6 +300,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
     logs = {}
     urls: list[str] = []
     room_urls: list[str] = []
+    start_urls: list[str] = []
 
     def collect_url(line: str) -> None:
         """Record a child's BROWSE_URL or ROOM_URL line.
@@ -298,6 +312,11 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         never handed to the opener -- a Room fixture canvas is reached
         from the Console's Room card, not an automatic browser tab.
         """
+        if markers.START_URL in line:
+            match = _URL_PATTERN.search(line)
+            if match is not None:
+                start_urls.append(match.group())
+            return
         is_browse = markers.BROWSE_URL in line or markers.WWW_URL in line
         is_room = markers.ROOM_URL in line
         if not (is_browse or is_room):
@@ -369,6 +388,20 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                     f"{tee.name} synced but was never granted a role. Is "
                     f"Control still in SETUP? `player` is a scored role "
                     f"and is refused once RUNNING.", logs, urls, room_urls)
+
+        if cfg.start_after_grant:
+            if not start_urls:
+                return RunResult(False, "start",
+                                 "no START_URL line seen; does the Bit's [start] "
+                                 "declare when = 'admin'?", logs, urls, room_urls)
+            url = _loopback(start_urls[-1])
+            try:
+                with urllib.request.urlopen(url, timeout=5) as resp:
+                    status = resp.status
+            except (OSError, urllib.error.URLError) as exc:
+                return RunResult(False, "start", f"start request failed: {exc}",
+                                 logs, urls, room_urls)
+            print(f"start requested via {url} -> HTTP {status}", flush=True)
 
         dead = _hold(cfg, processes, clock, sleep)
         if dead is not None:
@@ -668,6 +701,18 @@ def parse_args(argv=None):
                     action="store_false",
                     help="One-shot devices: each exits on /release, the "
                          "pre-2026-09 behavior.")
+    ap.add_argument("--start-after-grant", action="store_true",
+                    help="Once every spawned device is granted a role, GET the "
+                         "START_URL Control printed (rewritten to loopback, so "
+                         "the hit carries the Terrarium's own admin identity). "
+                         "Implied under --ci when the resolved Bit's start.when "
+                         "is \"admin\"; pass --no-start-after-grant to opt out.")
+    ap.add_argument("--no-start-after-grant", action="store_true",
+                    help="Suppress the start-after-grant implied under --ci for "
+                         "an admin-start Bit: the run holds in SETUP instead.")
+    ap.add_argument("--handshake-devices", type=int, default=0,
+                    help="The first N spawned Testshrooms join via the lobby "
+                         "handshake (--handshake) instead of an explicit join.")
     args = ap.parse_args(argv)
     if args.ci and args.open:
         ap.error("--open makes no sense under --ci: a headless CI run "
@@ -782,6 +827,15 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
     # parse time above, so `not args.ci` here is just documenting that
     # invariant, not re-deriving it.
     serve = args.serve or (console_port is not None and not args.ci)
+    # An admin-start Bit never leaves SETUP on its own, so a CI run of one
+    # would sit out its window and exit green without ever running. Under
+    # --ci that implies the start-after-grant hit, unless the caller opted
+    # out explicitly. Non-CI runs and non-admin Bits are untouched, and
+    # --handshake-devices stays an explicit choice.
+    start_after_grant = args.start_after_grant
+    if (args.ci and bit_cfg.start.when == "admin"
+            and not args.no_start_after_grant):
+        start_after_grant = True
     return StackConfig(
         log_dir=log_dir, arco_command=args.arco_command,
         devices=devices, ensemble=args.ensemble,
@@ -793,7 +847,9 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         open_urls=args.open, profile=args.profile,
         serve=serve,
         persist_shrooms=args.persist_shrooms,
-        www_port=args.www_port, web_build=args.web_build)
+        www_port=args.www_port, web_build=args.web_build,
+        start_after_grant=start_after_grant,
+        handshake_devices=args.handshake_devices)
 
 
 def _failing_log_key(result: RunResult) -> str | None:

@@ -3,6 +3,7 @@ in-process fake server (no sockets -- see test_devicelink_server.py)."""
 
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,7 @@ pytest.importorskip("luxaeterna")
 
 from bits.test.test_bit import TestBit
 from control.audio import AudioBridge, FakePool
+from control.bit_registry import BitRegistry
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
@@ -122,6 +124,8 @@ class _FakeAudioBridge:
         self.fed: list[tuple[str, int, int, int]] = []
         self.droned: set[str] = set()
         self.silenced: list[str] = []
+        self.notes: list[tuple[int, int, int, float]] = []
+        self.controls: list[tuple[str, int, int]] = []
         self.ticks = 0
 
     def on_grant(self, dev, role) -> None:
@@ -144,6 +148,12 @@ class _FakeAudioBridge:
     def silence(self, dev) -> None:
         self.silenced.append(dev)
 
+    def play_note(self, program, key, vel, duration) -> None:
+        self.notes.append((program, key, vel, duration))
+
+    def set_control(self, dev, cc, value) -> None:
+        self.controls.append((dev, cc, value))
+
     def tick(self, now=None) -> None:
         self.ticks += 1
 
@@ -164,6 +174,10 @@ class FakeFixtureSession:
         self.fed.append((status, d1, d2))
         self._last = d2
 
+    def swap(self, manifest):
+        self.manifest = manifest
+        self.swaps = getattr(self, "swaps", []) + [manifest]
+
     def render_into(self, universe):
         universe.set_range(0, bytes([self._last & 0xFF]) * (self.cap.pixel_count * 3))
 
@@ -181,6 +195,16 @@ def _fake_sessions(monkeypatch):
 
     monkeypatch.setattr(agent_mod, "build_session", build)
     return built
+
+
+def _no_lobby_config():
+    """TestBit's own manifest with [lobby] switched off. For tests that
+    assert on the Bit's OWN ROOM light declaration, or on an exact fed
+    list: from SETUP the lobby otherwise swaps its own aurora manifest on
+    top of every fixture and sounds its drone (see tests/
+    test_lobby_agent.py, which covers that behavior on purpose)."""
+    cfg = BitRegistry.scan([Path("bits")]).resolve_config("TestBit")
+    return replace(cfg, lobby=replace(cfg.lobby, enabled=False))
 
 
 def _hello(server, agent, client="c1", dev="ie1"):
@@ -1108,7 +1132,9 @@ def test_load_bit_swaps_ambient_for_the_bits_room_declaration(monkeypatch):
     agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
     assert "aurora" in _instrument_names([calls[-1]])
 
-    gs.load_bit("TestBit")   # TestBit declares DEMO room_manifests -> ROOM role
+    # Lobby off: this test is about the ambient <-> Bit ROOM swap, and the
+    # lobby's own SETUP swap would be the last manifest built instead.
+    gs.load_bit("TestBit", config=_no_lobby_config())
 
     assert set(agent._fixtures) == {"array"}
     assert "rainbow" in _instrument_names([calls[-1]])
@@ -1118,7 +1144,7 @@ def test_unload_bit_swaps_back_to_ambient(monkeypatch):
     calls = _spy_on_light_manifest(monkeypatch)
     gs = _demo_room_no_bit_game_server()
     agent = DeviceLinkAgent(gs, FakeServer(), clock=time.monotonic)
-    gs.load_bit("TestBit")
+    gs.load_bit("TestBit", config=_no_lobby_config())
     assert "rainbow" in _instrument_names([calls[-1]])
 
     gs.abort()   # -> UNLOADING -> IDLE; no Bit, no ROOM role any more
@@ -2301,8 +2327,36 @@ def test_room_solid_cue_paints_every_bound_fixture(two_fixture_agent):
     gs._dispatch_cues([SolidCue(ROOM, (255, 0, 0), 1.0, 5.0)], at=1.0)
     agent._render_room()
     frames = {dev: bytes(msg["args"][0]) for dev, msg in agent.server.sent}
-    assert frames[main] == bytes([255, 0, 0]) * 60
-    assert frames[accent] == bytes([255, 0, 0]) * 30
+    # Both TEST fixtures are GRB (rooms/TEST.toml), and a SolidCue names a
+    # colour, not a wire layout -- so red goes out G=0, R=255, B=0.
+    assert frames[main] == bytes([0, 255, 0]) * 60
+    assert frames[accent] == bytes([0, 255, 0]) * 30
+
+
+def test_unwire_room_drops_a_muted_fixtures_latched_override(two_fixture_agent):
+    """A mute latches an override with NO expiry, so nothing lapses it on
+    its own. Once unwire_room has dropped the fixtures (with gs.room already
+    None, so the dev no longer resolves to any fixture), that entry must be
+    gone: _render_frames' override-only pass would otherwise hand a Room
+    fixture a 36-channel PLAYER frame over its 180-channel strip."""
+    agent, _audio, main, _accent = two_fixture_agent
+    gs = agent.game_server
+    # Fixture simulators hello like any other device, which is what puts
+    # them in range of the override-only pass at all.
+    gs.hello(main, "sim", "1", None)
+    agent.poll()
+    agent._on_mute_change(main, True)
+    assert agent._overrides[main] == ((0, 0, 0), 0.0, None)
+
+    gs.room = None
+    agent.unwire_room()
+    agent.server.sent.clear()
+    agent.poll()
+
+    assert main not in agent._overrides
+    assert main not in agent._override_only
+    assert not [m for dev, m in agent.server.sent
+                if dev == main and m["address"] == f"/{main}/leds"]
 
 
 def test_override_expiry_clears_only_that_fixtures_last_frame():

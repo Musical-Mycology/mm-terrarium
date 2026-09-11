@@ -98,3 +98,20 @@ def test_default_encoder_produces_inline_svg():
     assert svg.startswith("<svg")
     assert "<?xml" not in svg
     assert "http://" not in svg    # the URL is encoded, never inlined as text
+
+
+from control.join_info import start_url
+
+
+def test_start_url_carries_the_key():
+    assert start_url(lan_ip="10.0.0.7", www_port=8788, key="a b") == \
+        "http://10.0.0.7:8788/start?key=a+b"
+
+
+def test_build_join_info_adds_a_start_row_only_for_an_admin_bit():
+    assert _info()["start"] is None
+    info = _info(start_key="metro-dev")
+    assert info["start"]["url"] == "http://10.0.0.7:8788/start?key=metro-dev"
+    assert info["start"]["key"] == "metro-dev"
+    assert info["start"]["qr_svg"].startswith("<svg>")
+    assert info["start"]["wire"] == '/game/start "ss" <dev> metro-dev'

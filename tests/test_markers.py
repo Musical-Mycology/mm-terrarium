@@ -158,3 +158,9 @@ def test_join_url_marker_value_and_emit_site():
     assert markers.JOIN_URL == "JOIN_URL:"
     import harness.terrarium_boot
     assert "markers.JOIN_URL" in inspect.getsource(harness.terrarium_boot)
+
+
+def test_start_url_marker_value_and_absent_from_dicts():
+    assert markers.START_URL == "START_URL:"
+    assert markers.START_URL not in markers.READY_MARKERS.values()
+    assert markers.START_URL not in markers.FAILURE_MARKERS.values()

@@ -11,6 +11,7 @@ import time
 from console import protocol
 from control.bit_config import ManifestError
 from control.engine import BitLoadError, GameServer, InvalidTransition
+from control.lobby import TERRARIUM_ADMIN
 from control.roles import RoleClass
 from control.room_view import room_view
 from control.rooms import non_room_counts, room_role_name
@@ -218,7 +219,10 @@ class ConsoleAgent:
                 else:
                     self.game_server.load_bit(command.name, config=cfg)
             elif isinstance(command, protocol.RunCommand):
-                self.game_server.run()
+                reason = self.game_server.request_start(None, TERRARIUM_ADMIN,
+                                                        "console")
+                if reason is not None:
+                    return protocol.error_event(name, reason)
             elif isinstance(command, protocol.AbortCommand):
                 # Hard stop (2026-09-01 spec section 7): end the bit AND
                 # the room. With the room's Arco gone, sound physically
@@ -629,6 +633,7 @@ class ConsoleAgent:
                 "cue_kinds": list(CUE_KINDS),
             },
             join=self._join_view(),
+            lobby=gs.lobby_state(),
         )
 
     def _rooms_view(self) -> list:
@@ -828,6 +833,8 @@ class ConsoleAgent:
         self.server.broadcast(protocol.state_changed_event(
             new_state.name, self.game_server.bit_name,
             terrarium_state=terrarium_state))
+        self.server.broadcast(
+            protocol.lobby_changed_event(self.game_server.lobby_state()))
         if new_state == State.UNLOADING:
             self._broadcast_bit_completed()
         # The Join card reads the loaded Bit's nodes: it changes exactly
@@ -879,6 +886,8 @@ class ConsoleAgent:
     def on_registration_change(self) -> None:
         self.server.broadcast(
             protocol.registration_changed_event(self._non_room_counts()))
+        self.server.broadcast(
+            protocol.lobby_changed_event(self.game_server.lobby_state()))
 
     def on_devices_change(self) -> None:
         self.server.broadcast(protocol.devices_changed_event(
@@ -910,6 +919,18 @@ class ConsoleAgent:
         must be impossible to misread as 'no load occurred'."""
         self.server.broadcast(protocol.log_event(
             "info", f"round ended: {bit_name} ({reason})"))
+
+    def on_start_requested(self, record) -> None:
+        if record.accepted:
+            message = f"start accepted: {record.source}"
+            level = "info"
+        else:
+            message = f"start refused: {record.source} ({record.reason})"
+            level = "warn"
+        self.server.broadcast(protocol.log_event(level, message))
+
+    def on_lobby_event(self, event: str, dev: str) -> None:
+        self.server.broadcast(protocol.log_event("info", f"lobby {event}: {dev}"))
 
     def on_function_fired(self, record) -> None:
         """Engine observer hook. A fire is engine-produced and has no device

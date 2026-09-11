@@ -76,3 +76,15 @@ def test_scored_count_zero_when_registration_none():
     gs = SimpleNamespace(bit=SimpleNamespace(role_table=_role_table()),
                           registration=None)
     assert scored_count(gs) == 0
+
+
+def test_admin_never_self_starts_without_a_timeout():
+    cond = StartCondition(when="admin", min_scored=0, key="k")
+    assert start_decision(cond, scored=5, elapsed=9999.0, setup_seconds=0.0) is None
+
+
+def test_admin_timeout_applies_on_timeout():
+    cond = StartCondition(when="admin", min_scored=0, key="k",
+                          timeout_seconds=30.0, on_timeout="abort")
+    assert start_decision(cond, scored=0, elapsed=29.0, setup_seconds=0.0) is None
+    assert start_decision(cond, scored=0, elapsed=30.0, setup_seconds=0.0) == "abort"

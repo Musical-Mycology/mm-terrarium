@@ -97,6 +97,7 @@ def test_invalid_command_sends_error_event_without_raising():
     errors = [m for m in transport.sent if m["event"] == "error"]
     assert len(errors) == 1
     assert errors[0]["command"] == "run"
+    assert errors[0]["message"] == "no Bit loaded"
 
 
 def test_unparseable_message_is_dropped_not_raised():

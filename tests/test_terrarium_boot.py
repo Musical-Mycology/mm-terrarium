@@ -3471,3 +3471,77 @@ def test_room_wiring_drops_the_pending_rewire_on_no_room():
 
     wiring.on_clients_restarted()
     assert calls == ["unwire"]
+
+
+def test_wait_in_setup_holds_without_a_deadline_for_an_admin_start():
+    from control.bit_config import StartCondition
+    from harness.terrarium_boot import _wait_in_setup
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class GS:
+        state = State.SETUP
+        bit_name = "X"
+        registration = None
+        bit = None
+
+    ticks = iter([0.0, 1.0, 2.0, 50.0, 60.0])
+    cond = StartCondition(when="admin", min_scored=0, key="k",
+                          timeout_seconds=55.0, on_timeout="abort")
+    reason = _wait_in_setup(FakeAgent(), 0.0, clock=lambda: next(ticks),
+                            sleep=lambda _s: None, gs=GS(), condition=cond,
+                            game_server=GS())
+    assert reason == "timeout-abort"
+
+
+def test_wait_in_setup_admin_yields_on_state_change_not_on_setup_seconds():
+    from control.bit_config import StartCondition
+    from harness.terrarium_boot import _wait_in_setup
+
+    class GS:
+        state = State.SETUP
+        bit_name = "X"
+        registration = None
+        bit = None
+
+    gs = GS()
+    polls = []
+
+    class FakeAgent:
+        def poll(self):
+            polls.append(1)
+            if len(polls) == 3:
+                gs.state = State.RUNNING
+
+    ticks = iter([0.0, 10.0, 20.0, 30.0, 40.0])
+    cond = StartCondition(when="admin", min_scored=0, key="k")
+    reason = _wait_in_setup(FakeAgent(), 5.0, clock=lambda: next(ticks),
+                            sleep=lambda _s: None, gs=gs, condition=cond,
+                            game_server=gs)
+    assert reason == "state-changed"
+
+
+def test_build_threads_terrarium_config_admin_devices_into_the_game_server():
+    """A loaded TerrariumConfig's [admin] devices must reach GameServer's
+    admin_devices -- otherwise a configured admin phone can never start a
+    round and only the Terrarium's own identity is ever admin."""
+    from control.terrarium_config import TerrariumConfig
+
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    terrarium_config = TerrariumConfig(
+        schema=1, name="terrarium-boot", bit_paths=(),
+        rooms={TEST_SPEC.name: TEST_SPEC},
+        version="terrarium-boot",
+        admin_devices=("gem-0001",))
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit},
+        arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC, terrarium_config=terrarium_config,
+        transport=_fake_transport(), clock=time.monotonic, arco_process_cls=_fake_arco,
+        simulator_popen=FakePopen(), room_audio=_fake_room_audio())
+    try:
+        assert gs.is_admin("gem-0001")
+    finally:
+        shutdown(teardown, terrarium)

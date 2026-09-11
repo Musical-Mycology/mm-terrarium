@@ -2170,3 +2170,38 @@ def test_ensure_room_refuses_mid_transition():
 
     assert reason == "room is room_loading; try again once it settles"
 
+
+
+def test_run_goes_through_request_start_and_logs_the_outcome():
+    gs, srv, agent = _server_with_agent()
+    srv.deliver("c1", {"command": "run"})
+    agent.poll()
+    errors = [m for (_, m) in srv.sent if m.get("event") == "error"]
+    assert errors[-1]["message"] == "no Bit loaded"
+    logs = [m for m in srv.broadcasts if m.get("event") == "log"]
+    assert logs[-1]["message"].startswith("start refused: console (no Bit loaded)")
+    gs.load_bit("TestBit")
+    srv.deliver("c1", {"command": "run"})
+    agent.poll()
+    assert gs.state.name == "RUNNING"
+    logs = [m for m in srv.broadcasts if m.get("event") == "log"]
+    assert logs[-1]["message"] == "start accepted: console"
+
+
+def test_lobby_changed_rides_registration_and_state_and_the_snapshot():
+    gs, srv, agent = _server_with_agent()
+    gs.load_bit("TestBit")
+    lobby = [m for m in srv.broadcasts if m.get("event") == "lobby_changed"]
+    assert lobby[-1]["lobby"] == "WAITING"
+    snap = agent.snapshot()
+    assert snap["lobby"] == "WAITING"
+    gs.request_start(None, "terrarium", "console")
+    lobby = [m for m in srv.broadcasts if m.get("event") == "lobby_changed"]
+    assert lobby[-1]["lobby"] is None
+
+
+def test_lobby_events_are_logged():
+    gs, srv, agent = _server_with_agent()
+    gs.notify_lobby("invite", "ie1")
+    logs = [m for m in srv.broadcasts if m.get("event") == "log"]
+    assert logs[-1]["message"] == "lobby invite: ie1"

@@ -745,3 +745,28 @@ def test_shipped_rooms_come_from_the_catalog_and_match_the_pre_migration_profile
         assert config.rooms[name].description == before.rooms[name].description
         assert config.rooms[name].node_id == before.rooms[name].node_id
     assert not tomllib.loads(open("terrarium.toml").read()).get("rooms")
+
+
+def test_admin_devices_default_empty_and_parse():
+    cfg = parse_terrarium_config(MINIMAL, source="t")
+    assert cfg.admin_devices == ()
+    cfg = parse_terrarium_config(
+        MINIMAL + "\n[admin]\ndevices = [\"gem-1\", \"gem-2\"]\n", source="t")
+    assert cfg.admin_devices == ("gem-1", "gem-2")
+
+
+def test_admin_devices_refuses_non_strings_and_the_reserved_id():
+    with pytest.raises(TerrariumConfigError) as err:
+        parse_terrarium_config(MINIMAL + "\n[admin]\ndevices = [1]\n", source="t")
+    assert err.value.key == "admin.devices"
+    with pytest.raises(TerrariumConfigError) as err:
+        parse_terrarium_config(
+            MINIMAL + "\n[admin]\ndevices = [\"terrarium\"]\n", source="t")
+    assert err.value.key == "admin.devices"
+    assert "always" in str(err.value)
+
+
+def test_admin_must_be_a_table():
+    with pytest.raises(TerrariumConfigError) as err:
+        parse_terrarium_config('admin = "gem-1"\n' + MINIMAL, source="t")
+    assert err.value.key == "admin"

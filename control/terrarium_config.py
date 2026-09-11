@@ -16,6 +16,7 @@ from control.functions import Function, FunctionKind, GeneratorSpec, ScriptStep
 from control.instrument import (Instrument, InstrumentError,
                                 validate_instrument,
                                 validate_instrument_manifests)
+from control.lobby import TERRARIUM_ADMIN
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
 from control.triggers import EventTrigger, StreamTrigger
@@ -63,6 +64,9 @@ class TerrariumConfig:
     # Console's design panel reads room_roots[0], when non-empty, as
     # its rooms_root.
     room_roots: tuple[Path, ...] = ()
+    # [admin] devices, a list of device names that are admin-control targets
+    # (in addition to the Terrarium itself, which is always an admin target).
+    admin_devices: tuple[str, ...] = ()
 
 
 def load_terrarium_config(path: str) -> TerrariumConfig:
@@ -131,6 +135,21 @@ def parse_terrarium_config(text: str, source: str,
         raise TerrariumConfigError(source=source, key="terrarium.name",
                                    message="required non-empty string")
     bit_paths = tuple(terr.get("bit_paths", ["bits"]))
+    admin_raw = raw.get("admin", {})
+    if not isinstance(admin_raw, dict):
+        raise TerrariumConfigError(source=source, key="admin",
+                                   message="expected a table")
+    devices_raw = admin_raw.get("devices", [])
+    if not isinstance(devices_raw, list) or not all(
+            isinstance(d, str) and d for d in devices_raw):
+        raise TerrariumConfigError(source=source, key="admin.devices",
+                                   message="expected a list of non-empty strings")
+    if TERRARIUM_ADMIN in devices_raw:
+        raise TerrariumConfigError(
+            source=source, key="admin.devices",
+            message=f"{TERRARIUM_ADMIN!r} is the Terrarium itself and is always "
+                    f"an admin; do not list it")
+    admin_devices = tuple(devices_raw)
     instruments_raw = raw.get("instruments", {})
     instruments: dict[str, Instrument] = {}
     for iname, iraw in instruments_raw.items():
@@ -158,7 +177,7 @@ def parse_terrarium_config(text: str, source: str,
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
     return TerrariumConfig(schema=schema, name=name, bit_paths=bit_paths,
                            rooms=rooms, instruments=instruments,
-                           version=f"{schema}-{digest}")
+                           version=f"{schema}-{digest}", admin_devices=admin_devices)
 
 
 _LANE_DEV_WIRE = {"room": ROOM, "target": TARGET}

@@ -60,9 +60,11 @@ function serialize(node) {
   if (node.hidden) attrs.push("hidden");
   for (const [k, v] of Object.entries(node._attrs)) attrs.push(`${k}="${v}"`);
   const open = `<${tag}${attrs.length ? " " + attrs.join(" ") : ""}>`;
-  const inner = node.children.length
-    ? node.children.map(serialize).join("")
-    : escapeText(node._text);
+  const inner = node._rawHtml !== undefined
+    ? node._rawHtml
+    : (node.children.length
+        ? node.children.map(serialize).join("")
+        : escapeText(node._text));
   return `${open}${inner}</${tag}>`;
 }
 
@@ -101,6 +103,7 @@ function el(tagName) {
       if (child.parentNode) child.parentNode._detach(child);
       node.children.push(child);
       node._text = "";
+      node._rawHtml = undefined;
       child.parentNode = node;
       return child;
     },
@@ -188,11 +191,25 @@ function el(tagName) {
       for (const c of node.children) unregisterIdTree(c);
       node._text = v == null ? "" : String(v);
       node.children = [];
+      node._rawHtml = undefined;
     },
   });
   Object.defineProperty(node, "innerHTML", {
-    get() { return node.children.map(serialize).join("") + (node.children.length ? "" : escapeText(node._text)); },
-    set() { /* discipline: never write markup strings; use createElement */ },
+    // A plain leaf write (no children set beforehand) is stored verbatim
+    // and echoed back raw -- covers the one legitimate front-end use,
+    // stamping a trusted server-rendered QR <svg> into a fresh mount --
+    // without pretending to be a real HTML parser. Any node built via
+    // createElement/appendChild still serializes structurally.
+    get() {
+      if (node._rawHtml !== undefined) return node._rawHtml;
+      return node.children.map(serialize).join("") + (node.children.length ? "" : escapeText(node._text));
+    },
+    set(v) {
+      for (const c of node.children) unregisterIdTree(c);
+      node.children = [];
+      node._text = "";
+      node._rawHtml = v == null ? "" : String(v);
+    },
   });
   return node;
 }

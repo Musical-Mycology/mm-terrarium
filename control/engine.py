@@ -18,11 +18,15 @@ from control.device_pool import DevicePool
 from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
                                  InstrumentRequirement, cue_kind, satisfies)
+from control.lobby import (DEFAULT_LOBBY, FEEDBACK_REFUSED, StartRequested,
+                           TERRARIUM_ADMIN, decide_start,
+                           lobby_state as _lobby_state)
 from control.registration import JoinResult, RegistrationState
 from control.role_config import (compose_role_config, manifest_fixture_targets,
                                  validate_role_declarations)
 from control.roles import RoleClass
 from control.rooms import room_role
+from control.start_condition import scored_count
 from control.state import State
 from control.builtins import RESERVED_NAMES, builtin_functions
 from control.functions import (
@@ -85,7 +89,8 @@ def _resolve_room_requirements(requirements, room) -> None:
 class GameServer:
     def __init__(self, bit_registry: dict, room_binding=None,
                  cue_horizon: float = 0.0, clock=time.monotonic,
-                 carried_instruments: dict | None = None):
+                 carried_instruments: dict | None = None,
+                 admin_devices=()):
         self.bit_registry = bit_registry
         # dev[str, Instrument]: every Instrument a device's hello may
         # declare by name, seeded with the two shipped constants (present
@@ -99,6 +104,9 @@ class GameServer:
             DEFAULTSHROOM.name: DEFAULTSHROOM,
             **(carried_instruments or {}),
         }
+        # The Terrarium itself is always an admin (spec section 3); the
+        # config list only adds to it.
+        self.admin_devices: frozenset[str] = frozenset(admin_devices) | {TERRARIUM_ADMIN}
         self.state = State.IDLE
         self.devices = DevicePool()
         # Control-global Room state (see control/rooms.py, control/
@@ -462,6 +470,56 @@ class GameServer:
         self._run_elapsed = 0.0
         self._set_state(State.RUNNING)
         self.bit.on_run_start()
+
+    def is_admin(self, dev: str | None) -> bool:
+        return dev is not None and dev in self.admin_devices
+
+    def lobby_config(self):
+        cfg = getattr(self.bit, "config", None) if self.bit is not None else None
+        return getattr(cfg, "lobby", None) or DEFAULT_LOBBY
+
+    def lobby_state(self) -> str | None:
+        """'WAITING' / 'FULL' while a lobby is active in SETUP, else None."""
+        if self.state is not State.SETUP or self.registration is None:
+            return None
+        if not self.lobby_config().enabled:
+            return None
+        return _lobby_state(self.registration.counts(),
+                            self.registration.role_table).name
+
+    def notify_lobby(self, event: str, dev: str) -> None:
+        """Let the device-link layer announce a lobby event (invite,
+        handshake) through the engine's observer list, so the Console can
+        log it without observing the transport."""
+        self._notify("on_lobby_event", event, dev)
+
+    def request_start(self, key: str | None, source_dev: str | None,
+                      source: str) -> str | None:
+        """The single start authority (spec section 2). Never raises; a
+        refusal is a reason string. Fires on_start_requested for every
+        attempt, after any state change it caused."""
+        cfg = getattr(self.bit, "config", None) if self.bit is not None else None
+        cond = getattr(cfg, "start", None)
+        decision = decide_start(
+            bit_loaded=self.bit is not None,
+            in_setup=self.state is State.SETUP,
+            when=cond.when if cond is not None else "immediate",
+            expected_key=getattr(cond, "key", None),
+            key=key,
+            admin=self.is_admin(source_dev),
+            scored=scored_count(self) if self.registration is not None else 0,
+            min_scored=cond.min_scored if cond is not None else 0)
+        accepted, reason, feedback = (decision.accepted, decision.reason,
+                                      decision.feedback)
+        if accepted:
+            try:
+                self.run()
+            except InvalidTransition as exc:
+                accepted, reason, feedback = False, str(exc), FEEDBACK_REFUSED
+        self._notify("on_start_requested", StartRequested(
+            source=source, source_dev=source_dev, accepted=accepted,
+            reason=reason, feedback=feedback))
+        return reason
 
     def join(self, dev: str, node: str) -> JoinResult:
         if self.state not in (State.SETUP, State.RUNNING):

@@ -14,12 +14,22 @@ from __future__ import annotations
 
 import functools
 import logging
+import queue
 import socket
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
+
+from control.lobby import StartRequest, TERRARIUM_ADMIN
 
 # The documented port a QR poster points at (spec section 4.1).
 WWW_PORT = 8788
+
+# The one dynamic route this server answers; everything else is a static
+# file under `directory`.
+START_PATH = "/start"
+_LOOPBACK = ("127.0.0.1", "::1")
+START_QUEUE_MAX = 16
 
 
 def lan_ip() -> str:
@@ -61,10 +71,45 @@ class _QuietHandler(SimpleHTTPRequestHandler):
     """SimpleHTTPRequestHandler already confines paths to `directory`
     (translate_path drops '..' components) and maps .wasm and .js through
     the mimetypes table. Only its per-request log line is silenced: the
-    stack's stdout carries markers, not access logs."""
+    stack's stdout carries markers, not access logs.
+
+    Static files as before, plus the one dynamic route: GET /start.
+    The handler runs on the server thread and never touches the engine;
+    it only enqueues a StartRequest for DeviceLinkAgent to drain on its
+    own tick (spec section 3)."""
+
+    def __init__(self, *args, start_requests=None, **kwargs):
+        self._start_requests = start_requests
+        super().__init__(*args, **kwargs)
 
     def log_message(self, format, *args):  # noqa: A002 (stdlib signature)
         return
+
+    def do_GET(self):
+        parsed = urlsplit(self.path)
+        if parsed.path != START_PATH:
+            return super().do_GET()
+        params = parse_qs(parsed.query)
+        key = params.get("key", [""])[0]
+        dev = params.get("dev", [""])[0] or None
+        if self.client_address[0] in _LOOPBACK:
+            dev, source = TERRARIUM_ADMIN, "web:terrarium"
+        else:
+            source = f"web:{dev}" if dev else "web:anonymous"
+        if self._start_requests is None:
+            self.send_error(404, "start is not wired on this server")
+            return
+        try:
+            self._start_requests.put_nowait(StartRequest(key, dev, source))
+        except queue.Full:
+            self.send_error(503, "start queue full")
+            return
+        body = b"start requested\n"
+        self.send_response(202)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 class WwwServer:
@@ -75,9 +120,11 @@ class WwwServer:
         self._port = port
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self.start_requests: queue.Queue = queue.Queue(maxsize=START_QUEUE_MAX)
 
     def start(self) -> None:
-        handler = functools.partial(_QuietHandler, directory=self._root)
+        handler = functools.partial(_QuietHandler, directory=self._root,
+                                    start_requests=self.start_requests)
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._server.daemon_threads = True
         self._port = self._server.server_address[1]

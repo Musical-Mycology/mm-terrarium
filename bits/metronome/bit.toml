@@ -20,10 +20,9 @@ default_join_role = "player"
 player = "METRO_PLAYER_NODE"
 
 [start]
-when = "players"
+when = "admin"
+key = "metro-dev"
 min_scored = 2
-timeout_seconds = 120
-on_timeout = "start"
 
 [console]
 display_name = "Metronome"

@@ -23,6 +23,7 @@ from __future__ import annotations
 import time
 from typing import Protocol
 
+from control.lobby import BELL_PROGRAM, BELL_VEL, NOTE_SCALE
 from control.roles import Role
 
 _CC_PREFIX = "cc:"
@@ -36,6 +37,9 @@ _CC_PREFIX = "cc:"
 # DEFAULT_SOUNDFONT comment; a non-GM soundfont cost real debugging time here).
 WELCOME_INSTRUMENTS: dict[str, tuple[int, int, int]] = {
     "chime": (9, 84, 88),        # 9 = Glockenspiel (General MIDI)
+    # The lobby owns the join bell's numbers (control/lobby.py): program 14
+    # is Tubular Bells and the key is the bottom of the lobby note scale.
+    "bell": (BELL_PROGRAM, NOTE_SCALE[0], BELL_VEL),
 }
 
 _DEFAULT_WELCOME_DURATION = 1.5
@@ -171,10 +175,26 @@ class AudioBridge:
                 f"(known: {sorted(self._welcome)})")
         program, key, vel = self._welcome[name]
         duration = float(decl.get("duration", _DEFAULT_WELCOME_DURATION))
+        self.play_note(program, key, vel, duration)
+
+    def play_note(self, program: int, key: int, vel: int,
+                  duration: float) -> None:
+        """One note on its own transient voice, released `duration`
+        seconds later by tick(). The welcome ceremony and the lobby bell
+        both ride this so neither disturbs a sustained drone."""
         voice = self._pool.acquire()
-        voice.program_change(program)
-        voice.note_on(key, vel)
-        self._pending_offs.append((self._clock() + duration, voice, key))
+        voice.program_change(int(program))
+        voice.note_on(int(key), int(vel))
+        self._pending_offs.append((self._clock() + float(duration), voice, int(key)))
+
+    def set_control(self, dev: str, cc: int, value: int) -> None:
+        """Write a controller straight to dev's voice, ignoring the role's
+        lane map. The lobby breath uses this: a Bit's ROOM ugen need not
+        declare cc:11 for the lobby to swell its pad."""
+        entry = self._devices.get(dev)
+        if entry is None:
+            return
+        entry.voice.control_change(int(cc), int(value))
 
     def tick(self, now: float | None = None) -> None:
         """Called once per driver-loop iteration: expire welcome cues, then let

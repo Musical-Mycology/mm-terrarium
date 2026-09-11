@@ -41,6 +41,11 @@ def guest_url(*, lan_ip: str, www_port: int, arco_http_port: int,
     return f"http://{lan_ip}:{www_port}/app/?{query}"
 
 
+def start_url(*, lan_ip: str, www_port: int, key: str) -> str:
+    """The admin start URL a QR code or NFC tag carries (spec section 3)."""
+    return f"http://{lan_ip}:{www_port}/start?{urlencode({'key': key})}"
+
+
 def tuneshroom_command(*, lan_ip: str, arco_http_port: int, ensemble: str,
                        node: str) -> str:
     """The `flutter run` line for the Tuneshroom web sim, to be run from
@@ -63,7 +68,8 @@ def default_qr_svg(url: str) -> str:
 
 def build_join_info(*, lan_ip: str, www_port: int, arco_http_port: int,
                     ensemble: str, bit_name: str | None, nodes,
-                    app_present: bool, qr_svg=default_qr_svg) -> dict:
+                    app_present: bool, qr_svg=default_qr_svg,
+                    start_key: str | None = None) -> dict:
     """The Join card's read model. `nodes` is an iterable of (role, node)
     pairs, the shape of BitConfig.launch.nodes; empty when no Bit is
     loaded. `qr_svg` is a callable url -> svg string, or None for no QR;
@@ -91,6 +97,17 @@ def build_join_info(*, lan_ip: str, www_port: int, arco_http_port: int,
                 lan_ip=lan_ip, arco_http_port=arco_http_port,
                 ensemble=ensemble, node=node),
         })
+    start = None
+    if start_key:
+        url = start_url(lan_ip=lan_ip, www_port=www_port, key=start_key)
+        svg = None
+        if qr_svg is not None:
+            try:
+                svg = qr_svg(url)
+            except Exception:
+                logger.exception("QR encoder failed for %s", url)
+        start = {"url": url, "qr_svg": svg, "key": start_key,
+                 "wire": f'/game/start "ss" <dev> {start_key}'}
     return {
         "www_url": f"http://{lan_ip}:{www_port}/app/",
         "o2ws_host": f"{lan_ip}:{arco_http_port}",
@@ -99,4 +116,5 @@ def build_join_info(*, lan_ip: str, www_port: int, arco_http_port: int,
         "bit": bit_name,
         "nodes": rows,
         "native_note": NATIVE_NOTE,
+        "start": start,
     }
