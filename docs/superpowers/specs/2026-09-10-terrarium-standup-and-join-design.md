@@ -286,7 +286,9 @@ renders once at the bottom. No external fetches; the SVG is inline, which
 ## Status
 
 **Implemented 2026-09-10/11.** Suite: 2142 passed, 1 skipped (the
-pre-existing skip; unchanged by Task 14). Live on MYCOLOGICAL:
+pre-existing skip; unchanged by Task 14). Task 15 added the D7 refusal
+tests; Task 16's re-run (before and after its live phase, 2026-09-11):
+2143 passed, 1 skipped both times, stable. Live on MYCOLOGICAL:
 
 - **Step 2, `./terrarium.sh` with no Room.** Stdout printed, in order,
   `BROWSE_URL: Terrarium Console at http://127.0.0.1:8772/`, `WWW_URL:
@@ -302,25 +304,58 @@ pre-existing skip; unchanged by Task 14). Live on MYCOLOGICAL:
   `state_changed` to SETUP, stdout `DeviceLink running on o2lite ensemble
   'arco' (restarted)` and two `JOIN_URL:` lines, `round loaded: TestBit`.
   **A room switch (`load_bit TestBit room: DEMO`, then back to `room:
-  TEST`) failed.** The control log shows, on every `room_loaded`
-  (including the first, successful one), `ERROR control.terrarium:
-  observer <_RoomWiring> on_terrarium_state_change raised` /
-  `RuntimeError: ArcoSynthPool.start() must run before acquire()`: the
-  `on_terrarium_state_change` observer's `rewire_room()` calls
-  `_grant_room_audio` -> `pool.acquire()` synchronously inside
-  `terrarium.load_room()`, before `ConsoleAgent._ensure_room_for_bit`'s
-  subsequent `restart_room_clients()` call has started the pool. On the
-  DEMO switch this crashed Arco outright (`Arco_engine: finish called.
-  Python should exit now.`) and `restart_room_clients()` then failed with
-  `room clients failed to restart: [Errno 32] Broken pipe`, leaving the
-  Terrarium in NO_ROOM; the switch back to TEST failed the same way
-  against the now-dead Arco. Neither `Network is unreachable` (D2) nor
-  `StopIteration` (D4) appeared in either run's control log (0 matches
-  each), so D2 through D4 hold; this is a new ordering defect, not
-  covered by D1 to D6, found by this re-verification. No production code
-  was changed to investigate or work around it, per the live-check rules.
-  SIGINT did not stop the run within 20 s (needed SIGTERM both times,
-  recorded); zero orphans afterward both times.
+  TEST`) was refused, not attempted -- D7, ruled and fixed in Task 15,
+  live-verified in Task 16 (2026-09-11).** Root cause, read from pyarco
+  rather than a debugger: `arco.initialize()`'s first line is `if o2lite
+  and o2lite.time_get() > 0: return None  # already started`
+  (`/Users/chris/projects/arco/pyarco/arco_engine.py`), so a second
+  `pool.start()` in the same process is a no-op against the dead o2lite
+  singleton, and `finish()` does not prepare a restart. Control can
+  therefore talk to exactly one Arco per process until pyarco/o2litepy
+  support re-initialization. Task 15 fixed this rather than merely
+  documenting it: `ConsoleAgent._ensure_room_for_bit` refuses a switch
+  away from the active Room before touching it (unknown/unloadable
+  checks still run first), naming the restart command in the refusal;
+  and `_RoomWiring` now restarts Control's own clients BEFORE
+  `rewire_room()` grants Room audio, closing the ordering race Task 14
+  found (the observer used to call `_grant_room_audio` ->
+  `pool.acquire()` synchronously inside `terrarium.load_room()`, ahead
+  of the caller's own `restart_room_clients()`).
+
+  Live re-verified (Task 16, 2026-09-11, `r16-1.log`/`r16-2.log`,
+  scratchpad `console_client.py`). **Run 1** (`./terrarium.sh`, no
+  Room): booted to NO_ROOM in order (`BROWSE_URL:`, `WWW_URL:`,
+  `NO_ROOM: waiting for the Console to load a Room`), `load_bit TestBit
+  room: TEST` reached SETUP with `DeviceLink running on o2lite ensemble
+  'arco' (restarted)` printed before the two `JOIN_URL:` lines and no
+  `_RoomWiring` traceback; `load_bit TestBit room: DEMO` (the switch)
+  returned `{"event": "error", "command": "load_bit", "message":
+  "switching Rooms in a running Terrarium is not supported yet: pyarco
+  cannot reconnect to a new Arco in one process; stop and run
+  ./terrarium.sh --room DEMO"}`, no `room_unloaded` event was ever sent,
+  and a fresh snapshot afterward still showed `terrarium_state:
+  "ROOM_READY"` with `room.room_type: "TEST"`. **Run 2**
+  (`./terrarium.sh --room DEMO`): booted straight to `room loaded:
+  DEMO` then `DeviceLink running on o2lite ensemble 'arco' (Ctrl-C to
+  stop)`, and `load_bit TestBit room: DEMO` (same room, no switch)
+  reached SETUP printing `round loaded: TestBit` and two `JOIN_URL:`
+  lines. Grep counts across both control logs: `_RoomWiring` 0, `must
+  run before acquire` 0, `room audio tick failed` 0, `Network is
+  unreachable` 0, `StopIteration` 0, `Traceback` 0 -- D2 through D7 all
+  hold live. SIGINT again did not stop either run within 20 s (SIGTERM
+  both times, as in Task 14); `pgrep -fl 'apps/pytest/server
+  |terrarium_boot|o2_shroom|run_stack'` was empty after each teardown
+  (zero orphans).
+
+  One observational note, not a defect: TestBit's own round
+  (`start.when: "immediate"`) auto-completes in under two seconds once
+  loaded, so in Run 1 the round had already advanced past SETUP (to
+  RUNNING, then on through its own completion) by the time the refused
+  switch's `error` event came back -- a race against TestBit's own
+  timing, unrelated to the Room-switch code path. The invariants D7
+  actually depends on -- no `room_unloaded`, `terrarium_state` staying
+  `ROOM_READY` with the original Room active, the refusal message
+  itself -- held regardless of the round's own state in every attempt.
 - **Step 4, `./terrarium.sh --room DEMO --web-build
   .../mm-tuneshroom/build/web`.** Stdout: `room loaded: DEMO`,
   `DeviceLink running on o2lite ensemble 'arco' (Ctrl-C to stop)`, no

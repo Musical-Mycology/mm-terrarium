@@ -4124,13 +4124,14 @@ Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`
   only and `main()` drops into `_serve_roomless`, whose inner
   `_wait_for_load` sits in IDLE until the Console loads a Bit.
 - **Console `load_bit` takes a `room`.** `ConsoleAgent._ensure_room_for_bit`
-  resolves the Bit's config, refuses a room outside its `room_types`
-  BEFORE touching the Room, and for a different room than the active one
-  runs abort (if a Bit is loaded), `unload_room(force=True)`, `load_room`,
-  then `load_bit`. The picker (`console/static/bit.js`) shows a Room select
-  per Bit card (room_types intersected with loadable configured rooms,
-  preselecting the active room, else `default_room_type`), and Load is
-  enabled from NO_ROOM as well as ROOM_READY. `bits_listed` rows carry
+  resolves the Bit's config and refuses a room outside its `room_types`
+  BEFORE touching the Room. For a different room than the active one it
+  no longer switches (see the D7 bullet below, which superseded the
+  original abort/unload/load-room switch this bullet described). The
+  picker (`console/static/bit.js`) shows a Room select per Bit card
+  (room_types intersected with loadable configured rooms, preselecting
+  the active room, else `default_room_type`), and Load is enabled from
+  NO_ROOM as well as ROOM_READY. `bits_listed` rows carry
   `default_room_type` and `nodes`.
 - **Join card** (`console/static/join.js`, Live view): per registration
   node, the guest URL `http://<lan-ip>:8788/app/?node=<NODE>&o2ws=<lan-ip>:8080&ens=<ens>`,
@@ -4172,6 +4173,26 @@ Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`
   `_ensure_room_for_bit` also checks `validate_rooms` for the target
   Room before unloading the active one, so an unloadable target no
   longer strands the operator in NO_ROOM.
+- **One Arco per Control process (D7 ruling, live-verified 2026-09-11).**
+  pyarco's `arco.initialize()` early-returns once o2lite has ever synced
+  and `finish()` cannot prepare a restart -- an upstream pyarco
+  constraint, already flagged to Roger in the 2026-09-01
+  console-load-stabilization spec (`arco.initialize()` second-run
+  behavior goes upstream to Roger) -- so a Control process can talk to
+  exactly one Arco until pyarco/o2litepy support re-initialization. The
+  Console now refuses a Room switch outright (`_ensure_room_for_bit`
+  returns before touching the active Room) and names the restart
+  command: `switching Rooms in a running Terrarium is not supported
+  yet: pyarco cannot reconnect to a new Arco in one process; stop and
+  run ./terrarium.sh --room <name>`. `_RoomWiring` now restarts
+  Control's own clients before calling `rewire_room()`, not after, so
+  the Room-wiring observer never grants audio against a pool that
+  hasn't started. The pre-existing ABORT-then-Load-Room path within one
+  process hits this same one-Arco-per-process limit; it is no longer
+  left to crash Arco underneath Control and is instead reported through
+  `restart_clients`'s own failure path, same as any other switch
+  attempt. The Bit picker disables its Load button for a non-active
+  Room while a Room is up, so the switch is never offered.
 
 ## Boundary rules (the load-bearing invariants)
 
