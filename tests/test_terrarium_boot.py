@@ -3196,3 +3196,50 @@ def test_main_no_room_boot_builds_with_a_simulator_array_backend(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         main()
     assert exc.value.code == 0
+
+
+def test_room_wiring_restarts_clients_before_rewiring_the_agent():
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    wiring = _RoomWiring(Agent(), terrarium=None,
+                         restart_clients=lambda: calls.append("restart") or None)
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == ["restart", "rewire"]
+
+
+def test_room_wiring_skips_the_rewire_when_the_restart_fails(caplog):
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    wiring = _RoomWiring(Agent(), terrarium=None,
+                         restart_clients=lambda: "clock never synced")
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == []
+    assert "clock never synced" in caplog.text
+
+
+def test_room_wiring_without_a_restart_hook_rewires_as_before():
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    wiring = _RoomWiring(Agent(), terrarium=None)
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_UNLOADING,
+                                     TerrariumState.NO_ROOM)
+    assert calls == ["rewire", "unwire"]

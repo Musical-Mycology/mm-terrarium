@@ -1061,14 +1061,29 @@ class _RoomWiring:
     read-out (which calls DeviceLinkAgent.controllers() live on every
     render, see its _current_room()) would have nothing to read either --
     see devicelink.agent.DeviceLinkAgent.rewire_room's own docstring for
-    the full picture."""
+    the full picture.
 
-    def __init__(self, agent, terrarium) -> None:
+    restart_clients, when given, runs FIRST on ROOM_READY: Control's own
+    Arco clients (the o2lite transport and the ArcoSynthPool) must be up
+    before rewire_room() grants the Room's audio, or the grant raises
+    'ArcoSynthPool.start() must run before acquire()' (live, 2026-09-11).
+    A restart reason skips the rewire and is logged; the driver that loaded
+    the Room (_serve_roomless, or ConsoleAgent's load_bit hook) retries the
+    restart itself and unloads the Room when it fails again."""
+
+    def __init__(self, agent, terrarium, restart_clients=None) -> None:
         self._agent = agent
         self._terrarium = terrarium
+        self._restart_clients = restart_clients
 
     def on_terrarium_state_change(self, old_state, new_state) -> None:
         if new_state is TerrariumState.ROOM_READY:
+            if self._restart_clients is not None:
+                reason = self._restart_clients()
+                if reason is not None:
+                    logging.getLogger(__name__).error(
+                        "room clients failed to restart: %s", reason)
+                    return
             self._agent.rewire_room()
         elif new_state is TerrariumState.NO_ROOM:
             self._agent.unwire_room()
@@ -1628,7 +1643,8 @@ def main() -> None:
     # already wired `agent` correctly for round 1, so this observer's first
     # call (a later Console load/unload, if any) is the first time it does
     # anything.
-    terrarium.add_observer(_RoomWiring(agent, terrarium))
+    terrarium.add_observer(_RoomWiring(agent, terrarium,
+                                       restart_clients=restart_clients))
 
     # Device lifecycle on Control's stdout (2026-08-20 UAT: a denial was
     # invisible anywhere but the denied device's own terminal). Unconditional

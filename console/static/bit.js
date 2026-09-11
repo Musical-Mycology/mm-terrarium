@@ -342,18 +342,8 @@ function buildPickCard(bitRow) {
   card.appendChild(roomRow);
   const hint = mk("p", "meta roomhint", "");
   card.appendChild(hint);
-  const paintHint = () => {
-    if (choices.length === 0) hint.textContent = "no configured room supports this Bit";
-    else if (active === null && choices.length > 0) hint.textContent = "loads Room: Arco starts (about 15 s)";
-    else if (select.value !== active) hint.textContent = "switches Room: Arco restarts (about 15 s)";
-    else hint.textContent = "";
-  };
-  select.onchange = paintHint;
-  paintHint();
-
   const actions = mk("div", "actions");
   const loadBtn = mk("button", "btn solid-gold", "Load");
-  loadBtn.disabled = choices.length === 0;
   loadBtn.onclick = () => {
     const result = overridesFromPairs(pairs);
     if (result.error !== undefined) {
@@ -363,6 +353,16 @@ function buildPickCard(bitRow) {
     wire.send("load_bit", { name: bitRow.name, overrides: result.overrides, room: select.value }, loadBtn);
     closeOverlay();
   };
+  const paintHint = () => {
+    if (choices.length === 0) hint.textContent = "no configured room supports this Bit";
+    else if (active === null && choices.length > 0) hint.textContent = "loads Room: Arco starts (about 15 s)";
+    else if (select.value !== active) hint.textContent = `switching Rooms needs a restart: ./terrarium.sh --room ${select.value}`;
+    else hint.textContent = "";
+    loadBtn.disabled = choices.length === 0 || (active !== null && select.value !== active);
+  };
+  select.onchange = paintHint;
+  paintHint();
+
   actions.appendChild(loadBtn);
   card.appendChild(actions);
 

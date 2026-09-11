@@ -89,11 +89,13 @@ class ConsoleAgent:
         # transition, so it always reads the Bit that is loaded NOW.
         self._join_info = join_info
         # Optional hooks from harness/terrarium_boot.py: Control is itself a
-        # client (o2lite transport + ArcoSynthPool) of the hub a Room switch
-        # replaces, so the switch must stop those clients before the unload
-        # and restart them after the load, the same order the dormant
-        # _recycle_room seam documents. None (tests, embeddings without
-        # Arco clients) skips both.
+        # client (o2lite transport + ArcoSynthPool) of the hub a Room load
+        # brings up. restart_room_clients runs after a NO_ROOM -> Room load
+        # (D7 refuses a switch away from an already-loaded Room before
+        # either hook would run). stop_room_clients is retained as a
+        # constructor parameter for the day pyarco supports re-initializing
+        # against a new Arco; the agent does not call it. None (tests,
+        # embeddings without Arco clients) skips restart_room_clients.
         self._stop_room_clients = stop_room_clients
         self._restart_room_clients = restart_room_clients
         # Optional Callable[[], dict] of fixture name -> {cc: value}, from
@@ -256,11 +258,14 @@ class ConsoleAgent:
     def _ensure_room_for_bit(self, command, cfg) -> str | None:
         """Spec 2026-09-10 section 4: bring the Terrarium to the Room a
         load_bit asks for, or leave the active one alone. Returns a
-        refusal reason (None on success). Order matters: the support check
-        runs BEFORE any Room is touched, so an unsupported request never
-        costs an Arco restart. A different target than the active Room
-        aborts any loaded Bit, unloads (force), then loads; every step's
-        refusal stops the sequence with no load_bit afterwards."""
+        refusal reason (None on success). Order matters: the support and
+        loadability checks run BEFORE any Room is touched, so a refused
+        request never costs an Arco restart or strands a live Room. D7: a
+        different target while a Room is already ROOM_READY is refused
+        outright, naming the ./terrarium.sh --room restart, rather than
+        unloading and reloading in-process -- pyarco cannot reconnect to a
+        second Arco in one process. Only a NO_ROOM start (no active Room to
+        replace) reaches _load_room below."""
         terrarium = self.terrarium
         active = (terrarium.room.name
                   if terrarium.state is TerrariumState.ROOM_READY else None)
@@ -285,19 +290,16 @@ class ConsoleAgent:
             array_backend_configured=terrarium.boot_config.array_backend_configured)
         if reasons.get(target) is not None:
             return f"room {target!r} is not loadable: {reasons[target]}"
-        gs = self.game_server
-        if gs.state is not State.IDLE:
-            gs.abort()
         if terrarium.state is TerrariumState.ROOM_READY:
-            if self._stop_room_clients is not None:
-                self._stop_room_clients()
-            reason = terrarium.unload_room(force=True)
-            if reason is not None:
-                # The old Room is still up: bring its clients back rather
-                # than leaving Control stopped against a live hub.
-                if self._restart_room_clients is not None:
-                    self._restart_room_clients()
-                return reason
+            # D7 (2026-09-11): pyarco's arco.initialize() is a no-op once
+            # o2lite has ever synced and finish() cannot prepare a restart,
+            # so Control can talk to exactly one Arco per process. A Room
+            # switch would replace the hub underneath it; refuse up front
+            # and name the restart instead.
+            return (f"switching Rooms in a running Terrarium is not "
+                    f"supported yet: pyarco cannot reconnect to a new Arco "
+                    f"in one process; stop and run ./terrarium.sh --room "
+                    f"{target}")
         reason = self._load_room(target)
         if reason is not None:
             return reason
