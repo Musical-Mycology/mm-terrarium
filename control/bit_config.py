@@ -274,7 +274,11 @@ def _parse_start(raw: dict, *, source: str) -> StartCondition:
                              message=f"must be one of {sorted(_START_WHEN)}")
 
     admin = when == "admin"
-    key = _get(raw, "key", str, None, source=source, prefix="start")
+    key = raw.get("key")
+    if key is not None and not isinstance(key, str):
+        raise ManifestError(
+            source=source, key="start.key",
+            message=f"expected str, got {type(key).__name__}")
     if admin and not key:
         raise ManifestError(source=source, key="start.key",
                              message="required non-empty string when when = 'admin'")

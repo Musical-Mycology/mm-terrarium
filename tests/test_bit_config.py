@@ -278,3 +278,16 @@ def test_start_key_and_lobby_ride_merge_overrides():
                                    "lobby": {"invite_interval_s": 3}}, source="p")
     assert merged.start.key == "venue-9"
     assert merged.lobby.invite_interval_s == 3.0
+
+
+def test_start_overrides_on_a_non_admin_manifest_keep_working():
+    cfg = parse_manifest(MINIMAL, source="t")
+    merged = merge_overrides(cfg, {"start": {"min_scored": 2}}, source="p")
+    assert merged.start.min_scored == 2
+    assert merged.start.key is None
+
+
+def test_admin_start_refuses_a_non_string_key():
+    with pytest.raises(ManifestError) as err:
+        parse_manifest(MINIMAL + "[start]\nwhen='admin'\nkey=5\n", source="t")
+    assert err.value.key == "start.key"
