@@ -419,9 +419,24 @@ tests; Task 16's re-run (before and after its live phase, 2026-09-11):
   before touching anything; `terrarium_boot` always passes
   `array_backend="simulator"` so every configured room is loadable from
   any boot.
-- **D6 (deferred, pre-existing).** `BrokenPipeError` tracebacks on
-  SIGINT/SIGTERM teardown, also present in 2026-09-08 logs; not this
-  branch's. Reproduced again in Step 4's teardown above; still deferred.
+- **D6 (fixed 2026-09-11).** `BrokenPipeError`/`EBADF` tracebacks from
+  pyarco's `Ugen.__del__` on every teardown, also present in 2026-09-08
+  logs. Root cause: nothing shut the `ArcoSynthPool` down at process
+  exit, so Arco was SIGTERMed with the pool's ugens alive and
+  `arco.finished` False, and each ugen's destructor sent `/arco/free` on
+  the dead socket at interpreter exit. Fix: `main()` registers the
+  `AudioBridge`'s shutdown on `pre_room_teardown` ahead of the transport
+  (`_register_room_audio`), and both `ArcoSynthPool.shutdown()` and
+  `AudioBridge.shutdown()` finish in a `finally`. Live: `./terrarium.sh
+  --room TEST`, SIGINT, `Traceback` count 0, exit 1 s, zero orphans
+  (runs/20260911-120253).
+- **The SIGINT-needs-SIGTERM note in Tasks 14 and 16 was the test
+  harness, not the product.** `bounded.sh` backgrounded the command from
+  a non-interactive bash without job control, which starts it with
+  SIGINT ignored; Python then never installs `KeyboardInterrupt`, so
+  `kill -INT` was a no-op. Under `set -m` the same `kill -INT` tears the
+  stack down in 1 s. Recorded with the recipe in `docs/MM_TERRARIUM.md`'s
+  2026-09-10 entry.
 
 Deviation: the Join card lives in the Live view's content column (after
 the Bit status card) rather than the sidebar, because the URL and

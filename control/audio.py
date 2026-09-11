@@ -262,12 +262,21 @@ class AudioBridge:
 
     def shutdown(self) -> None:
         """Free every voice, then the pool. Boundary rule 1: owning the ugen id
-        space means freeing it at Bit unload."""
-        for _due, voice, key in self._pending_offs:
-            voice.note_off(key)
-            voice.all_off()
-            self._pool.release(voice)
-        self._pending_offs = []
-        for dev in list(self._devices):
-            self.on_release(dev)
-        self._pool.shutdown()
+        space means freeing it at Bit unload.
+
+        The pool's shutdown runs in a finally: at process exit the hub may
+        already be dead, so silencing a voice can raise. That failure is
+        reported to the caller, but the pool must still shut down -- that
+        is where pyarco's arco.finish() runs, the flag that stops every
+        Ugen.__del__ from writing to the dead socket at interpreter exit
+        (D6, 2026-09-11)."""
+        try:
+            for _due, voice, key in self._pending_offs:
+                voice.note_off(key)
+                voice.all_off()
+                self._pool.release(voice)
+            self._pending_offs = []
+            for dev in list(self._devices):
+                self.on_release(dev)
+        finally:
+            self._pool.shutdown()

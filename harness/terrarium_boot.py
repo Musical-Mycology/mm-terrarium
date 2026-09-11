@@ -390,8 +390,11 @@ def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
 
     THREE unwind phases now, in this order:
 
-      1. `pre_room_teardown`, if given -- the o2lite transport ONLY. It
-         must close BEFORE Arco: it is Control's own o2lite client
+      1. `pre_room_teardown`, if given -- Control's own Arco CLIENTS: the
+         o2lite transport, then (as of 2026-09-11) the AudioBridge and its
+         ArcoSynthPool, which owns the pyarco o2lite connection the
+         transport is a guest on. Both must close BEFORE Arco: the
+         transport is Control's own o2lite client
          connection to the SAME Arco hub the Room simulator also talks to,
          and the repo's actual invariant (see control/teardown.py's own
          docstring) is "no client outlives the hub it is a guest on", not
@@ -1250,6 +1253,31 @@ def _register_o2lite_transport(teardown, transport) -> None:
     teardown.push("o2lite-transport", transport.stop)
 
 
+def _register_room_audio(teardown, room_audio) -> None:
+    """Push the AudioBridge's shutdown (which shuts its ArcoSynthPool) on
+    the SAME pre-room stack as the o2lite transport, registered BEFORE the
+    transport so LIFO runs it AFTER the transport stops -- and both run
+    ahead of terrarium.room_stack, where Arco lives.
+
+    The pool is Control's other o2lite client of the Arco hub: it owns the
+    pyarco connection the transport is a guest on. Until 2026-09-11 nothing
+    shut it down at process exit at all, so Arco was SIGTERMed with
+    pyarco's ugens still alive, and at interpreter exit every Ugen.__del__
+    sent /arco/free on the dead socket -- five "Exception ignored"
+    BrokenPipeError/EBADF tracebacks on every teardown (D6 in the
+    2026-09-10 standup-and-join spec). Shutting the pool here silences its
+    channels and frees the Flsyn while the hub is alive and calls
+    arco.finish(), the flag Ugen.__del__ checks before sending.
+
+    A NO_ROOM boot that never loaded a Room has a pool that never
+    started; ArcoSynthPool.shutdown() is a no-op then. `room_audio` is
+    None when build() was given none and built none; nothing is pushed.
+    """
+    if room_audio is None:
+        return
+    teardown.push("room-audio", room_audio.shutdown)
+
+
 def _effective_serve(args) -> bool:
     """`--serve` OR ("--console-port with neither --seconds nor --hold").
     `--hold`/`--seconds` are bounded/one-shot intents -- a console with
@@ -1673,6 +1701,10 @@ def main() -> None:
     # why the o2lite transport must close before terrarium.room_stack
     # (Arco) rather than with the rest of the process-level steps.
     pre_room_teardown = TeardownStack()
+    # Registered FIRST so it closes AFTER the transport (LIFO) and before
+    # Arco: the pool is the o2lite connection the transport rides on. See
+    # _register_room_audio for the D6 history behind this line.
+    _register_room_audio(pre_room_teardown, room_audio)
     # Live from here on: a Console `load_room`/`unload_room` after this
     # point prints via the two markers.CONTROL_ROOM_* lines. The round-1
     # CLI-selected Room (if --room was given) loaded INSIDE build(), before
