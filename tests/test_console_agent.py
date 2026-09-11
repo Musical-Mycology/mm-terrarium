@@ -5,11 +5,15 @@ import pytest
 from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.bit_config import ManifestError, merge_overrides, parse_manifest
+from control.boot_config import BootConfig
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from control.terrarium import TerrariumState
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room, room_role_name
+from harness.terrarium_boot import _RoomWiring
+from tests.test_terrarium import DEMO_SPEC, TEST_SPEC, make_config, make_terrarium
 
 ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
     RoomFixture(name="main", color_order="GRB",
@@ -1747,11 +1751,6 @@ def test_devices_view_labels_bound_fixtures(console_agent_with_room):
     assert by_dev[LOBBY_DEV]["fixture"] is None
 
 
-from tests.test_terrarium import DEMO_SPEC, TEST_SPEC, make_config, make_terrarium
-from control.boot_config import BootConfig
-from control.terrarium import TerrariumState
-
-
 def _two_room_terrarium(**kwargs):
     """A NO_ROOM Terrarium with TEST and DEMO configured, driving a
     GameServer that knows TestBit (room_types TEST and DEMO). DEMO's
@@ -1995,6 +1994,13 @@ def test_no_join_changed_without_a_provider():
 
 
 def test_room_load_from_no_room_restarts_clients_without_a_stop():
+    """Pins ConsoleAgent's own restart_room_clients fallback in isolation:
+    no _RoomWiring observer is registered on this terrarium (production
+    always registers one -- see
+    test_load_bit_from_no_room_with_the_production_room_wiring_restarts_once_and_rewires
+    below for that path), so a NO_ROOM-to-Room load_bit restarts Control's
+    Arco clients through the agent-side hook alone, exactly once, with no
+    stop call."""
     terrarium = _two_room_terrarium()
     calls = []
     srv = FakeConsoleServer()
@@ -2010,6 +2016,10 @@ def test_room_load_from_no_room_restarts_clients_without_a_stop():
 
 
 def test_a_failed_client_restart_unloads_the_room_and_refuses():
+    """Pins ConsoleAgent's own restart_room_clients fallback in isolation,
+    same as the test above: with no _RoomWiring observer registered on
+    this terrarium, a failed restart through the agent-side hook alone
+    unloads the just-loaded Room and refuses the load_bit."""
     terrarium = _two_room_terrarium()
     srv = FakeConsoleServer()
     agent = ConsoleAgent(
@@ -2028,7 +2038,6 @@ def test_a_failed_client_restart_unloads_the_room_and_refuses():
 def test_load_bit_refuses_an_unloadable_room_before_touching_the_active_one():
     """D5: from a boot with no array backend, DEMO is not loadable; the
     active TEST Room must survive the refusal."""
-    from control.boot_config import BootConfig
     terrarium = make_terrarium(
         config=make_config(rooms={"TEST": TEST_SPEC, "DEMO": DEMO_SPEC}),
         gs=GameServer({"TestBit": TestBit}),
@@ -2061,4 +2070,76 @@ def test_load_bit_refuses_an_unknown_room_before_touching_anything():
     assert _errors(srv) == [{"event": "error", "command": "load_bit",
                              "message": "unknown room 'ATRIUM'"}]
     assert terrarium.room.name == "TEST"
+
+
+def test_load_bit_from_no_room_with_the_production_room_wiring_restarts_once_and_rewires():
+    """The real NO_ROOM-to-Room load path a live boot takes: main() always
+    registers a `_RoomWiring` (harness/terrarium_boot.py) observer on the
+    Terrarium ahead of ConsoleAgent's own construction, so ROOM_READY fires
+    `_RoomWiring`'s restart-then-rewire FIRST, and ConsoleAgent's own
+    restart_room_clients hook (the same closure, called again right after
+    `_load_room` returns) is then just the already-idempotent no-op the two
+    tests above pin in isolation. Important #4 review finding: nothing
+    previously exercised the two hooks wired together this way."""
+    terrarium = _two_room_terrarium()
+    calls = []
+
+    class FakeAgent:
+        def rewire_room(self):
+            calls.append("rewire")
+
+        def unwire_room(self):
+            calls.append("unwire")
+
+    stopped = [True]
+
+    def restart():
+        if stopped[0]:
+            calls.append("restart")
+            stopped[0] = False
+            return None
+        calls.append("restart-noop")
+        return None
+
+    terrarium.add_observer(
+        _RoomWiring(FakeAgent(), terrarium, restart_clients=restart))
+
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium, restart_room_clients=restart)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "room": "TEST"})
+
+    agent.poll()
+
+    assert calls == ["restart", "rewire", "restart-noop"]
+    assert terrarium.gs.state.name == "SETUP"
+
+
+def test_ensure_room_refuses_mid_transition():
+    """Minor review finding: pins the "room is room_loading; try again once
+    it settles" refusal (console/agent.py's _ensure_room_for_bit) for a
+    Room transition still in flight. ROOM_LOADING is transient on a real
+    Terrarium -- nothing can catch it mid-load from the outside -- so a
+    terrarium double stands in rather than driving _two_room_terrarium()
+    through an actual load."""
+    from uplink.protocol import LoadBitCommand
+
+    class FakeTerrarium:
+        state = TerrariumState.ROOM_LOADING
+        room = None
+
+        def add_observer(self, observer):
+            pass
+
+    srv = FakeConsoleServer()
+    gs = GameServer({"TestBit": TestBit})
+    agent = ConsoleAgent(gs, srv, registry=_testbit_registry(),
+                         terrarium=FakeTerrarium())
+    command = LoadBitCommand(name="TestBit", room="TEST")
+
+    reason = agent._ensure_room_for_bit(command, None)
+
+    assert reason == "room is room_loading; try again once it settles"
 

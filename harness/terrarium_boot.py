@@ -1067,26 +1067,50 @@ class _RoomWiring:
     Arco clients (the o2lite transport and the ArcoSynthPool) must be up
     before rewire_room() grants the Room's audio, or the grant raises
     'ArcoSynthPool.start() must run before acquire()' (live, 2026-09-11).
-    A restart reason skips the rewire and is logged; the driver that loaded
-    the Room (_serve_roomless, or ConsoleAgent's load_bit hook) retries the
-    restart itself and unloads the Room when it fails again."""
+    A restart reason skips the rewire and is logged, and remembers the skip
+    (`_pending_rewire`) rather than dropping it on the floor: the driver
+    that loaded the Room (_serve_roomless, or ConsoleAgent's load_bit hook)
+    retries the restart itself, and either unloads the Room when it fails
+    again or, on a later successful retry, calls this observer's own
+    `on_clients_restarted()` to finish the rewire this method skipped (see
+    that method's docstring -- Important #3 review finding: without this,
+    a Room stuck at "restarted late" never gets its audio grant at all)."""
 
     def __init__(self, agent, terrarium, restart_clients=None) -> None:
         self._agent = agent
         self._terrarium = terrarium
         self._restart_clients = restart_clients
+        self._pending_rewire = False
 
     def on_terrarium_state_change(self, old_state, new_state) -> None:
         if new_state is TerrariumState.ROOM_READY:
             if self._restart_clients is not None:
                 reason = self._restart_clients()
                 if reason is not None:
+                    self._pending_rewire = True
                     logging.getLogger(__name__).error(
                         "room clients failed to restart: %s", reason)
                     return
             self._agent.rewire_room()
         elif new_state is TerrariumState.NO_ROOM:
+            self._pending_rewire = False
             self._agent.unwire_room()
+
+    def on_clients_restarted(self) -> None:
+        """Called by main()'s restart_clients closure after a SUCCESSFUL
+        restart. If this observer skipped rewire_room() because the restart
+        attempt inside load_room failed, and a later retry (the agent's hook
+        or _serve_roomless) succeeded, the Room is ROOM_READY with live
+        clients and no sessions: do the rewire now, exactly once."""
+        if not self._pending_rewire:
+            return
+        terrarium = self._terrarium
+        if (terrarium is not None
+                and terrarium.state is not TerrariumState.ROOM_READY):
+            self._pending_rewire = False
+            return
+        self._pending_rewire = False
+        self._agent.rewire_room()
 
 
 def _print_join_denied(dev: str, node: str, reason: str) -> None:
@@ -1178,8 +1202,17 @@ def _restart_room_clients(*, transport, pool=None,
     try:
         if pool is not None:
             pool.start()
+    except Exception as exc:
+        return str(exc)
+    try:
         transport.start(o2lite, pump=pump)
     except Exception as exc:
+        # The pool connected but the transport did not: drop the pool's
+        # handles (no wire traffic; the Flsyn ugen stays on the hub until
+        # the next reset) so the retry is a clean pool.start() rather than
+        # a second start on a started pool.
+        if pool is not None:
+            pool.quiesce()
         return str(exc)
     return None
 
@@ -1580,6 +1613,13 @@ def main() -> None:
     # `unload_room`); the room-back-up half reads it to know whether there
     # is anything to restart, and clears it once it has.
     clients_stopped = [False]
+    # Observers to run after a SUCCESSFUL restart_clients() -- currently
+    # just _RoomWiring's own on_clients_restarted (appended once it exists,
+    # below), which finishes a rewire it had to skip when an earlier
+    # restart attempt inside load_room failed (Important #3 review
+    # finding). A list, not a single callback, in case a future caller
+    # needs its own hook too.
+    restart_callbacks: list = []
 
     def stop_clients():
         """The room went down under live Arco clients (Console hard abort
@@ -1626,6 +1666,8 @@ def main() -> None:
             clients_stopped[0] = False
             print(f"{markers.CONTROL_TRANSPORT_READY} "
                   f"{config.o2_ensemble!r} (restarted)", flush=True)
+            for callback in list(restart_callbacks):
+                callback()
         return reason
     # A SEPARATE stack from `teardown` -- see shutdown()'s docstring for
     # why the o2lite transport must close before terrarium.room_stack
@@ -1643,8 +1685,16 @@ def main() -> None:
     # already wired `agent` correctly for round 1, so this observer's first
     # call (a later Console load/unload, if any) is the first time it does
     # anything.
-    terrarium.add_observer(_RoomWiring(agent, terrarium,
-                                       restart_clients=restart_clients))
+    #
+    # `restart_clients` (defined above) is called from exactly three sites:
+    # this `_RoomWiring` on its own ROOM_READY handling, `_serve_roomless`'s
+    # NO_ROOM wait, and ConsoleAgent's own `_ensure_room_for_bit`. All three
+    # are safe to call unconditionally -- `clients_stopped` is what makes
+    # the closure idempotent, so whichever of them actually finds the
+    # clients down does the restart and the other two no-op.
+    wiring = _RoomWiring(agent, terrarium, restart_clients=restart_clients)
+    restart_callbacks.append(wiring.on_clients_restarted)
+    terrarium.add_observer(wiring)
 
     # Device lifecycle on Control's stdout (2026-08-20 UAT: a denial was
     # invisible anywhere but the denied device's own terminal). Unconditional
