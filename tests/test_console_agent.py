@@ -1906,6 +1906,30 @@ def test_load_bit_refuses_an_unsupported_room_before_touching_the_room():
     assert _events(srv, "room_loaded") == []
 
 
+def test_bare_load_bit_is_refused_when_the_bit_excludes_the_active_room():
+    """Spec 2026-09-10 section 4 step 3 reads "target room" however the
+    target was chosen: a bare load_bit (no `room`) targets the active Room,
+    and a Bit whose launch.room_types excludes it is refused up front, the
+    Room and the engine untouched."""
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv,
+                         registry=_testbit_registry(room_types=["DEMO"]),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
+
+    agent.poll()
+
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "Bit 'TestBit' does not support "
+                                        "room 'TEST'"}]
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.name == "TEST"
+    assert terrarium.gs.state.name == "IDLE"
+
+
 def test_load_bit_with_no_room_anywhere_is_still_refused():
     terrarium = _two_room_terrarium()
     srv = FakeConsoleServer()
@@ -1982,6 +2006,9 @@ def test_join_changed_is_broadcast_on_loaded_and_on_idle():
     assert joins[-1] == {"event": "join_changed",
                          "join": {"bit": None, "nodes": []}}
     assert len(joins) == 2
+    # the provider is asked AFTER each transition lands, so it sees the
+    # loaded name on LOADED and no name at all once back in IDLE
+    assert calls == ["TestBit", None]
 
 
 def test_no_join_changed_without_a_provider():

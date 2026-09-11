@@ -40,7 +40,7 @@ function activeRoomName() {
 // The Rooms this Bit can run in that terrarium.toml actually defines and
 // reports loadable (status null).
 function roomChoices(bitRow) {
-  const loadable = new Set(rooms.filter((r) => r.status == null).map((r) => r.name));
+  const loadable = new Set(rooms.filter((r) => r.status === null).map((r) => r.name));
   return (bitRow.room_types || []).filter((name) => loadable.has(name));
 }
 

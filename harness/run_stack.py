@@ -702,7 +702,9 @@ def _bitless_config(args) -> StackConfig:
     # --open specified one -- forwarding None would only produce a
     # child-exited failure.
     console_port = args.console_port if args.console_port is not None else 0
-    serve = args.serve or (console_port is not None and not args.ci)
+    # A Console is always present here (see above), and a Console outside
+    # --ci implies --serve, same as the Bit path below.
+    serve = args.serve or not args.ci
     return StackConfig(
         log_dir=log_dir, arco_command=args.arco_command,
         devices=0, ensemble=args.ensemble,

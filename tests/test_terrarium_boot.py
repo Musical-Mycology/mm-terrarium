@@ -3403,6 +3403,46 @@ def test_room_wiring_rewires_once_after_a_retried_restart_succeeds():
     assert calls == ["rewire"]
 
 
+def test_room_wiring_does_not_rewire_twice_when_room_ready_refires():
+    """A ROOM_READY notification that arrives while a rewire is still
+    pending (the first restart failed) runs the restart itself; main()'s
+    restart_clients closure calls `on_clients_restarted()` from inside a
+    successful restart, which finishes the pending rewire. The ROOM_READY
+    branch must then NOT call rewire_room() a second time on its own way
+    out -- a second light session and audio grant for one Room."""
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    class FakeTerrarium:
+        state = TerrariumState.ROOM_READY
+
+    attempts = iter(["clock never synced", None])
+
+    def restart_clients():
+        reason = next(attempts)
+        if reason is None:
+            wiring.on_clients_restarted()    # as main()'s closure does
+        return reason
+
+    wiring = _RoomWiring(Agent(), FakeTerrarium(),
+                         restart_clients=restart_clients)
+
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == []
+
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == ["rewire"]
+
+    wiring.on_clients_restarted()
+    assert calls == ["rewire"]
+
+
 def test_room_wiring_drops_the_pending_rewire_on_no_room():
     """A Room that goes back to NO_ROOM before any retry ever succeeds (the
     driver gave up and unloaded) must not leave a stale pending-rewire

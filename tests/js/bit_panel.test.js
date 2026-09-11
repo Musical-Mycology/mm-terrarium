@@ -77,6 +77,25 @@ const PLAYER_ROLE = {
   assert.ok(pickerHtml.includes("Metronome"), "enabled bit should appear in picker");
   assert.ok(!pickerHtml.includes("Off"), "disabled bit should not appear in picker");
 
+  // the Room picker offers only rows whose status is exactly null (the
+  // snapshot contract for "loadable"): a row that carries a reason, or
+  // no status at all, is not a choice.
+  send({ event: "snapshot", state: "IDLE", loaded_bit: null, roles: [PLAYER_ROLE],
+         registration: [], devices: [], bit_status: {}, room: null, functions: [],
+         rooms: [{ name: "DEMO", description: "", status: null, active: false },
+                 { name: "TEST", description: "", status: "no array backend", active: false },
+                 { name: "ATRIUM", description: "", active: false }] });
+  send({ event: "bits_listed", errors: [],
+         bits: [{ name: "MetronomeBit", display_name: "Metronome", version: "1.0.0",
+                  kind: "r_game", hidden: false, enabled: true, description: "Call-and-response",
+                  room_types: ["DEMO", "TEST", "ATRIUM"], default_room_type: "DEMO", notes: "",
+                  start: { when: "players", min_scored: 2, timeout_seconds: 120, on_timeout: "start" },
+                  roles: { scored: 2, shared_open: false, jam_open: false } }] });
+  findByClass(byId.get("bitPanel"), "btn").onclick();
+  const roomPick = findByClass(byId.get("overlayMount"), "roompick");
+  assert.deepStrictEqual(roomPick.children.map((o) => o.textContent), ["DEMO"],
+                         "only a status-null room is offered");
+
   // loading a bit paints the identity card and phase chip
   send({ event: "state_changed", state: "SETUP", loaded_bit: "MetronomeBit" });
   const panel = byId.get("bitPanel");
