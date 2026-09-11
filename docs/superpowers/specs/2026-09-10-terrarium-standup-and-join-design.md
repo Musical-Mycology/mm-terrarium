@@ -282,3 +282,99 @@ renders once at the bottom. No external fetches; the SVG is inline, which
   websocket handler for the Arco spawn (~15 s). `load_room` already has
   exactly this shape from the Rooms panel, so this is accepted, not new.
 - `segno.svg_inline` exists from segno 1.3; the plan pins `segno>=1.5`.
+
+## Status
+
+**Implemented 2026-09-10/11.** Suite: 2142 passed, 1 skipped (the
+pre-existing skip; unchanged by Task 14). Live on MYCOLOGICAL:
+
+- **Step 2, `./terrarium.sh` with no Room.** Stdout printed, in order,
+  `BROWSE_URL: Terrarium Console at http://127.0.0.1:8772/`, `WWW_URL:
+  http://192.168.1.136:8788/ (guest page; o2ws goes to Arco on 8080)`,
+  `NO_ROOM: waiting for the Console to load a Room`; no `Traceback`, no
+  spawned Arco process. Client snapshot: `terrarium_state == "NO_ROOM"`,
+  `join` non-null with `nodes == []`, `bits_listed` rows carried
+  `default_room_type` and `nodes`. Matches spec.
+- **Step 3, load a Bit with a Room, then switch.** `load_bit TestBit
+  room: TEST` from NO_ROOM: `room loaded: TEST`, `join_changed` with two
+  node rows (jammer, player), each `qr_svg` starting `<svg`, each URL of
+  the form `http://192.168.1.136:8788/app/?node=...&o2ws=192.168.1.136%3A8080&ens=arco`,
+  `state_changed` to SETUP, stdout `DeviceLink running on o2lite ensemble
+  'arco' (restarted)` and two `JOIN_URL:` lines, `round loaded: TestBit`.
+  **A room switch (`load_bit TestBit room: DEMO`, then back to `room:
+  TEST`) failed.** The control log shows, on every `room_loaded`
+  (including the first, successful one), `ERROR control.terrarium:
+  observer <_RoomWiring> on_terrarium_state_change raised` /
+  `RuntimeError: ArcoSynthPool.start() must run before acquire()`: the
+  `on_terrarium_state_change` observer's `rewire_room()` calls
+  `_grant_room_audio` -> `pool.acquire()` synchronously inside
+  `terrarium.load_room()`, before `ConsoleAgent._ensure_room_for_bit`'s
+  subsequent `restart_room_clients()` call has started the pool. On the
+  DEMO switch this crashed Arco outright (`Arco_engine: finish called.
+  Python should exit now.`) and `restart_room_clients()` then failed with
+  `room clients failed to restart: [Errno 32] Broken pipe`, leaving the
+  Terrarium in NO_ROOM; the switch back to TEST failed the same way
+  against the now-dead Arco. Neither `Network is unreachable` (D2) nor
+  `StopIteration` (D4) appeared in either run's control log (0 matches
+  each), so D2 through D4 hold; this is a new ordering defect, not
+  covered by D1 to D6, found by this re-verification. No production code
+  was changed to investigate or work around it, per the live-check rules.
+  SIGINT did not stop the run within 20 s (needed SIGTERM both times,
+  recorded); zero orphans afterward both times.
+- **Step 4, `./terrarium.sh --room DEMO --web-build
+  .../mm-tuneshroom/build/web`.** Stdout: `room loaded: DEMO`,
+  `DeviceLink running on o2lite ensemble 'arco' (Ctrl-C to stop)`, no
+  `round loaded:` before a Console load. Snapshot: `state == "IDLE"`,
+  `terrarium_state == "ROOM_READY"`, `join.app_present == true`. `curl
+  -sI http://127.0.0.1:8788/app/` returned `200`, `Content-type:
+  text/html`. Loading TestBit into DEMO (no Room switch, so the D7
+  ordering defect above did not trigger) printed two `JOIN_URL:` lines
+  and `round loaded: TestBit`, reached SETUP cleanly, no `Network is
+  unreachable` or `StopIteration` (0 matches). SIGINT again needed
+  SIGTERM after 20 s (recorded); zero orphans afterward. `git status
+  --short` was clean afterward (`www/app/` is git-ignored). The only
+  tracebacks in this run's log were `BrokenPipeError: [Errno 32] Broken
+  pipe` / `OSError: [Errno 9] Bad file descriptor` from `o2litepy` during
+  the SIGTERM teardown, matching D6 (deferred, pre-existing).
+- **Step 5, real browser guest join and the `flutter run` line.** Not
+  run headlessly; with the controller / Chris.
+
+**D1 to D6 (first live pass, 2026-09-10), fixes landed in Tasks 12 and
+13:**
+
+- **D1** (`./terrarium.sh` with no Room died in `build()`: `pool.start()`
+  and `transport.start()` ran unconditionally against a hub that does
+  not exist yet). Fixed: a NO_ROOM boot leaves both Arco clients stopped
+  and `restart_clients()` (now unconditionally defined) starts them on
+  the first Console `load_room`, printing `TRANSPORT_READY ...
+  (restarted)`. Re-verified live in Step 2/3 above (one-shot NO_ROOM
+  runs now boot and load cleanly).
+- **D2** (a Console room switch swapped Arco under Control's own
+  clients: 13,693 `Network is unreachable` lines in one run). Fixed:
+  `ConsoleAgent` takes `stop_room_clients` / `restart_room_clients`
+  hooks and calls them around the switch (stop, unload, load, restart).
+  Re-verified live: 0 `Network is unreachable` lines in either Step 3 or
+  Step 4's control log.
+- **D3** (the serve loops kept polling the old Arco handle after a
+  switch, never draining the new Arco's pty). Fixed: `_live_arco`
+  resolves `terrarium.arco` every loop iteration in `_serve_rounds`,
+  `_wait_for_load`, `_wait_in_setup`, `_serve_until_done`.
+- **D4** (Room simulators spawned with the boot room's type, raising
+  `StopIteration` on a switch to a different room type). Fixed:
+  `Terrarium.loading_room` is set for the duration of `load_room`; the
+  simulator factory resolves the Room type through a callable at spawn
+  time. Re-verified live: 0 `StopIteration` lines in either run's log.
+- **D5** (`load_bit` unloaded the active Room before checking the
+  target was loadable, stranding the operator in NO_ROOM on a refusal).
+  Fixed: `_ensure_room_for_bit` checks `validate_rooms` for the target
+  before touching anything; `terrarium_boot` always passes
+  `array_backend="simulator"` so every configured room is loadable from
+  any boot.
+- **D6 (deferred, pre-existing).** `BrokenPipeError` tracebacks on
+  SIGINT/SIGTERM teardown, also present in 2026-09-08 logs; not this
+  branch's. Reproduced again in Step 4's teardown above; still deferred.
+
+Deviation: the Join card lives in the Live view's content column (after
+the Bit status card) rather than the sidebar, because the URL and
+command lines need the width. Phone-on-LAN QR scan and the `flutter run`
+line: with Chris.

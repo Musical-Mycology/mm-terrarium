@@ -4110,6 +4110,69 @@ Status:**
   (`harness/www_server.py`'s `lan_ip()`) uses a UDP-connect probe instead
   (no packet is actually sent), so this adds no new runtime dependency.
 
+### `./terrarium.sh`, `run_stack --no-bit`, room-aware `load_bit`, the Join card (2026-09-10)
+Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`.
+
+- **`./terrarium.sh [--room NAME]`** wraps `run_stack --no-bit --serve
+  --devices 0 --console-port 8772`: a clean Terrarium with no Bit and no
+  spawned Testshrooms. Without `--room` it boots to `NO_ROOM` (gate:
+  `markers.CONTROL_NO_ROOM_WAIT`, printed on entry to the NO_ROOM wait;
+  no Arco exists yet); with `--room` it gates on room-loaded and
+  transport-ready and skips the SETUP gate. `terrarium_boot --no-bit`
+  (requires `--console-port`, refused with `--bit`/`--profile`, implies
+  serve) makes `BootConfig.bit_name` None; `build()` then loads the Room
+  only and `main()` drops into `_serve_roomless`, whose inner
+  `_wait_for_load` sits in IDLE until the Console loads a Bit.
+- **Console `load_bit` takes a `room`.** `ConsoleAgent._ensure_room_for_bit`
+  resolves the Bit's config, refuses a room outside its `room_types`
+  BEFORE touching the Room, and for a different room than the active one
+  runs abort (if a Bit is loaded), `unload_room(force=True)`, `load_room`,
+  then `load_bit`. The picker (`console/static/bit.js`) shows a Room select
+  per Bit card (room_types intersected with loadable configured rooms,
+  preselecting the active room, else `default_room_type`), and Load is
+  enabled from NO_ROOM as well as ROOM_READY. `bits_listed` rows carry
+  `default_room_type` and `nodes`.
+- **Join card** (`console/static/join.js`, Live view): per registration
+  node, the guest URL `http://<lan-ip>:8788/app/?node=<NODE>&o2ws=<lan-ip>:8080&ens=<ens>`,
+  a QR (server-side, `segno`, now in `requirements.txt`), and the Chrome
+  sim command `flutter run -d chrome -t lib/sim_main.dart --dart-define=NODE=...
+  --dart-define=O2WS=... --dart-define=ENS=...`. Built by the pure
+  `control/join_info.py`; the agent takes a `join_info` provider,
+  ships it as `snapshot.join` and broadcasts `join_changed` on LOADED
+  and IDLE; `terrarium_boot` prints `JOIN_URL: <role> <node> <url>` per
+  node (`markers.JOIN_URL`, echoed by run_stack, never waited on). `dev`
+  is deliberately absent (the app mints one). **Native iOS/Android and the
+  Radxa app still cannot connect** (old websocket wire); the card says so.
+- **NO_ROOM boot defers Arco clients (D1 fix).** A NO_ROOM boot leaves
+  both Arco clients stopped (`clients_stopped[0] = True`); the existing
+  `restart_clients()` in `_serve_roomless` starts them after the first
+  `load_room`, printing `TRANSPORT_READY ... (restarted)`. This now also
+  works live in one-shot NO_ROOM runs (`./terrarium.sh` with no `--room`).
+- **The Console room switch stops and restarts Control's own Arco
+  clients (D2/D3 fix).** `ConsoleAgent` takes `stop_room_clients` /
+  `restart_room_clients` hooks from `terrarium_boot` and calls them
+  around a switch (stop, unload, load, restart), so the o2lite transport
+  and the `ArcoSynthPool` never poll a dead hub; `_ensure_room_for_bit`
+  refuses an unknown or unloadable target room before touching the
+  active one, so a refused switch cannot strand the operator in NO_ROOM.
+- **Serve loops resolve `terrarium.arco` per iteration (D3 fix, `_live_arco`).**
+  `_serve_rounds`, `_wait_for_load`, `_wait_in_setup`, and
+  `_serve_until_done` re-read the live Arco handle every loop iteration
+  instead of capturing it once, so a Console-driven switch mid-loop is
+  seen and drained rather than starving on the old handle's pty.
+- **Simulators spawn for `Terrarium.loading_room` (D4 fix).** The Room
+  simulator factory resolves its room type through a callable at spawn
+  time, reading `Terrarium.loading_room` (set for the duration of a
+  `load_room` call), so a Console switch spawns fixtures for the Room
+  being loaded rather than the boot room.
+- **`terrarium_boot` always passes `array_backend="simulator"` (D5
+  ruling).** This harness simulates whatever backend a Room declares
+  (per-fixture, via the factory), so every configured Room is loadable
+  from any boot; a venue box will pass its real backend when one exists.
+  `_ensure_room_for_bit` also checks `validate_rooms` for the target
+  Room before unloading the active one, so an unloadable target no
+  longer strands the operator in NO_ROOM.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
