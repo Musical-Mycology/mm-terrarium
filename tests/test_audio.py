@@ -269,3 +269,29 @@ def test_shutdown_releases_a_still_sounding_welcome_voice():
     br.on_grant("dev1", _role(ugens=PLAYER_UGENS, welcome=WELCOME))
     br.shutdown()
     assert len(pool.released) == 2                       # drone voice and cue voice
+
+
+def test_shutdown_shuts_the_pool_even_when_a_voice_fails_to_silence():
+    # D6 (2026-09-11): at process shutdown the hub may already be dead, so
+    # a voice's all_off() raises. The failure is reported (re-raised), but
+    # the pool's own shutdown -- which is where pyarco's arco.finish() runs,
+    # the flag that stops Ugen.__del__ from writing to the dead socket at
+    # interpreter exit -- must still happen.
+    from control.audio import FakeVoice
+
+    class DeadVoice(FakeVoice):
+        def all_off(self) -> None:
+            raise BrokenPipeError(32, "Broken pipe")
+
+    class DeadPool(FakePool):
+        def acquire(self):
+            voice = DeadVoice()
+            self.acquired.append(voice)
+            return voice
+
+    pool = DeadPool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("dev1", _role(ugens=PLAYER_UGENS))
+    with pytest.raises(BrokenPipeError):
+        bridge.shutdown()
+    assert pool.shut

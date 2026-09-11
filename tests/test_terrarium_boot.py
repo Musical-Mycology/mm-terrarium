@@ -292,6 +292,86 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
     assert order == ["o2lite-transport", "bit", "simulator", "arco"]
 
 
+def test_shutdown_stops_the_synth_pool_after_the_transport_and_before_arco(
+        monkeypatch):
+    """D6 (2026-09-11): the ArcoSynthPool is Control's OTHER o2lite client
+    of the Arco hub -- in fact it owns the o2lite connection the transport
+    is a guest on -- and nothing ever shut it down at process exit. Arco
+    was SIGTERMed in the room stack with pyarco's ugens still alive, and
+    at interpreter exit every Ugen.__del__ tried to send /arco/free on the
+    dead socket: five "Exception ignored" BrokenPipeError/EBADF tracebacks
+    on every teardown, live-reproduced on every run since 2026-09-08.
+
+    main() registers the AudioBridge's shutdown on `pre_room_teardown`
+    BEFORE the transport (so LIFO runs it AFTER the transport stops), and
+    both run ahead of terrarium.room_stack, where Arco lives: the pool
+    silences its channels, drops the Flsyn (/arco/free while the hub is
+    still alive) and calls arco.finish() -- the flag Ugen.__del__ checks
+    -- before Arco goes down."""
+    from control.engine import GameServer
+    from control.teardown import TeardownStack
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+    from harness.terrarium_boot import (_register_o2lite_transport,
+                                        _register_room_audio)
+
+    order = []
+    monkeypatch.setattr(GameServer, "abort",
+                        lambda self: order.append("bit"))
+    monkeypatch.setattr(O2LiteTransport, "stop",
+                        lambda self: order.append("o2lite-transport"))
+    monkeypatch.setattr(AudioBridge, "shutdown",
+                        lambda self: order.append("room-audio"))
+
+    class _RecordingPopen(FakePopen):
+        def __init__(self, label):
+            super().__init__()
+            self._label = label
+
+        def send_signal(self, sig):
+            if self.returncode is None:
+                order.append(self._label)
+            super().send_signal(sig)
+
+    arco_popen = _RecordingPopen("arco")
+    sim_popen = _RecordingPopen("simulator")
+
+    fake_o2 = FakeO2Lite()
+    fake_o2.set_services("actl")
+    transport = O2LiteTransport()
+    transport.start(fake_o2)
+    room_audio = _fake_room_audio()
+
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        clock=time.monotonic,
+        arco_process_cls=lambda cmd: _fake_arco(cmd, popen=arco_popen),
+        simulator_popen=sim_popen, room_audio=room_audio,
+        transport=transport)
+
+    pre_room_teardown = TeardownStack()
+    _register_room_audio(pre_room_teardown, agent.room_audio)
+    _register_o2lite_transport(pre_room_teardown, transport)
+
+    shutdown(teardown, terrarium, pre_room_teardown=pre_room_teardown)
+
+    assert order == ["o2lite-transport", "room-audio", "bit", "simulator",
+                     "arco"]
+
+
+def test_register_room_audio_tolerates_a_build_with_no_audio_bridge():
+    """agent.room_audio is None when build() was handed room_audio=None
+    and could not construct one -- registering nothing must be a no-op,
+    not an AttributeError at shutdown."""
+    from control.teardown import TeardownStack
+    from harness.terrarium_boot import _register_room_audio
+
+    stack = TeardownStack()
+    _register_room_audio(stack, None)
+    assert stack.close() == []
+
+
 def test_shutdown_reports_a_failing_step_without_skipping_the_rest():
     """A guarded stack: one broken teardown step must not orphan Arco."""
     arco_popen = FakePopen()
@@ -2709,7 +2789,11 @@ def test_main_no_room_boot_skips_transport_start_and_leaves_clients_stopped(
             room=None, state=TerrariumState.NO_ROOM, bit=None, bit_name=None,
             add_observer=lambda observer: None)
         server = object()
-        room_audio = types.SimpleNamespace(pool=pool)
+        # main() registers room_audio.shutdown on the pre-room stack
+        # (D6, 2026-09-11); the real AudioBridge has one, so the fake
+        # must too.
+        room_audio = types.SimpleNamespace(pool=pool,
+                                           shutdown=lambda: None)
         agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[],
                                       room_audio=room_audio)
         teardown = TeardownStack()
