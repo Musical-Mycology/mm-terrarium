@@ -2150,3 +2150,433 @@ git commit -m "docs: terrarium.sh standup, room-aware load_bit and Join card liv
 ```
 
 At closeout, run the `mm-deepdive-sync` skill as the project convention requires; the entry above is its input.
+
+---
+
+## Addendum (2026-09-11): defects found by Task 11's live run
+
+Task 11's first live pass (runs/20260910-1039xx to 1048xx, this worktree) proved
+two steps and failed two. What worked: `./terrarium.sh --room TEST` booted
+with no Bit, a Console `load_bit` with `room: "TEST"` loaded TestBit, printed
+`JOIN_URL:` lines (`http://192.168.21.74:8788/app/?node=...&o2ws=192.168.21.74%3A8080&ens=arco`)
+and `round loaded: TestBit`; `./terrarium.sh --room DEMO` then a switch to TEST
+unloaded DEMO and loaded TEST. What failed, with root causes read from the
+code:
+
+- **D1. `./terrarium.sh` with no Room dies in `build()`.** `build()` calls
+  `pool.start()` (pyarco `arco.initialize`, 30 s timeout) unconditionally,
+  and `main()` calls `transport.start(...)` unconditionally; a NO_ROOM boot
+  has no Arco. The pre-existing NO_ROOM boot path was only ever exercised
+  offline with a fake pool. Fix: a NO_ROOM boot leaves both clients stopped
+  (`clients_stopped[0] = True`) and the existing `restart_clients()` in
+  `_serve_roomless` starts them after the first `load_room`.
+- **D2. A Room switch inside the Console handler swaps Arco under Control's
+  own clients.** After `unload_room` + `load_room` in `_ensure_room_for_bit`,
+  the o2lite transport and the ArcoSynthPool still point at the dead hub:
+  13,693 `OSError: [Errno 51] Network is unreachable` lines in one run. The
+  dormant `_recycle_room` seam already documents the only survivable order:
+  stop clients, replace the hub, restart clients. Fix: `ConsoleAgent` takes
+  `stop_room_clients` / `restart_room_clients` hooks and calls them around
+  the switch; `terrarium_boot` passes its `stop_clients` / `restart_clients`
+  closures.
+- **D3. The serve loops keep polling the old Arco handle after a switch.**
+  `_serve_rounds`, `_wait_for_load`, `_wait_in_setup`, `_serve_until_done`
+  capture `arco` once; a switch happens inside `console_agent.poll()`, so
+  they never drain the new Arco's pty (the documented starvation trap) and
+  cannot see it exit. Fix: resolve `terrarium.arco` every iteration.
+- **D4. Room simulators are spawned with the boot room's type.**
+  `_O2SimulatorFactory(room_type=config.room_name)` is fixed at `build()`;
+  loading TEST from a DEMO boot spawned `--room-type DEMO --fixture main`,
+  which `StopIteration`s in `to_fixture_capability`. Fix: `Terrarium` exposes
+  `loading_room` during `load_room`, and the factory resolves its room type
+  through a callable at spawn time.
+- **D5. `load_bit` unloads the active Room before checking the target is
+  loadable.** From a TEST boot, `room: "DEMO"` unloaded TEST, then
+  `validate_rooms` refused DEMO ("requires an array backend, none
+  configured"), leaving NO_ROOM. Fix: check `validate_rooms` for the target
+  before touching anything. Ruling: `terrarium_boot` always passes
+  `array_backend="simulator"`: this harness simulates whatever backend a
+  room declares (per-fixture, via the factory), so every configured room is
+  loadable from any boot; a venue box will pass its real backend when one
+  exists.
+- **D6 (deferred, pre-existing).** `BrokenPipeError` tracebacks on SIGINT
+  appear in 2026-09-08 logs too; not this branch's.
+
+### Task 12: `terrarium_boot`: NO_ROOM boot defers Arco clients; live Arco handle; dynamic simulator room type; simulator array backend
+
+**Files:**
+- Modify: `harness/terrarium_boot.py` (`build()` pool start, `_O2SimulatorFactory`, `_wait_for_load`, `_wait_in_setup`, `_serve_until_done`, `_serve_rounds`, `main()` closures / transport start / `BootConfig` array_backend)
+- Modify: `control/terrarium.py` (`loading_room` attribute)
+- Test: `tests/test_terrarium_boot.py`, `tests/test_terrarium.py`
+
+**Interfaces:**
+- Produces: `Terrarium.loading_room: str | None` (the name being loaded, set for the whole `load_room` call, None otherwise). `_O2SimulatorFactory(ensemble, *, popen, room_type: str | Callable[[], str])`. `_live_arco(terrarium, arco)` helper. `_wait_in_setup(..., terrarium=None)`. `main()`'s `stop_clients` / `restart_clients` closures always defined (no longer gated on `effective_serve`); `restart_clients()` prints `markers.CONTROL_TRANSPORT_READY` on success.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_terrarium.py`:
+
+```python
+def test_loading_room_is_set_only_during_load_room():
+    seen = []
+
+    def factory(teardown, fixture):
+        seen.append(terrarium.loading_room)
+        return f"sim-{fixture}-dev"
+
+    terrarium = make_terrarium(simulator_factory=factory)
+    assert terrarium.loading_room is None
+    assert terrarium.load_room("TEST") is None
+    assert seen == ["TEST", "TEST"]        # one call per fixture, both mid-load
+    assert terrarium.loading_room is None
+
+
+def test_loading_room_is_cleared_after_a_failed_load():
+    terrarium = make_terrarium(
+        ownership_probe=lambda: "another Console owns this room")
+    assert terrarium.load_room("TEST") is not None
+    assert terrarium.loading_room is None
+```
+
+Append to `tests/test_terrarium_boot.py`:
+
+```python
+def test_simulator_factory_resolves_a_callable_room_type_at_spawn_time():
+    from harness.terrarium_boot import _O2SimulatorFactory
+    from control.teardown import TeardownStack
+    current = ["DEMO"]
+    popen = FakePopen()
+    factory = _O2SimulatorFactory("arco", popen=popen,
+                                  room_type=lambda: current[0])
+    factory(TeardownStack(), "array")
+    current[0] = "TEST"
+    factory(TeardownStack(), "main")
+    first, second = popen.commands[-2], popen.commands[-1]
+    assert first[first.index("--room-type") + 1] == "DEMO"
+    assert second[second.index("--room-type") + 1] == "TEST"
+
+
+def test_build_with_no_room_does_not_start_the_pool():
+    """D1: a NO_ROOM build has no Arco to connect to, so the default
+    ArcoSynthPool must be constructed but not started (pool.start() is
+    arco.initialize(), a 30 s blocking connect)."""
+    import harness.terrarium_boot as tb
+
+    class RecordingPool:
+        started = 0
+        def __init__(self, *a, **k): pass
+        def start(self): RecordingPool.started += 1
+        def poll(self): pass
+        def quiesce(self): pass
+
+    monkey = pytest.MonkeyPatch()
+    import harness.arco_synth as arco_synth
+    monkey.setattr(arco_synth, "ArcoSynthPool", RecordingPool)
+    try:
+        config = BootConfig(room_name=None, bit_name=None)
+        gs, server, agent, arco, teardown, terrarium = build(
+            config, {"TestBit": TestBit}, arco_command=["arco-server"],
+            room_binding=RoomBindingRegistry(), room_spec=None,
+            arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
+            transport=_fake_transport(), clock=time.monotonic)
+        try:
+            assert RecordingPool.started == 0
+            assert arco is None
+            assert terrarium.state == TerrariumState.NO_ROOM
+        finally:
+            teardown.close()
+    finally:
+        monkey.undo()
+
+
+def test_live_arco_prefers_the_terrariums_current_handle():
+    from harness.terrarium_boot import _live_arco
+
+    class T:
+        arco = "new"
+
+    assert _live_arco(T(), "old") == "new"
+    assert _live_arco(None, "old") == "old"
+
+
+def test_serve_until_done_polls_the_terrariums_arco_not_a_stale_handle():
+    """D3: a Console room switch inside console_agent.poll() replaces Arco;
+    the loop must poll the NEW handle from the next iteration on."""
+    from harness.terrarium_boot import _serve_until_done
+
+    class Arco:
+        def __init__(self): self.polls = 0; self.exit = None
+        def poll(self): self.polls += 1; return self.exit
+
+    old, new = Arco(), Arco()
+
+    class T:
+        state = TerrariumState.ROOM_READY
+        arco = old
+
+    class GS:
+        state = State.RUNNING
+        def tick(self, dt): pass
+
+    class Agent:
+        closing = 0
+        def poll(self): pass
+
+    class Console:
+        def __init__(self): self.n = 0
+        def poll(self):
+            self.n += 1
+            if self.n == 2:
+                T.arco = new            # the switch
+            if self.n == 4:
+                new.exit = 0            # the NEW Arco exits
+
+    reason = _serve_until_done(GS(), Agent(), old, console_agent=Console(),
+                               terrarium=T(), sleep=lambda _s: None)
+    assert reason == "arco-exited"
+    assert new.polls >= 1
+    assert old.polls <= 2
+
+
+def test_main_no_room_boot_leaves_clients_stopped_and_skips_transport_start(monkeypatch):
+    """D1: main() must not call transport.start() (which asserts a synced
+    clock against a hub that does not exist) on a NO_ROOM boot. Captured at
+    the build() seam plus a transport whose start() raises if called."""
+    import harness.terrarium_boot as terrarium_boot_module
+    from devicelink.o2_transport import FakeO2Lite
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+    monkeypatch.setattr(terrarium_boot_module, "_o2lite_module", lambda: fake)
+
+    class Boom(Exception):
+        pass
+
+    def fake_build(config, bit_registry, **kwargs):
+        assert config.room_name is None
+        assert config.array_backend == "simulator"
+        transport = kwargs["transport"]
+        orig = transport.start
+        def start(*a, **k):
+            raise Boom("transport.start called on a NO_ROOM boot")
+        transport.start = start
+        raise SystemExit(0)
+
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--no-bit",
+                                      "--console-port", "0"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
+```
+
+(The last test pins the `array_backend="simulator"` ruling and that `main()` reaches build with a NO_ROOM config; the transport-start skip itself is pinned by reading `main()`: the implementer adds an assertion-style comment and the reviewer checks the branch. If `FakePopen` lacks `.commands`, use the attribute `tests/test_terrarium_boot.py` already uses for spawned command lines in the two existing `_O2SimulatorFactory` tests near line 1627.)
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `.venv/bin/python -m pytest tests/test_terrarium.py tests/test_terrarium_boot.py -q -k "loading_room or callable_room_type or no_room_does_not_start or live_arco or stale_handle or leaves_clients_stopped"`
+Expected: FAIL (no `loading_room`, callable `room_type` passed straight to argv, pool started, `_live_arco` missing, old handle polled, `array_backend` None)
+
+- [ ] **Step 3: Implement**
+
+`control/terrarium.py`: in `__init__`, add `self.loading_room: str | None = None` with a comment ("the Room name a load_room call is currently loading; None outside one. The harness's simulator factory reads it to spawn fixtures for the Room being loaded rather than the boot room."). In `load_room`, right after the state check and before `_set_state(ROOM_LOADING)`, set `self.loading_room = name`; wrap the rest of the method body so that `self.loading_room = None` runs in a `finally` on every exit (success, refusal, exception).
+
+`harness/terrarium_boot.py`:
+
+(a) `_O2SimulatorFactory.__init__`: `room_type: "str | Callable[[], str]" = "TEST"`; in `__call__`, `room_type = self._room_type() if callable(self._room_type) else self._room_type` and pass that to `--room-type`. Docstring: a callable is resolved at spawn time so a Console `load_room` of a different Room than the boot room spawns the right fixtures (D4).
+
+(b) `build()`: construct the factory as
+```python
+    factory = _O2SimulatorFactory(
+        config.o2_ensemble, popen=simulator_popen,
+        # Resolved at spawn time: `terrarium` is assigned below, before any
+        # load_room can call this. loading_room is the Room being loaded
+        # (Console-driven loads included); the boot room only as a fallback.
+        room_type=lambda: (terrarium.loading_room or config.room_name or ""))
+```
+and in the pool block: `if room_spec is not None: pool.start()` with the comment: "A NO_ROOM build has no Arco to connect to. The pool stays in its pre-start state (same as after quiesce()); main()'s restart_clients() starts it after the first Console load_room (D1)."
+
+(c) Add `_live_arco(terrarium, arco)` (docstring as in the addendum's D3) near `_arco_pump`. In `_wait_for_load` and `_serve_until_done`, at the top of each `while True` iteration add `arco = _live_arco(terrarium, arco)`. In `_wait_in_setup`, add a `terrarium=None` keyword and the same per-iteration refresh before `if arco is not None: arco.poll()`. In `_serve_rounds`, pass `terrarium=terrarium` to `_wait_in_setup`, and refresh `arco = _live_arco(terrarium, arco)` immediately after `_wait_for_load` returns "loaded" and again immediately before the `_serve_until_done` call. In `main()`'s round-1 branch pass `terrarium=terrarium` to its `_wait_in_setup` call.
+
+(d) `main()`: `array_backend="simulator"` always in the `BootConfig(...)` construction, with the D5 ruling as the comment. Remove the two `... if effective_serve else None` gatings so `stop_clients` and `restart_clients` are always callables (update their docstrings: one-shot mode simply never calls them). In `restart_clients`, after a successful restart (`reason is None`), print `f"{markers.CONTROL_TRANSPORT_READY} {config.o2_ensemble!r} (restarted)"`. Replace the unconditional `transport.start(o2lite, pump=...)` + `CONTROL_TRANSPORT_READY` + `ARCO_WWW` prints with:
+```python
+        if arco is not None:
+            transport.start(o2lite, pump=arco.poll)
+            print(f"{markers.CONTROL_TRANSPORT_READY} "
+                  f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)
+            print(f"{markers.ARCO_WWW} http://127.0.0.1:{ARCO_HTTP_PORT}/ "
+                  f"(www/ over Arco's HTTP server; o2ws on the same port)",
+                  flush=True)
+        else:
+            # NO_ROOM boot: there is no hub yet. Both Arco clients (the
+            # o2lite transport and the ArcoSynthPool) stay stopped until the
+            # first Console load_room, when _serve_roomless's
+            # restart_clients() brings them up in launch order (D1).
+            clients_stopped[0] = True
+        _register_o2lite_transport(pre_room_teardown, transport)
+```
+Check `tests/test_markers.py` still finds `markers.ARCO_WWW` and `markers.CONTROL_TRANSPORT_READY` by name in the module source (they remain).
+
+- [ ] **Step 4: Run the tests**
+
+Run: `.venv/bin/python -m pytest tests/test_terrarium.py tests/test_terrarium_boot.py tests/test_markers.py -q`, then the full suite. Any existing test asserting `array_backend is None` for a non-array boot room must be updated to the ruling (say so in the report).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -am "fix(harness): NO_ROOM boot defers Arco clients; serve loops poll the live Arco; simulators spawn for the Room being loaded"
+```
+
+### Task 13: Console room switch stops and restarts Control's Arco clients, and checks loadability first
+
+**Files:**
+- Modify: `console/agent.py` (constructor, `_ensure_room_for_bit`)
+- Modify: `harness/terrarium_boot.py` (the `ConsoleAgent(...)` call)
+- Test: `tests/test_console_agent.py`
+
+**Interfaces:**
+- Consumes: `main()`'s `stop_clients() -> None` and `restart_clients() -> str | None` closures (Task 12, always defined).
+- Produces: `ConsoleAgent(..., stop_room_clients=None, restart_room_clients=None)`.
+
+- [ ] **Step 1: Write the failing tests** (append to `tests/test_console_agent.py`; `_two_room_terrarium`, `_testbit_registry`, `_errors`, `_events` exist from Task 3)
+
+```python
+def test_room_switch_stops_clients_before_unload_and_restarts_after_load():
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    calls = []
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(
+        terrarium.gs, srv, registry=_testbit_registry(), terrarium=terrarium,
+        stop_room_clients=lambda: calls.append(("stop", terrarium.room.name)),
+        restart_room_clients=lambda: calls.append(("restart", terrarium.room.name)) or None)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "DEMO"})
+    agent.poll()
+    assert _errors(srv) == []
+    assert calls == [("stop", "TEST"), ("restart", "DEMO")]
+    assert terrarium.gs.state.name == "SETUP"
+
+
+def test_room_load_from_no_room_restarts_clients_without_a_stop():
+    terrarium = _two_room_terrarium()
+    calls = []
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(
+        terrarium.gs, srv, registry=_testbit_registry(), terrarium=terrarium,
+        stop_room_clients=lambda: calls.append("stop"),
+        restart_room_clients=lambda: calls.append("restart") or None)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "TEST"})
+    agent.poll()
+    assert _errors(srv) == []
+    assert calls == ["restart"]
+
+
+def test_a_failed_client_restart_unloads_the_room_and_refuses():
+    terrarium = _two_room_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(
+        terrarium.gs, srv, registry=_testbit_registry(), terrarium=terrarium,
+        restart_room_clients=lambda: "clock never synced")
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "TEST"})
+    agent.poll()
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "room clients failed to restart: "
+                                        "clock never synced"}]
+    assert terrarium.state == TerrariumState.NO_ROOM
+    assert terrarium.gs.state.name == "IDLE"
+
+
+def test_load_bit_refuses_an_unloadable_room_before_unloading_the_active_one():
+    """D5: from a boot with no array backend, DEMO is not loadable; the
+    active TEST Room must survive the refusal."""
+    from control.boot_config import BootConfig
+    terrarium = make_terrarium(
+        config=make_config(rooms={"TEST": TEST_SPEC, "DEMO": DEMO_SPEC}),
+        gs=GameServer({"TestBit": TestBit}),
+        boot_config=BootConfig(room_name="TEST", bit_name="TestBit"))
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "DEMO"})
+    agent.poll()
+    errors = _errors(srv)
+    assert len(errors) == 1
+    assert errors[0]["message"].startswith("room 'DEMO' is not loadable: ")
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.name == "TEST"
+    assert _events(srv, "room_unloaded") == []
+
+
+def test_load_bit_refuses_an_unknown_room_before_touching_anything():
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv,
+                         registry=_testbit_registry(room_types=["TEST", "DEMO", "ATRIUM"]),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "ATRIUM"})
+    agent.poll()
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "unknown room 'ATRIUM'"}]
+    assert terrarium.room.name == "TEST"
+```
+
+- [ ] **Step 2: Run to verify they fail** (`-k "room_switch or from_no_room_restarts or failed_client_restart or unloadable_room or unknown_room"`)
+
+- [ ] **Step 3: Implement**
+
+`console/agent.py`: add `stop_room_clients=None, restart_room_clients=None` after `join_info=None` in `__init__`, stored as `self._stop_room_clients` / `self._restart_room_clients` with a comment: "Optional hooks from harness/terrarium_boot.py: Control is itself a client (o2lite transport + ArcoSynthPool) of the hub a Room switch replaces, so the switch must stop those clients before the unload and restart them after the load, the same order the dormant _recycle_room seam documents. None (tests, embeddings without Arco clients) skips both."
+
+Replace `_ensure_room_for_bit`'s body from the `if target == active: return None` line onward with:
+
+```python
+        if target == active:
+            return None
+        if terrarium.state not in (TerrariumState.NO_ROOM,
+                                   TerrariumState.ROOM_READY):
+            return (f"room is {terrarium.state.name.lower()}; try again "
+                    f"once it settles")
+        # D5: refuse an unloadable target BEFORE touching the active Room;
+        # otherwise a refused load_room would strand the operator in
+        # NO_ROOM. Same validate_rooms the Rooms panel's status column uses.
+        if target not in terrarium.config.rooms:
+            return f"unknown room {target!r}"
+        reasons = validate_rooms(
+            terrarium.config,
+            array_backend_configured=terrarium.boot_config.array_backend_configured)
+        if reasons.get(target) is not None:
+            return f"room {target!r} is not loadable: {reasons[target]}"
+        gs = self.game_server
+        if gs.state is not State.IDLE:
+            gs.abort()
+        if terrarium.state is TerrariumState.ROOM_READY:
+            if self._stop_room_clients is not None:
+                self._stop_room_clients()
+            reason = terrarium.unload_room(force=True)
+            if reason is not None:
+                return reason
+        reason = self._load_room(target)
+        if reason is not None:
+            return reason
+        if self._restart_room_clients is not None:
+            reason = self._restart_room_clients()
+            if reason is not None:
+                terrarium.unload_room(force=True)
+                return f"room clients failed to restart: {reason}"
+        return None
+```
+`validate_rooms` is already imported in `console/agent.py`.
+
+`harness/terrarium_boot.py`: add `stop_room_clients=stop_clients, restart_room_clients=restart_clients,` to the `ConsoleAgent(...)` call.
+
+- [ ] **Step 4: Run** `tests/test_console_agent.py`, then the full suite.
+- [ ] **Step 5: Commit** `fix(console): a Room switch stops and restarts Control's Arco clients and checks loadability first`
+
+### Task 14: Live re-verification and docs (replaces Task 11's steps)
+
+Same as Task 11, with these amendments: every websocket wait has a hard timeout and the whole live phase has a wall-clock budget (about 12 minutes); after each switch, assert the control log contains no `Network is unreachable` and no `StopIteration` lines; from the no-Room `./terrarium.sh` boot, load TestBit into TEST, then switch to DEMO (loadable now that the harness always declares the simulator array backend), then back to TEST; SIGINT each run and confirm zero orphans. Then write the spec's `## Status` (listing D1 to D6 and what was observed) and the deep-dive entry (add one bullet for D1 to D5 under the dated entry), run the full suite, commit `docs: terrarium.sh standup, room-aware load_bit and Join card live-verified`.
