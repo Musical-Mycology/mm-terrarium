@@ -293,6 +293,10 @@ class ConsoleAgent:
                 self._stop_room_clients()
             reason = terrarium.unload_room(force=True)
             if reason is not None:
+                # The old Room is still up: bring its clients back rather
+                # than leaving Control stopped against a live hub.
+                if self._restart_room_clients is not None:
+                    self._restart_room_clients()
                 return reason
         reason = self._load_room(target)
         if reason is not None:

@@ -2076,3 +2076,45 @@ def test_load_bit_refuses_an_unknown_room_before_touching_anything():
     assert _errors(srv) == [{"event": "error", "command": "load_bit",
                              "message": "unknown room 'ATRIUM'"}]
     assert terrarium.room.name == "TEST"
+
+
+def test_a_refused_unload_restarts_the_clients_it_stopped():
+    """A switch stops Control's Arco clients before unloading; if the
+    unload is refused the old Room is still live, so the clients must come
+    back rather than stay stopped against a running hub."""
+    from control.boot_config import BootConfig
+
+    class StubbornTerrarium:
+        state = TerrariumState.ROOM_READY
+        config = make_config(rooms={"TEST": TEST_SPEC, "DEMO": DEMO_SPEC})
+        boot_config = BootConfig(room_name="TEST", bit_name="TestBit",
+                                 array_backend="simulator")
+        room_binding = None
+
+        class _Room:
+            name = "TEST"
+        room = _Room()
+
+        def add_observer(self, observer):
+            pass
+
+        def unload_room(self, force=False):
+            return "unload refused for the test"
+
+        def load_room(self, name):
+            raise AssertionError("must not load after a refused unload")
+
+    calls = []
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(
+        gs, srv, registry=_testbit_registry(), terrarium=StubbornTerrarium(),
+        stop_room_clients=lambda: calls.append("stop"),
+        restart_room_clients=lambda: calls.append("restart") or None)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "DEMO"})
+    agent.poll()
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "unload refused for the test"}]
+    assert calls == ["stop", "restart"]
+    assert gs.state.name == "IDLE"
