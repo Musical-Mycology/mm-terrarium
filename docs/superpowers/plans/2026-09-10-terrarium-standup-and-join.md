@@ -2580,3 +2580,236 @@ Replace `_ensure_room_for_bit`'s body from the `if target == active: return None
 ### Task 14: Live re-verification and docs (replaces Task 11's steps)
 
 Same as Task 11, with these amendments: every websocket wait has a hard timeout and the whole live phase has a wall-clock budget (about 12 minutes); after each switch, assert the control log contains no `Network is unreachable` and no `StopIteration` lines; from the no-Room `./terrarium.sh` boot, load TestBit into TEST, then switch to DEMO (loadable now that the harness always declares the simulator array backend), then back to TEST; SIGINT each run and confirm zero orphans. Then write the spec's `## Status` (listing D1 to D6 and what was observed) and the deep-dive entry (add one bullet for D1 to D5 under the dated entry), run the full suite, commit `docs: terrarium.sh standup, room-aware load_bit and Join card live-verified`.
+
+## Addendum 2 (2026-09-11): D7, the one-Arco-per-process constraint
+
+Task 14's live pass (runs/20260911-1045xx, 1049xx) proved the no-Room
+standup (D1), the Room standup, and the first Console `load_bit` with a
+room, and failed the Room switch. Evidence and root cause:
+
+- On every `room_loaded`, `_RoomWiring.on_terrarium_state_change` ->
+  `DeviceLinkAgent.rewire_room()` -> `_grant_room_audio` ->
+  `ArcoSynthPool.acquire()` raised `ArcoSynthPool.start() must run before
+  acquire()`: the observer fires inside `load_room`, before anything has
+  restarted the pool. On the first NO_ROOM load the Room therefore came up
+  with no audio grant.
+- On the switch, `restart_clients()` -> `pool.start()` -> pyarco
+  `arco.initialize()`, whose first line is `if o2lite and o2lite.time_get()
+  > 0: return None  # already started` (`/Users/chris/projects/arco/pyarco/arco_engine.py`).
+  The o2lite singleton still pointed at the dead hub, `Flsyn(...)` hit
+  `[Errno 32] Broken pipe`, `ArcoSynthPool.start`'s cleanup called
+  `arco.finish()` ("does not prepare to reinitialize or restart"), and the
+  new Arco was left unusable. The 2026-09-01 console-load-stabilization
+  spec already flagged "`arco.initialize()` second-run behavior goes
+  upstream to Roger"; this is that constraint, hit for real.
+
+**Ruling.** A Control process can connect to exactly one Arco until
+pyarco/o2litepy support re-initialization. So: (1) an in-process Room
+switch is refused with a message naming the restart command, not
+attempted; (2) the first Room load in a process starts Control's clients
+BEFORE the Room-wiring observer grants audio, by moving the restart into
+`_RoomWiring`; (3) the picker disables Load for a non-active Room while a
+Room is up and says why. The stop/restart hooks from Task 13 stay (the
+NO_ROOM path uses restart) and the abort/unload/load switch code is
+removed rather than left dormant. Cost if wrong: when pyarco gains
+re-init, the switch is a small re-add on top of the retained hooks.
+
+### Task 15: refuse in-process Room switches; restart clients before the Room wiring grants audio; picker copy
+
+**Files:**
+- Modify: `harness/terrarium_boot.py` (`_RoomWiring`, its construction in `main()`)
+- Modify: `console/agent.py` (`_ensure_room_for_bit`)
+- Modify: `console/static/bit.js` (`paintHint`, Load gating in `buildPickCard`)
+- Test: `tests/test_terrarium_boot.py`, `tests/test_console_agent.py`, `tests/test_console_static.py`
+
+**Interfaces:**
+- Produces: `_RoomWiring(agent, terrarium, restart_clients=None)`; on `ROOM_READY` it calls `restart_clients()` first (when given) and only calls `agent.rewire_room()` when that returned `None`; a returned reason is logged at ERROR and the rewire is skipped (the caller that drove the load surfaces the reason: `_serve_roomless` retries `restart_clients()` and unloads on failure; `_ensure_room_for_bit` does the same through its own hook).
+- Produces: `_ensure_room_for_bit` refusal text for a switch: `switching Rooms in a running Terrarium is not supported yet: pyarco cannot reconnect to a new Arco in one process; stop and run ./terrarium.sh --room <target>`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_terrarium_boot.py`:
+
+```python
+def test_room_wiring_restarts_clients_before_rewiring_the_agent():
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    wiring = _RoomWiring(Agent(), terrarium=None,
+                         restart_clients=lambda: calls.append("restart") or None)
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == ["restart", "rewire"]
+
+
+def test_room_wiring_skips_the_rewire_when_the_restart_fails(caplog):
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    wiring = _RoomWiring(Agent(), terrarium=None,
+                         restart_clients=lambda: "clock never synced")
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == []
+    assert "clock never synced" in caplog.text
+
+
+def test_room_wiring_without_a_restart_hook_rewires_as_before():
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    wiring = _RoomWiring(Agent(), terrarium=None)
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_UNLOADING,
+                                     TerrariumState.NO_ROOM)
+    assert calls == ["rewire", "unwire"]
+```
+
+In `tests/test_console_agent.py`, replace the bodies of these four tests so they pin the refusal (keep the names so the ledger's history still reads): `test_load_bit_with_a_different_room_unloads_then_loads_then_loads_bit`, `test_load_bit_with_a_different_room_aborts_a_loaded_bit_first`, `test_room_switch_stops_clients_before_unload_and_restarts_after_load`, `test_a_refused_unload_restarts_the_clients_it_stopped`. Delete the last two outright (their scenario no longer exists) and rewrite the first two as:
+
+```python
+def test_load_bit_with_a_different_room_is_refused_and_leaves_the_room_up():
+    """D7: pyarco cannot reconnect to a second Arco in one process, so a
+    Room switch is refused up front with the restart command."""
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    calls = []
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium,
+                         stop_room_clients=lambda: calls.append("stop"),
+                         restart_room_clients=lambda: calls.append("restart") or None)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "DEMO"})
+    agent.poll()
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "switching Rooms in a running Terrarium "
+                                        "is not supported yet: pyarco cannot "
+                                        "reconnect to a new Arco in one process; "
+                                        "stop and run ./terrarium.sh --room DEMO"}]
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.name == "TEST"
+    assert terrarium.gs.state.name == "IDLE"
+    assert calls == []
+    assert _events(srv, "room_unloaded") == []
+
+
+def test_load_bit_with_a_different_room_is_refused_even_with_a_bit_loaded():
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "TEST"})
+    agent.poll()
+    assert terrarium.gs.state.name == "SETUP"
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "DEMO"})
+    agent.poll()
+    assert len(_errors(srv)) == 1
+    assert _errors(srv)[0]["message"].startswith("switching Rooms in a running Terrarium")
+    assert terrarium.room.name == "TEST"
+    assert terrarium.gs.state.name == "SETUP"      # the loaded Bit is untouched
+```
+
+Keep `test_room_load_from_no_room_restarts_clients_without_a_stop`, `test_a_failed_client_restart_unloads_the_room_and_refuses`, `test_load_bit_refuses_an_unloadable_room_before_unloading_the_active_one` (rename to `..._before_touching_the_active_one`; its assertions still hold because the loadability check now precedes the switch refusal and DEMO is unloadable in that fixture) and `test_load_bit_refuses_an_unknown_room_before_touching_anything` (the unknown-room check also precedes the switch refusal).
+
+In `tests/test_console_static.py::test_bit_picker_sends_a_room_with_load_bit`, replace `assert "Arco restarts" in js` with `assert "needs a restart" in js`.
+
+- [ ] **Step 2: Run to verify they fail**
+
+- [ ] **Step 3: Implement**
+
+`harness/terrarium_boot.py`, `_RoomWiring`:
+
+```python
+class _RoomWiring:
+    """... (keep the existing docstring, then add:)
+
+    restart_clients, when given, runs FIRST on ROOM_READY: Control's own
+    Arco clients (the o2lite transport and the ArcoSynthPool) must be up
+    before rewire_room() grants the Room's audio, or the grant raises
+    'ArcoSynthPool.start() must run before acquire()' (live, 2026-09-11).
+    A restart reason skips the rewire and is logged; the driver that loaded
+    the Room (_serve_roomless, or ConsoleAgent's load_bit hook) retries the
+    restart itself and unloads the Room when it fails again."""
+
+    def __init__(self, agent, terrarium, restart_clients=None) -> None:
+        self._agent = agent
+        self._terrarium = terrarium
+        self._restart_clients = restart_clients
+
+    def on_terrarium_state_change(self, old_state, new_state) -> None:
+        if new_state is TerrariumState.ROOM_READY:
+            if self._restart_clients is not None:
+                reason = self._restart_clients()
+                if reason is not None:
+                    logging.getLogger(__name__).error(
+                        "room clients failed to restart: %s", reason)
+                    return
+            self._agent.rewire_room()
+        elif new_state is TerrariumState.NO_ROOM:
+            self._agent.unwire_room()
+```
+
+(`logging` is already imported in the module; verify.) In `main()`, change `terrarium.add_observer(_RoomWiring(agent, terrarium))` to `terrarium.add_observer(_RoomWiring(agent, terrarium, restart_clients=restart_clients))` (the closure is defined above that line).
+
+`console/agent.py`, `_ensure_room_for_bit`: after the loadability check and before `gs = self.game_server`, replace everything from `gs = self.game_server` to the end of the method with:
+
+```python
+        if terrarium.state is TerrariumState.ROOM_READY:
+            # D7 (2026-09-11): pyarco's arco.initialize() is a no-op once
+            # o2lite has ever synced and finish() cannot prepare a restart,
+            # so Control can talk to exactly one Arco per process. A Room
+            # switch would replace the hub underneath it; refuse up front
+            # and name the restart instead.
+            return (f"switching Rooms in a running Terrarium is not "
+                    f"supported yet: pyarco cannot reconnect to a new Arco "
+                    f"in one process; stop and run ./terrarium.sh --room "
+                    f"{target}")
+        reason = self._load_room(target)
+        if reason is not None:
+            return reason
+        if self._restart_room_clients is not None:
+            reason = self._restart_room_clients()
+            if reason is not None:
+                terrarium.unload_room(force=True)
+                return f"room clients failed to restart: {reason}"
+        return None
+```
+
+Update the `stop_room_clients` constructor comment to say the stop hook is retained for the day pyarco supports re-initialization and is currently unused by the agent. Keep the parameter.
+
+`console/static/bit.js`, in `buildPickCard`: the hint for a non-active selection while a Room is active becomes `switching Rooms needs a restart: ./terrarium.sh --room <name>`, and the Load button is disabled in that case. Concretely replace `paintHint` and the Load-disable line with:
+
+```js
+  const paintHint = () => {
+    if (choices.length === 0) hint.textContent = "no configured room supports this Bit";
+    else if (active === null && choices.length > 0) hint.textContent = "loads Room: Arco starts (about 15 s)";
+    else if (select.value !== active) hint.textContent = `switching Rooms needs a restart: ./terrarium.sh --room ${select.value}`;
+    else hint.textContent = "";
+    loadBtn.disabled = choices.length === 0 || (active !== null && select.value !== active);
+  };
+```
+
+and move the `const loadBtn = ...` creation above `paintHint` (it is currently created after the room row; keep it appended to `actions` where it was). Remove the standalone `loadBtn.disabled = choices.length === 0;` line.
+
+- [ ] **Step 4: Run** `node --check console/static/bit.js`, then `.venv/bin/python -m pytest tests -q`.
+- [ ] **Step 5: Commit** `fix(console,harness): refuse in-process Room switches; restart Control's clients before the Room wiring grants audio`
+
+### Task 16: Live re-check of the first-load path and docs
+
+Bounded exactly as Task 14. Run 1: `./terrarium.sh` (no Room), Console `load_bit` TestBit `room: "TEST"`: expect NO `_RoomWiring ... raised` line and NO `must run before acquire` line in the log, `DeviceLink running on o2lite ensemble 'arco' (restarted)` BEFORE `round loaded: TestBit`, the two `JOIN_URL:` lines, the Room's drone audible is not checkable headlessly so instead assert the control log has no `room audio tick failed`; then `load_bit` with `room: "DEMO"`: expect the `switching Rooms in a running Terrarium` error event, `terrarium_state` still ROOM_READY with TEST, no `room_unloaded`; SIGINT (then TERM if needed), zero orphans. Run 2: `./terrarium.sh --room DEMO`, `load_bit` TestBit `room: "DEMO"`: `round loaded: TestBit` and JOIN lines; SIGINT, zero orphans. Then update the spec's `## Status` (replace the Task 14 switch paragraph with D7's ruling and this run's evidence) and the deep-dive entry (one bullet: one Arco per Control process, switch refused, `_RoomWiring` restarts clients first; ABORT then Load Room in the same process has the same limit and is now reported by `restart_clients` rather than crashing), run the full suite, commit `docs: D7 one-Arco-per-process ruling live-verified`.
