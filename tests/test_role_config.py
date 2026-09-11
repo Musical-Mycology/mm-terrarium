@@ -208,7 +208,7 @@ def test_validate_rejects_unknown_welcome_audio_instrument():
     role = make_role(welcome={"audio": {"instrument": "gong"}})
     with pytest.raises(ValueError,
                        match=r"role 'player' welcome 'audio': unknown "
-                             r"instrument 'gong' \(known: \['chime'\]\)"):
+                             r"instrument 'gong' \(known: \['bell', 'chime'\]\)"):
         validate_role_declarations(make_table(role))
 
 
