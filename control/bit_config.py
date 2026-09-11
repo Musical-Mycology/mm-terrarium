@@ -12,11 +12,13 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from control.lobby import DEFAULT_LOBBY, LobbyConfig
+
 logger = logging.getLogger(__name__)
 
 KINDS = frozenset({"music", "r_game", "game", "tool", "ambient"})
 
-_START_WHEN = frozenset({"immediate", "players", "operator"})
+_START_WHEN = frozenset({"immediate", "players", "operator", "admin"})
 _ON_TIMEOUT = frozenset({"start", "abort"})
 _TRANSPORTS = frozenset({"any", "o2lite"})
 
@@ -62,6 +64,7 @@ class StartCondition:
     min_scored: int = 1
     timeout_seconds: float | None = None
     on_timeout: str = "start"
+    key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,7 @@ class BitConfig:
     assets: tuple[tuple[str, str], ...] = ()
     rhythm: RhythmConfig | None = None
     ambient: AmbientConfig | None = None
+    lobby: LobbyConfig = DEFAULT_LOBBY
     extras: dict = field(default_factory=dict)
     # Stamped by BitRegistry.resolve_config, never parsed from the manifest:
     # the absolute package directory asset paths resolve against. None means
@@ -257,7 +261,7 @@ def _parse_launch(raw: dict, *, source: str) -> LaunchConfig:
 
 
 def _parse_start(raw: dict, *, source: str) -> StartCondition:
-    known = {"when", "min_scored", "timeout_seconds", "on_timeout"}
+    known = {"when", "min_scored", "timeout_seconds", "on_timeout", "key"}
     _warn_unknown_keys(raw, known, source=source, prefix="start")
 
     when = _get(raw, "when", str, "immediate", source=source, prefix="start")
@@ -269,10 +273,21 @@ def _parse_start(raw: dict, *, source: str) -> StartCondition:
         raise ManifestError(source=source, key="start.when",
                              message=f"must be one of {sorted(_START_WHEN)}")
 
-    min_scored = _get(raw, "min_scored", int, 1, source=source, prefix="start")
-    if min_scored < 1:
+    admin = when == "admin"
+    key = _get(raw, "key", str, None, source=source, prefix="start")
+    if admin and not key:
+        raise ManifestError(source=source, key="start.key",
+                             message="required non-empty string when when = 'admin'")
+    if not admin and key is not None:
+        logger.warning("%s: [start.key] ignored: only an admin start takes a key",
+                       source)
+        key = None
+
+    min_scored = _get(raw, "min_scored", int, 0 if admin else 1,
+                      source=source, prefix="start")
+    if min_scored < (0 if admin else 1):
         raise ManifestError(source=source, key="start.min_scored",
-                             message="must be >= 1")
+                             message="must be >= 0" if admin else "must be >= 1")
 
     on_timeout = _get(raw, "on_timeout", str, "start", source=source,
                        prefix="start")
@@ -292,7 +307,23 @@ def _parse_start(raw: dict, *, source: str) -> StartCondition:
         timeout_seconds=(float(timeout_seconds)
                           if timeout_seconds is not None else None),
         on_timeout=on_timeout,
+        key=key,
     )
+
+
+def _parse_lobby(raw: dict, *, source: str) -> LobbyConfig:
+    known = {"enabled", "invite_interval_s", "ceremony_gap_s",
+             "double_tap_window_s"}
+    _warn_unknown_keys(raw, known, source=source, prefix="lobby")
+    enabled = _get(raw, "enabled", bool, True, source=source, prefix="lobby")
+    out = {}
+    for name in ("invite_interval_s", "ceremony_gap_s", "double_tap_window_s"):
+        value = raw.get(name, getattr(DEFAULT_LOBBY, name))
+        if not _is_number(value) or value < 0:
+            raise ManifestError(source=source, key=f"lobby.{name}",
+                                 message="expected a non-negative number")
+        out[name] = float(value)
+    return LobbyConfig(enabled=enabled, **out)
 
 
 def _parse_console(raw: dict, *, source: str) -> ConsoleBlock:
@@ -334,7 +365,7 @@ def _parse_ambient(raw: dict, *, source: str) -> AmbientConfig:
 
 
 _KNOWN_TOP_TABLES = {"bit", "launch", "start", "console", "results", "rhythm",
-                     "ambient", "defaults", "assets"}
+                     "ambient", "lobby", "defaults", "assets"}
 
 
 def parse_manifest(text: str, *, source: str) -> BitConfig:
@@ -348,6 +379,7 @@ def parse_manifest(text: str, *, source: str) -> BitConfig:
     launch = _parse_launch(doc.get("launch", {}), source=source)
     start = _parse_start(doc.get("start", {}), source=source)
     console = _parse_console(doc.get("console", {}), source=source)
+    lobby = _parse_lobby(doc.get("lobby", {}), source=source)
 
     results_raw = doc.get("results", {})
     _warn_unknown_keys(results_raw, {"keys"}, source=source, prefix="results")
@@ -396,6 +428,7 @@ def parse_manifest(text: str, *, source: str) -> BitConfig:
         assets=assets,
         rhythm=rhythm,
         ambient=ambient,
+        lobby=lobby,
         extras=extras,
     )
 
@@ -409,6 +442,7 @@ _OVERRIDE_TABLES = {
     "console": ("console", _parse_console, None),
     "rhythm": ("rhythm", _parse_rhythm, RhythmConfig),
     "ambient": ("ambient", _parse_ambient, AmbientConfig),
+    "lobby": ("lobby", _parse_lobby, None),
 }
 
 

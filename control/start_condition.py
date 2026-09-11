@@ -47,4 +47,9 @@ def start_decision(cond: StartCondition, *, scored: int, elapsed: float,
             return cond.on_timeout
         return None
 
+    if cond.when == "admin":
+        if cond.timeout_seconds is not None and elapsed >= cond.timeout_seconds:
+            return cond.on_timeout
+        return None
+
     return None

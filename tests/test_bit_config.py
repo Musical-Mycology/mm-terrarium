@@ -222,3 +222,59 @@ def test_bit_enabled_parses_and_defaults_true():
     on = parse_manifest(MINIMAL_ENABLED_FALSE.replace(
         "enabled = false\n", ""), source="t")
     assert on.identity.enabled is True
+
+
+from control.lobby import DEFAULT_LOBBY, LobbyConfig
+
+
+def test_admin_start_requires_a_key():
+    with pytest.raises(ManifestError) as err:
+        parse_manifest(MINIMAL + "[start]\nwhen='admin'\n", source="t")
+    assert err.value.key == "start.key"
+
+
+def test_admin_start_parses_key_and_defaults_min_scored_to_zero():
+    cfg = parse_manifest(MINIMAL + "[start]\nwhen='admin'\nkey='metro-dev'\n",
+                         source="t")
+    assert cfg.start.when == "admin"
+    assert cfg.start.key == "metro-dev"
+    assert cfg.start.min_scored == 0
+    assert cfg.start.timeout_seconds is None
+
+
+def test_admin_start_refuses_a_negative_minimum_but_allows_zero():
+    parse_manifest(MINIMAL + "[start]\nwhen='admin'\nkey='k'\nmin_scored=0\n",
+                   source="t")
+    with pytest.raises(ManifestError) as err:
+        parse_manifest(MINIMAL + "[start]\nwhen='admin'\nkey='k'\nmin_scored=-1\n",
+                       source="t")
+    assert err.value.key == "start.min_scored"
+
+
+def test_key_is_ignored_with_a_warning_on_a_non_admin_start(caplog):
+    cfg = parse_manifest(MINIMAL + "[start]\nwhen='players'\nkey='k'\n",
+                         source="t")
+    assert cfg.start.key is None
+
+
+def test_lobby_table_defaults_and_parses():
+    cfg = parse_manifest(MINIMAL, source="t")
+    assert cfg.lobby == DEFAULT_LOBBY
+    cfg = parse_manifest(MINIMAL + "[lobby]\nenabled=false\ninvite_interval_s=7\n"
+                         "ceremony_gap_s=0.5\ndouble_tap_window_s=2\n", source="t")
+    assert cfg.lobby == LobbyConfig(enabled=False, invite_interval_s=7.0,
+                                    ceremony_gap_s=0.5, double_tap_window_s=2.0)
+
+
+def test_lobby_table_refuses_wrong_types():
+    with pytest.raises(ManifestError) as err:
+        parse_manifest(MINIMAL + "[lobby]\nenabled='yes'\n", source="t")
+    assert err.value.key == "lobby.enabled"
+
+
+def test_start_key_and_lobby_ride_merge_overrides():
+    cfg = parse_manifest(MINIMAL + "[start]\nwhen='admin'\nkey='k'\n", source="t")
+    merged = merge_overrides(cfg, {"start": {"key": "venue-9"},
+                                   "lobby": {"invite_interval_s": 3}}, source="p")
+    assert merged.start.key == "venue-9"
+    assert merged.lobby.invite_interval_s == 3.0
