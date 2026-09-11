@@ -118,6 +118,12 @@ WWW_URL = "WWW_URL:"
 # variable count per load, like BROWSE_URL).
 JOIN_URL = "JOIN_URL:"
 
+# The admin start URL for a loaded Bit whose start condition is "admin"
+# (spec 2026-09-11-metronome-lobby-and-admin-start-design.md section 3):
+# hitting it enqueues a StartRequest that lifts the SETUP hold. Collected
+# by run_stack like JOIN_URL, never waited on.
+START_URL = "START_URL:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,

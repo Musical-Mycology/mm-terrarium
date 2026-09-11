@@ -95,3 +95,33 @@ def test_lan_ip_falls_back_to_loopback_when_the_probe_finds_no_address(
         assert www_server.lan_ip() == "127.0.0.1"
     assert any("no LAN address" in rec.getMessage() for rec in caplog.records)
     assert socket_module is www_server.socket        # module, not shadowed
+
+
+import urllib.request
+from control.lobby import StartRequest, TERRARIUM_ADMIN
+
+
+def test_start_route_queues_a_loopback_hit_as_the_terrarium(www):
+    with urllib.request.urlopen(f"http://127.0.0.1:{www.port}/start?key=abc&dev=gem-1") as r:
+        assert r.status == 202
+        body = r.read().decode()
+    assert "abc" not in body
+    req = www.start_requests.get_nowait()
+    assert req == StartRequest("abc", TERRARIUM_ADMIN, "web:terrarium")
+
+
+def test_start_route_labels_a_remote_hit_by_dev_or_anonymous(www, monkeypatch):
+    from harness import www_server
+    monkeypatch.setattr(www_server, "_LOOPBACK", ())          # pretend not loopback
+    urllib.request.urlopen(f"http://127.0.0.1:{www.port}/start?key=k&dev=gem-2").read()
+    assert www.start_requests.get_nowait() == StartRequest("k", "gem-2", "web:gem-2")
+    urllib.request.urlopen(f"http://127.0.0.1:{www.port}/start?key=k").read()
+    assert www.start_requests.get_nowait() == StartRequest("k", None, "web:anonymous")
+
+
+def test_start_route_only_get_and_other_paths_still_serve_files(www):
+    # /index.html doesn't exist in this fixture (it writes index.htm); use
+    # a path the fixture actually creates so this exercises "not /start
+    # still serves files" rather than a fixture mismatch.
+    with urllib.request.urlopen(f"http://127.0.0.1:{www.port}/index.htm") as r:
+        assert r.status == 200
