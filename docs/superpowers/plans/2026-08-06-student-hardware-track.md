@@ -1,5 +1,12 @@
 # Student Hardware Track Implementation Plan
 
+> **SUPERSEDED 2026-09-11** by
+> [`2026-09-11-student-hardware-track-esp32.md`](2026-09-11-student-hardware-track-esp32.md).
+> No task below was started. The Radxa (Phase B), the Pi 5 venue box and the
+> 864 px Art-Net array (Phase A) are out of the Dec 4 scope. Tasks A1, A4, A5
+> and A8 (luxaeterna Art-Net, PixelSpan, UniverseSet, power limiter) already
+> landed in luxaeterna PR #11 and stay valid for the post-show array build.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > **For human workers (the two students):** this plan is written for you. Tasks
