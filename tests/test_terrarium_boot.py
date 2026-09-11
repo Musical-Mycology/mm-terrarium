@@ -3075,3 +3075,131 @@ def test_join_logger_is_silent_when_the_provider_returns_none(capsys):
     gs.add_observer(_JoinLogger(lambda: None))
     gs.load_bit("TestBit")
     assert markers.JOIN_URL not in capsys.readouterr().out
+
+
+def test_simulator_factory_resolves_a_callable_room_type_at_spawn_time():
+    from harness.terrarium_boot import _O2SimulatorFactory
+    from control.teardown import TeardownStack
+    current = ["DEMO"]
+    popen = FakePopen()
+    factory = _O2SimulatorFactory("arco", popen=popen,
+                                  room_type=lambda: current[0])
+    factory(TeardownStack(), "array")
+    current[0] = "TEST"
+    factory(TeardownStack(), "main")
+    first, second = popen.commands[-2], popen.commands[-1]
+    assert first[first.index("--room-type") + 1] == "DEMO"
+    assert second[second.index("--room-type") + 1] == "TEST"
+
+
+def test_build_with_no_room_does_not_start_the_pool():
+    """D1: a NO_ROOM build has no Arco to connect to, so the default
+    ArcoSynthPool must be constructed but not started (pool.start() is
+    arco.initialize(), a 30 s blocking connect)."""
+    import harness.terrarium_boot as tb
+
+    class RecordingPool:
+        started = 0
+        def __init__(self, *a, **k): pass
+        def start(self): RecordingPool.started += 1
+        def poll(self): pass
+        def quiesce(self): pass
+
+    monkey = pytest.MonkeyPatch()
+    import harness.arco_synth as arco_synth
+    monkey.setattr(arco_synth, "ArcoSynthPool", RecordingPool)
+    try:
+        config = BootConfig(room_name=None, bit_name=None)
+        gs, server, agent, arco, teardown, terrarium = build(
+            config, {"TestBit": TestBit}, arco_command=["arco-server"],
+            room_binding=RoomBindingRegistry(), room_spec=None,
+            arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
+            transport=_fake_transport(), clock=time.monotonic)
+        try:
+            assert RecordingPool.started == 0
+            assert arco is None
+            assert terrarium.state == TerrariumState.NO_ROOM
+        finally:
+            teardown.close()
+    finally:
+        monkey.undo()
+
+
+def test_live_arco_prefers_the_terrariums_current_handle():
+    from harness.terrarium_boot import _live_arco
+
+    class T:
+        arco = "new"
+
+    assert _live_arco(T(), "old") == "new"
+    assert _live_arco(None, "old") == "old"
+
+
+def test_serve_until_done_polls_the_terrariums_arco_not_a_stale_handle():
+    """D3: a Console room switch inside console_agent.poll() replaces Arco;
+    the loop must poll the NEW handle from the next iteration on."""
+    from harness.terrarium_boot import _serve_until_done
+
+    class Arco:
+        def __init__(self): self.polls = 0; self.exit = None
+        def poll(self): self.polls += 1; return self.exit
+
+    old, new = Arco(), Arco()
+
+    class T:
+        state = TerrariumState.ROOM_READY
+        arco = old
+
+    class GS:
+        state = State.RUNNING
+        def tick(self, dt): pass
+
+    class Agent:
+        closing = 0
+        def poll(self): pass
+
+    class Console:
+        def __init__(self): self.n = 0
+        def poll(self):
+            self.n += 1
+            if self.n == 2:
+                T.arco = new            # the switch
+            if self.n == 4:
+                new.exit = 0            # the NEW Arco exits
+
+    reason = _serve_until_done(GS(), Agent(), old, console_agent=Console(),
+                               terrarium=T(), sleep=lambda _s: None)
+    assert reason == "arco-exited"
+    assert new.polls >= 1
+    assert old.polls <= 2
+
+
+def test_main_no_room_boot_leaves_clients_stopped_and_skips_transport_start(monkeypatch):
+    """D1: main() must not call transport.start() (which asserts a synced
+    clock against a hub that does not exist) on a NO_ROOM boot. Captured at
+    the build() seam plus a transport whose start() raises if called."""
+    import harness.terrarium_boot as terrarium_boot_module
+    from devicelink.o2_transport import FakeO2Lite
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+    monkeypatch.setattr(terrarium_boot_module, "_o2lite_module", lambda: fake)
+
+    class Boom(Exception):
+        pass
+
+    def fake_build(config, bit_registry, **kwargs):
+        assert config.room_name is None
+        assert config.array_backend == "simulator"
+        transport = kwargs["transport"]
+        orig = transport.start
+        def start(*a, **k):
+            raise Boom("transport.start called on a NO_ROOM boot")
+        transport.start = start
+        raise SystemExit(0)
+
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--no-bit",
+                                      "--console-port", "0"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
