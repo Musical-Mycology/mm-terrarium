@@ -207,3 +207,35 @@ def test_hello_as_terrarium_is_refused(monkeypatch):
     server.deliver("c9", "/game/hello", "sss", [TERRARIUM_ADMIN, "sim", "1"])
     agent.poll()
     assert gs.devices.get(TERRARIUM_ADMIN) is None
+
+
+def test_start_claiming_the_terrarium_identity_never_reaches_the_engine(monkeypatch):
+    """The reserved id is refused at DISPATCH, not at hello: nothing on this
+    wire obliges a device to hello first, so a bare /game/start claiming
+    `terrarium` would otherwise be an unconditional keyless start."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    records = []
+
+    class Obs:
+        def on_start_requested(self, record):
+            records.append(record)
+
+    gs.add_observer(Obs())
+    server.arrive("c9")                                    # never hello'd
+    server.deliver("c9", "/game/start", "ss", [TERRARIUM_ADMIN, ""])
+    agent.poll()
+    assert gs.state is State.SETUP
+    assert records == []
+    assert gs.devices.get(TERRARIUM_ADMIN) is None
+
+
+def test_handshake_ignores_a_default_join_role_that_is_not_scored(monkeypatch):
+    """default_join_role is the launcher's hint and a Bit may point it at a
+    jam role; a handshake still lands on a scored node."""
+    cfg = _admin_cfg()
+    cfg = replace(cfg, launch=replace(cfg.launch, default_join_role="jammer"))
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, cfg)
+    _hello(server, agent, "c1", "ie1")
+    server.deliver("c1", "/game/tap", "sffi", ["ie1", 1.0, 50.0, 2], timestamp=clk.t)
+    agent.poll()
+    assert gs.registration.assignments["ie1"][0] == "TEST_PLAYER_NODE"

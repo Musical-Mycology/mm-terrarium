@@ -30,7 +30,8 @@ from control.fixture_sink import ConsoleFrameSink, DeviceLinkSink
 from control.functions import FunctionKind
 from control.generator_runner import GeneratorRunner
 from control.instrument import fixture_ambient
-from control.lobby import (GREEN, TERRARIUM_ADMIN, LobbyState, StartRequest,
+from control.lobby import (FIXTURE_FLASH_GAP_S, FIXTURE_FLASH_ON_S, GREEN,
+                           TERRARIUM_ADMIN, LobbyState, StartRequest,
                            lobby_light_manifest)
 from control.role_config import compose_role_config, slice_light_manifest
 from control.roles import Role, RoleClass
@@ -231,6 +232,9 @@ class DeviceLinkAgent:
         # the loaded Bit's [lobby] enabled is true. Built by _enter_lobby.
         self._lobby: LobbyRuntime | None = None
         self._lobby_known: set[str] = set()
+        # dev ids already refused by _handle's reserved-identity guard, so a
+        # device sending on a loop is logged once rather than once a tick.
+        self._refused_ids: set[str] = set()
         # devs with no session of their own (hello'd, never joined -- the
         # ones the lobby invites) that currently show a non-black override
         # frame and so still owe one black frame when it expires. Kept
@@ -437,9 +441,14 @@ class DeviceLinkAgent:
         gs = self.game_server
         table = gs.registration.role_table if gs.registration is not None else None
         cfg = getattr(gs.bit, "config", None) if gs.bit is not None else None
-        if cfg is not None and cfg.launch.default_join_role:
+        if cfg is not None and table is not None and cfg.launch.default_join_role:
+            # Only when it actually names a SCORED role in the live table.
+            # default_join_role is the launcher's hint for a device picking
+            # its own node, and a Bit is free to point it at a jam role --
+            # a handshake never joins one.
+            declared = table.roles.get(cfg.launch.default_join_role)
             node = cfg.node_for(cfg.launch.default_join_role)
-            if node is not None:
+            if declared is not None and declared.scored and node is not None:
                 return node
         if cfg is not None and table is not None:
             for role_name, node in cfg.launch.nodes:
@@ -459,14 +468,14 @@ class DeviceLinkAgent:
         if gs.room is None:
             return
         now = self._clock()
+        spacing = FIXTURE_FLASH_ON_S + FIXTURE_FLASH_GAP_S
         for i in range(count):
+            at = now + i * spacing
             for name in self._fixtures:
                 dev = gs.room.bound.get(name)
                 if dev is None:
                     continue
-                self._light_cues.push(
-                    now + i * 0.5,
-                    ("__flash__", dev, rgb, now + i * 0.5), now=now)
+                self._light_cues.push(at, ("__flash__", dev, rgb, at), now=now)
 
     def _drain_start_requests(self) -> None:
         """Web starts cross a thread here and nowhere else: the queue is
@@ -612,6 +621,21 @@ class DeviceLinkAgent:
         cleanup just above: nothing must consult a runner or a start time
         built for a Room that is gone."""
         self._exit_lobby(restore_light=False)
+        # Before self._fixtures goes: every fixture dev's override (a
+        # latched mute blackout has no expiry and so never lapses on its
+        # own) and cached frame. Left behind, _render_frames' override-only
+        # pass would find a dev that no longer resolves to any fixture --
+        # gs.room is already None by the time this runs -- and paint it a
+        # PLAYER-width frame over a Room-width strip.
+        gone = {st.last_dev for st in self._fixtures.values()
+                if st.last_dev is not None}
+        if self.game_server.room is not None:
+            gone |= {d for d in self.game_server.room.bound.values()
+                     if d is not None}
+        for dev in gone:
+            self._overrides.pop(dev, None)
+            self._override_only.discard(dev)
+            self._last_frames.pop(dev, None)
         if self._room_audio is not None:
             for name in list(self._room_audio_fixtures):
                 self._room_audio.stop_drone(name)
@@ -979,10 +1003,16 @@ class DeviceLinkAgent:
         # invited) renders only its override, and one black frame when the
         # override expires, so an invite is visible before any role exists.
         black = bytes(_DEVICE_CHANNELS)
+        gs = self.game_server
+        bound = set(gs.room.bound.values()) if gs.room is not None else set()
         for dev in list(set(self._overrides) | self._override_only):
-            if dev in self.bridges or self._fixture_for_dev(dev) is not None:
-                # It has a session (or a fixture) of its own now -- the
-                # loops above own its frames from here.
+            # Only a KNOWN device that is not a Room fixture may be painted
+            # here. `bound` is checked as well as _fixture_for_dev because
+            # the two disagree while a Room is being torn down, and a
+            # fixture dev must never be handed a 36-channel player frame.
+            if (dev in self.bridges or dev in bound
+                    or self._fixture_for_dev(dev) is not None
+                    or gs.devices.get(dev) is None):
                 self._override_only.discard(dev)
                 continue
             frame = (self._apply_override(dev, black, order)
@@ -1036,6 +1066,18 @@ class DeviceLinkAgent:
             logger.warning("dropping /game/%s with no dev argument", verb)
             return
         dev = env.args[0]
+        if dev == TERRARIUM_ADMIN:
+            # The Terrarium's own admin identity (control/lobby.py) is
+            # always in the effective admin set, so a device claiming it
+            # would hold an unconditional, keyless start. It is refused
+            # HERE, before any dispatch, not in _on_hello: nothing on this
+            # wire requires a hello first, so a guard further down would
+            # still let /game/start (or /game/join) through under the
+            # reserved id.
+            if dev not in self._refused_ids:
+                self._refused_ids.add(dev)
+                logger.warning("messages from reserved dev id %r refused", dev)
+            return
         self.game_server.devices.touch(dev, self._clock())
         if dev in self._closing:
             # Proof of life on ANY inbound message (hello, join, or a plain
@@ -1076,12 +1118,6 @@ class DeviceLinkAgent:
         return dict(self._canvas_urls)
 
     def _on_hello(self, client, dev: str, args: list) -> None:
-        if dev == TERRARIUM_ADMIN:
-            # The Terrarium's own admin identity (control/lobby.py): always
-            # in the admin set, so a device answering to it would hold an
-            # unconditional start.
-            logger.warning("hello from reserved dev id %r refused", dev)
-            return
         name = args[1] if len(args) > 1 else ""
         protoversion = args[2] if len(args) > 2 else ""
         instrument = args[3] if len(args) > 3 else None
@@ -1295,6 +1331,11 @@ class DeviceLinkAgent:
         self._closing.pop(dev, None)
         self._last_breath.pop(dev, None)
         self._breathless.discard(dev)
+        # Dropped with the rest of this device's state: a latched mute
+        # override has expires=None and would otherwise outlive the device
+        # entirely, and _render_frames' override-only pass would keep
+        # painting it.
+        self._overrides.pop(dev, None)
         self._override_only.discard(dev)
         self._canvas_urls.pop(dev, None)
         # Send BEFORE drop_dev, same reasoning as _on_release's no-bridge
@@ -1363,7 +1404,7 @@ class DeviceLinkAgent:
                 _tag, dev, rgb, when = payload
                 if dev in self._muted:
                     continue
-                self._on_solid_cue(dev, rgb, 1.0, 0.25, when)
+                self._on_solid_cue(dev, rgb, 1.0, FIXTURE_FLASH_ON_S, when)
                 continue
             dev, status, d1, d2, at = payload
             if dev in self._muted:

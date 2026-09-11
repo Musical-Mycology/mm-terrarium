@@ -2333,6 +2333,32 @@ def test_room_solid_cue_paints_every_bound_fixture(two_fixture_agent):
     assert frames[accent] == bytes([0, 255, 0]) * 30
 
 
+def test_unwire_room_drops_a_muted_fixtures_latched_override(two_fixture_agent):
+    """A mute latches an override with NO expiry, so nothing lapses it on
+    its own. Once unwire_room has dropped the fixtures (with gs.room already
+    None, so the dev no longer resolves to any fixture), that entry must be
+    gone: _render_frames' override-only pass would otherwise hand a Room
+    fixture a 36-channel PLAYER frame over its 180-channel strip."""
+    agent, _audio, main, _accent = two_fixture_agent
+    gs = agent.game_server
+    # Fixture simulators hello like any other device, which is what puts
+    # them in range of the override-only pass at all.
+    gs.hello(main, "sim", "1", None)
+    agent.poll()
+    agent._on_mute_change(main, True)
+    assert agent._overrides[main] == ((0, 0, 0), 0.0, None)
+
+    gs.room = None
+    agent.unwire_room()
+    agent.server.sent.clear()
+    agent.poll()
+
+    assert main not in agent._overrides
+    assert main not in agent._override_only
+    assert not [m for dev, m in agent.server.sent
+                if dev == main and m["address"] == f"/{main}/leds"]
+
+
 def test_override_expiry_clears_only_that_fixtures_last_frame():
     """_tick_overrides is per fixture: expiry must force a resend of only
     the fixture whose override expired, not fan out and clear every other
