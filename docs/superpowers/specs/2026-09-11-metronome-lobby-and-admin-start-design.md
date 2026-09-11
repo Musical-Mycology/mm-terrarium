@@ -343,4 +343,16 @@ room reaction; a start with one player gives two red flashes.
 
 ## 10. Deviations recorded during execution
 
-None yet.
+- **Start rule ordering (section 2).** The key is checked before the SETUP
+  check: a valid key outside SETUP gives three red flashes (the "any other
+  reason" case); a bad key stays silent; an unkeyed Console/uplink start
+  outside SETUP is refused with no room reaction. With no Bit loaded every
+  start is refused silently because there is no key to check against.
+- **`min_scored` default.** 1 for `players` (unchanged, still refuses 0), 0
+  for `admin` (absent means an empty start is allowed).
+- **Accept flash.** The green accept flash is emitted by the agent, not the
+  LobbyRuntime, because RUNNING tears the runtime down before the
+  `on_start_requested` record arrives.
+- **Testshroom handshake.** The invite is detected as a solid white frame
+  (every byte >= 200) and answered with one count-2 tap, re-armed at most
+  every 2 s.

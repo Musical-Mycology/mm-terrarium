@@ -4200,6 +4200,66 @@ Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`
   attempt. The Bit picker disables its Load button for a non-active
   Room while a Room is up, so the switch is never offered.
 
+### Lobby, join handshake, and admin start (2026-09-11)
+Design: `docs/superpowers/specs/2026-09-11-metronome-lobby-and-admin-start-design.md`.
+The timed SETUP wait is replaced by an admin-started lobby that every Bit
+gets by default.
+
+- **`control/lobby.py`** (pure): `LobbyState` WAITING/FULL from
+  `RegistrationState.counts()` (FULL = every capped scored role at
+  capacity), the A major note scale, the start rule `decide_start`, and
+  three schedulers (`DoubleTapDetector`, `InviteSchedule`,
+  `CeremonySlots`). `TERRARIUM_ADMIN = "terrarium"` is the box's own
+  admin identity: always admin, never removable, refused as a hello'd
+  dev. `DeviceLinkAgent._handle` refuses that reserved identity before
+  any dispatch, not only at hello, so it can never re-enter through a
+  later verb.
+- **`GameServer.request_start(key, source_dev, source)`** is the one start
+  authority; Console `run`, uplink `run`, `GET /start?key=` on the LAN
+  static server (loopback hits count as the Terrarium), and the new
+  `/game/start "ss" dev key` verb all call it. Refusals are reason strings;
+  every attempt fires `on_start_requested`. `[admin] devices` in
+  `terrarium.toml` adds GemIDs; `gs.is_admin(dev)` answers for Bits and the
+  Console.
+- **`[start] when = "admin"`** with a required `key`; `min_scored` defaults
+  to 0 there. The harness hold waits with no deadline (a `timeout_seconds`
+  still applies). MetronomeBit ships `when = "admin"`, `key = "metro-dev"`,
+  `min_scored = 2`; `profiles/dev-metronome.toml` no longer overrides
+  `[start]`.
+- **`devicelink/lobby_runtime.py`** does the light and sound through sinks
+  the agent injects: on SETUP every fixture session swaps to a lobby
+  aurora (cc:74 hue drift, cc:11 breath), the fixture voices switch to the
+  warm pad and drone; FULL pins green, keeps the breath on light only and
+  stops the drone; RUNNING swaps back and restores the Bit's program. A
+  scored join runs the ceremony from one reserved time `at`: device green
+  flash x2, bell on a transient voice at `at + 0.8` up the scale, device
+  chime play cue at `at + 1.8` carrying `key=<midi>`; ceremonies are spaced
+  1 s apart. Invites are two white flashes every 5 s on any hello'd,
+  un-joined, non-fixture device while WAITING; a double tap (count 2, or
+  two taps within 1.5 s) joins it to the Bit's default join role via the
+  same `GameServer.join` an explicit join uses. `[lobby] enabled = false`
+  opts a Bit out. Solid overrides honor the surface's colour order rather
+  than assuming RGB, so a green override on a GRB strip paints G=255,
+  R=0, B=0; an un-joined device that stops handshaking receives its
+  override frame plus one closing black frame on expiry, not a bare
+  cutoff. `unwire_room` and `_finish_release` both clear a device's
+  overrides so a Room teardown or a release cannot leave a stale frame
+  painted on the next session.
+- **Feedback on fixtures:** accept green x1, minimum not met red x2, any
+  other keyed refusal red x3, bad key nothing.
+- **Harness:** `harness/o2_shroom.py --handshake`, keyed chime in
+  `harness/sim_audio.py`, `run_stack --start-after-grant` and
+  `--handshake-devices N`, `START_URL:` marker, a Start row (URL, QR, key,
+  wire row) on the Console's Join card, `lobby_changed` wire event and
+  `lobby` snapshot key.
+- **Cross-repo follow-ups (not built):** mm-tuneshroom sends `/game/start`
+  and renders frames and the keyed chime before a role; the MycoQuest admin
+  site writes a device's GemID into the venue's `[admin] devices`.
+- **Live gate on MYCOLOGICAL:** pending; record the run id here.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2246 passed, 1 skipped**.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
