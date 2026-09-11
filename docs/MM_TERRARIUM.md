@@ -4149,13 +4149,19 @@ Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`
   `restart_clients()` in `_serve_roomless` starts them after the first
   `load_room`, printing `TRANSPORT_READY ... (restarted)`. This now also
   works live in one-shot NO_ROOM runs (`./terrarium.sh` with no `--room`).
-- **The Console room switch stops and restarts Control's own Arco
-  clients (D2/D3 fix).** `ConsoleAgent` takes `stop_room_clients` /
-  `restart_room_clients` hooks from `terrarium_boot` and calls them
-  around a switch (stop, unload, load, restart), so the o2lite transport
-  and the `ArcoSynthPool` never poll a dead hub; `_ensure_room_for_bit`
-  refuses an unknown or unloadable target room before touching the
-  active one, so a refused switch cannot strand the operator in NO_ROOM.
+- **The NO_ROOM-to-Room load restarts Control's own Arco clients (D2/D3
+  fix).** `_RoomWiring` (`terrarium_boot.py`) restarts the o2lite
+  transport and the `ArcoSynthPool` on ROOM_READY, before granting the
+  Room's audio; `ConsoleAgent`'s own `restart_room_clients` hook is the
+  retry a load whose restart inside `load_room` failed falls back to.
+  `stop_room_clients` is retained as a constructor parameter for the day
+  pyarco supports re-initializing against a new Arco, but nothing calls
+  it now: a Room switch in a running Terrarium is refused outright rather
+  than stopped and reloaded (see the D7 bullet below, which superseded
+  this bullet's original stop/unload/load/restart switch behavior).
+  `_ensure_room_for_bit` refuses an unknown or unloadable target room
+  before touching the active one, so a refused load cannot strand the
+  operator in NO_ROOM.
 - **Serve loops resolve `terrarium.arco` per iteration (D3 fix, `_live_arco`).**
   `_serve_rounds`, `_wait_for_load`, `_wait_in_setup`, and
   `_serve_until_done` re-read the live Arco handle every loop iteration

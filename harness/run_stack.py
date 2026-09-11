@@ -689,8 +689,8 @@ def parse_args(argv=None):
 def _bitless_config(args) -> StackConfig:
     """config_from_args for --no-bit: no registry, no Bit manifest, no
     profile, no node, zero devices. Everything else mirrors the Bit path
-    (log dir, CI bound, --open implying an ephemeral Console, a Console
-    implying serve)."""
+    (log dir, CI bound, an unconditional ephemeral Console default, a
+    Console implying serve)."""
     log_dir = args.log_dir or os.path.join(
         "runs", time.strftime("%Y%m%d-%H%M%S"))
     seconds = args.seconds

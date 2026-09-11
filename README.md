@@ -68,11 +68,14 @@ observer list as the uplink and runs entirely offline in tests. See
 
 `./terrarium.sh` wraps `harness/run_stack.py --no-bit`: no Bit is
 loaded and no Testshrooms are spawned. From the Console, **Load** picks a
-Bit and the Room it should run in (a different Room than the active one
-restarts Arco, about 15 s). Once a Bit is loaded the Console's **Join**
-card shows, per registration node, the guest URL, a QR code for a phone
-on the same LAN, and a `flutter run` line to paste into an mm-tuneshroom
-checkout for a Chrome Testshroom. The same URLs print on stdout as
+Bit and the Room it should run in: from `NO_ROOM` the first Load brings
+the chosen Room up (about 15 s of Arco spawn); a different Room than the
+active one needs a restart: `./terrarium.sh --room NAME` (pyarco can
+only ever connect to one Arco per process). Once a Bit is loaded the
+Console's **Join** card shows, per registration node, the guest URL, a
+QR code for a phone on the same LAN, and a `flutter run` line to paste
+into an mm-tuneshroom checkout for a Chrome Testshroom. The same URLs
+print on stdout as
 `JOIN_URL:` lines. Pass `--web-build /path/to/mm-tuneshroom/build/web` to
 stage the guest app under `/app/`; without it the URL serves no page.
 Native iOS/Android and the Radxa app cannot connect until mm-tuneshroom's

@@ -126,6 +126,10 @@ does not spawn Testshrooms.
 
 ### 4. Room-aware `load_bit`
 
+Superseded in part by Addendum 2 (D7) of the plan and the Status below: a
+Room switch in a running Terrarium is refused; only the NO_ROOM-to-Room
+load and same-Room loads are supported.
+
 **Wire.** `LoadBitCommand` gains `room: str | None`; `parse_command`
 accepts an optional string `room`. `bits_listed` rows gain
 `default_room_type` (string) and `nodes` (the manifest's role-to-node
@@ -297,12 +301,22 @@ tests; Task 16's re-run (before and after its live phase, 2026-09-11):
   spawned Arco process. Client snapshot: `terrarium_state == "NO_ROOM"`,
   `join` non-null with `nodes == []`, `bits_listed` rows carried
   `default_room_type` and `nodes`. Matches spec.
-- **Step 3, load a Bit with a Room, then switch.** `load_bit TestBit
-  room: TEST` from NO_ROOM: `room loaded: TEST`, `join_changed` with two
-  node rows (jammer, player), each `qr_svg` starting `<svg`, each URL of
-  the form `http://192.168.1.136:8788/app/?node=...&o2ws=192.168.1.136%3A8080&ens=arco`,
+- **Step 3, load a Bit with a Room, then switch.** Booted via
+  `./terrarium.sh --room TEST` (round 1's TestBit already loaded at boot,
+  not a true NO_ROOM start -- corrected label; the original note below
+  said "from NO_ROOM"), so `load_bit TestBit room: TEST` reloads the
+  already-loaded Room and Bit: `room loaded: TEST`, `join_changed` with
+  two node rows (jammer, player), each `qr_svg` starting `<svg`, each URL
+  of the form `http://192.168.1.136:8788/app/?node=...&o2ws=192.168.1.136%3A8080&ens=arco`,
   `state_changed` to SETUP, stdout `DeviceLink running on o2lite ensemble
   'arco' (restarted)` and two `JOIN_URL:` lines, `round loaded: TestBit`.
+  A true NO_ROOM boot's first combined `load_bit ... room:` does not
+  print `round loaded:` -- the engine is already out of IDLE by the time
+  `_serve_rounds` is entered for round 1, so that marker (only printed on
+  a later Console reload once rounds are already looping) never fires the
+  first time around; see Run 1 of the Task 16 live re-verification below,
+  which boots truly NO_ROOM and reaches SETUP with no `round loaded:`
+  line at all.
   **A room switch (`load_bit TestBit room: DEMO`, then back to `room:
   TEST`) was refused, not attempted -- D7, ruled and fixed in Task 15,
   live-verified in Task 16 (2026-09-11).** Root cause, read from pyarco
