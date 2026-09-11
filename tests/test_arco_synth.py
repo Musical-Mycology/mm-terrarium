@@ -103,3 +103,41 @@ def test_live_pool_acquires_sends_and_releases():
         pool.release(voice)
     finally:
         pool.shutdown()
+
+
+def test_shutdown_finishes_arco_even_when_the_hub_is_already_dead():
+    # D6 (2026-09-11): at process shutdown Arco can already be gone (it
+    # crashed, or a teardown step ahead of this one killed it), so alloff()
+    # raises BrokenPipeError. finish() must still run: it sets
+    # arco.finished, which is the one flag pyarco's Ugen.__del__ checks
+    # before sending /arco/free on the dead socket at interpreter exit --
+    # every skipped finish() is one "Exception ignored in __del__"
+    # traceback per live ugen on the way out.
+    from harness.arco_synth import ArcoSynthPool
+
+    calls = []
+
+    class DeadFlsyn:
+        def alloff(self, chan):
+            raise BrokenPipeError(32, "Broken pipe")
+
+    class RecordingArco:
+        def finish(self):
+            calls.append("finish")
+
+    pool = ArcoSynthPool()
+    pool._flsyn = DeadFlsyn()
+    pool._arco = RecordingArco()
+    pool._sched = object()
+    with pytest.raises(BrokenPipeError):
+        pool.shutdown()                  # the failure is reported, not hidden
+    assert calls == ["finish"]
+    assert pool._flsyn is None and pool._arco is None and pool._sched is None
+
+
+def test_shutdown_before_start_is_a_noop():
+    # A NO_ROOM boot that is interrupted before any Room loads never
+    # started the pool; main() still registers its shutdown unconditionally.
+    from harness.arco_synth import ArcoSynthPool
+
+    ArcoSynthPool().shutdown()
