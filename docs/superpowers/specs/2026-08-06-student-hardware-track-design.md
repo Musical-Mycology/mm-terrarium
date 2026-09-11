@@ -1,7 +1,12 @@
 # Student Hardware Track — design
 
 **2026-08-06 · Chris Oltyan — chris@musicalmycology.org**
-**Status: APPROVED DESIGN.** Feeds an implementation plan; supersedes nothing.
+**Status: SUPERSEDED 2026-09-11** by
+[`2026-09-11-student-hardware-track-esp32-design.md`](2026-09-11-student-hardware-track-esp32-design.md).
+The instrument computer is now the ESP32-P4, the Room display is the Tower,
+and the Dec 4 Terrarium runs on a laptop; the Radxa, the Pi 5 venue box and
+the 864 px array below are no longer in the Dec 4 scope. Kept for the
+reasoning and the procurement record.
 
 Two students join full-time on **2026-08-24** and run a dedicated hardware track
 through the **2026-12-04** Musical Mycology show. This document defines what they
