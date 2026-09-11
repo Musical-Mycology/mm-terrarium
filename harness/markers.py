@@ -63,6 +63,12 @@ CONTROL_ROOM_LOADED = "room loaded:"
 # per successful unload_room, "room unloaded: TEST".
 CONTROL_ROOM_UNLOADED = "room unloaded:"
 
+# Booted (or returned) to NO_ROOM with a Console and nothing to load --
+# printed once on entry to the NO_ROOM wait. run_stack --no-bit with no
+# --room gates on this: no Arco exists yet in that mode, so it is the only
+# thing that says Control is up and waiting.
+CONTROL_NO_ROOM_WAIT = "NO_ROOM: waiting for the Console to load a Room"
+
 # --- Device (harness/o2_shroom.py) -------------------------------------
 
 # o2lite.time_get() went non-negative. Until this, the device has no clock
@@ -106,6 +112,12 @@ ARCO_WWW = "ARCO_WWW:"
 # section 4.1). Collected and opened by run_stack like BROWSE_URL.
 WWW_URL = "WWW_URL:"
 
+# One line per registration node of the Bit that just loaded:
+# "JOIN_URL: <role> <node> <url>". The same rows the Console's Join card
+# shows, for a headless box. Echoed by run_stack, never waited on (a
+# variable count per load, like BROWSE_URL).
+JOIN_URL = "JOIN_URL:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,
@@ -114,6 +126,7 @@ READY_MARKERS = {
     "CONTROL_ROUND_ENDED": CONTROL_ROUND_ENDED,
     "CONTROL_ROOM_LOADED": CONTROL_ROOM_LOADED,
     "CONTROL_ROOM_UNLOADED": CONTROL_ROOM_UNLOADED,
+    "CONTROL_NO_ROOM_WAIT": CONTROL_NO_ROOM_WAIT,
     "DEVICE_CLOCK_SYNCED": DEVICE_CLOCK_SYNCED,
     "DEVICE_ROLE_GRANTED": DEVICE_ROLE_GRANTED,
 }

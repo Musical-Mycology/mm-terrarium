@@ -185,6 +185,10 @@ class Terrarium:
         self.room_stack: TeardownStack | None = None
         self.arco = None
         self._observers: list = []
+        # The Room name a load_room call is currently loading; None outside
+        # one. The harness's simulator factory reads it to spawn fixtures
+        # for the Room being loaded rather than the boot room.
+        self.loading_room: str | None = None
 
     def add_observer(self, observer) -> None:
         self._observers.append(observer)
@@ -258,6 +262,7 @@ class Terrarium:
         self._set_state(TerrariumState.ROOM_LOADING)
         stack = None
         try:
+            self.loading_room = name
             self._progress("validating")
             spec = self.config.rooms.get(name)
             if spec is None:
@@ -341,6 +346,8 @@ class Terrarium:
             if isinstance(exc, RoomLoadError):
                 return str(exc)
             return str(exc)
+        finally:
+            self.loading_room = None
 
     def unload_room(self, force: bool = False) -> str | None:
         """Tear the active Room down. Returns None on success, else a

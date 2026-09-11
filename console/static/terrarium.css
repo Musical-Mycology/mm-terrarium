@@ -394,3 +394,13 @@ details.refcard .body { margin-top: 12px; display: flex; flex-direction: column;
 
 /* whole-page stale-data signal while the socket is down */
 body.dimmed .shell { opacity: 0.8; }
+
+.pick .roomrow { display: flex; align-items: center; gap: 8px; grid-column: 2; }
+.pick .roomrow select { min-width: 120px; }
+.pick .roomhint { grid-column: 2; margin: 0; min-height: 1em; }
+
+.joinrow { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.joinrow code { flex: 1; font-family: var(--f-mono); font-size: 12px; word-break: break-all; }
+.joinnode { border-top: 1.5px solid var(--hair); padding-top: 10px; margin-top: 10px; }
+.joinnode h4 { margin: 0 0 6px; font-family: var(--f-mono); font-size: 13px; }
+.joinnode .qr svg { width: 168px; height: 168px; display: block; margin: 6px 0; }

@@ -5,11 +5,15 @@ import pytest
 from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.bit_config import ManifestError, merge_overrides, parse_manifest
+from control.boot_config import BootConfig
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from control.terrarium import TerrariumState
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room, room_role_name
+from harness.terrarium_boot import _RoomWiring
+from tests.test_terrarium import DEMO_SPEC, TEST_SPEC, make_config, make_terrarium
 
 ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
     RoomFixture(name="main", color_order="GRB",
@@ -1745,3 +1749,397 @@ def test_devices_view_labels_bound_fixtures(console_agent_with_room):
     assert by_dev[MAIN_DEV]["fixture"] == "main"
     assert by_dev[ACCENT_DEV]["fixture"] == "accent"
     assert by_dev[LOBBY_DEV]["fixture"] is None
+
+
+def _two_room_terrarium(**kwargs):
+    """A NO_ROOM Terrarium with TEST and DEMO configured, driving a
+    GameServer that knows TestBit (room_types TEST and DEMO). DEMO's
+    RoomSpec (tests/test_terrarium.py) declares an "array" backend, so
+    boot_config needs array_backend="simulator" or load_room("DEMO")
+    refuses before anything else runs -- the same setup
+    tests/test_terrarium_cycle.py's make_cycle_terrarium uses for its own
+    TEST+DEMO Terrarium."""
+    boot_config = BootConfig(room_name="TEST", bit_name="TestBit",
+                             array_backend="simulator")
+    return make_terrarium(
+        config=make_config(rooms={"TEST": TEST_SPEC, "DEMO": DEMO_SPEC}),
+        gs=GameServer({"TestBit": TestBit}), boot_config=boot_config,
+        **kwargs)
+
+
+def _testbit_registry(room_types=None):
+    base = parse_manifest(open("bits/test/bit.toml").read(),
+                          source="bits/test/bit.toml")
+    if room_types is not None:
+        base = merge_overrides(
+            base, {"launch": {"room_types": room_types,
+                              "default_room_type": room_types[0]}},
+            source="bits/test/bit.toml")
+    return FakeBitRegistry(config=base)
+
+
+def _events(srv, name):
+    return [m for m in srv.broadcasts if m.get("event") == name]
+
+
+def _errors(srv):
+    return [m for _c, m in srv.sent if m.get("event") == "error"]
+
+
+def test_load_bit_with_room_loads_the_room_then_the_bit_from_no_room():
+    terrarium = _two_room_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "room": "TEST"})
+
+    agent.poll()
+
+    assert _errors(srv) == []
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.name == "TEST"
+    assert terrarium.gs.state.name == "SETUP"
+    assert _events(srv, "room_loaded") == [{"event": "room_loaded",
+                                            "name": "TEST"}]
+
+
+def test_load_bit_with_the_active_room_touches_no_room():
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.broadcasts.clear()
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "room": "TEST"})
+
+    agent.poll()
+
+    assert _errors(srv) == []
+    assert _events(srv, "room_unloaded") == []
+    assert _events(srv, "room_loaded") == []
+    assert terrarium.gs.state.name == "SETUP"
+
+
+def test_load_bit_without_room_keeps_the_active_room_as_before():
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("DEMO") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
+
+    agent.poll()
+
+    assert _errors(srv) == []
+    assert terrarium.room.name == "DEMO"
+    assert terrarium.gs.state.name == "SETUP"
+
+
+def test_load_bit_with_a_different_room_is_refused_and_leaves_the_room_up():
+    """D7: pyarco cannot reconnect to a second Arco in one process, so a
+    Room switch is refused up front with the restart command."""
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    calls = []
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium,
+                         stop_room_clients=lambda: calls.append("stop"),
+                         restart_room_clients=lambda: calls.append("restart") or None)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "DEMO"})
+    agent.poll()
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "switching Rooms in a running Terrarium "
+                                        "is not supported yet: pyarco cannot "
+                                        "reconnect to a new Arco in one process; "
+                                        "stop and run ./terrarium.sh --room DEMO"}]
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.name == "TEST"
+    assert terrarium.gs.state.name == "IDLE"
+    assert calls == []
+    assert _events(srv, "room_unloaded") == []
+
+
+def test_load_bit_with_a_different_room_is_refused_even_with_a_bit_loaded():
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "room": "TEST"})
+    agent.poll()
+    assert terrarium.gs.state.name == "SETUP"
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "room": "DEMO"})
+    agent.poll()
+    assert len(_errors(srv)) == 1
+    assert _errors(srv)[0]["message"].startswith("switching Rooms in a running Terrarium")
+    assert terrarium.room.name == "TEST"
+    assert terrarium.gs.state.name == "SETUP"      # the loaded Bit is untouched
+
+
+def test_load_bit_refuses_an_unsupported_room_before_touching_the_room():
+    terrarium = _two_room_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv,
+                         registry=_testbit_registry(room_types=["TEST"]),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "room": "DEMO"})
+
+    agent.poll()
+
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "Bit 'TestBit' does not support "
+                                        "room 'DEMO'"}]
+    assert terrarium.state == TerrariumState.NO_ROOM
+    assert terrarium.gs.state.name == "IDLE"
+    assert _events(srv, "room_loaded") == []
+
+
+def test_load_bit_with_no_room_anywhere_is_still_refused():
+    terrarium = _two_room_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
+
+    agent.poll()
+
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "no room loaded"}]
+    assert terrarium.gs.state.name == "IDLE"
+
+
+def test_load_bit_room_load_refusal_stops_before_load_bit():
+    terrarium = _two_room_terrarium(
+        ownership_probe=lambda: "another Console owns this room")
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "room": "TEST"})
+
+    agent.poll()
+
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "another Console owns this room"}]
+    assert terrarium.state == TerrariumState.NO_ROOM
+    assert terrarium.gs.state.name == "IDLE"
+    assert _events(srv, "room_load_failed") == [
+        {"event": "room_load_failed", "name": "TEST",
+         "reason": "another Console owns this room"}]
+
+
+def test_snapshot_join_is_none_without_a_provider():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    assert msg["join"] is None
+
+
+def test_snapshot_join_comes_from_the_injected_provider():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    join = {"www_url": "http://10.0.0.7:8788/app/", "nodes": []}
+    agent = ConsoleAgent(gs, srv, join_info=lambda: join)
+    srv.connect("c1")
+    agent.poll()
+    _, msg = srv.sent[0]
+    assert msg["join"] == join
+
+
+def test_join_changed_is_broadcast_on_loaded_and_on_idle():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    calls = []
+
+    def provider():
+        calls.append(gs.bit_name)
+        return {"bit": gs.bit_name, "nodes": []}
+
+    agent = ConsoleAgent(gs, srv, join_info=provider)
+    gs.load_bit("TestBit")
+    joins = [m for m in srv.broadcasts if m.get("event") == "join_changed"]
+    assert joins == [{"event": "join_changed",
+                      "join": {"bit": "TestBit", "nodes": []}}]
+    gs.abort()
+    joins = [m for m in srv.broadcasts if m.get("event") == "join_changed"]
+    assert joins[-1] == {"event": "join_changed",
+                         "join": {"bit": None, "nodes": []}}
+    assert len(joins) == 2
+
+
+def test_no_join_changed_without_a_provider():
+    gs = GameServer({"TestBit": TestBit})
+    srv = FakeConsoleServer()
+    ConsoleAgent(gs, srv)
+    gs.load_bit("TestBit")
+    gs.abort()
+    assert [m for m in srv.broadcasts if m.get("event") == "join_changed"] == []
+
+
+def test_room_load_from_no_room_restarts_clients_without_a_stop():
+    """Pins ConsoleAgent's own restart_room_clients fallback in isolation:
+    no _RoomWiring observer is registered on this terrarium (production
+    always registers one -- see
+    test_load_bit_from_no_room_with_the_production_room_wiring_restarts_once_and_rewires
+    below for that path), so a NO_ROOM-to-Room load_bit restarts Control's
+    Arco clients through the agent-side hook alone, exactly once, with no
+    stop call."""
+    terrarium = _two_room_terrarium()
+    calls = []
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(
+        terrarium.gs, srv, registry=_testbit_registry(), terrarium=terrarium,
+        stop_room_clients=lambda: calls.append("stop"),
+        restart_room_clients=lambda: calls.append("restart") or None)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "TEST"})
+    agent.poll()
+    assert _errors(srv) == []
+    assert calls == ["restart"]
+
+
+def test_a_failed_client_restart_unloads_the_room_and_refuses():
+    """Pins ConsoleAgent's own restart_room_clients fallback in isolation,
+    same as the test above: with no _RoomWiring observer registered on
+    this terrarium, a failed restart through the agent-side hook alone
+    unloads the just-loaded Room and refuses the load_bit."""
+    terrarium = _two_room_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(
+        terrarium.gs, srv, registry=_testbit_registry(), terrarium=terrarium,
+        restart_room_clients=lambda: "clock never synced")
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "TEST"})
+    agent.poll()
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "room clients failed to restart: "
+                                        "clock never synced"}]
+    assert terrarium.state == TerrariumState.NO_ROOM
+    assert terrarium.gs.state.name == "IDLE"
+
+
+def test_load_bit_refuses_an_unloadable_room_before_touching_the_active_one():
+    """D5: from a boot with no array backend, DEMO is not loadable; the
+    active TEST Room must survive the refusal."""
+    terrarium = make_terrarium(
+        config=make_config(rooms={"TEST": TEST_SPEC, "DEMO": DEMO_SPEC}),
+        gs=GameServer({"TestBit": TestBit}),
+        boot_config=BootConfig(room_name="TEST", bit_name="TestBit"))
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "DEMO"})
+    agent.poll()
+    errors = _errors(srv)
+    assert len(errors) == 1
+    assert errors[0]["message"].startswith("room 'DEMO' is not loadable: ")
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.name == "TEST"
+    assert _events(srv, "room_unloaded") == []
+
+
+def test_load_bit_refuses_an_unknown_room_before_touching_anything():
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv,
+                         registry=_testbit_registry(room_types=["TEST", "DEMO", "ATRIUM"]),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "ATRIUM"})
+    agent.poll()
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "unknown room 'ATRIUM'"}]
+    assert terrarium.room.name == "TEST"
+
+
+def test_load_bit_from_no_room_with_the_production_room_wiring_restarts_once_and_rewires():
+    """The real NO_ROOM-to-Room load path a live boot takes: main() always
+    registers a `_RoomWiring` (harness/terrarium_boot.py) observer on the
+    Terrarium ahead of ConsoleAgent's own construction, so ROOM_READY fires
+    `_RoomWiring`'s restart-then-rewire FIRST, and ConsoleAgent's own
+    restart_room_clients hook (the same closure, called again right after
+    `_load_room` returns) is then just the already-idempotent no-op the two
+    tests above pin in isolation. Important #4 review finding: nothing
+    previously exercised the two hooks wired together this way."""
+    terrarium = _two_room_terrarium()
+    calls = []
+
+    class FakeAgent:
+        def rewire_room(self):
+            calls.append("rewire")
+
+        def unwire_room(self):
+            calls.append("unwire")
+
+    stopped = [True]
+
+    def restart():
+        if stopped[0]:
+            calls.append("restart")
+            stopped[0] = False
+            return None
+        calls.append("restart-noop")
+        return None
+
+    terrarium.add_observer(
+        _RoomWiring(FakeAgent(), terrarium, restart_clients=restart))
+
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium, restart_room_clients=restart)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit",
+                       "room": "TEST"})
+
+    agent.poll()
+
+    assert calls == ["restart", "rewire", "restart-noop"]
+    assert terrarium.gs.state.name == "SETUP"
+
+
+def test_ensure_room_refuses_mid_transition():
+    """Minor review finding: pins the "room is room_loading; try again once
+    it settles" refusal (console/agent.py's _ensure_room_for_bit) for a
+    Room transition still in flight. ROOM_LOADING is transient on a real
+    Terrarium -- nothing can catch it mid-load from the outside -- so a
+    terrarium double stands in rather than driving _two_room_terrarium()
+    through an actual load."""
+    from uplink.protocol import LoadBitCommand
+
+    class FakeTerrarium:
+        state = TerrariumState.ROOM_LOADING
+        room = None
+
+        def add_observer(self, observer):
+            pass
+
+    srv = FakeConsoleServer()
+    gs = GameServer({"TestBit": TestBit})
+    agent = ConsoleAgent(gs, srv, registry=_testbit_registry(),
+                         terrarium=FakeTerrarium())
+    command = LoadBitCommand(name="TestBit", room="TEST")
+
+    reason = agent._ensure_room_for_bit(command, None)
+
+    assert reason == "room is room_loading; try again once it settles"
+

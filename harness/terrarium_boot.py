@@ -18,12 +18,14 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 from control.arco_process import ArcoProcess
 from control.bit_config import StartCondition
 from control.bit_registry import BitRegistry
 from control.boot_config import BootConfig
 from control.engine import BitLoadError, GameServer
+from control.join_info import build_join_info
 from control.room_binding import RoomBindingRegistry
 from control.run_profile import RunProfile, deep_merge_overrides, parse_profile
 from control.simulator_process import SimulatorProcess
@@ -103,10 +105,15 @@ class _O2SimulatorFactory:
     """Spawns the Room simulator as an o2lite client. Reuses
     harness/o2_shroom.py with --no-join: Control has already recorded this
     dev as the bound Room before the process is spawned, so there is no
-    Registration Node to tap. Called once per fixture."""
+    Registration Node to tap. Called once per fixture.
+
+    `room_type` may be a plain string or a zero-argument callable, resolved
+    at spawn time (not construction time): a callable lets a Console
+    `load_room` of a different Room than the boot room spawn fixtures for
+    the Room actually being loaded, rather than the boot room (D4)."""
 
     def __init__(self, ensemble: str, *, popen=subprocess.Popen,
-                 room_type: str = "TEST") -> None:
+                 room_type: "str | Callable[[], str]" = "TEST") -> None:
         self._ensemble = ensemble
         self._popen = popen
         self._room_type = room_type
@@ -125,11 +132,13 @@ class _O2SimulatorFactory:
         # covers the case teardown cannot: an external SIGKILL of this
         # process.
         dev = sim_dev(fixture)
+        room_type = self._room_type() if callable(self._room_type) \
+            else self._room_type
         process = SimulatorProcess(
             [sys.executable, "-u", "-m", "harness.o2_shroom",
              "--dev", dev, "--ensemble", self._ensemble, "--no-join",
              "--exit-with-parent", str(os.getpid()),
-             "--room-type", self._room_type, "--fixture", fixture],
+             "--room-type", room_type, "--fixture", fixture],
             popen=self._popen, record=record)
         process.start()
         teardown.push(f"simulator-{fixture}", process.shutdown)
@@ -284,9 +293,12 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     # transport on it AFTER this function returns -- and therefore
     # registers its teardown then, so it stops before everything here.
     server = transport
-    factory = _O2SimulatorFactory(config.o2_ensemble,
-                                  popen=simulator_popen,
-                                  room_type=config.room_name or "")
+    factory = _O2SimulatorFactory(
+        config.o2_ensemble, popen=simulator_popen,
+        # Resolved at spawn time: `terrarium` is assigned below, before any
+        # load_room can call this. loading_room is the Room being loaded
+        # (Console-driven loads included); the boot room only as a fallback.
+        room_type=lambda: (terrarium.loading_room or config.room_name or ""))
 
     if terrarium_config is None:
         rooms = {room_spec.name: room_spec} if room_spec is not None else {}
@@ -314,26 +326,30 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         # be SETUP (via GameServer.load_bit) the instant build() returns
         # with a room_spec. A NO_ROOM build (room_spec is None) loads no
         # Bit either: main() defers that to whenever a Room actually
-        # exists (see harness/terrarium_boot.py's main()).
-        try:
-            bit_cls = bit_registry.get(config.bit_name)
-            if bit_cls is None:
-                raise TerrariumBuildFailure(f"unknown Bit {config.bit_name!r}")
-            if terrarium.room.name not in bit_cls.room_types:
-                raise TerrariumBuildFailure(
-                    f"Bit {config.bit_name!r} does not support "
-                    f"{terrarium.room.name}")
-            gs.load_bit(config.bit_name, config=config.bit_config)
-        except BitLoadError as exc:
-            if terrarium.state is TerrariumState.ROOM_READY:
-                terrarium.unload_room(force=True)
-            teardown.close()
-            raise TerrariumBuildFailure(f"Bit load failed: {exc}") from exc
-        except BaseException:
-            if terrarium.state is TerrariumState.ROOM_READY:
-                terrarium.unload_room(force=True)
-            teardown.close()
-            raise
+        # exists (see harness/terrarium_boot.py's main()). A bit_name of
+        # None (terrarium_boot --no-bit) loads the Room only and leaves
+        # the engine IDLE for the Console to load a Bit into.
+        if config.bit_name is not None:
+            try:
+                bit_cls = bit_registry.get(config.bit_name)
+                if bit_cls is None:
+                    raise TerrariumBuildFailure(
+                        f"unknown Bit {config.bit_name!r}")
+                if terrarium.room.name not in bit_cls.room_types:
+                    raise TerrariumBuildFailure(
+                        f"Bit {config.bit_name!r} does not support "
+                        f"{terrarium.room.name}")
+                gs.load_bit(config.bit_name, config=config.bit_config)
+            except BitLoadError as exc:
+                if terrarium.state is TerrariumState.ROOM_READY:
+                    terrarium.unload_room(force=True)
+                teardown.close()
+                raise TerrariumBuildFailure(f"Bit load failed: {exc}") from exc
+            except BaseException:
+                if terrarium.state is TerrariumState.ROOM_READY:
+                    terrarium.unload_room(force=True)
+                teardown.close()
+                raise
 
     try:
         if room_audio is None:
@@ -341,7 +357,12 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
             from harness.arco_synth import ArcoSynthPool
             pool = ArcoSynthPool() if config.arco_soundfont is None \
                 else ArcoSynthPool(soundfont=config.arco_soundfont)
-            pool.start()
+            # A NO_ROOM build has no Arco to connect to. The pool stays in
+            # its pre-start state (same as after quiesce()); main()'s
+            # restart_clients() starts it after the first Console
+            # load_room (D1).
+            if room_spec is not None:
+                pool.start()
             room_audio = AudioBridge(pool, clock=clock)
 
         agent = DeviceLinkAgent(gs, server, room_audio=room_audio,
@@ -419,7 +440,8 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
                    console_agent=None, arco=None, gs=None,
                    condition: StartCondition | None = None,
-                   game_server=None, announce_swaps: bool = False) -> str:
+                   game_server=None, announce_swaps: bool = False,
+                   terrarium=None) -> str:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
@@ -447,6 +469,11 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     undrained pty blocks it mid-write, and a blocked Arco serves no clock
     sync, routes no messages and plays no audio. This loop not draining
     it froze whole rooms for the length of the hold (2026-08-20).
+
+    terrarium, when given, refreshes `arco` to `terrarium.arco` at the top
+    of every iteration via `_live_arco` -- a Console-driven Room switch
+    mid-hold can replace the live Arco handle, and this loop must drain
+    the NEW one from its very next iteration on (D3).
 
     gs, when given, is watched: the Console is a second driver, and if
     the operator moves the engine out of SETUP (Run, Abort) this hold
@@ -490,6 +517,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
             return "expired"
         if parent_is_gone(parent_pid):
             return "parent-gone"
+        arco = _live_arco(terrarium, arco)
         if arco is not None:
             arco.poll()
         agent.poll()
@@ -585,6 +613,7 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
     stale.
     """
     while True:
+        arco = _live_arco(terrarium, arco)
         if parent_is_gone(parent_pid):
             return "parent-gone"
         if (terrarium is not None
@@ -635,6 +664,7 @@ def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
     if gs.state is not State.IDLE:
         return "loaded"
     while True:
+        arco = _live_arco(terrarium, arco)
         if parent_is_gone(parent_pid):
             return "parent-gone"
         if terrarium is not None and terrarium.state is not TerrariumState.ROOM_READY:
@@ -697,6 +727,7 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
                                 terrarium=terrarium)
         if reason != "loaded":
             return reason
+        arco = _live_arco(terrarium, arco)
         if was_idle:
             # Only a round _wait_for_load actually watched leave IDLE gets
             # announced here -- the immediate-return case (state already
@@ -717,7 +748,7 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
         reason = _wait_in_setup(agent, setup, parent_pid=parent_pid,
                                 console_agent=console_agent, arco=arco,
                                 gs=gs, condition=cond, game_server=gs,
-                                announce_swaps=True)
+                                announce_swaps=True, terrarium=terrarium)
         if reason == "parent-gone":
             return reason
         if reason == "timeout-abort":
@@ -731,6 +762,7 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
         # during the hold -- a handoff, not an error (same guard main()
         # applies to round 1).
 
+        arco = _live_arco(terrarium, arco)
         reason = _serve_until_done(gs, agent, arco, parent_pid=parent_pid,
                                    console_agent=console_agent,
                                    terrarium=terrarium)
@@ -762,6 +794,7 @@ def _wait_for_room_ready(agent, terrarium, *, console_agent=None,
     inner `_serve_rounds` call returns "no-room") -- or "parent-gone"."""
     if terrarium.state is TerrariumState.ROOM_READY:
         return "ready"
+    print(markers.CONTROL_NO_ROOM_WAIT, flush=True)
     while True:
         if parent_is_gone(parent_pid):
             return "parent-gone"
@@ -924,6 +957,55 @@ class _LifecycleLogger:
         self._last_assignments = current_assignments
 
 
+def _join_info_provider(gs, *, ensemble: str, www_port: int, ip=lan_ip,
+                        app_root: str | None = None):
+    """The Console's Join card provider (console.agent.ConsoleAgent
+    join_info=) and _JoinLogger's source: control/join_info.py's
+    build_join_info over the LAN address, the two ports, the ensemble and
+    the loaded Bit's launch.nodes, read fresh on every call. Returns None
+    when the guest page is off (--www-port 0): there is nothing to join
+    through. `app_root` is the www/ directory; app_present is whether a
+    Flutter build sits under its app/."""
+    root = app_root if app_root is not None else os.path.join(REPO_ROOT, "www")
+
+    def provider():
+        if www_port == 0:
+            return None
+        cfg = getattr(gs.bit, "config", None)
+        nodes = tuple(cfg.launch.nodes) if cfg is not None else ()
+        return build_join_info(
+            lan_ip=ip(), www_port=www_port, arco_http_port=ARCO_HTTP_PORT,
+            ensemble=ensemble, bit_name=gs.bit_name, nodes=nodes,
+            app_present=os.path.isfile(os.path.join(root, "app", "index.html")))
+
+    return provider
+
+
+def _print_join_urls(provider) -> None:
+    """One markers.JOIN_URL line per node of the loaded Bit; silent when
+    the provider yields nothing (guest page off, or no Bit)."""
+    info = provider()
+    if not info:
+        return
+    for row in info["nodes"]:
+        print(f"{markers.JOIN_URL} {row['role']} {row['node']} {row['url']}",
+              flush=True)
+
+
+class _JoinLogger:
+    """GameServer observer: prints the JOIN_URL lines whenever a Bit reaches
+    LOADED (a Console load in serve mode). Round 1's CLI-selected Bit loads
+    inside build(), before any observer exists, so main() calls
+    _print_join_urls once for it explicitly, like CONTROL_ROOM_LOADED."""
+
+    def __init__(self, provider):
+        self._provider = provider
+
+    def on_state_change(self, old_state, new_state) -> None:
+        if new_state is State.LOADED:
+            _print_join_urls(self._provider)
+
+
 class _TerrariumLogger:
     """Prints control.terrarium.Terrarium's Room lifecycle to Control's
     stdout: a `room loading: <stage>` line per progress notification (NOT
@@ -979,17 +1061,56 @@ class _RoomWiring:
     read-out (which calls DeviceLinkAgent.controllers() live on every
     render, see its _current_room()) would have nothing to read either --
     see devicelink.agent.DeviceLinkAgent.rewire_room's own docstring for
-    the full picture."""
+    the full picture.
 
-    def __init__(self, agent, terrarium) -> None:
+    restart_clients, when given, runs FIRST on ROOM_READY: Control's own
+    Arco clients (the o2lite transport and the ArcoSynthPool) must be up
+    before rewire_room() grants the Room's audio, or the grant raises
+    'ArcoSynthPool.start() must run before acquire()' (live, 2026-09-11).
+    A restart reason skips the rewire and is logged, and remembers the skip
+    (`_pending_rewire`) rather than dropping it on the floor: the driver
+    that loaded the Room (_serve_roomless, or ConsoleAgent's load_bit hook)
+    retries the restart itself, and either unloads the Room when it fails
+    again or, on a later successful retry, calls this observer's own
+    `on_clients_restarted()` to finish the rewire this method skipped (see
+    that method's docstring -- Important #3 review finding: without this,
+    a Room stuck at "restarted late" never gets its audio grant at all)."""
+
+    def __init__(self, agent, terrarium, restart_clients=None) -> None:
         self._agent = agent
         self._terrarium = terrarium
+        self._restart_clients = restart_clients
+        self._pending_rewire = False
 
     def on_terrarium_state_change(self, old_state, new_state) -> None:
         if new_state is TerrariumState.ROOM_READY:
+            if self._restart_clients is not None:
+                reason = self._restart_clients()
+                if reason is not None:
+                    self._pending_rewire = True
+                    logging.getLogger(__name__).error(
+                        "room clients failed to restart: %s", reason)
+                    return
             self._agent.rewire_room()
         elif new_state is TerrariumState.NO_ROOM:
+            self._pending_rewire = False
             self._agent.unwire_room()
+
+    def on_clients_restarted(self) -> None:
+        """Called by main()'s restart_clients closure after a SUCCESSFUL
+        restart. If this observer skipped rewire_room() because the restart
+        attempt inside load_room failed, and a later retry (the agent's hook
+        or _serve_roomless) succeeded, the Room is ROOM_READY with live
+        clients and no sessions: do the rewire now, exactly once."""
+        if not self._pending_rewire:
+            return
+        terrarium = self._terrarium
+        if (terrarium is not None
+                and terrarium.state is not TerrariumState.ROOM_READY):
+            self._pending_rewire = False
+            return
+        self._pending_rewire = False
+        self._agent.rewire_room()
 
 
 def _print_join_denied(dev: str, node: str, reason: str) -> None:
@@ -1041,6 +1162,22 @@ def _arco_pump(terrarium):
     return arco.poll if arco is not None else None
 
 
+def _live_arco(terrarium, arco):
+    """The Arco handle a serve loop should poll THIS iteration: prefers
+    `terrarium.arco` (the terrarium's own current handle) over the loop's
+    own, possibly-stale, `arco` local. A Console room switch inside
+    `console_agent.poll()` can replace `terrarium.arco` with a brand new
+    handle for the new Room mid-iteration; a loop that keeps polling its
+    original `arco` local after that switch is polling a handle the
+    terrarium has already moved on from (D3). Falls back to `arco`
+    unchanged when no `terrarium` is given, or (same as `_arco_pump`'s own
+    getattr) when it has no `.arco` attribute at all -- several tests drive
+    these loops with minimal terrarium doubles that only model `.state`."""
+    if terrarium is not None:
+        return getattr(terrarium, "arco", arco)
+    return arco
+
+
 def _restart_room_clients(*, transport, pool=None,
                           o2lite=None, pump=None) -> str | None:
     """The restart half of `_recycle_room` (pool.start() then
@@ -1065,8 +1202,17 @@ def _restart_room_clients(*, transport, pool=None,
     try:
         if pool is not None:
             pool.start()
+    except Exception as exc:
+        return str(exc)
+    try:
         transport.start(o2lite, pump=pump)
     except Exception as exc:
+        # The pool connected but the transport did not: drop the pool's
+        # handles (no wire traffic; the Flsyn ugen stays on the hub until
+        # the next reset) so the retry is a clean pool.start() rather than
+        # a second start on a started pool.
+        if pool is not None:
+            pool.quiesce()
         return str(exc)
     return None
 
@@ -1109,9 +1255,11 @@ def _effective_serve(args) -> bool:
     `--hold`/`--seconds` are bounded/one-shot intents -- a console with
     neither implies rounds instead. `harness/run_stack.py --ci` never
     passes `--serve` (its one-shot semantics are unchanged), and this
-    process itself has no --ci."""
-    return bool(args.serve or (args.console_port is not None
-                               and args.seconds is None and not args.hold))
+    process itself has no --ci. --no-bit always serves: with no round-1
+    Bit there is nothing but rounds to run."""
+    return bool(args.serve or getattr(args, "no_bit", False)
+                or (args.console_port is not None
+                    and args.seconds is None and not args.hold))
 
 
 def _print_round_outcome(reason: str) -> None:
@@ -1256,6 +1404,13 @@ def _build_arg_parser():
                          "room_types. See --list-bits for what's available. "
                          "Default: the --profile's own [run].bit, else "
                          "TestBit.")
+    ap.add_argument("--no-bit", action="store_true",
+                    help="Load no Bit at all: boot the Room given by "
+                         "--room (or to NO_ROOM without one) and wait for "
+                         "the Console to load a Bit. Requires "
+                         "--console-port; refused together with --bit or "
+                         "--profile. Implies --serve. This is what "
+                         "./terrarium.sh runs.")
     ap.add_argument("--profile", default=None, metavar="PATH",
                     help="A venue TOML (see profiles/dev-metronome.toml) "
                          "supplying launch defaults -- bit, room_type, "
@@ -1314,6 +1469,13 @@ def main() -> None:
             print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
         sys.exit(0)
 
+    if args.no_bit and (args.bit is not None or args.profile is not None):
+        ap.error("--no-bit cannot be combined with --bit or --profile")
+    if args.no_bit and args.console_port is None:
+        print("--no-bit given with no --console-port to load a Bit from; "
+              "nothing would ever load a Bit", file=sys.stderr)
+        sys.exit(1)
+
     profile = RunProfile()
     if args.profile is not None:
         with open(args.profile, encoding="utf-8") as handle:
@@ -1321,10 +1483,11 @@ def main() -> None:
 
     # manifest < profile < explicit CLI, applied once here -- the same
     # precedence harness/run_stack.py's config_from_args applies for its
-    # own launcher fields.
-    bit = args.bit or profile.bit or "TestBit"
+    # own launcher fields. --no-bit short-circuits all of it: no Bit is
+    # resolved, so nothing below can refuse one.
+    bit = None if args.no_bit else (args.bit or profile.bit or "TestBit")
 
-    if bit not in registry.packages:
+    if bit is not None and bit not in registry.packages:
         available = sorted(registry.packages)
         print(f"unknown Bit {bit!r}; available: {available}",
              file=sys.stderr)
@@ -1332,7 +1495,7 @@ def main() -> None:
             print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
         sys.exit(1)
 
-    if not registry.packages[bit].config.identity.enabled:
+    if bit is not None and not registry.packages[bit].config.identity.enabled:
         print(f"Bit {bit!r} is disabled (bit.enabled = false in its "
               f"manifest); re-enable it there to load it.", file=sys.stderr)
         sys.exit(1)
@@ -1358,7 +1521,8 @@ def main() -> None:
     if run_duration is not None:
         overrides["defaults"] = {"run_duration_seconds": run_duration}
     overrides = deep_merge_overrides(profile.overrides, overrides)
-    cfg = registry.resolve_config(bit, overrides or None)
+    cfg = (None if bit is None
+           else registry.resolve_config(bit, overrides or None))
 
     console_port = (args.console_port if args.console_port is not None
                     else profile.console_port)
@@ -1384,12 +1548,14 @@ def main() -> None:
 
     config = BootConfig(
         room_name=room_name, bit_name=bit, bit_config=cfg,
-        # A room whose config declares the array backend needs Terrarium to
-        # spawn one; "simulator" is the value BootConfig already defines
-        # for that. A room with no array backend, or no room chosen yet,
-        # leaves the field None.
-        array_backend=("simulator" if room_spec is not None
-                       and "array" in room_spec.backends else None))
+        # The harness always declares the simulator array backend (D5): it
+        # simulates any Room's declared backends regardless of whether THIS
+        # boot's Room actually has one, so a later Console load_room of a
+        # DIFFERENT Room (one that DOES declare "array") is never refused
+        # for want of an array backend this boot never anticipated. A real
+        # venue box passes its own array_backend host later; this harness
+        # entry point never does.
+        array_backend="simulator")
     if args.horizon is not None:
         config.cue_horizon = args.horizon
     if args.stale_timeout is not None:
@@ -1447,12 +1613,24 @@ def main() -> None:
     # `unload_room`); the room-back-up half reads it to know whether there
     # is anything to restart, and clears it once it has.
     clients_stopped = [False]
+    # Observers to run after a SUCCESSFUL restart_clients() -- currently
+    # just _RoomWiring's own on_clients_restarted (appended once it exists,
+    # below), which finishes a rewire it had to skip when an earlier
+    # restart attempt inside load_room failed (Important #3 review
+    # finding). A list, not a single callback, in case a future caller
+    # needs its own hook too.
+    restart_callbacks: list = []
 
     def stop_clients():
         """The room went down under live Arco clients (Console hard abort
         or unload_room). Stop the transport and drop the pool's dead-hub
         handles so the next load_room's restart_clients() can bring both
-        back against the new hub. Idempotent via clients_stopped."""
+        back against the new hub. Idempotent via clients_stopped.
+
+        Always defined now, not gated on effective_serve: a one-shot
+        (--console-port, non-serve) run simply never calls it -- there are
+        no rounds to fall back into -- but the closure itself costs
+        nothing to define."""
         if clients_stopped[0]:
             return
         transport.stop()
@@ -1460,17 +1638,25 @@ def main() -> None:
             pool.quiesce()
         clients_stopped[0] = True
 
-    stop_clients = stop_clients if effective_serve else None
-
     def restart_clients():
         """Called from the NO_ROOM wait after a plain Console `load_room`
         succeeds. A no-op unless the clients were previously marked
         stopped -- either by `stop_clients()` above (the room went down
-        under live Arco clients) or by a failed `recycle()` that left the
+        under live Arco clients), by a NO_ROOM boot that never started them
+        in the first place (D1), or by a failed `recycle()` that left the
         transport/pool stopped with no hub left to restart them against --
         the ordinary case (no prior stop, or `_recycle_room` already
         restarted them itself) does nothing here, avoiding a
-        double-start."""
+        double-start.
+
+        Always defined now, not gated on effective_serve -- see
+        stop_clients' docstring for why.
+
+        Prints markers.CONTROL_TRANSPORT_READY on a successful restart:
+        this is the first time the transport comes up at all for a NO_ROOM
+        boot, so it needs the same announcement main()'s own initial
+        transport.start() would have printed had a Room existed to start
+        it against."""
         if not clients_stopped[0]:
             return None
         o2 = o2lite
@@ -1478,9 +1664,11 @@ def main() -> None:
                                        o2lite=o2, pump=_arco_pump(terrarium))
         if reason is None:
             clients_stopped[0] = False
+            print(f"{markers.CONTROL_TRANSPORT_READY} "
+                  f"{config.o2_ensemble!r} (restarted)", flush=True)
+            for callback in list(restart_callbacks):
+                callback()
         return reason
-
-    restart_clients = restart_clients if effective_serve else None
     # A SEPARATE stack from `teardown` -- see shutdown()'s docstring for
     # why the o2lite transport must close before terrarium.room_stack
     # (Arco) rather than with the rest of the process-level steps.
@@ -1497,7 +1685,16 @@ def main() -> None:
     # already wired `agent` correctly for round 1, so this observer's first
     # call (a later Console load/unload, if any) is the first time it does
     # anything.
-    terrarium.add_observer(_RoomWiring(agent, terrarium))
+    #
+    # `restart_clients` (defined above) is called from exactly three sites:
+    # this `_RoomWiring` on its own ROOM_READY handling, `_serve_roomless`'s
+    # NO_ROOM wait, and ConsoleAgent's own `_ensure_room_for_bit`. All three
+    # are safe to call unconditionally -- `clients_stopped` is what makes
+    # the closure idempotent, so whichever of them actually finds the
+    # clients down does the restart and the other two no-op.
+    wiring = _RoomWiring(agent, terrarium, restart_clients=restart_clients)
+    restart_callbacks.append(wiring.on_clients_restarted)
+    terrarium.add_observer(wiring)
 
     # Device lifecycle on Control's stdout (2026-08-20 UAT: a denial was
     # invisible anywhere but the denied device's own terminal). Unconditional
@@ -1508,6 +1705,13 @@ def main() -> None:
     # console-frame sink two functions below still does that (build() never
     # took an on_room_frame parameter), but on_join_denied has one, so
     # production wiring uses it rather than reaching past it.
+    join_info = _join_info_provider(gs, ensemble=config.o2_ensemble,
+                                    www_port=args.www_port)
+    gs.add_observer(_JoinLogger(join_info))
+    # Round 1's Bit (if any) loaded inside build(), before the observer
+    # above existed; announce its join rows once here.
+    _print_join_urls(join_info)
+
     gs.add_observer(_LifecycleLogger(gs))
 
     # build() already loaded round 1's Bit together with its Room, exactly
@@ -1527,7 +1731,7 @@ def main() -> None:
         # itself exactly once. Gated on effective_serve because one-shot
         # mode has no "rounds" to announce; see _serve_rounds for every
         # later round's line.
-        if effective_serve:
+        if effective_serve and gs.bit_name is not None:
             print(f"{markers.CONTROL_ROUND_LOADED} {gs.bit_name}", flush=True)
 
     # Once build() has returned, Arco and the simulator (if a Room was
@@ -1569,20 +1773,30 @@ def main() -> None:
                                          catalog_root=catalog_root,
                                          rooms_root=rooms_root,
                                          bench_session_factory=bench_session_factory,
-                                         captures_root=Path("captures"))
+                                         captures_root=Path("captures"),
+                                         join_info=join_info,
+                                         stop_room_clients=stop_clients,
+                                         restart_room_clients=restart_clients)
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
         _start_www_server(args, teardown)
         # pump=arco.poll drains Arco's pty for the whole ownership hold;
         # see _restart_room_clients for why that is load-bearing.
-        transport.start(o2lite, pump=arco.poll if arco is not None else None)
+        if arco is not None:
+            transport.start(o2lite, pump=arco.poll)
+            print(f"{markers.CONTROL_TRANSPORT_READY} "
+                  f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)
+            print(f"{markers.ARCO_WWW} http://127.0.0.1:{ARCO_HTTP_PORT}/ "
+                  f"(www/ over Arco's HTTP server; o2ws on the same port)",
+                  flush=True)
+        else:
+            # NO_ROOM boot: there is no hub yet. Both Arco clients (the
+            # o2lite transport and the ArcoSynthPool) stay stopped until the
+            # first Console load_room, when _serve_roomless's
+            # restart_clients() brings them up in launch order (D1).
+            clients_stopped[0] = True
         _register_o2lite_transport(pre_room_teardown, transport)
-        print(f"{markers.CONTROL_TRANSPORT_READY} "
-              f"{config.o2_ensemble!r} (Ctrl-C to stop)", flush=True)
-        print(f"{markers.ARCO_WWW} http://127.0.0.1:{ARCO_HTTP_PORT}/ "
-              f"(www/ over Arco's HTTP server; o2ws on the same port)",
-              flush=True)
         if args.arco_start_audio:
             # After Control's own clock sync, so this cannot disturb it.
             console = getattr(arco, "_process", None)
@@ -1594,7 +1808,7 @@ def main() -> None:
             else:
                 print("--arco-start-audio needs --arco-pty; ignoring",
                       file=sys.stderr)
-        if room_spec is not None:
+        if room_spec is not None and gs.bit_name is not None:
             # Captured now, before any wait/run/abort: gs.bit_name is None
             # again by round end (the engine clears it on unload), and this
             # is round 1's only chance to still name it for the
@@ -1609,7 +1823,8 @@ def main() -> None:
                                     console_agent=console_agent,
                                     arco=arco, gs=gs,
                                     condition=cfg.start, game_server=gs,
-                                    announce_swaps=effective_serve)
+                                    announce_swaps=effective_serve,
+                                    terrarium=terrarium)
             if reason == "parent-gone":
                 print("parent is gone; tearing down", file=sys.stderr)
             elif reason == "timeout-abort":
@@ -1692,11 +1907,12 @@ def main() -> None:
                 # teardown like "completed" does.
                 _print_round_outcome(reason)
         else:
-            # NO_ROOM boot (no --room, a console port instead): wait for
-            # the Console to load a Room, then serve rounds against it --
-            # same round machinery as the --room CLI path falls into after
-            # its own round 1, looping back to this same wait whenever the
-            # room is unloaded mid-serve (see _serve_roomless).
+            # NO_ROOM boot (no --room, a console port instead) OR a --no-bit
+            # boot with a Room already loaded: wait for the Console to load
+            # a Room (immediate when one is up), then serve rounds against
+            # it -- _wait_for_load sits in IDLE until the Console loads a
+            # Bit -- looping back to the NO_ROOM wait whenever the room is
+            # unloaded mid-serve (see _serve_roomless).
             reason = _serve_roomless(gs, agent, terrarium,
                                      console_agent=console_agent,
                                      parent_pid=args.exit_with_parent,

@@ -4110,6 +4110,96 @@ Status:**
   (`harness/www_server.py`'s `lan_ip()`) uses a UDP-connect probe instead
   (no packet is actually sent), so this adds no new runtime dependency.
 
+### `./terrarium.sh`, `run_stack --no-bit`, room-aware `load_bit`, the Join card (2026-09-10)
+Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`.
+
+- **`./terrarium.sh [--room NAME]`** wraps `run_stack --no-bit --serve
+  --devices 0 --console-port 8772`: a clean Terrarium with no Bit and no
+  spawned Testshrooms. Without `--room` it boots to `NO_ROOM` (gate:
+  `markers.CONTROL_NO_ROOM_WAIT`, printed on entry to the NO_ROOM wait;
+  no Arco exists yet); with `--room` it gates on room-loaded and
+  transport-ready and skips the SETUP gate. `terrarium_boot --no-bit`
+  (requires `--console-port`, refused with `--bit`/`--profile`, implies
+  serve) makes `BootConfig.bit_name` None; `build()` then loads the Room
+  only and `main()` drops into `_serve_roomless`, whose inner
+  `_wait_for_load` sits in IDLE until the Console loads a Bit.
+- **Console `load_bit` takes a `room`.** `ConsoleAgent._ensure_room_for_bit`
+  resolves the Bit's config and refuses a room outside its `room_types`
+  BEFORE touching the Room. For a different room than the active one it
+  no longer switches (see the D7 bullet below, which superseded the
+  original abort/unload/load-room switch this bullet described). The
+  picker (`console/static/bit.js`) shows a Room select per Bit card
+  (room_types intersected with loadable configured rooms, preselecting
+  the active room, else `default_room_type`), and Load is enabled from
+  NO_ROOM as well as ROOM_READY. `bits_listed` rows carry
+  `default_room_type` and `nodes`.
+- **Join card** (`console/static/join.js`, Live view): per registration
+  node, the guest URL `http://<lan-ip>:8788/app/?node=<NODE>&o2ws=<lan-ip>:8080&ens=<ens>`,
+  a QR (server-side, `segno`, now in `requirements.txt`), and the Chrome
+  sim command `flutter run -d chrome -t lib/sim_main.dart --dart-define=NODE=...
+  --dart-define=O2WS=... --dart-define=ENS=...`. Built by the pure
+  `control/join_info.py`; the agent takes a `join_info` provider,
+  ships it as `snapshot.join` and broadcasts `join_changed` on LOADED
+  and IDLE; `terrarium_boot` prints `JOIN_URL: <role> <node> <url>` per
+  node (`markers.JOIN_URL`, echoed by run_stack, never waited on). `dev`
+  is deliberately absent (the app mints one). **Native iOS/Android and the
+  Radxa app still cannot connect** (old websocket wire); the card says so.
+- **NO_ROOM boot defers Arco clients (D1 fix).** A NO_ROOM boot leaves
+  both Arco clients stopped (`clients_stopped[0] = True`); the existing
+  `restart_clients()` in `_serve_roomless` starts them after the first
+  `load_room`, printing `TRANSPORT_READY ... (restarted)`. This now also
+  works live in one-shot NO_ROOM runs (`./terrarium.sh` with no `--room`).
+- **The NO_ROOM-to-Room load restarts Control's own Arco clients (D2/D3
+  fix).** `_RoomWiring` (`terrarium_boot.py`) restarts the o2lite
+  transport and the `ArcoSynthPool` on ROOM_READY, before granting the
+  Room's audio; `ConsoleAgent`'s own `restart_room_clients` hook is the
+  retry a load whose restart inside `load_room` failed falls back to.
+  `stop_room_clients` is retained as a constructor parameter for the day
+  pyarco supports re-initializing against a new Arco, but nothing calls
+  it now: a Room switch in a running Terrarium is refused outright rather
+  than stopped and reloaded (see the D7 bullet below, which superseded
+  this bullet's original stop/unload/load/restart switch behavior).
+  `_ensure_room_for_bit` refuses an unknown or unloadable target room
+  before touching the active one, so a refused load cannot strand the
+  operator in NO_ROOM.
+- **Serve loops resolve `terrarium.arco` per iteration (D3 fix, `_live_arco`).**
+  `_serve_rounds`, `_wait_for_load`, `_wait_in_setup`, and
+  `_serve_until_done` re-read the live Arco handle every loop iteration
+  instead of capturing it once, so a Console-driven switch mid-loop is
+  seen and drained rather than starving on the old handle's pty.
+- **Simulators spawn for `Terrarium.loading_room` (D4 fix).** The Room
+  simulator factory resolves its room type through a callable at spawn
+  time, reading `Terrarium.loading_room` (set for the duration of a
+  `load_room` call), so a Console switch spawns fixtures for the Room
+  being loaded rather than the boot room.
+- **`terrarium_boot` always passes `array_backend="simulator"` (D5
+  ruling).** This harness simulates whatever backend a Room declares
+  (per-fixture, via the factory), so every configured Room is loadable
+  from any boot; a venue box will pass its real backend when one exists.
+  `_ensure_room_for_bit` also checks `validate_rooms` for the target
+  Room before unloading the active one, so an unloadable target no
+  longer strands the operator in NO_ROOM.
+- **One Arco per Control process (D7 ruling, live-verified 2026-09-11).**
+  pyarco's `arco.initialize()` early-returns once o2lite has ever synced
+  and `finish()` cannot prepare a restart -- an upstream pyarco
+  constraint, already flagged to Roger in the 2026-09-01
+  console-load-stabilization spec (`arco.initialize()` second-run
+  behavior goes upstream to Roger) -- so a Control process can talk to
+  exactly one Arco until pyarco/o2litepy support re-initialization. The
+  Console now refuses a Room switch outright (`_ensure_room_for_bit`
+  returns before touching the active Room) and names the restart
+  command: `switching Rooms in a running Terrarium is not supported
+  yet: pyarco cannot reconnect to a new Arco in one process; stop and
+  run ./terrarium.sh --room <name>`. `_RoomWiring` now restarts
+  Control's own clients before calling `rewire_room()`, not after, so
+  the Room-wiring observer never grants audio against a pool that
+  hasn't started. The pre-existing ABORT-then-Load-Room path within one
+  process hits this same one-Arco-per-process limit; it is no longer
+  left to crash Arco underneath Control and is instead reported through
+  `restart_clients`'s own failure path, same as any other switch
+  attempt. The Bit picker disables its Load button for a non-active
+  Room while a Room is up, so the switch is never offered.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —

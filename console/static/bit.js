@@ -19,9 +19,29 @@ let state = "IDLE";
 let loadedName = null;
 let terrariumState = null; // gates Load/Run/Abort: only enabled in ROOM_READY
 let rolesByName = {};      // role name -> role_view() dict, for the Bit Details popup
+let rooms = [];            // snapshot.rooms rows: {name, description, status, active}
 
 function roomReady() {
   return terrariumState === "ROOM_READY";
+}
+
+// Load is allowed whenever the Terrarium is settled: a Bit can be loaded
+// from NO_ROOM (the picker asks for a Room and the agent loads it first)
+// or from ROOM_READY. Never mid-transition.
+function roomSettled() {
+  return terrariumState === "NO_ROOM" || terrariumState === "ROOM_READY";
+}
+
+function activeRoomName() {
+  const active = rooms.find((r) => r.active);
+  return active ? active.name : null;
+}
+
+// The Rooms this Bit can run in that terrarium.toml actually defines and
+// reports loadable (status null).
+function roomChoices(bitRow) {
+  const loadable = new Set(rooms.filter((r) => r.status == null).map((r) => r.name));
+  return (bitRow.room_types || []).filter((name) => loadable.has(name));
 }
 
 function startText(start) {
@@ -67,7 +87,7 @@ function render() {
     const wrap = mk("div", "bitcard empty");
     wrap.appendChild(mk("p", "muted", "No Bit loaded"));
     const loadBtn = mk("button", "btn solid-gold", "Load");
-    loadBtn.disabled = !roomReady();
+    loadBtn.disabled = !roomSettled();
     loadBtn.onclick = openPicker;
     wrap.appendChild(loadBtn);
     panel.appendChild(wrap);
@@ -92,8 +112,7 @@ function render() {
   detailsPill.onclick = () => openDetails(bit);
   wrap.appendChild(detailsPill);
 
-  // button row -- Run/Abort/Load, disabled outside ROOM_READY (spec: a Bit
-  // cannot run, abort, or be (re)loaded without a Room bound and ready).
+  // Run/Restart/Abort need ROOM_READY; Load only needs a settled Terrarium (see roomSettled).
   const btnrow = mk("div", "btnrow");
   const gated = !roomReady();
 
@@ -121,7 +140,7 @@ function render() {
   btnrow.appendChild(abortBtn);
 
   const loadBtn = mk("button", "btn", "Load");
-  loadBtn.disabled = gated;
+  loadBtn.disabled = !roomSettled();
   loadBtn.onclick = openPicker;
   btnrow.appendChild(loadBtn);
 
@@ -302,6 +321,27 @@ function buildPickCard(bitRow) {
   const { details, pairs } = buildOverridesForm();
   card.appendChild(details);
 
+  // Room choice (spec 2026-09-10 section 4): the Bit's room_types that
+  // the config defines and reports loadable, preselecting the active Room
+  // when compatible, else the Bit's own default.
+  const choices = roomChoices(bitRow);
+  const active = activeRoomName();
+  const roomRow = mk("div", "roomrow");
+  roomRow.appendChild(mk("span", "meta", "Room"));
+  const select = document.createElement("select");
+  select.className = "roompick";
+  for (const name of choices) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    select.appendChild(opt);
+  }
+  if (choices.includes(active)) select.value = active;
+  else if (choices.includes(bitRow.default_room_type)) select.value = bitRow.default_room_type;
+  roomRow.appendChild(select);
+  card.appendChild(roomRow);
+  const hint = mk("p", "meta roomhint", "");
+  card.appendChild(hint);
   const actions = mk("div", "actions");
   const loadBtn = mk("button", "btn solid-gold", "Load");
   loadBtn.onclick = () => {
@@ -310,9 +350,19 @@ function buildPickCard(bitRow) {
       flashError(loadBtn, `override key must be table.key (got "${result.error}")`);
       return;
     }
-    wire.send("load_bit", { name: bitRow.name, overrides: result.overrides }, loadBtn);
+    wire.send("load_bit", { name: bitRow.name, overrides: result.overrides, room: select.value }, loadBtn);
     closeOverlay();
   };
+  const paintHint = () => {
+    if (choices.length === 0) hint.textContent = "no configured room supports this Bit";
+    else if (active === null && choices.length > 0) hint.textContent = "loads Room: Arco starts (about 15 s)";
+    else if (select.value !== active) hint.textContent = `switching Rooms needs a restart: ./terrarium.sh --room ${select.value}`;
+    else hint.textContent = "";
+    loadBtn.disabled = choices.length === 0 || (active !== null && select.value !== active);
+  };
+  select.onchange = paintHint;
+  paintHint();
+
   actions.appendChild(loadBtn);
   card.appendChild(actions);
 
@@ -397,6 +447,7 @@ export function init() {
     state = m.state;
     loadedName = m.loaded_bit;
     terrariumState = m.terrarium_state;
+    rooms = m.rooms || [];
     rolesByName = {};
     for (const role of m.roles || []) rolesByName[role.role] = role;
     render();
@@ -417,4 +468,21 @@ export function init() {
     render();
   });
   wire.on("bit_status", (m) => renderStatus(m.status || {}));
+  wire.on("room_loaded", (m) => {
+    rooms = rooms.map((r) => Object.assign({}, r, { active: r.name === m.name }));
+    // Cards capture the active room at build time, so close and rebuild the picker.
+    closeOverlay();
+    render();
+  });
+  wire.on("room_unloaded", () => {
+    rooms = rooms.map((r) => Object.assign({}, r, { active: false }));
+    // Cards capture the active room at build time, so close and rebuild the picker.
+    closeOverlay();
+    render();
+  });
+  wire.on("room_load_failed", () => {
+    // Cards capture the active room at build time, so close and rebuild the picker.
+    closeOverlay();
+    render();
+  });
 }

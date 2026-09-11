@@ -1,2 +1,6 @@
 # Runtime dependencies for the Control+GameServer / Terrarium uplink.
 websockets>=13
+
+# QR codes for the Console's Join card (control/join_info.py). Pure Python,
+# no transitive dependencies, so the offline suite stays offline.
+segno>=1.5

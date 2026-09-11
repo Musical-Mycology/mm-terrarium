@@ -1181,3 +1181,90 @@ def test_stage_web_build_leaves_an_index_without_base_untouched(tmp_path):
     stage_web_build(str(src), str(www))
     assert (www / "app" / "index.html").read_text(
         encoding="utf-8") == original
+
+
+def test_no_bit_refuses_bit_profile_node_and_devices():
+    from harness.run_stack import parse_args
+    for extra in (["--bit", "TestBit"],
+                  ["--profile", "profiles/dev-metronome.toml"],
+                  ["--node", "X"],
+                  ["--devices", "1"]):
+        with pytest.raises(SystemExit):
+            parse_args(["--no-bit"] + extra)
+
+
+def test_no_bit_config_has_no_bit_no_node_no_devices_and_no_room_by_default():
+    from harness.run_stack import config_from_args, parse_args
+    cfg = config_from_args(parse_args(["--no-bit"]))
+    assert cfg.no_bit is True
+    assert cfg.bit is None
+    assert cfg.node is None
+    assert cfg.devices == 0
+    assert cfg.room_type is None
+
+
+def test_no_bit_config_forwards_room_and_console_port():
+    from harness.run_stack import config_from_args, parse_args
+    cfg = config_from_args(parse_args(
+        ["--no-bit", "--room", "DEMO", "--console-port", "8772"]))
+    assert cfg.room_type == "DEMO"
+    assert cfg.console_port == 8772
+    assert cfg.serve is True
+
+
+def test_no_bit_defaults_to_an_ephemeral_console():
+    from harness.run_stack import config_from_args, parse_args
+    cfg = config_from_args(parse_args(["--no-bit"]))
+    assert cfg.console_port == 0
+    assert cfg.serve is True
+
+
+def test_no_bit_ci_is_bounded():
+    from harness.run_stack import config_from_args, parse_args
+    cfg = config_from_args(parse_args(["--no-bit", "--ci"]))
+    assert cfg.seconds is not None
+    assert cfg.echo is False
+
+
+def test_control_command_under_no_bit_omits_bit_and_forwards_the_flag(tmp_path):
+    cmd = control_command(_cfg(tmp_path, no_bit=True, bit=None,
+                               room_type=None), 1)
+    assert "--no-bit" in cmd
+    assert "--bit" not in cmd
+    assert "--room" not in cmd
+
+
+def test_control_command_under_no_bit_with_a_room_forwards_it(tmp_path):
+    cmd = control_command(_cfg(tmp_path, no_bit=True, bit=None,
+                               room_type="DEMO"), 1)
+    assert cmd[cmd.index("--room") + 1] == "DEMO"
+    assert "--bit" not in cmd
+
+
+def test_control_stages_by_mode(tmp_path):
+    from harness.run_stack import _control_stages
+    names = lambda cfg: [s[0] for s in _control_stages(cfg)]
+    assert names(_cfg(tmp_path)) == [
+        "control-room-loaded", "control-ready", "control-setup"]
+    assert names(_cfg(tmp_path, no_bit=True, bit=None, room_type="TEST")) == [
+        "control-room-loaded", "control-ready"]
+    assert names(_cfg(tmp_path, no_bit=True, bit=None, room_type=None)) == [
+        "control-no-room-wait"]
+
+
+def test_a_no_bit_no_room_run_completes_on_the_no_room_marker(tmp_path):
+    popen = ScriptedPopen([f"{markers.CONTROL_NO_ROOM_WAIT}\n"])
+    result = run(_cfg(tmp_path, no_bit=True, bit=None, room_type=None,
+                      devices=0), popen=popen, sleep=lambda _s: None)
+    assert result.ok is True
+    assert result.stage == "complete"
+    assert len(popen.children) == 1     # Control only, no devices
+
+
+def test_a_no_bit_room_run_completes_without_a_setup_hold(tmp_path):
+    popen = ScriptedPopen([f"{markers.CONTROL_ROOM_LOADED} DEMO\n"
+                           f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"])
+    result = run(_cfg(tmp_path, no_bit=True, bit=None, room_type="DEMO",
+                      devices=0), popen=popen, sleep=lambda _s: None)
+    assert result.ok is True
+    assert result.stage == "complete"

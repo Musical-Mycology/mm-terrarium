@@ -4,16 +4,19 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
 
 from bits.test.test_bit import TestBit
 from control.arco_process import FakePopen
 from control.audio import AudioBridge, FakePool
 from control.boot_config import BootConfig
+from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.state import State
 from control.teardown import TeardownStack
+from control.terrarium import TerrariumState
 from control.terrarium_config import RoomSpec
 from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
                                     _run_duration, build, main,
@@ -2348,6 +2351,46 @@ def test_restart_room_clients_catches_a_raising_start_and_returns_reason():
     assert reason == "injected pool failure"
 
 
+def test_restart_room_clients_quiesces_the_pool_when_the_transport_fails():
+    """A pool.start() that connects followed by a transport.start() that
+    raises must not leave the pool started against a hub the transport
+    never joined: the next retry has to be a clean pool.start(), not a
+    second start on an already-started pool (Important #3 review finding,
+    "double start"). _restart_room_clients quiesces the pool on that path
+    before returning the transport's failure reason."""
+    import harness.terrarium_boot as terrarium_boot
+
+    class FakePool:
+        def __init__(self):
+            self.calls = []
+
+        def start(self):
+            self.calls.append("start")
+
+        def quiesce(self):
+            self.calls.append("quiesce")
+
+    class FailingTransport:
+        def start(self, o2, *, pump=None):
+            raise RuntimeError("no clock")
+
+    pool = FakePool()
+    reason = terrarium_boot._restart_room_clients(
+        transport=FailingTransport(), pool=pool, o2lite=None)
+    assert reason == "no clock"
+    assert pool.calls == ["start", "quiesce"]
+
+    class SucceedingTransport:
+        def start(self, o2, *, pump=None):
+            pass
+
+    pool2 = FakePool()
+    reason2 = terrarium_boot._restart_room_clients(
+        transport=SucceedingTransport(), pool=pool2, o2lite=None)
+    assert reason2 is None
+    assert pool2.calls == ["start"]
+
+
 def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
     """`_serve_rounds` threads `terrarium` straight into `_wait_for_load`
     so a Console `unload_room` landing while a round waits in IDLE (no Bit
@@ -2473,6 +2516,8 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
     class _FakeObservable:
         room = None
         state = TerrariumState.NO_ROOM
+        bit = None
+        bit_name = None
 
         def add_observer(self, observer):
             pass
@@ -2524,6 +2569,8 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
     class _FakeObservable:
         room = None
         state = TerrariumState.NO_ROOM
+        bit = None
+        bit_name = None
 
         def add_observer(self, observer):
             pass
@@ -2578,6 +2625,8 @@ def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
     class _FakeObservable:
         room = None
         state = TerrariumState.NO_ROOM
+        bit = None
+        bit_name = None
 
         def add_observer(self, observer):
             pass
@@ -2609,6 +2658,90 @@ def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
 
     assert captured["restart_clients"] is not None
     assert captured["stop_clients"] is not None
+
+
+def test_main_no_room_boot_skips_transport_start_and_leaves_clients_stopped(
+        monkeypatch):
+    """A `--no-bit --console-port` boot has no Room and so no Arco to start
+    the transport/pool against (D1): main() must never call
+    transport.start() on that path, and must leave `clients_stopped` True
+    so the captured `restart_clients` closure actually attempts a restart
+    (rather than no-op'ing) once a Console load_room finally brings a Room
+    up. Same fake-build harness as
+    test_main_wires_stop_clients_into_the_no_room_boot_serve_loop above,
+    extended with a transport spy and a pool double reachable through the
+    built agent's `room_audio`."""
+    import types
+
+    import harness.terrarium_boot as terrarium_boot_module
+    from control.terrarium import TerrariumState
+    from devicelink.o2_transport import O2LiteTransport
+
+    _mock_o2lite_module(monkeypatch, terrarium_boot_module)
+
+    transport_calls = []
+    monkeypatch.setattr(
+        O2LiteTransport, "start",
+        lambda self, o2, *, pump=None: transport_calls.append("start"))
+
+    class FakePool:
+        def __init__(self):
+            self.calls = []
+
+        def start(self):
+            self.calls.append("start")
+
+    pool = FakePool()
+
+    class _FakeTerrarium:
+        arco = None
+        room = None
+        state = TerrariumState.NO_ROOM
+        config = None
+        boot_config = None
+        loading_room = None
+
+        def add_observer(self, observer):
+            pass
+
+    def fake_build(config, bit_registry, **kwargs):
+        gs = types.SimpleNamespace(
+            room=None, state=TerrariumState.NO_ROOM, bit=None, bit_name=None,
+            add_observer=lambda observer: None)
+        server = object()
+        room_audio = types.SimpleNamespace(pool=pool)
+        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[],
+                                      room_audio=room_audio)
+        teardown = TeardownStack()
+        terrarium = _FakeTerrarium()
+        return gs, server, agent, None, teardown, terrarium
+
+    captured = {}
+
+    def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
+                            parent_pid=None, restart_clients=None,
+                            stop_clients=None):
+        captured["restart_clients"] = restart_clients
+        return "parent-gone"
+
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(terrarium_boot_module, "_start_www_server",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(terrarium_boot_module, "_serve_roomless",
+                        fake_serve_roomless)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--no-bit",
+                                      "--console-port", "0"])
+
+    terrarium_boot_module.main()
+
+    assert transport_calls == []
+
+    restart_clients = captured["restart_clients"]
+    reason = restart_clients()
+
+    assert reason is None
+    assert pool.calls == ["start"]
+    assert transport_calls == ["start"]
 
 
 def test_recycle_room_orders_client_stops_before_unload_and_restarts_after():
@@ -2905,3 +3038,396 @@ def test_main_configures_logging_first():
     import harness.terrarium_boot as mod
     src = inspect.getsource(mod.main)
     assert src.index("configure_logging()") < src.index("_build_arg_parser()")
+
+
+def test_build_with_no_bit_loads_the_room_and_leaves_the_engine_idle():
+    """--no-bit (spec 2026-09-10 section 3): a BootConfig with bit_name
+    None loads the Room exactly as before and skips load_bit."""
+    config = BootConfig(room_name="TEST", bit_name=None)
+    gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config)
+    try:
+        assert terrarium.state == TerrariumState.ROOM_READY
+        assert gs.state is State.IDLE
+        assert gs.bit_name is None
+    finally:
+        teardown.close()
+
+
+def test_no_bit_is_refused_without_a_console(monkeypatch, capsys):
+    import harness.terrarium_boot as terrarium_boot_module
+    _mock_o2lite_module(monkeypatch, terrarium_boot_module)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--no-bit"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    assert "nothing would ever load a Bit" in capsys.readouterr().err
+
+
+def test_no_bit_is_refused_together_with_bit_or_profile(monkeypatch):
+    import harness.terrarium_boot as terrarium_boot_module
+    _mock_o2lite_module(monkeypatch, terrarium_boot_module)
+    for extra in (["--bit", "TestBit"],
+                  ["--profile", "profiles/dev-metronome.toml"]):
+        monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--no-bit",
+                                          "--console-port", "0"] + extra)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+
+
+def test_no_bit_with_a_console_builds_a_bitless_boot_config(monkeypatch):
+    captured = _run_main_capturing_build(
+        monkeypatch, ["--no-bit", "--console-port", "0", "--room", "TEST"])
+    assert captured["config"].bit_name is None
+    assert captured["config"].bit_config is None
+    assert captured["config"].room_name == "TEST"
+
+
+def test_no_bit_without_a_room_builds_a_no_room_boot_config(monkeypatch):
+    captured = _run_main_capturing_build(
+        monkeypatch, ["--no-bit", "--console-port", "0"])
+    assert captured["config"].bit_name is None
+    assert captured["config"].room_name is None
+
+
+def test_no_bit_forces_serve_mode():
+    from harness.terrarium_boot import _build_arg_parser, _effective_serve
+    ap = _build_arg_parser()
+    args = ap.parse_args(["--no-bit", "--console-port", "0", "--hold"])
+    assert _effective_serve(args) is True
+
+
+def test_wait_for_room_ready_prints_the_no_room_marker_once(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _wait_for_room_ready
+
+    class FlippingTerrarium:
+        def __init__(self):
+            self.polls = 0
+            self.state = TerrariumState.NO_ROOM
+
+    class Agent:
+        def __init__(self, terrarium):
+            self._t = terrarium
+
+        def poll(self):
+            self._t.polls += 1
+            if self._t.polls >= 2:
+                self._t.state = TerrariumState.ROOM_READY
+
+    terrarium = FlippingTerrarium()
+    reason = _wait_for_room_ready(Agent(terrarium), terrarium,
+                                  sleep=lambda _s: None)
+    assert reason == "ready"
+    out = capsys.readouterr().out
+    assert out.count(markers.CONTROL_NO_ROOM_WAIT) == 1
+
+
+def test_wait_for_room_ready_prints_nothing_when_already_ready(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _wait_for_room_ready
+
+    class Ready:
+        state = TerrariumState.ROOM_READY
+
+    class Agent:
+        def poll(self):
+            raise AssertionError("must not poll when already ready")
+
+    assert _wait_for_room_ready(Agent(), Ready()) == "ready"
+    assert markers.CONTROL_NO_ROOM_WAIT not in capsys.readouterr().out
+
+
+def test_join_info_provider_reads_the_loaded_bits_nodes(tmp_path):
+    from harness.terrarium_boot import _join_info_provider
+    from control.bit_registry import BitRegistry
+
+    registry = BitRegistry.scan([Path("bits")])
+    gs = GameServer({"TestBit": TestBit})
+    provider = _join_info_provider(gs, ensemble="arco", www_port=8788,
+                                   ip=lambda: "10.0.0.7",
+                                   app_root=str(tmp_path))
+
+    info = provider()
+    assert info["bit"] is None
+    assert info["nodes"] == []
+    assert info["www_url"] == "http://10.0.0.7:8788/app/"
+    assert info["app_present"] is False
+
+    gs.load_bit("TestBit", config=registry.resolve_config("TestBit"))
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "index.html").write_text("<html></html>")
+    info = provider()
+    assert info["bit"] == "TestBit"
+    assert [(r["role"], r["node"]) for r in info["nodes"]] == [
+        ("jammer", "TEST_JAM_NODE"), ("player", "TEST_PLAYER_NODE")]
+    assert info["app_present"] is True
+    assert info["nodes"][0]["url"].startswith("http://10.0.0.7:8788/app/?")
+
+
+def test_join_info_provider_is_none_when_the_guest_page_is_off():
+    from harness.terrarium_boot import _join_info_provider
+    gs = GameServer({"TestBit": TestBit})
+    provider = _join_info_provider(gs, ensemble="arco", www_port=0,
+                                   ip=lambda: "10.0.0.7", app_root="/nowhere")
+    assert provider() is None
+
+
+def test_join_logger_prints_one_join_url_line_per_node_on_loaded(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _JoinLogger
+
+    info = {"nodes": [
+        {"role": "player", "node": "N1", "url": "http://h:8788/app/?node=N1"},
+        {"role": "jammer", "node": "N2", "url": "http://h:8788/app/?node=N2"},
+    ]}
+    gs = GameServer({"TestBit": TestBit})
+    gs.add_observer(_JoinLogger(lambda: info))
+    gs.load_bit("TestBit")
+    out = capsys.readouterr().out
+    assert f"{markers.JOIN_URL} player N1 http://h:8788/app/?node=N1" in out
+    assert f"{markers.JOIN_URL} jammer N2 http://h:8788/app/?node=N2" in out
+    assert out.count(markers.JOIN_URL) == 2
+    gs.abort()
+    assert markers.JOIN_URL not in capsys.readouterr().out
+
+
+def test_join_logger_is_silent_when_the_provider_returns_none(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _JoinLogger
+    gs = GameServer({"TestBit": TestBit})
+    gs.add_observer(_JoinLogger(lambda: None))
+    gs.load_bit("TestBit")
+    assert markers.JOIN_URL not in capsys.readouterr().out
+
+
+def test_simulator_factory_resolves_a_callable_room_type_at_spawn_time():
+    from harness.terrarium_boot import _O2SimulatorFactory
+    from control.teardown import TeardownStack
+    current = ["DEMO"]
+    popen = FakePopen()
+    factory = _O2SimulatorFactory("arco", popen=popen,
+                                  room_type=lambda: current[0])
+    factory(TeardownStack(), "array")
+    current[0] = "TEST"
+    factory(TeardownStack(), "main")
+    first, second = popen.commands[-2], popen.commands[-1]
+    assert first[first.index("--room-type") + 1] == "DEMO"
+    assert second[second.index("--room-type") + 1] == "TEST"
+
+
+def test_build_with_no_room_does_not_start_the_pool():
+    """D1: a NO_ROOM build has no Arco to connect to, so the default
+    ArcoSynthPool must be constructed but not started (pool.start() is
+    arco.initialize(), a 30 s blocking connect)."""
+
+    class RecordingPool:
+        started = 0
+        def __init__(self, *a, **k): pass
+        def start(self): RecordingPool.started += 1
+        def poll(self): pass
+        def quiesce(self): pass
+
+    monkey = pytest.MonkeyPatch()
+    import harness.arco_synth as arco_synth
+    monkey.setattr(arco_synth, "ArcoSynthPool", RecordingPool)
+    try:
+        config = BootConfig(room_name=None, bit_name=None)
+        gs, server, agent, arco, teardown, terrarium = build(
+            config, {"TestBit": TestBit}, arco_command=["arco-server"],
+            room_binding=RoomBindingRegistry(), room_spec=None,
+            arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
+            transport=_fake_transport(), clock=time.monotonic)
+        try:
+            assert RecordingPool.started == 0
+            assert arco is None
+            assert terrarium.state == TerrariumState.NO_ROOM
+        finally:
+            teardown.close()
+    finally:
+        monkey.undo()
+
+
+def test_live_arco_prefers_the_terrariums_current_handle():
+    from harness.terrarium_boot import _live_arco
+
+    class T:
+        arco = "new"
+
+    assert _live_arco(T(), "old") == "new"
+    assert _live_arco(None, "old") == "old"
+
+
+def test_serve_until_done_polls_the_terrariums_arco_not_a_stale_handle():
+    """D3: a Console room switch inside console_agent.poll() replaces Arco;
+    the loop must poll the NEW handle from the next iteration on."""
+    from harness.terrarium_boot import _serve_until_done
+
+    class Arco:
+        def __init__(self): self.polls = 0; self.exit = None
+        def poll(self): self.polls += 1; return self.exit
+
+    old, new = Arco(), Arco()
+
+    class T:
+        state = TerrariumState.ROOM_READY
+        arco = old
+
+    class GS:
+        state = State.RUNNING
+        def tick(self, dt): pass
+
+    class Agent:
+        closing = 0
+        def poll(self): pass
+
+    class Console:
+        def __init__(self): self.n = 0
+        def poll(self):
+            self.n += 1
+            if self.n == 2:
+                T.arco = new            # the switch
+            if self.n == 4:
+                new.exit = 0            # the NEW Arco exits
+
+    reason = _serve_until_done(GS(), Agent(), old, console_agent=Console(),
+                               terrarium=T(), sleep=lambda _s: None)
+    assert reason == "arco-exited"
+    assert new.polls >= 1
+    assert old.polls <= 2
+
+
+def test_main_no_room_boot_builds_with_a_simulator_array_backend(monkeypatch):
+    """main() must set array_backend='simulator' unconditionally on a NO_ROOM
+    boot (D5), rather than computing it based on the boot room's device spec
+    (there is no boot room). This pins the BootConfig shape and the D5 ruling;
+    the transport-start skip itself is verified by reading main()'s branch
+    (main() does not call transport.start() when arco is None)."""
+    import harness.terrarium_boot as terrarium_boot_module
+    from devicelink.o2_transport import FakeO2Lite
+    fake = FakeO2Lite()
+    fake.set_services("actl")
+    monkeypatch.setattr(terrarium_boot_module, "_o2lite_module", lambda: fake)
+
+    def fake_build(config, bit_registry, **kwargs):
+        assert config.room_name is None
+        assert config.array_backend == "simulator"
+        raise SystemExit(0)
+
+    monkeypatch.setattr(terrarium_boot_module, "build", fake_build)
+    monkeypatch.setattr(sys, "argv", ["terrarium_boot.py", "--no-bit",
+                                      "--console-port", "0"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
+
+
+def test_room_wiring_restarts_clients_before_rewiring_the_agent():
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    wiring = _RoomWiring(Agent(), terrarium=None,
+                         restart_clients=lambda: calls.append("restart") or None)
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == ["restart", "rewire"]
+
+
+def test_room_wiring_skips_the_rewire_when_the_restart_fails(caplog):
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    wiring = _RoomWiring(Agent(), terrarium=None,
+                         restart_clients=lambda: "clock never synced")
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == []
+    assert "clock never synced" in caplog.text
+
+
+def test_room_wiring_without_a_restart_hook_rewires_as_before():
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    wiring = _RoomWiring(Agent(), terrarium=None)
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_UNLOADING,
+                                     TerrariumState.NO_ROOM)
+    assert calls == ["rewire", "unwire"]
+
+
+def test_room_wiring_rewires_once_after_a_retried_restart_succeeds():
+    """Important #3: a restart that fails inside `on_terrarium_state_change`
+    skips the rewire and remembers it as pending. When a LATER restart
+    retry succeeds (run by _serve_roomless or ConsoleAgent's own
+    load_bit hook, not by this observer), the driver calls
+    `on_clients_restarted()` -- the Room is ROOM_READY with live clients and
+    no sessions granted yet -- and the rewire happens exactly once, even if
+    `on_clients_restarted()` is called again afterward (e.g. a second
+    retries-exhausted path)."""
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    class FakeTerrarium:
+        state = TerrariumState.ROOM_READY
+
+    attempts = iter(["clock never synced", None])
+    wiring = _RoomWiring(Agent(), FakeTerrarium(),
+                         restart_clients=lambda: next(attempts))
+
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == []
+
+    wiring.on_clients_restarted()
+    assert calls == ["rewire"]
+
+    wiring.on_clients_restarted()
+    assert calls == ["rewire"]
+
+
+def test_room_wiring_drops_the_pending_rewire_on_no_room():
+    """A Room that goes back to NO_ROOM before any retry ever succeeds (the
+    driver gave up and unloaded) must not leave a stale pending-rewire
+    flag around to fire a rewire against a Room that no longer exists once
+    the NEXT Room happens to land in ROOM_READY."""
+    from harness.terrarium_boot import _RoomWiring
+    calls = []
+
+    class Agent:
+        def rewire_room(self): calls.append("rewire")
+        def unwire_room(self): calls.append("unwire")
+
+    class FakeTerrarium:
+        state = TerrariumState.NO_ROOM
+
+    wiring = _RoomWiring(Agent(), FakeTerrarium(),
+                         restart_clients=lambda: "clock never synced")
+
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                     TerrariumState.ROOM_READY)
+    assert calls == []
+
+    wiring.on_terrarium_state_change(TerrariumState.ROOM_UNLOADING,
+                                     TerrariumState.NO_ROOM)
+    assert calls == ["unwire"]
+
+    wiring.on_clients_restarted()
+    assert calls == ["unwire"]

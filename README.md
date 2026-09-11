@@ -59,6 +59,31 @@ front-end fixture every Bit reuses. It attaches to the same engine
 observer list as the uplink and runs entirely offline in tests. See
 `docs/superpowers/specs/2026-07-21-terrarium-console-design.md`.
 
+## Quick start: a clean Terrarium
+
+```
+./terrarium.sh              # Console at http://127.0.0.1:8772/, no Room, no Bit
+./terrarium.sh --room TEST  # Arco + the TEST Room up, no Bit
+```
+
+`./terrarium.sh` wraps `harness/run_stack.py --no-bit`: no Bit is
+loaded and no Testshrooms are spawned. From the Console, **Load** picks a
+Bit and the Room it should run in: from `NO_ROOM` the first Load brings
+the chosen Room up (about 15 s of Arco spawn); a different Room than the
+active one needs a restart: `./terrarium.sh --room NAME` (pyarco can
+only ever connect to one Arco per process). Once a Bit is loaded the
+Console's **Join** card shows, per registration node, the guest URL, a
+QR code for a phone on the same LAN, and a `flutter run` line to paste
+into an mm-tuneshroom checkout for a Chrome Testshroom. The same URLs
+print on stdout as
+`JOIN_URL:` lines. Pass `--web-build /path/to/mm-tuneshroom/build/web` to
+stage the guest app under `/app/`; without it the URL serves no page.
+Native iOS/Android and the Radxa app cannot connect until mm-tuneshroom's
+FFI o2lite link lands.
+
+`./smoke-test.sh` remains the Bit-first launcher (spawned Testshrooms, CI
+mode, profiles).
+
 It also carries a **Room panel**: the Room's declared light and audio
 instruments side by side with each lane's live controller value, plus a
 labelled view of the Room's live LED frame. Open it during a run by passing

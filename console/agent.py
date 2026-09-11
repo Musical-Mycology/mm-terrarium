@@ -40,7 +40,8 @@ class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_controllers=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
                  terrarium=None, catalog_root=None, bench_session_factory=None,
-                 captures_root=None, rooms_root=None):
+                 captures_root=None, rooms_root=None, join_info=None,
+                 stop_room_clients=None, restart_room_clients=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
@@ -80,6 +81,23 @@ class ConsoleAgent:
         # DeviceLinkAgent.canvas_urls(). None (a GameServer built without a
         # DeviceLinkAgent) yields no URLs anywhere in the Console's views.
         self._canvas_urls = canvas_urls
+        # Optional Callable[[], dict | None] building the Join card's read
+        # model (control/join_info.py's build_join_info), from
+        # harness/terrarium_boot.py. None (every embedding without a guest
+        # page) yields join=None in the snapshot and no join_changed
+        # events. Called at snapshot time and on every LOADED / IDLE
+        # transition, so it always reads the Bit that is loaded NOW.
+        self._join_info = join_info
+        # Optional hooks from harness/terrarium_boot.py: Control is itself a
+        # client (o2lite transport + ArcoSynthPool) of the hub a Room load
+        # brings up. restart_room_clients runs after a NO_ROOM -> Room load
+        # (D7 refuses a switch away from an already-loaded Room before
+        # either hook would run). stop_room_clients is retained as a
+        # constructor parameter for the day pyarco supports re-initializing
+        # against a new Arco; the agent does not call it. None (tests,
+        # embeddings without Arco clients) skips restart_room_clients.
+        self._stop_room_clients = stop_room_clients
+        self._restart_room_clients = restart_room_clients
         # Optional Callable[[], dict] of fixture name -> {cc: value}, from
         # DeviceLinkAgent.controllers(), for the Room panel's live
         # controllers read-out. None (a GameServer built the pre-Room way,
@@ -184,17 +202,20 @@ class ConsoleAgent:
             return None
         try:
             if isinstance(command, protocol.LoadBitCommand):
-                if (self.terrarium is not None
-                        and self.terrarium.state is not TerrariumState.ROOM_READY):
-                    return protocol.error_event(name, "no room loaded")
-                if self.registry is None:
-                    self.game_server.load_bit(command.name)
-                else:
+                cfg = None
+                if self.registry is not None:
                     try:
                         cfg = self.registry.resolve_config(
                             command.name, command.overrides)
                     except (ManifestError, KeyError) as exc:
                         return protocol.error_event(name, str(exc))
+                if self.terrarium is not None:
+                    reason = self._ensure_room_for_bit(command, cfg)
+                    if reason is not None:
+                        return protocol.error_event(name, reason)
+                if cfg is None:
+                    self.game_server.load_bit(command.name)
+                else:
                     self.game_server.load_bit(command.name, config=cfg)
             elif isinstance(command, protocol.RunCommand):
                 self.game_server.run()
@@ -233,6 +254,61 @@ class ConsoleAgent:
         if reason is not None:
             self.server.broadcast(protocol.room_load_failed_event(name, reason))
         return reason
+
+    def _ensure_room_for_bit(self, command, cfg) -> str | None:
+        """Spec 2026-09-10 section 4: bring the Terrarium to the Room a
+        load_bit asks for, or leave the active one alone. Returns a
+        refusal reason (None on success). Order matters: the support and
+        loadability checks run BEFORE any Room is touched, so a refused
+        request never costs an Arco restart or strands a live Room. D7: a
+        different target while a Room is already ROOM_READY is refused
+        outright, naming the ./terrarium.sh --room restart, rather than
+        unloading and reloading in-process -- pyarco cannot reconnect to a
+        second Arco in one process. Only a NO_ROOM start (no active Room to
+        replace) reaches _load_room below."""
+        terrarium = self.terrarium
+        active = (terrarium.room.name
+                  if terrarium.state is TerrariumState.ROOM_READY else None)
+        target = command.room if command.room is not None else active
+        if target is None:
+            return "no room loaded"
+        if cfg is not None and target not in cfg.launch.room_types:
+            return f"Bit {command.name!r} does not support room {target!r}"
+        if target == active:
+            return None
+        if terrarium.state not in (TerrariumState.NO_ROOM,
+                                   TerrariumState.ROOM_READY):
+            return (f"room is {terrarium.state.name.lower()}; try again "
+                    f"once it settles")
+        # D5: refuse an unloadable target BEFORE touching the active Room;
+        # otherwise a refused load_room would strand the operator in
+        # NO_ROOM. Same validate_rooms the Rooms panel's status column uses.
+        if target not in terrarium.config.rooms:
+            return f"unknown room {target!r}"
+        reasons = validate_rooms(
+            terrarium.config,
+            array_backend_configured=terrarium.boot_config.array_backend_configured)
+        if reasons.get(target) is not None:
+            return f"room {target!r} is not loadable: {reasons[target]}"
+        if terrarium.state is TerrariumState.ROOM_READY:
+            # D7 (2026-09-11): pyarco's arco.initialize() is a no-op once
+            # o2lite has ever synced and finish() cannot prepare a restart,
+            # so Control can talk to exactly one Arco per process. A Room
+            # switch would replace the hub underneath it; refuse up front
+            # and name the restart instead.
+            return (f"switching Rooms in a running Terrarium is not "
+                    f"supported yet: pyarco cannot reconnect to a new Arco "
+                    f"in one process; stop and run ./terrarium.sh --room "
+                    f"{target}")
+        reason = self._load_room(target)
+        if reason is not None:
+            return reason
+        if self._restart_room_clients is not None:
+            reason = self._restart_room_clients()
+            if reason is not None:
+                terrarium.unload_room(force=True)
+                return f"room clients failed to restart: {reason}"
+        return None
 
     def _handle_admin_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
@@ -552,6 +628,7 @@ class ConsoleAgent:
                 "capabilities": sorted(CAPABILITY_VOCABULARY),
                 "cue_kinds": list(CUE_KINDS),
             },
+            join=self._join_view(),
         )
 
     def _rooms_view(self) -> list:
@@ -570,6 +647,9 @@ class ConsoleAgent:
              "status": reasons.get(name), "active": name == active_name}
             for name, spec in self.terrarium.config.rooms.items()
         ]
+
+    def _join_view(self) -> dict | None:
+        return self._join_info() if self._join_info is not None else None
 
     def _current_room(self) -> dict | None:
         """Build the Room panel payload, or None when no Room is configured.
@@ -750,6 +830,11 @@ class ConsoleAgent:
             terrarium_state=terrarium_state))
         if new_state == State.UNLOADING:
             self._broadcast_bit_completed()
+        # The Join card reads the loaded Bit's nodes: it changes exactly
+        # when a Bit becomes loaded and when the engine returns to IDLE.
+        if (new_state in (State.LOADED, State.IDLE)
+                and self._join_info is not None):
+            self.server.broadcast(protocol.join_changed_event(self._join_info()))
 
     # --- terrarium observer callbacks ---------------------------------------
     def on_terrarium_state_change(self, old_state: TerrariumState,

@@ -142,3 +142,19 @@ def test_www_url_marker_is_distinct_from_every_other_marker():
     for other in others:
         assert not markers.WWW_URL.startswith(other)
         assert not other.startswith(markers.WWW_URL)
+
+
+def test_no_room_wait_marker_is_a_ready_marker_emitted_by_terrarium_boot():
+    assert markers.CONTROL_NO_ROOM_WAIT == \
+        "NO_ROOM: waiting for the Console to load a Room"
+    assert markers.READY_MARKERS["CONTROL_NO_ROOM_WAIT"] is \
+        markers.CONTROL_NO_ROOM_WAIT
+    import harness.terrarium_boot
+    assert "markers.CONTROL_NO_ROOM_WAIT" in inspect.getsource(
+        harness.terrarium_boot)
+
+
+def test_join_url_marker_value_and_emit_site():
+    assert markers.JOIN_URL == "JOIN_URL:"
+    import harness.terrarium_boot
+    assert "markers.JOIN_URL" in inspect.getsource(harness.terrarium_boot)

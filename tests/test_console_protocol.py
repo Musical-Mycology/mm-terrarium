@@ -481,3 +481,21 @@ def test_replay_result_event_shape():
 def test_restart_parses():
     cmd = protocol.parse_command({"command": "restart"})
     assert isinstance(cmd, protocol.RestartCommand)
+
+
+def test_snapshot_carries_join_and_defaults_it_to_none():
+    msg = protocol.snapshot_event(
+        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        registration=[], devices=[], bit_status={})
+    assert msg["join"] is None
+    join = {"www_url": "http://10.0.0.7:8788/app/", "nodes": []}
+    msg = protocol.snapshot_event(
+        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        registration=[], devices=[], bit_status={}, join=join)
+    assert msg["join"] == join
+
+
+def test_join_changed_event_shape():
+    join = {"www_url": "http://10.0.0.7:8788/app/", "nodes": []}
+    assert protocol.join_changed_event(join) == {"event": "join_changed",
+                                                 "join": join}

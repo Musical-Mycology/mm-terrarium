@@ -93,9 +93,10 @@ class StackConfig:
     settle_seconds: float = 5.0
     arco_ready_timeout: float = 60.0
     console_port: int | None = None   # None = no Terrarium Console
-    room_type: str = "TEST"
+    room_type: str | None = "TEST"    # None = boot to NO_ROOM (--no-bit only)
     config: str | None = None         # forwarded to terrarium_boot verbatim
-    bit: str = "TestBit"
+    bit: str | None = "TestBit"       # None = --no-bit
+    no_bit: bool = False              # forward --no-bit; no devices, no node
     node: str | None = None
     node_explicit: bool = False       # True iff --node was passed on the CLI
     devices_explicit: bool = False    # True iff --devices was passed
@@ -151,8 +152,12 @@ def control_command(cfg: StackConfig, ppid: int) -> list[str]:
     command += ["--www-port", str(cfg.www_port)]
     if cfg.config is not None:
         command += ["--config", cfg.config]
-    command += ["--room", cfg.room_type]
-    command += ["--bit", cfg.bit]
+    if cfg.room_type is not None:
+        command += ["--room", cfg.room_type]
+    if cfg.no_bit:
+        command += ["--no-bit"]
+    elif cfg.bit is not None:
+        command += ["--bit", cfg.bit]
     if cfg.profile is not None:
         # terrarium_boot re-parses the same file and applies the same
         # manifest < profile < CLI precedence for its own process's
@@ -236,6 +241,34 @@ def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
 _URL_PATTERN = re.compile(r"http://\S+")
 
 
+def _control_stages(cfg: StackConfig) -> tuple[tuple[str, str, str], ...]:
+    """The Control readiness gates run() waits on, in order, by mode.
+
+    A Bit run gates on the Room, the transport and the SETUP hold. A
+    --no-bit run with a Room has no SETUP (nothing is loaded), and a
+    --no-bit run without a Room has no Arco at all yet, so the only
+    evidence Control is up is its NO_ROOM wait line."""
+    room_loaded = (
+        "control-room-loaded", markers.CONTROL_ROOM_LOADED,
+        "Control never reported its Room loaded. Check arco.log for "
+        "a failed Arco start, and control.log for a load_room refusal.")
+    ready = (
+        "control-ready", markers.CONTROL_TRANSPORT_READY,
+        "Control never reported its o2lite transport up. Check "
+        "arco.log for a failed Arco start, and o2debug.log.")
+    setup = (
+        "control-setup", markers.CONTROL_SETUP_HOLD,
+        "Control came up but never opened registration.")
+    if cfg.no_bit and cfg.room_type is None:
+        return ((
+            "control-no-room-wait", markers.CONTROL_NO_ROOM_WAIT,
+            "Control never reached its NO_ROOM wait. Check control.log for "
+            "a failed Console or guest-page start."),)
+    if cfg.no_bit:
+        return (room_loaded, ready)
+    return (room_loaded, ready, setup)
+
+
 def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, getpid=os.getpid,
         opener=webbrowser.open, registry: BitRegistry | None = None
@@ -299,21 +332,7 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
         control = spawn("control", control_command(cfg, getpid()),
                         _watch_list("CONTROL_"))
 
-        for stage, marker, detail in (
-            # Gates on the Room finishing rather than boot completion, which
-            # it now precedes: harness/terrarium_boot.py's build() loads the
-            # Room (Arco, the simulator, the Room bridge) before it even
-            # starts the o2lite transport -- see control/terrarium.py's
-            # Terrarium.load_room.
-            ("control-room-loaded", markers.CONTROL_ROOM_LOADED,
-             "Control never reported its Room loaded. Check arco.log for "
-             "a failed Arco start, and control.log for a load_room refusal."),
-            ("control-ready", markers.CONTROL_TRANSPORT_READY,
-             "Control never reported its o2lite transport up. Check "
-             "arco.log for a failed Arco start, and o2debug.log."),
-            ("control-setup", markers.CONTROL_SETUP_HOLD,
-             "Control came up but never opened registration."),
-        ):
+        for stage, marker, detail in _control_stages(cfg):
             if not control.wait_for(marker, cfg.ready_timeout, clock, sleep):
                 return RunResult(False, stage, detail, logs, urls, room_urls)
 
@@ -612,6 +631,12 @@ def parse_args(argv=None):
                          "(bits/*/bit.toml). See --list-bits for what's "
                          "available. Default: the --profile's own "
                          "[run].bit, else TestBit.")
+    ap.add_argument("--no-bit", action="store_true",
+                    help="Stand up a clean Terrarium: no Bit, no spawned "
+                         "devices, --room optional (NO_ROOM without it). "
+                         "The Console loads Rooms and Bits. Refused with "
+                         "--bit, --profile, --node or --devices N>0. This "
+                         "is what ./terrarium.sh runs.")
     ap.add_argument("--profile", default=None, metavar="PATH",
                     help="A venue TOML (see profiles/dev-metronome.toml) "
                          "supplying launch defaults -- bit, room_type, "
@@ -651,10 +676,48 @@ def parse_args(argv=None):
         ap.error("--serve makes no sense under --ci: a headless CI run "
                  "needs a bounded hold, not one that runs until Ctrl-C or "
                  "a child exit.")
+    if args.no_bit and (args.bit is not None or args.profile is not None
+                        or args.node is not None):
+        ap.error("--no-bit loads no Bit, so --bit, --profile and --node "
+                 "have nothing to apply to")
+    if args.no_bit and args.devices:
+        ap.error("--no-bit spawns no devices: with no Bit there is no node "
+                 "for a Testshroom to join")
     return args
 
 
+def _bitless_config(args) -> StackConfig:
+    """config_from_args for --no-bit: no registry, no Bit manifest, no
+    profile, no node, zero devices. Everything else mirrors the Bit path
+    (log dir, CI bound, an unconditional ephemeral Console default, a
+    Console implying serve)."""
+    log_dir = args.log_dir or os.path.join(
+        "runs", time.strftime("%Y%m%d-%H%M%S"))
+    seconds = args.seconds
+    if seconds is None and args.ci:
+        seconds = CI_DEFAULT_SECONDS
+    # A Bit-less stack has nothing but the Console to drive it, and
+    # terrarium_boot --no-bit exits 1 without one, so default to an
+    # ephemeral Console (port 0) whenever neither --console-port nor
+    # --open specified one -- forwarding None would only produce a
+    # child-exited failure.
+    console_port = args.console_port if args.console_port is not None else 0
+    serve = args.serve or (console_port is not None and not args.ci)
+    return StackConfig(
+        log_dir=log_dir, arco_command=args.arco_command,
+        devices=0, ensemble=args.ensemble,
+        setup_seconds=args.setup_seconds, seconds=seconds,
+        horizon=args.horizon, echo=not args.ci,
+        console_port=console_port, room_type=args.room, config=args.config,
+        bit=None, no_bit=True, node=None,
+        open_urls=args.open, serve=serve,
+        persist_shrooms=args.persist_shrooms,
+        www_port=args.www_port, web_build=args.web_build)
+
+
 def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
+    if args.no_bit:
+        return _bitless_config(args)
     registry = registry if registry is not None else discover_registry(args.config)
 
     profile = RunProfile()

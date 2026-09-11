@@ -400,3 +400,24 @@ def test_arco_ready_timeout_defaults_to_the_room_spec_value():
     terrarium = make_terrarium(arco_process_cls=RecordingArco)
     assert terrarium.load_room("TEST") is None
     assert seen == [terrarium.config.rooms["TEST"].arco_ready_timeout]
+
+
+def test_loading_room_is_set_only_during_load_room():
+    seen = []
+
+    def factory(teardown, fixture):
+        seen.append(terrarium.loading_room)
+        return f"sim-{fixture}-dev"
+
+    terrarium = make_terrarium(simulator_factory=factory)
+    assert terrarium.loading_room is None
+    assert terrarium.load_room("TEST") is None
+    assert seen == ["TEST", "TEST"]        # one call per fixture, both mid-load
+    assert terrarium.loading_room is None
+
+
+def test_loading_room_is_cleared_after_a_failed_load():
+    terrarium = make_terrarium(
+        ownership_probe=lambda: "another Console owns this room")
+    assert terrarium.load_room("TEST") is not None
+    assert terrarium.loading_room is None

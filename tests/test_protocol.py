@@ -190,3 +190,23 @@ def test_error_event_shape():
     assert error_event("run", "requires SETUP") == {
         "event": "error", "command": "run", "message": "requires SETUP",
     }
+
+
+def test_load_bit_command_parses_an_optional_room():
+    from uplink.protocol import LoadBitCommand, parse_command
+    cmd = parse_command({"command": "load_bit", "name": "TestBit",
+                         "room": "DEMO"})
+    assert cmd == LoadBitCommand(name="TestBit", overrides=None, room="DEMO")
+
+
+def test_load_bit_command_room_defaults_to_none():
+    from uplink.protocol import parse_command
+    cmd = parse_command({"command": "load_bit", "name": "TestBit"})
+    assert cmd.room is None
+
+
+def test_load_bit_command_rejects_a_non_string_room():
+    import pytest
+    from uplink.protocol import parse_command
+    with pytest.raises(ValueError):
+        parse_command({"command": "load_bit", "name": "TestBit", "room": 7})
