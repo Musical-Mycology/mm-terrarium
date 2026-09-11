@@ -70,9 +70,8 @@ SETUP stays the engine state. Inside SETUP a new pure module,
   3. Key mismatch for a keyed source: refused, `"bad key"`. Logged on the
      Console with the source; **no room reaction at all**, so a stranger
      scanning an old poster cannot make the fixtures react.
-  4. Admin source (a `source_dev` in the terrarium `[admin] devices`
-     list, or the Console, or the uplink): start unconditionally, even
-     with zero scored players.
+  4. Admin source (`gs.is_admin(source_dev)`, section 3): start
+     unconditionally, even with zero scored players.
   5. Otherwise the Bit's rule: scored count below a positive `min_scored`
      is refused, `"minimum not met"`; absent or zero `min_scored` allows a
      start with no scored players.
@@ -94,8 +93,8 @@ All three adapters are a few lines each and call `request_start`.
 |---|---|---|---|---|
 | Web | `GET /start?key=<key>[&dev=<GemID>]` on the LAN static server (port 8788) | `web:<dev>` or `web:anonymous` | required | if `dev` is listed |
 | Device | `/game/start "ss" dev key` | `device:<dev>` | required | if `dev` is listed |
-| Console | existing `run` command | `console` | none | always |
-| Uplink | existing `run` command | `uplink` | none | always |
+| Console | existing `run` command | `console` | none | always (`source_dev = "terrarium"`) |
+| Uplink | existing `run` command | `uplink` | none | always (`source_dev = "terrarium"`) |
 
 - **Web.** `harness/www_server.py` gains one route. QR codes and NFC tags
   carry that URL, so a phone's browser is the adapter. The handler runs on
@@ -103,8 +102,12 @@ All three adapters are a few lines each and call `request_start`.
   `(key, dev)` on a bounded queue and answers `202 Accepted` at once. The
   device-link agent drains the queue on its tick and calls `request_start`.
   The MycoQuest app appends `dev=<GemID>` when it opens the URL; a poster
-  scan is anonymous. Only `GET` is served; the response body is plain
-  text and never echoes the key.
+  scan is anonymous. A request whose peer address is the box's own
+  loopback address is the Terrarium itself: the handler substitutes
+  `source_dev = "terrarium"` and the source label `web:terrarium`,
+  matching the loopback trust the Console already has and giving the CI
+  start-after-grant path (section 7) the override. Only `GET` is served;
+  the response body is plain text and never echoes the key.
 - **Device.** The agent recognises the `start` verb before the engine's
   verb dispatch and routes it to `request_start` with the hello'd dev, so
   no Bit needs a `start` handler and the engine's "unregistered device"
@@ -112,13 +115,25 @@ All three adapters are a few lines each and call `request_start`.
   player). The encoder lives in `devicelink/protocol.py` with the other
   wire rows.
 - **Console and uplink.** Their existing `run` handlers call
-  `request_start(None, None, "console"|"uplink")` instead of `gs.run()`.
-  A refusal becomes the usual `error` event.
+  `request_start(None, "terrarium", "console"|"uplink")` instead of
+  `gs.run()`. A refusal becomes the usual `error` event.
+- **The Terrarium is a built-in admin device.** `control/lobby.py`
+  declares `TERRARIUM_ADMIN = "terrarium"`, a reserved dev id that is
+  always in the effective admin set and can never be removed by config.
+  It is the identity the Console, the uplink, and a loopback web hit carry,
+  so the Terrarium's own operator surfaces go through the same rule as an
+  admin instrument rather than around it. `TERRARIUM_ADMIN` is refused as
+  a hello'd dev id at the transport, so no device can impersonate the box.
 - **Admin identity.** `terrarium.toml` gains `[admin] devices = [...]`, a
-  list of dev ids (GemIDs) that count as admin instruments. The Terrarium
-  cannot verify who holds a dev id; the device wire and the static server
-  carry no auth, the same trusted-LAN model the Console already runs on,
-  and the spec records that plainly. Absent list means no admin override.
+  list of dev ids (GemIDs) that count as admin instruments in addition to
+  the built-in one. The Terrarium cannot verify who holds a dev id; the
+  device wire and the static server carry no auth, the same trusted-LAN
+  model the Console already runs on, and the spec records that plainly.
+  An absent list means the Terrarium itself is the only admin.
+- **`GameServer.is_admin(dev) -> bool`** exposes the effective set (the
+  built-in identity plus the configured list) to Bits and to the Console,
+  so a Bit can gate admin-only behaviour on the same answer the start rule
+  uses and the Console can label admin devices in its device list.
 - **`/game/start` and the web URL are the same thing.** A tap on an admin
   instrument, an NFC tap, and a QR scan all end in the one function; there
   is exactly one piece of start logic to maintain.
@@ -237,9 +252,11 @@ double_tap_window_s = 1.5
 devices = ["gem-0001", "gem-0002"]
 ```
 
-A non-string entry is a located `TerrariumConfigError`. The list is threaded
-into `GameServer` at construction by `harness/terrarium_boot.py`, the same
-way the carried-instrument catalog is.
+A non-string entry is a located `TerrariumConfigError`, and listing the
+reserved `"terrarium"` id is a located error too (it is always present).
+The list is threaded into `GameServer` at construction by
+`harness/terrarium_boot.py`, the same way the carried-instrument catalog
+is; `GameServer.is_admin` unions it with `TERRARIUM_ADMIN`.
 
 **MetronomeBit** (`bits/metronome/bit.toml`): `when = "admin"`, `key =
 "metro-dev"`, `min_scored = 2` unchanged, `timeout_seconds` removed.
@@ -262,7 +279,8 @@ window still self-starts.
 - **`run_stack --ci`** gains `--start-after-grant`: once every spawned
   device has reported `DEVICE_ROLE_GRANTED`, it performs an HTTP GET on
   the collected `START_URL` with the key read from the resolved manifest,
-  the same adapter a phone uses. `./smoke-test.sh --ci --profile
+  the same adapter a phone uses; because it runs on the box the hit is
+  loopback and carries the Terrarium's own admin identity. `./smoke-test.sh --ci --profile
   profiles/dev-metronome.toml` passes the flag.
 - **Testshroom** (`harness/o2_shroom.py`) gains `--handshake`: hello, no
   join, render invite frames, send a count-2 tap on the first invite. It
@@ -297,8 +315,12 @@ rule 5):
   `request_start` from an un-joined device; `tap` from an invited device
   is intercepted, from anyone else refused.
 - Config tests: `[start] key` required for `admin`, `[lobby]` defaults,
-  `[admin] devices` parsing and located errors, `start_decision` for
-  `admin` with and without a timeout.
+  `[admin] devices` parsing and located errors (including the reserved
+  id), `start_decision` for `admin` with and without a timeout.
+- Admin identity tests: `is_admin("terrarium")` is true with no config;
+  the Console and uplink `run` start with zero players on an admin Bit;
+  a loopback `/start` hit is treated as the Terrarium and a LAN-address
+  hit is not; a hello with dev `"terrarium"` is refused.
 - Console tests: `lobby_changed`, the Start row, the start log lines.
 
 **Live gate on MYCOLOGICAL**, to be recorded in this section when run:
