@@ -1990,3 +1990,89 @@ def test_no_join_changed_without_a_provider():
     gs.load_bit("TestBit")
     gs.abort()
     assert [m for m in srv.broadcasts if m.get("event") == "join_changed"] == []
+
+
+def test_room_switch_stops_clients_before_unload_and_restarts_after_load():
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    calls = []
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(
+        terrarium.gs, srv, registry=_testbit_registry(), terrarium=terrarium,
+        stop_room_clients=lambda: calls.append(("stop", terrarium.room.name)),
+        restart_room_clients=lambda: calls.append(("restart", terrarium.room.name)) or None)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "DEMO"})
+    agent.poll()
+    assert _errors(srv) == []
+    assert calls == [("stop", "TEST"), ("restart", "DEMO")]
+    assert terrarium.gs.state.name == "SETUP"
+
+
+def test_room_load_from_no_room_restarts_clients_without_a_stop():
+    terrarium = _two_room_terrarium()
+    calls = []
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(
+        terrarium.gs, srv, registry=_testbit_registry(), terrarium=terrarium,
+        stop_room_clients=lambda: calls.append("stop"),
+        restart_room_clients=lambda: calls.append("restart") or None)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "TEST"})
+    agent.poll()
+    assert _errors(srv) == []
+    assert calls == ["restart"]
+
+
+def test_a_failed_client_restart_unloads_the_room_and_refuses():
+    terrarium = _two_room_terrarium()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(
+        terrarium.gs, srv, registry=_testbit_registry(), terrarium=terrarium,
+        restart_room_clients=lambda: "clock never synced")
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "TEST"})
+    agent.poll()
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "room clients failed to restart: "
+                                        "clock never synced"}]
+    assert terrarium.state == TerrariumState.NO_ROOM
+    assert terrarium.gs.state.name == "IDLE"
+
+
+def test_load_bit_refuses_an_unloadable_room_before_unloading_the_active_one():
+    """D5: from a boot with no array backend, DEMO is not loadable; the
+    active TEST Room must survive the refusal."""
+    from control.boot_config import BootConfig
+    terrarium = make_terrarium(
+        config=make_config(rooms={"TEST": TEST_SPEC, "DEMO": DEMO_SPEC}),
+        gs=GameServer({"TestBit": TestBit}),
+        boot_config=BootConfig(room_name="TEST", bit_name="TestBit"))
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, registry=_testbit_registry(),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "DEMO"})
+    agent.poll()
+    errors = _errors(srv)
+    assert len(errors) == 1
+    assert errors[0]["message"].startswith("room 'DEMO' is not loadable: ")
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.name == "TEST"
+    assert _events(srv, "room_unloaded") == []
+
+
+def test_load_bit_refuses_an_unknown_room_before_touching_anything():
+    terrarium = _two_room_terrarium()
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv,
+                         registry=_testbit_registry(room_types=["TEST", "DEMO", "ATRIUM"]),
+                         terrarium=terrarium)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "load_bit", "name": "TestBit", "room": "ATRIUM"})
+    agent.poll()
+    assert _errors(srv) == [{"event": "error", "command": "load_bit",
+                             "message": "unknown room 'ATRIUM'"}]
+    assert terrarium.room.name == "TEST"

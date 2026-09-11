@@ -40,7 +40,8 @@ class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_controllers=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
                  terrarium=None, catalog_root=None, bench_session_factory=None,
-                 captures_root=None, rooms_root=None, join_info=None):
+                 captures_root=None, rooms_root=None, join_info=None,
+                 stop_room_clients=None, restart_room_clients=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
@@ -87,6 +88,14 @@ class ConsoleAgent:
         # events. Called at snapshot time and on every LOADED / IDLE
         # transition, so it always reads the Bit that is loaded NOW.
         self._join_info = join_info
+        # Optional hooks from harness/terrarium_boot.py: Control is itself a
+        # client (o2lite transport + ArcoSynthPool) of the hub a Room switch
+        # replaces, so the switch must stop those clients before the unload
+        # and restart them after the load, the same order the dormant
+        # _recycle_room seam documents. None (tests, embeddings without
+        # Arco clients) skips both.
+        self._stop_room_clients = stop_room_clients
+        self._restart_room_clients = restart_room_clients
         # Optional Callable[[], dict] of fixture name -> {cc: value}, from
         # DeviceLinkAgent.controllers(), for the Room panel's live
         # controllers read-out. None (a GameServer built the pre-Room way,
@@ -266,14 +275,34 @@ class ConsoleAgent:
                                    TerrariumState.ROOM_READY):
             return (f"room is {terrarium.state.name.lower()}; try again "
                     f"once it settles")
+        # D5: refuse an unloadable target BEFORE touching the active Room;
+        # otherwise a refused load_room would strand the operator in
+        # NO_ROOM. Same validate_rooms the Rooms panel's status column uses.
+        if target not in terrarium.config.rooms:
+            return f"unknown room {target!r}"
+        reasons = validate_rooms(
+            terrarium.config,
+            array_backend_configured=terrarium.boot_config.array_backend_configured)
+        if reasons.get(target) is not None:
+            return f"room {target!r} is not loadable: {reasons[target]}"
         gs = self.game_server
         if gs.state is not State.IDLE:
             gs.abort()
         if terrarium.state is TerrariumState.ROOM_READY:
+            if self._stop_room_clients is not None:
+                self._stop_room_clients()
             reason = terrarium.unload_room(force=True)
             if reason is not None:
                 return reason
-        return self._load_room(target)
+        reason = self._load_room(target)
+        if reason is not None:
+            return reason
+        if self._restart_room_clients is not None:
+            reason = self._restart_room_clients()
+            if reason is not None:
+                terrarium.unload_room(force=True)
+                return f"room clients failed to restart: {reason}"
+        return None
 
     def _handle_admin_command(self, msg: dict) -> dict | None:
         name = msg.get("command")

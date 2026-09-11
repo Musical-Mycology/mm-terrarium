@@ -1708,7 +1708,9 @@ def main() -> None:
                                          rooms_root=rooms_root,
                                          bench_session_factory=bench_session_factory,
                                          captures_root=Path("captures"),
-                                         join_info=join_info)
+                                         join_info=join_info,
+                                         stop_room_clients=stop_clients,
+                                         restart_room_clients=restart_clients)
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
