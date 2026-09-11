@@ -87,6 +87,12 @@ class LobbyRuntime:
                 self._s.feed_audio(name, 0xC0, int(self._room_program), 0)
         self._queue = TimedQueue()
         self._invites.clear()
+        self._taps.clear()
+        # The de-dupe caches are what a restarted lobby would otherwise
+        # measure its first frame against, silencing the opening breath
+        # and hue feeds.
+        self._last_light.clear()
+        self._last_audio.clear()
 
     def set_state(self, state: LobbyState) -> None:
         if state is self._state:

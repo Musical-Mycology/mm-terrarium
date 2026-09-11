@@ -1283,3 +1283,29 @@ def test_handshake_devices_get_the_flag(tmp_path):
     cfg = _cfg(tmp_path, devices=2, handshake_devices=1)     # use the file's config helper
     assert "--handshake" in device_command(cfg, 1, 1)
     assert "--handshake" not in device_command(cfg, 2, 1)
+
+
+def test_ci_implies_start_after_grant_for_an_admin_start_bit(
+        metronome_enabled_registry):
+    """MetronomeBit starts on an admin hit and never leaves SETUP on its
+    own, so `smoke-test.sh --ci` on it would otherwise sit out its window
+    and exit green without ever running a round."""
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--bit", "MetronomeBit"])
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).start_after_grant is True
+
+
+def test_no_start_after_grant_opts_out_under_ci(metronome_enabled_registry):
+    from harness.run_stack import config_from_args, parse_args
+    args = parse_args(["--ci", "--bit", "MetronomeBit",
+                       "--no-start-after-grant"])
+    assert config_from_args(
+        args, registry=metronome_enabled_registry).start_after_grant is False
+
+
+def test_ci_does_not_imply_start_after_grant_for_a_non_admin_bit():
+    """TestBit's start condition is not admin, so --ci changes nothing."""
+    from harness.run_stack import config_from_args, parse_args
+    assert config_from_args(
+        parse_args(["--ci"])).start_after_grant is False

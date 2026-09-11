@@ -239,3 +239,16 @@ def test_handshake_ignores_a_default_join_role_that_is_not_scored(monkeypatch):
     server.deliver("c1", "/game/tap", "sffi", ["ie1", 1.0, 50.0, 2], timestamp=clk.t)
     agent.poll()
     assert gs.registration.assignments["ie1"][0] == "TEST_PLAYER_NODE"
+
+
+def test_accept_flash_is_gated_on_the_lobby_being_enabled(monkeypatch):
+    """[lobby] enabled = false means no room reaction at all, including
+    the green accept flash. The runtime is already gone on accept, so the
+    gate has to be the config."""
+    cfg = _admin_cfg()
+    cfg = replace(cfg, lobby=replace(cfg.lobby, enabled=False))
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, cfg)
+    gs.request_start(None, TERRARIUM_ADMIN, "console")
+    assert gs.state is State.RUNNING
+    agent.poll()
+    assert agent._overrides == {}

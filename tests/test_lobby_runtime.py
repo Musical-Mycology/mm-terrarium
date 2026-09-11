@@ -221,3 +221,23 @@ def test_double_tap_from_an_invited_device_requests_the_join():
     assert rt.observe_tap("ie9", 2, 60.0, "c9") is False     # never invited
     rt.forget("ie3")
     assert not rt.is_invited("ie3")
+
+
+def test_stop_then_start_feeds_the_first_breath_and_hue_again():
+    """stop() has to reset the de-dupe caches and the tap detector, not
+    just the queue: a restarted lobby whose opening frame repeats the
+    values the old one last sent would come up silent and dark, because
+    the caches still hold them."""
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.tick()
+    rt.stop()
+    n_light, n_ctrl = len(sinks.light), len(sinks.controls)
+    rt.start()                                  # same clock: t is 0.0 again
+    rt.tick()
+    fresh_light = sinks.light[n_light:]
+    fresh_ctrl = sinks.controls[n_ctrl:]
+    for name in ("main", "accent"):
+        assert (name, 0xB0, HUE_CC, hue_drift_cc(0.0)) in fresh_light
+        assert (name, 0xB0, BREATH_CC, breath_cc(0.0)) in fresh_light
+        assert (name, BREATH_CC, breath_cc(0.0)) in fresh_ctrl

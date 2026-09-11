@@ -1483,7 +1483,11 @@ class DeviceLinkAgent:
         on_state_change has already torn the lobby down, so it rides the
         agent's own flash path; every refusal still has a live lobby."""
         if record.feedback == "accept":
-            self._flash_fixtures_now(GREEN, 1)
+            # The runtime is already torn down on accept, so the gate is
+            # the config, not self._lobby: a Bit with [lobby] enabled =
+            # false gets no room reaction at all.
+            if self.game_server.lobby_config().enabled:
+                self._flash_fixtures_now(GREEN, 1)
         elif self._lobby is not None:
             self._lobby.feedback(record.feedback)
 

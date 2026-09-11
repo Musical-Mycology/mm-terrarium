@@ -356,3 +356,12 @@ room reaction; a start with one player gives two red flashes.
 - **Testshroom handshake.** The invite is detected as a solid white frame
   (every byte >= 200) and answered with one count-2 tap, re-armed at most
   every 2 s.
+- **No `/game/start` encoder.** `devicelink/protocol.py` gained no encoder
+  for `/game/start`: that module carries no inbound-verb encoders at all,
+  so adding one for start alone would have been the odd entry out. The
+  wire row (`/game/start "ss" dev key`) is documented on the Join card and
+  built by `control/join_info.py`.
+- **Accept flash gating.** The green accept flash is gated on `[lobby]
+  enabled`: a Bit that turned the lobby off gets no room reaction on
+  accept either. The gate reads the config rather than the runtime,
+  because RUNNING has already torn the runtime down by then.

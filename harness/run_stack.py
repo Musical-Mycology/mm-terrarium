@@ -704,7 +704,12 @@ def parse_args(argv=None):
     ap.add_argument("--start-after-grant", action="store_true",
                     help="Once every spawned device is granted a role, GET the "
                          "START_URL Control printed (rewritten to loopback, so "
-                         "the hit carries the Terrarium's own admin identity).")
+                         "the hit carries the Terrarium's own admin identity). "
+                         "Implied under --ci when the resolved Bit's start.when "
+                         "is \"admin\"; pass --no-start-after-grant to opt out.")
+    ap.add_argument("--no-start-after-grant", action="store_true",
+                    help="Suppress the start-after-grant implied under --ci for "
+                         "an admin-start Bit: the run holds in SETUP instead.")
     ap.add_argument("--handshake-devices", type=int, default=0,
                     help="The first N spawned Testshrooms join via the lobby "
                          "handshake (--handshake) instead of an explicit join.")
@@ -822,6 +827,15 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
     # parse time above, so `not args.ci` here is just documenting that
     # invariant, not re-deriving it.
     serve = args.serve or (console_port is not None and not args.ci)
+    # An admin-start Bit never leaves SETUP on its own, so a CI run of one
+    # would sit out its window and exit green without ever running. Under
+    # --ci that implies the start-after-grant hit, unless the caller opted
+    # out explicitly. Non-CI runs and non-admin Bits are untouched, and
+    # --handshake-devices stays an explicit choice.
+    start_after_grant = args.start_after_grant
+    if (args.ci and bit_cfg.start.when == "admin"
+            and not args.no_start_after_grant):
+        start_after_grant = True
     return StackConfig(
         log_dir=log_dir, arco_command=args.arco_command,
         devices=devices, ensemble=args.ensemble,
@@ -834,7 +848,7 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         serve=serve,
         persist_shrooms=args.persist_shrooms,
         www_port=args.www_port, web_build=args.web_build,
-        start_after_grant=args.start_after_grant,
+        start_after_grant=start_after_grant,
         handshake_devices=args.handshake_devices)
 
 

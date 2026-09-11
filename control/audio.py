@@ -23,6 +23,7 @@ from __future__ import annotations
 import time
 from typing import Protocol
 
+from control.lobby import BELL_PROGRAM, BELL_VEL, NOTE_SCALE
 from control.roles import Role
 
 _CC_PREFIX = "cc:"
@@ -36,7 +37,9 @@ _CC_PREFIX = "cc:"
 # DEFAULT_SOUNDFONT comment; a non-GM soundfont cost real debugging time here).
 WELCOME_INSTRUMENTS: dict[str, tuple[int, int, int]] = {
     "chime": (9, 84, 88),        # 9 = Glockenspiel (General MIDI)
-    "bell": (14, 69, 100),       # 14 = Tubular Bells; the lobby's join bell
+    # The lobby owns the join bell's numbers (control/lobby.py): program 14
+    # is Tubular Bells and the key is the bottom of the lobby note scale.
+    "bell": (BELL_PROGRAM, NOTE_SCALE[0], BELL_VEL),
 }
 
 _DEFAULT_WELCOME_DURATION = 1.5

@@ -188,6 +188,9 @@ class DoubleTapDetector:
     def forget(self, dev: str) -> None:
         self._last.pop(dev, None)
 
+    def clear(self) -> None:
+        self._last.clear()
+
 
 class InviteSchedule:
     """When to (re)flash an invite: now on first sight, then every

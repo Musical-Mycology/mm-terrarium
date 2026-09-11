@@ -136,7 +136,10 @@ def parse_terrarium_config(text: str, source: str,
                                    message="required non-empty string")
     bit_paths = tuple(terr.get("bit_paths", ["bits"]))
     admin_raw = raw.get("admin", {})
-    devices_raw = admin_raw.get("devices", []) if isinstance(admin_raw, dict) else []
+    if not isinstance(admin_raw, dict):
+        raise TerrariumConfigError(source=source, key="admin",
+                                   message="expected a table")
+    devices_raw = admin_raw.get("devices", [])
     if not isinstance(devices_raw, list) or not all(
             isinstance(d, str) and d for d in devices_raw):
         raise TerrariumConfigError(source=source, key="admin.devices",

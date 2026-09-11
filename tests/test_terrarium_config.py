@@ -764,3 +764,9 @@ def test_admin_devices_refuses_non_strings_and_the_reserved_id():
             MINIMAL + "\n[admin]\ndevices = [\"terrarium\"]\n", source="t")
     assert err.value.key == "admin.devices"
     assert "always" in str(err.value)
+
+
+def test_admin_must_be_a_table():
+    with pytest.raises(TerrariumConfigError) as err:
+        parse_terrarium_config('admin = "gem-1"\n' + MINIMAL, source="t")
+    assert err.value.key == "admin"
