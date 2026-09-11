@@ -7,6 +7,7 @@ import time
 
 from control.bit_config import ManifestError
 from control.engine import BitLoadError, GameServer, InvalidTransition
+from control.lobby import TERRARIUM_ADMIN
 from control.rooms import non_room_counts
 from control.state import State
 from control.terrarium import TerrariumState
@@ -139,7 +140,10 @@ class UplinkAgent:
                         return
                     self.game_server.load_bit(command.name, config=cfg)
             elif isinstance(command, protocol.RunCommand):
-                self.game_server.run()
+                reason = self.game_server.request_start(None, TERRARIUM_ADMIN,
+                                                        "uplink")
+                if reason is not None:
+                    self._send(protocol.error_event(command_name, reason))
             elif isinstance(command, protocol.AbortCommand):
                 self.game_server.abort()
         except (InvalidTransition, BitLoadError) as exc:

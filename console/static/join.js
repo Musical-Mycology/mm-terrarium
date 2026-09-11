@@ -89,6 +89,20 @@ export function render(info) {
     block.appendChild(lineWithCopy(row.tuneshroom_cmd));
     card.appendChild(block);
   }
+  if (info.start) {
+    const block = mk("div", "joinnode");
+    block.appendChild(mk("h4", null, "Start (admin)"));
+    if (info.start.qr_svg) {
+      const qr = mk("div", "qr");
+      qr.innerHTML = info.start.qr_svg;   // server-rendered segno SVG, trusted local Console
+      block.appendChild(qr);
+    }
+    block.appendChild(lineWithCopy(info.start.url));
+    block.appendChild(mk("p", "meta", "Key (also accepted on the device wire):"));
+    block.appendChild(lineWithCopy(info.start.key));
+    block.appendChild(lineWithCopy(info.start.wire));
+    card.appendChild(block);
+  }
   card.appendChild(mk("p", "muted", info.native_note || ""));
 }
 
