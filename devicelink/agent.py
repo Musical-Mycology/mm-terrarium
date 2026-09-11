@@ -20,6 +20,7 @@ Boundary rule 2: nothing in here may propagate into the engine tick.
 from __future__ import annotations
 
 import logging
+import queue
 from dataclasses import dataclass, field, replace
 
 from control.breath import BREATH_CC, breath_cc
@@ -29,6 +30,8 @@ from control.fixture_sink import ConsoleFrameSink, DeviceLinkSink
 from control.functions import FunctionKind
 from control.generator_runner import GeneratorRunner
 from control.instrument import fixture_ambient
+from control.lobby import (GREEN, TERRARIUM_ADMIN, LobbyState, StartRequest,
+                           lobby_light_manifest)
 from control.role_config import compose_role_config, slice_light_manifest
 from control.roles import Role, RoleClass
 from control.room_profile import RoomProfile
@@ -36,6 +39,7 @@ from control.rooms import room_role_name
 from control.state import State
 from control.timed_queue import TimedQueue
 from devicelink import protocol
+from devicelink.lobby_runtime import LobbyRuntime, LobbySinks
 from harness.device_bridge import DeviceBridge
 from harness.room_surface import to_fixture_capability
 from luxaeterna.synth.director import CLOSING
@@ -52,6 +56,12 @@ logger = logging.getLogger(__name__)
 # frames, ~1s at 44Hz) for the analogous per-binding guard this mirrors. 200
 # frames is generous headroom over the ~0.6s sys:closing signature.
 _MAX_CLOSING_FRAMES = 200
+
+# One player device's frame width: 12 pixels x 3 channels. The same figure
+# harness/shroom_client.py calls LED_CHANNELS -- named here because
+# _render_frames needs a black frame of exactly that width for a device
+# that has no session to render one.
+_DEVICE_CHANNELS = 36
 
 
 @dataclass
@@ -217,6 +227,22 @@ class DeviceLinkAgent:
         # and changes nothing else.
         self._on_room_frame = on_room_frame
         self._on_join_denied = on_join_denied
+        # Lobby (spec 4, 5): alive only while the engine is in SETUP and
+        # the loaded Bit's [lobby] enabled is true. Built by _enter_lobby.
+        self._lobby: LobbyRuntime | None = None
+        self._lobby_known: set[str] = set()
+        # devs with no session of their own (hello'd, never joined -- the
+        # ones the lobby invites) that currently show a non-black override
+        # frame and so still owe one black frame when it expires. Kept
+        # separately from _last_frames because _invalidate_frame POPS that
+        # entry the moment the override lapses, which would otherwise drop
+        # the device out of _render_frames' override-only pass before the
+        # blackout ever went out.
+        self._override_only: set[str] = set()
+        # Web starts (harness/www_server.py) arrive on the server thread
+        # and are drained here, on the tick thread, so the engine is only
+        # ever touched from one thread.
+        self.start_requests: queue.Queue[StartRequest] | None = None
         self._setup_room()
         game_server.add_observer(self)
         game_server.on_release = self._on_release
@@ -249,7 +275,8 @@ class DeviceLinkAgent:
                 if role is not None else None)
         for fixture in profile.fixtures:
             if blob is not None:
-                light = slice_light_manifest(blob["light_manifest"], profile, fixture.name)
+                light = slice_light_manifest(blob["light_manifest"], profile,
+                                             fixture.name)
                 generators = None
             else:
                 light, _ugen = fixture_ambient(fixture)
@@ -275,6 +302,199 @@ class DeviceLinkAgent:
         if blob is None:
             self._ambient_start = self._clock()
         self._grant_room_audio(role)
+
+    def _bit_fixture_light(self, fixture_name: str) -> dict | None:
+        """The loaded Bit's ROOM light declaration sliced for one fixture,
+        or None when no Bit ROOM role is loaded."""
+        gs = self.game_server
+        room = gs.room
+        if room is None or gs.registration is None:
+            return None
+        role = gs.registration.role_table.roles.get(room_role_name(room.name))
+        if role is None:
+            return None
+        blob = compose_role_config(gs.bit_name, gs.bit.version, role)
+        return slice_light_manifest(blob["light_manifest"], self._room_profile,
+                                    fixture_name)
+
+    def _bit_room_program(self) -> int | None:
+        """The program number the Bit's ROOM role declares on its first
+        instrument -- what the lobby restores when it stops, so the Room's
+        own voice is back before the Bit's drone starts."""
+        gs = self.game_server
+        if gs.room is None or gs.registration is None:
+            return None
+        role = gs.registration.role_table.roles.get(room_role_name(gs.room.name))
+        if role is None:
+            return None
+        instruments = role.ugen_manifest.get("instruments", [])
+        if not instruments or instruments[0].get("program") is None:
+            return None
+        return int(instruments[0]["program"])
+
+    # --- the lobby (spec sections 4 and 5) ---------------------------------
+    def _enter_lobby(self) -> None:
+        """SETUP entry: swap every fixture to the lobby's own manifest and
+        stand up a fresh LobbyRuntime. One runtime per SETUP -- it is
+        dropped whole on exit, so nothing from a previous wait can leak
+        into the next one."""
+        gs = self.game_server
+        if self._lobby is not None or not self._fixtures or gs.room is None:
+            return
+        if not gs.lobby_config().enabled:
+            return
+        manifest = LightManifest.from_dict(lobby_light_manifest())
+        for st in self._fixtures.values():
+            st.session.swap(manifest)
+        self._lobby = LobbyRuntime(gs.lobby_config(), self._lobby_sinks(),
+                                   self._clock,
+                                   room_program=self._bit_room_program())
+        self._lobby_known = set(gs.registration.assignments) if gs.registration else set()
+        self._lobby.start()
+        self._sync_lobby_state()
+
+    def _exit_lobby(self, *, restore_light: bool) -> None:
+        """Tear the runtime down. `restore_light` swaps each fixture back to
+        the Bit's own ROOM declaration -- right on the way into RUNNING,
+        wrong on an unload, where _setup_room rebuilds the sessions anyway
+        and the Bit whose declaration this would restore is going away."""
+        lobby, self._lobby = self._lobby, None
+        if lobby is None:
+            return
+        lobby.stop()
+        if restore_light:
+            for name, st in self._fixtures.items():
+                light = self._bit_fixture_light(name)
+                if light is not None:
+                    st.session.swap(LightManifest.from_dict(light))
+
+    def _sync_lobby_state(self) -> None:
+        if self._lobby is None:
+            return
+        name = self.game_server.lobby_state()
+        if name is not None:
+            self._lobby.set_state(LobbyState[name])
+
+    def _lobby_sinks(self) -> LobbySinks:
+        """Every effect the lobby can have, bound to this agent's own seams.
+        LobbyRuntime holds nothing but these, so it never touches a session,
+        a voice, or the wire itself."""
+        gs = self.game_server
+
+        def feed_light(name, status, d1, d2):
+            st = self._fixtures.get(name)
+            dev = gs.room.bound.get(name) if gs.room is not None else None
+            if st is None or (dev is not None and dev in self._muted):
+                return
+            try:
+                st.session.feed_midi(status, d1, d2)
+            except Exception:
+                logger.exception("lobby light feed for %s failed", name)
+
+        def feed_audio(name, status, d1, d2):
+            if self._room_audio is not None and name in self._room_audio_fixtures:
+                self._room_audio.feed_midi(name, status, d1, d2)
+
+        def set_audio_control(name, cc, value):
+            if self._room_audio is not None and name in self._room_audio_fixtures:
+                self._room_audio.set_control(name, cc, value)
+
+        def play_note(program, key, vel, duration):
+            if self._room_audio is not None:
+                self._room_audio.play_note(program, key, vel, duration)
+
+        def set_override(dev, rgb, level, duration):
+            self._on_solid_cue(dev, rgb, level, duration, self._clock())
+
+        def send_play(dev, name, params):
+            if dev not in self._muted:
+                self._send(dev, protocol.play_event(dev, name, params))
+
+        return LobbySinks(
+            fixture_names=lambda: list(self._fixtures),
+            bound_dev=lambda name: (gs.room.bound.get(name)
+                                    if gs.room is not None else None),
+            feed_light=feed_light, feed_audio=feed_audio,
+            set_audio_control=set_audio_control, play_note=play_note,
+            set_override=set_override, send_play=send_play,
+            request_join=self._handshake_join,
+            announce=gs.notify_lobby)
+
+    def _handshake_join(self, dev: str, client) -> None:
+        """A double tap from an invited device joins it, exactly as if the
+        device had sent /game/join itself."""
+        node = self._default_scored_node()
+        if node is None:
+            logger.warning("handshake for %s: the Bit declares no scored node",
+                           dev)
+            return
+        self._on_join(client, dev, [dev, node])
+
+    def _default_scored_node(self) -> str | None:
+        """The node a handshake joins: the manifest's default_join_role,
+        else the first manifest node whose role is scored, else the first
+        role-table node whose first role is scored. Never a jam node."""
+        gs = self.game_server
+        table = gs.registration.role_table if gs.registration is not None else None
+        cfg = getattr(gs.bit, "config", None) if gs.bit is not None else None
+        if cfg is not None and cfg.launch.default_join_role:
+            node = cfg.node_for(cfg.launch.default_join_role)
+            if node is not None:
+                return node
+        if cfg is not None and table is not None:
+            for role_name, node in cfg.launch.nodes:
+                role = table.roles.get(role_name)
+                if role is not None and role.scored:
+                    return node
+        if table is not None:
+            for node, roles in table.node_map.items():
+                if roles and table.roles[roles[0]].scored:
+                    return node
+        return None
+
+    def _flash_fixtures_now(self, rgb, count: int) -> None:
+        """Feedback flashes that outlive the lobby: the accept flash fires
+        after RUNNING has already torn the runtime down."""
+        gs = self.game_server
+        if gs.room is None:
+            return
+        now = self._clock()
+        for i in range(count):
+            for name in self._fixtures:
+                dev = gs.room.bound.get(name)
+                if dev is None:
+                    continue
+                self._light_cues.push(
+                    now + i * 0.5,
+                    ("__flash__", dev, rgb, now + i * 0.5), now=now)
+
+    def _drain_start_requests(self) -> None:
+        """Web starts cross a thread here and nowhere else: the queue is
+        filled on the server thread and emptied on this, the tick thread, so
+        the engine is only ever touched from one."""
+        q = self.start_requests
+        if q is None:
+            return
+        while True:
+            try:
+                req = q.get_nowait()
+            except queue.Empty:
+                return
+            self.game_server.request_start(req.key, req.dev, req.source)
+
+    def _tick_lobby(self) -> None:
+        lobby = self._lobby
+        if lobby is None:
+            return
+        gs = self.game_server
+        joined = set(gs.registration.assignments) if gs.registration else set()
+        fixture_devs = set(gs.room.bound.values()) if gs.room is not None else set()
+        for info in gs.devices.all():
+            dev = info.dev
+            if dev in joined or dev in fixture_devs or dev in self._closing:
+                continue
+            lobby.consider_invite(dev)
+        lobby.tick()
 
     def _grant_room_audio(self, role) -> None:
         """Grant EVERY audio-capable fixture its own AudioBridge voice, from
@@ -391,6 +611,7 @@ class DeviceLinkAgent:
         themselves, mirroring the audio grant's own cached-at-wire-time
         cleanup just above: nothing must consult a runner or a start time
         built for a Room that is gone."""
+        self._exit_lobby(restore_light=False)
         if self._room_audio is not None:
             for name in list(self._room_audio_fixtures):
                 self._room_audio.stop_drone(name)
@@ -477,6 +698,8 @@ class DeviceLinkAgent:
         self.game_server.reap_stale(self._stale_timeout)
         self._tick_overrides()
         self._feed_breath()
+        self._drain_start_requests()
+        self._tick_lobby()
         self._feed_ambient_generators()
         # Before both renders: a feed released this tick must be reflected in
         # the frame rendered this tick, not the next one. Draining after would
@@ -503,12 +726,20 @@ class DeviceLinkAgent:
             del self._overrides[dev]
             self._invalidate_frame(dev)
 
-    def _apply_override(self, dev: str, frame: bytes) -> bytes:
+    def _apply_override(self, dev: str, frame: bytes,
+                        color_order: str = "GRB") -> bytes:
+        """Paint every pixel of `frame` the override's colour, in the
+        surface's own channel order. `rgb` is always stated R, G, B -- a
+        SolidCue names a colour, not a wire layout -- so a GRB strip (every
+        strip this Room ships) needs the channels reordered here or green
+        lands as red."""
         entry = self._overrides.get(dev)
         if entry is None:
             return frame
         rgb, level, _expires = entry
-        pixel = bytes(max(0, min(255, round(ch * level))) for ch in rgb)
+        by_name = dict(zip("RGB", rgb))
+        pixel = bytes(max(0, min(255, round(by_name[ch] * level)))
+                      for ch in color_order[:3])
         reps = len(frame) // 3 + 1
         return (pixel * reps)[:len(frame)]
 
@@ -623,7 +854,7 @@ class DeviceLinkAgent:
                 continue
             frame = bytes(st.universe.get_frame()[:fixture.pixel_count * 3])
             if dev is not None:
-                frame = self._apply_override(dev, frame)
+                frame = self._apply_override(dev, frame, fixture.color_order)
             if dev != st.last_dev:
                 # A rebind (or a first binding) has to resend even if this
                 # fixture's own bytes have not moved.
@@ -705,6 +936,8 @@ class DeviceLinkAgent:
         go out on the wire at all. _finish_release() below is what removes
         it and sends /<dev>/release, once CLOSING is done (or the stuck-
         session guard fires)."""
+        order = (self._capability.color_order
+                 if self._capability is not None else "GRB")
         for dev, bridge in list(self.bridges.items()):
             universe = self._universes.get(dev)
             session = bridge.session
@@ -728,8 +961,8 @@ class DeviceLinkAgent:
                 if closing:
                     self._check_closing_bound(dev)
                 continue
-            frame = bytes(universe.get_frame()[:36])
-            frame = self._apply_override(dev, frame)
+            frame = bytes(universe.get_frame()[:_DEVICE_CHANNELS])
+            frame = self._apply_override(dev, frame, order)
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame
                 # The cue's own time when a cue produced this frame, else
@@ -742,6 +975,33 @@ class DeviceLinkAgent:
                     logger.exception("leds send for %s failed", dev)
             if closing:
                 self._check_closing_done(dev, session)
+        # A device with no session (hello'd, not joined: the one being
+        # invited) renders only its override, and one black frame when the
+        # override expires, so an invite is visible before any role exists.
+        black = bytes(_DEVICE_CHANNELS)
+        for dev in list(set(self._overrides) | self._override_only):
+            if dev in self.bridges or self._fixture_for_dev(dev) is not None:
+                # It has a session (or a fixture) of its own now -- the
+                # loops above own its frames from here.
+                self._override_only.discard(dev)
+                continue
+            frame = (self._apply_override(dev, black, order)
+                     if dev in self._overrides else black)
+            if self._last_frames.get(dev) == frame:
+                continue
+            self._last_frames[dev] = frame
+            try:
+                self._send(dev, protocol.leds_event(
+                    dev, frame, when=self._clock() + self._horizon))
+            except Exception:
+                logger.exception("leds send for %s failed", dev)
+            if frame == black:
+                # Nothing more to say until another override lands: forget
+                # the frame so this dev drops out of the loop entirely.
+                self._override_only.discard(dev)
+                self._last_frames.pop(dev, None)
+            else:
+                self._override_only.add(dev)
 
     def _check_closing_done(self, dev: str, session) -> None:
         try:
@@ -790,7 +1050,7 @@ class DeviceLinkAgent:
         elif verb == "canvas":
             self._on_canvas(dev, env.args)
         else:
-            self._on_verb(dev, verb, env.args, env.timestamp)
+            self._on_verb(dev, verb, env.args, env.timestamp, client=client)
 
     def _on_canvas(self, dev: str, args: list) -> None:
         try:
@@ -816,6 +1076,12 @@ class DeviceLinkAgent:
         return dict(self._canvas_urls)
 
     def _on_hello(self, client, dev: str, args: list) -> None:
+        if dev == TERRARIUM_ADMIN:
+            # The Terrarium's own admin identity (control/lobby.py): always
+            # in the admin set, so a device answering to it would hold an
+            # unconditional start.
+            logger.warning("hello from reserved dev id %r refused", dev)
+            return
         name = args[1] if len(args) > 1 else ""
         protoversion = args[2] if len(args) > 2 else ""
         instrument = args[3] if len(args) > 3 else None
@@ -860,17 +1126,37 @@ class DeviceLinkAgent:
         # in _closing -- so drop it explicitly rather than leave a stale
         # entry sitting around for a dev that may never be released again.
         self._closing_revived.discard(dev)
+        if self._lobby is not None:
+            self._lobby.forget(dev)
         self._send(dev, protocol.role_event(dev, result.config))
 
     def _on_verb(self, dev: str, verb: str, args: list,
-                 gesture_time: float = 0.0) -> None:
+                 gesture_time: float = 0.0, client=None) -> None:
         """`gesture_time` is the inbound envelope's timestamp: the device's
         own reading of the O2 clock at the instant of the gesture (Design
         Rule 4, timestamps at the source). It is -1 before o2lite clock
         sync completes, and GameServer falls back to its own clock in that
         case -- so the transport must pass it through rather than invent
         anything.
+
+        Two verbs never reach GameServer.data. `start` is the device face of
+        the start authority (spec section 2) and goes to request_start. And a
+        `tap` from a device the lobby has invited is a handshake gesture, not
+        gameplay -- that device has no role yet, so data() could only refuse
+        it.
         """
+        if verb == "start":
+            key = args[1] if len(args) > 1 and isinstance(args[1], str) else ""
+            reason = self.game_server.request_start(key, dev, f"device:{dev}")
+            if reason is not None:
+                self._send(dev, protocol.error_event(dev, "start", reason))
+            return
+        if (verb == "tap" and self._lobby is not None
+                and self._lobby.is_invited(dev)):
+            count = int(args[3]) if len(args) > 3 else 1
+            stamp = gesture_time if gesture_time and gesture_time > 0 else self._clock()
+            self._lobby.observe_tap(dev, count, stamp, client)
+            return
         reason = self.game_server.data(dev, verb, args,
                                        gesture_time=gesture_time)
         if reason is not None:
@@ -929,6 +1215,12 @@ class DeviceLinkAgent:
             self._setup_room()
         if new_state in (State.LOADED, State.IDLE):
             self._setup_room()
+        if new_state == State.SETUP:
+            self._enter_lobby()
+        elif new_state == State.RUNNING:
+            self._exit_lobby(restore_light=True)
+        elif new_state in (State.UNLOADING, State.IDLE, State.LOADED):
+            self._exit_lobby(restore_light=False)
         if new_state == State.UNLOADING:
             self._room_cues = TimedQueue()
             self._light_cues = TimedQueue()
@@ -1003,6 +1295,7 @@ class DeviceLinkAgent:
         self._closing.pop(dev, None)
         self._last_breath.pop(dev, None)
         self._breathless.discard(dev)
+        self._override_only.discard(dev)
         self._canvas_urls.pop(dev, None)
         # Send BEFORE drop_dev, same reasoning as _on_release's no-bridge
         # branch above: dropping the connection mapping first would make
@@ -1060,7 +1353,19 @@ class DeviceLinkAgent:
         already purges this dev's pending cues when the mute lands, but a
         cue that arrives (or a mute that lands) between purge and drain
         must not feed a muted session either."""
-        for (dev, status, d1, d2, at) in self._light_cues.due(self._clock()):
+        for payload in self._light_cues.due(self._clock()):
+            if payload[0] == "__flash__":
+                # _flash_fixtures_now's sentinel: a feedback flash that has
+                # to outlive the lobby runtime that asked for it. Muted devs
+                # are checked here rather than purged in _on_mute_change,
+                # whose predicate matches on payload[0] == dev and so never
+                # matches a tagged payload.
+                _tag, dev, rgb, when = payload
+                if dev in self._muted:
+                    continue
+                self._on_solid_cue(dev, rgb, 1.0, 0.25, when)
+                continue
+            dev, status, d1, d2, at = payload
             if dev in self._muted:
                 continue
             self._feed_light_now(dev, status, d1, d2, at)
@@ -1114,7 +1419,32 @@ class DeviceLinkAgent:
         self._send(dev, protocol.play_event(dev, name, params))
 
     def on_registration_change(self) -> None:
+        """A scored join is what the lobby's ceremony celebrates (spec 4),
+        so the diff against the last-known assignment set is taken here --
+        the engine reports that a registration changed, not which way."""
         self._broadcast_room()
+        lobby = self._lobby
+        if lobby is None:
+            return
+        gs = self.game_server
+        assignments = gs.registration.assignments if gs.registration else {}
+        for dev in set(assignments) - self._lobby_known:
+            _node, role_name, _cls = assignments[dev]
+            role = gs.registration.role_table.roles.get(role_name)
+            if role is not None and role.scored:
+                lobby.forget(dev)
+                lobby.on_scored_join(dev)
+        self._lobby_known = set(assignments)
+        self._sync_lobby_state()
+
+    def on_start_requested(self, record) -> None:
+        """Room feedback for one start attempt. An accept lands after
+        on_state_change has already torn the lobby down, so it rides the
+        agent's own flash path; every refusal still has a live lobby."""
+        if record.feedback == "accept":
+            self._flash_fixtures_now(GREEN, 1)
+        elif self._lobby is not None:
+            self._lobby.feedback(record.feedback)
 
     # --- room snapshot (informational push) ---------------------------------
     def _room_blob(self) -> dict:

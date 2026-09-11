@@ -179,17 +179,26 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     assert _last_instruments() == []
 
     # --- console: load_bit TestBit ---
+    mark = len(light_manifest_calls)
     srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
     agent.poll()
     assert gs.state.name == "SETUP"
     assert not [m for _c, m in srv.sent if m.get("event") == "error"]
     assert set(dl_agent._fixtures) == {"main", "accent"}
-    assert "rainbow" in _last_instruments()   # the Bit's own ROOM declaration
+    # The Bit's own ROOM declaration is built at LOADED; SETUP then swaps
+    # the lobby's aurora on top of it for as long as the wait lasts, so the
+    # LAST manifest built in this step is the lobby's, not the Bit's.
+    built = [decl.instrument for manifest in light_manifest_calls[mark:]
+             for decl in manifest.instruments]
+    assert "rainbow" in built                 # the Bit's own ROOM declaration
+    assert _last_instruments() == ["aurora"]  # the lobby, while it waits
 
     # --- console: run ---
     srv.deliver("c1", {"command": "run"})
     agent.poll()
     assert gs.state.name == "RUNNING"
+    # RUNNING tears the lobby down and swaps each fixture back.
+    assert "rainbow" in _last_instruments()
 
     # --- complete: TestBit's run duration elapses on the engine clock ---
     gs.tick(3.0)
@@ -253,10 +262,16 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     assert ambient_value_at_3 is not None and ambient_value_at_6 is not None
     assert ambient_value_at_3 != ambient_value_at_6
 
+    mark = len(light_manifest_calls)
     srv.deliver("c1", {"command": "load_bit", "name": "TestBit"})
     agent.poll()
     assert set(dl_agent._fixtures) == {"array"}
-    assert "rainbow" in _last_instruments()   # the Bit's declaration takes over
+    # Same as the TEST leg above: the Bit's declaration takes over from
+    # ambient at LOADED, and the lobby's aurora sits on top through SETUP.
+    built = [decl.instrument for manifest in light_manifest_calls[mark:]
+             for decl in manifest.instruments]
+    assert "rainbow" in built
+    assert _last_instruments() == ["aurora"]
     # TestBit's own declared "drift" generator supersedes the ambient one --
     # _setup_room drops each fixture's ambient runner the moment a Bit's ROOM
     # role is composed (last-start-wins, spec section 7).

@@ -106,7 +106,7 @@ SERVICES = f"{PYARCO_SERVICE},{CONTROL_SERVICE}"
 # Every /game/* verb the agent routes. Registered as full-path handlers so
 # o2lite dispatches straight into the drain queue.
 GAME_VERBS = ("hello", "join", "tilt", "tap", "shake", "capture",
-              "telemetry", "canvas")
+              "telemetry", "canvas", "start")
 
 
 # Inbound arguments are PULLED off the o2lite object one at a time, in
