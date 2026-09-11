@@ -868,8 +868,8 @@ Control becomes a real O2 participant, and a cue gains a time. Design:
   `"actl,game"` string: pyarco already claimed `actl` on the shared
   connection, and writing just `"game"` would silently drop it and stop
   Arco's control replies. **Control is a guest on pyarco's connection**, not
-  the owner of its own. The fifth (from Roger's 2026-08-20 reply to the
-  upstream report): **immediately after `o2lite.set_services()`, a UDP send
+  the owner of its own. The fifth (from Roger's 2026-08-16 reply to the
+  upstream report, which he found in his own test program): **immediately after `o2lite.set_services()`, a UDP send
   addressed to that service can arrive at the hub before the service
   registration does and is silently dropped** -- send via TCP (`send_cmd`)
   at least the first time. `verify_service_ownership` already does this,
@@ -4201,7 +4201,8 @@ yet**; the box does not exist.
   announcement is silent on the client; o2litepy's discovery has no ensemble
   filter) are written up for Roger at
   [`docs/upstream/2026-08-14-o2-service-and-discovery-report.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/upstream/2026-08-14-o2-service-and-discovery-report.md)
-  -- reports, not proposals. Roger replied 2026-08-20: defect 1 is O2 working
+  -- reports, not proposals. Roger replied 2026-08-15 and 2026-08-16 (one
+  email thread, folded into this doc on 2026-08-20): defect 1 is O2 working
   as designed (design guidance given, no upstream change coming), defect 2 is
   fixed and regression-tested upstream in `rbdannenberg/o2`; see *Not yet
   built / deferred* below for the standing descriptions of both.
@@ -4473,7 +4474,7 @@ Kept explicit so the doc doesn't over-claim:
   on reconnect), and silence means the socket is dead (still the
   upstream reset behavior).
 - **A refused o2lite service announcement is unobservable from the client.
-  Not a defect: this is O2 working as designed** (Roger, 2026-08-17). The
+  Not a defect: this is O2 working as designed** (Roger, 2026-08-16). The
   host will not forward messages to two providers of the same service name,
   so one must win; full O2 picks the highest IP+port lexicographically, and
   **o2lite keeps no fallback list and does not prioritize at all, so it is
@@ -4482,13 +4483,24 @@ Kept explicit so the doc doesn't over-claim:
   if you don't receive it) is OK", so `verify_service_ownership` is sanctioned
   rather than a hack. **Do not expect an upstream fix**, and treat a service
   collision here as a design question on this side rather than a bug to report.
-  Roger's fuller reply (2026-08-20, to the upstream report) restates the model
-  -- O2 forwards each service to exactly one provider, and for o2lite clients
-  it is first-come-first-serve with no fallback list, so two o2lite processes
-  offering the same service name is a design error on the client side -- and
-  suggests two workarounds: (a) namespace services per process (e.g.
-  `/room/...` and `/control/...`), or (b) build unique names from
-  `o2lite.bridge_id` (which he notes is fragile across multiple hosts).
+  Roger answered in two steps. His first reply (2026-08-15) did not think
+  it was a bug but planned to reproduce it: O2 drops service offerings
+  from "imposters" on purpose by checking where the `/sv` message came
+  from, so either the second o2lite process was doing something odd or O2
+  was failing to distinguish two o2lite clients, and he had no regression
+  test for multiple o2lite clients offering different services. His
+  second reply (2026-08-16) reread the report and settled it: refusing a
+  second claimant of the *same* service name is not a defect, because the
+  host will not forward one service to two providers, so one must win. In
+  full O2 the winner is the provider with the lexicographically highest IP
+  address and port, and that can change as processes come and go; for
+  o2lite the host keeps no fallback list and does no prioritizing, so it
+  is first-come-first-serve. Two o2lite processes offering the same name
+  is therefore a design error on the client side. He suggested two
+  workarounds: (a) namespace services per process (e.g. `/room/...` and
+  `/control/...`), or (b) build unique names from `o2lite.bridge_id`,
+  which he called not very robust because bridge ids are unique only
+  within one O2 host, so two clients on two hosts could both be `-1`.
   Assessed 2026-08-20: **no code change warranted.** mm-terrarium already
   satisfies the constraint by construction -- every live process claims a
   distinct name (Control `actl,game`, per-fixture simulators
@@ -4519,18 +4531,31 @@ Kept explicit so the doc doesn't over-claim:
   the mm-terrarium side, but the underlying silence at the O2 layer stays
   open.)
 - ~~**o2litepy's discovery has no ensemble filter at all.**~~ **Fixed
-  upstream 2026-08-17** (`rbdannenberg/arco` commit `379424e`, merged into the
+  upstream 2026-08-16** (`rbdannenberg/arco` commit `379424e`, merged into the
   local checkout; `o2litepy/o2lite_disc.py` now stores the ensemble and
-  `py3discovery.py` filters on it). Roger: "real, only in the Python port, and
-  is now fixed and tested in the regression tests". His 2026-08-20 reply
-  confirms the canonical fix lives in `rbdannenberg/o2` (commit `f21499e`
-  reworks the o2litepy package and adds multi-client regression tests); the
-  `arco/o2litepy` copy this repo reaches by `PYTHONPATH` is downstream of it,
-  currently byte-identical, and Roger may remove it -- see the o2litepy
-  dependency bullet above. **Verified in source, not yet re-verified
-  live**, and properly closing it means re-running the original
-  reproduction, and the venue consequence below needs two O2 hosts to
-  exercise. The description of the original defect follows.
+  `py3discovery.py` filters on it). Roger's first reply (2026-08-15) called
+  it "simply a mistake that obviously must be fixed", with the protocol
+  itself fine and the oversight easy to correct; his second (2026-08-16):
+  "real, only in the Python port, and is now fixed and tested in the
+  regression tests". The same reply says the canonical fix lives in
+  `rbdannenberg/o2` (commit `f21499e` reworks the o2litepy package into a
+  proper Python package and adds multi-client regression tests); he copied
+  everything except `pyproject.toml` into `arco/o2litepy`, so the copy this
+  repo reaches by `PYTHONPATH` is downstream of it, currently
+  byte-identical, and he said he should probably remove it -- see the
+  o2litepy dependency bullet above. **Verified live 2026-09-11 (on MYCOLOGICAL),
+  fix confirmed.** The original reproduction was re-run with the `o2`
+  repo's `o2litehost` test binary as the only `_o2proc` host on the LAN
+  (ensemble `test`, o2lite enabled, master clock) and three o2litepy
+  clients polled for 8 s each: the fixed `arco/o2litepy` in ensemble
+  `arco` accepted no hosts from discovery and never connected
+  (`time_get()` stayed -1); the same client in ensemble `test` connected
+  and clock-synced; and the pre-fix code (the parent of `379424e`, copied
+  to a scratch dir) in ensemble `arco` connected to the `test` host and
+  clock-synced, which is the defect as originally observed. Still not
+  exercised: the venue
+  consequence below, which needs two real Arco hubs on one network. The
+  description of the original defect follows.
 
   **The defect as reported.**
   `o2litepy/o2lite_disc.py:24` takes `ensemble` as a constructor argument
