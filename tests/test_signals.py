@@ -43,3 +43,33 @@ def test_every_supervised_module_installs_the_handler(module_name, monkeypatch):
     assert "sigterm_as_keyboard_interrupt()" in source, (
         f"{module_name} is sent SIGTERM by a supervisor and would lose its "
         f"finally block without the handler")
+
+
+def test_it_also_maps_sighup_so_a_closed_terminal_unwinds():
+    """2026-09-12: a hangup on run_stack used to hit Python's default
+    disposition and kill it without running TeardownStack, leaving Arco
+    (in its own session, never hung up) playing."""
+    previous_term = signal.getsignal(signal.SIGTERM)
+    previous_hup = signal.getsignal(signal.SIGHUP)
+    try:
+        signal.signal(signal.SIGHUP, signal.SIG_DFL)
+        sigterm_as_keyboard_interrupt()
+        handler = signal.getsignal(signal.SIGHUP)
+        assert callable(handler)
+        with pytest.raises(KeyboardInterrupt):
+            handler(signal.SIGHUP, None)
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGHUP, previous_hup)
+
+
+def test_it_leaves_an_ignored_sighup_alone_so_nohup_keeps_working():
+    previous_term = signal.getsignal(signal.SIGTERM)
+    previous_hup = signal.getsignal(signal.SIGHUP)
+    try:
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        sigterm_as_keyboard_interrupt()
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGHUP, previous_hup)
