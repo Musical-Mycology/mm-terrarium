@@ -10,8 +10,9 @@ import pytest
 
 from control.arco_process import FakePopen
 from harness import markers
-from harness.run_stack import (StackConfig, _dead_child, _failed_marker, _hold,
-                               control_command, device_command, run)
+from harness.run_stack import (PARENT_GONE, StackConfig, _dead_child,
+                               _failed_marker, _hold, control_command,
+                               device_command, parse_args, run)
 
 
 class ScriptedPopen(FakePopen):
@@ -1309,3 +1310,72 @@ def test_ci_does_not_imply_start_after_grant_for_a_non_admin_bit():
     from harness.run_stack import config_from_args, parse_args
     assert config_from_args(
         parse_args(["--ci"])).start_after_grant is False
+
+
+# --- parent watch (2026-09-12 run_stack parent-watch spec) -----------------
+
+def _ppid_flipping_after(calls: int, *, launcher=777, then=1):
+    """A getppid double: the launcher's pid for the first `calls` reads,
+    then PID 1, the way the kernel reparents an orphan."""
+    seen = [0]
+
+    def getppid():
+        seen[0] += 1
+        return launcher if seen[0] <= calls else then
+    return getppid
+
+
+def test_hold_ends_with_parent_gone_when_the_launching_shell_exits(tmp_path):
+    """The bug reproduced live 2026-09-12: run_stack sat at the top of the
+    --exit-with-parent chain with no watch of its own, so a closed terminal
+    left Arco playing under a supervisor reparented to PID 1. seconds=None
+    is the hold-until-Ctrl-C shape ./terrarium.sh runs in; without the
+    watch this test would never return."""
+    popen = ScriptedPopen([_CONTROL_OK, _DEVICE_OK])
+    cfg = StackConfig(arco_command="/bin/true", log_dir=str(tmp_path),
+                      echo=False, seconds=None)
+    # One read at run() entry records the launcher; the hold's first
+    # tick still sees it, the second sees PID 1.
+    result = run(cfg, popen=popen, sleep=lambda _s: None,
+                 getppid=_ppid_flipping_after(2))
+
+    assert result.ok is True
+    assert result.stage == "parent-gone"
+    assert "--detach" in result.detail
+    # Ordered teardown ran: every child was signalled.
+    assert all(signal.SIGTERM in child.signals for child in popen.children)
+
+
+def test_detach_keeps_the_stack_up_when_the_launching_shell_exits(tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK, _DEVICE_OK])
+    cfg = _cfg(tmp_path, watch_parent=False)
+    result = run(cfg, popen=popen, sleep=lambda _s: None,
+                 getppid=_ppid_flipping_after(1))
+
+    assert result.stage == "complete"
+
+
+def test_hold_polls_parent_gone_alongside_the_children():
+    cfg = StackConfig(arco_command="/bin/true", log_dir="unused",
+                      seconds=None)
+    child = FakePopen()
+    child(["x"])
+    flips = iter([False, False, True])
+    ticks = []
+    out = _hold(cfg, {"control": child}, lambda: 0.0, ticks.append,
+                parent_gone=lambda: next(flips))
+    assert out is PARENT_GONE
+    assert len(ticks) == 2
+
+
+def test_hold_without_a_parent_watch_is_unchanged():
+    cfg = StackConfig(arco_command="/bin/true", log_dir="unused",
+                      seconds=0.0)
+    child = FakePopen()
+    child(["x"])
+    assert _hold(cfg, {"control": child}, lambda: 0.0, lambda _s: None) is None
+
+
+def test_detach_flag_disables_the_parent_watch():
+    assert parse_args(["--detach"]).detach is True
+    assert parse_args([]).detach is False

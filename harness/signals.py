@@ -31,5 +31,14 @@ def sigterm_as_keyboard_interrupt() -> None:
 
     Call once, at the top of main(), before anything with a finally block
     that matters.
+
+    SIGHUP gets the same mapping (2026-09-12 run_stack parent-watch spec):
+    a terminal closing over a supervisor otherwise kills it with no
+    unwinding, and its children, in their own sessions, never see the
+    hangup and play on. Left alone when SIGHUP is already ignored: that is
+    what `nohup` sets, and a deliberately detached run must keep working.
     """
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+    sighup = getattr(signal, "SIGHUP", None)
+    if sighup is not None and signal.getsignal(sighup) is not signal.SIG_IGN:
+        signal.signal(sighup, _raise_keyboard_interrupt)

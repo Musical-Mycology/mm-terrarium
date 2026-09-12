@@ -992,6 +992,23 @@ self-addressed round trip before the tick loop starts, so a refused
 announcement fails loud instead of silently. Design:
 `docs/superpowers/specs/2026-08-14-room-simulator-service-collision-design.md`.
 
+**The top of that chain had no watch of its own (fixed 2026-09-12).**
+Live on MYCOLOGICAL a `./terrarium.sh --room DEMO` stack kept playing the
+DEMO drone after its terminal was gone: `run_stack` was reparented to
+PID 1 with `terrarium_boot`, Arco and the Room simulator all alive,
+because every child watches its parent but `run_stack` watched nothing,
+and a hangup (when one is delivered at all) hit Python's default SIGHUP
+disposition, killing the supervisor without running `TeardownStack`
+while its children, in their own sessions, never saw it. Two guards now:
+`run()` records `getppid()` at entry and `_hold` polls
+`o2_shroom.parent_is_gone` on every tick, ending the hold with
+`stage="parent-gone"` through the normal ordered teardown; and
+`harness/signals.py`'s `sigterm_as_keyboard_interrupt()` maps SIGHUP the
+same way as SIGTERM, unless SIGHUP is already `SIG_IGN` (what `nohup`
+sets). `run_stack --detach` opts out of the parent watch for a launch
+that is orphaned on purpose (nohup, launchd). Design:
+`docs/superpowers/specs/2026-09-12-run-stack-parent-watch-design.md`.
+
 **The `/actl/_svcheck` reply that never came back (root-caused 2026-09-08;
 it was Arco frozen on its pty, not routing).** When the o2lite cutover
 made Control the owner of the whole `"actl,game"` services string
@@ -4121,7 +4138,9 @@ Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`
 
 - **`./terrarium.sh [--room NAME]`** wraps `run_stack --no-bit --serve
   --devices 0 --console-port 8772`: a clean Terrarium with no Bit and no
-  spawned Testshrooms. Without `--room` it boots to `NO_ROOM` (gate:
+  spawned Testshrooms. Closing its terminal tears the whole stack down
+  (Arco included) as of 2026-09-12; add `--detach` to keep it running
+  without one. Without `--room` it boots to `NO_ROOM` (gate:
   `markers.CONTROL_NO_ROOM_WAIT`, printed on entry to the NO_ROOM wait;
   no Arco exists yet); with `--room` it gates on room-loaded and
   transport-ready and skips the SETUP gate. `terrarium_boot --no-bit`

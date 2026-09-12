@@ -60,6 +60,7 @@ from control.terrarium_config import load_terrarium_config, resolve_bit_roots
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.proc_tee import ProcTee
+from harness.o2_shroom import parent_is_gone
 from harness.signals import sigterm_as_keyboard_interrupt
 from harness.www_server import WWW_PORT
 
@@ -112,6 +113,7 @@ class StackConfig:
     web_build: str | None = None      # copied into www/app/ before run()
     start_after_grant: bool = False   # GET the admin START_URL once granted
     handshake_devices: int = 0        # first N devices join via --handshake
+    watch_parent: bool = True         # tear down when the launching shell exits
 
 
 @dataclass
@@ -283,7 +285,7 @@ def _control_stages(cfg: StackConfig) -> tuple[tuple[str, str, str], ...]:
 
 
 def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
-        sleep=time.sleep, getpid=os.getpid,
+        sleep=time.sleep, getpid=os.getpid, getppid=os.getppid,
         opener=webbrowser.open, registry: BitRegistry | None = None
         ) -> RunResult:
     """Bring the stack up, hold it, and tear it down in order.
@@ -292,8 +294,18 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
     spawned, so Control (spawned first) stops last and the devices stop
     before it. That is the whole point of the primitive: the ordering is a
     consequence of startup, not a list this function maintains.
+
+    The launching shell's pid is recorded here and watched during the
+    hold (see _hold and PARENT_GONE): this process is the top of the
+    --exit-with-parent chain and, until 2026-09-12, the one link in it
+    with no parent watch, so a closed terminal left Arco playing under a
+    supervisor nobody could see. cfg.watch_parent False (--detach) is the
+    opt-out for a deliberately orphaned launch.
     """
     os.makedirs(cfg.log_dir, exist_ok=True)
+    launcher = getppid()
+    parent_gone = ((lambda: parent_is_gone(launcher, getppid))
+                   if cfg.watch_parent else None)
     teardown = TeardownStack()
     tees: dict[str, ProcTee] = {}
     processes: dict[str, object] = {}
@@ -403,7 +415,13 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                                  logs, urls, room_urls)
             print(f"start requested via {url} -> HTTP {status}", flush=True)
 
-        dead = _hold(cfg, processes, clock, sleep)
+        dead = _hold(cfg, processes, clock, sleep, parent_gone=parent_gone)
+        if dead is PARENT_GONE:
+            return RunResult(True, "parent-gone",
+                             "the shell that launched run_stack exited; "
+                             "stack torn down (pass --detach to keep a "
+                             "stack running without its terminal)",
+                             logs, urls, room_urls)
         if dead is not None:
             name, code = dead
             # A control child that exits ZERO after announcing the Bit
@@ -518,9 +536,22 @@ def _wait_for_marker(tee: ProcTee, target: str, timeout: float, clock,
         sleep(0.05)
 
 
+# _hold's return when the launching shell is gone: distinct from any
+# (name, code) dead-child pair and from None (hold ran out). Compared by
+# identity in run().
+PARENT_GONE: tuple = ("<launcher>", None)
+
+
 def _hold(cfg: StackConfig, children: dict[str, object], clock,
-         sleep) -> tuple[str, int] | None:
+         sleep, *, parent_gone=None) -> tuple[str, int] | None:
     """Run for --seconds, or until Ctrl-C when no duration was asked for.
+
+    parent_gone, when given, is polled on every tick alongside the
+    children and ends the hold with PARENT_GONE the moment it returns
+    True (2026-09-12 spec: the launching shell disappearing is news the
+    same way a dead child is, and the answer is the same ordered
+    teardown). None means nobody asked (--detach, or a caller with no
+    launcher to watch).
 
     Polls every spawned child on each tick and returns as soon as one has
     exited, instead of only watching the clock. Design spec section 3.4
@@ -534,15 +565,21 @@ def _hold(cfg: StackConfig, children: dict[str, object], clock,
     worth waiting out the rest of the hold for.
     """
     tolerate = cfg.serve
+
+    def check():
+        if parent_gone is not None and parent_gone():
+            return PARENT_GONE
+        return _dead_child(children, tolerate_clean_devices=tolerate)
+
     if cfg.seconds is None:
         while True:
-            dead = _dead_child(children, tolerate_clean_devices=tolerate)
+            dead = check()
             if dead is not None:
                 return dead
             sleep(0.5)
     deadline = clock() + cfg.seconds
     while clock() < deadline:
-        dead = _dead_child(children, tolerate_clean_devices=tolerate)
+        dead = check()
         if dead is not None:
             return dead
         sleep(0.1)
@@ -693,6 +730,14 @@ def parse_args(argv=None):
                          "launch.default_join_role resolved against "
                          "launch.nodes, or the first node if there is no "
                          "default role). Set this to override that.")
+    ap.add_argument("--detach", action="store_true",
+                    help="Keep the stack running after the shell that "
+                         "launched it exits. By default run_stack watches "
+                         "its parent pid and tears the whole stack down "
+                         "(Control, Arco, simulators) the moment that "
+                         "shell is gone, so a closed terminal never leaves "
+                         "Arco playing; pass this for a nohup or launchd "
+                         "launch that is orphaned on purpose.")
     ap.add_argument("--persist-shrooms", dest="persist_shrooms",
                     action="store_true", default=True,
                     help="Launch every player o2_shroom with --persist so "
@@ -759,7 +804,8 @@ def _bitless_config(args) -> StackConfig:
         bit=None, no_bit=True, node=None,
         open_urls=args.open, serve=serve,
         persist_shrooms=args.persist_shrooms,
-        www_port=args.www_port, web_build=args.web_build)
+        www_port=args.www_port, web_build=args.web_build,
+        watch_parent=not args.detach)
 
 
 def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
@@ -849,7 +895,8 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         persist_shrooms=args.persist_shrooms,
         www_port=args.www_port, web_build=args.web_build,
         start_after_grant=start_after_grant,
-        handshake_devices=args.handshake_devices)
+        handshake_devices=args.handshake_devices,
+        watch_parent=not args.detach)
 
 
 def _failing_log_key(result: RunResult) -> str | None:
