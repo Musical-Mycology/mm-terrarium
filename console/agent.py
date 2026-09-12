@@ -42,7 +42,8 @@ class ConsoleAgent:
                  clock=time.monotonic, registry=None, canvas_urls=None,
                  terrarium=None, catalog_root=None, bench_session_factory=None,
                  captures_root=None, rooms_root=None, join_info=None,
-                 stop_room_clients=None, restart_room_clients=None):
+                 stop_room_clients=None, restart_room_clients=None,
+                 clients_live=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
@@ -99,6 +100,14 @@ class ConsoleAgent:
         # embeddings without Arco clients) skips restart_room_clients.
         self._stop_room_clients = stop_room_clients
         self._restart_room_clients = restart_room_clients
+        # Optional Callable[[], bool] from harness/terrarium_boot.py: True
+        # once Control's own Arco clients have been started in this
+        # process and are still up. D7's unload case: after that point
+        # pyarco cannot reconnect to a new Arco, so a Console unload_room
+        # is refused up front (see _unload_room_refusal) instead of
+        # leaving a Terrarium that can load nothing until restarted. None
+        # (tests, embeddings without Arco clients) never refuses.
+        self._clients_live = clients_live
         # Optional Callable[[], dict] of fixture name -> {cc: value}, from
         # DeviceLinkAgent.controllers(), for the Room panel's live
         # controllers read-out. None (a GameServer built the pre-Room way,
@@ -197,6 +206,9 @@ class ConsoleAgent:
         if isinstance(command, protocol.UnloadRoomCommand):
             if self.terrarium is None:
                 return protocol.error_event(name, "no terrarium")
+            reason = self._unload_room_refusal()
+            if reason is not None:
+                return protocol.error_event(name, reason)
             reason = self.terrarium.unload_room(force=command.force)
             if reason is not None:
                 return protocol.error_event(name, reason)
@@ -258,6 +270,22 @@ class ConsoleAgent:
         if reason is not None:
             self.server.broadcast(protocol.room_load_failed_event(name, reason))
         return reason
+
+    def _unload_room_refusal(self) -> str | None:
+        """D7's unload case (2026-09-12): pyarco's arco.initialize() is a
+        no-op once o2lite has ever synced and finish() cannot prepare a
+        restart, so once Control's Arco clients have been live an unload
+        leaves a process that can never talk to another Arco: the next
+        load_room spawns a fresh Arco and restart_room_clients fails with
+        a broken pipe, stranding the Terrarium in NO_ROOM. Refuse up front
+        and name the restart, matching _ensure_room_for_bit's switch
+        refusal. Returns the reason (None when the unload may proceed:
+        no hook wired, or the clients never started)."""
+        if self._clients_live is None or not self._clients_live():
+            return None
+        return ("unloading the Room in a running Terrarium is not "
+                "supported yet: pyarco cannot reconnect to a new Arco in "
+                "one process; stop and run ./terrarium.sh")
 
     def _ensure_room_for_bit(self, command, cfg) -> str | None:
         """Spec 2026-09-10 section 4: bring the Terrarium to the Room a
@@ -647,9 +675,14 @@ class ConsoleAgent:
             array_backend_configured=self.terrarium.boot_config.array_backend_configured)
         active_name = (
             self.terrarium.room.name if self.terrarium.room is not None else None)
+        # The active row carries the D7 unload refusal (or None) so the
+        # Rooms panel can disable its Unload button with the reason.
+        unload_blocked = self._unload_room_refusal()
         return [
             {"name": name, "description": spec.description,
-             "status": reasons.get(name), "active": name == active_name}
+             "status": reasons.get(name), "active": name == active_name,
+             "unload_blocked": (unload_blocked if name == active_name
+                                else None)}
             for name, spec in self.terrarium.config.rooms.items()
         ]
 

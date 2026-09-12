@@ -3616,8 +3616,14 @@ the serve-mode console flow; this slice stabilizes the load path. Design:
 - **ABORT semantics change: hard stop.** Console abort now runs
   `gs.abort()` then `terrarium.unload_room(force=True)` when a Terrarium
   is wired -- Arco goes down, silence is guaranteed, post-state is
-  `NO_ROOM`, and the operator's path back is Load Room (~15 s Arco spawn)
-  then Load Bit. `terrarium=None` callers (terrarium-less embeddings)
+  `NO_ROOM`. **The path back is a process restart, not Load Room
+  (corrected 2026-09-12):** once Control's Arco clients have been live,
+  D7 (below) means a later Load Room spawns an Arco that pyarco cannot
+  reconnect to, so after a hard ABORT the operator stops the process and
+  runs `./terrarium.sh` (or `./terrarium.sh --room <name>`). The
+  in-process Load-Room-then-Load-Bit recovery this sentence used to
+  promise was only ever true for a NO_ROOM boot whose clients had not
+  started yet. `terrarium=None` callers (terrarium-less embeddings)
   keep the old bit-only abort, zero behavior change. Uplink abort is
   unchanged.
 - **RESTART (new).** A console command/button sits between Run and
@@ -4200,6 +4206,30 @@ Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`
   attempt. The Bit picker disables its Load button for a non-active
   Room while a Room is up, so the switch is never offered.
 
+  **Unload is the same limit (2026-09-12, reproduced live on
+  `./terrarium.sh --room DEMO`).** Console `unload_room` on a Room whose
+  Arco clients were live took Arco down cleanly, but the next Bit load
+  (`_ensure_room_for_bit` reaching `_load_room` from NO_ROOM) spawned a
+  fresh Arco that `_restart_room_clients` could not attach to:
+  `Arco_engine: finish called. Python should exit now.` then `room
+  clients failed to restart: [Errno 32] Broken pipe`, `room unloaded:
+  DEMO`, and a Terrarium that could load neither Room nor Bit until
+  restarted. `_serve_roomless`'s stop_clients/restart_clients pair only
+  ever worked for a NO_ROOM boot (clients never started); it cannot
+  revive clients that were once live. `ConsoleAgent` now takes a
+  `clients_live` callable from `terrarium_boot` (`not
+  clients_stopped[0]`, threaded in rather than probing pyarco state) and
+  the `UnloadRoomCommand` branch refuses while it holds, in the switch
+  refusal's style: `unloading the Room in a running Terrarium is not
+  supported yet: pyarco cannot reconnect to a new Arco in one process;
+  stop and run ./terrarium.sh`. The unload is still allowed when the
+  clients never started (no hook wired, or `clients_live()` False), which
+  in practice never coincides with ROOM_READY: a NO_ROOM boot that
+  loaded a Room has started them. The Rooms panel's snapshot rows carry
+  `unload_blocked` (the reason, or null) on the active row and
+  `rooms.js` disables Unload with the reason as its tooltip; a stale
+  panel that sends anyway gets the `error` event flashed on the button.
+
 ### Lobby, join handshake, and admin start (2026-09-11)
 Design: `docs/superpowers/specs/2026-09-11-metronome-lobby-and-admin-start-design.md`.
 The timed SETUP wait is replaced by an admin-started lobby that every Bit
@@ -4256,6 +4286,16 @@ gets by default.
   and renders frames and the keyed chime before a role; the MycoQuest admin
   site writes a device's GemID into the venue's `[admin] devices`.
 - **Live gate on MYCOLOGICAL:** pending; record the run id here.
+- **Operator recipe, one Arco per process (2026-09-12).** Two shapes
+  work; anything that unloads a Room under live clients does not (D7,
+  above). Either boot roomless with `./terrarium.sh` (no `--room`) and
+  Load the Bit from the Console: `_ensure_room_for_bit` loads the Bit's
+  Room from NO_ROOM and restarts Control's clients against the new Arco,
+  printing `DeviceLink running on o2lite ensemble 'arco' (restarted)`,
+  then the Bit loads. Or boot with `./terrarium.sh --room X` and load
+  only Bits whose `room_types` include X, never unloading. Unload and
+  hard ABORT both end the process's useful life; the Console refuses the
+  former and the way back from either is stop and rerun `terrarium.sh`.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2246 passed, 1 skipped**.

@@ -1006,6 +1006,91 @@ def test_unload_room_refusal_is_error_event():
     assert errors[0]["command"] == "unload_room"
 
 
+UNLOAD_REFUSAL = ("unloading the Room in a running Terrarium is not "
+                  "supported yet: pyarco cannot reconnect to a new Arco in "
+                  "one process; stop and run ./terrarium.sh")
+
+
+def test_unload_room_is_refused_while_arco_clients_are_live():
+    """D7 unload case (2026-09-12): once Control's Arco clients have been
+    started in this process, an unload leaves a Terrarium that can never
+    reconnect (pyarco's initialize() is a no-op after the first sync), so
+    the command is refused before terrarium.unload_room runs."""
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    calls = []
+    real_unload = terrarium.unload_room
+    terrarium.unload_room = lambda force=False: calls.append(force) or real_unload(force=force)
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium,
+                         clients_live=lambda: True)
+    srv.broadcasts.clear()
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "unload_room", "force": True})
+
+    agent.poll()
+
+    assert _errors(srv) == [{"event": "error", "command": "unload_room",
+                             "message": UNLOAD_REFUSAL}]
+    assert calls == []
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.name == "TEST"
+    assert _events(srv, "room_unloaded") == []
+
+
+def test_unload_room_is_allowed_when_arco_clients_never_started():
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium,
+                         clients_live=lambda: False)
+    srv.broadcasts.clear()
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "unload_room"})
+
+    agent.poll()
+
+    assert _errors(srv) == []
+    assert terrarium.state == TerrariumState.NO_ROOM
+    assert _events(srv, "room_unloaded") == [
+        {"event": "room_unloaded", "name": "TEST"}]
+
+
+def test_unload_room_refusal_consults_clients_live_at_command_time():
+    """The hook is a callable, not a boolean captured at construction: a
+    NO_ROOM boot starts with no clients and gains live ones on its first
+    Room load, so the same agent must flip from allowing to refusing."""
+    terrarium = make_terrarium()
+    live = [False]
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium,
+                         clients_live=lambda: live[0])
+    srv.connect("c1")
+    terrarium.load_room("TEST")
+    live[0] = True
+    srv.deliver("c1", {"command": "unload_room", "force": True})
+    agent.poll()
+    assert len(_errors(srv)) == 1
+    assert terrarium.state == TerrariumState.ROOM_READY
+
+
+def test_rooms_view_marks_the_active_room_unload_blocked_while_clients_live():
+    terrarium = make_terrarium()
+    srv = FakeConsoleServer()
+    live = [False]
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium,
+                         clients_live=lambda: live[0])
+    assert agent.snapshot()["rooms"] == [
+        {"name": "TEST", "description": "", "status": None, "active": False,
+         "unload_blocked": None}]
+    terrarium.load_room("TEST")
+    assert agent.snapshot()["rooms"][0]["unload_blocked"] is None
+    live[0] = True
+    assert agent.snapshot()["rooms"] == [
+        {"name": "TEST", "description": "", "status": None, "active": True,
+         "unload_blocked": UNLOAD_REFUSAL}]
+
+
 def test_abort_unloads_the_room_when_terrarium_wired():
     terrarium = make_terrarium()
     terrarium.load_room("TEST")
@@ -1128,13 +1213,15 @@ def test_snapshot_carries_terrarium_state_and_rooms():
     snap = agent.snapshot()
     assert snap["terrarium_state"] == "NO_ROOM"
     assert snap["rooms"] == [
-        {"name": "TEST", "description": "", "status": None, "active": False}]
+        {"name": "TEST", "description": "", "status": None, "active": False,
+         "unload_blocked": None}]
 
     terrarium.load_room("TEST")
     snap = agent.snapshot()
     assert snap["terrarium_state"] == "ROOM_READY"
     assert snap["rooms"] == [
-        {"name": "TEST", "description": "", "status": None, "active": True}]
+        {"name": "TEST", "description": "", "status": None, "active": True,
+         "unload_blocked": None}]
 
 
 def test_snapshot_terrarium_fields_are_none_safe_without_terrarium():
