@@ -1669,6 +1669,16 @@ def main() -> None:
             pool.quiesce()
         clients_stopped[0] = True
 
+    def clients_live() -> bool:
+        """True while Control's Arco clients are up in this process: a
+        `--room` boot starts them before the tick loop, a NO_ROOM boot
+        starts them on its first load_room via restart_clients(). D7's
+        unload case: ConsoleAgent refuses unload_room while this holds,
+        because pyarco cannot reconnect to the Arco a later load_room
+        would spawn (arco.initialize() early-returns after the first
+        sync) and the Terrarium would be stranded in NO_ROOM."""
+        return not clients_stopped[0]
+
     def restart_clients():
         """Called from the NO_ROOM wait after a plain Console `load_room`
         succeeds. A no-op unless the clients were previously marked
@@ -1807,7 +1817,8 @@ def main() -> None:
                                          captures_root=Path("captures"),
                                          join_info=join_info,
                                          stop_room_clients=stop_clients,
-                                         restart_room_clients=restart_clients)
+                                         restart_room_clients=restart_clients,
+                                         clients_live=clients_live)
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)

@@ -180,6 +180,11 @@ function buildCard(room, rooms) {
         wire.send("unload_room", { force: true }, unloadBtn);
       });
     };
+    // D7 unload case: once Control's Arco clients have been live in this
+    // process an unload can never be followed by a reconnect, so the agent
+    // marks the row and the button is disabled with the reason as tooltip.
+    unloadBtn.disabled = Boolean(room.unload_blocked);
+    if (room.unload_blocked) unloadBtn.title = room.unload_blocked;
     actions.appendChild(unloadBtn);
     unloadBtnByName.set(room.name, unloadBtn);
   } else {

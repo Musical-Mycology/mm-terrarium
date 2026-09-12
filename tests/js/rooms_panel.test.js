@@ -161,5 +161,31 @@ function snapshotMsg(rooms, terrarium_state) {
   assert.ok(html().includes("Newcomer"), "new device appears");
   assert.ok(!html().includes("Wanderer"), "departed device disappears");
 
+  // 7. D7 unload case: a row whose unload_blocked carries a reason renders
+  //    its Unload button disabled with the reason as its tooltip; a row
+  //    without one keeps the button live.
+  const blockedReason = "unloading the Room in a running Terrarium is not supported yet";
+  send(snapshotMsg(
+    [
+      { name: "TEST", description: "Test room", status: null, active: true,
+        unload_blocked: blockedReason },
+      { name: "OTHER", description: "Other room", status: null, active: false,
+        unload_blocked: null },
+    ],
+    "ROOM_READY"));
+  const blockedUnload = rooms._unloadBtnFor("TEST");
+  assert.ok(blockedUnload, "active card still has an Unload button");
+  assert.strictEqual(blockedUnload.disabled, true, "Unload disabled when blocked");
+  assert.strictEqual(blockedUnload.title, blockedReason, "reason shown as tooltip");
+  send(snapshotMsg(
+    [
+      { name: "TEST", description: "Test room", status: null, active: true,
+        unload_blocked: null },
+      { name: "OTHER", description: "Other room", status: null, active: false,
+        unload_blocked: null },
+    ],
+    "ROOM_READY"));
+  assert.strictEqual(rooms._unloadBtnFor("TEST").disabled, false, "Unload live when not blocked");
+
   console.log("rooms_panel: ok");
 })().catch((e) => { console.error(e); process.exit(1); });
