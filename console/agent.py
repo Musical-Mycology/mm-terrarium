@@ -976,6 +976,16 @@ class ConsoleAgent:
             level = "warn"
         self.server.broadcast(protocol.log_event(level, message))
 
+    def on_prepare_requested(self, record) -> None:
+        if record.accepted:
+            message = f"prepare {record.bit} from {record.source}: accepted"
+            level = "info"
+        else:
+            message = (f"prepare {record.bit} from {record.source}: "
+                       f"refused ({record.reason})")
+            level = "warn"
+        self.server.broadcast(protocol.log_event(level, message))
+
     def on_lobby_event(self, event: str, dev: str) -> None:
         self.server.broadcast(protocol.log_event("info", f"lobby {event}: {dev}"))
 

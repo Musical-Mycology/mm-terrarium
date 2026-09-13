@@ -252,3 +252,64 @@ def test_accept_flash_is_gated_on_the_lobby_being_enabled(monkeypatch):
     assert gs.state is State.RUNNING
     agent.poll()
     assert agent._overrides == {}
+
+
+import threading
+
+from control.prepare import PrepareReply, PrepareRequest
+
+
+class _Authority:
+    def __init__(self, decision=None, raises=None):
+        self.decision = decision
+        self.raises = raises
+        self.seen = []
+
+    def request(self, req):
+        self.seen.append(req)
+        if self.raises is not None:
+            raise self.raises
+        return self.decision
+
+
+def _prepare_req():
+    return PrepareRequest("k", "TestBit", "gem-1", "web:gem-1",
+                          PrepareReply(threading.Event()))
+
+
+def test_prepare_queue_is_drained_on_poll_and_the_reply_is_filled(monkeypatch):
+    from control.prepare import PrepareDecision
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    auth = _Authority(PrepareDecision(False, "busy", "none", True))
+    agent.prepare_requests = queue.Queue()
+    agent.prepare_authority = auth
+    req = _prepare_req()
+    agent.prepare_requests.put(req)
+    agent.poll()
+    assert auth.seen == [req]
+    assert req.reply.done.is_set()
+    assert (req.reply.accepted, req.reply.reason, req.reply.visible) == (False, "busy", True)
+
+
+def test_prepare_without_an_authority_answers_not_wired(monkeypatch):
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    agent.prepare_requests = queue.Queue()
+    req = _prepare_req()
+    agent.prepare_requests.put(req)
+    agent.poll()
+    assert req.reply.done.is_set()
+    assert (req.reply.accepted, req.reply.reason, req.reply.visible) == (
+        False, "prepare is not wired", True)
+
+
+def test_prepare_raising_authority_answers_failed_and_keeps_polling(monkeypatch):
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    agent.prepare_requests = queue.Queue()
+    agent.prepare_authority = _Authority(raises=RuntimeError("boom"))
+    req = _prepare_req()
+    agent.prepare_requests.put(req)
+    agent.poll()
+    assert req.reply.done.is_set()
+    assert (req.reply.accepted, req.reply.reason, req.reply.visible) == (
+        False, "prepare failed", True)
+    agent.poll()      # nothing left, no raise

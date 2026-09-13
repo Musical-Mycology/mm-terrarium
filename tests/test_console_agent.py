@@ -2338,3 +2338,14 @@ def test_lobby_events_are_logged():
     gs.notify_lobby("invite", "ie1")
     logs = [m for m in srv.broadcasts if m.get("event") == "log"]
     assert logs[-1]["message"] == "lobby invite: ie1"
+
+
+def test_prepare_attempts_are_logged_to_the_console():
+    from control.prepare import PrepareRequested
+    gs, server, agent = _server_with_agent()
+    agent.on_prepare_requested(PrepareRequested("web:gem-1", "gem-1", "MetronomeBit", True, None))
+    agent.on_prepare_requested(PrepareRequested("web:gem-2", "gem-2", "MetronomeBit", False, "busy"))
+    logs = [m for m in server.broadcasts if m.get("event") == "log"]
+    assert logs[-2]["message"] == "prepare MetronomeBit from web:gem-1: accepted"
+    assert logs[-1]["message"] == "prepare MetronomeBit from web:gem-2: refused (busy)"
+    assert logs[-2]["level"] == "info" and logs[-1]["level"] == "warn"
