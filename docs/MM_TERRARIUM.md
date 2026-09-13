@@ -3630,19 +3630,27 @@ the serve-mode console flow; this slice stabilizes the load path. Design:
   `NO_ROOM` wait instead of exiting. **Final-review catch:** the
   `NO_ROOM`-boot call site initially omitted the `stop_clients` wiring;
   fixed and regression-pinned before merge.
-- **ABORT semantics change: hard stop.** Console abort now runs
+- **ABORT semantics change: hard stop.** Console abort ran
   `gs.abort()` then `terrarium.unload_room(force=True)` when a Terrarium
-  is wired -- Arco goes down, silence is guaranteed, post-state is
-  `NO_ROOM`. **The path back is a process restart, not Load Room
-  (corrected 2026-09-12):** once Control's Arco clients have been live,
-  D7 (below) means a later Load Room spawns an Arco that pyarco cannot
-  reconnect to, so after a hard ABORT the operator stops the process and
-  runs `./terrarium.sh` (or `./terrarium.sh --room <name>`). The
-  in-process Load-Room-then-Load-Bit recovery this sentence used to
-  promise was only ever true for a NO_ROOM boot whose clients had not
-  started yet. `terrarium=None` callers (terrarium-less embeddings)
-  keep the old bit-only abort, zero behavior change. Uplink abort is
-  unchanged.
+  was wired -- Arco down, silence guaranteed, post-state `NO_ROOM`.
+  **Superseded 2026-09-13 (D7's abort case, reproduced live):** once
+  Control's Arco clients have been live, the Room teardown left a
+  process that could never talk to another Arco, so a hard ABORT was a
+  one-way door: the next `load_bit` spawned a fresh Arco,
+  `_restart_room_clients` failed with `[Errno 32] Broken pipe`, and the
+  Room unloaded again. Console ABORT is now **Bit-only while the clients
+  are live** (the same `_unload_room_refusal` guard the Unload button
+  uses): `gs.abort()` runs the UNLOADING branch (devices released,
+  drones and pending cues stopped), the Room and Arco stay up, and the
+  serve loop falls back into `_wait_for_load` for the next Bit.
+  Live-verified on `./terrarium.sh --room DEMO`: load MetronomeBit,
+  ABORT, load MetronomeBit, ABORT, load TestBit, ABORT, all on one Arco
+  with no client restart. The Arco-down hard stop still applies when the
+  clients never started (an unload the guard allows), and
+  `terrarium=None` callers keep the bit-only abort as before. Uplink
+  abort is unchanged. Cosmetic: the harness prints `round ended: <bit>
+  (completed)` for a Bit-only ABORT, since `_serve_until_done` cannot
+  tell an operator abort from a Bit's own completion.
 - **RESTART (new).** A console command/button sits between Run and
   Abort: soft cycle -- capture the loaded Bit's name and the same config
   object, `gs.abort()`, `load_bit` the same name again. Room and Arco are
@@ -4312,9 +4320,11 @@ gets by default.
   Room from NO_ROOM and restarts Control's clients against the new Arco,
   printing `DeviceLink running on o2lite ensemble 'arco' (restarted)`,
   then the Bit loads. Or boot with `./terrarium.sh --room X` and load
-  only Bits whose `room_types` include X, never unloading. Unload and
-  hard ABORT both end the process's useful life; the Console refuses the
-  former and the way back from either is stop and rerun `terrarium.sh`.
+  only Bits whose `room_types` include X, never unloading. Unload ends
+  the process's useful life, so the Console refuses it; the way back is
+  stop and rerun `terrarium.sh`. ABORT no longer does (2026-09-13): with
+  live clients it ends the Bit only, and the next `load_bit` reuses the
+  Room and Arco.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2246 passed, 1 skipped**.
