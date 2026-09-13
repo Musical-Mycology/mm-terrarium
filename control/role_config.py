@@ -129,6 +129,21 @@ def _validate_string_list(role: Role, field_name: str) -> None:
                 f"{where}[{idx}]: must be a non-empty string, got {entry!r}")
 
 
+def carried_instrument_view(carried: Instrument) -> dict:
+    """The `instrument` section of a /ie<N>/role blob for `carried`: the one
+    wire shape a generic host (mm-tuneshroom) parses. Also what
+    tools/export_solo.py bundles, so solo mode and a granted role read the
+    same definition."""
+    return {
+        "name": carried.name,
+        "capabilities": sorted(carried.capabilities),
+        "pixels": carried.pixels,
+        "ambient": {"light": deepcopy(carried.light_manifest),
+                    "ugen": deepcopy(carried.ugen_manifest)},
+        "functions": [function_view(f) for f in carried.functions],
+    }
+
+
 def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
                         room_name: str | None = None,
                         terrarium_config_version: str | None = None,
@@ -195,14 +210,7 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
         config["triggers"] = {t.name: dict(t.thresholds)
                               for t in event_triggers}
     if carried is not None:
-        config["instrument"] = {
-            "name": carried.name,
-            "capabilities": sorted(carried.capabilities),
-            "pixels": carried.pixels,
-            "ambient": {"light": deepcopy(carried.light_manifest),
-                        "ugen": deepcopy(carried.ugen_manifest)},
-            "functions": [function_view(f) for f in carried.functions],
-        }
+        config["instrument"] = carried_instrument_view(carried)
     return config
 
 

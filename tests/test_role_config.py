@@ -568,3 +568,11 @@ def test_manifest_fixture_targets_collects_named_fixtures():
 def test_manifest_fixture_targets_refuses_unknown_names(target):
     with pytest.raises(ValueError, match="instruments\\[0\\]"):
         manifest_fixture_targets({"instruments": [_decl(target)]}, _PROFILE)
+
+
+def test_carried_instrument_view_matches_compose_section():
+    from control.instrument import TUNESHROOM
+    from control.role_config import carried_instrument_view
+
+    config = compose_role_config("Bit", "0.1", make_role(), carried=TUNESHROOM)
+    assert config["instrument"] == carried_instrument_view(TUNESHROOM)

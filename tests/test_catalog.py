@@ -285,3 +285,42 @@ def test_clone_entry_refuses_an_unknown_kind(tmp_path):
     with pytest.raises(ValueError, match="unknown catalog kind"):
         clone_entry(tmp_path, "published", "glowcap", "glowcap2", kind="widget")
     assert not (tmp_path / "drafts").exists()
+
+
+SOLO = GOOD + '''
+[[functions]]
+name = "bloom"
+kind = "scripted"
+description = "a scripted test function"
+script = [ { offset = 0.0, midi = [176, 74, 127] } ]
+
+[solo]
+  [solo.ambient.light]
+  instruments = [ { instrument = "aurora", target = "primary" } ]
+  [solo.bindings]
+  tap = "bloom"
+'''
+
+
+def test_published_entry_parses_solo_table(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "glowcap.toml").write_text(SOLO)
+    inst = load_catalog(root).published["glowcap"]
+    assert inst.solo is not None
+    assert inst.solo.bindings == {"tap": "bloom"}
+    assert inst.solo.light_manifest["instruments"][0]["instrument"] == "aurora"
+
+
+def test_published_entry_without_solo_has_none(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "glowcap.toml").write_text(GOOD)
+    assert load_catalog(root).published["glowcap"].solo is None
+
+
+def test_shipped_tuneshroom_declares_solo():
+    root = Path(__file__).resolve().parents[1] / "instruments"
+    inst = load_catalog(root).published["tuneshroom"]
+    assert inst.solo.bindings == {
+        "tap": "play_aurora", "double_tap": "win", "shake": "fireworks_player"}
+    assert inst.solo.light_manifest["instruments"] == [
+        {"instrument": "aurora", "target": "primary"}]

@@ -3018,7 +3018,11 @@ and its plan
   that PR: `RoleTable` takes `node_map`, not `node_fallbacks`;
   `role_table` and `function_table` are `@property` on the `Bit` ABC,
   so GlowBit implements both as properties; the ROOM role's import
-  comes from `control.cues`.
+  comes from `control.cues`. Since the solo export (2026-09-13) carried
+  instruments may carry a `[solo]` table; `tools/export_solo.py` writes
+  the JSON mm-tuneshroom bundles for standalone mode, and
+  `control.role_config.carried_instrument_view` is the single serializer
+  both paths share.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **1667 passed, 1 skipped** (up from 1634 passed, 1 skipped). The Spec 1,

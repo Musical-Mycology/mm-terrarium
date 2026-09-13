@@ -48,6 +48,18 @@ class InstrumentError(ValueError):
     pass
 
 
+SOLO_EVENTS = frozenset({"tap", "double_tap", "shake"})
+
+
+@dataclass(frozen=True)
+class SoloConfig:
+    """What a carried instrument does with no hub (spec
+    2026-09-13-standalone-solo-mode-design, mm-tuneshroom): an idle
+    ambient.light manifest and event -> declared-function bindings."""
+    light_manifest: dict = field(default_factory=dict)
+    bindings: dict = field(default_factory=dict)  # event -> function name
+
+
 @dataclass(frozen=True)
 class Instrument:
     name: str
@@ -60,6 +72,7 @@ class Instrument:
     ugen_manifest: dict = field(default_factory=dict)
     event_triggers: tuple[EventTrigger, ...] = ()
     stream_triggers: tuple[StreamTrigger, ...] = ()
+    solo: SoloConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +126,18 @@ def validate_instrument(instrument: Instrument) -> None:
                     f"instrument {instrument.name!r}: function {fn.name!r} "
                     f"script[{i}] is a {kind!r} cue but accepted_cues is "
                     f"{list(instrument.accepted_cues)}")
+    if instrument.solo is not None:
+        declared = {fn.name for fn in instrument.functions}
+        for event, fn_name in instrument.solo.bindings.items():
+            if event not in SOLO_EVENTS:
+                raise InstrumentError(
+                    f"instrument {instrument.name!r}: unknown solo event "
+                    f"{event!r}; known: {sorted(SOLO_EVENTS)}")
+            if fn_name not in declared:
+                raise InstrumentError(
+                    f"instrument {instrument.name!r}: solo binding "
+                    f"{event!r} -> {fn_name!r} names no declared function; "
+                    f"declared: {sorted(declared)}")
     where = f"instrument {instrument.name!r}"
     try:
         for trig in instrument.event_triggers:
@@ -250,6 +275,11 @@ TUNESHROOM = Instrument(
             name="shake", description="a shake gesture",
             thresholds={"peak_g": 2.0, "window_ms": 200}),
     ),
+    solo=SoloConfig(
+        light_manifest={"instruments": [
+            {"instrument": "aurora", "target": "primary"}]},
+        bindings={"tap": "play_aurora", "double_tap": "win",
+                  "shake": "fireworks_player"}),
 )
 
 
