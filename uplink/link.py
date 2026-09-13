@@ -22,7 +22,7 @@ class UplinkAgent:
 
     def __init__(self, game_server: GameServer, transport, *,
                  time_source=time.monotonic, registry=None, terrarium=None,
-                 identity=None, lan_ip=None):
+                 identity=None, lan_ip=None, journal=None):
         self.game_server = game_server
         self.transport = transport
         self.registry = registry
@@ -44,6 +44,10 @@ class UplinkAgent:
         # (a normal unload) does. Captured on ROOM_UNLOADING entry, before
         # Terrarium clears .room.
         self._unloading_room_name: str | None = None
+        # uplink/journal.py Journal or None: bit_completed is appended before
+        # any send and replayed after the resync over a durable transport
+        # (spec 2026-09-13 section 6.4).
+        self.journal = journal
         game_server.add_observer(self)
         if terrarium is not None:
             terrarium.add_observer(self)
@@ -70,6 +74,23 @@ class UplinkAgent:
         if self.identity is not None:
             self._send(protocol.identity_frame(self.identity))
         self._send_resync()
+        self._replay_journal()
+
+    def _replay_journal(self) -> None:
+        if self.journal is None or not getattr(self.transport, "durable", False):
+            return
+        entries = self.journal.entries()
+        for event in entries:
+            if not self.transport.connected:
+                return
+            try:
+                self.transport.send(event)
+            except Exception:
+                logger.warning("uplink dropped mid-replay; %d journal entries "
+                               "kept for the next connect", len(entries))
+                return
+        if entries:
+            self.journal.clear()
 
     def _send_resync(self) -> None:
         terrarium_state = (
@@ -224,6 +245,11 @@ class UplinkAgent:
         self._emit_bit_completed(event)
 
     def _emit_bit_completed(self, event: dict) -> None:
+        if self.journal is not None:
+            try:
+                self.journal.append(event)
+            except OSError:
+                logger.exception("could not journal bit_completed; sending live only")
         self._send(event)
 
     def on_registration_change(self) -> None:

@@ -5,6 +5,7 @@ from control.bit_config import ManifestError
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from tests.test_engine import RoomCapableBit, make_room
+from uplink.journal import Journal
 from uplink.link import UplinkAgent
 from uplink.transport import FakeTransport
 
@@ -717,3 +718,89 @@ def test_a_raising_lan_ip_is_omitted_not_fatal():
     agent = UplinkAgent(server, transport, lan_ip=boom, time_source=FakeClock())
     agent.maintain_connection()
     assert "lan_ip" not in transport.sent[0]
+
+
+def _completed_round(server):
+    server.load_bit("test_bit")
+    server.run()
+    server.tick(3.0)
+
+
+def test_bit_completed_is_journaled_even_while_disconnected(tmp_path):
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    _completed_round(server)          # never connected
+    assert [e["event"] for e in journal.entries()] == ["bit_completed"]
+    assert transport.sent == []
+
+
+def test_replay_after_resync_on_a_durable_transport_then_clear(tmp_path):
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    journal.append({"event": "bit_completed", "bit": {"name": "old", "version": "0"},
+                    "result": None, "players": []})
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    agent.maintain_connection()
+    events = [m["event"] for m in transport.sent]
+    assert events[0] == "state_changed"
+    assert events[-1] == "bit_completed"
+    assert transport.sent[-1]["bit"]["name"] == "old"
+    assert journal.entries() == []
+
+
+def test_live_send_and_journal_both_happen_when_connected(tmp_path):
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    agent.maintain_connection()
+    _completed_round(server)
+    assert [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert len(journal.entries()) == 1       # trimmed only on the next replay
+    transport.disconnect()
+    transport.sent.clear()
+    agent.maintain_connection()
+    assert [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert journal.entries() == []
+
+
+def test_non_durable_transport_replays_nothing_and_clears_nothing(tmp_path):
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport(durable=False)
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    journal.append({"event": "bit_completed", "bit": {"name": "old", "version": "0"},
+                    "result": None, "players": []})
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    agent.maintain_connection()
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    assert len(journal.entries()) == 1
+
+
+def test_a_send_that_raises_mid_replay_leaves_the_journal_intact(tmp_path):
+    class DroppingTransport(FakeTransport):
+        def send(self, msg):
+            if msg.get("event") == "bit_completed" and msg["bit"]["name"] == "second":
+                self.connected = False
+                raise ConnectionError("dropped")
+            super().send(msg)
+
+    server = GameServer(bit_registry=REGISTRY)
+    transport = DroppingTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    for name in ("first", "second", "third"):
+        journal.append({"event": "bit_completed", "bit": {"name": name, "version": "0"},
+                        "result": None, "players": []})
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    agent.maintain_connection()          # must not raise
+    assert [e["bit"]["name"] for e in journal.entries()] == ["first", "second", "third"]
+    assert transport.connected is False
+
+
+def test_no_journal_means_no_replay_and_no_file(tmp_path):
+    agent, server, transport = make_agent()
+    transport.disconnect()
+    agent.maintain_connection()
+    assert not list(tmp_path.iterdir())
