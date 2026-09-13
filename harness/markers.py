@@ -129,6 +129,11 @@ START_URL = "START_URL:"
 # after START_URL; echoed by run_stack, never waited on.
 PREPARE_URL = "PREPARE_URL:"
 
+# Printed once at startup when terrarium.toml has an [uplink] table:
+# "UPLINK: log-only tenant=<slug>" or "UPLINK: <url> tenant=<slug>". Never
+# carries the secret. Echoed by run_stack, never waited on.
+UPLINK = "UPLINK:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,
