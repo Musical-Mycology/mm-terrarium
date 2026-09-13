@@ -3,6 +3,7 @@ an actual socket. See design spec section 3.
 """
 
 import json
+import logging
 from collections import deque
 from typing import Protocol
 
@@ -11,6 +12,8 @@ from websockets.sync.client import connect as ws_connect
 
 from control.wire_json import dumps as _json_dumps
 
+logger = logging.getLogger(__name__)
+
 
 class Transport(Protocol):
     """What UplinkAgent needs from a connection to fairyring. Non-blocking:
@@ -18,6 +21,10 @@ class Transport(Protocol):
     """
 
     connected: bool
+    # True when a send() that returns without raising has left the box on
+    # a real socket; the agent replays and trims its journal only then
+    # (spec 2026-09-13 section 6.3).
+    durable: bool
 
     def connect(self) -> None:
         """Establish (or re-establish) the connection."""
@@ -36,8 +43,9 @@ class FakeTransport:
     inbound messages via `push_incoming` and inspect `sent`.
     """
 
-    def __init__(self):
+    def __init__(self, durable: bool = True):
         self.connected = False
+        self.durable = durable
         self.sent: list[dict] = []
         self._incoming: deque[dict] = deque()
         self.connect_count = 0
@@ -71,6 +79,8 @@ class WebSocketTransport:
     blocks the caller's loop.
     """
 
+    durable = True
+
     def __init__(self, uri: str):
         self.uri = uri
         self.connected = False
@@ -100,3 +110,26 @@ class WebSocketTransport:
             self.connected = False
             return None
         return json.loads(raw)
+
+
+class LogTransport:
+    """A box with [uplink] but no broker URL: frames go to the log so the
+    identity, resync and journal-append paths run live, and nothing is ever
+    trimmed on its account (durable is False)."""
+
+    durable = False
+
+    def __init__(self) -> None:
+        self.connected = False
+
+    def connect(self) -> None:
+        self.connected = True
+
+    def send(self, msg: dict) -> None:
+        shown = dict(msg)
+        if "secret" in shown:
+            shown["secret"] = "[redacted]"
+        logger.debug("uplink (log-only) %s", _json_dumps(shown))
+
+    def receive(self) -> dict | None:
+        return None
