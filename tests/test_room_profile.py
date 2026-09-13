@@ -324,3 +324,38 @@ def test_no_control_module_imports_a_renderer_at_module_level():
                 offenders.append(f"{path.name}:{lineno}: {line.strip()}")
     assert offenders == [], ("control/ must have no module-level renderer "
                              "imports:\n" + "\n".join(offenders))
+
+
+def _module_level_import_offenders(package_dir: pathlib.Path, banned: tuple):
+    offenders = []
+    for path in sorted(package_dir.glob("*.py")):
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            if line[:1].isspace():          # indented: function-scoped, allowed
+                continue
+            if not (line.startswith("import ") or line.startswith("from ")):
+                continue
+            if any(line.split()[1].split(".")[0] == pkg for pkg in banned):
+                offenders.append(f"{path.name}:{lineno}: {line.strip()}")
+    return offenders
+
+
+def test_control_never_imports_uplink_or_harness():
+    """The plan claims these boundaries are pinned by test, but only the
+    renderer boundary (above) was. control/ must never import uplink/ or
+    harness/ -- uplink is a thin translation layer built on top of control,
+    and harness is the process/CLI entry point; a dependency running the
+    other way would be a layering inversion (design spec sections 3-5)."""
+    control_dir = pathlib.Path(__file__).resolve().parent.parent / "control"
+    offenders = _module_level_import_offenders(control_dir, ("uplink", "harness"))
+    assert offenders == [], ("control/ must not import uplink/ or harness/:\n"
+                             + "\n".join(offenders))
+
+
+def test_uplink_never_imports_harness():
+    """uplink/ translates between the wire protocol and GameServer calls; it
+    must stay independent of harness/, the process/CLI entry point that
+    constructs it (design spec sections 3-5). lan_ip is injected as a
+    callable specifically so this boundary holds."""
+    uplink_dir = pathlib.Path(__file__).resolve().parent.parent / "uplink"
+    offenders = _module_level_import_offenders(uplink_dir, ("harness",))
+    assert offenders == [], "uplink/ must not import harness/:\n" + "\n".join(offenders)
