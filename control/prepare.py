@@ -11,10 +11,16 @@ as the web start queue.
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass, field
 
+from control.bit_config import ManifestError
+from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.state import State
+from control.terrarium import TerrariumState
+
+logger = logging.getLogger(__name__)
 
 ACTION_LOAD = "load"
 ACTION_NOOP = "noop"
@@ -80,3 +86,41 @@ def decide_prepare(*, room_ready: bool, state: State, loaded_bit: str | None,
     if state is State.SETUP and loaded_bit == bit:
         return PrepareDecision(True, None, ACTION_NOOP, True)
     return PrepareDecision(False, REASON_BUSY, ACTION_NONE, True)
+
+
+class PrepareAuthority:
+    """Applies decide_prepare against the registry and the engine. Called
+    on the tick thread only (DeviceLinkAgent's drain). Never raises; every
+    outcome is a PrepareDecision and every attempt fires
+    on_prepare_requested through the engine."""
+
+    def __init__(self, game_server: GameServer, registry, terrarium=None) -> None:
+        self.game_server = game_server
+        self.registry = registry
+        self.terrarium = terrarium
+
+    def _room_ready(self) -> bool:
+        return (self.terrarium is None
+                or self.terrarium.state is TerrariumState.ROOM_READY)
+
+    def request(self, req: PrepareRequest) -> PrepareDecision:
+        gs = self.game_server
+        pkg = self.registry.packages.get(req.bit)
+        cond = pkg.config.start if pkg is not None else None
+        decision = decide_prepare(
+            room_ready=self._room_ready(), state=gs.state,
+            loaded_bit=gs.bit_name, bit=req.bit, known=pkg is not None,
+            when=cond.when if cond is not None else None,
+            expected_key=cond.key if cond is not None else None,
+            key=req.key)
+        if decision.action == ACTION_LOAD:
+            try:
+                cfg = self.registry.resolve_config(req.bit)
+                gs.load_bit(req.bit, config=cfg)
+            except (ManifestError, KeyError, BitLoadError,
+                    InvalidTransition) as exc:
+                decision = PrepareDecision(False, str(exc), ACTION_NONE, True)
+        gs.notify_prepare_requested(PrepareRequested(
+            source=req.source, source_dev=req.dev, bit=req.bit,
+            accepted=decision.accepted, reason=decision.reason))
+        return decision
