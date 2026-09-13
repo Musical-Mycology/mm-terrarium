@@ -23,3 +23,5 @@ def test_the_wrapper_runs_run_stack_bitless_in_serve_mode_on_8772():
     assert text.rstrip().endswith('"$@"'), \
         "user flags must come last so they override the defaults"
     assert "PYTHONPATH=" in text
+    assert "/Users/" not in text, "arco path must not be hardcoded; use ARCO_ROOT"
+    assert "ARCO_ROOT" in text
