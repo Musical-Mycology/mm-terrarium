@@ -155,7 +155,11 @@ class UplinkAgent:
         self._send(protocol.state_changed_event(
             new_state.name, self.game_server.bit_name,
             terrarium_state=terrarium_state))
-        if new_state == State.UNLOADING:
+        # COMPLETING is reached only by the tick-triggered completion path;
+        # abort() skips it, so an aborted round is never reported as
+        # completed (spec 2026-09-13 section 5.3). Registration is still
+        # populated here; it is released during UNLOADING.
+        if new_state == State.COMPLETING:
             self._send_bit_completed()
 
     # --- terrarium observer callbacks ---------------------------------------
@@ -188,20 +192,25 @@ class UplinkAgent:
         self._send(protocol.room_load_progress_event(stage))
 
     def _send_bit_completed(self) -> None:
-        bit = self.game_server.bit
+        gs = self.game_server
+        bit = gs.bit
         if bit is None:
             return
         try:
             result = bit.result()
         except Exception:
-            logger.exception("Bit.result raised; not sending bit_completed")
-            return
-        if result is not None:
-            self._send(protocol.bit_completed_event(
-                result, self.game_server.bit_name or "", bit.version,
-                room_name=self.game_server.provenance.get("room_name"),
-                terrarium_config_version=self.game_server.provenance.get(
-                    "terrarium_config_version")))
+            logger.exception("Bit.result raised; sending bit_completed with a null result")
+            result = None
+        granted = gs.registration.granted() if gs.registration is not None else []
+        event = protocol.bit_completed_event(
+            result, gs.bit_name or "", bit.version,
+            room_name=gs.provenance.get("room_name"),
+            terrarium_config_version=gs.provenance.get("terrarium_config_version"),
+            players=protocol.players_view(granted))
+        self._emit_bit_completed(event)
+
+    def _emit_bit_completed(self, event: dict) -> None:
+        self._send(event)
 
     def on_registration_change(self) -> None:
         counts = non_room_counts(self.game_server.registration)

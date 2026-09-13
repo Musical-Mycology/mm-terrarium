@@ -1,3 +1,5 @@
+import pytest
+
 from bits.test.test_bit import TestBit
 from control.bit_config import ManifestError
 from control.engine import GameServer
@@ -131,7 +133,7 @@ def test_registration_changes_are_sent_as_events():
     assert roles["player"] == 1
 
 
-def test_bit_completed_sent_at_unload_when_result_present():
+def test_bit_completed_sent_at_completing_when_result_present():
     class ScoringBit(TestBit):
         def result(self):
             return {"score": 99}
@@ -172,16 +174,20 @@ def test_exploding_result_does_not_wedge_state_machine():
     assert released == ["ie1"]  # device was released, not stranded
     assert server.bit is None
     assert server.registration is None
-    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert len(completed) == 1 and completed[0]["result"] is None
+    assert completed[0]["players"] == [{"dev": "ie1", "role": "player", "class": "scored"}]
 
 
-def test_no_bit_completed_event_when_result_is_none():
+def test_bit_completed_with_null_result_when_bit_has_none():
     agent, server, transport = make_agent()
     server.load_bit("test_bit")
     server.run()
     server.tick(3.0)
 
-    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert len(completed) == 1 and completed[0]["result"] is None
+    assert completed[0]["players"] == []
 
 
 def test_events_not_sent_while_disconnected():
@@ -193,6 +199,61 @@ def test_events_not_sent_while_disconnected():
     server.load_bit("test_bit")
 
     assert transport.sent == []
+
+
+def test_bit_completed_carries_players_captured_before_release():
+    agent, server, transport = make_agent()
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.hello("ie2", "Testshroom 2", "1.0")
+    server.load_bit("test_bit")
+    server.join("ie1", "TEST_PLAYER_NODE")
+    server.join("ie2", "TEST_JAM_NODE")
+    server.run()
+    server.tick(3.0)
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert completed[0]["players"] == [
+        {"dev": "ie1", "role": "player", "class": "scored"},
+        {"dev": "ie2", "role": "jammer", "class": "jam"}]
+    states = [m["state"] for m in transport.sent if m["event"] == "state_changed"]
+    # sent on COMPLETING, i.e. before the UNLOADING state_changed
+    idx_completed = transport.sent.index(completed[0])
+    idx_unloading = next(i for i, m in enumerate(transport.sent)
+                         if m.get("event") == "state_changed" and m["state"] == "UNLOADING")
+    assert idx_completed < idx_unloading
+
+
+def test_abort_sends_no_bit_completed():
+    class ScoringBit(TestBit):
+        def result(self):
+            return {"score": 99}
+    server = GameServer(bit_registry={"scoring_bit": ScoringBit})
+    transport = FakeTransport()
+    UplinkAgent(server, transport)
+    transport.connect()
+    server.load_bit("scoring_bit")
+    server.run()
+    server.abort()
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    assert server.state.name == "IDLE"
+
+
+@pytest.mark.xfail(
+    reason="NEEDS_CONTEXT (task 7): GameServer.hello/join never refuse the "
+           "reserved 'terrarium' id -- that refusal lives only in "
+           "devicelink/agent.py's wire-level hello handling (dev == "
+           "TERRARIUM_ADMIN check), which server.hello() called directly "
+           "here bypasses. join('terrarium', ...) is granted. See task-7 "
+           "report for details; out of scope for uplink/link.py.",
+    strict=True)
+def test_the_reserved_terrarium_id_never_appears_in_players():
+    agent, server, transport = make_agent()
+    server.hello("terrarium", "Box", "1.0")      # refused at hello
+    server.load_bit("test_bit")
+    assert server.join("terrarium", "TEST_PLAYER_NODE").granted is False
+    server.run()
+    server.tick(3.0)
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert completed[0]["players"] == []
 
 
 class FakeClock:
