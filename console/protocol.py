@@ -19,6 +19,7 @@ from uplink.protocol import (  # re-exported: single source of truth
     bits_listed_event,
     error_event,
     parse_command,
+    players_view,
     registration_changed_event,
     room_load_failed_event,
     room_load_progress_event,
@@ -30,7 +31,7 @@ from uplink.protocol import (  # re-exported: single source of truth
 __all__ = [
     "AbortCommand", "ListBitsCommand", "LoadBitCommand", "RunCommand",
     "LoadRoomCommand", "UnloadRoomCommand", "RestartCommand",
-    "parse_command", "bit_completed_event", "bits_listed_event",
+    "parse_command", "bit_completed_event", "bits_listed_event", "players_view",
     "error_event", "registration_changed_event",
     "room_loaded_event", "room_unloaded_event", "room_load_failed_event",
     "room_load_progress_event",

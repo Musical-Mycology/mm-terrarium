@@ -885,6 +885,25 @@ def test_bit_completed_event_carries_bit_name_and_version():
                           "bit": {"name": "scoring_bit", "version": "0.1"}, "players": []}]
 
 
+def test_bit_completed_event_carries_joined_players():
+    class ScoringBit(TestBit):
+        def result(self):
+            return {"score": 99}
+
+    gs = GameServer(bit_registry={"scoring_bit": ScoringBit})
+    srv = FakeConsoleServer()
+    ConsoleAgent(gs, srv)
+    gs.hello("ie1", "Testshroom 1", "1.0")
+    gs.load_bit("scoring_bit")
+    gs.join("ie1", "TEST_PLAYER_NODE")
+    gs.run()
+    gs.tick(3.0)
+
+    completed = [m for m in srv.broadcasts if m.get("event") == "bit_completed"]
+    assert completed[0]["players"] == [
+        {"dev": "ie1", "role": "player", "class": "scored"}]
+
+
 # --- Task 6: room commands, terrarium-state gating, rooms snapshot --------
 
 from control.terrarium import TerrariumState

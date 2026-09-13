@@ -1006,8 +1006,11 @@ class ConsoleAgent:
             logger.exception("Bit.result raised; not broadcasting bit_completed")
             return
         if result is not None:
+            gs = self.game_server
+            granted = gs.registration.granted() if gs.registration is not None else ()
             self.server.broadcast(protocol.bit_completed_event(
-                result, self.game_server.bit_name or "", bit.version,
-                room_name=self.game_server.provenance.get("room_name"),
-                terrarium_config_version=self.game_server.provenance.get(
-                    "terrarium_config_version")))
+                result, gs.bit_name or "", bit.version,
+                room_name=gs.provenance.get("room_name"),
+                terrarium_config_version=gs.provenance.get(
+                    "terrarium_config_version"),
+                players=protocol.players_view(granted)))
