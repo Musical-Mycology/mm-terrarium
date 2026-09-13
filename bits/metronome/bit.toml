@@ -22,7 +22,7 @@ player = "METRO_PLAYER_NODE"
 [start]
 when = "admin"
 key = "metro-dev"
-min_scored = 2
+min_scored = 1
 
 [console]
 display_name = "Metronome"

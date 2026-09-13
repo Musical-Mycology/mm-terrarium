@@ -4273,7 +4273,7 @@ gets by default.
 - **`[start] when = "admin"`** with a required `key`; `min_scored` defaults
   to 0 there. The harness hold waits with no deadline (a `timeout_seconds`
   still applies). MetronomeBit ships `when = "admin"`, `key = "metro-dev"`,
-  `min_scored = 2`; `profiles/dev-metronome.toml` no longer overrides
+  `min_scored = 1` (was 2 until 2026-09-13, so one player can start a round); `profiles/dev-metronome.toml` no longer overrides
   `[start]`.
 - **`devicelink/lobby_runtime.py`** does the light and sound through sinks
   the agent injects: on SETUP every fixture session swaps to a lobby
