@@ -1,6 +1,7 @@
 import pytest
 
 import argparse
+import logging
 import os
 import sys
 import time
@@ -3624,6 +3625,34 @@ def test_pump_uplink_maintains_then_polls_and_tolerates_none():
     _pump_uplink(None)
     _pump_uplink(Up())
     assert calls == ["maintain", "poll"]
+
+
+def test_pump_uplink_swallows_a_raising_maintain_connection(caplog):
+    from harness.terrarium_boot import _pump_uplink
+
+    class Boom:
+        def maintain_connection(self):
+            raise RuntimeError("boom")
+
+        def poll(self):
+            raise AssertionError("poll must not run after maintain_connection raised")
+
+    with caplog.at_level(logging.ERROR, logger="harness.terrarium_boot"):
+        _pump_uplink(Boom())  # must not raise
+    assert any("boom" in r.getMessage() or r.exc_info for r in caplog.records)
+
+
+def test_pump_uplink_swallows_a_raising_poll():
+    from harness.terrarium_boot import _pump_uplink
+
+    class Boom:
+        def maintain_connection(self):
+            pass
+
+        def poll(self):
+            raise RuntimeError("boom")
+
+    _pump_uplink(Boom())  # must not raise
 
 
 def test_wait_in_setup_pumps_the_uplink():

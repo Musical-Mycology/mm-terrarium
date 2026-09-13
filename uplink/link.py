@@ -71,14 +71,20 @@ class UplinkAgent:
             return
         self._backoff = self.INITIAL_BACKOFF_SECONDS
         self._next_attempt_at = 0.0
-        if self.identity is not None:
-            self._send(protocol.identity_frame(self.identity))
-        self._send_resync()
-        self._replay_journal()
+        try:
+            if self.identity is not None:
+                self._send(protocol.identity_frame(self.identity))
+            self._send_resync()
+            self._replay_journal()
+        except Exception:
+            logger.warning("uplink send failed right after connect; "
+                            "leaving the retry to the backoff schedule")
+            return
 
     def _replay_journal(self) -> None:
         if self.journal is None or not getattr(self.transport, "durable", False):
             return
+        had_lines = not self.journal.is_empty()
         entries = self.journal.entries()
         for event in entries:
             if not self.transport.connected:
@@ -89,7 +95,7 @@ class UplinkAgent:
                 logger.warning("uplink dropped mid-replay; %d journal entries "
                                "kept for the next connect", len(entries))
                 return
-        if entries:
+        if had_lines:
             self.journal.clear()
 
     def _send_resync(self) -> None:
@@ -119,7 +125,11 @@ class UplinkAgent:
         if not self.transport.connected:
             return
         while True:
-            msg = self.transport.receive()
+            try:
+                msg = self.transport.receive()
+            except Exception:
+                logger.warning("uplink receive failed; will retry next tick")
+                return
             if msg is None:
                 return
             self._handle_message(msg)

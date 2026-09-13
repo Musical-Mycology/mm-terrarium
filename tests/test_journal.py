@@ -48,6 +48,26 @@ def test_clear_truncates(tmp_path):
     assert (tmp_path / "j.jsonl").read_text() == ""
 
 
+def test_is_empty_true_for_missing_file(tmp_path):
+    j = Journal(str(tmp_path / "runs" / "j.jsonl"))
+    assert j.is_empty() is True
+
+
+def test_is_empty_false_when_file_has_raw_lines_even_if_all_corrupt(tmp_path):
+    p = tmp_path / "j.jsonl"
+    p.write_text("not json\nalso not json\n")
+    j = Journal(str(p))
+    assert j.entries() == []
+    assert j.is_empty() is False
+
+
+def test_is_empty_true_after_clear(tmp_path):
+    j = Journal(str(tmp_path / "j.jsonl"))
+    j.append({"n": 1})
+    j.clear()
+    assert j.is_empty() is True
+
+
 def test_lines_go_through_wire_json(tmp_path, monkeypatch):
     import uplink.journal as journal_module
     calls = []

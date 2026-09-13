@@ -195,11 +195,21 @@ def _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir):
 
 def _pump_uplink(uplink) -> None:
     """One uplink tick: reconnect on the backoff schedule, then drain
-    inbound commands. Called wherever console_agent.poll() is."""
+    inbound commands. Called wherever console_agent.poll() is.
+
+    maintain_connection()/poll() promise never to raise, but a bug in
+    either -- or in agent code they call into -- must not unwind the
+    caller's wait loop and tear the venue box down (see the design
+    spec's fix wave, finding 1). Belt-and-suspenders: catch here too, and
+    log once with the traceback."""
     if uplink is None:
         return
-    uplink.maintain_connection()
-    uplink.poll()
+    try:
+        uplink.maintain_connection()
+        uplink.poll()
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "uplink pump raised; leaving the venue box running")
 
 
 def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip):

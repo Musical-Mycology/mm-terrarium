@@ -55,6 +55,14 @@ class Journal:
                                self.path, number)
         return out
 
+    def is_empty(self) -> bool:
+        """True when the file is missing or has no raw lines at all --
+        distinct from entries() == [], which is also true when every raw
+        line is corrupt JSON. Callers that need to know whether there is
+        anything left to truncate (see _replay_journal in uplink/link.py)
+        must use this, not `not entries()`."""
+        return not self._lines()
+
     def clear(self) -> None:
         with open(self.path, "w", encoding="utf-8"):
             pass

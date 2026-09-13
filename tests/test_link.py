@@ -804,3 +804,88 @@ def test_no_journal_means_no_replay_and_no_file(tmp_path):
     transport.disconnect()
     agent.maintain_connection()
     assert not list(tmp_path.iterdir())
+
+
+# --- fix wave: maintain_connection/poll must never raise to the caller ----
+
+class SendFailsOnceTransport(FakeTransport):
+    """Connects fine, but the first send() after connect raises -- e.g. the
+    identity frame or the resync hits a socket that closed right away."""
+
+    def __init__(self, fail_on: str):
+        super().__init__()
+        self._fail_on = fail_on
+        self.fail_count = 0
+
+    def send(self, msg: dict) -> None:
+        should_fail = (
+            self.fail_count == 0
+            and ((self._fail_on == "identity" and msg.get("event") == "identity")
+                 or (self._fail_on == "resync" and msg.get("event") == "state_changed")))
+        if should_fail:
+            self.fail_count += 1
+            self.connected = False
+            raise ConnectionError("closed right after connect")
+        super().send(msg)
+
+
+class ReceiveRaisesTransport(FakeTransport):
+    def receive(self):
+        raise ConnectionError("socket error on recv")
+
+
+def test_send_failure_on_identity_frame_does_not_raise_and_allows_reconnect():
+    from uplink.protocol import UplinkIdentity
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = SendFailsOnceTransport(fail_on="identity")
+    ident = UplinkIdentity("mm", "main-stage", "ab" * 32)
+    agent = UplinkAgent(server, transport, identity=ident, time_source=clock)
+
+    agent.maintain_connection()  # connects, then identity send raises
+    assert transport.fail_count == 1
+    assert transport.connected is False
+
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS + 0.1)
+    agent.maintain_connection()  # backoff elapsed -- retries and connects
+    assert transport.connected is True
+
+
+def test_send_failure_on_resync_does_not_raise_and_allows_reconnect():
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = SendFailsOnceTransport(fail_on="resync")
+    agent = UplinkAgent(server, transport, time_source=clock)
+
+    agent.maintain_connection()  # connects, resync send raises
+    assert transport.fail_count == 1
+    assert transport.connected is False
+
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS + 0.1)
+    agent.maintain_connection()
+    assert transport.connected is True
+
+
+def test_poll_returns_without_raising_when_receive_raises():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = ReceiveRaisesTransport()
+    agent = UplinkAgent(server, transport, time_source=FakeClock())
+    transport.connect()
+
+    agent.poll()  # must not raise
+
+
+# --- fix wave: an all-corrupt journal is still truncated on replay --------
+
+def test_all_corrupt_journal_replays_nothing_and_is_cleared(tmp_path):
+    path = tmp_path / "j.jsonl"
+    path.write_text("not json\nalso not json\n")
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(path))
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+
+    agent.maintain_connection()
+
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    assert journal.is_empty() is True
