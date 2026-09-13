@@ -238,3 +238,18 @@ def test_bit_completed_event_always_carries_players():
     assert ev["result"] is None
     assert ev["players"] == [{"dev": "g1", "role": "player", "class": "scored"}]
     dumps(ev)     # JSON-serialisable
+
+
+from uplink.protocol import UplinkIdentity, identity_frame, state_changed_event
+
+
+def test_identity_frame_shape_and_hidden_repr():
+    ident = UplinkIdentity("mm", "main-stage", "ab" * 32)
+    assert identity_frame(ident) == {"event": "identity", "tenant_slug": "mm",
+                                     "terrarium_name": "main-stage", "secret": "ab" * 32}
+    assert "ab" * 32 not in repr(ident)
+
+
+def test_state_changed_event_carries_lan_ip_only_when_given():
+    assert "lan_ip" not in state_changed_event("IDLE")
+    assert state_changed_event("IDLE", lan_ip="10.0.0.7")["lan_ip"] == "10.0.0.7"

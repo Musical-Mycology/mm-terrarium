@@ -669,3 +669,51 @@ def test_room_load_progress_is_sent_per_stage():
                         if m["event"] == "room_load_progress")
     assert dumps(progress_msg) == (
         '{"event": "room_load_progress", "stage": "validating"}')
+
+
+from uplink.protocol import UplinkIdentity
+
+
+def test_identity_is_the_first_frame_on_every_connect():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    ident = UplinkIdentity("mm", "main-stage", "ab" * 32)
+    agent = UplinkAgent(server, transport, identity=ident, time_source=FakeClock())
+    agent.maintain_connection()
+    assert transport.sent[0] == {"event": "identity", "tenant_slug": "mm",
+                                 "terrarium_name": "main-stage", "secret": "ab" * 32}
+    assert transport.sent[1]["event"] == "state_changed"
+    transport.disconnect()
+    transport.sent.clear()
+    agent.maintain_connection()
+    assert transport.sent[0]["event"] == "identity"
+
+
+def test_no_identity_means_no_identity_frame():
+    agent, server, transport = make_agent()
+    transport.disconnect()
+    transport.sent.clear()
+    agent.maintain_connection()
+    assert transport.sent[0]["event"] == "state_changed"
+
+
+def test_resync_carries_the_injected_lan_ip_and_ordinary_events_do_not():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, lan_ip=lambda: "10.0.0.7",
+                        time_source=FakeClock())
+    agent.maintain_connection()
+    assert transport.sent[0]["lan_ip"] == "10.0.0.7"
+    server.load_bit("test_bit")
+    later = [m for m in transport.sent[1:] if m["event"] == "state_changed"]
+    assert all("lan_ip" not in m for m in later)
+
+
+def test_a_raising_lan_ip_is_omitted_not_fatal():
+    def boom():
+        raise OSError("no route")
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, lan_ip=boom, time_source=FakeClock())
+    agent.maintain_connection()
+    assert "lan_ip" not in transport.sent[0]

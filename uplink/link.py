@@ -21,7 +21,8 @@ class UplinkAgent:
     MAX_BACKOFF_SECONDS = 30.0
 
     def __init__(self, game_server: GameServer, transport, *,
-                 time_source=time.monotonic, registry=None, terrarium=None):
+                 time_source=time.monotonic, registry=None, terrarium=None,
+                 identity=None, lan_ip=None):
         self.game_server = game_server
         self.transport = transport
         self.registry = registry
@@ -29,6 +30,11 @@ class UplinkAgent:
         # caller) means no room commands and no terrarium-state stamping --
         # zero behavior change.
         self.terrarium = terrarium
+        # Identity presented first on every connect (None: a test-only or
+        # pre-config agent sends none). lan_ip is an injected callable so
+        # uplink/ never imports harness/.
+        self.identity = identity
+        self._lan_ip = lan_ip
         self._time_source = time_source
         self._next_attempt_at = 0.0
         self._backoff = self.INITIAL_BACKOFF_SECONDS
@@ -61,14 +67,22 @@ class UplinkAgent:
             return
         self._backoff = self.INITIAL_BACKOFF_SECONDS
         self._next_attempt_at = 0.0
+        if self.identity is not None:
+            self._send(protocol.identity_frame(self.identity))
         self._send_resync()
 
     def _send_resync(self) -> None:
         terrarium_state = (
             self.terrarium.state.name if self.terrarium is not None else None)
+        lan_ip = None
+        if self._lan_ip is not None:
+            try:
+                lan_ip = self._lan_ip()
+            except Exception:
+                logger.exception("lan_ip probe raised; resync carries no address")
         self._send(protocol.state_changed_event(
             self.game_server.state.name, self.game_server.bit_name,
-            terrarium_state=terrarium_state))
+            terrarium_state=terrarium_state, lan_ip=lan_ip))
         if self.terrarium is not None and self.terrarium.room is not None:
             # Active room name for a reconnecting peer, on the same
             # room_loaded event on_terrarium_state_change would have sent

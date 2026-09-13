@@ -3,10 +3,25 @@ contract between UplinkAgent and a future fairyring broker. See design spec
 section 4.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from control.lobby import TERRARIUM_ADMIN
 from control.roles import RoleClass
+
+
+@dataclass(frozen=True)
+class UplinkIdentity:
+    """What the box presents in the first frame of every connection (spec
+    2026-09-13 section 6.2; shape from mm-fairyring issue #1)."""
+    tenant_slug: str
+    terrarium_name: str
+    secret: str = field(repr=False)
+
+
+def identity_frame(identity: UplinkIdentity) -> dict:
+    return {"event": "identity", "tenant_slug": identity.tenant_slug,
+            "terrarium_name": identity.terrarium_name,
+            "secret": identity.secret}
 
 
 # --- Down: fairyring -> Terrarium, one dataclass per command ---------------
@@ -95,9 +110,13 @@ def parse_command(msg: dict):
 # side, so a builder function is enough; no dataclass round-trip needed.)
 
 def state_changed_event(state_name: str, loaded_bit: str | None = None, *,
-                        terrarium_state: str | None = None) -> dict:
-    return {"event": "state_changed", "state": state_name,
-           "loaded_bit": loaded_bit, "terrarium_state": terrarium_state}
+                        terrarium_state: str | None = None,
+                        lan_ip: str | None = None) -> dict:
+    event = {"event": "state_changed", "state": state_name,
+             "loaded_bit": loaded_bit, "terrarium_state": terrarium_state}
+    if lan_ip is not None:
+        event["lan_ip"] = lan_ip
+    return event
 
 
 def registration_changed_event(counts: list[tuple[str, int, int | None]]) -> dict:
