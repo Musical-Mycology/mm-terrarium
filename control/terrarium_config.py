@@ -7,6 +7,7 @@ control/bit_config.py. See docs/superpowers/specs/
 from __future__ import annotations
 
 import hashlib
+import re
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -22,6 +23,18 @@ from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
 from control.triggers import EventTrigger, StreamTrigger
 
 KNOWN_BACKENDS = frozenset({"devicelink", "array"})
+
+
+SECRET_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True)
+class UplinkConfig:
+    """[uplink]: the broker and the MycoQuest-issued box secret (spec
+    2026-09-13 section 6.1). The name presented is [terrarium] name."""
+    tenant_slug: str
+    secret: str = field(repr=False)
+    url: str = ""
 
 
 class TerrariumConfigError(Exception):
@@ -67,6 +80,8 @@ class TerrariumConfig:
     # [admin] devices, a list of device names that are admin-control targets
     # (in addition to the Terrarium itself, which is always an admin target).
     admin_devices: tuple[str, ...] = ()
+    # [uplink], None when the table is absent: no uplink is built at boot.
+    uplink: UplinkConfig | None = None
 
 
 def load_terrarium_config(path: str) -> TerrariumConfig:
@@ -150,6 +165,27 @@ def parse_terrarium_config(text: str, source: str,
             message=f"{TERRARIUM_ADMIN!r} is the Terrarium itself and is always "
                     f"an admin; do not list it")
     admin_devices = tuple(devices_raw)
+    uplink_raw = raw.get("uplink")
+    uplink = None
+    if uplink_raw is not None:
+        if not isinstance(uplink_raw, dict):
+            raise TerrariumConfigError(source=source, key="uplink",
+                                       message="expected a table")
+        slug = uplink_raw.get("tenant_slug")
+        if not isinstance(slug, str) or not slug:
+            raise TerrariumConfigError(source=source, key="uplink.tenant_slug",
+                                       message="required non-empty string")
+        secret = uplink_raw.get("secret")
+        if not isinstance(secret, str) or not SECRET_PATTERN.match(secret):
+            raise TerrariumConfigError(
+                source=source, key="uplink.secret",
+                message="expected 64 lowercase hex characters, pasted from "
+                        "the MycoQuest admin site (value not shown)")
+        url = uplink_raw.get("url", "")
+        if not isinstance(url, str):
+            raise TerrariumConfigError(source=source, key="uplink.url",
+                                       message="expected a string")
+        uplink = UplinkConfig(tenant_slug=slug, secret=secret, url=url)
     instruments_raw = raw.get("instruments", {})
     instruments: dict[str, Instrument] = {}
     for iname, iraw in instruments_raw.items():
@@ -177,7 +213,8 @@ def parse_terrarium_config(text: str, source: str,
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
     return TerrariumConfig(schema=schema, name=name, bit_paths=bit_paths,
                            rooms=rooms, instruments=instruments,
-                           version=f"{schema}-{digest}", admin_devices=admin_devices)
+                           version=f"{schema}-{digest}", admin_devices=admin_devices,
+                           uplink=uplink)
 
 
 _LANE_DEV_WIRE = {"room": ROOM, "target": TARGET}

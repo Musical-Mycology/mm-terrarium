@@ -5,3 +5,11 @@ name = "dev-box"
 bit_paths = ["bits"]
 instrument_paths = ["instruments"]
 room_paths = ["rooms"]
+
+# [uplink]
+# Presence of this table turns the uplink on. The secret is issued once by
+# the MycoQuest admin site (64 lowercase hex characters); url may be left
+# out until mm-fairyring exists, in which case frames are logged locally.
+# tenant_slug = "your-tenant"
+# secret = "0000000000000000000000000000000000000000000000000000000000000000"
+# url = "wss://fairyring.example/uplink"
