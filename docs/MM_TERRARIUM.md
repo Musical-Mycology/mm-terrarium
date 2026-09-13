@@ -363,7 +363,9 @@ are per
   (a `state_changed` + `registration_changed` snapshot). `bit_completed` fires
   on entry to COMPLETING, with `players: [{dev, role, class}]` for every
   granted assignment (`class` is `jam` for `RoleClass.JAM`, else `scored`; the
-  reserved id `terrarium` is filtered before it can ever be assigned); it is
+  reserved id `terrarium` is refused on the device wire at hello, and
+  `players_view` in `uplink/protocol.py` filters it out of `bit_completed` as
+  a second guard); it is
   never sent on `abort()`, so an aborted round credits nobody. `result` may be
   `null` when the Bit has no `result()` payload or `result()` raised. A small
   JSON wire protocol (dataclasses in `uplink/protocol.py`);
