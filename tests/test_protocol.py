@@ -224,6 +224,13 @@ def test_players_view_maps_jam_and_everything_else_to_scored():
         {"dev": "g3", "role": "lead", "class": "scored"}]
 
 
+def test_players_view_drops_the_reserved_terrarium_id():
+    from uplink.protocol import players_view
+    granted = [("terrarium", "player", RoleClass.SHARED),
+               ("g1", "player", RoleClass.SHARED)]
+    assert players_view(granted) == [{"dev": "g1", "role": "player", "class": "scored"}]
+
+
 def test_bit_completed_event_always_carries_players():
     assert bit_completed_event({"score": 1}, "B", "0.1")["players"] == []
     ev = bit_completed_event(None, "B", "0.1",

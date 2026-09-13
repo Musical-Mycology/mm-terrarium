@@ -237,23 +237,18 @@ def test_abort_sends_no_bit_completed():
     assert server.state.name == "IDLE"
 
 
-@pytest.mark.xfail(
-    reason="NEEDS_CONTEXT (task 7): GameServer.hello/join never refuse the "
-           "reserved 'terrarium' id -- that refusal lives only in "
-           "devicelink/agent.py's wire-level hello handling (dev == "
-           "TERRARIUM_ADMIN check), which server.hello() called directly "
-           "here bypasses. join('terrarium', ...) is granted. See task-7 "
-           "report for details; out of scope for uplink/link.py.",
-    strict=True)
 def test_the_reserved_terrarium_id_never_appears_in_players():
     agent, server, transport = make_agent()
-    server.hello("terrarium", "Box", "1.0")      # refused at hello
+    server.hello("terrarium", "Box", "1.0")
     server.load_bit("test_bit")
-    assert server.join("terrarium", "TEST_PLAYER_NODE").granted is False
+    server.join("terrarium", "TEST_PLAYER_NODE")  # engine grants it; wire refusal is elsewhere
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.join("ie1", "TEST_PLAYER_NODE")
     server.run()
     server.tick(3.0)
     completed = [m for m in transport.sent if m["event"] == "bit_completed"]
-    assert completed[0]["players"] == []
+    assert completed[0]["players"] == [
+        {"dev": "ie1", "role": "player", "class": "scored"}]
 
 
 class FakeClock:

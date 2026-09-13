@@ -5,6 +5,7 @@ section 4.
 
 from dataclasses import dataclass
 
+from control.lobby import TERRARIUM_ADMIN
 from control.roles import RoleClass
 
 
@@ -111,10 +112,14 @@ def registration_changed_event(counts: list[tuple[str, int, int | None]]) -> dic
 
 def players_view(granted) -> list[dict]:
     """bit_completed.players (spec 2026-09-13 section 5.2): JAM is "jam",
-    every other player-bearing class is "scored". ROOM never reaches here."""
+    every other player-bearing class is "scored". ROOM never reaches here.
+    The reserved TERRARIUM_ADMIN ("terrarium") id is refused on the device
+    wire (devicelink/agent.py); this is a second guard against it ever
+    appearing in players (spec 5.3, MycoQuest invariant 15)."""
     return [{"dev": dev, "role": role,
              "class": "jam" if role_class is RoleClass.JAM else "scored"}
-            for dev, role, role_class in granted]
+            for dev, role, role_class in granted
+            if dev != TERRARIUM_ADMIN]
 
 
 def bit_completed_event(result: dict, bit_name: str = "",
