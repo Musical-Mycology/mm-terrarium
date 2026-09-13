@@ -147,7 +147,7 @@ def test_bit_completed_sent_at_unload_when_result_present():
 
     completed = [m for m in transport.sent if m["event"] == "bit_completed"]
     assert completed == [{"event": "bit_completed", "result": {"score": 99},
-                          "bit": {"name": "scoring_bit", "version": "0.1"}}]
+                          "bit": {"name": "scoring_bit", "version": "0.1"}, "players": []}]
 
 
 def test_exploding_result_does_not_wedge_state_machine():

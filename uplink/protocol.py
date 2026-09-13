@@ -5,6 +5,8 @@ section 4.
 
 from dataclasses import dataclass
 
+from control.roles import RoleClass
+
 
 # --- Down: fairyring -> Terrarium, one dataclass per command ---------------
 
@@ -107,13 +109,22 @@ def registration_changed_event(counts: list[tuple[str, int, int | None]]) -> dic
     }
 
 
+def players_view(granted) -> list[dict]:
+    """bit_completed.players (spec 2026-09-13 section 5.2): JAM is "jam",
+    every other player-bearing class is "scored". ROOM never reaches here."""
+    return [{"dev": dev, "role": role,
+             "class": "jam" if role_class is RoleClass.JAM else "scored"}
+            for dev, role, role_class in granted]
+
+
 def bit_completed_event(result: dict, bit_name: str = "",
                         bit_version: str = "", *, room_name=None,
-                        terrarium_config_version=None) -> dict:
+                        terrarium_config_version=None, players=()) -> dict:
     event = {
         "event": "bit_completed",
         "result": result,
         "bit": {"name": bit_name, "version": bit_version},
+        "players": list(players),
     }
     if room_name is not None:
         event["room_name"] = room_name

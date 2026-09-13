@@ -19,6 +19,7 @@ from uplink.protocol import (
     state_changed_event,
 )
 from control.wire_json import dumps
+from control.roles import RoleClass
 
 
 def test_parse_load_bit_command():
@@ -150,14 +151,14 @@ def test_registration_changed_event_shape():
 def test_bit_completed_event_shape():
     assert bit_completed_event({"score": 42}) == {
         "event": "bit_completed", "result": {"score": 42},
-        "bit": {"name": "", "version": ""},
+        "bit": {"name": "", "version": ""}, "players": [],
     }
 
 
 def test_bit_completed_event_stamps_bit_name_and_version():
     assert bit_completed_event({"score": 42}, "test_bit", "1.0") == {
         "event": "bit_completed", "result": {"score": 42},
-        "bit": {"name": "test_bit", "version": "1.0"},
+        "bit": {"name": "test_bit", "version": "1.0"}, "players": [],
     }
 
 
@@ -169,6 +170,7 @@ def test_bit_completed_event_stamps_room_provenance_when_given():
         "bit": {"name": "test_bit", "version": "1.0"},
         "room_name": "atrium",
         "terrarium_config_version": "1-abcdef012345",
+        "players": [],
     }
 
 
@@ -210,3 +212,22 @@ def test_load_bit_command_rejects_a_non_string_room():
     from uplink.protocol import parse_command
     with pytest.raises(ValueError):
         parse_command({"command": "load_bit", "name": "TestBit", "room": 7})
+
+
+def test_players_view_maps_jam_and_everything_else_to_scored():
+    from uplink.protocol import players_view
+    granted = [("g1", "jammer", RoleClass.JAM), ("g2", "player", RoleClass.SHARED),
+               ("g3", "lead", RoleClass.UNIQUE)]
+    assert players_view(granted) == [
+        {"dev": "g1", "role": "jammer", "class": "jam"},
+        {"dev": "g2", "role": "player", "class": "scored"},
+        {"dev": "g3", "role": "lead", "class": "scored"}]
+
+
+def test_bit_completed_event_always_carries_players():
+    assert bit_completed_event({"score": 1}, "B", "0.1")["players"] == []
+    ev = bit_completed_event(None, "B", "0.1",
+                             players=[{"dev": "g1", "role": "player", "class": "scored"}])
+    assert ev["result"] is None
+    assert ev["players"] == [{"dev": "g1", "role": "player", "class": "scored"}]
+    dumps(ev)     # JSON-serialisable

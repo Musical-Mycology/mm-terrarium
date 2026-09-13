@@ -882,7 +882,7 @@ def test_bit_completed_event_carries_bit_name_and_version():
 
     completed = [m for m in srv.broadcasts if m.get("event") == "bit_completed"]
     assert completed == [{"event": "bit_completed", "result": {"score": 99},
-                          "bit": {"name": "scoring_bit", "version": "0.1"}}]
+                          "bit": {"name": "scoring_bit", "version": "0.1"}, "players": []}]
 
 
 # --- Task 6: room commands, terrarium-state gating, rooms snapshot --------
