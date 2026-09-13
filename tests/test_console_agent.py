@@ -1110,6 +1110,52 @@ def test_abort_unloads_the_room_when_terrarium_wired():
     assert calls == [True]
 
 
+def test_abort_keeps_the_room_when_arco_clients_are_live():
+    """D7's abort case (2026-09-13, reproduced live): once Control's Arco
+    clients have been live, tearing the Room down under them leaves a
+    process that can never talk to another Arco, so a hard ABORT was a
+    one-way door -- the next load_bit spawned a fresh Arco, the clients
+    failed to restart (Broken pipe) and the Room unloaded again. With live
+    clients ABORT ends the Bit only: Room and Arco stay up, and both the
+    same Bit and a different one load afterwards."""
+    class OtherRoomBit(RoomCapableBit):
+        pass
+    gs = GameServer({"RoomCapableBit": RoomCapableBit,
+                     "OtherRoomBit": OtherRoomBit})
+    terrarium = make_terrarium(gs=gs)
+    terrarium.load_room("TEST")
+    gs.load_bit("RoomCapableBit")
+    gs.hello("ie9", "Shroom Nine", "1")
+    gs.join("ie9", room_role_name("TEST"))
+    gs.run()
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv, terrarium=terrarium,
+                         clients_live=lambda: True)
+    calls = []
+    real_unload = terrarium.unload_room
+    terrarium.unload_room = lambda force=False: calls.append(force) or real_unload(force=force)
+
+    error = agent._handle_command({"command": "abort"})
+
+    assert error is None
+    assert gs.state.name == "IDLE"
+    assert calls == []
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.name == "TEST"
+
+    # The same Bit loads again against the same Room and Arco ...
+    assert agent._handle_command({"command": "load_bit",
+                                  "name": "RoomCapableBit"}) is None
+    assert gs.bit_name == "RoomCapableBit"
+    assert agent._handle_command({"command": "abort"}) is None
+    # ... and so does a different one: multiple Bits per process.
+    assert agent._handle_command({"command": "load_bit",
+                                  "name": "OtherRoomBit"}) is None
+    assert gs.bit_name == "OtherRoomBit"
+    assert calls == []
+    assert terrarium.state == TerrariumState.ROOM_READY
+
+
 def test_abort_without_terrarium_stays_bit_only():
     gs, srv, agent = _server_with_agent()   # terrarium=None
     gs.load_bit("TestBit")

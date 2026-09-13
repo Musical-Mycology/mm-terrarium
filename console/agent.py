@@ -240,8 +240,22 @@ class ConsoleAgent:
                 # the room. With the room's Arco gone, sound physically
                 # cannot continue, a guarantee no mute can match. A
                 # terrarium-less embedding keeps the old bit-only abort.
+                #
+                # D7's abort case (2026-09-13, reproduced live): once
+                # Control's Arco clients have been live, taking the Room
+                # down leaves a process that can never talk to another
+                # Arco (see _unload_room_refusal), so a hard ABORT was a
+                # one-way door: the next load_bit spawned a fresh Arco,
+                # the clients failed to restart with a broken pipe, and
+                # the Room unloaded again. With live clients the abort is
+                # Bit-only, like RESTART's first half: gs.abort() runs the
+                # UNLOADING branch (devices released, drones and pending
+                # cues stopped) while the Room and Arco stay up for the
+                # next load. The Room comes down only when the Unload
+                # button itself would be allowed to take it down.
                 self.game_server.abort()
-                if self.terrarium is not None:
+                if (self.terrarium is not None
+                        and self._unload_room_refusal() is None):
                     reason = self.terrarium.unload_room(force=True)
                     if reason is not None:
                         return protocol.error_event(name, reason)
