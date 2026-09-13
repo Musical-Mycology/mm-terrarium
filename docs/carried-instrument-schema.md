@@ -168,3 +168,30 @@ same-branch fix: the client-side declaration lives in mm-tuneshroom, not
 this repo. Do not deploy this branch against a real room, and do not treat
 existing hardware as compatible, until mm-tuneshroom's hello sends its
 name.
+
+## Solo: the `[solo]` table and `tools/export_solo.py`
+
+A carried instrument may declare what it does with **no hub**
+(mm-tuneshroom `docs/superpowers/specs/2026-09-13-standalone-solo-mode-design.md`):
+
+````toml
+[solo]
+  [solo.ambient.light]
+  instruments = [ { instrument = "aurora", target = "primary" } ]
+  [solo.bindings]
+  tap = "play_aurora"        # events: tap | double_tap | shake
+  double_tap = "win"
+  shake = "fireworks_player"
+````
+
+`validate_instrument` refuses an unknown event or a binding to an
+undeclared function. The table never ships on the wire: the device
+bundles it at build time via
+
+    .venv/bin/python -m tools.export_solo tuneshroom <mm-tuneshroom>/assets/solo/tuneshroom.json
+
+whose output is `{"_provenance", "instrument", "triggers", "solo"}` --
+`instrument` is exactly `carried_instrument_view(inst)` (the `/ie<N>/role`
+section), `triggers` the role blob's `{name: thresholds}`, `solo` the
+table above. A granted role always replaces the bundled definition on the
+device.
