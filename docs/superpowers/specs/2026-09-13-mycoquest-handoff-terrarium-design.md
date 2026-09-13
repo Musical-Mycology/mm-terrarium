@@ -229,6 +229,15 @@ never waits out its timeout on a bug.
   labelled prepare.
 - `harness/markers.py`: `PREPARE_URL`, printed by `_print_join_urls` right
   after `START_URL`.
+- Cross-plan note (mm-tuneshroom join launcher spec
+  `docs/superpowers/specs/2026-09-13-tuneshroom-join-launcher-design.md`,
+  section 4.1, unbuilt as of 2026-09-13): its `GET /join.json` serves this
+  same read model on the LAN with no auth. The `start` dict carries the key
+  and, after this spec, the prepare URL, so the JSON view must pass
+  `start_key=None` and always serve `start: null`, the way it already
+  passes `qr_svg=None`. Otherwise any LAN client can read the key and the
+  silent bad-key rule of `/start` and `/prepare` means nothing. The Console
+  is loopback-only, which is why the card may show it.
 - Boot: `_start_www_server` is unchanged; after it, `agent.prepare_requests
   = www.prepare_requests` and `agent.prepare_authority =
   PrepareAuthority(gs, registry, terrarium)`.
