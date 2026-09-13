@@ -108,3 +108,12 @@ script = [
   { offset = 0.0, midi = [176, 74, 42] },
   { offset = 0.0, midi = [176, 11, 60] },
 ]
+
+[solo]
+  # What a Tuneshroom does with no hub (mm-tuneshroom solo mode).
+  [solo.ambient.light]
+  instruments = [ { instrument = "aurora", target = "primary" } ]
+  [solo.bindings]
+  tap = "play_aurora"
+  double_tap = "win"
+  shake = "fireworks_player"

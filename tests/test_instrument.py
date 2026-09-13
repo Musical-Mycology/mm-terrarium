@@ -205,3 +205,46 @@ def test_light_pixels_requires_the_12_led_floor():
         name="ok", capabilities=frozenset({"light.pixels"}), pixels=12))
     validate_instrument(Instrument(  # non-light.pixels exempt
         name="surface", capabilities=frozenset({"light.surface"})))
+from control.instrument import SOLO_EVENTS, SoloConfig
+
+
+def _scripted_fn(name="bloom"):
+    from control.cues import TARGET
+    from control.functions import Function, FunctionKind, ScriptStep
+    return Function(name=name, description="a scripted test function",
+                    kind=FunctionKind.SCRIPTED,
+                    script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),))
+
+
+def _carrier(solo):
+    return Instrument(
+        name="carrier", pixels=12,
+        capabilities=frozenset({"light.pixels", "gesture.tap"}),
+        accepted_cues=("midi",), functions=(_scripted_fn(),), solo=solo)
+
+
+def test_solo_events_vocabulary():
+    assert SOLO_EVENTS == frozenset({"tap", "double_tap", "shake"})
+
+
+def test_instrument_without_solo_validates():
+    validate_instrument(_carrier(None))
+
+
+def test_solo_binding_must_name_a_declared_function():
+    bad = SoloConfig(light_manifest={}, bindings={"tap": "nope"})
+    with pytest.raises(InstrumentError, match="solo binding 'tap' -> 'nope'"):
+        validate_instrument(_carrier(bad))
+
+
+def test_solo_binding_event_must_be_known():
+    bad = SoloConfig(light_manifest={}, bindings={"wiggle": "bloom"})
+    with pytest.raises(InstrumentError, match="unknown solo event 'wiggle'"):
+        validate_instrument(_carrier(bad))
+
+
+def test_valid_solo_config_passes():
+    good = SoloConfig(
+        light_manifest={"instruments": [{"instrument": "aurora", "target": "primary"}]},
+        bindings={"tap": "bloom"})
+    validate_instrument(_carrier(good))

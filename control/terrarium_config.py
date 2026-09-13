@@ -13,7 +13,7 @@ from pathlib import Path
 
 from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue
 from control.functions import Function, FunctionKind, GeneratorSpec, ScriptStep
-from control.instrument import (Instrument, InstrumentError,
+from control.instrument import (Instrument, InstrumentError, SoloConfig,
                                 validate_instrument,
                                 validate_instrument_manifests)
 from control.lobby import TERRARIUM_ADMIN
@@ -363,6 +363,24 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
     ambient = iraw.get("ambient", {})
     light_manifest = ambient.get("light", {})
     ugen_manifest = ambient.get("ugen", {})
+    solo = None
+    sraw = iraw.get("solo")
+    if sraw is not None:
+        if not isinstance(sraw, dict):
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: [solo] must be a table")
+        sambient = sraw.get("ambient", {})
+        bindings = sraw.get("bindings", {})
+        if not isinstance(bindings, dict) or not all(
+                isinstance(k, str) and isinstance(v, str)
+                for k, v in bindings.items()):
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: [solo.bindings] must map "
+                        f"event names to function names")
+        solo = SoloConfig(light_manifest=sambient.get("light", {}),
+                          bindings=dict(bindings))
     pixels = iraw.get("pixels", 0)
     if isinstance(pixels, bool) or not isinstance(pixels, int):
         raise TerrariumConfigError(
@@ -380,6 +398,7 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
         ugen_manifest=ugen_manifest,
         event_triggers=_parse_event_triggers(iname, iraw, source=source, key=key),
         stream_triggers=_parse_stream_triggers(iname, iraw, source=source, key=key),
+        solo=solo,
     )
     try:
         validate_instrument(instrument)
