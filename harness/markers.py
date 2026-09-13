@@ -124,6 +124,11 @@ JOIN_URL = "JOIN_URL:"
 # by run_stack like JOIN_URL, never waited on.
 START_URL = "START_URL:"
 
+# The keyed LAN prepare URL for the loaded Bit (spec 2026-09-13 section
+# 4.5): MycoQuest sends it to load the Bit into the lobby. Printed right
+# after START_URL; echoed by run_stack, never waited on.
+PREPARE_URL = "PREPARE_URL:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,

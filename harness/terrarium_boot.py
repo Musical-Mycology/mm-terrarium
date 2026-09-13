@@ -1007,6 +1007,9 @@ def _print_join_urls(provider) -> None:
               flush=True)
     if info.get("start"):
         print(f"{markers.START_URL} {info['start']['url']}", flush=True)
+        if info["start"].get("prepare_url"):
+            print(f"{markers.PREPARE_URL} {info['start']['prepare_url']}",
+                  flush=True)
 
 
 class _JoinLogger:
@@ -1825,6 +1828,9 @@ def main() -> None:
         www = _start_www_server(args, teardown)
         if www is not None:
             agent.start_requests = www.start_requests
+            agent.prepare_requests = www.prepare_requests
+            from control.prepare import PrepareAuthority
+            agent.prepare_authority = PrepareAuthority(gs, registry, terrarium)
         # pump=arco.poll drains Arco's pty for the whole ownership hold;
         # see _restart_room_clients for why that is load-bearing.
         if arco is not None:

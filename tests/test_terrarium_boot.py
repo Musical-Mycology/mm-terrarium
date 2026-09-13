@@ -3545,3 +3545,16 @@ def test_build_threads_terrarium_config_admin_devices_into_the_game_server():
         assert gs.is_admin("gem-0001")
     finally:
         shutdown(teardown, terrarium)
+
+
+def test_print_join_urls_prints_the_prepare_url_after_the_start_url(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _print_join_urls
+
+    info = {"nodes": [], "start": {
+        "url": "http://10.0.0.7:8788/start?key=k",
+        "prepare_url": "http://10.0.0.7:8788/prepare?key=k&bit=B"}}
+    _print_join_urls(lambda: info)
+    out = capsys.readouterr().out.splitlines()
+    assert out == [f"{markers.START_URL} http://10.0.0.7:8788/start?key=k",
+                   f"{markers.PREPARE_URL} http://10.0.0.7:8788/prepare?key=k&bit=B"]
