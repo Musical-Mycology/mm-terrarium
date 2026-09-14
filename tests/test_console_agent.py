@@ -2172,6 +2172,24 @@ def test_no_join_changed_without_a_provider():
     assert [m for m in srv.broadcasts if m.get("event") == "join_changed"] == []
 
 
+def test_roles_changed_is_broadcast_on_loaded_and_on_idle():
+    """A Console tab connected BEFORE a Bit loads must see the loaded Bit's
+    role declarations (scored/class/capacity) without reloading. rail.js and
+    rooms.js cache role declarations only from `snapshot`, so the server
+    must re-broadcast them at the same LOADED/IDLE transitions that already
+    drive join_changed."""
+    gs, srv, agent = _server_with_agent()
+    gs.load_bit("TestBit")
+    changed = [m for m in srv.broadcasts if m.get("event") == "roles_changed"]
+    assert len(changed) == 1
+    assert {r["role"] for r in changed[0]["roles"]} == {"player", "jammer"}
+
+    gs.abort()
+    changed = [m for m in srv.broadcasts if m.get("event") == "roles_changed"]
+    assert changed[-1] == {"event": "roles_changed", "roles": []}
+    assert len(changed) == 2
+
+
 def test_room_load_from_no_room_restarts_clients_without_a_stop():
     """Pins ConsoleAgent's own restart_room_clients fallback in isolation:
     no _RoomWiring observer is registered on this terrarium (production

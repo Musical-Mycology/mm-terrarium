@@ -113,6 +113,11 @@ export function init() {
     registrationRows = m.roles || [];
     renderRegistration();
   });
+  wire.on("roles_changed", (m) => {
+    rolesByName = {};
+    for (const role of m.roles || []) rolesByName[role.role] = role;
+    renderRegistration();
+  });
   wire.on("room_changed", (m) => {
     currentRoom = m.room || null;
     renderRegistration();
