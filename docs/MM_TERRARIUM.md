@@ -4396,6 +4396,45 @@ gets by default.
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2246 passed, 1 skipped**.
 
+### Console confirm-tap width lock and expiry flash (2026-09-14)
+Live testing surfaced an operator-facing defect distinct from the
+2026-09-13 abort-semantics fix above: the Console's own Abort button
+could silently fail to send the command at all, reported as "aborting a
+bit does not cancel sound."
+
+- **Root cause:** `wire.confirmTap` swapped a button's label to its
+  longer armed form ("Confirm abort?") with no reserved width.
+  `.btnrow`'s `flex-wrap: wrap` then reflowed the row on arm -- on a
+  narrow sidebar this carried the button (or its neighbors) to a new
+  position. A second click aimed at the pre-arm position landed on
+  nothing: no error, no feedback, indistinguishable from "abort does
+  nothing." Confirmed live: screenshot/DOM inspection before the fix
+  showed the button move on arm; after, two clicks at one fixed screen
+  coordinate correctly arm then confirm.
+- **`wire.reserveConfirmWidth(btn, armLabel)`** measures the armed label
+  via an offscreen clone and locks `btn.style.minWidth` in at button
+  creation (bit.js's Restart/Abort, rooms.js's Unload, surface.js's
+  Release -- every `confirmTap` call site), so arming never changes a
+  button's footprint.
+- **An expired arm window is now visible.** `confirmTap`'s timeout
+  revert used to flip the label back with no trace; it now flashes an
+  inline "not confirmed" note (`errflash`/`inline-err`, reusing
+  `flashRefusal`'s look) so a missed or late confirm is never mistaken
+  for silence.
+- **Live-verified the full abort path**, not just the button: loaded
+  TestBit via the Console with `launch.setup_seconds` and
+  `defaults.run_duration_seconds` overrides, joined a real Testshroom
+  over o2lite to the scored `player` role (`TEST_PLAYER_NODE`), let it
+  register a real tilt gesture while RUNNING, then Aborted from the
+  Console UI. Confirmed: state RUNNING -> UNLOADING -> IDLE, the Room
+  drops to 0 instruments / NO FRAMES, Room and Arco stay up (matching
+  the 2026-09-13 semantics above), and the joined device detects the
+  teardown (`ERROR from Control: tilt: no Bit running`) and exits
+  cleanly rather than crashing.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2374 passed, 1 skipped**.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
