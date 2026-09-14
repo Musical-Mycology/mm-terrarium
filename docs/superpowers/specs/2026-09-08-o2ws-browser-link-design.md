@@ -14,7 +14,7 @@ probe P2 taught; where the two disagree, this document wins for Phase 2.
 - The vendored `www/o2ws.js` carries a one-line patch beyond what section
   6.3 describes: `o2ws_schedule_handler` rounded the scheduling delay to
   whole seconds before scaling to milliseconds (an upstream defect,
-  report to Roger pending); our copy scales to milliseconds first. See
+  reported to Roger by email 2026-09-11); our copy scales to milliseconds first. See
   the P8 result below.
 - Section 4.1 named `netifaces` for the LAN-IP lookup; the implementation
   (`harness/www_server.py`'s `lan_ip()`) uses a UDP-connect probe instead
