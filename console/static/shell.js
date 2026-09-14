@@ -36,7 +36,17 @@ export function paintRoomNav(rooms) {
 document.getElementById("navLive").onclick = () => showView("live");
 document.getElementById("navRoom").onclick = () => showView("room");
 document.getElementById("navDesign").onclick = () => showView("design");
-wire.on("snapshot", (m) => paintRoomNav(m.rooms));
+let navRooms = [];  // last-known snapshot.rooms rows, kept current on room events
+wire.on("snapshot", (m) => { navRooms = m.rooms || []; paintRoomNav(navRooms); });
+wire.on("room_loaded", (m) => {
+  navRooms = navRooms.map((r) => Object.assign({}, r, { active: r.name === m.name }));
+  if (!navRooms.some((r) => r.name === m.name)) navRooms.push({ name: m.name, active: true });
+  paintRoomNav(navRooms);
+});
+wire.on("room_unloaded", () => {
+  navRooms = navRooms.map((r) => Object.assign({}, r, { active: false }));
+  paintRoomNav(navRooms);
+});
 
 wire.on("_open", () => {
   conn.className = "chip sage";

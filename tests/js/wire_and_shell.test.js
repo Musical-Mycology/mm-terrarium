@@ -188,4 +188,21 @@ globalThis.WebSocket = FakeSocket;
   assert.strictEqual(byId.get("navRoom").textContent, "Room: none");
 
   console.log("shell view switcher: ok");
+
+  // Room nav label follows Console-driven loads: only the connect-time
+  // snapshot used to repaint it, so a load from this tab left "Room: none"
+  // until reload.
+  {
+    const sock2 = FakeSocket.instances.at(-1);
+    const send = (m) => sock2.onmessage({ data: JSON.stringify(m) });
+    send({ event: "snapshot", state: "IDLE", loaded_bit: null, roles: [], registration: [],
+           devices: [], bit_status: {}, room: null, functions: [], terrarium_state: "NO_ROOM",
+           rooms: [{ name: "DEMO", description: "", status: null, active: false }] });
+    assert.strictEqual(byId.get("navRoom").textContent, "Room: none");
+    send({ event: "room_loaded", name: "DEMO" });
+    assert.strictEqual(byId.get("navRoom").textContent, "Room: DEMO");
+    send({ event: "room_unloaded", name: "DEMO" });
+    assert.strictEqual(byId.get("navRoom").textContent, "Room: none");
+    console.log("shell room nav follows room_loaded: ok");
+  }
 })().catch((e) => { console.error(e); process.exit(1); });
