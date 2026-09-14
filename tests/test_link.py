@@ -889,3 +889,47 @@ def test_all_corrupt_journal_replays_nothing_and_is_cleared(tmp_path):
 
     assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
     assert journal.is_empty() is True
+
+
+class SendAlwaysFailsTransport(FakeTransport):
+    """A broker that accepts the socket and drops it on the first frame,
+    every time (a rejected secret looks exactly like this)."""
+
+    def __init__(self):
+        super().__init__()
+        self.fail_count = 0
+
+    def send(self, msg):
+        self.fail_count += 1
+        self.connected = False
+        raise ConnectionError("dropped on first frame")
+
+
+def test_post_connect_send_failure_backs_off_like_a_failed_connect():
+    from uplink.protocol import UplinkIdentity
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = SendAlwaysFailsTransport()
+    ident = UplinkIdentity("mm", "main-stage", "ab" * 32)
+    agent = UplinkAgent(server, transport, identity=ident, time_source=clock)
+
+    agent.maintain_connection()
+    assert transport.connect_count == 1 and transport.fail_count == 1
+
+    # Same tick and the next few: no reconnect until the backoff elapses.
+    agent.maintain_connection()
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS / 2)
+    agent.maintain_connection()
+    assert transport.connect_count == 1
+
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS)
+    agent.maintain_connection()
+    assert transport.connect_count == 2 and transport.fail_count == 2
+
+    # And the backoff doubles, as it does for a failed connect.
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS + 0.1)
+    agent.maintain_connection()
+    assert transport.connect_count == 2
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS)
+    agent.maintain_connection()
+    assert transport.connect_count == 3

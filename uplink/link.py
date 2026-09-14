@@ -69,17 +69,24 @@ class UplinkAgent:
             self._next_attempt_at = now + self._backoff
             self._backoff = min(self._backoff * 2, self.MAX_BACKOFF_SECONDS)
             return
-        self._backoff = self.INITIAL_BACKOFF_SECONDS
-        self._next_attempt_at = 0.0
         try:
             if self.identity is not None:
                 self._send(protocol.identity_frame(self.identity))
             self._send_resync()
             self._replay_journal()
         except Exception:
+            # A broker that accepts the socket and drops the first frame (a
+            # rejected secret looks exactly like this) is a failed attempt
+            # like any other: same schedule, same doubling, so the box never
+            # reconnects every tick.
             logger.warning("uplink send failed right after connect; "
-                            "leaving the retry to the backoff schedule")
+                            "retrying in %.1fs", self._backoff)
+            self._next_attempt_at = now + self._backoff
+            self._backoff = min(self._backoff * 2, self.MAX_BACKOFF_SECONDS)
             return
+        # Only a fully established link resets the schedule.
+        self._backoff = self.INITIAL_BACKOFF_SECONDS
+        self._next_attempt_at = 0.0
 
     def _replay_journal(self) -> None:
         if self.journal is None or not getattr(self.transport, "durable", False):
