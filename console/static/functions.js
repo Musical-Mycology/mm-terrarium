@@ -408,6 +408,7 @@ function buildCard(fn) {
 
 function render(list) {
   const mount = document.getElementById("functionsMount");
+  if (!mount) return false;
   clear(mount);
   cardByName.clear();
   // The diagnostics row is built once and reused across rebuilds -- clear()
@@ -418,7 +419,7 @@ function render(list) {
   if (!list.length) {
     currentDeviceTargets = new Map();
     mount.appendChild(mk("p", "muted", "No functions declared"));
-    return;
+    return true;
   }
 
   const grid = mk("div", "fngrid");
@@ -432,14 +433,14 @@ function render(list) {
       currentDeviceTargets.set(fn.name, { target: fn.target, fn });
     }
   }
+  return true;
 }
 
 function onFunctionsChanged(list) {
   const functions = list || [];
   const signature = JSON.stringify(functions);
   if (signature === fnSignature) return;
-  fnSignature = signature;
-  render(functions);
+  if (render(functions)) fnSignature = signature;
 }
 
 function onFunctionFired(fired) {
