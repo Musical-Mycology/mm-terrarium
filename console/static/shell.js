@@ -6,6 +6,7 @@ import { init as initSurface } from "./surface.js";
 import { init as initFunctions } from "./functions.js";
 import { init as initRail, logLine } from "./rail.js";
 import { init as initRooms } from "./rooms.js";
+import { init as initBusy } from "./busy.js";
 import { init as initDesign, initBench, initCalibrate } from "./design.js";
 import { initForms } from "./design_forms.js";
 
@@ -76,5 +77,5 @@ wire.on("error", (m) => {
   logLine("error", `${m.command}: ${m.message}`);
 });
 
-initBit(); initJoin(); initSurface(); initFunctions(); initRail(); initRooms(); initDesign(); initBench(); initCalibrate(); initForms();
+initBit(); initJoin(); initSurface(); initFunctions(); initRail(); initRooms(); initBusy(); initDesign(); initBench(); initCalibrate(); initForms();
 wire.connect();

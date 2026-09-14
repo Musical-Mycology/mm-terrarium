@@ -19,6 +19,7 @@ export function send(command, extra = {}, sourceEl = null) {
   if (ws && ws.readyState === (ws.constructor.OPEN ?? 1)) {
     ws.send(JSON.stringify(Object.assign({ command }, extra)));
   }
+  dispatch("_sent", Object.assign({ command }, extra));
 }
 
 export function flashRefusal(command, message) {
