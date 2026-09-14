@@ -79,21 +79,55 @@ function mk(tag, className, text) {
 
 // ---------------------------------------------------------------- #bitPanel
 
-function render() {
+// Rendering discipline (rule 1, same as rooms.js/surface.js): the panel's
+// structural DOM -- which buttons exist -- is rebuilt only when the loaded
+// bit's identity actually changes (panelSignatureFor). An unrelated
+// snapshot/state_changed/room_* tick (a phase transition, a status poll, a
+// round auto-completing) must never recreate the Run/Restart/Abort/Load
+// buttons, or it would silently discard whichever one is mid confirm-tap
+// (wire.confirmTap keys its armed/timer state off the specific button
+// element). Phase chip text and disabled/gated state DO change on every
+// such tick, so those are updated in place instead.
+let panelSignature = null;  // identity of what's currently built
+let panelEmpty = null;      // true/false once built; null before first render
+
+let elDetailsPill = null;
+let elRunBtn = null;
+let elRestartBtn = null;
+let elAbortBtn = null;
+let elLoadBtn = null;       // the loaded-state Load button
+let elEmptyLoadBtn = null;  // the empty-state Load button
+let elPhase = null;
+let elPhaseLabel = null;
+let elPhaseSub = null;
+
+function panelSignatureFor() {
+  const bit = loadedName ? findBit(loadedName) : null;
+  return JSON.stringify([
+    loadedName,
+    bit ? [bit.display_name, bit.kind, bit.version, bit.start] : null,
+  ]);
+}
+
+function buildEmptyPanel() {
   const panel = document.getElementById("bitPanel");
   clear(panel);
+  const wrap = mk("div", "bitcard empty");
+  wrap.appendChild(mk("p", "muted", "No Bit loaded"));
+  const loadBtn = mk("button", "btn solid-gold", "Load");
+  loadBtn.onclick = openPicker;
+  wrap.appendChild(loadBtn);
+  panel.appendChild(wrap);
 
-  if (!loadedName) {
-    const wrap = mk("div", "bitcard empty");
-    wrap.appendChild(mk("p", "muted", "No Bit loaded"));
-    const loadBtn = mk("button", "btn solid-gold", "Load");
-    loadBtn.disabled = !roomSettled();
-    loadBtn.onclick = openPicker;
-    wrap.appendChild(loadBtn);
-    panel.appendChild(wrap);
-    return;
-  }
+  elEmptyLoadBtn = loadBtn;
+  elDetailsPill = elRunBtn = elRestartBtn = elAbortBtn = elLoadBtn = null;
+  elPhase = elPhaseLabel = elPhaseSub = null;
+  panelEmpty = true;
+}
 
+function buildLoadedPanel() {
+  const panel = document.getElementById("bitPanel");
+  clear(panel);
   const bit = findBit(loadedName);
   const wrap = mk("div", "bitcard");
 
@@ -114,15 +148,12 @@ function render() {
 
   // Run/Restart/Abort need ROOM_READY; Load only needs a settled Terrarium (see roomSettled).
   const btnrow = mk("div", "btnrow");
-  const gated = !roomReady();
 
   const runBtn = mk("button", "btn solid-gold", "Run");
-  runBtn.disabled = gated;
   runBtn.onclick = () => wire.send("run", {}, runBtn);
   btnrow.appendChild(runBtn);
 
   const restartBtn = mk("button", "btn", "Restart");
-  restartBtn.disabled = gated;
   restartBtn.onclick = () => {
     wire.confirmTap(restartBtn, { armLabel: "Confirm restart?" }, () => {
       wire.send("restart", {}, restartBtn);
@@ -131,7 +162,6 @@ function render() {
   btnrow.appendChild(restartBtn);
 
   const abortBtn = mk("button", "btn solid-rose", "Abort");
-  abortBtn.disabled = gated;
   abortBtn.onclick = () => {
     wire.confirmTap(abortBtn, { armLabel: "Confirm abort?" }, () => {
       wire.send("abort", {}, abortBtn);
@@ -140,25 +170,74 @@ function render() {
   btnrow.appendChild(abortBtn);
 
   const loadBtn = mk("button", "btn", "Load");
-  loadBtn.disabled = !roomSettled();
   loadBtn.onclick = openPicker;
   btnrow.appendChild(loadBtn);
 
   wrap.appendChild(btnrow);
 
-  // phase chip
-  const [label, tone] = PHASES[state] || [state, "dim"];
-  const phase = mk("div", `phase ${tone}`);
+  // phase chip (label/tone/sub filled in by updatePanelDynamic)
+  const phase = mk("div", "phase");
   const plabel = mk("div", "p-label");
   plabel.appendChild(mk("span", "dot"));
-  plabel.appendChild(mk("span", null, label));
+  const phaseLabel = mk("span", null, "");
+  plabel.appendChild(phaseLabel);
   phase.appendChild(plabel);
-  if (state === "SETUP" && bit) {
-    phase.appendChild(mk("div", "p-sub", `starts: ${startText(bit.start)}`));
-  }
   wrap.appendChild(phase);
 
   panel.appendChild(wrap);
+
+  elDetailsPill = detailsPill;
+  elRunBtn = runBtn;
+  elRestartBtn = restartBtn;
+  elAbortBtn = abortBtn;
+  elLoadBtn = loadBtn;
+  elEmptyLoadBtn = null;
+  elPhase = phase;
+  elPhaseLabel = phaseLabel;
+  elPhaseSub = null;
+  panelEmpty = false;
+}
+
+// Updates the parts of the panel that legitimately change on every tick
+// (phase chip, gated/disabled state) without touching button identity.
+function updatePanelDynamic() {
+  if (panelEmpty) {
+    if (elEmptyLoadBtn) elEmptyLoadBtn.disabled = !roomSettled();
+    return;
+  }
+  if (!elRunBtn) return;
+
+  const gated = !roomReady();
+  elRunBtn.disabled = gated;
+  elRestartBtn.disabled = gated;
+  elAbortBtn.disabled = gated;
+  elLoadBtn.disabled = !roomSettled();
+
+  const [label, tone] = PHASES[state] || [state, "dim"];
+  elPhase.className = `phase ${tone}`;
+  elPhaseLabel.textContent = label;
+
+  const bit = loadedName ? findBit(loadedName) : null;
+  if (state === "SETUP" && bit) {
+    if (!elPhaseSub) {
+      elPhaseSub = mk("div", "p-sub");
+      elPhase.appendChild(elPhaseSub);
+    }
+    elPhaseSub.textContent = `starts: ${startText(bit.start)}`;
+  } else if (elPhaseSub) {
+    elPhaseSub.remove();
+    elPhaseSub = null;
+  }
+}
+
+function render() {
+  const sig = panelSignatureFor();
+  if (sig !== panelSignature) {
+    panelSignature = sig;
+    if (loadedName) buildLoadedPanel();
+    else buildEmptyPanel();
+  }
+  updatePanelDynamic();
 }
 
 // ------------------------------------------------------------ Bit Details
