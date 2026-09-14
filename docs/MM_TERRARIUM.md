@@ -4466,6 +4466,35 @@ bit does not cancel sound."
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2374 passed, 1 skipped**.
 
+### `bits/capture/capture_bit.py` -- a Bit's `__init__` must take `config` positional-first (2026-09-14)
+Bug, found via live testing: loading CaptureBit through the Console's Load
+picker crashed the whole `run_stack` process group, ending in
+`AttributeError: 'BitConfig' object has no attribute 'session_id'` (also
+seen for `expire` and `truncate_all` on repeat runs), which cascaded into
+`BrokenPipeError`/`OSError` as Arco's pipe closed. Root cause:
+`GameServer.load_bit` constructs every Bit as `bit_cls(config)` --
+**positional**, matching `Bit.__init__(self, config=None)` (see *Bit
+packaging and launch* above). `CaptureBit.__init__` declared `store` before
+`config`, so the live `BitConfig` silently bound to `store` instead of a
+real `CaptureStore`, and every `self._store.*` access (`status()`,
+`update()`, `on_unload()`) then raised `AttributeError` on the `BitConfig`
+object. The existing offline suite never caught this: every test built
+`CaptureBit` with `store=` as a keyword (which sidesteps positional binding
+entirely) or via a no-arg factory lambda that skipped real construction.
+
+- **Fix:** `config` is now `CaptureBit.__init__`'s first parameter, matching
+  every other Bit (`MetronomeBit`, `TestBit`) and the base class.
+- **General trap, not CaptureBit-specific:** any `Bit` subclass whose
+  `__init__` puts another parameter before `config` has the same failure
+  mode -- the positional call silently binds the live `BitConfig` to that
+  other parameter instead of raising a `TypeError`, so the bug surfaces only
+  once something reads off the (wrong-typed) attribute, not at construction.
+- Regression coverage:
+  `tests/test_capture_bit.py::test_loads_through_the_real_registry_with_a_resolved_bit_config`
+  loads CaptureBit through the real `BitRegistry -> GameServer.load_bit`
+  path with a resolved `BitConfig` -- the path the Console's Load picker
+  actually uses, which no prior CaptureBit test exercised.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
