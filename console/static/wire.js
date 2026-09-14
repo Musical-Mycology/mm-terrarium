@@ -46,23 +46,58 @@ export function connect({ WebSocketImpl = WebSocket, retryMs = 1000 } = {}) {
   };
 }
 
+// Reserves room for `btn`'s armed label before it is ever needed, via an
+// offscreen clone, so confirmTap's label swap never changes the button's
+// rendered width. Call once, right after creating the button. Without
+// this, arming grew the button in place and reflowed the row -- on a
+// narrow sidebar that could carry the button itself to a new line, so a
+// fast second click aimed at its pre-arm position landed on nothing and
+// silently failed to confirm (2026-09-13, "abort does nothing" report).
+export function reserveConfirmWidth(btn, armLabel) {
+  if (typeof btn.cloneNode !== "function") return; // no-op under the JS test stub's minimal DOM
+  const clone = btn.cloneNode(true);
+  clone.textContent = armLabel;
+  clone.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;left:-9999px;";
+  document.body.appendChild(clone);
+  const armedWidth = clone.getBoundingClientRect().width;
+  clone.remove();
+  if (armedWidth) btn.style.minWidth = `${armedWidth}px`;
+}
+
 // Shared two-tap confirm helper used by any panel with a destructive/
 // state-changing action that needs "click once to arm, click again to
 // confirm" behavior (per spec section 5: one confirm mechanism, reused
 // everywhere rather than each panel inventing its own modal/dialog).
+// Pair with reserveConfirmWidth at button creation so arming never
+// reflows the row (see its comment).
 export function confirmTap(btn, { armLabel, timeoutMs = 4000 } = {}, onConfirm) {
   if (btn.dataset.armed === "1") {
     delete btn.dataset.armed;
+    clearTimeout(btn._confirmTimer);
     onConfirm();
     return;
   }
   const original = btn.textContent;
   btn.dataset.armed = "1";
   btn.textContent = armLabel;
-  setTimeout(() => {
+  btn._confirmTimer = setTimeout(() => {
     if (btn.dataset.armed === "1") {
       delete btn.dataset.armed;
       btn.textContent = original;
+      flashNotConfirmed(btn);
     }
   }, timeoutMs);
+}
+
+// The arm window closed with no second click: previously a silent revert
+// indistinguishable from the confirm click having been swallowed. Now
+// visible, reusing flashRefusal's look, so a missed or late confirm is
+// never mistaken for "it worked" or explained by nothing at all.
+function flashNotConfirmed(btn) {
+  btn.classList.add("errflash");
+  const note = document.createElement("span");
+  note.className = "inline-err";
+  note.textContent = "not confirmed, click to try again";
+  btn.parentNode?.appendChild?.(note);
+  setTimeout(() => { btn.classList.remove("errflash"); note.remove(); }, 4000);
 }

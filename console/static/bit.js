@@ -123,6 +123,7 @@ function render() {
 
   const restartBtn = mk("button", "btn", "Restart");
   restartBtn.disabled = gated;
+  wire.reserveConfirmWidth(restartBtn, "Confirm restart?");
   restartBtn.onclick = () => {
     wire.confirmTap(restartBtn, { armLabel: "Confirm restart?" }, () => {
       wire.send("restart", {}, restartBtn);
@@ -132,6 +133,7 @@ function render() {
 
   const abortBtn = mk("button", "btn solid-rose", "Abort");
   abortBtn.disabled = gated;
+  wire.reserveConfirmWidth(abortBtn, "Confirm abort?");
   abortBtn.onclick = () => {
     wire.confirmTap(abortBtn, { armLabel: "Confirm abort?" }, () => {
       wire.send("abort", {}, abortBtn);
