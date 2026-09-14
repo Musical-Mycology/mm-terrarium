@@ -51,7 +51,7 @@ export function stage(text) {
 }
 
 export function fail(text) {
-  if (!overlayEl) begin({ title: "Failed" });
+  if (!overlayEl) begin({ title: roomName() ? `Loading Room ${roomName()}`.trim() : "Failed" });
   failed = true;
   bodyEl.textContent = "";
   bodyEl.appendChild(mk("p", "inline-err", text));
@@ -72,28 +72,12 @@ function roomName() {
   return activeRoom || requestedRoom || "";
 }
 
-let lastKnownState = null;   // previous terrarium_state, to detect a load-failure transition
-
 function onTerrariumState(state) {
-  const prev = lastKnownState;
-  lastKnownState = state;
   if (state === "ROOM_LOADING") {
     if (!overlayEl) begin({ title: `Loading Room ${roomName()}`.trim() });
   } else if (state === "ROOM_UNLOADING") {
     if (!overlayEl) begin({ title: `Unloading Room ${roomName()}`.trim() });
   } else if (state === "ROOM_READY" || state === "NO_ROOM") {
-    // A NO_ROOM reached from ROOM_LOADING is always a load failure in this
-    // codebase (control/terrarium.py's load_room only returns to NO_ROOM by
-    // unwinding on an exception mid-sequence). room_load_failed is
-    // broadcast right after this state_changed, not before it
-    // (Terrarium._set_state notifies observers synchronously from inside
-    // load_room(), before load_room() has returned the reason to the
-    // caller that broadcasts room_load_failed). Closing here first would
-    // tear down the correctly-titled overlay before fail() gets to reuse
-    // it, forcing fail()'s title-less "Failed" fallback. Skip the
-    // auto-close for exactly that transition; room_load_failed's fail()
-    // call handles it instead, on the original overlay node.
-    if (prev === "ROOM_LOADING" && state === "NO_ROOM") return;
     if (overlayEl && !failed) end();
   }
 }
