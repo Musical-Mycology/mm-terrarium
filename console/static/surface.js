@@ -177,6 +177,7 @@ function bindingControls(fixture) {
       wrap.appendChild(popout);
     }
     const releaseBtn = mk("button", "btn outline small", "Release");
+    wire.reserveConfirmWidth(releaseBtn, "Confirm release?");
     releaseBtn.onclick = () => {
       wire.confirmTap(releaseBtn, { armLabel: "Confirm release?" }, () => {
         wire.send("release_room", { room_type: currentRoom.room_type, fixture: fixture.name }, releaseBtn);

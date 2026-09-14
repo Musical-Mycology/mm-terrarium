@@ -3,8 +3,12 @@
 const assert = require("node:assert");
 
 // -- minimal DOM stub ------------------------------------------------------
+// getBoundingClientRect/cloneNode are synthetic (8px per character) --
+// just enough to let reserveConfirmWidth's own logic (measure a clone at
+// the armed label, keep the wider of the two) be asserted on below,
+// without a real layout engine.
 function el() {
-  return {
+  const node = {
     children: [], classList: (() => { const s = new Set(); return {
       add: (c) => s.add(c), remove: (c) => s.delete(c),
       contains: (c) => s.has(c), toggle: (c, v) => v ? s.add(c) : s.delete(c),
@@ -17,7 +21,10 @@ function el() {
     querySelector: () => null, querySelectorAll: () => [],
     getContext: () => ({ clearRect() {}, beginPath() {}, arc() {},
                          fill() {}, stroke() {}, fillRect() {} }),
+    getBoundingClientRect() { return { width: node.textContent.length * 8 }; },
+    cloneNode() { return el(); },
   };
+  return node;
 }
 const byId = new Map();
 globalThis.document = {
@@ -61,6 +68,24 @@ globalThis.WebSocket = FakeSocket;
 
   console.log("wire_and_shell: ok");
 
+  // -- reserveConfirmWidth ----------------------------------------------------
+  // Locks in room for the armed label up front so confirmTap's later swap
+  // never changes the button's footprint -- the original bug: arming grew
+  // the button in place, reflowing the row and carrying the button (or its
+  // neighbors) out from under a fast second click (2026-09-13 abort bug).
+  {
+    const wbtn = el();
+    wbtn.textContent = "Abort";                        // 5 chars -> 40px (rest)
+    wire.reserveConfirmWidth(wbtn, "Confirm abort?");   // 14 chars -> 112px (armed)
+    assert.strictEqual(wbtn.style.minWidth, "112px", "must reserve the wider (armed) width");
+
+    wire.confirmTap(wbtn, { armLabel: "Confirm abort?" }, () => {});
+    assert.strictEqual(wbtn.textContent, "Confirm abort?");
+    assert.strictEqual(wbtn.style.minWidth, "112px", "arming must not change the already-reserved width");
+
+    console.log("reserveConfirmWidth: ok");
+  }
+
   // -- confirmTap -----------------------------------------------------------
   const cbtn = el();
   cbtn.textContent = "Abort";
@@ -81,7 +106,11 @@ globalThis.WebSocket = FakeSocket;
   console.log("confirmTap arm/confirm: ok");
 
   // timeout-revert: click once to arm, then let the timer fire with no
-  // second click -- button should revert and onConfirm must NOT fire.
+  // second click -- button should revert, onConfirm must NOT fire, and
+  // (2026-09-13 abort bug) the revert must be visible rather than a
+  // silent no-trace flip back to the resting label: a swallowed confirm
+  // click looked exactly like this same revert, with nothing to tell
+  // the two apart.
   {
     const realSetTimeout = globalThis.setTimeout;
     let capturedFn = null;
@@ -98,14 +127,17 @@ globalThis.WebSocket = FakeSocket;
     assert.strictEqual(capturedMs, 4000);
     assert.ok(typeof capturedFn === "function");
 
-    globalThis.setTimeout = realSetTimeout;
-
-    // simulate the timeout firing with no second click in between
+    // simulate the timeout firing with no second click in between; stay
+    // stubbed so the flash's own cleanup timer doesn't leave a real
+    // multi-second handle open against this test process
     capturedFn();
+    globalThis.setTimeout = realSetTimeout;
 
     assert.strictEqual(tbtn.dataset.armed, undefined);
     assert.strictEqual(tbtn.textContent, "Release");
     assert.strictEqual(tconfirmed, 0);
+    assert.ok(tbtn.classList.contains("errflash"),
+      "an expired arm window must flash visibly, not revert silently");
 
     console.log("confirmTap timeout-revert: ok");
   }
