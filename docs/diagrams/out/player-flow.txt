@@ -1,4 +1,4 @@
-Player flow, hello to complete
+Player flow, hello to complete (lobby handshake, 2026-09-11)
 
 +------------+                                       +------+                                       +---------+
 | Tuneshroom |                                       | Arco |                                       | Control |
@@ -14,13 +14,35 @@ Player flow, hello to complete
        |                                                 |                                               |
 [ SETUP holds registration open; --setup-seconds widens the window ]
        |                                                 |                                               |
-       |----------/game/join TEST_PLAYER_NODE----------->|                                               |
+       |                                                 |<------------/ie1/leds invite flash------------|
        |                                                 |                                               |
-       |                                                 |------------------/game/join------------------>|
+       |<-------------------/ie1/leds--------------------|                                               |
+       |                                                 |                                               |
+[ a double tap, or two taps within 1.5s, joins with no node needed ]
+       |                                                 |                                               |
+       |--------------/game/tap count >= 2-------------->|                                               |
+       |                                                 |                                               |
+       |                                                 |------------------/game/tap------------------->|
        |                                                 |                                               |
        |                                                 |<--------/ie1/role composed config blob--------|
        |                                                 |                                               |
        |<-------------------/ie1/role--------------------|                                               |
+       |                                                 |                                               |
+       |                                                 |<-----------/ie1/leds green flash x2-----------|
+       |                                                 |                                               |
+       |<-------------------/ie1/leds--------------------|                                               |
+       |                                                 |                                               |
+[ a Room fixture bell climbs the A major scale on Control's own Arco voice ]
+       |                                                 |                                               |
+       |                                                 |<----------/ie1/play chime key=<midi>----------|
+       |                                                 |                                               |
+       |<-------------------/ie1/play--------------------|                                               |
+       |                                                 |                                               |
+       |--------------/game/start dev, key-------------->|                                               |
+       |                                                 |                                               |
+       |                                                 |-----------------/game/start------------------>|
+       |                                                 |                                               |
+[ request_start accepts; SETUP -> RUNNING; Room fixtures flash green x1 ]
        |                                                 |                                               |
        |-------------------/game/tilt------------------->|                                               |
        |                                                 |                                               |
