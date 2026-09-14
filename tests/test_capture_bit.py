@@ -8,6 +8,7 @@ import pytest
 
 from bits.capture.capture_bit import CAPTURE_NODE, CaptureBit
 from capture.store import CaptureStore
+from control.bit_registry import BitRegistry
 from control.engine import GameServer
 from control.roles import RoleClass
 
@@ -93,6 +94,28 @@ def test_loads_cleanly_through_the_engine(tmp_path):
     gs = GameServer({"capture": lambda: bit})
     gs.load_bit("capture")
     assert gs.join("ie1", CAPTURE_NODE).granted is True
+
+
+def test_loads_through_the_real_registry_with_a_resolved_bit_config():
+    """Regression for a live crash: the Console's Load picker goes through
+    BitRegistry -> GameServer.load_bit(name, config=resolved_config), which
+    constructs the entry class as `bit_cls(config)` -- config positional,
+    matching Bit.__init__(self, config=None). CaptureBit's own __init__ used
+    to declare `store` before `config`, so that positional BitConfig landed
+    in `self._store` instead of a real CaptureStore, and every `self._store.*`
+    access (status(), update(), on_unload()) blew up with AttributeError on
+    the BitConfig object -- which cascaded into the whole run_stack process
+    group dying. make_bit()/the test above only ever construct CaptureBit
+    with keyword args or a no-arg factory lambda, so neither caught this."""
+    reg = BitRegistry.discover()
+    config = reg.resolve_config("CaptureBit")
+    gs = GameServer(reg.lazy_class_map())
+    gs.load_bit("CaptureBit", config=config)
+
+    assert isinstance(gs.bit._store, CaptureStore)
+    gs.bit.status()
+    gs.bit.update(1.0)
+    gs.bit.on_unload()
 
 
 # --- the happy path through verb dispatch --------------------------------
