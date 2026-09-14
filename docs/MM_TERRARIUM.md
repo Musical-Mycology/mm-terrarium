@@ -4427,6 +4427,29 @@ yet need.
   followed only by `roles_changed`, never a second `snapshot` -- and assert
   the rollup/tag updates from that broadcast alone.
 
+### `bit.js`'s Loaded-Bit button row wasn't under the rendering-discipline rule (2026-09-14)
+Bug, found via code audit: the front-end-rewrite entry above (2026-08-25)
+claims the signature-gated rendering discipline is "enforced structurally
+across all six modules," but `bit.js`'s `render()` was the one holdout -- it
+cleared and rebuilt the whole `#bitPanel` subtree, including the
+Run/Restart/Abort/Load buttons, on every `snapshot`/`bits_listed`/
+`state_changed`/`room_loaded`/`room_unloaded`/`room_load_failed` event,
+regardless of whether the loaded Bit or its display actually changed. An
+unrelated event landing while Restart or Abort was mid `wire.confirmTap`
+(the 4s two-tap window) silently tore down the armed button with no
+feedback -- narrower in practice than the `surface.js`/`rooms.js` cases (it
+needs an external event to land during the exact arm window) but the same
+defect shape.
+
+- Fixed: `render()` now computes a signature from the loaded Bit's identity
+  (`loadedName` plus `display_name`/`kind`/`version`/`start`) and rebuilds
+  the button row only when that changes; phase chip text and gated/disabled
+  state update in place on every tick instead, mirroring `rooms.js`'s
+  `roomsSignature`.
+- Regression coverage: `tests/js/bit_panel.test.js` arms Abort, fires an
+  unrelated `snapshot` and a real `state_changed` phase transition, and
+  asserts the button's DOM node identity and armed state survive both.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
