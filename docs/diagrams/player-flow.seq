@@ -1,4 +1,4 @@
-title: Player flow, hello to complete
+title: Player flow, hello to complete (lobby handshake, 2026-09-11)
 
 participants: Tuneshroom, Arco, Control
 
@@ -8,10 +8,27 @@ Arco -> Control: /game/hello
 Control -> Arco: /ie1/room pushed on hello and on state change
 Arco -> Tuneshroom: /ie1/room
 note: SETUP holds registration open; --setup-seconds widens the window
-Tuneshroom -> Arco: /game/join TEST_PLAYER_NODE
-Arco -> Control: /game/join
+
+# Lobby invite. WAITING and un-joined: white/black flash, repeats every 5s.
+Control -> Arco: /ie1/leds invite flash
+Arco -> Tuneshroom: /ie1/leds
+note: a double tap, or two taps within 1.5s, joins with no node needed
+Tuneshroom -> Arco: /game/tap count >= 2
+Arco -> Control: /game/tap
 Control -> Arco: /ie1/role composed config blob
 Arco -> Tuneshroom: /ie1/role
+
+# Join ceremony. One reserved slot per join, spaced 1s apart.
+Control -> Arco: /ie1/leds green flash x2
+Arco -> Tuneshroom: /ie1/leds
+note: a Room fixture bell climbs the A major scale on Control's own Arco voice
+Control -> Arco: /ie1/play chime key=<midi>
+Arco -> Tuneshroom: /ie1/play
+
+# Admin start. One authority: web URL (QR/NFC), this verb, Console, or uplink.
+Tuneshroom -> Arco: /game/start dev, key
+Arco -> Control: /game/start
+note: request_start accepts; SETUP -> RUNNING; Room fixtures flash green x1
 
 # Play. Gesture in, timed frames out.
 Tuneshroom -> Arco: /game/tilt
