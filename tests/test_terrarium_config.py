@@ -770,3 +770,51 @@ def test_admin_must_be_a_table():
     with pytest.raises(TerrariumConfigError) as err:
         parse_terrarium_config('admin = "gem-1"\n' + MINIMAL, source="t")
     assert err.value.key == "admin"
+
+
+GOOD_SECRET = "0123456789abcdef" * 4
+
+
+def test_uplink_absent_is_none():
+    assert parse_terrarium_config(MINIMAL, source="t").uplink is None
+
+
+def test_uplink_parses_and_hides_the_secret_from_repr():
+    cfg = parse_terrarium_config(
+        MINIMAL + f'\n[uplink]\ntenant_slug = "mm"\nsecret = "{GOOD_SECRET}"\n'
+        'url = "wss://broker.example/uplink"\n', source="t")
+    assert cfg.uplink.tenant_slug == "mm"
+    assert cfg.uplink.secret == GOOD_SECRET
+    assert cfg.uplink.url == "wss://broker.example/uplink"
+    assert GOOD_SECRET not in repr(cfg.uplink) and GOOD_SECRET not in repr(cfg)
+
+
+def test_uplink_url_defaults_to_empty():
+    cfg = parse_terrarium_config(
+        MINIMAL + f'\n[uplink]\ntenant_slug = "mm"\nsecret = "{GOOD_SECRET}"\n',
+        source="t")
+    assert cfg.uplink.url == ""
+
+
+@pytest.mark.parametrize("body,key", [
+    (f'secret = "{GOOD_SECRET}"', "uplink.tenant_slug"),
+    ('tenant_slug = ""\nsecret = "' + GOOD_SECRET + '"', "uplink.tenant_slug"),
+    ('tenant_slug = "mm"', "uplink.secret"),
+    ('tenant_slug = "mm"\nsecret = "abc"', "uplink.secret"),
+    ('tenant_slug = "mm"\nsecret = "' + GOOD_SECRET.upper() + '"', "uplink.secret"),
+    ('tenant_slug = "mm"\nsecret = "' + GOOD_SECRET + '"\nurl = 7', "uplink.url"),
+])
+def test_uplink_validation_is_located_and_never_echoes_the_secret(body, key):
+    with pytest.raises(TerrariumConfigError) as err:
+        parse_terrarium_config(MINIMAL + "\n[uplink]\n" + body + "\n", source="t")
+    assert err.value.key == key
+    assert GOOD_SECRET not in str(err.value) and GOOD_SECRET.upper() not in str(err.value)
+
+
+def test_uplink_must_be_a_table():
+    # Prepended, not appended: MINIMAL ends inside a [[rooms...zones]] array
+    # of tables, so a trailing bare `uplink = 1` would land inside that
+    # table instead of at the top level.
+    with pytest.raises(TerrariumConfigError) as err:
+        parse_terrarium_config("uplink = 1\n" + MINIMAL, source="t")
+    assert err.value.key == "uplink"

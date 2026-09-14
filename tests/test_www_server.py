@@ -125,3 +125,121 @@ def test_start_route_only_get_and_other_paths_still_serve_files(www):
     # still serves files" rather than a fixture mismatch.
     with urllib.request.urlopen(f"http://127.0.0.1:{www.port}/index.htm") as r:
         assert r.status == 200
+
+
+import threading
+from urllib.parse import quote
+
+from control.prepare import PrepareRequest
+
+
+def _answer(www, *, accepted, reason=None, visible=True):
+    """Stand in for DeviceLinkAgent's drain on a helper thread: take one
+    request, fill its reply, release the handler."""
+    taken = []
+
+    def drain():
+        req = www.prepare_requests.get(timeout=2.0)
+        taken.append(req)
+        req.reply.accepted = accepted
+        req.reply.reason = reason
+        req.reply.visible = visible
+        req.reply.done.set()
+
+    t = threading.Thread(target=drain, daemon=True)
+    t.start()
+    return taken, t
+
+
+def _get(www, query):
+    url = f"http://127.0.0.1:{www.port}/prepare?{query}"
+    try:
+        with urllib.request.urlopen(url) as r:
+            return r.status, r.read().decode()
+    except HTTPError as err:
+        return err.code, err.read().decode()
+
+
+def test_prepare_accept_is_202_and_queues_a_loopback_hit_as_the_terrarium(www):
+    taken, t = _answer(www, accepted=True)
+    status, body = _get(www, "key=abc&bit=MetronomeBit&dev=gem-1")
+    t.join(2.0)
+    assert (status, body) == (202, "prepare requested\n")
+    assert "abc" not in body
+    req = taken[0]
+    assert isinstance(req, PrepareRequest)
+    assert (req.key, req.bit, req.dev, req.source) == (
+        "abc", "MetronomeBit", TERRARIUM_ADMIN, "web:terrarium")
+
+
+def test_prepare_visible_refusal_is_409_with_the_reason(www):
+    _, t = _answer(www, accepted=False, reason="busy", visible=True)
+    status, body = _get(www, "key=abc&bit=MetronomeBit")
+    t.join(2.0)
+    assert (status, body) == (409, "busy\n")
+
+
+def test_prepare_silent_refusal_looks_exactly_like_an_accept(www):
+    _, t = _answer(www, accepted=False, reason="bad key", visible=False)
+    status, body = _get(www, "key=wrong&bit=MetronomeBit")
+    t.join(2.0)
+    assert (status, body) == (202, "prepare requested\n")
+    assert "wrong" not in body and "bad key" not in body
+
+
+def test_prepare_undrained_request_is_503(www, monkeypatch):
+    from harness import www_server
+    monkeypatch.setattr(www_server, "PREPARE_REPLY_TIMEOUT_S", 0.05)
+    status, body = _get(www, "key=abc&bit=MetronomeBit")
+    assert (status, body) == (503, "prepare not drained\n")
+    www.prepare_requests.get_nowait()     # it was queued, nobody answered
+
+
+def test_prepare_labels_a_remote_hit_by_dev_or_anonymous(www, monkeypatch):
+    from harness import www_server
+    monkeypatch.setattr(www_server, "_LOOPBACK", ())
+    taken, t = _answer(www, accepted=True)
+    _get(www, "key=k&bit=B&dev=gem-2")
+    t.join(2.0)
+    assert (taken[0].dev, taken[0].source) == ("gem-2", "web:gem-2")
+    taken, t = _answer(www, accepted=True)
+    _get(www, "key=k&bit=B")
+    t.join(2.0)
+    assert (taken[0].dev, taken[0].source) == (None, "web:anonymous")
+
+
+def test_prepare_missing_key_is_queued_with_none(www):
+    taken, t = _answer(www, accepted=False, reason="bad key", visible=False)
+    _get(www, "bit=B")
+    t.join(2.0)
+    assert taken[0].key is None and taken[0].bit == "B"
+
+
+def test_prepare_queue_full_is_503(www, monkeypatch):
+    from harness import www_server
+    monkeypatch.setattr(www_server, "PREPARE_REPLY_TIMEOUT_S", 0.05)
+    for _ in range(www_server.PREPARE_QUEUE_MAX):
+        www.prepare_requests.put_nowait(object())
+    status, body = _get(www, "key=k&bit=B")
+    assert (status, body) == (503, "prepare queue full\n")
+
+
+def test_prepare_is_404_when_not_wired(tmp_path):
+    from harness.www_server import WwwServer
+    server = WwwServer(str(tmp_path), host="127.0.0.1", port=0)
+    server.prepare_requests = None
+    server.start()
+    try:
+        status, _ = _get(server, "key=k&bit=B")
+    finally:
+        server.stop()
+    assert status == 404
+
+
+def test_prepare_key_never_reaches_a_log_line(www, caplog):
+    import logging
+    _, t = _answer(www, accepted=False, reason="busy", visible=True)
+    with caplog.at_level(logging.DEBUG):
+        _get(www, "key=" + quote("hunter2") + "&bit=B")
+    t.join(2.0)
+    assert "hunter2" not in caplog.text

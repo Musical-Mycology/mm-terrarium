@@ -115,3 +115,22 @@ def test_build_join_info_adds_a_start_row_only_for_an_admin_bit():
     assert info["start"]["key"] == "metro-dev"
     assert info["start"]["qr_svg"].startswith("<svg>")
     assert info["start"]["wire"] == '/game/start "ss" <dev> metro-dev'
+
+
+from control.join_info import prepare_url
+
+
+def test_prepare_url_carries_key_and_bit():
+    assert prepare_url(lan_ip="10.0.0.7", www_port=8788, key="a b", bit="MetronomeBit") == \
+        "http://10.0.0.7:8788/prepare?key=a+b&bit=MetronomeBit"
+
+
+def test_build_join_info_adds_the_prepare_url_to_the_start_row():
+    info = _info(start_key="metro-dev")
+    assert info["start"]["prepare_url"] == \
+        "http://10.0.0.7:8788/prepare?key=metro-dev&bit=" + info["bit"]
+
+
+def test_prepare_url_is_absent_without_a_bit_name():
+    info = _info(start_key="metro-dev", bit_name=None)
+    assert info["start"]["prepare_url"] is None

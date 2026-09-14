@@ -344,19 +344,61 @@ the light and the sound read the same number.
 **persistent outbound websocket** to a *future* mm-fairyring broker, without
 `GameServer` depending on that link existing or being up. Landed in
 [`2026-07-20-terrarium-uplink-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md).
+Identity, the `bit_completed` `players` payload and the replay journal below
+are per
+[`2026-09-13-mycoquest-handoff-terrarium-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-13-mycoquest-handoff-terrarium-design.md).
 
 - Down-commands `load_bit` / `run` / `abort` map to `GameServer` calls (engine
   errors become `error` events, never raised across the wire); up-events
   `state_changed` / `registration_changed` / `bit_completed` / `error` are
   pushed reactively from the observer hooks.
+- Built by `harness/terrarium_boot.py` only when `terrarium.toml` carries an
+  `[uplink]` table (`tenant_slug`, a 64-hex-character `secret`, an optional
+  `url`; an empty or absent `url` gives a log-only transport, not a missing
+  one). On every successful connect the agent sends the identity frame first
+  (`{"event": "identity", "tenant_slug": ..., "terrarium_name": ...,
+  "secret": ...}`), then the resync, whose `state_changed` now carries
+  `lan_ip`.
 - Owns connection lifecycle: reconnect-with-backoff and **resync-on-reconnect**
-  (a `state_changed` + `registration_changed` snapshot); nothing is buffered
-  during an outage. A small JSON wire protocol (dataclasses in
-  `uplink/protocol.py`); `WebSocketTransport` (real socket) + `FakeTransport`
-  (in-process test double).
+  (a `state_changed` + `registration_changed` snapshot). `bit_completed` fires
+  on entry to COMPLETING, with `players: [{dev, role, class}]` for every
+  granted assignment (`class` is `jam` for `RoleClass.JAM`, else `scored`; the
+  reserved id `terrarium` is refused on the device wire at hello, and
+  `players_view` in `uplink/protocol.py` filters it out of `bit_completed` as
+  a second guard); it is
+  never sent on `abort()`, so an aborted round credits nobody. `result` may be
+  `null` when the Bit has no `result()` payload or `result()` raised. A small
+  JSON wire protocol (dataclasses in `uplink/protocol.py`);
+  `WebSocketTransport` (real socket, durable) + `LogTransport` (log-only,
+  not durable) + `FakeTransport` (in-process test double).
+- **Replay journal, not a buffer (issue #103):** every `bit_completed` is
+  appended to `<runs_dir>/uplink_journal.jsonl` before any send is attempted,
+  whether or not the transport is connected, capped at 500 entries (oldest
+  dropped, newest kept). After the resync, when the transport is durable
+  (a real socket), the agent sends every journalled entry in order and then
+  clears the journal; a send that raises mid-replay stops the replay and
+  leaves the journal intact for the next connect. A log-only transport never
+  replays and never trims: the journal keeps growing to its cap.
 - **Never in the real-time loop:** `join`/`tick` device traffic stays local at
   o2lite speed; only lifecycle + registration counts cross the link. A live Bit
   runs **identically** whether or not the uplink is connected.
+- **Deviations from the MycoQuest spec section 7.2** (verbatim from
+  `2026-09-13-mycoquest-handoff-terrarium-design.md` section 8, so
+  mm-renquest can mirror them from this deep-dive alone):
+  1. `bit_completed` is no longer emitted on `abort()`. It fires at
+     COMPLETING only, so an operator-aborted round credits nobody.
+  2. `result` may be `null` on `bit_completed`; MycoQuest's poll reads only
+     `bit.name` and `players` and is unaffected.
+  3. The identity frame carries an `event: "identity"` discriminator
+     alongside `tenant_slug`, `terrarium_name` and `secret`, so the broker
+     can parse it like every other up-message.
+  4. `GET /prepare` can answer 503 (`prepare not drained` or `prepare queue
+     full`); the app should show its "cannot reach the room" message for
+     any status other than 202 and 409.
+  5. An unknown Bit name is a silent refusal (202, no reaction), the same
+     as a bad key, so the route never enumerates Bits.
+  6. The resync `state_changed` event carries `lan_ip` now (7.2 listed it
+     as a later slice).
 
 ### `console/` — the Terrarium Console, a local admin panel (the *inbound* sibling)
 **(landed PR #3.)** A Bit-agnostic **local admin panel** — the durable
@@ -4282,6 +4324,27 @@ gets by default.
   every attempt fires `on_start_requested`. `[admin] devices` in
   `terrarium.toml` adds GemIDs; `gs.is_admin(dev)` answers for Bits and the
   Console.
+- **`GET /prepare?key=<key>&bit=<name>[&dev=<GemID>]`** (design
+  `2026-09-13-mycoquest-handoff-terrarium-design.md`, section 4) lives on the
+  same LAN static server as `/start`, same loopback rule (`dev = terrarium`).
+  The handler enqueues a `PrepareRequest` with a reply slot and waits up to
+  3 s for `DeviceLinkAgent`'s drain to answer it. The rule
+  (`control/prepare.py`) is evaluated in order: no room loaded is a visible
+  409 `no room loaded`; an unknown Bit, a non-admin start condition, or a
+  missing or wrong key is a silent 202, byte-identical to an accept, so a
+  stranger learns nothing; IDLE loads the Bit (a load error becomes a
+  visible 409 reason); SETUP with the same Bit already loaded is a 202
+  no-op (a second party joining the same lobby); anything else is a visible
+  409 `busy`. A timed-out reply or a full queue is 503. The key checked is
+  the named Bit's `[start] key`, read off the registry package's already-
+  parsed config, never by loading or importing the Bit. Every attempt fires
+  `on_prepare_requested`, and the Console logs
+  `prepare <bit> from <source>: accepted | refused (<reason>)`. The Join
+  card and the `PREPARE_URL:` marker carry the operator's prepare URL
+  alongside the start URL. The future mm-tuneshroom join launcher's
+  `GET /join.json` (spec section 4.5) must serve `start: null` on the LAN,
+  the same way it already omits `qr_svg`, since the `start` dict now carries
+  both the key and the prepare URL.
 - **`[start] when = "admin"`** with a required `key`; `min_scored` defaults
   to 0 there. The harness hold waits with no deadline (a `timeout_seconds`
   still applies). MetronomeBit ships `when = "admin"`, `key = "metro-dev"`,

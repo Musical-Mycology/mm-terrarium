@@ -882,7 +882,26 @@ def test_bit_completed_event_carries_bit_name_and_version():
 
     completed = [m for m in srv.broadcasts if m.get("event") == "bit_completed"]
     assert completed == [{"event": "bit_completed", "result": {"score": 99},
-                          "bit": {"name": "scoring_bit", "version": "0.1"}}]
+                          "bit": {"name": "scoring_bit", "version": "0.1"}, "players": []}]
+
+
+def test_bit_completed_event_carries_joined_players():
+    class ScoringBit(TestBit):
+        def result(self):
+            return {"score": 99}
+
+    gs = GameServer(bit_registry={"scoring_bit": ScoringBit})
+    srv = FakeConsoleServer()
+    ConsoleAgent(gs, srv)
+    gs.hello("ie1", "Testshroom 1", "1.0")
+    gs.load_bit("scoring_bit")
+    gs.join("ie1", "TEST_PLAYER_NODE")
+    gs.run()
+    gs.tick(3.0)
+
+    completed = [m for m in srv.broadcasts if m.get("event") == "bit_completed"]
+    assert completed[0]["players"] == [
+        {"dev": "ie1", "role": "player", "class": "scored"}]
 
 
 # --- Task 6: room commands, terrarium-state gating, rooms snapshot --------
@@ -2338,3 +2357,14 @@ def test_lobby_events_are_logged():
     gs.notify_lobby("invite", "ie1")
     logs = [m for m in srv.broadcasts if m.get("event") == "log"]
     assert logs[-1]["message"] == "lobby invite: ie1"
+
+
+def test_prepare_attempts_are_logged_to_the_console():
+    from control.prepare import PrepareRequested
+    gs, server, agent = _server_with_agent()
+    agent.on_prepare_requested(PrepareRequested("web:gem-1", "gem-1", "MetronomeBit", True, None))
+    agent.on_prepare_requested(PrepareRequested("web:gem-2", "gem-2", "MetronomeBit", False, "busy"))
+    logs = [m for m in server.broadcasts if m.get("event") == "log"]
+    assert logs[-2]["message"] == "prepare MetronomeBit from web:gem-1: accepted"
+    assert logs[-1]["message"] == "prepare MetronomeBit from web:gem-2: refused (busy)"
+    assert logs[-2]["level"] == "info" and logs[-1]["level"] == "warn"

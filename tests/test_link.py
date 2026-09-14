@@ -1,8 +1,11 @@
+import pytest
+
 from bits.test.test_bit import TestBit
 from control.bit_config import ManifestError
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from tests.test_engine import RoomCapableBit, make_room
+from uplink.journal import Journal
 from uplink.link import UplinkAgent
 from uplink.transport import FakeTransport
 
@@ -131,7 +134,7 @@ def test_registration_changes_are_sent_as_events():
     assert roles["player"] == 1
 
 
-def test_bit_completed_sent_at_unload_when_result_present():
+def test_bit_completed_sent_at_completing_when_result_present():
     class ScoringBit(TestBit):
         def result(self):
             return {"score": 99}
@@ -147,7 +150,7 @@ def test_bit_completed_sent_at_unload_when_result_present():
 
     completed = [m for m in transport.sent if m["event"] == "bit_completed"]
     assert completed == [{"event": "bit_completed", "result": {"score": 99},
-                          "bit": {"name": "scoring_bit", "version": "0.1"}}]
+                          "bit": {"name": "scoring_bit", "version": "0.1"}, "players": []}]
 
 
 def test_exploding_result_does_not_wedge_state_machine():
@@ -172,16 +175,20 @@ def test_exploding_result_does_not_wedge_state_machine():
     assert released == ["ie1"]  # device was released, not stranded
     assert server.bit is None
     assert server.registration is None
-    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert len(completed) == 1 and completed[0]["result"] is None
+    assert completed[0]["players"] == [{"dev": "ie1", "role": "player", "class": "scored"}]
 
 
-def test_no_bit_completed_event_when_result_is_none():
+def test_bit_completed_with_null_result_when_bit_has_none():
     agent, server, transport = make_agent()
     server.load_bit("test_bit")
     server.run()
     server.tick(3.0)
 
-    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert len(completed) == 1 and completed[0]["result"] is None
+    assert completed[0]["players"] == []
 
 
 def test_events_not_sent_while_disconnected():
@@ -193,6 +200,56 @@ def test_events_not_sent_while_disconnected():
     server.load_bit("test_bit")
 
     assert transport.sent == []
+
+
+def test_bit_completed_carries_players_captured_before_release():
+    agent, server, transport = make_agent()
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.hello("ie2", "Testshroom 2", "1.0")
+    server.load_bit("test_bit")
+    server.join("ie1", "TEST_PLAYER_NODE")
+    server.join("ie2", "TEST_JAM_NODE")
+    server.run()
+    server.tick(3.0)
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert completed[0]["players"] == [
+        {"dev": "ie1", "role": "player", "class": "scored"},
+        {"dev": "ie2", "role": "jammer", "class": "jam"}]
+    states = [m["state"] for m in transport.sent if m["event"] == "state_changed"]
+    # sent on COMPLETING, i.e. before the UNLOADING state_changed
+    idx_completed = transport.sent.index(completed[0])
+    idx_unloading = next(i for i, m in enumerate(transport.sent)
+                         if m.get("event") == "state_changed" and m["state"] == "UNLOADING")
+    assert idx_completed < idx_unloading
+
+
+def test_abort_sends_no_bit_completed():
+    class ScoringBit(TestBit):
+        def result(self):
+            return {"score": 99}
+    server = GameServer(bit_registry={"scoring_bit": ScoringBit})
+    transport = FakeTransport()
+    UplinkAgent(server, transport)
+    transport.connect()
+    server.load_bit("scoring_bit")
+    server.run()
+    server.abort()
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    assert server.state.name == "IDLE"
+
+
+def test_the_reserved_terrarium_id_never_appears_in_players():
+    agent, server, transport = make_agent()
+    server.hello("terrarium", "Box", "1.0")
+    server.load_bit("test_bit")
+    server.join("terrarium", "TEST_PLAYER_NODE")  # engine grants it; wire refusal is elsewhere
+    server.hello("ie1", "Testshroom 1", "1.0")
+    server.join("ie1", "TEST_PLAYER_NODE")
+    server.run()
+    server.tick(3.0)
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert completed[0]["players"] == [
+        {"dev": "ie1", "role": "player", "class": "scored"}]
 
 
 class FakeClock:
@@ -613,3 +670,222 @@ def test_room_load_progress_is_sent_per_stage():
                         if m["event"] == "room_load_progress")
     assert dumps(progress_msg) == (
         '{"event": "room_load_progress", "stage": "validating"}')
+
+
+from uplink.protocol import UplinkIdentity
+
+
+def test_identity_is_the_first_frame_on_every_connect():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    ident = UplinkIdentity("mm", "main-stage", "ab" * 32)
+    agent = UplinkAgent(server, transport, identity=ident, time_source=FakeClock())
+    agent.maintain_connection()
+    assert transport.sent[0] == {"event": "identity", "tenant_slug": "mm",
+                                 "terrarium_name": "main-stage", "secret": "ab" * 32}
+    assert transport.sent[1]["event"] == "state_changed"
+    transport.disconnect()
+    transport.sent.clear()
+    agent.maintain_connection()
+    assert transport.sent[0]["event"] == "identity"
+
+
+def test_no_identity_means_no_identity_frame():
+    agent, server, transport = make_agent()
+    transport.disconnect()
+    transport.sent.clear()
+    agent.maintain_connection()
+    assert transport.sent[0]["event"] == "state_changed"
+
+
+def test_resync_carries_the_injected_lan_ip_and_ordinary_events_do_not():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, lan_ip=lambda: "10.0.0.7",
+                        time_source=FakeClock())
+    agent.maintain_connection()
+    assert transport.sent[0]["lan_ip"] == "10.0.0.7"
+    server.load_bit("test_bit")
+    later = [m for m in transport.sent[1:] if m["event"] == "state_changed"]
+    assert all("lan_ip" not in m for m in later)
+
+
+def test_a_raising_lan_ip_is_omitted_not_fatal():
+    def boom():
+        raise OSError("no route")
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, lan_ip=boom, time_source=FakeClock())
+    agent.maintain_connection()
+    assert "lan_ip" not in transport.sent[0]
+
+
+def _completed_round(server):
+    server.load_bit("test_bit")
+    server.run()
+    server.tick(3.0)
+
+
+def test_bit_completed_is_journaled_even_while_disconnected(tmp_path):
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    _completed_round(server)          # never connected
+    assert [e["event"] for e in journal.entries()] == ["bit_completed"]
+    assert transport.sent == []
+
+
+def test_replay_after_resync_on_a_durable_transport_then_clear(tmp_path):
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    journal.append({"event": "bit_completed", "bit": {"name": "old", "version": "0"},
+                    "result": None, "players": []})
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    agent.maintain_connection()
+    events = [m["event"] for m in transport.sent]
+    assert events[0] == "state_changed"
+    assert events[-1] == "bit_completed"
+    assert transport.sent[-1]["bit"]["name"] == "old"
+    assert journal.entries() == []
+
+
+def test_live_send_and_journal_both_happen_when_connected(tmp_path):
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    agent.maintain_connection()
+    _completed_round(server)
+    assert [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert len(journal.entries()) == 1       # trimmed only on the next replay
+    transport.disconnect()
+    transport.sent.clear()
+    agent.maintain_connection()
+    assert [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert journal.entries() == []
+
+
+def test_non_durable_transport_replays_nothing_and_clears_nothing(tmp_path):
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport(durable=False)
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    journal.append({"event": "bit_completed", "bit": {"name": "old", "version": "0"},
+                    "result": None, "players": []})
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    agent.maintain_connection()
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    assert len(journal.entries()) == 1
+
+
+def test_a_send_that_raises_mid_replay_leaves_the_journal_intact(tmp_path):
+    class DroppingTransport(FakeTransport):
+        def send(self, msg):
+            if msg.get("event") == "bit_completed" and msg["bit"]["name"] == "second":
+                self.connected = False
+                raise ConnectionError("dropped")
+            super().send(msg)
+
+    server = GameServer(bit_registry=REGISTRY)
+    transport = DroppingTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    for name in ("first", "second", "third"):
+        journal.append({"event": "bit_completed", "bit": {"name": name, "version": "0"},
+                        "result": None, "players": []})
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    agent.maintain_connection()          # must not raise
+    assert [e["bit"]["name"] for e in journal.entries()] == ["first", "second", "third"]
+    assert transport.connected is False
+
+
+def test_no_journal_means_no_replay_and_no_file(tmp_path):
+    agent, server, transport = make_agent()
+    transport.disconnect()
+    agent.maintain_connection()
+    assert not list(tmp_path.iterdir())
+
+
+# --- fix wave: maintain_connection/poll must never raise to the caller ----
+
+class SendFailsOnceTransport(FakeTransport):
+    """Connects fine, but the first send() after connect raises -- e.g. the
+    identity frame or the resync hits a socket that closed right away."""
+
+    def __init__(self, fail_on: str):
+        super().__init__()
+        self._fail_on = fail_on
+        self.fail_count = 0
+
+    def send(self, msg: dict) -> None:
+        should_fail = (
+            self.fail_count == 0
+            and ((self._fail_on == "identity" and msg.get("event") == "identity")
+                 or (self._fail_on == "resync" and msg.get("event") == "state_changed")))
+        if should_fail:
+            self.fail_count += 1
+            self.connected = False
+            raise ConnectionError("closed right after connect")
+        super().send(msg)
+
+
+class ReceiveRaisesTransport(FakeTransport):
+    def receive(self):
+        raise ConnectionError("socket error on recv")
+
+
+def test_send_failure_on_identity_frame_does_not_raise_and_allows_reconnect():
+    from uplink.protocol import UplinkIdentity
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = SendFailsOnceTransport(fail_on="identity")
+    ident = UplinkIdentity("mm", "main-stage", "ab" * 32)
+    agent = UplinkAgent(server, transport, identity=ident, time_source=clock)
+
+    agent.maintain_connection()  # connects, then identity send raises
+    assert transport.fail_count == 1
+    assert transport.connected is False
+
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS + 0.1)
+    agent.maintain_connection()  # backoff elapsed -- retries and connects
+    assert transport.connected is True
+
+
+def test_send_failure_on_resync_does_not_raise_and_allows_reconnect():
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = SendFailsOnceTransport(fail_on="resync")
+    agent = UplinkAgent(server, transport, time_source=clock)
+
+    agent.maintain_connection()  # connects, resync send raises
+    assert transport.fail_count == 1
+    assert transport.connected is False
+
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS + 0.1)
+    agent.maintain_connection()
+    assert transport.connected is True
+
+
+def test_poll_returns_without_raising_when_receive_raises():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = ReceiveRaisesTransport()
+    agent = UplinkAgent(server, transport, time_source=FakeClock())
+    transport.connect()
+
+    agent.poll()  # must not raise
+
+
+# --- fix wave: an all-corrupt journal is still truncated on replay --------
+
+def test_all_corrupt_journal_replays_nothing_and_is_cleared(tmp_path):
+    path = tmp_path / "j.jsonl"
+    path.write_text("not json\nalso not json\n")
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(path))
+    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+
+    agent.maintain_connection()
+
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    assert journal.is_empty() is True

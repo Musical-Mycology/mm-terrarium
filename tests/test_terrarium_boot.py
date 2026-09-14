@@ -1,6 +1,7 @@
 import pytest
 
 import argparse
+import logging
 import os
 import sys
 import time
@@ -2532,7 +2533,8 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
                             parent_pid=None,
-                            restart_clients=None, stop_clients=None):
+                            restart_clients=None, stop_clients=None,
+                            uplink=None):
         captured["catalog_root"] = console_agent.catalog_root
         captured["rooms_root"] = console_agent.rooms_root
         raise SystemExit(0)
@@ -2585,7 +2587,8 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
                             parent_pid=None,
-                            restart_clients=None, stop_clients=None):
+                            restart_clients=None, stop_clients=None,
+                            uplink=None):
         captured["bench_session_factory"] = console_agent.bench_session_factory
         captured["captures_root"] = console_agent.captures_root
         raise SystemExit(0)
@@ -2641,7 +2644,7 @@ def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
                             parent_pid=None, restart_clients=None,
-                            stop_clients=None):
+                            stop_clients=None, uplink=None):
         captured["restart_clients"] = restart_clients
         captured["stop_clients"] = stop_clients
         raise SystemExit(0)
@@ -2720,7 +2723,7 @@ def test_main_no_room_boot_skips_transport_start_and_leaves_clients_stopped(
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
                             parent_pid=None, restart_clients=None,
-                            stop_clients=None):
+                            stop_clients=None, uplink=None):
         captured["restart_clients"] = restart_clients
         return "parent-gone"
 
@@ -3545,3 +3548,129 @@ def test_build_threads_terrarium_config_admin_devices_into_the_game_server():
         assert gs.is_admin("gem-0001")
     finally:
         shutdown(teardown, terrarium)
+
+
+def test_print_join_urls_prints_the_prepare_url_after_the_start_url(capsys):
+    from harness import markers
+    from harness.terrarium_boot import _print_join_urls
+
+    info = {"nodes": [], "start": {
+        "url": "http://10.0.0.7:8788/start?key=k",
+        "prepare_url": "http://10.0.0.7:8788/prepare?key=k&bit=B"}}
+    _print_join_urls(lambda: info)
+    out = capsys.readouterr().out.splitlines()
+    assert out == [f"{markers.START_URL} http://10.0.0.7:8788/start?key=k",
+                   f"{markers.PREPARE_URL} http://10.0.0.7:8788/prepare?key=k&bit=B"]
+
+
+def _uplink_config(url=""):
+    from control.terrarium_config import UplinkConfig
+    return UplinkConfig(tenant_slug="mm", secret="ab" * 32, url=url)
+
+
+class _CfgWithUplink:
+    name = "main-stage"
+
+    def __init__(self, uplink):
+        self.uplink = uplink
+
+
+def test_build_uplink_returns_none_without_the_table(tmp_path):
+    from harness.terrarium_boot import _build_uplink
+    gs = GameServer({"TestBit": TestBit})
+    assert _build_uplink(_CfgWithUplink(None), gs, None, None, str(tmp_path)) is None
+
+
+def test_build_uplink_log_only_when_url_is_empty(tmp_path):
+    from harness.terrarium_boot import _build_uplink
+    from uplink.journal import Journal
+    from uplink.transport import LogTransport
+    gs = GameServer({"TestBit": TestBit})
+    up = _build_uplink(_CfgWithUplink(_uplink_config()), gs, None, None, str(tmp_path))
+    assert isinstance(up.transport, LogTransport)
+    assert isinstance(up.journal, Journal)
+    assert up.journal.path == str(tmp_path / "uplink_journal.jsonl")
+    assert up.identity.tenant_slug == "mm" and up.identity.terrarium_name == "main-stage"
+    assert up._lan_ip is not None
+
+
+def test_build_uplink_websocket_when_url_is_set(tmp_path):
+    from harness.terrarium_boot import _build_uplink
+    from uplink.transport import WebSocketTransport
+    gs = GameServer({"TestBit": TestBit})
+    up = _build_uplink(_CfgWithUplink(_uplink_config("ws://127.0.0.1:1/")), gs,
+                       None, None, str(tmp_path))
+    assert isinstance(up.transport, WebSocketTransport)
+    assert up.transport.uri == "ws://127.0.0.1:1/"
+
+
+def test_build_uplink_has_no_journal_without_run_records():
+    from harness.terrarium_boot import _build_uplink
+    gs = GameServer({"TestBit": TestBit})
+    up = _build_uplink(_CfgWithUplink(_uplink_config()), gs, None, None, None)
+    assert up.journal is None
+
+
+def test_pump_uplink_maintains_then_polls_and_tolerates_none():
+    from harness.terrarium_boot import _pump_uplink
+    calls = []
+
+    class Up:
+        def maintain_connection(self):
+            calls.append("maintain")
+
+        def poll(self):
+            calls.append("poll")
+
+    _pump_uplink(None)
+    _pump_uplink(Up())
+    assert calls == ["maintain", "poll"]
+
+
+def test_pump_uplink_swallows_a_raising_maintain_connection(caplog):
+    from harness.terrarium_boot import _pump_uplink
+
+    class Boom:
+        def maintain_connection(self):
+            raise RuntimeError("boom")
+
+        def poll(self):
+            raise AssertionError("poll must not run after maintain_connection raised")
+
+    with caplog.at_level(logging.ERROR, logger="harness.terrarium_boot"):
+        _pump_uplink(Boom())  # must not raise
+    assert any("boom" in r.getMessage() or r.exc_info for r in caplog.records)
+
+
+def test_pump_uplink_swallows_a_raising_poll():
+    from harness.terrarium_boot import _pump_uplink
+
+    class Boom:
+        def maintain_connection(self):
+            pass
+
+        def poll(self):
+            raise RuntimeError("boom")
+
+    _pump_uplink(Boom())  # must not raise
+
+
+def test_wait_in_setup_pumps_the_uplink():
+    from harness.terrarium_boot import _wait_in_setup
+    pumps = []
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    class Up:
+        def maintain_connection(self):
+            pumps.append("m")
+
+        def poll(self):
+            pumps.append("p")
+
+    ticks = iter([0.0, 0.1, 0.2, 5.0])
+    _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                   sleep=lambda _s: None, uplink=Up())
+    assert pumps[:2] == ["m", "p"] and len(pumps) >= 4

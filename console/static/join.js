@@ -101,6 +101,10 @@ export function render(info) {
     block.appendChild(mk("p", "meta", "Key (also accepted on the device wire):"));
     block.appendChild(lineWithCopy(info.start.key));
     block.appendChild(lineWithCopy(info.start.wire));
+    if (info.start.prepare_url) {
+      block.appendChild(mk("p", "meta", "Prepare (loads this Bit into the lobby; MycoQuest sends this):"));
+      block.appendChild(lineWithCopy(info.start.prepare_url));
+    }
     card.appendChild(block);
   }
   card.appendChild(mk("p", "muted", info.native_note || ""));

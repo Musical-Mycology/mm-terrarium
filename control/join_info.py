@@ -46,6 +46,13 @@ def start_url(*, lan_ip: str, www_port: int, key: str) -> str:
     return f"http://{lan_ip}:{www_port}/start?{urlencode({'key': key})}"
 
 
+def prepare_url(*, lan_ip: str, www_port: int, key: str, bit: str) -> str:
+    """The keyed LAN prepare URL MycoQuest builds (spec 2026-09-13 section
+    4.5); the operator's copy carries no dev, loopback is the Terrarium."""
+    return (f"http://{lan_ip}:{www_port}/prepare?"
+            f"{urlencode({'key': key, 'bit': bit})}")
+
+
 def tuneshroom_command(*, lan_ip: str, arco_http_port: int, ensemble: str,
                        node: str) -> str:
     """The `flutter run` line for the Tuneshroom web sim, to be run from
@@ -107,7 +114,10 @@ def build_join_info(*, lan_ip: str, www_port: int, arco_http_port: int,
             except Exception:
                 logger.exception("QR encoder failed for %s", url)
         start = {"url": url, "qr_svg": svg, "key": start_key,
-                 "wire": f'/game/start "ss" <dev> {start_key}'}
+                 "wire": f'/game/start "ss" <dev> {start_key}',
+                 "prepare_url": (prepare_url(lan_ip=lan_ip, www_port=www_port,
+                                             key=start_key, bit=bit_name)
+                                 if bit_name else None)}
     return {
         "www_url": f"http://{lan_ip}:{www_port}/app/",
         "o2ws_host": f"{lan_ip}:{arco_http_port}",

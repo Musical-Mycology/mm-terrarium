@@ -976,6 +976,16 @@ class ConsoleAgent:
             level = "warn"
         self.server.broadcast(protocol.log_event(level, message))
 
+    def on_prepare_requested(self, record) -> None:
+        if record.accepted:
+            message = f"prepare {record.bit} from {record.source}: accepted"
+            level = "info"
+        else:
+            message = (f"prepare {record.bit} from {record.source}: "
+                       f"refused ({record.reason})")
+            level = "warn"
+        self.server.broadcast(protocol.log_event(level, message))
+
     def on_lobby_event(self, event: str, dev: str) -> None:
         self.server.broadcast(protocol.log_event("info", f"lobby {event}: {dev}"))
 
@@ -996,8 +1006,11 @@ class ConsoleAgent:
             logger.exception("Bit.result raised; not broadcasting bit_completed")
             return
         if result is not None:
+            gs = self.game_server
+            granted = gs.registration.granted() if gs.registration is not None else ()
             self.server.broadcast(protocol.bit_completed_event(
-                result, self.game_server.bit_name or "", bit.version,
-                room_name=self.game_server.provenance.get("room_name"),
-                terrarium_config_version=self.game_server.provenance.get(
-                    "terrarium_config_version")))
+                result, gs.bit_name or "", bit.version,
+                room_name=gs.provenance.get("room_name"),
+                terrarium_config_version=gs.provenance.get(
+                    "terrarium_config_version"),
+                players=protocol.players_view(granted)))

@@ -169,6 +169,49 @@ def _arco_popen(args):
     return functools.partial(subprocess.Popen, cwd=ARCOSERVER_DIR)
 
 
+def _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir):
+    """Spec 2026-09-13 section 6.5: an [uplink] table is the switch. No
+    table, no agent. An empty url means LogTransport (frames logged, the
+    journal grows, nothing trimmed). The journal lives directly under
+    runs_dir so it outlives any single run; with run records off (runs_dir
+    None) there is no journal and the box keeps no state."""
+    cfg = terrarium_config.uplink
+    if cfg is None:
+        return None
+    from uplink.journal import JOURNAL_FILENAME, Journal
+    from uplink.link import UplinkAgent
+    from uplink.protocol import UplinkIdentity
+    from uplink.transport import LogTransport, WebSocketTransport
+    transport = WebSocketTransport(cfg.url) if cfg.url else LogTransport()
+    journal = (Journal(os.path.join(runs_dir, JOURNAL_FILENAME))
+               if runs_dir is not None else None)
+    if journal is None:
+        logging.getLogger(__name__).warning(
+            "uplink: run records are off, so bit_completed is not journaled")
+    identity = UplinkIdentity(cfg.tenant_slug, terrarium_config.name, cfg.secret)
+    return UplinkAgent(gs, transport, registry=registry, terrarium=terrarium,
+                       identity=identity, journal=journal, lan_ip=lan_ip)
+
+
+def _pump_uplink(uplink) -> None:
+    """One uplink tick: reconnect on the backoff schedule, then drain
+    inbound commands. Called wherever console_agent.poll() is.
+
+    maintain_connection()/poll() promise never to raise, but a bug in
+    either -- or in agent code they call into -- must not unwind the
+    caller's wait loop and tear the venue box down (see the design
+    spec's fix wave, finding 1). Belt-and-suspenders: catch here too, and
+    log once with the traceback."""
+    if uplink is None:
+        return
+    try:
+        uplink.maintain_connection()
+        uplink.poll()
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "uplink pump raised; leaving the venue box running")
+
+
 def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip):
     """Serve www/ to guest phones (spec section 4.1). Independent of Arco
     and the transport; constructed through `server_cls` so the wiring is
@@ -442,7 +485,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    console_agent=None, arco=None, gs=None,
                    condition: StartCondition | None = None,
                    game_server=None, announce_swaps: bool = False,
-                   terrarium=None) -> str:
+                   terrarium=None, uplink=None) -> str:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
@@ -532,6 +575,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
         agent.poll()
         if console_agent is not None:
             console_agent.poll()
+        _pump_uplink(uplink)
         if gs is not None and gs.state is not State.SETUP:
             return "state-changed"
         if gs is not None and getattr(gs, "bit_name", None) != initial_bit_name:
@@ -580,7 +624,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
 
 def _serve_until_done(gs, agent, arco, clock=time.monotonic,
                       sleep=time.sleep, parent_pid: int | None = None,
-                      console_agent=None, terrarium=None) -> str:
+                      console_agent=None, terrarium=None, uplink=None) -> str:
     """Tick until the Bit finishes, Arco dies, the parent is gone, or the
     Room goes down. Returns the reason.
 
@@ -636,6 +680,7 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
         agent.poll()
         if console_agent is not None:
             console_agent.poll()
+        _pump_uplink(uplink)
         gs.tick(1.0 / 44.0)
         if gs.state in (State.LOADING, State.LOADED, State.SETUP):
             # Only a Console restart can put the engine here while this
@@ -648,7 +693,7 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
 
 def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
-                   console_agent=None, terrarium=None) -> str:
+                   console_agent=None, terrarium=None, uplink=None) -> str:
     """Hold in IDLE until a console `load_bit` moves the engine out of it --
     the between-rounds counterpart to `_wait_in_setup`'s in-SETUP hold.
 
@@ -686,6 +731,7 @@ def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
         agent.poll()
         if console_agent is not None:
             console_agent.poll()
+        _pump_uplink(uplink)
         gs.tick(1.0 / 44.0)
         if gs.state is not State.IDLE:
             return "loaded"
@@ -693,7 +739,8 @@ def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
 
 
 def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
-                  console_agent=None, drain_arco=None, terrarium=None) -> str:
+                  console_agent=None, drain_arco=None, terrarium=None,
+                  uplink=None) -> str:
     """The `--serve` round loop: load, hold, run, complete, repeat -- until
     the parent or Arco disappears. Each iteration is one round:
 
@@ -736,7 +783,7 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
         was_idle = gs.state is State.IDLE
         reason = _wait_for_load(gs, agent, arco, parent_pid=parent_pid,
                                 console_agent=console_agent,
-                                terrarium=terrarium)
+                                terrarium=terrarium, uplink=uplink)
         if reason != "loaded":
             return reason
         arco = _live_arco(terrarium, arco)
@@ -760,7 +807,8 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
         reason = _wait_in_setup(agent, setup, parent_pid=parent_pid,
                                 console_agent=console_agent, arco=arco,
                                 gs=gs, condition=cond, game_server=gs,
-                                announce_swaps=True, terrarium=terrarium)
+                                announce_swaps=True, terrarium=terrarium,
+                                uplink=uplink)
         if reason == "parent-gone":
             return reason
         if reason == "timeout-abort":
@@ -777,7 +825,7 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
         arco = _live_arco(terrarium, arco)
         reason = _serve_until_done(gs, agent, arco, parent_pid=parent_pid,
                                    console_agent=console_agent,
-                                   terrarium=terrarium)
+                                   terrarium=terrarium, uplink=uplink)
         if reason in ("parent-gone", "arco-exited"):
             return reason
         if reason == "no-room":
@@ -794,7 +842,7 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
 
 def _wait_for_room_ready(agent, terrarium, *, console_agent=None,
                          parent_pid: int | None = None,
-                         sleep=time.sleep) -> str:
+                         sleep=time.sleep, uplink=None) -> str:
     """The NO_ROOM idle loop: main() falls in here when it booted with no
     --room. Polls the transport and the console at ~20 Hz until the
     Console loads a Room (terrarium.state becomes ROOM_READY) -- no Arco
@@ -813,6 +861,7 @@ def _wait_for_room_ready(agent, terrarium, *, console_agent=None,
         agent.poll()
         if console_agent is not None:
             console_agent.poll()
+        _pump_uplink(uplink)
         if terrarium.state is TerrariumState.ROOM_READY:
             return "ready"
         sleep(1.0 / 20.0)
@@ -820,7 +869,8 @@ def _wait_for_room_ready(agent, terrarium, *, console_agent=None,
 
 def _serve_roomless(gs, agent, terrarium, *, console_agent=None,
                     parent_pid: int | None = None,
-                    restart_clients=None, stop_clients=None) -> str:
+                    restart_clients=None, stop_clients=None,
+                    uplink=None) -> str:
     """main()'s top-level loop for a NO_ROOM boot (no --room given): wait
     for the Console to load a Room (`_wait_for_room_ready`), then serve
     rounds against whatever that load produced
@@ -850,7 +900,7 @@ def _serve_roomless(gs, agent, terrarium, *, console_agent=None,
     while True:
         reason = _wait_for_room_ready(agent, terrarium,
                                       console_agent=console_agent,
-                                      parent_pid=parent_pid)
+                                      parent_pid=parent_pid, uplink=uplink)
         if reason != "ready":
             return reason
         if restart_clients is not None:
@@ -863,7 +913,7 @@ def _serve_roomless(gs, agent, terrarium, *, console_agent=None,
         reason = _serve_rounds(gs, agent, terrarium.arco,
                                parent_pid=parent_pid,
                                console_agent=console_agent,
-                               terrarium=terrarium)
+                               terrarium=terrarium, uplink=uplink)
         if reason != "no-room":
             return reason
         if stop_clients is not None:
@@ -1007,6 +1057,9 @@ def _print_join_urls(provider) -> None:
               flush=True)
     if info.get("start"):
         print(f"{markers.START_URL} {info['start']['url']}", flush=True)
+        if info["start"].get("prepare_url"):
+            print(f"{markers.PREPARE_URL} {info['start']['prepare_url']}",
+                  flush=True)
 
 
 class _JoinLogger:
@@ -1825,6 +1878,14 @@ def main() -> None:
         www = _start_www_server(args, teardown)
         if www is not None:
             agent.start_requests = www.start_requests
+            agent.prepare_requests = www.prepare_requests
+            from control.prepare import PrepareAuthority
+            agent.prepare_authority = PrepareAuthority(gs, registry, terrarium)
+        uplink = _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir)
+        if uplink is not None:
+            mode = terrarium_config.uplink.url or "log-only"
+            print(f"{markers.UPLINK} {mode} tenant={terrarium_config.uplink.tenant_slug}",
+                  flush=True)
         # pump=arco.poll drains Arco's pty for the whole ownership hold;
         # see _restart_room_clients for why that is load-bearing.
         if arco is not None:
@@ -1871,7 +1932,7 @@ def main() -> None:
                                     arco=arco, gs=gs,
                                     condition=cfg.start, game_server=gs,
                                     announce_swaps=effective_serve,
-                                    terrarium=terrarium)
+                                    terrarium=terrarium, uplink=uplink)
             if reason == "parent-gone":
                 print("parent is gone; tearing down", file=sys.stderr)
             elif reason == "timeout-abort":
@@ -1891,7 +1952,7 @@ def main() -> None:
                         console_agent=console_agent,
                         parent_pid=args.exit_with_parent,
                         restart_clients=restart_clients,
-                        stop_clients=stop_clients))
+                        stop_clients=stop_clients, uplink=uplink))
             else:
                 if gs.state is State.SETUP:
                     gs.run()
@@ -1904,7 +1965,7 @@ def main() -> None:
                 reason = _serve_until_done(gs, agent, arco,
                                            parent_pid=args.exit_with_parent,
                                            console_agent=console_agent,
-                                           terrarium=terrarium)
+                                           terrarium=terrarium, uplink=uplink)
                 if effective_serve and reason == "completed":
                     print(f"{markers.CONTROL_ROUND_ENDED} {round1_bit_name} "
                          "(completed)", flush=True)
@@ -1918,7 +1979,7 @@ def main() -> None:
                         console_agent=console_agent,
                         parent_pid=args.exit_with_parent,
                         restart_clients=restart_clients,
-                        stop_clients=stop_clients)
+                        stop_clients=stop_clients, uplink=uplink)
                 elif effective_serve and reason == "no-room":
                     reason_text = "aborted"
                     print(f"{markers.CONTROL_ROUND_ENDED} {round1_bit_name} "
@@ -1933,7 +1994,7 @@ def main() -> None:
                         console_agent=console_agent,
                         parent_pid=args.exit_with_parent,
                         restart_clients=restart_clients,
-                        stop_clients=stop_clients)
+                        stop_clients=stop_clients, uplink=uplink)
                 elif effective_serve and reason == "restarted":
                     print(f"{markers.CONTROL_ROUND_ENDED} "
                          f"{round1_bit_name} (restarted)", flush=True)
@@ -1947,7 +2008,7 @@ def main() -> None:
                         console_agent=console_agent,
                         parent_pid=args.exit_with_parent,
                         restart_clients=restart_clients,
-                        stop_clients=stop_clients)
+                        stop_clients=stop_clients, uplink=uplink)
                 # else: one-shot (non-serve) mode. A "restarted" return
                 # here makes no sense without rounds -- there is no next
                 # round to hand off to -- so it simply falls through to
@@ -1964,7 +2025,7 @@ def main() -> None:
                                      console_agent=console_agent,
                                      parent_pid=args.exit_with_parent,
                                      restart_clients=restart_clients,
-                                     stop_clients=stop_clients)
+                                     stop_clients=stop_clients, uplink=uplink)
             _print_round_outcome(reason)
     except KeyboardInterrupt:
         pass

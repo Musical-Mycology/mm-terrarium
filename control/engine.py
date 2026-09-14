@@ -493,6 +493,12 @@ class GameServer:
         log it without observing the transport."""
         self._notify("on_lobby_event", event, dev)
 
+    def notify_prepare_requested(self, record) -> None:
+        """Let the prepare authority (control/prepare.py) announce every
+        prepare attempt through the engine's observer list, the same way
+        request_start fires on_start_requested."""
+        self._notify("on_prepare_requested", record)
+
     def request_start(self, key: str | None, source_dev: str | None,
                       source: str) -> str | None:
         """The single start authority (spec section 2). Never raises; a

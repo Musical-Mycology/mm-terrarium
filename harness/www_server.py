@@ -21,15 +21,21 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from control.lobby import StartRequest, TERRARIUM_ADMIN
+from control.prepare import PrepareReply, PrepareRequest
 
 # The documented port a QR poster points at (spec section 4.1).
 WWW_PORT = 8788
 
-# The one dynamic route this server answers; everything else is a static
-# file under `directory`.
+# The two dynamic routes this server answers; everything else is a static
+# file under `directory`. /prepare (spec 2026-09-13 section 4.1) is /start
+# with a reply slot: the handler waits for the tick thread's answer so the
+# app can learn busy.
 START_PATH = "/start"
+PREPARE_PATH = "/prepare"
 _LOOPBACK = ("127.0.0.1", "::1")
 START_QUEUE_MAX = 16
+PREPARE_QUEUE_MAX = 16
+PREPARE_REPLY_TIMEOUT_S = 3.0
 
 
 def lan_ip() -> str:
@@ -78,24 +84,37 @@ class _QuietHandler(SimpleHTTPRequestHandler):
     it only enqueues a StartRequest for DeviceLinkAgent to drain on its
     own tick (spec section 3)."""
 
-    def __init__(self, *args, start_requests=None, **kwargs):
+    def __init__(self, *args, start_requests=None, prepare_requests=None,
+                 **kwargs):
         self._start_requests = start_requests
+        self._prepare_requests = prepare_requests
         super().__init__(*args, **kwargs)
 
     def log_message(self, format, *args):  # noqa: A002 (stdlib signature)
         return
 
+    def _plain(self, status: int, text: str) -> None:
+        body = (text + "\n").encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _source(self, dev):
+        if self.client_address[0] in _LOOPBACK:
+            return TERRARIUM_ADMIN, "web:terrarium"
+        return dev, (f"web:{dev}" if dev else "web:anonymous")
+
     def do_GET(self):
         parsed = urlsplit(self.path)
+        if parsed.path == PREPARE_PATH:
+            return self._do_prepare(parsed)
         if parsed.path != START_PATH:
             return super().do_GET()
         params = parse_qs(parsed.query)
         key = params.get("key", [""])[0]
-        dev = params.get("dev", [""])[0] or None
-        if self.client_address[0] in _LOOPBACK:
-            dev, source = TERRARIUM_ADMIN, "web:terrarium"
-        else:
-            source = f"web:{dev}" if dev else "web:anonymous"
+        dev, source = self._source(params.get("dev", [""])[0] or None)
         if self._start_requests is None:
             self.send_error(404, "start is not wired on this server")
             return
@@ -104,12 +123,30 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         except queue.Full:
             self.send_error(503, "start queue full")
             return
-        body = b"start requested\n"
-        self.send_response(202)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._plain(202, "start requested")
+
+    def _do_prepare(self, parsed):
+        if self._prepare_requests is None:
+            self.send_error(404, "prepare is not wired on this server")
+            return
+        params = parse_qs(parsed.query)
+        key = params.get("key", [None])[0]
+        bit = params.get("bit", [""])[0]
+        dev, source = self._source(params.get("dev", [""])[0] or None)
+        reply = PrepareReply(threading.Event())
+        try:
+            self._prepare_requests.put_nowait(
+                PrepareRequest(key, bit, dev, source, reply))
+        except queue.Full:
+            self._plain(503, "prepare queue full")
+            return
+        if not reply.done.wait(PREPARE_REPLY_TIMEOUT_S):
+            self._plain(503, "prepare not drained")
+            return
+        if reply.accepted or not reply.visible:
+            self._plain(202, "prepare requested")
+            return
+        self._plain(409, reply.reason or "refused")
 
 
 class WwwServer:
@@ -121,10 +158,12 @@ class WwwServer:
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self.start_requests: queue.Queue = queue.Queue(maxsize=START_QUEUE_MAX)
+        self.prepare_requests: queue.Queue = queue.Queue(maxsize=PREPARE_QUEUE_MAX)
 
     def start(self) -> None:
         handler = functools.partial(_QuietHandler, directory=self._root,
-                                    start_requests=self.start_requests)
+                                    start_requests=self.start_requests,
+                                    prepare_requests=self.prepare_requests)
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._server.daemon_threads = True
         self._port = self._server.server_address[1]

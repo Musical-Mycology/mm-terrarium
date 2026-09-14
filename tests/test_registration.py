@@ -101,3 +101,18 @@ def test_counts_reflects_live_registrations_and_capacity():
     assert counts["conductor"] == (1, 1)
     assert counts["jammer"] == (0, None)
     assert counts["understudy"] == (0, None)
+
+
+def test_granted_lists_assignments_in_join_order_and_skips_room():
+    table = make_table()
+    room = Role(name="room", role_class=RoleClass.ROOM, capacity=1, scored=False)
+    table.roles["room"] = room
+    table.node_map["NODE_ROOM"] = ["room"]
+    reg = RegistrationState(table)
+    reg.join("ie2", "NODE_JAM", State.SETUP)
+    reg.join("ie1", "NODE_PLAYER", State.SETUP)
+    reg.join("fx1", "NODE_ROOM", State.SETUP)
+    assert reg.granted() == [("ie2", "jammer", RoleClass.JAM),
+                             ("ie1", "player", RoleClass.SHARED)]
+    reg.release("ie2")
+    assert reg.granted() == [("ie1", "player", RoleClass.SHARED)]

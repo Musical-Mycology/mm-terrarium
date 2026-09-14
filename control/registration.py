@@ -92,3 +92,11 @@ class RegistrationState:
             (role.name, self._counts[role.name], role.capacity)
             for role in self.role_table.roles.values()
         ]
+
+    def granted(self) -> list[tuple[str, str, RoleClass]]:
+        """Every current assignment as (dev, role_name, role_class) in join
+        order, without ROOM-class bindings (a fixture, never a player). The
+        uplink builds bit_completed.players from this at COMPLETING."""
+        return [(dev, role_name, role_class)
+                for dev, (_node, role_name, role_class) in self.assignments.items()
+                if role_class is not RoleClass.ROOM]

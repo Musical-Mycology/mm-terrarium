@@ -21,7 +21,8 @@ class UplinkAgent:
     MAX_BACKOFF_SECONDS = 30.0
 
     def __init__(self, game_server: GameServer, transport, *,
-                 time_source=time.monotonic, registry=None, terrarium=None):
+                 time_source=time.monotonic, registry=None, terrarium=None,
+                 identity=None, lan_ip=None, journal=None):
         self.game_server = game_server
         self.transport = transport
         self.registry = registry
@@ -29,6 +30,11 @@ class UplinkAgent:
         # caller) means no room commands and no terrarium-state stamping --
         # zero behavior change.
         self.terrarium = terrarium
+        # Identity presented first on every connect (None: a test-only or
+        # pre-config agent sends none). lan_ip is an injected callable so
+        # uplink/ never imports harness/.
+        self.identity = identity
+        self._lan_ip = lan_ip
         self._time_source = time_source
         self._next_attempt_at = 0.0
         self._backoff = self.INITIAL_BACKOFF_SECONDS
@@ -38,6 +44,10 @@ class UplinkAgent:
         # (a normal unload) does. Captured on ROOM_UNLOADING entry, before
         # Terrarium clears .room.
         self._unloading_room_name: str | None = None
+        # uplink/journal.py Journal or None: bit_completed is appended before
+        # any send and replayed after the resync over a durable transport
+        # (spec 2026-09-13 section 6.4).
+        self.journal = journal
         game_server.add_observer(self)
         if terrarium is not None:
             terrarium.add_observer(self)
@@ -61,14 +71,45 @@ class UplinkAgent:
             return
         self._backoff = self.INITIAL_BACKOFF_SECONDS
         self._next_attempt_at = 0.0
-        self._send_resync()
+        try:
+            if self.identity is not None:
+                self._send(protocol.identity_frame(self.identity))
+            self._send_resync()
+            self._replay_journal()
+        except Exception:
+            logger.warning("uplink send failed right after connect; "
+                            "leaving the retry to the backoff schedule")
+            return
+
+    def _replay_journal(self) -> None:
+        if self.journal is None or not getattr(self.transport, "durable", False):
+            return
+        had_lines = not self.journal.is_empty()
+        entries = self.journal.entries()
+        for event in entries:
+            if not self.transport.connected:
+                return
+            try:
+                self.transport.send(event)
+            except Exception:
+                logger.warning("uplink dropped mid-replay; %d journal entries "
+                               "kept for the next connect", len(entries))
+                return
+        if had_lines:
+            self.journal.clear()
 
     def _send_resync(self) -> None:
         terrarium_state = (
             self.terrarium.state.name if self.terrarium is not None else None)
+        lan_ip = None
+        if self._lan_ip is not None:
+            try:
+                lan_ip = self._lan_ip()
+            except Exception:
+                logger.exception("lan_ip probe raised; resync carries no address")
         self._send(protocol.state_changed_event(
             self.game_server.state.name, self.game_server.bit_name,
-            terrarium_state=terrarium_state))
+            terrarium_state=terrarium_state, lan_ip=lan_ip))
         if self.terrarium is not None and self.terrarium.room is not None:
             # Active room name for a reconnecting peer, on the same
             # room_loaded event on_terrarium_state_change would have sent
@@ -84,7 +125,11 @@ class UplinkAgent:
         if not self.transport.connected:
             return
         while True:
-            msg = self.transport.receive()
+            try:
+                msg = self.transport.receive()
+            except Exception:
+                logger.warning("uplink receive failed; will retry next tick")
+                return
             if msg is None:
                 return
             self._handle_message(msg)
@@ -155,7 +200,11 @@ class UplinkAgent:
         self._send(protocol.state_changed_event(
             new_state.name, self.game_server.bit_name,
             terrarium_state=terrarium_state))
-        if new_state == State.UNLOADING:
+        # COMPLETING is reached only by the tick-triggered completion path;
+        # abort() skips it, so an aborted round is never reported as
+        # completed (spec 2026-09-13 section 5.3). Registration is still
+        # populated here; it is released during UNLOADING.
+        if new_state == State.COMPLETING:
             self._send_bit_completed()
 
     # --- terrarium observer callbacks ---------------------------------------
@@ -188,20 +237,30 @@ class UplinkAgent:
         self._send(protocol.room_load_progress_event(stage))
 
     def _send_bit_completed(self) -> None:
-        bit = self.game_server.bit
+        gs = self.game_server
+        bit = gs.bit
         if bit is None:
             return
         try:
             result = bit.result()
         except Exception:
-            logger.exception("Bit.result raised; not sending bit_completed")
-            return
-        if result is not None:
-            self._send(protocol.bit_completed_event(
-                result, self.game_server.bit_name or "", bit.version,
-                room_name=self.game_server.provenance.get("room_name"),
-                terrarium_config_version=self.game_server.provenance.get(
-                    "terrarium_config_version")))
+            logger.exception("Bit.result raised; sending bit_completed with a null result")
+            result = None
+        granted = gs.registration.granted() if gs.registration is not None else []
+        event = protocol.bit_completed_event(
+            result, gs.bit_name or "", bit.version,
+            room_name=gs.provenance.get("room_name"),
+            terrarium_config_version=gs.provenance.get("terrarium_config_version"),
+            players=protocol.players_view(granted))
+        self._emit_bit_completed(event)
+
+    def _emit_bit_completed(self, event: dict) -> None:
+        if self.journal is not None:
+            try:
+                self.journal.append(event)
+            except OSError:
+                logger.exception("could not journal bit_completed; sending live only")
+        self._send(event)
 
     def on_registration_change(self) -> None:
         counts = non_room_counts(self.game_server.registration)

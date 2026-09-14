@@ -33,6 +33,7 @@ from control.instrument import fixture_ambient
 from control.lobby import (FIXTURE_FLASH_GAP_S, FIXTURE_FLASH_ON_S, GREEN,
                            TERRARIUM_ADMIN, LobbyState, StartRequest,
                            lobby_light_manifest)
+from control.prepare import PrepareRequest
 from control.role_config import compose_role_config, slice_light_manifest
 from control.roles import Role, RoleClass
 from control.room_profile import RoomProfile
@@ -247,6 +248,11 @@ class DeviceLinkAgent:
         # and are drained here, on the tick thread, so the engine is only
         # ever touched from one thread.
         self.start_requests: queue.Queue[StartRequest] | None = None
+        # Web prepares (harness/www_server.py, spec 2026-09-13 section 4.4)
+        # arrive on the server thread and are drained here too; the handler
+        # waits on each request's reply slot.
+        self.prepare_requests: queue.Queue[PrepareRequest] | None = None
+        self.prepare_authority = None
         self._setup_room()
         game_server.add_observer(self)
         game_server.on_release = self._on_release
@@ -491,6 +497,33 @@ class DeviceLinkAgent:
                 return
             self.game_server.request_start(req.key, req.dev, req.source)
 
+    def _drain_prepare_requests(self) -> None:
+        """Web prepares cross a thread here and nowhere else, mirroring
+        _drain_start_requests: filled on the server thread, emptied on this,
+        the tick thread, so the engine is only ever touched from one."""
+        q = self.prepare_requests
+        if q is None:
+            return
+        while True:
+            try:
+                req = q.get_nowait()
+            except queue.Empty:
+                return
+            reply = req.reply
+            if self.prepare_authority is None:
+                reply.accepted, reply.reason, reply.visible = (
+                    False, "prepare is not wired", True)
+            else:
+                try:
+                    decision = self.prepare_authority.request(req)
+                    reply.accepted, reply.reason, reply.visible = (
+                        decision.accepted, decision.reason, decision.visible)
+                except Exception:
+                    logger.exception("prepare authority raised for %s", req)
+                    reply.accepted, reply.reason, reply.visible = (
+                        False, "prepare failed", True)
+            reply.done.set()
+
     def _tick_lobby(self) -> None:
         lobby = self._lobby
         if lobby is None:
@@ -723,6 +756,7 @@ class DeviceLinkAgent:
         self._tick_overrides()
         self._feed_breath()
         self._drain_start_requests()
+        self._drain_prepare_requests()
         self._tick_lobby()
         self._feed_ambient_generators()
         # Before both renders: a feed released this tick must be reflected in

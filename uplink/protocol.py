@@ -3,7 +3,25 @@ contract between UplinkAgent and a future fairyring broker. See design spec
 section 4.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from control.lobby import TERRARIUM_ADMIN
+from control.roles import RoleClass
+
+
+@dataclass(frozen=True)
+class UplinkIdentity:
+    """What the box presents in the first frame of every connection (spec
+    2026-09-13 section 6.2; shape from mm-fairyring issue #1)."""
+    tenant_slug: str
+    terrarium_name: str
+    secret: str = field(repr=False)
+
+
+def identity_frame(identity: UplinkIdentity) -> dict:
+    return {"event": "identity", "tenant_slug": identity.tenant_slug,
+            "terrarium_name": identity.terrarium_name,
+            "secret": identity.secret}
 
 
 # --- Down: fairyring -> Terrarium, one dataclass per command ---------------
@@ -92,9 +110,13 @@ def parse_command(msg: dict):
 # side, so a builder function is enough; no dataclass round-trip needed.)
 
 def state_changed_event(state_name: str, loaded_bit: str | None = None, *,
-                        terrarium_state: str | None = None) -> dict:
-    return {"event": "state_changed", "state": state_name,
-           "loaded_bit": loaded_bit, "terrarium_state": terrarium_state}
+                        terrarium_state: str | None = None,
+                        lan_ip: str | None = None) -> dict:
+    event = {"event": "state_changed", "state": state_name,
+             "loaded_bit": loaded_bit, "terrarium_state": terrarium_state}
+    if lan_ip is not None:
+        event["lan_ip"] = lan_ip
+    return event
 
 
 def registration_changed_event(counts: list[tuple[str, int, int | None]]) -> dict:
@@ -107,13 +129,26 @@ def registration_changed_event(counts: list[tuple[str, int, int | None]]) -> dic
     }
 
 
+def players_view(granted) -> list[dict]:
+    """bit_completed.players (spec 2026-09-13 section 5.2): JAM is "jam",
+    every other player-bearing class is "scored". ROOM never reaches here.
+    The reserved TERRARIUM_ADMIN ("terrarium") id is refused on the device
+    wire (devicelink/agent.py); this is a second guard against it ever
+    appearing in players (spec 5.3, MycoQuest invariant 15)."""
+    return [{"dev": dev, "role": role,
+             "class": "jam" if role_class is RoleClass.JAM else "scored"}
+            for dev, role, role_class in granted
+            if dev != TERRARIUM_ADMIN]
+
+
 def bit_completed_event(result: dict, bit_name: str = "",
                         bit_version: str = "", *, room_name=None,
-                        terrarium_config_version=None) -> dict:
+                        terrarium_config_version=None, players=()) -> dict:
     event = {
         "event": "bit_completed",
         "result": result,
         "bit": {"name": bit_name, "version": bit_version},
+        "players": list(players),
     }
     if room_name is not None:
         event["room_name"] = room_name
