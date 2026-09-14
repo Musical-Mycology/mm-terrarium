@@ -187,5 +187,27 @@ function snapshotMsg(rooms, terrarium_state) {
     "ROOM_READY"));
   assert.strictEqual(rooms._unloadBtnFor("TEST").disabled, false, "Unload live when not blocked");
 
+  // 8. Regression: a tab connected BEFORE the Bit loaded has rolesByName
+  //    empty (as left by the roles: [] snapshots above), while room_changed
+  //    and devices_changed keep currentRoom/deviceRows current -- exactly a
+  //    stale tab's state once registration is already flowing. Loading a
+  //    Bit broadcasts roles_changed, never a second snapshot, to an
+  //    already-open tab; the device's Scored/Jam tag must refresh from
+  //    roles_changed alone. (The section 7 snapshots rebuilt the card, so
+  //    look up the detail HTML fresh rather than reuse the stale `html`
+  //    closure captured before that rebuild.)
+  const detailHtml = () => rooms._cardFor("TEST").innerHTML;
+  send({ event: "room_changed",
+         room: { capability: { pixel_count: 60, color_order: "GRB", zones: [] },
+                 fixtures: [], instruments: [] } });
+  send({ event: "devices_changed",
+         devices: [{ dev: "ie1", name: "Testshroom 1", role: "player" }] });
+  assert.ok(!/Testshroom 1[\s\S]*?Scored/.test(detailHtml()),
+    "no role declaration yet: device isn't tagged Scored despite its role");
+  send({ event: "roles_changed",
+         roles: [{ role: "player", class: "shared", capacity: 2, scored: true }] });
+  assert.ok(/Testshroom 1[\s\S]*?Scored/.test(detailHtml()),
+    "roles_changed alone (no second snapshot) tags the device Scored");
+
   console.log("rooms_panel: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

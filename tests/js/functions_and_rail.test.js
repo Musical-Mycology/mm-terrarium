@@ -132,6 +132,25 @@ const FUNCTIONS = [
 
   // rail: rollup categories render even with no role declarations
   assert.ok(byId.get("registrationCard").innerHTML.includes("Fixtures"));
+
+  // Regression: a tab connected BEFORE the Bit loaded gets a snapshot with
+  // roles: [] (real registration counts, no declarations yet -- exactly
+  // this test's starting state above). Loading a Bit broadcasts
+  // roles_changed, never a second snapshot, to an already-open tab; the
+  // Scored rollup must refresh from that broadcast alone.
+  {
+    const reg0 = byId.get("registrationCard").innerHTML;
+    assert.ok(/Scored[\s\S]*?0\/0/.test(reg0),
+      "no role declarations yet: scored rollup reads 0/0 despite registered counts");
+  }
+  send({ event: "roles_changed",
+         roles: [{ role: "player", class: "UNIQUE", capacity: 2, scored: true }] });
+  {
+    const reg1 = byId.get("registrationCard").innerHTML;
+    assert.ok(/Scored[\s\S]*?2\/2/.test(reg1),
+      "roles_changed alone (no second snapshot) refreshes the scored rollup");
+  }
+
   send({ event: "log", level: "error", message: "boom" });
   assert.ok(byId.get("logCard").innerHTML.includes("boom"));
   send({ event: "bit_completed", result: { phrases: 4 }, bit_name: "MetronomeBit" });
