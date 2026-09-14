@@ -4427,6 +4427,45 @@ yet need.
   followed only by `roles_changed`, never a second `snapshot` -- and assert
   the rollup/tag updates from that broadcast alone.
 
+### Console confirm-tap width lock and expiry flash (2026-09-14)
+Live testing surfaced an operator-facing defect distinct from the
+2026-09-13 abort-semantics fix above: the Console's own Abort button
+could silently fail to send the command at all, reported as "aborting a
+bit does not cancel sound."
+
+- **Root cause:** `wire.confirmTap` swapped a button's label to its
+  longer armed form ("Confirm abort?") with no reserved width.
+  `.btnrow`'s `flex-wrap: wrap` then reflowed the row on arm -- on a
+  narrow sidebar this carried the button (or its neighbors) to a new
+  position. A second click aimed at the pre-arm position landed on
+  nothing: no error, no feedback, indistinguishable from "abort does
+  nothing." Confirmed live: screenshot/DOM inspection before the fix
+  showed the button move on arm; after, two clicks at one fixed screen
+  coordinate correctly arm then confirm.
+- **`wire.reserveConfirmWidth(btn, armLabel)`** measures the armed label
+  via an offscreen clone and locks `btn.style.minWidth` in at button
+  creation (bit.js's Restart/Abort, rooms.js's Unload, surface.js's
+  Release -- every `confirmTap` call site), so arming never changes a
+  button's footprint.
+- **An expired arm window is now visible.** `confirmTap`'s timeout
+  revert used to flip the label back with no trace; it now flashes an
+  inline "not confirmed" note (`errflash`/`inline-err`, reusing
+  `flashRefusal`'s look) so a missed or late confirm is never mistaken
+  for silence.
+- **Live-verified the full abort path**, not just the button: loaded
+  TestBit via the Console with `launch.setup_seconds` and
+  `defaults.run_duration_seconds` overrides, joined a real Testshroom
+  over o2lite to the scored `player` role (`TEST_PLAYER_NODE`), let it
+  register a real tilt gesture while RUNNING, then Aborted from the
+  Console UI. Confirmed: state RUNNING -> UNLOADING -> IDLE, the Room
+  drops to 0 instruments / NO FRAMES, Room and Arco stay up (matching
+  the 2026-09-13 semantics above), and the joined device detects the
+  teardown (`ERROR from Control: tilt: no Bit running`) and exits
+  cleanly rather than crashing.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2374 passed, 1 skipped**.
+
 ### `bit.js`'s Loaded-Bit button row wasn't under the rendering-discipline rule (2026-09-14)
 Bug, found via code audit: the front-end-rewrite entry above (2026-08-25)
 claims the signature-gated rendering discipline is "enforced structurally
@@ -4439,7 +4478,8 @@ unrelated event landing while Restart or Abort was mid `wire.confirmTap`
 (the 4s two-tap window) silently tore down the armed button with no
 feedback -- narrower in practice than the `surface.js`/`rooms.js` cases (it
 needs an external event to land during the exact arm window) but the same
-defect shape.
+defect shape, and distinct from the width-lock entry just above (that one
+kept the button in place; this one kept the button node itself alive).
 
 - Fixed: `render()` now computes a signature from the loaded Bit's identity
   (`loadedName` plus `display_name`/`kind`/`version`/`start`) and rebuilds
@@ -4449,6 +4489,35 @@ defect shape.
 - Regression coverage: `tests/js/bit_panel.test.js` arms Abort, fires an
   unrelated `snapshot` and a real `state_changed` phase transition, and
   asserts the button's DOM node identity and armed state survive both.
+
+### `bits/capture/capture_bit.py` -- a Bit's `__init__` must take `config` positional-first (2026-09-14)
+Bug, found via live testing: loading CaptureBit through the Console's Load
+picker crashed the whole `run_stack` process group, ending in
+`AttributeError: 'BitConfig' object has no attribute 'session_id'` (also
+seen for `expire` and `truncate_all` on repeat runs), which cascaded into
+`BrokenPipeError`/`OSError` as Arco's pipe closed. Root cause:
+`GameServer.load_bit` constructs every Bit as `bit_cls(config)` --
+**positional**, matching `Bit.__init__(self, config=None)` (see *Bit
+packaging and launch* above). `CaptureBit.__init__` declared `store` before
+`config`, so the live `BitConfig` silently bound to `store` instead of a
+real `CaptureStore`, and every `self._store.*` access (`status()`,
+`update()`, `on_unload()`) then raised `AttributeError` on the `BitConfig`
+object. The existing offline suite never caught this: every test built
+`CaptureBit` with `store=` as a keyword (which sidesteps positional binding
+entirely) or via a no-arg factory lambda that skipped real construction.
+
+- **Fix:** `config` is now `CaptureBit.__init__`'s first parameter, matching
+  every other Bit (`MetronomeBit`, `TestBit`) and the base class.
+- **General trap, not CaptureBit-specific:** any `Bit` subclass whose
+  `__init__` puts another parameter before `config` has the same failure
+  mode -- the positional call silently binds the live `BitConfig` to that
+  other parameter instead of raising a `TypeError`, so the bug surfaces only
+  once something reads off the (wrong-typed) attribute, not at construction.
+- Regression coverage:
+  `tests/test_capture_bit.py::test_loads_through_the_real_registry_with_a_resolved_bit_config`
+  loads CaptureBit through the real `BitRegistry -> GameServer.load_bit`
+  path with a resolved `BitConfig` -- the path the Console's Load picker
+  actually uses, which no prior CaptureBit test exercised.
 
 ## Boundary rules (the load-bearing invariants)
 

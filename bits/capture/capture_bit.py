@@ -31,7 +31,7 @@ CAPTURE_DIR = "./captures"
 class CaptureBit(Bit):
     version = "0.1"
 
-    def __init__(self, store: CaptureStore | None = None, config=None,
+    def __init__(self, config=None, store: CaptureStore | None = None,
                  idle_timeout_s: float = IDLE_TIMEOUT_S,
                  provenance: dict | None = None):
         super().__init__(config)

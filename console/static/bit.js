@@ -154,6 +154,7 @@ function buildLoadedPanel() {
   btnrow.appendChild(runBtn);
 
   const restartBtn = mk("button", "btn", "Restart");
+  wire.reserveConfirmWidth(restartBtn, "Confirm restart?");
   restartBtn.onclick = () => {
     wire.confirmTap(restartBtn, { armLabel: "Confirm restart?" }, () => {
       wire.send("restart", {}, restartBtn);
@@ -162,6 +163,7 @@ function buildLoadedPanel() {
   btnrow.appendChild(restartBtn);
 
   const abortBtn = mk("button", "btn solid-rose", "Abort");
+  wire.reserveConfirmWidth(abortBtn, "Confirm abort?");
   abortBtn.onclick = () => {
     wire.confirmTap(abortBtn, { armLabel: "Confirm abort?" }, () => {
       wire.send("abort", {}, abortBtn);
