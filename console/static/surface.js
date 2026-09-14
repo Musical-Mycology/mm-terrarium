@@ -233,7 +233,7 @@ function bindingControls(fixture) {
 // card and the per-declaration instrument cards below; these fields never
 // carry a live value (no controller/lane), so a plain tag row (no <dl>
 // live-update machinery) is enough.
-function instrumentTags(instrument) {
+export function instrumentTags(instrument) {
   const row = mk("div", "insttags");
   row.appendChild(mk("span", "insttag instname", instrument.name));
   for (const cap of instrument.capabilities || []) {
@@ -263,8 +263,6 @@ function buildFixture(fixture) {
   head.appendChild(mk("span", "fixname", fixture.name));
   head.appendChild(bindingControls(fixture));
   wrap.appendChild(head);
-
-  if (fixture.instrument) wrap.appendChild(instrumentTags(fixture.instrument));
 
   const blockrows = mk("div", "blockrows");
   const rows = _blockRowsFor(fixture);

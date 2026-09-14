@@ -67,20 +67,19 @@ const ROOM = {
   assert.ok(!card.innerHTML.includes("Instruments"));
   assert.ok(card.innerHTML.includes("Triggers"));        // renamed from Functions
   assert.ok(!card.innerHTML.includes("Functions"));
-  // fixture cards show the fixture's own Instrument as a small tag row
-  // (name + capabilities + accepted cues).
-  assert.ok(card.innerHTML.includes("light.surface"));
-  assert.ok(card.innerHTML.includes("audio.flsyn"));
-  assert.ok(card.innerHTML.includes("generic_surface"));
-  // event triggers (Task 8's Instrument.event_triggers) render read-only
-  // alongside capabilities on the fixture's instrument tag row.
-  assert.ok(card.innerHTML.includes("tap"));
-  assert.ok(card.innerHTML.includes("z_delta:2.5"));
-  // declared generator function tags render a compact string, not
-  // "[object Object]" -- room_view.py's _function_view feeds an object,
-  // not a string (review fix round 1).
-  assert.ok(card.innerHTML.includes("glow (generator)"));
-  assert.ok(!card.innerHTML.includes("[object Object]"));
+  // the fixture's Instrument declaration chips no longer render on the
+  // Live card (they moved to the Room view, rooms.js); the head shows only
+  // name, binding, pop-out, Release/Arm.
+  assert.ok(!card.innerHTML.includes("insttags"));
+  assert.ok(!card.innerHTML.includes("glow (generator)"));
+  // the helper is still exported for rooms.js and renders the compact
+  // strings, never "[object Object]"
+  const tags = surface.instrumentTags(ROOM.fixtures[0].instrument);
+  assert.ok(tags.innerHTML.includes("generic_surface"));
+  assert.ok(tags.innerHTML.includes("audio.flsyn"));
+  assert.ok(tags.innerHTML.includes("glow (generator)"));
+  assert.ok(tags.innerHTML.includes("z_delta:2.5"));
+  assert.ok(!tags.innerHTML.includes("[object Object]"));
 
   // a controllers-only change must NOT rebuild fixture strips (rule 1/3):
   const stripBefore = surface._canvasFor("main");
@@ -197,7 +196,7 @@ const ROOM = {
       },
     });
     assert.notStrictEqual(surface._bindCtlFor("main"), bindCtlBaseline);
-    assert.ok(card.innerHTML.includes("gesture.tap"));
+    assert.ok(!card.innerHTML.includes("gesture.tap"), "chips are not drawn on the Live card");
 
     const bindCtlAfterInstChange = surface._bindCtlFor("main");
     send({ event: "room_changed",
