@@ -266,6 +266,11 @@ export function init() {
     currentRoom = m.room || null;
     renderDetail();
   });
+  wire.on("roles_changed", (m) => {
+    rolesByName = {};
+    for (const role of m.roles || []) rolesByName[role.role] = role;
+    renderDetail();
+  });
   wire.on("devices_changed", (m) => {
     deviceRows = m.devices || [];
     renderDetail();

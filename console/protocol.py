@@ -36,7 +36,8 @@ __all__ = [
     "room_loaded_event", "room_unloaded_event", "room_load_failed_event",
     "room_load_progress_event",
     "state_changed_event", "role_view", "device_view", "snapshot_event",
-    "devices_changed_event", "bit_status_event", "log_event",
+    "devices_changed_event", "roles_changed_event", "bit_status_event",
+    "log_event",
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
     "room_changed_event", "join_changed_event", "room_frame_event",
     "lobby_changed_event",
@@ -161,6 +162,14 @@ def function_fired_event(fired) -> dict:
 
 def devices_changed_event(devices) -> dict:
     return {"event": "devices_changed", "devices": devices}
+
+
+def roles_changed_event(roles: list) -> dict:
+    """Re-broadcasts the loaded Bit's role declarations (same role_view()
+    shape as snapshot_event's `roles`) at the LOADED/IDLE transitions where
+    they change, so a Console tab connected before the Bit loaded stays
+    current without a reload."""
+    return {"event": "roles_changed", "roles": roles}
 
 
 def bit_status_event(status) -> dict:

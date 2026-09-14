@@ -4396,6 +4396,37 @@ gets by default.
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2246 passed, 1 skipped**.
 
+### `roles_changed`: rail/rooms role cache goes stale on an already-open tab (2026-09-13)
+Bug, found via live testing: a Console tab connected BEFORE a Bit loaded kept
+reading `Scored 0/0` in the sidebar rollup (`rail.js`) and a bare `Role`/`Class`
+tag instead of `Scored`/`Jam` on connected devices in the Room detail
+(`rooms.js`), indefinitely -- reloading the same tab fixed it instantly, so
+the server always had the right data. Root cause: `rolesByName` (the cache
+both files read for scored/jam classing) was populated only inside each
+file's `wire.on("snapshot", ...)` handler, the once-at-connect read model;
+nothing re-populated it on a Bit load for a tab already connected, so
+`registration_changed`/`state_changed` updated counts and state but never the
+declarations (`scored`/`class`/`capacity`) those counts are classed against.
+This is the one protocol addition the PR #71 entry above (2026-08-31) didn't
+yet need.
+
+- **New wire event `roles_changed`** (`console/protocol.py`
+  `roles_changed_event`): the same `role_view()` shape as `snapshot.roles`.
+  `ConsoleAgent.on_state_change` broadcasts it on the LOADED/IDLE
+  transitions -- the exact two points role declarations change -- right
+  alongside the existing `join_changed` broadcast; `_roles_view()` factors
+  out the list-building `snapshot()` already did, so both stay in lockstep.
+- **`rail.js`/`rooms.js`** each gained a `wire.on("roles_changed", ...)`
+  handler that repopulates `rolesByName` and re-renders, mirroring their
+  `snapshot` handler.
+- Regression coverage:
+  `tests/test_console_agent.py::test_roles_changed_is_broadcast_on_loaded_and_on_idle`
+  pins the LOADED/IDLE broadcast shape; `tests/js/functions_and_rail.test.js`
+  and `tests/js/rooms_panel.test.js` each reproduce the exact stale-tab
+  scenario -- a `roles: []` snapshot (or an empty `rolesByName` left by one)
+  followed only by `roles_changed`, never a second `snapshot` -- and assert
+  the rollup/tag updates from that broadcast alone.
+
 ### Console confirm-tap width lock and expiry flash (2026-09-14)
 Live testing surfaced an operator-facing defect distinct from the
 2026-09-13 abort-semantics fix above: the Console's own Abort button

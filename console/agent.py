@@ -637,14 +637,10 @@ class ConsoleAgent:
     def snapshot(self) -> dict:
         gs = self.game_server
         loaded_bit = None
-        roles: list = []
+        roles: list = self._roles_view()
         registration: list = []
         if gs.registration is not None:
             loaded_bit = self._loaded_bit_name()
-            roles = [protocol.role_view(
-                        r, gs.slot_requirement(r.requires) if r.requires else None)
-                     for r in gs.registration.role_table.roles.values()
-                     if r.role_class != RoleClass.ROOM]
             registration = protocol.registration_changed_event(
                 self._non_room_counts())["roles"]
         self._last_room = self._current_room()
@@ -677,6 +673,18 @@ class ConsoleAgent:
             join=self._join_view(),
             lobby=gs.lobby_state(),
         )
+
+    def _roles_view(self) -> list:
+        """The loaded Bit's role declarations (role_view() shape), or []
+        with no Bit loaded. Shared by snapshot() and the LOADED/IDLE
+        broadcast in on_state_change() so both stay in lockstep."""
+        gs = self.game_server
+        if gs.registration is None:
+            return []
+        return [protocol.role_view(
+                    r, gs.slot_requirement(r.requires) if r.requires else None)
+                for r in gs.registration.role_table.roles.values()
+                if r.role_class != RoleClass.ROOM]
 
     def _rooms_view(self) -> list:
         """The rooms panel's read model: every configured room, its
@@ -884,11 +892,16 @@ class ConsoleAgent:
             protocol.lobby_changed_event(self.game_server.lobby_state()))
         if new_state == State.UNLOADING:
             self._broadcast_bit_completed()
-        # The Join card reads the loaded Bit's nodes: it changes exactly
-        # when a Bit becomes loaded and when the engine returns to IDLE.
-        if (new_state in (State.LOADED, State.IDLE)
-                and self._join_info is not None):
-            self.server.broadcast(protocol.join_changed_event(self._join_info()))
+        # The Join card reads the loaded Bit's nodes, and the rail/rooms
+        # panels cache role declarations (scored/class/capacity): both
+        # change exactly when a Bit becomes loaded and when the engine
+        # returns to IDLE, so both re-broadcast at those two transitions.
+        if new_state in (State.LOADED, State.IDLE):
+            self.server.broadcast(protocol.roles_changed_event(
+                self._roles_view()))
+            if self._join_info is not None:
+                self.server.broadcast(
+                    protocol.join_changed_event(self._join_info()))
 
     # --- terrarium observer callbacks ---------------------------------------
     def on_terrarium_state_change(self, old_state: TerrariumState,
