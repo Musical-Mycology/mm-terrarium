@@ -64,23 +64,37 @@ function findByClass(node, cls) {
   send({ event: "room_unloaded", name: "DEMO" });
   assert.strictEqual(busy._overlay(), null);
 
-  // failure keeps it open with the reason and a Dismiss button
+  // failure keeps it open with the reason and a Dismiss button. Real
+  // backend order is state_changed(NO_ROOM) BEFORE room_load_failed
+  // (Terrarium._set_state notifies observers synchronously from inside
+  // load_room(), before load_room() has returned the reason to the caller
+  // that broadcasts room_load_failed) -- so the settle-triggered close must
+  // not race ahead and swap the correctly-titled overlay for a new,
+  // generically-titled one.
   wire.send("load_room", { name: "DEMO" });
   send({ event: "state_changed", state: "IDLE", loaded_bit: null, terrarium_state: "ROOM_LOADING" });
-  send({ event: "room_load_failed", name: "DEMO", reason: "arco did not start" });
+  const overlayBeforeFailure = busy._overlay();
   send({ event: "state_changed", state: "IDLE", loaded_bit: null, terrarium_state: "NO_ROOM" });
+  send({ event: "room_load_failed", name: "DEMO", reason: "arco did not start" });
   const failed = busy._overlay();
   assert.ok(failed, "failure keeps the overlay up despite NO_ROOM");
+  assert.strictEqual(failed, overlayBeforeFailure, "failure reuses the original overlay node, not a new one");
+  assert.ok(mount.innerHTML.includes("Loading Room DEMO"), "title survives the failure");
   assert.ok(mount.innerHTML.includes("arco did not start"));
   const dismiss = findByClass(failed, "btn");
   assert.ok(dismiss && dismiss.textContent === "Dismiss");
   dismiss.onclick();
   assert.strictEqual(busy._overlay(), null);
 
-  // an error on load_bit while up also fails it
+  // an error on load_bit while up also fails it; same real ordering
+  // (state_changed(NO_ROOM) before the error) and same node/title survival.
   wire.send("load_bit", { name: "MetronomeBit", room: "DEMO" });
   send({ event: "state_changed", state: "IDLE", loaded_bit: null, terrarium_state: "ROOM_LOADING" });
+  const overlayBeforeBitFailure = busy._overlay();
+  send({ event: "state_changed", state: "IDLE", loaded_bit: null, terrarium_state: "NO_ROOM" });
   send({ event: "error", command: "load_bit", message: "no such bit" });
+  assert.strictEqual(busy._overlay(), overlayBeforeBitFailure, "failure reuses the original overlay node, not a new one");
+  assert.ok(mount.innerHTML.includes("Loading Room DEMO"), "title survives the failure");
   assert.ok(mount.innerHTML.includes("no such bit"));
   findByClass(busy._overlay(), "btn").onclick();
   assert.strictEqual(busy._overlay(), null);
