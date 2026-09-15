@@ -4635,6 +4635,17 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
   once the mount existed (mirroring signature patterns in `bit.js` and `rooms.js`).
   This defect escaped the offline test suite: the node DOM stub auto-vivifies any
   unseen element id rather than returning `null`, masking the guard's real necessity.
+- **Shared `#overlayMount`, registration-order dependent (whole-branch review
+  finding, documented rather than refactored)**: `bit.js`'s `closeOverlay()`
+  clears every child of `#overlayMount` unconditionally, and `busy.js`'s
+  loading/failure overlay lives in that same mount; both run from the same
+  `room_loaded`/`room_unloaded`/`room_load_failed` events. Correctness today
+  depends entirely on `shell.js`'s init order (`initBit()` registers before
+  `initBusy()`, and `wire.js`'s `dispatch()` is a plain registration-order
+  loop over `handlers.get(event)`) rather than any ownership protocol between
+  the two files. Not broken today -- commented at both call sites so a future
+  reorder in `shell.js`, or either file gaining its own overlay logic,
+  doesn't silently break the other.
 - **Known gap (pre-existing, not fixed)**: plain "btn solid-gold" and "btn
   solid-rose" class pairs across the whole Console have no matching CSS rule and
   render as browser-default gray buttons. The defect predates this work and is
