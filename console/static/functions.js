@@ -18,7 +18,7 @@ let fnSignature = null;              // JSON of the last-rendered declaration
 const lastFired = {};                // function name -> its last fire record (survives rebuilds)
 let fnDevices = [];                  // {dev, muted, fixture} offered by DEVICE/SURFACE pickers
 let currentDeviceTargets = new Map(); // name -> {target, fn} for rendered SURFACE/DEVICE pickers
-const cardByName = new Map();        // function name -> its card element (test hook)
+const cardByName = new Map();        // function name -> its row element (test hook)
 const infoBtnByName = new Map();     // function name -> its (i) button (test hook)
 let openPopoverRow = null;           // the row whose popover is open, else null
 const ALL_OPTION = "@all";
@@ -322,6 +322,10 @@ function closePopover() {
 function openPopover(fn, row) {
   closePopover();
   const pop = mk("div", "popover");
+  // Stop a click inside the popover (e.g. selecting script text) from
+  // bubbling to the document-level "click anywhere closes it" listener
+  // registered in init() -- only outside clicks (and Escape) should close.
+  pop.onclick = (e) => { if (e && e.stopPropagation) e.stopPropagation(); };
   const desc = mk("p", "desc", row._descText || fn.description);
   pop.appendChild(desc);
   row._popDesc = desc;

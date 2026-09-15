@@ -349,6 +349,16 @@ function openDetails(bit) {
 
 // ---------------------------------------------------------------- picker
 
+// #overlayMount is shared with busy.js's loading/failure overlay. This
+// clears every child unconditionally, so it would silently discard busy's
+// overlay too if this ever ran after busy's own append on the same event.
+// Correctness today depends entirely on shell.js's init order -- initBit()
+// registers this module's wire.on handlers before initBusy() registers
+// busy.js's, so wire.dispatch's per-event handler-array iteration always
+// runs this clear before busy.js's append-or-close on the same event
+// (room_loaded/room_unloaded/room_load_failed, all handled by both
+// modules). If either file's registration order changes, or either gains
+// its own dedicated overlay logic, re-check this interaction.
 function closeOverlay() {
   clear(document.getElementById("overlayMount"));
 }

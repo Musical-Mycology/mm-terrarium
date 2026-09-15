@@ -28,6 +28,14 @@ export function _overlay() {
 export function begin({ title }) {
   if (overlayEl) { end(); }
   failed = false;
+  // #overlayMount is shared with bit.js's picker/details overlay. bit.js's
+  // closeOverlay() clears every child of this element unconditionally, and
+  // runs from the same room_loaded/room_unloaded/room_load_failed events
+  // this module handles. That only stays safe because shell.js calls
+  // initBit() before initBusy(), so wire.dispatch's per-event handler-array
+  // iteration (registration order) always runs bit.js's clear before this
+  // module's own append-or-close on the same event. See bit.js's
+  // closeOverlay() for the other half of this.
   const mount = document.getElementById("overlayMount");
   overlayEl = mk("div", "overlay open busy");
   const panel = mk("div", "picker busypanel");
@@ -50,8 +58,11 @@ export function stage(text) {
   stagesEl.appendChild(mk("li", "current", text));
 }
 
-export function fail(text) {
-  if (!overlayEl) begin({ title: roomName() ? `Loading Room ${roomName()}`.trim() : "Failed" });
+export function fail(text, name) {
+  if (!overlayEl) {
+    const title = name || roomName();
+    begin({ title: title ? `Loading Room ${title}`.trim() : "Failed" });
+  }
   failed = true;
   bodyEl.textContent = "";
   bodyEl.appendChild(mk("p", "inline-err", text));
@@ -97,7 +108,7 @@ export function init() {
   wire.on("room_load_progress", (m) => stage(m.stage));
   wire.on("room_loaded", (m) => { activeRoom = m.name; if (!failed) end(); });
   wire.on("room_unloaded", () => { activeRoom = null; if (!failed) end(); });
-  wire.on("room_load_failed", (m) => fail(m.reason || "load failed"));
+  wire.on("room_load_failed", (m) => fail(m.reason || "load failed", m.name));
   wire.on("error", (m) => {
     if (overlayEl && ROOM_COMMANDS.has(m.command)) fail(m.message);
   });

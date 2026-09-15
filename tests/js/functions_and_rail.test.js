@@ -72,10 +72,16 @@ const FUNCTIONS = [
   assert.ok(pop.innerHTML.includes("bit-adjudicated"));
   assert.ok(pop.innerHTML.includes("+0.00s"));
   assert.ok(pop.innerHTML.includes("+1.40s"));
+  // a click inside the open popover (e.g. selecting script text) must not
+  // bubble to the document-level outside-click closer registered in init()
+  let popoverClickStopped = false;
+  pop.onclick({ stopPropagation() { popoverClickStopped = true; } });
+  assert.ok(popoverClickStopped, "popover's own click handler stops propagation");
+  assert.strictEqual(fireworksCard._popover, pop, "a click inside the popover must not close it");
   infoBtn.onclick({ stopPropagation() {} });
   assert.strictEqual(fireworksCard._popover, null, "second click closes the popover");
 
-  // SURFACE card: picker offers "All" first, then live devices
+  // SURFACE row: picker offers "All" first, then live devices
   const pickerFor = (name) => functions._cardFor(name).children.find((c) => c.tagName === "select");
   const surfacePicker = pickerFor("flash_device");
   assert.strictEqual(surfacePicker.options[0].value, "@all");
@@ -88,7 +94,7 @@ const FUNCTIONS = [
   send({ event: "functions_changed", functions: FUNCTIONS });
   assert.strictEqual(functions._cardFor("fireworks_player"), before);
 
-  // devices_changed refreshes SURFACE pickers in place, without rebuilding cards
+  // devices_changed refreshes SURFACE pickers in place, without rebuilding rows
   const surfaceCardBefore = functions._cardFor("flash_device");
   send({ event: "devices_changed",
          devices: [{ dev: "ie1", name: "Testshroom 1", role: "player", muted: true }] });
@@ -103,7 +109,7 @@ const FUNCTIONS = [
          at: 12.5, steps: 1 } });
   assert.ok(mount.innerHTML.includes("Admin manual"));
 
-  // kind-tagged cards: a snapshot with all three kinds renders three cards;
+  // kind-tagged rows: a snapshot with all three kinds renders three rows;
   // only the scripted one has a Fire button; generator/stream render their
   // declaration lines with none.
   assert.strictEqual(list.children.length, 5, "one row per declared function");
@@ -127,8 +133,8 @@ const FUNCTIONS = [
   const scriptedFireBtn = fireworksCard.children.find((c) => c.tagName === "button" && c.textContent === "Fire");
   assert.ok(scriptedFireBtn, "scripted row keeps its Fire button");
 
-  // a function_fired patch on the scripted card leaves the generator and
-  // stream cards' children intact -- the single-card patch discipline is
+  // a function_fired patch on the scripted row leaves the generator and
+  // stream rows' children intact -- the single-row patch discipline is
   // untouched by the new kinds.
   const driftChildrenBefore = driftCard.children.length;
   const tiltChildrenBefore = tiltCard.children.length;

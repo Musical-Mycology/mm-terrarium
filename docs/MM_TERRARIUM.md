@@ -4549,7 +4549,8 @@ entirely) or via a no-arg factory lambda that skipped real construction.
   actually uses, which no prior CaptureBit test exercised.
 
 ### Console Live-view UX pass: loading overlay, nav fix, lane table, trigger rows, icon buttons (2026-09-14)
-Eight-task relayout of the Console's Live view and operator control surfaces.
+Nine-task relayout (seven code tasks, plus a browser-check/PR task per PR) of
+the Console's Live view and operator control surfaces.
 Design: [`.../2026-09-14-console-live-view-ux-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-14-console-live-view-ux-design.md);
 implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-09-14-console-live-view-ux.md).
 
@@ -4640,7 +4641,10 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
   unrelated; flagged for a future styling pass.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**2374 passed, 1 skipped**.
+**2380 passed, 1 skipped**. (`test_devicelink_agent.py::
+test_solid_cue_at_one_fixture_paints_only_its_slice` fails when run alone or
+first -- order-dependent, pre-existing, unrelated to this slice's
+console-only files; not fixed here.)
 
 ## Boundary rules (the load-bearing invariants)
 
