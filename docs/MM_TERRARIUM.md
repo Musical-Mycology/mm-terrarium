@@ -4560,19 +4560,24 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
   events. On failure (`room_load_failed` or an `error` event with a
   ROOM_COMMANDS match), keeps the overlay open with the failure reason and a
   Dismiss button rather than racing a settling `state_changed`. Required two
-  refinements during review: the first fix introduced a stuck-open regression
-  on disconnect-during-load (a reconnect or second tab seeing `room_loaded`
-  with no prior `ROOM_LOADING` event would never close); resolved by having
-  `fail()` reconstruct the title from tracked `roomName()` instead of
-  refusing to rebuild.
-- **`wire.js` updates**: `send()` now dispatches a `_sent` event (line 22)
-  with the command name and any extra fields, so other modules (e.g., `busy.js`)
-  can observe which command this tab just sent. `confirmTap` (line 74) gained an
-  `armStyle: "fill"` option alongside the original default `"label"` style: fill
-  style pulses the button's background on arm, pairing with a shared
-  `.confirm-note` text line below the button (since an icon cannot swap to
-  armed text label without breaking footprint); both styles accept new
-  `onArm`/`onDisarm` hooks (line 75) for lifecycle callbacks.
+  refinements during review: round 1 added a `lastKnownState` guard refusing
+  to auto-close on `ROOM_LOADING -> NO_ROOM`, waiting for `room_load_failed`
+  to reuse the overlay's title. Round 1 introduced a stuck-open regression:
+  a client disconnecting during `ROOM_LOADING` never receives `room_load_failed`
+  on reconnect (protocol sends only a fresh `snapshot`, never a replay), and
+  the overlay waited forever for an event that would never arrive. Round 2
+  fixed this by reverting the guard entirely and instead having `fail()`
+  reconstruct the title from tracked `roomName()` state when reopening,
+  eliminating both the stuck-open case and the title-loss bug simultaneously.
+- **`wire.js` updates**: `send()` dispatches a `_sent` event (via
+  `dispatch("_sent", Object.assign({ command }, extra))`) with the command name
+  and any extra fields, so other modules (e.g., `busy.js`) can observe which
+  command this tab just sent. `confirmTap()` gained an `armStyle: "fill"`
+  option alongside the original default `"label"` style: fill style pulses the
+  button's background on arm, pairing with a shared `.confirm-note` text line
+  below the button (since an icon cannot swap to armed text label without
+  breaking footprint); both styles accept new `onArm`/`onDisarm` hooks for
+  lifecycle callbacks.
 - **`shell.js` Room nav label fix**: the sidebar's Room label (showing active
   room name) now updates on `room_loaded` and `room_unloaded` events in
   addition to the connect-time `snapshot`. Previously stuck at "Room: none"
@@ -4581,49 +4586,51 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
 - **Fixture Instrument declaration chips moved**: `surface.js`'s Live fixture
   card previously rendered name, capabilities, functions, accepted cues, and
   event-trigger declaration chips for each fixture. These chips now render in
-  `rooms.js`'s Room-view fixture detail panel (line 122), paired with the
-  Room view's existing instance state. `instrumentTags()` (the single shared
-  function rendering the chip set, exported from `surface.js` line 256 and
-  imported by `rooms.js` line 12) is unchanged; the live card no longer calls
+  `rooms.js`'s Room-view fixture detail panel (where `instrumentTags()` is
+  called), paired with the Room view's existing instance state. `instrumentTags()`
+  (the single shared function rendering the chip set, exported from `surface.js`
+  and imported by `rooms.js`) is unchanged; the live card no longer calls
   it or renders instrument cards at all.
 - **Live view's "Live values" accordion rebuilt as per-controller lane table**:
   the old design showed one collapsible card per declared voice/instrument voice
-  (nested, dense). The new design (`_laneTable()` in `surface.js` line 417)
-  displays a flat table with one row per MIDI controller number across every
-  voice, showing the controller's current value and which voice lanes read it.
-  `_laneRowsFor()` (line 391) computes per-controller lane membership,
-  sorting numeric CC numbers ahead of other source types. The accordion is
-  closed by default and remembers operator's last open/closed choice via
-  `localStorage`. The old `_instCardFor()` and instrument-card machinery
-  (`_instCardFor` references in `surface.js`) is fully removed; `buildInstrumentCard()`
-  (used by `bit.js`'s Bit Details popup) is the only
-  survivor in the card-building family.
+  (nested, dense). The new design (built by `buildLaneTable(instruments,
+  controllers)` in `surface.js`) displays a flat table with one row per MIDI
+  controller number across every voice, plus rows for non-CC sources (marked
+  with CSS class `lane other`), showing the controller's current value and
+  which voice lanes read it. `_laneRowsFor()` computes per-controller lane
+  membership, sorting numeric CC numbers ahead of other source types (a
+  convenience getter `_laneTable()` returns the rendered table element for
+  testing). The accordion is closed by default and remembers operator's last
+  open/closed choice via `localStorage`. The old `_instCardFor()` and
+  instrument-card machinery (`_instCardFor` references in `surface.js`) is
+  fully removed; `buildInstrumentCard()` (used by `bit.js`'s Bit Details popup)
+  is the only survivor in the card-building family.
 - **Triggers accordion redesigned**: moved directly under the LED rows (above
   Live values) and refactored from decorated cards to compact rows (`functions.js`).
   Each row shows: function name, target/kind chip, one-line summary, device
   picker (where target requires device selection), an (i) button opening a
   popover with description/condition/script detail, and (for scripted functions
   only) a Fire button and last-fired status line. Renders into `#functionsMount`
-  (created once by `surface.js`, outside its per-fixture rebuild path).
+  (created once by `surface.js`'s Triggers accordion shell at lines 639--651,
+  outside `functions.js`'s per-fixture rebuild path).
 - **Sidebar Run/Restart/Abort/Load buttons reshaped as single-row icon group**:
   all four are now inline-SVG icons on one `display: flex` row that never wraps.
-  Restart and Abort use the new fill-style `confirmTap` (pulsing button plus
+  Restart and Abort use the new fill-style `confirmTap()` (pulsing button plus
   shared `.confirm-note` line, since icons cannot swap to armed text). Run and
   Load remain simple click actions.
 - **Pre-existing defect found and fixed during live browser check**: `functions.js`'s
-  `render()` called `document.getElementById("functionsMount")` unconditionally
-  (line 395), but that element is only created once a Room is configured
-  (inside `surface.js`'s Triggers accordion shell; see `surface.js` line 375).
-  Connecting to a NO_ROOM Terrarium threw `TypeError` and silently broke every
-  `wire` event handler registered after `functions.js`'s own handlers in
-  `shell.js`'s init order (`rail.js`, `rooms.js`, `busy.js`), since JavaScript
-  stops handler chain on first uncaught error. Fixed with a guard (`if (!mount)
-  return false;` at line 396) plus signature-gating: the guard alone would have
-  permanently blocked a later real render of an unchanged functions list once
-  mount existed (mirroring signature patterns in `bit.js` and `rooms.js`).
-  This defect escaped the offline test suite: the node DOM stub auto-vivifies
-  any unseen element id rather than returning `null`, masking the guard's real
-  necessity.
+  `render()` called `document.getElementById("functionsMount")` unconditionally,
+  but that element is only created once a Room is configured (inside `surface.js`'s
+  Triggers accordion shell). Connecting to a NO_ROOM Terrarium threw `TypeError`
+  and silently broke every `wire` event handler registered after `initFunctions()`
+  in `shell.js`'s handler init order (`initRail()`, `initRooms()`, `initBusy()`,
+  `initDesign()`, `initForms()`), since JavaScript stops handler registration on
+  first uncaught error. Fixed with a guard in `render()` (`if (!mount)
+  return false;`) plus signature-gating: the guard alone would have permanently
+  blocked a later real render of an unchanged functions list once the mount
+  existed (mirroring signature patterns in `bit.js` and `rooms.js`). This defect
+  escaped the offline test suite: the node DOM stub auto-vivifies any unseen
+  element id rather than returning `null`, masking the guard's real necessity.
 - **Known gap (pre-existing, not fixed)**: plain "btn solid-gold" and "btn
   solid-rose" class pairs across the whole Console have no matching CSS rule and
   render as browser-default gray buttons. The defect predates this work and is
