@@ -51,25 +51,32 @@ const FUNCTIONS = [
   // device picker only on DEVICE targets, offering live devices
   assert.ok(mount.innerHTML.includes("ie1"));
 
-  // redesign markup: grid + card classes reconciled to terrarium.css
-  const grid = mount.children.find((c) => c.className === "fngrid");
-  assert.ok(grid, "expected a .fngrid container");
+  // row layout: one .fnrow per function inside a .fnlist; description,
+  // condition and script live in the (i) popover, not on the row
+  const list = mount.children.find((c) => c.className === "fnlist");
+  assert.ok(list, "expected a .fnlist container");
   const fireworksCard = functions._cardFor("fireworks_player");
-  assert.ok(fireworksCard.className.includes("fn"), "card should carry the fn class");
-  assert.ok(fireworksCard.children.some((c) => c.className === "desc"));
-  assert.ok(fireworksCard.children.some((c) => c.className === "cond"));
+  assert.ok(fireworksCard.className.includes("fnrow"), "row carries the fnrow class");
+  assert.ok(!fireworksCard.children.some((c) => c.className === "desc"), "no description on the row");
   assert.ok(fireworksCard.children.some((c) => c.className === "fired-line"));
-  // collapsed script block toggles via the expander, not a bare <details>
-  const scriptEl = fireworksCard.children.find((c) => c.className.split(" ")[0] === "script");
-  assert.ok(scriptEl && !scriptEl.classList.contains("open"), "script starts collapsed");
-  const scriptbar = fireworksCard.children.find((c) => c.className === "scriptbar");
-  const expander = scriptbar.children.find((c) => c.className === "expander");
-  expander.onclick();
-  assert.ok(scriptEl.classList.contains("open"), "expander opens the script block");
+  assert.ok(fireworksCard.innerHTML.includes("DEVICE"), "target chip on the row");
+  // (i) opens a popover carrying description, condition and the steps
+  const infoBtn = functions._infoBtnFor("fireworks_player");
+  assert.ok(infoBtn && infoBtn.getAttribute("aria-label") === "Details for fireworks_player");
+  assert.strictEqual(fireworksCard._popover, null);
+  infoBtn.onclick({ stopPropagation() {} });
+  const pop = fireworksCard._popover;
+  assert.ok(pop && pop.className.includes("popover"));
+  assert.ok(pop.innerHTML.includes("Celebratory flashes"));
+  assert.ok(pop.innerHTML.includes("Player matches the call phrase"));
+  assert.ok(pop.innerHTML.includes("bit-adjudicated"));
+  assert.ok(pop.innerHTML.includes("+0.00s"));
+  assert.ok(pop.innerHTML.includes("+1.40s"));
+  infoBtn.onclick({ stopPropagation() {} });
+  assert.strictEqual(fireworksCard._popover, null, "second click closes the popover");
 
   // SURFACE card: picker offers "All" first, then live devices
-  const pickerFor = (name) =>
-    functions._cardFor(name).children.find((c) => c.className === "firerow").children[0];
+  const pickerFor = (name) => functions._cardFor(name).children.find((c) => c.tagName === "select");
   const surfacePicker = pickerFor("flash_device");
   assert.strictEqual(surfacePicker.options[0].value, "@all");
   assert.strictEqual(surfacePicker.options[0].textContent, "All");
@@ -99,24 +106,26 @@ const FUNCTIONS = [
   // kind-tagged cards: a snapshot with all three kinds renders three cards;
   // only the scripted one has a Fire button; generator/stream render their
   // declaration lines with none.
-  assert.strictEqual(grid.children.length, 5, "one card per declared function");
+  assert.strictEqual(list.children.length, 5, "one row per declared function");
   const driftCard = functions._cardFor("drift");
-  assert.ok(driftCard, "generator card should render");
-  assert.ok(driftCard.innerHTML.includes("triangle"));
-  assert.ok(driftCard.innerHTML.includes("12"));
+  assert.ok(driftCard, "generator row should render");
+  assert.ok(driftCard.innerHTML.includes("generator"));
+  assert.ok(driftCard.innerHTML.includes("period 12s"));
+  functions._infoBtnFor("drift").onclick({ stopPropagation() {} });
+  assert.ok(driftCard._popover.innerHTML.includes("triangle"));
+  functions._infoBtnFor("drift").onclick({ stopPropagation() {} });
   assert.ok(!driftCard.children.some((c) => c.tagName === "button" && c.textContent === "Fire"),
-    "generator card must not offer a Fire button");
+    "generator row must not offer a Fire button");
   const tiltCard = functions._cardFor("tilt_hue");
-  assert.ok(tiltCard, "stream card should render");
-  assert.ok(tiltCard.innerHTML.includes("tilt"));
-  assert.ok(tiltCard.innerHTML.includes("linear"));
+  assert.ok(tiltCard, "stream row should render");
+  assert.ok(tiltCard.innerHTML.includes("verb:tilt"));
+  functions._infoBtnFor("tilt_hue").onclick({ stopPropagation() {} });
+  assert.ok(tiltCard._popover.innerHTML.includes("linear"));
+  functions._infoBtnFor("tilt_hue").onclick({ stopPropagation() {} });
   assert.ok(!tiltCard.children.some((c) => c.tagName === "button" && c.textContent === "Fire"),
-    "stream card must not offer a Fire button");
-  const scriptedFireBtn = fireworksCard.children
-    .find((c) => c.className === "firerow").children
-    .find((c) => c.tagName === "button");
-  assert.ok(scriptedFireBtn && scriptedFireBtn.textContent === "Fire",
-    "scripted card keeps its Fire button");
+    "stream row must not offer a Fire button");
+  const scriptedFireBtn = fireworksCard.children.find((c) => c.tagName === "button" && c.textContent === "Fire");
+  assert.ok(scriptedFireBtn, "scripted row keeps its Fire button");
 
   // a function_fired patch on the scripted card leaves the generator and
   // stream cards' children intact -- the single-card patch discipline is

@@ -1,17 +1,17 @@
-// Functions panel: compact cards rendered into #functionsMount (created once
-// by surface.js, outside its per-fixture rebuild path). One card per
-// Bit-declared function: name, target chip, description, condition line,
-// collapsed script <details>, a bottom-pinned action row (device picker +
-// Fire for DEVICE targets, Fire only for ROOM targets), and a last-fired
-// line.
+// Functions panel: compact rows rendered into #functionsMount (created once
+// by surface.js, outside its per-fixture rebuild path). One row per
+// Bit-declared function: name, target/kind chip, a one-line summary, a
+// device picker where the target needs one, an (i) button that opens a
+// popover with the description/condition/script detail, and (for scripted
+// functions only) a Fire button and a last-fired line.
 //
-// Rendering discipline (rule 1): the card list is rebuilt ONLY when the
+// Rendering discipline (rule 1): the row list is rebuilt ONLY when the
 // declared function table's signature actually changes -- `devices_changed`
 // fires far more often than `functions_changed` and must never cause a
 // rebuild, only a picker refill (which preserves the operator's current
 // selection). `lastFired` is tracked outside the signature-gated rebuild
-// path so it survives any card rebuild -- a function that already fired
-// still shows its fired state after its card is recreated.
+// path so it survives any row rebuild -- a function that already fired
+// still shows its fired state after its row is recreated.
 import * as wire from "./wire.js";
 
 let fnSignature = null;              // JSON of the last-rendered declaration
@@ -19,6 +19,8 @@ const lastFired = {};                // function name -> its last fire record (s
 let fnDevices = [];                  // {dev, muted, fixture} offered by DEVICE/SURFACE pickers
 let currentDeviceTargets = new Map(); // name -> {target, fn} for rendered SURFACE/DEVICE pickers
 const cardByName = new Map();        // function name -> its card element (test hook)
+const infoBtnByName = new Map();     // function name -> its (i) button (test hook)
+let openPopoverRow = null;           // the row whose popover is open, else null
 const ALL_OPTION = "@all";
 
 // Instrument-compatibility data, carried on `snapshot`/`functions_changed`
@@ -49,6 +51,10 @@ function mk(tag, className, text) {
 
 export function _cardFor(name) {
   return cardByName.get(name);
+}
+
+export function _infoBtnFor(name) {
+  return infoBtnByName.get(name);
 }
 
 export function _diagRow() {
@@ -148,8 +154,9 @@ function refreshCardCompatibility(fn, picker, card) {
       option.disabled = !isCompatible(fn, option.value);
     }
   }
-  if (card && card._descEl) {
-    card._descEl.textContent = resolvedDescription(fn, picker ? picker.value : null);
+  if (card) {
+    card._descText = resolvedDescription(fn, picker ? picker.value : null);
+    if (card._popDesc) card._popDesc.textContent = card._descText;
   }
 }
 
@@ -281,129 +288,107 @@ function outputText(output) {
     + `[${output.out_lo}, ${output.out_hi}]   ${output.mode}`;
 }
 
-function buildGeneratorCard(fn) {
-  const card = document.createElement("div");
-  card.className = "fn";
-
-  const head = mk("div", "fnhead");
-  head.appendChild(mk("h3", null, fn.name));
-  head.appendChild(mk("span", "grow"));
-  head.appendChild(mk("span", "chip dim kind", "generator"));
-  card.appendChild(head);
-
-  card.appendChild(mk("p", "desc", fn.description));
-
-  const decl = mk("div", "script mono");
-  decl.appendChild(mk("div", "step", laneText(fn.lane)));
-  decl.appendChild(mk("div", "step",
-    `waveform:${fn.waveform}   period:${fn.period}s   [${fn.lo}, ${fn.hi}]`));
-  card.appendChild(decl);
-
-  return card;
-}
-
-function buildStreamCard(fn) {
-  const card = document.createElement("div");
-  card.className = "fn";
-
-  const head = mk("div", "fnhead");
-  head.appendChild(mk("h3", null, fn.name));
-  head.appendChild(mk("span", "grow"));
-  head.appendChild(mk("span", "chip dim kind", "stream"));
-  card.appendChild(head);
-
-  card.appendChild(mk("p", "desc", fn.description));
-
-  const decl = mk("div", "script mono");
-  decl.appendChild(mk("div", "step",
-    `verb:${fn.verb}   arg:${fn.arg}   in:[${fn.in_lo}, ${fn.in_hi}]`));
-  for (const output of fn.outputs) {
-    decl.appendChild(mk("div", "step", outputText(output)));
-  }
-  card.appendChild(decl);
-
-  return card;
-}
-
-function buildScriptedCard(fn) {
-  const card = document.createElement("div");
-  card.className = "fn";
-
-  const head = mk("div", "fnhead");
-  head.appendChild(mk("h3", null, fn.name));
-  head.appendChild(mk("span", "grow"));
-  head.appendChild(mk("span", "chip dim kind", fn.target));
-  card.appendChild(head);
-
-  const descEl = mk("p", "desc", fn.description);
-  card.appendChild(descEl);
-  card._descEl = descEl;
-
-  const cond = fn.condition;
-  const condText = cond.description + "   (" + cond.source
-    + (cond.verb ? ": " + cond.verb : "") + ")";
-  card.appendChild(mk("p", "cond", condText));
-
-  const scriptbar = mk("div", "scriptbar");
+function summaryText(fn) {
+  if (fn.kind === "generator") return `period ${fn.period}s · cc:${fn.lane.data1}`;
+  if (fn.kind === "stream") return `verb:${fn.verb} → ${fn.outputs.length} output${fn.outputs.length === 1 ? "" : "s"}`;
   const n = fn.script.length;
-  const expander = mk("button", "expander", null);
-  expander.type = "button";
-  expander.setAttribute("aria-expanded", "false");
-  const tri = mk("span", "tri", "▸");
-  const label = mk("span", "mono",
-    `${n} step${n === 1 ? "" : "s"} · ${maxOffset(fn.script).toFixed(1)}s`);
-  expander.appendChild(tri);
-  expander.appendChild(label);
-  scriptbar.appendChild(expander);
-  card.appendChild(scriptbar);
+  return `${n} step${n === 1 ? "" : "s"} · ${maxOffset(fn.script).toFixed(1)}s`;
+}
 
-  const script = mk("div", "script mono");
-  for (const step of fn.script) {
-    script.appendChild(mk("div", "step", stepText(step)));
+function chipText(fn) {
+  if (fn.kind === "generator" || fn.kind === "stream") return fn.kind;
+  return fn.target;
+}
+
+function detailLines(fn) {
+  if (fn.kind === "generator") {
+    return [laneText(fn.lane), `waveform:${fn.waveform}   period:${fn.period}s   [${fn.lo}, ${fn.hi}]`];
   }
-  card.appendChild(script);
+  if (fn.kind === "stream") {
+    return [`verb:${fn.verb}   arg:${fn.arg}   in:[${fn.in_lo}, ${fn.in_hi}]`,
+            ...fn.outputs.map(outputText)];
+  }
+  return fn.script.map(stepText);
+}
 
-  expander.onclick = () => {
-    const open = !script.classList.contains("open");
-    script.classList.toggle("open", open);
-    expander.setAttribute("aria-expanded", open ? "true" : "false");
-  };
+function closePopover() {
+  if (!openPopoverRow) return;
+  if (openPopoverRow._popover) openPopoverRow._popover.remove();
+  openPopoverRow._popover = null;
+  openPopoverRow._popDesc = null;
+  openPopoverRow = null;
+}
 
-  const firerow = mk("div", "firerow");
+function openPopover(fn, row) {
+  closePopover();
+  const pop = mk("div", "popover");
+  const desc = mk("p", "desc", row._descText || fn.description);
+  pop.appendChild(desc);
+  row._popDesc = desc;
+  if (fn.condition) {
+    const cond = fn.condition;
+    pop.appendChild(mk("p", "cond",
+      cond.description + "   (" + cond.source + (cond.verb ? ": " + cond.verb : "") + ")"));
+  }
+  const script = mk("div", "script mono open");
+  for (const line of detailLines(fn)) script.appendChild(mk("div", "step", line));
+  pop.appendChild(script);
+  row.appendChild(pop);
+  row._popover = pop;
+  openPopoverRow = row;
+}
+
+// GENERATOR and STREAM rows render their declaration lines only -- no Fire
+// button (they never accept an admin-manual fire, see GameServer.fire_function's
+// kind refusal) and no fired-line (function_fired is scoped to SCRIPTED fires).
+function buildRow(fn) {
+  const row = mk("div", "fn fnrow");
+  row._popover = null;
+  row._popDesc = null;
+  row._descText = fn.description;
+
+  row.appendChild(mk("h3", null, fn.name));
+  row.appendChild(mk("span", "chip dim kind", chipText(fn)));
+  row.appendChild(mk("span", "mono summary", summaryText(fn)));
+
   let picker = null;
   if (fn.target === "DEVICE" || fn.target === "SURFACE") {
     picker = document.createElement("select");
     picker.id = "functionDev_" + fn.name;
-    firerow.appendChild(picker);
+    row.appendChild(picker);
     fillDevicePicker(picker, fn.target === "SURFACE");
-    picker.onchange = () => refreshCardCompatibility(fn, picker, card);
-    refreshCardCompatibility(fn, picker, card);
+    picker.onchange = () => refreshCardCompatibility(fn, picker, row);
   }
-  firerow.appendChild(mk("span", "grow"));
-  const fireBtn = mk("button", "btn solid-gold", "Fire");
-  fireBtn.onclick = () => {
-    const extra = { name: fn.name };
-    if (picker) extra.dev = picker.value;
-    wire.send("fire_function", extra, fireBtn);
+  row.appendChild(mk("span", "grow"));
+
+  const infoBtn = mk("button", "infobtn", "i");
+  infoBtn.type = "button";
+  infoBtn.setAttribute("aria-label", `Details for ${fn.name}`);
+  infoBtn.title = "Details";
+  infoBtn.onclick = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    if (row._popover) closePopover(); else openPopover(fn, row);
   };
-  firerow.appendChild(fireBtn);
-  card.appendChild(firerow);
+  row.appendChild(infoBtn);
+  infoBtnByName.set(fn.name, infoBtn);
 
-  const firedLine = mk("div", "fired-line");
-  applyFired(card, firedLine, lastFired[fn.name]);
-  card.appendChild(firedLine);
-  card._firedLine = firedLine;
+  if (fn.kind !== "generator" && fn.kind !== "stream") {
+    const fireBtn = mk("button", "btn solid-gold small", "Fire");
+    fireBtn.onclick = () => {
+      const extra = { name: fn.name };
+      if (picker) extra.dev = picker.value;
+      wire.send("fire_function", extra, fireBtn);
+    };
+    row.appendChild(fireBtn);
 
-  return card;
-}
+    const firedLine = mk("div", "fired-line");
+    applyFired(row, firedLine, lastFired[fn.name]);
+    row.appendChild(firedLine);
+    row._firedLine = firedLine;
+  }
 
-// GENERATOR and STREAM cards render their declaration lines only -- no Fire
-// button (they never accept an admin-manual fire, see GameServer.fire_function's
-// kind refusal) and no fired-line (function_fired is scoped to SCRIPTED fires).
-function buildCard(fn) {
-  if (fn.kind === "generator") return buildGeneratorCard(fn);
-  if (fn.kind === "stream") return buildStreamCard(fn);
-  return buildScriptedCard(fn);
+  refreshCardCompatibility(fn, picker, row);
+  return row;
 }
 
 function render(list) {
@@ -411,6 +396,8 @@ function render(list) {
   if (!mount) return false;
   clear(mount);
   cardByName.clear();
+  closePopover();
+  infoBtnByName.clear();
   // The diagnostics row is built once and reused across rebuilds -- clear()
   // just emptied the mount, so re-append the same node rather than
   // reconstructing it.
@@ -422,13 +409,13 @@ function render(list) {
     return true;
   }
 
-  const grid = mk("div", "fngrid");
-  mount.appendChild(grid);
+  const fnlist = mk("div", "fnlist");
+  mount.appendChild(fnlist);
   currentDeviceTargets = new Map();
   for (const fn of list) {
-    const card = buildCard(fn);
-    grid.appendChild(card);
-    cardByName.set(fn.name, card);
+    const row = buildRow(fn);
+    fnlist.appendChild(row);
+    cardByName.set(fn.name, row);
     if (fn.target === "DEVICE" || fn.target === "SURFACE") {
       currentDeviceTargets.set(fn.name, { target: fn.target, fn });
     }
@@ -464,4 +451,7 @@ export function init() {
   });
   wire.on("devices_changed", (m) => onDevicesChanged(m.devices));
   wire.on("function_fired", (m) => onFunctionFired(m.fired));
+
+  document.addEventListener("click", () => closePopover());
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePopover(); });
 }
