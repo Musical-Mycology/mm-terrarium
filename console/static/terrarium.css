@@ -99,6 +99,8 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2.5px solid var(--gold
 .btn.outline { background: none; color: var(--gold); border: 2.5px solid var(--gold-deep); }
 .btn.solid-gold { background: var(--gold-deep); color: var(--on-gold); }
 .btn.solid-rose { background: var(--rose); color: var(--bg); }
+.btn.builtin    { background: var(--terra); color: var(--bg); }
+.btn.instrument { background: var(--gold-deep); color: var(--on-gold); }
 .btn.small { padding: 4px 14px; font-size: 13px; }
 
 .card {
