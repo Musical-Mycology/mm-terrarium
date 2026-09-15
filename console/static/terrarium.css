@@ -278,7 +278,12 @@ details.acc > .accbody { margin-top: 10px; }
   background: var(--s-high); border-radius: 10px; border: 1.5px solid var(--hair);
   border-left: 4px solid var(--hair-tan);
   padding: 4px 10px; margin: 0; min-height: 32px;
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; position: relative;
+  position: relative;
+}
+.fn.fnrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fn.diagrow {
+  display: flex; flex-direction: column; gap: 5px;
+  border-radius: 12px; padding: 10px 13px; min-height: 0;
 }
 .fn.fired-admin { border-left-color: var(--terra); }
 .fn.fired { border-left-color: var(--sage); }
