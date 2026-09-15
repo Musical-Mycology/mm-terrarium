@@ -257,6 +257,15 @@ details.acc[open] > summary .tri { transform: rotate(90deg); }
 details.acc > summary .summeta { margin-left: auto; }
 details.acc > .accbody { margin-top: 10px; }
 
+.lanes { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.lanes td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--hair); vertical-align: top; }
+.lanes tr:last-child td { border-bottom: none; }
+.lanes .src { color: var(--gold); white-space: nowrap; width: 1%; }
+.lanes .val { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; width: 1%; min-width: 3.5em; }
+.lanes .readers { color: var(--ink-var); }
+.lanes .readers .kind { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 0 5px; border-radius: 4px; margin-right: 2px; }
+.lanes tr.other .val { color: var(--ink-dim); }
+
 /* ---------- bit status ---------- */
 .statusgrid { display: flex; gap: 22px; flex-wrap: wrap; font-family: var(--f-mono); }
 .stat .k { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-dim); }
