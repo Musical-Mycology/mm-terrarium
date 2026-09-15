@@ -80,6 +80,22 @@ function snapshotMsg(rooms, terrarium_state) {
       { name: "BROKEN", description: "Broken room", status: "missing device map", active: false },
     ],
     "ROOM_READY"));
+
+  // the active card's detail renders each fixture's Instrument chips
+  {
+    send({ event: "room_changed", room: {
+      room_type: "TEST", capability: { pixel_count: 60, color_order: "GRB", zones: [] },
+      fixtures: [{ name: "main", pixel_count: 60, zones: [], dev: "sim-room-main", url: null,
+                   instrument: { name: "generic_surface", capabilities: ["light.surface"],
+                                 functions: [{ name: "glow", kind: "generator", lane: "cc:74", period: 12 }],
+                                 accepted_cues: ["midi"], event_triggers: [] } }],
+      instruments: [], controllers: {} } });
+    const activeCard = rooms._cardFor("TEST");
+    assert.ok(activeCard.innerHTML.includes("insttags"), "fixture chips render in the Room view");
+    assert.ok(activeCard.innerHTML.includes("generic_surface"));
+    assert.ok(activeCard.innerHTML.includes("glow (generator)"));
+  }
+
   const otherLoadBtn = rooms._loadBtnFor("OTHER");
   assert.strictEqual(otherLoadBtn.disabled, true, "Load disabled on other rooms while one is active");
 

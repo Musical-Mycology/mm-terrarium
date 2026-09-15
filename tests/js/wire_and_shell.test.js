@@ -31,6 +31,7 @@ globalThis.document = {
   getElementById: (id) => byId.get(id) ?? byId.set(id, el()).get(id),
   createElement: () => el(),
   body: el(),
+  addEventListener: () => {},
 };
 globalThis.matchMedia = () => ({ matches: true });   // reduced motion: no timers
 globalThis.addEventListener = () => {};
@@ -169,6 +170,34 @@ globalThis.WebSocket = FakeSocket;
     console.log("confirmTap stale-timer-after-confirm: ok");
   }
 
+  // fill-style arming: icon buttons cannot swap a label, so the armed
+  // state is data-armed plus onArm/onDisarm hooks and the text is untouched
+  {
+    const realSetTimeout = globalThis.setTimeout;
+    let capturedFn = null;
+    globalThis.setTimeout = (fn) => { capturedFn = fn; return 0; };
+    const ibtn = el();
+    ibtn.textContent = "<svg/>";
+    const calls = [];
+    let fconfirmed = 0;
+    const opts = { armStyle: "fill", onArm: () => calls.push("arm"), onDisarm: () => calls.push("disarm") };
+    wire.confirmTap(ibtn, opts, () => { fconfirmed += 1; });
+    assert.strictEqual(ibtn.dataset.armed, "1");
+    assert.strictEqual(ibtn.textContent, "<svg/>", "fill style never touches the text");
+    assert.deepStrictEqual(calls, ["arm"]);
+    wire.confirmTap(ibtn, opts, () => { fconfirmed += 1; });
+    assert.strictEqual(fconfirmed, 1);
+    assert.deepStrictEqual(calls, ["arm", "disarm"]);
+    // timeout path also disarms via the hook and keeps the text
+    wire.confirmTap(ibtn, opts, () => {});
+    capturedFn();
+    globalThis.setTimeout = realSetTimeout;
+    assert.strictEqual(ibtn.dataset.armed, undefined);
+    assert.strictEqual(ibtn.textContent, "<svg/>");
+    assert.deepStrictEqual(calls, ["arm", "disarm", "arm", "disarm"]);
+    console.log("confirmTap fill style: ok");
+  }
+
   const shell = await import("../../console/static/shell.js");
   // view switcher: exactly one visible view at a time; the Event Log is no
   // longer a view of its own (it lives pinned inside the Live view).
@@ -188,4 +217,21 @@ globalThis.WebSocket = FakeSocket;
   assert.strictEqual(byId.get("navRoom").textContent, "Room: none");
 
   console.log("shell view switcher: ok");
+
+  // Room nav label follows Console-driven loads: only the connect-time
+  // snapshot used to repaint it, so a load from this tab left "Room: none"
+  // until reload.
+  {
+    const sock2 = FakeSocket.instances.at(-1);
+    const send = (m) => sock2.onmessage({ data: JSON.stringify(m) });
+    send({ event: "snapshot", state: "IDLE", loaded_bit: null, roles: [], registration: [],
+           devices: [], bit_status: {}, room: null, functions: [], terrarium_state: "NO_ROOM",
+           rooms: [{ name: "DEMO", description: "", status: null, active: false }] });
+    assert.strictEqual(byId.get("navRoom").textContent, "Room: none");
+    send({ event: "room_loaded", name: "DEMO" });
+    assert.strictEqual(byId.get("navRoom").textContent, "Room: DEMO");
+    send({ event: "room_unloaded", name: "DEMO" });
+    assert.strictEqual(byId.get("navRoom").textContent, "Room: none");
+    console.log("shell room nav follows room_loaded: ok");
+  }
 })().catch((e) => { console.error(e); process.exit(1); });

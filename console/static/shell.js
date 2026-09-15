@@ -6,6 +6,7 @@ import { init as initSurface } from "./surface.js";
 import { init as initFunctions } from "./functions.js";
 import { init as initRail, logLine } from "./rail.js";
 import { init as initRooms } from "./rooms.js";
+import { init as initBusy } from "./busy.js";
 import { init as initDesign, initBench, initCalibrate } from "./design.js";
 import { initForms } from "./design_forms.js";
 
@@ -36,7 +37,17 @@ export function paintRoomNav(rooms) {
 document.getElementById("navLive").onclick = () => showView("live");
 document.getElementById("navRoom").onclick = () => showView("room");
 document.getElementById("navDesign").onclick = () => showView("design");
-wire.on("snapshot", (m) => paintRoomNav(m.rooms));
+let navRooms = [];  // last-known snapshot.rooms rows, kept current on room events
+wire.on("snapshot", (m) => { navRooms = m.rooms || []; paintRoomNav(navRooms); });
+wire.on("room_loaded", (m) => {
+  navRooms = navRooms.map((r) => Object.assign({}, r, { active: r.name === m.name }));
+  if (!navRooms.some((r) => r.name === m.name)) navRooms.push({ name: m.name, active: true });
+  paintRoomNav(navRooms);
+});
+wire.on("room_unloaded", () => {
+  navRooms = navRooms.map((r) => Object.assign({}, r, { active: false }));
+  paintRoomNav(navRooms);
+});
 
 wire.on("_open", () => {
   conn.className = "chip sage";
@@ -66,5 +77,5 @@ wire.on("error", (m) => {
   logLine("error", `${m.command}: ${m.message}`);
 });
 
-initBit(); initJoin(); initSurface(); initFunctions(); initRail(); initRooms(); initDesign(); initBench(); initCalibrate(); initForms();
+initBit(); initJoin(); initSurface(); initFunctions(); initRail(); initRooms(); initBusy(); initDesign(); initBench(); initCalibrate(); initForms();
 wire.connect();
