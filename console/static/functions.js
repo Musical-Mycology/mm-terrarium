@@ -15,6 +15,7 @@
 import * as wire from "./wire.js";
 
 let fnSignature = null;              // JSON of the last-rendered declaration
+let fnMountEl = null;                // #functionsMount node that signature was rendered into
 const lastFired = {};                // function name -> its last fire record (survives rebuilds)
 let fnDevices = [];                  // {dev, muted, fixture} offered by DEVICE/SURFACE pickers
 let currentDeviceTargets = new Map(); // name -> {target, fn} for rendered SURFACE/DEVICE pickers
@@ -406,8 +407,7 @@ function buildCard(fn) {
   return buildScriptedCard(fn);
 }
 
-function render(list) {
-  const mount = document.getElementById("functionsMount");
+function render(list, mount) {
   clear(mount);
   cardByName.clear();
   // The diagnostics row is built once and reused across rebuilds -- clear()
@@ -434,12 +434,25 @@ function render(list) {
   }
 }
 
+// #functionsMount is not static markup: surface.js mints it only once a
+// Room actually renders, and tears it down again on Room unload (both
+// inside its own signature-gated render()). A snapshot/functions_changed
+// can therefore arrive with nowhere to render into (NO_ROOM), or after the
+// node it last rendered into was discarded and replaced by a new one. The
+// mount's own identity is tracked alongside the declaration signature so
+// neither case is mistaken for "already rendered": comparing the
+// signature alone let a NO_ROOM pass cache an unchanged declaration (e.g.
+// the empty list every Bit-less boot starts with) against a mount that
+// didn't exist yet, then skip rendering forever once a Room finally
+// mounted the real node with that same declaration still current.
 function onFunctionsChanged(list) {
+  const mount = document.getElementById("functionsMount");
   const functions = list || [];
   const signature = JSON.stringify(functions);
-  if (signature === fnSignature) return;
-  fnSignature = signature;
-  render(functions);
+  if (mount === fnMountEl && signature === fnSignature) return;
+  fnMountEl = mount;
+  fnSignature = mount ? signature : null;
+  if (mount) render(functions, mount);
 }
 
 function onFunctionFired(fired) {
