@@ -62,6 +62,17 @@ def test_css_guards_the_hidden_attribute():
     assert "display: none !important" in css
 
 
+def test_css_defines_solid_gold_and_solid_rose_for_plain_buttons():
+    """Every plain-button call site (Fire, Load, Run, Abort, Unload, Save,
+    Publish, Simulate, Apply proposal to draft) builds class "btn solid-gold"
+    or "btn solid-rose", but terrarium.css only ever defined those color
+    fills for .chip, not for .btn -- so these rendered as browser-default
+    gray buttons with no CSS match at all."""
+    css = (STATIC / "terrarium.css").read_text()
+    assert ".btn.solid-gold { background: var(--gold-deep); color: var(--on-gold); }" in css
+    assert ".btn.solid-rose { background: var(--rose); color: var(--bg); }" in css
+
+
 def test_css_defines_builtin_and_instrument_for_bench_function_buttons():
     """renderBenchFunctions (design.js) builds class "btn builtin" or "btn
     instrument" per fired-function source, but terrarium.css defined no

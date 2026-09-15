@@ -9,6 +9,7 @@
 // would discard the Unload button's confirm-tap armed state, which
 // wire.confirmTap keys off the specific button element).
 import * as wire from "./wire.js";
+import { instrumentTags } from "./surface.js";
 
 let roomsSignature = null;   // JSON of the last-rendered declaration
 let terrariumState = null;   // last-seen terrarium_state
@@ -118,6 +119,7 @@ function renderDetail() {
     const zones = (f.zones || []).map((z) => z.name).join(", ");
     if (zones) row.appendChild(mk("span", "mono dim", zones));
     mount.appendChild(row);
+    if (f.instrument) mount.appendChild(instrumentTags(f.instrument));
   }
 
   section(mount, "Connected devices");

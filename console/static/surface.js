@@ -1,6 +1,6 @@
 // Room card: LED surface as discrete per-pixel dot rows (one per physical
-// block), zone bar, binding controls, and the Instruments/Functions
-// accordions. Per-fixture rebuild discipline (spec section 6, rules
+// block), zone bar, binding controls, the Triggers accordion shell, and the
+// Live values lane table. Per-fixture rebuild discipline (spec section 6, rules
 // 1/2/3/4/6/9) is the load-bearing part of this file -- a controllers-only
 // room_changed must repaint nothing but live lane values; a room_frame must
 // only ever repaint a canvas, never rebuild DOM.
@@ -37,9 +37,10 @@ let instMountEl = null;
 let functionsAccEl = null;           // created once, outside the per-fixture rebuild path
 let fixtureElByName = new Map();     // fixture name -> its .fixture wrapper element
 let bindStateByName = new Map();     // fixture name -> last-rendered binding-state key
-let instGridEl = null;               // .instgrid wrapper inside instMountEl
-let instCardByKey = new Map();       // instKey(inst) -> its .inst card element
-let instShapeByKey = new Map();      // instKey(inst) -> last-rendered JSON.stringify(inst)
+let laneTableEl = null;              // <table class="lanes"> inside instMountEl
+let laneRowBySource = new Map();     // lane source ("cc:74") -> its <tr>
+let laneValueBySource = new Map();   // lane source -> its value <td>
+let lanesSignature = null;           // JSON of the last-rendered instruments list
 
 function clear(node) {
   node.textContent = "";
@@ -50,6 +51,31 @@ function mk(tag, className, text) {
   if (className) e.className = className;
   if (text != null) e.textContent = text;
   return e;
+}
+
+// ------------------------------------------------------------ persistence
+
+const LIVE_VALUES_KEY = "terrarium.liveValuesOpen";
+
+// Guarded with `typeof window` (matching syncCanvasBackingSize's dpr check
+// below) rather than `globalThis.localStorage` -- Node's own experimental
+// global localStorage stub emits an ExperimentalWarning on first touch when
+// no --localstorage-file is given, which would dirty every test run's
+// stderr even inside a try/catch (a warning isn't a thrown exception). No
+// real browser lacks `window`, so this is a no-op guard there.
+function readLiveValuesOpen() {
+  try {
+    return typeof window !== "undefined" && window.localStorage
+      && window.localStorage.getItem(LIVE_VALUES_KEY) === "1";
+  } catch (e) { return false; }
+}
+
+function writeLiveValuesOpen(open) {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      window.localStorage.setItem(LIVE_VALUES_KEY, open ? "1" : "0");
+    }
+  } catch (e) { /* private window or blocked storage: keep the default */ }
 }
 
 // ------------------------------------------------------------ block rows
@@ -91,12 +117,6 @@ export function _bindCtlFor(name) {
   if (!wrap) return undefined;
   const head = wrap.children[0];
   return head && head.children[1];
-}
-
-// Instrument card element for a given instrument declaration, so tests can
-// assert its DOM node identity survives a controllers-only room_changed.
-export function _instCardFor(kind, instrument, target) {
-  return instCardByKey.get(`${kind}:${instrument}:${target || ""}`);
 }
 
 // -------------------------------------------------------------- painting
@@ -233,7 +253,7 @@ function bindingControls(fixture) {
 // card and the per-declaration instrument cards below; these fields never
 // carry a live value (no controller/lane), so a plain tag row (no <dl>
 // live-update machinery) is enough.
-function instrumentTags(instrument) {
+export function instrumentTags(instrument) {
   const row = mk("div", "insttags");
   row.appendChild(mk("span", "insttag instname", instrument.name));
   for (const cap of instrument.capabilities || []) {
@@ -263,8 +283,6 @@ function buildFixture(fixture) {
   head.appendChild(mk("span", "fixname", fixture.name));
   head.appendChild(bindingControls(fixture));
   wrap.appendChild(head);
-
-  if (fixture.instrument) wrap.appendChild(instrumentTags(fixture.instrument));
 
   const blockrows = mk("div", "blockrows");
   const rows = _blockRowsFor(fixture);
@@ -365,103 +383,104 @@ export function buildInstrumentCard(inst, controllers) {
   return card;
 }
 
-// In-place update of an unchanged instrument card's live lane values only --
-// mirrors the fixture in-place-update path above. Never touches the rest of
-// the card's DOM, so any future interactive per-node state within a card
-// would survive a controllers-only room_changed the same way binding
-// controls already do.
-function updateInstrumentLive(card, controllers) {
-  for (const row of card._liveRows || []) {
-    const value = controllers && controllers[row.cc];
-    if (value !== undefined) {
-      const text = `= ${value}`;
-      if (!row.span) {
-        row.span = mk("span", "live", text);
-        row.dd.appendChild(row.span);
-      } else if (row.span.textContent !== text) {
-        row.span.textContent = text;
+// -------------------------------------------------------------------- lanes
+
+// One row per lane source across every voice. cc:<n> sources sort by n
+// ascending; anything else (a note lane, "trigger") follows in first-seen
+// order with no live value.
+export function _laneRowsFor(instruments) {
+  const bySource = new Map();
+  for (const inst of instruments || []) {
+    for (const lane of inst.lanes || []) {
+      if (!bySource.has(lane.source)) {
+        const cc = lane.source.startsWith("cc:") ? Number(lane.source.slice(3)) : null;
+        bySource.set(lane.source, { source: lane.source, cc, readers: [] });
       }
-    } else if (row.span) {
-      row.span.remove();
-      row.span = null;
+      bySource.get(lane.source).readers.push(
+        { kind: inst.kind, instrument: inst.instrument, dest: lane.dest });
     }
+  }
+  const rows = Array.from(bySource.values());
+  rows.sort((a, b) => {
+    if (a.cc === null && b.cc === null) return 0;
+    if (a.cc === null) return 1;
+    if (b.cc === null) return -1;
+    return a.cc - b.cc;
+  });
+  return rows;
+}
+
+export function _laneRowFor(source) {
+  return laneRowBySource.get(source);
+}
+
+export function _laneTable() {
+  return laneTableEl;
+}
+
+function voiceCounts(instruments) {
+  let light = 0;
+  let audio = 0;
+  for (const inst of instruments || []) {
+    if (inst.kind === "audio") audio += 1; else light += 1;
+  }
+  return `${light} light · ${audio} audio voices`;
+}
+
+function valueText(controllers, cc) {
+  if (cc === null) return "";
+  const v = controllers && controllers[cc];
+  return v === undefined ? "—" : String(v);
+}
+
+function buildLaneTable(instruments, controllers) {
+  const table = mk("table", "lanes mono");
+  laneRowBySource = new Map();
+  laneValueBySource = new Map();
+  for (const row of _laneRowsFor(instruments)) {
+    const tr = mk("tr", row.cc === null ? "lane other" : "lane");
+    tr.appendChild(mk("td", "src", row.source));
+    const val = mk("td", "val", valueText(controllers, row.cc));
+    tr.appendChild(val);
+    const readers = mk("td", "readers");
+    row.readers.forEach((r, i) => {
+      if (i > 0) readers.appendChild(mk("span", "dim", " · "));
+      readers.appendChild(mk("span", `kind ${r.kind === "audio" ? "audio" : "light"}`,
+        r.kind === "audio" ? "Audio" : "Light"));
+      readers.appendChild(document.createTextNode(` ${r.instrument} ${r.dest}`));
+    });
+    tr.appendChild(readers);
+    table.appendChild(tr);
+    laneRowBySource.set(row.source, tr);
+    laneValueBySource.set(row.source, { td: val, cc: row.cc });
+  }
+  return table;
+}
+
+function updateLaneValues(controllers) {
+  for (const { td, cc } of laneValueBySource.values()) {
+    const text = valueText(controllers, cc);
+    if (td.textContent !== text) td.textContent = text;
   }
 }
 
-// Key uniquely identifying an instrument declaration within one Room's
-// instrument list. `instrument` alone isn't unique -- room_view.py's
-// _light_instruments defaults `target` to "primary" per declaration, so two
-// light instruments can share a name while differing by target; audio
-// entries carry no `target` at all, so the empty-string fallback still
-// distinguishes them from a same-named light entry.
-function instKey(inst) {
-  return `${inst.kind}:${inst.instrument}:${inst.target || ""}`;
-}
-
-function renderInstruments(container, instruments, controllers) {
-  if (!instruments || instruments.length === 0) {
-    clear(container);
-    instCardByKey = new Map();
-    instShapeByKey = new Map();
-    container.appendChild(mk("p", "muted", "No instruments declared (no Bit loaded)."));
+function renderLanes(container, instruments, controllers) {
+  const signature = JSON.stringify(instruments || []);
+  if (laneTableEl && laneTableEl.parentNode === container && signature === lanesSignature) {
+    updateLaneValues(controllers);
     return;
   }
-
-  if (!instGridEl || instGridEl.parentNode !== container) {
-    // First paint (or recovering from the empty-state branch above, which
-    // replaced the grid with a "no instruments" <p>).
-    clear(container);
-    instGridEl = mk("div", "instgrid");
-    container.appendChild(instGridEl);
-    instCardByKey = new Map();
-    instShapeByKey = new Map();
+  clear(container);
+  lanesSignature = signature;
+  if (!instruments || instruments.length === 0) {
+    laneTableEl = null;
+    laneRowBySource = new Map();
+    laneValueBySource = new Map();
+    container.appendChild(mk("p", "muted", "No voices declared (no Bit loaded)."));
+    return;
   }
-  const grid = instGridEl;
-
-  // Drop instruments no longer declared.
-  const currentKeys = new Set(instruments.map(instKey));
-  for (const oldKey of Array.from(instCardByKey.keys())) {
-    if (!currentKeys.has(oldKey)) {
-      const oldEl = instCardByKey.get(oldKey);
-      if (oldEl) oldEl.remove();
-      instCardByKey.delete(oldKey);
-      instShapeByKey.delete(oldKey);
-    }
-  }
-
-  // Rebuild only cards whose own declaration changed; update everyone
-  // else's live lane values in place. Reinsert before the nearest later
-  // surviving card so declaration order is preserved.
-  for (let i = 0; i < instruments.length; i++) {
-    const inst = instruments[i];
-    const key = instKey(inst);
-    const nextShape = JSON.stringify(inst);
-    const unchanged = instShapeByKey.get(key) === nextShape;
-
-    if (unchanged) {
-      const existing = instCardByKey.get(key);
-      if (existing) updateInstrumentLive(existing, controllers);
-      continue;
-    }
-
-    const oldEl = instCardByKey.get(key);
-    if (oldEl) oldEl.remove();
-
-    let anchor = null;
-    for (let j = i + 1; j < instruments.length; j++) {
-      const nextEl = instCardByKey.get(instKey(instruments[j]));
-      if (nextEl) { anchor = nextEl; break; }
-    }
-
-    const card = buildInstrumentCard(inst, controllers);
-    if (anchor) {
-      grid.insertBefore(card, anchor);
-    } else {
-      grid.appendChild(card);
-    }
-    instCardByKey.set(key, card);
-    instShapeByKey.set(key, nextShape);
-  }
+  laneTableEl = buildLaneTable(instruments, controllers);
+  container.appendChild(laneTableEl);
 }
 
 // -------------------------------------------------------------------- frame
@@ -495,9 +514,10 @@ function resetStructure() {
   functionsAccEl = null;
   fixtureElByName = new Map();
   bindStateByName = new Map();
-  instGridEl = null;
-  instCardByKey = new Map();
-  instShapeByKey = new Map();
+  laneTableEl = null;
+  laneRowBySource = new Map();
+  laneValueBySource = new Map();
+  lanesSignature = null;
 }
 
 function render() {
@@ -616,26 +636,8 @@ function render() {
   }
   canvasesByName = newCanvasesByName;
 
-  // Instruments accordion (created once, refreshed each render).
-  if (!instAccEl) {
-    instAccEl = document.createElement("details");
-    instAccEl.className = "acc";
-    instAccEl.open = true;
-    const summary = document.createElement("summary");
-    summary.appendChild(mk("span", "tri", "▸"));
-    summary.appendChild(document.createTextNode("Live values"));
-    instSummaryMetaEl = mk("span", "summeta mono dim", "");
-    summary.appendChild(instSummaryMetaEl);
-    instAccEl.appendChild(summary);
-    instMountEl = mk("div", "accbody");
-    instAccEl.appendChild(instMountEl);
-    body.appendChild(instAccEl);
-  }
-  instSummaryMetaEl.textContent = `${room.instruments.length} instruments`;
-  renderInstruments(instMountEl, room.instruments, room.controllers || {});
-
-  // Functions accordion shell -- created ONCE here; functions.js renders into
-  // #functionsMount.
+  // Triggers accordion shell -- created ONCE here; functions.js renders into
+  // #functionsMount. Sits directly under the LED rows.
   if (!functionsAccEl) {
     functionsAccEl = document.createElement("details");
     functionsAccEl.className = "acc";
@@ -650,6 +652,26 @@ function render() {
     functionsAccEl.appendChild(functionsBody);
     body.appendChild(functionsAccEl);
   }
+
+  // Live values accordion (created once, refreshed each render). Closed by
+  // default; the operator's last choice is remembered per browser.
+  if (!instAccEl) {
+    instAccEl = document.createElement("details");
+    instAccEl.className = "acc";
+    instAccEl.open = readLiveValuesOpen();
+    const summary = document.createElement("summary");
+    summary.appendChild(mk("span", "tri", "▸"));
+    summary.appendChild(document.createTextNode("Live values"));
+    instSummaryMetaEl = mk("span", "summeta mono dim", "");
+    summary.appendChild(instSummaryMetaEl);
+    instAccEl.appendChild(summary);
+    instAccEl.addEventListener("toggle", () => writeLiveValuesOpen(instAccEl.open));
+    instMountEl = mk("div", "accbody");
+    instAccEl.appendChild(instMountEl);
+    body.appendChild(instAccEl);
+  }
+  instSummaryMetaEl.textContent = voiceCounts(room.instruments);
+  renderLanes(instMountEl, room.instruments, room.controllers || {});
 }
 
 // -------------------------------------------------------------------- frames
