@@ -4548,6 +4548,44 @@ entirely) or via a no-arg factory lambda that skipped real construction.
   path with a resolved `BitConfig` -- the path the Console's Load picker
   actually uses, which no prior CaptureBit test exercised.
 
+### `console/static/functions.js`'s NO_ROOM snapshot crashed on a Room-only DOM mount (2026-09-15)
+Bug, found via browser verification of an unrelated CSS fix: loading the
+Console at its default NO_ROOM boot threw `TypeError: Cannot set properties
+of null (setting 'textContent')` inside `wire.js`'s `dispatch()`, on the
+very first `snapshot` broadcast every client gets at connect. Root cause:
+`functions.js`'s `render()` wrote straight into
+`document.getElementById("functionsMount")`, but `#functionsMount` is not
+static markup -- `surface.js` mints it only inside its own Room-card
+`render()`, and that function's `!currentRoom` branch (the NO_ROOM path)
+returns before ever building it. `onFunctionsChanged` also cached a
+content-only signature (`JSON.stringify(functions)`), so a NO_ROOM pass
+could record "no functions declared" against a mount that did not exist
+yet and then, once a Room *did* mount the real node with that same
+still-empty declaration, treat it as already rendered and never paint it
+-- the crash's quieter sibling, same root cause.
+
+- **Fix:** `onFunctionsChanged` now tracks the `#functionsMount` node's own
+  identity (`fnMountEl`) alongside the declaration signature, mirroring the
+  DOM-identity discipline the rest of the front-end rewrite already applies
+  (see the 2026-08-25 entry above) -- a mount that is missing or has been
+  replaced since the last render is never mistaken for "already rendered
+  and unchanged," so it always repaints once a real mount exists.
+- Regression coverage: `tests/js/functions_mount_lifecycle.test.js` sends a
+  NO_ROOM `snapshot` (`room: null`, `functions: []`), then a `room_changed`
+  that mints the real mount, then a `functions_changed` repeating the same
+  empty declaration -- reproducing the exact repeat-signature/new-mount
+  sequence -- and asserts the real mount ends up painted. The shared node
+  DOM stub auto-vivifies a placeholder for any unseen id instead of
+  returning `null` (see `_dom_stub.js`'s own "Residual gap" note), so it
+  cannot reproduce the literal null-deref; this is the closest observable
+  proxy the existing test infrastructure supports. Live-verified against a
+  real `./terrarium.sh` boot: NO_ROOM now loads with zero console errors,
+  and loading the TEST Room afterward correctly paints "No functions
+  declared" into the real mount.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2378 passed, 1 skipped**.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
