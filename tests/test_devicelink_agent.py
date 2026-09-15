@@ -1471,14 +1471,22 @@ def two_fixture_agent():
     _FakeAudioBridge room_audio so grants/feeds can be asserted per real
     fixture dev. Both devs are pre-bound on the FakeServer so /leds sends
     for either fixture are actually recorded (see FakeServer.send's
-    unbound-dev no-op)."""
+    unbound-dev no-op).
+
+    A frozen clock, not time.monotonic: TestBit's ROOM role renders
+    `rainbow` (bits/test_bit.py), which -- unlike aurora -- never settles
+    and keeps scrolling hue from ctx.time by design (see
+    test_an_unchanged_fixture_slice_is_not_resent_after_settling's
+    docstring above). A live clock lets real time drift an untouched
+    fixture's own rendered frame between two poll()s, which several tests
+    below compare byte-for-byte; nothing here needs real time to advance."""
     gs = _room_ready_game_server(
         bound={"main": "sim-room-main", "accent": "sim-room-accent"})
     audio = _FakeAudioBridge()
     server = FakeServer()
     server.bind_dev("sim-room-main", "c-main")
     server.bind_dev("sim-room-accent", "c-accent")
-    agent = DeviceLinkAgent(gs, server, room_audio=audio, clock=time.monotonic)
+    agent = DeviceLinkAgent(gs, server, room_audio=audio, clock=_Clock())
     return agent, audio, "sim-room-main", "sim-room-accent"
 
 
