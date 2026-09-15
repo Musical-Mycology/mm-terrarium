@@ -430,8 +430,14 @@ function render(list) {
 function onFunctionsChanged(list) {
   const functions = list || [];
   const signature = JSON.stringify(functions);
-  if (signature === fnSignature) return;
+  // The mount is also checked here, not just inside render(): if it's
+  // missing when a same-signature message arrives, we must not just return
+  // -- render() itself never runs, so fnSignature never gets a chance to be
+  // invalidated below, and a later remount with the same list would stay
+  // blocked by this same stale signature forever.
+  if (signature === fnSignature && document.getElementById("functionsMount")) return;
   if (render(functions)) fnSignature = signature;
+  else fnSignature = null;
 }
 
 function onFunctionFired(fired) {
