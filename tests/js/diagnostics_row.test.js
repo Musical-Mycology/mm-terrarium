@@ -120,7 +120,7 @@ const BUILTINS = {
 
   const card = functions._cardFor("strobe");
   assert.ok(card, "strobe card should render");
-  const picker = card.children.find((c) => c.className === "firerow").children[0];
+  const picker = card.children.find((c) => c.tagName === "select");
   assert.deepStrictEqual([...picker.options].map((o) => o.value), ["ie1", "sim-strip"]);
   // tuneshroom has no "strobe" scripted function and the Bit's own script is
   // empty and "strobe" isn't a builtin name -- ie1 must be disabled.
@@ -133,18 +133,18 @@ const BUILTINS = {
   // (first offered device, "ie1" / tuneshroom -- no matching instrument
   // function, so it falls back to the Bit's own description).
   assert.strictEqual(picker.value, "ie1");
-  assert.strictEqual(card._descEl.textContent, "Bit fallback description");
+  assert.strictEqual(card._descText, "Bit fallback description");
 
   // switching the picker to sim-strip / dev_strip resolves to the
   // instrument's own function description.
   picker.value = "sim-strip";
   picker.onchange();
-  assert.strictEqual(card._descEl.textContent, "Strip-specific strobe pattern");
+  assert.strictEqual(card._descText, "Strip-specific strobe pattern");
 
   // switching back falls back to the Bit's own description again.
   picker.value = "ie1";
   picker.onchange();
-  assert.strictEqual(card._descEl.textContent, "Bit fallback description");
+  assert.strictEqual(card._descText, "Bit fallback description");
 
   // ---- 5. No-rebuild-on-fire discipline preserved -------------------------
   const cardBefore = functions._cardFor("strobe");

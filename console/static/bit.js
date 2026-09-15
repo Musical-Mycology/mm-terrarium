@@ -1,5 +1,5 @@
-// Sidebar Loaded-Bit panel: identity, phase chip, Run/Abort/Load buttons,
-// the Load picker overlay, and the Bit status card.
+// Sidebar Loaded-Bit panel: identity, phase chip, Run/Restart/Abort/Load icon
+// buttons, the Load picker overlay, and the Bit status card.
 import * as wire from "./wire.js";
 import { buildInstrumentCard } from "./surface.js";
 
@@ -77,6 +77,22 @@ function mk(tag, className, text) {
   return e;
 }
 
+const ICONS = {
+  run: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>',
+  restart: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 1-5.2 3.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M2.5 2.5v4h4z" fill="currentColor"/></svg>',
+  abort: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"/></svg>',
+  load: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v7H2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 7.5v4M6 9.5h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+};
+
+function iconBtn(className, label, icon) {
+  const b = mk("button", `btn icon ${className}`);
+  b.type = "button";
+  b.setAttribute("aria-label", label);
+  b.title = label;
+  b.innerHTML = ICONS[icon];
+  return b;
+}
+
 // ---------------------------------------------------------------- #bitPanel
 
 // Rendering discipline (rule 1, same as rooms.js/surface.js): the panel's
@@ -147,35 +163,38 @@ function buildLoadedPanel() {
   wrap.appendChild(detailsPill);
 
   // Run/Restart/Abort need ROOM_READY; Load only needs a settled Terrarium (see roomSettled).
-  const btnrow = mk("div", "btnrow");
+  const btnrow = mk("div", "btnrow icons");
+  const note = mk("div", "confirm-note", "click again to confirm");
+  note.hidden = true;
+  const showNote = () => { note.hidden = false; };
+  const hideNote = () => { note.hidden = true; };
 
-  const runBtn = mk("button", "btn solid-gold", "Run");
+  const runBtn = iconBtn("solid-gold", "Run", "run");
   runBtn.onclick = () => wire.send("run", {}, runBtn);
   btnrow.appendChild(runBtn);
 
-  const restartBtn = mk("button", "btn", "Restart");
-  wire.reserveConfirmWidth(restartBtn, "Confirm restart?");
+  const restartBtn = iconBtn("outline", "Restart", "restart");
   restartBtn.onclick = () => {
-    wire.confirmTap(restartBtn, { armLabel: "Confirm restart?" }, () => {
+    wire.confirmTap(restartBtn, { armStyle: "fill", onArm: showNote, onDisarm: hideNote }, () => {
       wire.send("restart", {}, restartBtn);
     });
   };
   btnrow.appendChild(restartBtn);
 
-  const abortBtn = mk("button", "btn solid-rose", "Abort");
-  wire.reserveConfirmWidth(abortBtn, "Confirm abort?");
+  const abortBtn = iconBtn("solid-rose", "Abort", "abort");
   abortBtn.onclick = () => {
-    wire.confirmTap(abortBtn, { armLabel: "Confirm abort?" }, () => {
+    wire.confirmTap(abortBtn, { armStyle: "fill", onArm: showNote, onDisarm: hideNote }, () => {
       wire.send("abort", {}, abortBtn);
     });
   };
   btnrow.appendChild(abortBtn);
 
-  const loadBtn = mk("button", "btn", "Load");
+  const loadBtn = iconBtn("outline", "Load a Bit", "load");
   loadBtn.onclick = openPicker;
   btnrow.appendChild(loadBtn);
 
   wrap.appendChild(btnrow);
+  wrap.appendChild(note);
 
   // phase chip (label/tone/sub filled in by updatePanelDynamic)
   const phase = mk("div", "phase");

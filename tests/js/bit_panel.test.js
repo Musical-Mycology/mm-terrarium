@@ -174,18 +174,29 @@ const PLAYER_ROLE = {
     }
     return null;
   }
-  function findButton(node, text) {
-    return findNode(node, (n) => n.tagName === "button" && n.textContent === text);
+  function findButton(node, label) {
+    return findNode(node, (n) => n.tagName === "button" && n.getAttribute("aria-label") === label);
   }
 
   send({ event: "state_changed", state: "RUNNING", loaded_bit: "MetronomeBit",
          terrarium_state: "ROOM_READY" });
   const panelForConfirm = byId.get("bitPanel");
   const abortBtn = findButton(panelForConfirm, "Abort");
+  // icon row: four icon buttons on one row, aria-labelled, SVG inside
+  const btnrow = findByClass(panelForConfirm, "btnrow");
+  const iconBtns = btnrow.children.filter((c) => c.tagName === "button");
+  assert.deepStrictEqual(iconBtns.map((b) => b.getAttribute("aria-label")), ["Run", "Restart", "Abort", "Load a Bit"]);
+  assert.ok(iconBtns.every((b) => b.className.includes("icon")));
+  assert.ok(abortBtn.innerHTML.includes("<svg"), "icon button carries inline SVG");
+  const note = findByClass(panelForConfirm, "confirm-note");
+  assert.strictEqual(note.hidden, true, "confirm note hidden at rest");
   assert.ok(abortBtn, "Abort button should be present while ROOM_READY");
   sock.sent = [];
   abortBtn.onclick();
   assert.strictEqual(abortBtn.dataset.armed, "1", "first tap arms confirm");
+  assert.ok(abortBtn.innerHTML.includes("<svg"), "arming never swaps the icon for text");
+  assert.strictEqual(note.hidden, false, "confirm note shows while armed");
+  assert.ok(note.textContent.includes("click again to confirm"));
   assert.strictEqual(sock.sent.length, 0, "first tap does not send");
 
   // an unrelated snapshot tick (e.g. a status poll) must not reset it
@@ -211,6 +222,7 @@ const PLAYER_ROLE = {
   assert.strictEqual(sock.sent.length, 1);
   assert.deepStrictEqual(sock.sent[0], { command: "abort" });
   assert.strictEqual(abortBtn.dataset.armed, undefined, "second tap clears armed state");
+  assert.strictEqual(note.hidden, true, "confirm note hides after confirm");
 
   console.log("bit_panel: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

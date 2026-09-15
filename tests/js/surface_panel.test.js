@@ -45,6 +45,16 @@ const ROOM = {
   assert.deepStrictEqual(
     surface._blockRowsFor({ pixel_count: 60 }).map((r) => r.count), [60]);
 
+  // pure lane merge: one row per source across every voice, cc ascending,
+  // non-cc sources last
+  assert.deepStrictEqual(
+    surface._laneRowsFor([
+      { kind: "light", instrument: "aurora", lanes: [{ source: "cc:74", dest: "hue" }, { source: "cc:11", dest: "level" }] },
+      { kind: "light", instrument: "bloom", lanes: [{ source: "note", dest: "trigger" }] },
+      { kind: "audio", instrument: "flsyn", lanes: [{ source: "cc:74", dest: "cc:74" }] },
+    ]).map((r) => [r.source, r.readers.map((x) => `${x.instrument} ${x.dest}`).join(" · ")]),
+    [["cc:11", "aurora level"], ["cc:74", "aurora hue · flsyn cc:74"], ["note", "bloom trigger"]]);
+
   surface.init();
   wire.connect({ WebSocketImpl: FakeSocket });
   const sock = FakeSocket.instances.at(-1);
@@ -59,7 +69,11 @@ const ROOM = {
   assert.ok(card.innerHTML.includes("Not bound"));       // accent unbound
   assert.ok(card.innerHTML.includes("sim-room-main"));   // main bound
   assert.ok(card.innerHTML.includes("aurora"));
-  assert.ok(card.innerHTML.includes("= 93"));            // live lane value
+  assert.ok(card.innerHTML.includes("93"), "live lane value shown");
+  assert.ok(card.innerHTML.includes("1 light · 1 audio voices"), "summary meta counts voices");
+  // accordion order: fixtures, Triggers, then Live values
+  const bodyHtml = card.innerHTML;
+  assert.ok(bodyHtml.indexOf("Triggers") < bodyHtml.indexOf("Live values"), "Triggers sits above Live values");
   // the accordion shows real-time controller values, so it is labeled
   // "Live values" -- the official instrument declarations live on the
   // Registration rollup / Room view instead.
@@ -67,41 +81,42 @@ const ROOM = {
   assert.ok(!card.innerHTML.includes("Instruments"));
   assert.ok(card.innerHTML.includes("Triggers"));        // renamed from Functions
   assert.ok(!card.innerHTML.includes("Functions"));
-  // fixture cards show the fixture's own Instrument as a small tag row
-  // (name + capabilities + accepted cues).
-  assert.ok(card.innerHTML.includes("light.surface"));
-  assert.ok(card.innerHTML.includes("audio.flsyn"));
-  assert.ok(card.innerHTML.includes("generic_surface"));
-  // event triggers (Task 8's Instrument.event_triggers) render read-only
-  // alongside capabilities on the fixture's instrument tag row.
-  assert.ok(card.innerHTML.includes("tap"));
-  assert.ok(card.innerHTML.includes("z_delta:2.5"));
-  // declared generator function tags render a compact string, not
-  // "[object Object]" -- room_view.py's _function_view feeds an object,
-  // not a string (review fix round 1).
-  assert.ok(card.innerHTML.includes("glow (generator)"));
-  assert.ok(!card.innerHTML.includes("[object Object]"));
+  // the fixture's Instrument declaration chips no longer render on the
+  // Live card (they moved to the Room view, rooms.js); the head shows only
+  // name, binding, pop-out, Release/Arm.
+  assert.ok(!card.innerHTML.includes("insttags"));
+  assert.ok(!card.innerHTML.includes("glow (generator)"));
+  // the helper is still exported for rooms.js and renders the compact
+  // strings, never "[object Object]"
+  const tags = surface.instrumentTags(ROOM.fixtures[0].instrument);
+  assert.ok(tags.innerHTML.includes("generic_surface"));
+  assert.ok(tags.innerHTML.includes("audio.flsyn"));
+  assert.ok(tags.innerHTML.includes("glow (generator)"));
+  assert.ok(tags.innerHTML.includes("z_delta:2.5"));
+  assert.ok(!tags.innerHTML.includes("[object Object]"));
 
   // a controllers-only change must NOT rebuild fixture strips (rule 1/3):
   const stripBefore = surface._canvasFor("main");
+  const laneTableBefore = surface._laneTable();
   const bindCtlBefore = surface._bindCtlFor("main");
-  // ...and must NOT rebuild the Instruments grid's cards either -- same bug
+  // ...and must NOT rebuild the lane table's rows either -- same bug
   // class as the binding-controls chip/button above, just recurring in the
-  // Instruments accordion instead.
-  const instCardBefore = surface._instCardFor("light", "aurora", "primary");
+  // Live values accordion instead.
+  const laneRowBefore = surface._laneRowFor("cc:74");
   send({ event: "room_changed",
          room: { ...ROOM, controllers: { 74: 12 } } });
   assert.strictEqual(surface._canvasFor("main"), stripBefore);
-  assert.ok(card.innerHTML.includes("= 12"));
+  assert.ok(card.innerHTML.includes("12"));
   // ...and must NOT rebuild the binding chip/Release button either (rule 1):
   // a fresh button on every controllers-only tick would silently discard
   // wire.confirmTap's armed state, breaking the two-tap Release confirm.
   assert.strictEqual(surface._bindCtlFor("main"), bindCtlBefore);
-  // instrument card node identity survives too, while its live value text
-  // updates in place.
-  assert.strictEqual(surface._instCardFor("light", "aurora", "primary"), instCardBefore);
-  assert.ok(instCardBefore.innerHTML.includes("= 12"));
-  assert.ok(!instCardBefore.innerHTML.includes("= 93"));
+  // lane row node identity survives too, while its live value text updates
+  // in place.
+  assert.strictEqual(surface._laneRowFor("cc:74"), laneRowBefore);
+  assert.ok(laneRowBefore.innerHTML.includes("12"));
+  assert.ok(!laneRowBefore.innerHTML.includes("93"));
+  assert.strictEqual(surface._laneTable(), laneTableBefore, "lane table node survives a controllers-only tick");
 
   // rule 3: a shape change on ONE fixture must not touch a sibling fixture
   // whose shape is unchanged. main is the unchanged fixture here, so its
@@ -197,7 +212,7 @@ const ROOM = {
       },
     });
     assert.notStrictEqual(surface._bindCtlFor("main"), bindCtlBaseline);
-    assert.ok(card.innerHTML.includes("gesture.tap"));
+    assert.ok(!card.innerHTML.includes("gesture.tap"), "chips are not drawn on the Live card");
 
     const bindCtlAfterInstChange = surface._bindCtlFor("main");
     send({ event: "room_changed",
@@ -211,6 +226,18 @@ const ROOM = {
     assert.strictEqual(surface._bindCtlFor("main"), bindCtlAfterInstChange);
 
     // restore baseline for any subsequent assertions
+    send({ event: "room_changed", room: ROOM });
+  }
+
+  // a changed instrument list rebuilds the lane table
+  {
+    const tableBefore = surface._laneTable();
+    send({ event: "room_changed", room: { ...ROOM,
+      instruments: [...ROOM.instruments,
+        { kind: "light", instrument: "rainbow", target: "primary", params: {}, lanes: [{ source: "cc:21", dest: "level" }] }] } });
+    assert.notStrictEqual(surface._laneTable(), tableBefore);
+    assert.ok(surface._laneRowFor("cc:21"));
+    assert.ok(card.innerHTML.includes("2 light · 1 audio voices"));
     send({ event: "room_changed", room: ROOM });
   }
 

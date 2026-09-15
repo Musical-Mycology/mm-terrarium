@@ -4548,16 +4548,112 @@ entirely) or via a no-arg factory lambda that skipped real construction.
   path with a resolved `BitConfig` -- the path the Console's Load picker
   actually uses, which no prior CaptureBit test exercised.
 
+### Console Live-view UX pass: loading overlay, nav fix, lane table, trigger rows, icon buttons (2026-09-14)
+Eight-task relayout of the Console's Live view and operator control surfaces.
+Design: [`.../2026-09-14-console-live-view-ux-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-14-console-live-view-ux-design.md);
+implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/plans/2026-09-14-console-live-view-ux.md).
+
+- **`busy.js` (new module, `console/static/busy.js`)**: a state-driven loading
+  overlay for Room load/unload operations. Opens on `ROOM_LOADING`/
+  `ROOM_UNLOADING` events (from either `snapshot` or `state_changed`); closes
+  on state settle (`ROOM_READY`, `NO_ROOM`) or on `room_loaded`/`room_unloaded`
+  events. On failure (`room_load_failed` or an `error` event with a
+  ROOM_COMMANDS match), keeps the overlay open with the failure reason and a
+  Dismiss button rather than racing a settling `state_changed`. Required two
+  refinements during review: round 1 added a `lastKnownState` guard refusing
+  to auto-close on `ROOM_LOADING -> NO_ROOM`, waiting for `room_load_failed`
+  to reuse the overlay's title. Round 1 introduced a stuck-open regression:
+  a client disconnecting during `ROOM_LOADING` never receives `room_load_failed`
+  on reconnect (protocol sends only a fresh `snapshot`, never a replay), and
+  the overlay waited forever for an event that would never arrive. Round 2
+  fixed this by reverting the guard entirely and instead having `fail()`
+  reconstruct the title from tracked `roomName()` state when reopening,
+  eliminating both the stuck-open case and the title-loss bug simultaneously.
+- **`wire.js` updates**: `send()` dispatches a `_sent` event (via
+  `dispatch("_sent", Object.assign({ command }, extra))`) with the command name
+  and any extra fields, so other modules (e.g., `busy.js`) can observe which
+  command this tab just sent. `confirmTap()` gained an `armStyle: "fill"`
+  option alongside the original default `"label"` style: fill style pulses the
+  button's background on arm, pairing with a shared `.confirm-note` text line
+  below the button (since an icon cannot swap to armed text label without
+  breaking footprint); both styles accept new `onArm`/`onDisarm` hooks for
+  lifecycle callbacks.
+- **`shell.js` Room nav label fix**: the sidebar's Room label (showing active
+  room name) now updates on `room_loaded` and `room_unloaded` events in
+  addition to the connect-time `snapshot`. Previously stuck at "Room: none"
+  until page reload when a Room was loaded from the Console (the label only
+  consulted snapshot data).
+- **Fixture Instrument declaration chips moved**: `surface.js`'s Live fixture
+  card previously rendered name, capabilities, functions, accepted cues, and
+  event-trigger declaration chips for each fixture. These chips now render in
+  `rooms.js`'s Room-view fixture detail panel (where `instrumentTags()` is
+  called), paired with the Room view's existing instance state. `instrumentTags()`
+  (the single shared function rendering the chip set, exported from `surface.js`
+  and imported by `rooms.js`) is unchanged; the live card no longer calls
+  it or renders instrument cards at all.
+- **Live view's "Live values" accordion rebuilt as per-controller lane table**:
+  the old design showed one collapsible card per declared voice/instrument voice
+  (nested, dense). The new design (built by `buildLaneTable(instruments,
+  controllers)` in `surface.js`) displays a flat table with one row per MIDI
+  controller number across every voice, plus rows for non-CC sources (marked
+  with CSS class `lane other`), showing the controller's current value and
+  which voice lanes read it. `_laneRowsFor()` computes per-controller lane
+  membership, sorting numeric CC numbers ahead of other source types (a
+  convenience getter `_laneTable()` returns the rendered table element for
+  testing). The accordion is closed by default and remembers operator's last
+  open/closed choice via `localStorage`. The old `_instCardFor()` and
+  instrument-card machinery (`_instCardFor` references in `surface.js`) is
+  fully removed; `buildInstrumentCard()` (used by `bit.js`'s Bit Details popup)
+  is the only survivor in the card-building family.
+- **Triggers accordion redesigned**: moved directly under the LED rows (above
+  Live values) and refactored from decorated cards to compact rows (`functions.js`).
+  Each row shows: function name, target/kind chip, one-line summary, device
+  picker (where target requires device selection), an (i) button opening a
+  popover with description/condition/script detail, and (for scripted functions
+  only) a Fire button and last-fired status line. Renders into `#functionsMount`
+  (created once by `surface.js`'s `render()` function within the `functionsAccEl`
+  lazy-initialization guard; the comment at that point reads "Triggers accordion
+  shell -- created ONCE here; functions.js renders into #functionsMount",
+  outside `functions.js`'s per-fixture rebuild path).
+- **Sidebar Run/Restart/Abort/Load buttons reshaped as single-row icon group**:
+  all four are now inline-SVG icons on one `display: flex` row that never wraps.
+  Restart and Abort use the new fill-style `confirmTap()` (pulsing button plus
+  shared `.confirm-note` line, since icons cannot swap to armed text). Run and
+  Load remain simple click actions.
+- **Pre-existing defect found and fixed during live browser check**: `functions.js`'s
+  `render()` called `document.getElementById("functionsMount")` unconditionally,
+  but that element is only created once a Room is configured (inside `surface.js`'s
+  Triggers accordion shell). Connecting to a NO_ROOM Terrarium threw `TypeError`
+  and silently broke every `snapshot` event handler registered after `initFunctions()`
+  in `shell.js`'s handler init order (`initRail()`, `initRooms()`, `initBusy()`,
+  `initDesign()`, `initForms()`), since one throwing listener aborts the
+  remaining listeners in `wire.js`'s dispatch loop for `snapshot` events, and the
+  same listener throws on every subsequent `snapshot` dispatch. Fixed with a guard in
+  `render()` (`if (!mount) return false;`) plus signature-gating: the guard alone
+  would have permanently blocked a later real render of an unchanged functions list
+  once the mount existed (mirroring signature patterns in `bit.js` and `rooms.js`).
+  This defect escaped the offline test suite: the node DOM stub auto-vivifies any
+  unseen element id rather than returning `null`, masking the guard's real necessity.
+- **Known gap (pre-existing, not fixed)**: plain "btn solid-gold" and "btn
+  solid-rose" class pairs across the whole Console have no matching CSS rule and
+  render as browser-default gray buttons. The defect predates this work and is
+  unrelated; flagged for a future styling pass.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2374 passed, 1 skipped**.
+
 ### `console/agent.py`'s `_ensure_room_for_bit` -- a failed post-load client restart was invisible except to the requester (2026-09-14)
-Bug, found while checking a new loading-overlay module's failure-handling
-paths during a whole-branch review of an unrelated, front-end-only plan;
-backend-adjacent, so spun off as its own fix rather than folded into that
-review. This is a second, distinct gap behind the same 2026-09-12 incident
-the *Unload is the same limit* bullet above narrates ("room clients failed
-to restart: [Errno 32] Broken pipe" surfacing only as "room unloaded:
-DEMO") -- that bullet recorded the unload-refusal fix the incident
-prompted; this is the operator-visibility gap the same incident also
-exposed.
+Bug, found while checking the loading-overlay module's (`busy.js`, just
+above) failure-handling paths during the whole-branch review of the
+Console Live-view UX pass; backend-adjacent, so spun off as its own fix
+rather than folded into that review. This is a second, distinct gap
+behind the same 2026-09-12 incident the *Unload is the same limit* bullet
+above narrates ("room clients failed to restart: [Errno 32] Broken pipe"
+surfacing only as "room unloaded: DEMO") -- that bullet recorded the
+unload-refusal fix the incident prompted; this is the operator-visibility
+gap the same incident also exposed, and the reason `busy.js`'s
+`room_load_failed` handling (described above) now has something to
+react to on this path.
 
 - **Root cause:** when `_load_room` succeeds but the subsequent
   `_restart_room_clients()` call then fails, `_ensure_room_for_bit` called
