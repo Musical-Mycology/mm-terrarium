@@ -67,7 +67,7 @@ const TEST_FUNCTIONS = [
   // This is the exact regression the signature-gating fix prevents.
   const card = functions._cardFor("test_fire");
   assert.ok(card, "test_fire card should now exist even with identical function list");
-  assert.ok(card.innerHTML.includes("Test function"), "card should render correctly");
+  assert.strictEqual(card._descText, "Test function", "card should render correctly");
   assert.ok(mountEl.innerHTML.length > 0, "mount should have content");
 
   // Secondary check: send a different list to verify rendering still works normally.
@@ -88,11 +88,11 @@ const TEST_FUNCTIONS = [
   // Confirm both cards render with the new list.
   const updatedCard = functions._cardFor("test_fire");
   assert.ok(updatedCard, "test_fire card should exist after signature change");
-  assert.ok(updatedCard.innerHTML.includes("Test function (updated)"), "card should update");
+  assert.strictEqual(updatedCard._descText, "Test function (updated)", "card should update");
 
   const newCard = functions._cardFor("another_fire");
   assert.ok(newCard, "another_fire card should exist");
-  assert.ok(newCard.innerHTML.includes("Another function"), "new card should render");
+  assert.strictEqual(newCard._descText, "Another function", "new card should render");
 
   console.log("functions_no_room: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

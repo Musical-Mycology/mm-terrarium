@@ -31,6 +31,7 @@ globalThis.document = {
   getElementById: (id) => byId.get(id) ?? byId.set(id, el()).get(id),
   createElement: () => el(),
   body: el(),
+  addEventListener: () => {},
 };
 globalThis.matchMedia = () => ({ matches: true });   // reduced motion: no timers
 globalThis.addEventListener = () => {};
