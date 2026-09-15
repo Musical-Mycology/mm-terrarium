@@ -4635,6 +4635,27 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
   once the mount existed (mirroring signature patterns in `bit.js` and `rooms.js`).
   This defect escaped the offline test suite: the node DOM stub auto-vivifies any
   unseen element id rather than returning `null`, masking the guard's real necessity.
+- **Residual gap in that same signature-gating fix (found and fixed 2026-09-15).**
+  `fnSignature` was never invalidated when `#functionsMount` disappears again after
+  a successful render -- Room unload clears surface.js's whole `#roomCard` subtree,
+  including `#functionsMount`, but `fnSignature` stays set to the last-rendered
+  list's signature. A subsequent Room reload with an unchanged functions list then
+  short-circuited on that stale signature match before `render()` was ever called
+  again, leaving the freshly (re)mounted, empty `#functionsMount` unpainted. Fixed
+  by folding the mount check into the same guard rather than only adding a reset
+  after it: `if (signature === fnSignature && document.getElementById("functionsMount")) return;`,
+  plus `fnSignature = null` whenever `render()` returns `false`. The reset-only
+  half alone is not sufficient -- a same-signature message arriving while the
+  mount is missing would still return before ever reaching `render()`, so the
+  reset would never run and a later remount would stay blocked exactly as before.
+  Regression: `tests/js/functions_stale_signature_on_remount.test.js`, which
+  forces a real `null` from `getElementById` (see `_dom_stub.js`'s auto-vivify
+  gap, noted above) rather than relying on the stub's default behavior. Likely
+  not reachable in today's real operator flow: unloading a Room whose Bit's
+  clients are live hits the D7 one-Arco-per-process limit (see the D7 bullet
+  above), which today ends the Terrarium process's useful life rather than
+  leaving the same Console session to observe a clean reload -- fixed anyway
+  now that the gap is understood, and worth having if that limit is ever lifted.
 - **Shared `#overlayMount`, registration-order dependent (whole-branch review
   finding, documented rather than refactored)**: `bit.js`'s `closeOverlay()`
   clears every child of `#overlayMount` unconditionally, and `busy.js`'s
