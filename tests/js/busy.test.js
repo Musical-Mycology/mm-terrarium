@@ -133,5 +133,21 @@ function findByClass(node, cls) {
           rooms: [{ name: "DEMO", description: "", status: null, active: false }] });
   assert.strictEqual(busy._overlay(), null, "reconnect snapshot must close a stale overlay, not leave it stuck");
 
+  // Multi-tab: this tab's own tracked roomName() (requestedRoom/activeRoom)
+  // still points at DEMO from earlier in this test, but a room_load_failed
+  // broadcast for a DIFFERENT room (some other tab's load) arrives while
+  // this tab has no overlay open of its own. fail() must title the overlay
+  // from the event's own name, not this tab's stale local roomName() --
+  // otherwise an operator watching this tab would see the wrong room
+  // blamed for a failure that has nothing to do with it.
+  send({ event: "room_load_failed", name: "OTHERROOM", reason: "arco did not start" });
+  const otherRoomFailed = busy._overlay();
+  assert.ok(otherRoomFailed, "failure opens a fresh overlay");
+  assert.ok(mount.innerHTML.includes("Loading Room OTHERROOM"),
+    "title comes from the event's own room name, not this tab's roomName()");
+  assert.ok(!mount.innerHTML.includes("DEMO"), "stale local room name must not leak into the title");
+  findByClass(otherRoomFailed, "btn").onclick();
+  assert.strictEqual(busy._overlay(), null);
+
   console.log("busy: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

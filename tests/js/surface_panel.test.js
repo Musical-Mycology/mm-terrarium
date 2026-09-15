@@ -241,6 +241,23 @@ const ROOM = {
     send({ event: "room_changed", room: ROOM });
   }
 
+  // empty instruments: the "No voices declared" message patches in place
+  // across repeated ticks instead of being rebuilt every time -- the same
+  // patch-in-place discipline the lane table itself already gets.
+  {
+    send({ event: "room_changed", room: { ...ROOM, instruments: [] } });
+    assert.ok(card.innerHTML.includes("No voices declared"));
+    assert.strictEqual(surface._laneTable(), null);
+    const emptyMsgBefore = surface._laneEmptyMsg();
+    assert.ok(emptyMsgBefore, "empty-state message rendered");
+    // a second identical (still-empty) tick must not rebuild the message
+    send({ event: "room_changed", room: { ...ROOM, instruments: [] } });
+    assert.strictEqual(surface._laneEmptyMsg(), emptyMsgBefore,
+      "empty-state message survives an unchanged tick instead of being rebuilt");
+    send({ event: "room_changed", room: ROOM });
+    assert.ok(surface._laneTable(), "lane table returns once instruments are non-empty again");
+  }
+
   // frames: GRB decode, keyed by fixture NAME; an unknown fixture is a
   // no-op (rule 9)
   send({ event: "room_frame", fixture: "main",

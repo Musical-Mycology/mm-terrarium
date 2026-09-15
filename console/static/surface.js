@@ -41,6 +41,7 @@ let laneTableEl = null;              // <table class="lanes"> inside instMountEl
 let laneRowBySource = new Map();     // lane source ("cc:74") -> its <tr>
 let laneValueBySource = new Map();   // lane source -> its value <td>
 let lanesSignature = null;           // JSON of the last-rendered instruments list
+let emptyMsgEl = null;               // "No voices declared" <p>, when instruments is empty
 
 function clear(node) {
   node.textContent = "";
@@ -249,10 +250,10 @@ function bindingControls(fixture) {
 // -------------------------------------------------------------- fixtures
 
 // A small tag row for an Instrument's static declaration -- name plus its
-// capabilities/functions/accepted_cues. Used by both the per-fixture
-// card and the per-declaration instrument cards below; these fields never
-// carry a live value (no controller/lane), so a plain tag row (no <dl>
-// live-update machinery) is enough.
+// capabilities/functions/accepted_cues. Exported for rooms.js's per-fixture
+// detail row, its sole caller; these fields never carry a live value (no
+// controller/lane), so a plain tag row (no <dl> live-update machinery) is
+// enough.
 export function instrumentTags(instrument) {
   const row = mk("div", "insttags");
   row.appendChild(mk("span", "insttag instname", instrument.name));
@@ -418,6 +419,10 @@ export function _laneTable() {
   return laneTableEl;
 }
 
+export function _laneEmptyMsg() {
+  return emptyMsgEl;
+}
+
 function voiceCounts(instruments) {
   let light = 0;
   let audio = 0;
@@ -466,19 +471,27 @@ function updateLaneValues(controllers) {
 
 function renderLanes(container, instruments, controllers) {
   const signature = JSON.stringify(instruments || []);
-  if (laneTableEl && laneTableEl.parentNode === container && signature === lanesSignature) {
-    updateLaneValues(controllers);
+  const empty = !instruments || instruments.length === 0;
+  // Patch in place whichever of the two rendered forms (table or empty
+  // message) is still current, matching this file's rendering discipline --
+  // an unchanged signature must repaint nothing structural, empty state
+  // included.
+  const current = empty ? emptyMsgEl : laneTableEl;
+  if (current && current.parentNode === container && signature === lanesSignature) {
+    if (!empty) updateLaneValues(controllers);
     return;
   }
   clear(container);
   lanesSignature = signature;
-  if (!instruments || instruments.length === 0) {
+  if (empty) {
     laneTableEl = null;
     laneRowBySource = new Map();
     laneValueBySource = new Map();
-    container.appendChild(mk("p", "muted", "No voices declared (no Bit loaded)."));
+    emptyMsgEl = mk("p", "muted", "No voices declared (no Bit loaded).");
+    container.appendChild(emptyMsgEl);
     return;
   }
+  emptyMsgEl = null;
   laneTableEl = buildLaneTable(instruments, controllers);
   container.appendChild(laneTableEl);
 }
@@ -518,6 +531,7 @@ function resetStructure() {
   laneRowBySource = new Map();
   laneValueBySource = new Map();
   lanesSignature = null;
+  emptyMsgEl = null;
 }
 
 function render() {
