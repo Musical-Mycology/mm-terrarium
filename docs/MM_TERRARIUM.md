@@ -4642,6 +4642,39 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2374 passed, 1 skipped**.
 
+### `console/agent.py`'s `_ensure_room_for_bit` -- a failed post-load client restart was invisible except to the requester (2026-09-14)
+Bug, found while checking the loading-overlay module's (`busy.js`, just
+above) failure-handling paths during the whole-branch review of the
+Console Live-view UX pass; backend-adjacent, so spun off as its own fix
+rather than folded into that review. This is a second, distinct gap
+behind the same 2026-09-12 incident the *Unload is the same limit* bullet
+above narrates ("room clients failed to restart: [Errno 32] Broken pipe"
+surfacing only as "room unloaded: DEMO") -- that bullet recorded the
+unload-refusal fix the incident prompted; this is the operator-visibility
+gap the same incident also exposed, and the reason `busy.js`'s
+`room_load_failed` handling (described above) now has something to
+react to on this path.
+
+- **Root cause:** when `_load_room` succeeds but the subsequent
+  `_restart_room_clients()` call then fails, `_ensure_room_for_bit` called
+  `terrarium.unload_room(force=True)` and returned a plain reason string --
+  delivered to the requesting client only, as a targeted `error_event`. The
+  forced unload's own observer notifications (`ROOM_READY` ->
+  `ROOM_UNLOADING` -> `NO_ROOM`) broadcast `room_unloaded_event` to every
+  other client with no indication anything went wrong, so a room that
+  failed to become usable looked identical to a deliberate, successful
+  unload everywhere but the requester's own error toast.
+- **Fix:** broadcast `room_load_failed_event` (the same builder
+  `_load_room` already uses for its own refusals -- see
+  `on_terrarium_state_change`'s docstring above) before the forced unload,
+  so every connected client learns why, not just that the room went away,
+  and the failure no longer depends on message-delivery timing against the
+  unload's own state-change broadcasts.
+- Regression coverage:
+  `tests/test_console_agent.py::test_a_failed_client_restart_unloads_the_room_and_refuses`
+  now pins the broadcast (name + reason) and its ordering ahead of
+  `room_unloaded`.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —

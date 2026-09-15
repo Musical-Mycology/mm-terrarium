@@ -2216,7 +2216,12 @@ def test_a_failed_client_restart_unloads_the_room_and_refuses():
     """Pins ConsoleAgent's own restart_room_clients fallback in isolation,
     same as the test above: with no _RoomWiring observer registered on
     this terrarium, a failed restart through the agent-side hook alone
-    unloads the just-loaded Room and refuses the load_bit."""
+    unloads the just-loaded Room and refuses the load_bit. Also pins the
+    operator-visible side of the failure: every connected client, not
+    only the requester, must learn the room failed via room_load_failed
+    -- broadcast before the forced unload's own room_unloaded -- rather
+    than the failure surviving only as a targeted error_event that a
+    load-failed-then-unloaded sequence can bury."""
     terrarium = _two_room_terrarium()
     srv = FakeConsoleServer()
     agent = ConsoleAgent(
@@ -2230,6 +2235,16 @@ def test_a_failed_client_restart_unloads_the_room_and_refuses():
                                         "clock never synced"}]
     assert terrarium.state == TerrariumState.NO_ROOM
     assert terrarium.gs.state.name == "IDLE"
+    failed = _events(srv, "room_load_failed")
+    assert failed == [{"event": "room_load_failed", "name": "TEST",
+                       "reason": "room clients failed to restart: "
+                                 "clock never synced"}]
+    unloaded = _events(srv, "room_unloaded")
+    assert unloaded, "expected the forced unload to still broadcast room_unloaded"
+    assert (srv.broadcasts.index(failed[0])
+            < srv.broadcasts.index(unloaded[0])), (
+        "room_load_failed must reach clients before room_unloaded, not "
+        "depend on message-delivery timing against it")
 
 
 def test_load_bit_refuses_an_unloadable_room_before_touching_the_active_one():

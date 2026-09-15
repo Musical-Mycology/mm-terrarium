@@ -352,8 +352,18 @@ class ConsoleAgent:
         if self._restart_room_clients is not None:
             reason = self._restart_room_clients()
             if reason is not None:
+                failure = f"room clients failed to restart: {reason}"
+                # Broadcast before the forced unload below, whose own
+                # observer notifications (ROOM_READY -> ROOM_UNLOADING ->
+                # NO_ROOM) fire room_unloaded_event -- an operator-facing
+                # client must learn WHY, not just that the room went away,
+                # and must not depend on message-delivery timing against
+                # that sequence to see it (see _load_room's identical
+                # broadcast-then-return shape for its own refusals).
+                self.server.broadcast(
+                    protocol.room_load_failed_event(target, failure))
                 terrarium.unload_room(force=True)
-                return f"room clients failed to restart: {reason}"
+                return failure
         return None
 
     def _handle_admin_command(self, msg: dict) -> dict | None:
