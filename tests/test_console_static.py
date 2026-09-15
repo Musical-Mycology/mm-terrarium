@@ -62,6 +62,17 @@ def test_css_guards_the_hidden_attribute():
     assert "display: none !important" in css
 
 
+def test_css_defines_builtin_and_instrument_for_bench_function_buttons():
+    """renderBenchFunctions (design.js) builds class "btn builtin" or "btn
+    instrument" per fired-function source, but terrarium.css defined no
+    .btn.builtin/.btn.instrument rule at all -- these rendered as
+    browser-default gray buttons with no CSS match, the same gap this file
+    once had for .btn.solid-gold/.btn.solid-rose on plain buttons."""
+    css = (STATIC / "terrarium.css").read_text()
+    assert ".btn.builtin    { background: var(--terra); color: var(--bg); }" in css
+    assert ".btn.instrument { background: var(--gold-deep); color: var(--on-gold); }" in css
+
+
 def test_css_defines_the_status_palette_and_faces():
     css = (STATIC / "terrarium.css").read_text()
     for token in ("#7a9e6e", "#d96680", "#c07850",   # sage/rose/terracotta
