@@ -71,20 +71,28 @@ export function reserveConfirmWidth(btn, armLabel) {
 // everywhere rather than each panel inventing its own modal/dialog).
 // Pair with reserveConfirmWidth at button creation so arming never
 // reflows the row (see its comment).
-export function confirmTap(btn, { armLabel, timeoutMs = 4000 } = {}, onConfirm) {
+export function confirmTap(btn, { armLabel, armStyle = "label", timeoutMs = 4000,
+                                  onArm = null, onDisarm = null } = {}, onConfirm) {
   if (btn.dataset.armed === "1") {
     delete btn.dataset.armed;
     clearTimeout(btn._confirmTimer);
+    if (armStyle === "label") btn.textContent = btn._restLabel ?? btn.textContent;
+    if (onDisarm) onDisarm();
     onConfirm();
     return;
   }
   const original = btn.textContent;
   btn.dataset.armed = "1";
-  btn.textContent = armLabel;
+  if (armStyle === "label") {
+    btn._restLabel = original;
+    btn.textContent = armLabel;
+  }
+  if (onArm) onArm();
   btn._confirmTimer = setTimeout(() => {
     if (btn.dataset.armed === "1") {
       delete btn.dataset.armed;
-      btn.textContent = original;
+      if (armStyle === "label") btn.textContent = original;
+      if (onDisarm) onDisarm();
       flashNotConfirmed(btn);
     }
   }, timeoutMs);
