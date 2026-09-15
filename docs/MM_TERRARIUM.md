@@ -4572,8 +4572,7 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
   style pulses the button's background on arm, pairing with a shared
   `.confirm-note` text line below the button (since an icon cannot swap to
   armed text label without breaking footprint); both styles accept new
-  `onArm`/`onDisarm` hooks (line 75) for lifecycle callbacks (e.g., sidebar
-  Restart using onArm to disable other buttons while armed).
+  `onArm`/`onDisarm` hooks (line 75) for lifecycle callbacks.
 - **`shell.js` Room nav label fix**: the sidebar's Room label (showing active
   room name) now updates on `room_loaded` and `room_unloaded` events in
   addition to the connect-time `snapshot`. Previously stuck at "Room: none"
@@ -4597,7 +4596,7 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
   closed by default and remembers operator's last open/closed choice via
   `localStorage`. The old `_instCardFor()` and instrument-card machinery
   (`_instCardFor` references in `surface.js`) is fully removed; `buildInstrumentCard()`
-  (used by `bit.js`'s Bit Details popup, lines ~130--150) is the only
+  (used by `bit.js`'s Bit Details popup) is the only
   survivor in the card-building family.
 - **Triggers accordion redesigned**: moved directly under the LED rows (above
   Live values) and refactored from decorated cards to compact rows (`functions.js`).
