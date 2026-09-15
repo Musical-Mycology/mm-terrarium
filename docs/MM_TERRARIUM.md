@@ -4613,7 +4613,7 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
   only) a Fire button and last-fired status line. Renders into `#functionsMount`
   (created once by `surface.js`'s `render()` function within the `functionsAccEl`
   lazy-initialization guard; the comment at that point reads "Triggers accordion
-  shell -- created ONCE here; functions.js renders into #functionsMount"),
+  shell -- created ONCE here; functions.js renders into #functionsMount",
   outside `functions.js`'s per-fixture rebuild path).
 - **Sidebar Run/Restart/Abort/Load buttons reshaped as single-row icon group**:
   all four are now inline-SVG icons on one `display: flex` row that never wraps.
