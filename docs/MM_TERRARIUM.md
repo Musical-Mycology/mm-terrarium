@@ -4611,7 +4611,9 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
   picker (where target requires device selection), an (i) button opening a
   popover with description/condition/script detail, and (for scripted functions
   only) a Fire button and last-fired status line. Renders into `#functionsMount`
-  (created once by `surface.js`'s Triggers accordion shell at lines 639--651,
+  (created once by `surface.js`'s `render()` function within the `functionsAccEl`
+  lazy-initialization guard; the comment at that point reads "Triggers accordion
+  shell -- created ONCE here; functions.js renders into #functionsMount"),
   outside `functions.js`'s per-fixture rebuild path).
 - **Sidebar Run/Restart/Abort/Load buttons reshaped as single-row icon group**:
   all four are now inline-SVG icons on one `display: flex` row that never wraps.
@@ -4622,15 +4624,16 @@ implementation plan: [`.../2026-09-14-console-live-view-ux.md`](https://github.c
   `render()` called `document.getElementById("functionsMount")` unconditionally,
   but that element is only created once a Room is configured (inside `surface.js`'s
   Triggers accordion shell). Connecting to a NO_ROOM Terrarium threw `TypeError`
-  and silently broke every `wire` event handler registered after `initFunctions()`
+  and silently broke every `snapshot` event handler registered after `initFunctions()`
   in `shell.js`'s handler init order (`initRail()`, `initRooms()`, `initBusy()`,
-  `initDesign()`, `initForms()`), since JavaScript stops handler registration on
-  first uncaught error. Fixed with a guard in `render()` (`if (!mount)
-  return false;`) plus signature-gating: the guard alone would have permanently
-  blocked a later real render of an unchanged functions list once the mount
-  existed (mirroring signature patterns in `bit.js` and `rooms.js`). This defect
-  escaped the offline test suite: the node DOM stub auto-vivifies any unseen
-  element id rather than returning `null`, masking the guard's real necessity.
+  `initDesign()`, `initForms()`), since one throwing listener aborts the
+  remaining listeners in `wire.js`'s dispatch loop for `snapshot` events, and the
+  same listener throws on every subsequent `snapshot` dispatch. Fixed with a guard in
+  `render()` (`if (!mount) return false;`) plus signature-gating: the guard alone
+  would have permanently blocked a later real render of an unchanged functions list
+  once the mount existed (mirroring signature patterns in `bit.js` and `rooms.js`).
+  This defect escaped the offline test suite: the node DOM stub auto-vivifies any
+  unseen element id rather than returning `null`, masking the guard's real necessity.
 - **Known gap (pre-existing, not fixed)**: plain "btn solid-gold" and "btn
   solid-rose" class pairs across the whole Console have no matching CSS rule and
   render as browser-default gray buttons. The defect predates this work and is
