@@ -16,8 +16,9 @@ with no configuration. Arco's directory index file is `index.htm`, not
   delivery fix). Text frames only: strings, times, doubles, floats, ints.
   No blob type (probe P2, 2026-09-08). Three upstream defects are patched
   here (2026-09-08), each marked with a `// mm-terrarium patch` comment;
-  all three were reported to Roger, and all three must be re-applied if the
-  file is refreshed from the `o2` repo:
+  the first was reported to Roger by email 2026-09-11 and acknowledged the
+  same day, the other two are not yet reported, and all three must be
+  re-applied if the file is refreshed from the `o2` repo:
   1. Rounding order in `o2ws_schedule_handler`: upstream rounded the delay
      in seconds before scaling to milliseconds, so any timestamp under
      500 ms ahead was delivered immediately. Our copy rounds after scaling.
