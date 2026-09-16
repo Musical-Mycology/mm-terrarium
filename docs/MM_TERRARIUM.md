@@ -524,6 +524,16 @@ Two operational traps, both hit during live testing:
    rounding patch and the pyarco re-initialize limit; two questions asked:
    whether `reset()` in `initialize()` is meant to be unconditional, and
    whether the failed audio re-open after `/host/clear` on macOS is known).
+   **Roger replied 2026-09-11:** the o2ws.js rounding is his mistake
+   (seconds vs milliseconds); the `/host/clear` and pyarco re-initialize
+   items "will take more thought" and he will follow up. He noted that
+   full O2 recovers and reconnects well but o2lite may need work, and
+   that a restarted clock service makes connected clients see time jump
+   back near zero, which breaks any local scheduling in flight. Chris
+   answered the same day that MM will sidestep all of it with a full
+   fresh start per round, since rounds are gated and short. No fix is
+   pending on either item; treat one Arco per Control process as the
+   design.
    **Note (2026-08-31):** in serve mode, `Terrarium`'s bit-cycle room
    recycle now performs this restart automatically once per round (see the
    *bit-cycle room recycle* entry near the end of this file) -- the trap and
