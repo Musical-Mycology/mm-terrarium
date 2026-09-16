@@ -4201,7 +4201,20 @@ itself is Plan B, in `mm-tuneshroom` (see *Not yet built* below).
   scaling to milliseconds, so any timestamp under 500 ms ahead was
   delivered immediately instead of held. Our vendored copy is patched to
   scale to milliseconds before rounding (one line; upstream defect,
-  reported to Roger by email 2026-09-11). Re-measurement after the patch could not
+  reported to Roger by email 2026-09-11, acknowledged the same day as his
+  mistake). Two more patches to the same vendored file landed on main
+  2026-09-16 (rescued from the deleted `claude/o2ws-browser-link` branch,
+  which had been wrongly assumed merged): a deferred handler snapshots
+  `o2ws_message_fields` before `setTimeout` and restores it inside the
+  closure, because the `o2ws_get_*` getters shift off one global that
+  every inbound message reassigns, so a deferred handler otherwise read
+  whichever payload arrived in the meantime; and the websocket `onerror`
+  path now calls the documented `o2ws_on_error` hook instead of the
+  undefined `o2ws_error`, so an abnormal close reaches the page. Neither
+  is reported upstream yet. All three are marked with `// mm-terrarium
+  patch` comments and listed in `www/README.md` as re-apply-on-refresh;
+  mm-tuneshroom's `web/o2ws.js` already carries all three and must stay
+  byte-identical below its header. Re-measurement after the patch could not
   establish the fix's real magnitude in the automation browser: its tab
   stays `document.hidden` even when fronted, which clamps timer firing to
   about once a second and adds a near-constant delay to every sample.
