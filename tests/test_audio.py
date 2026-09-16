@@ -303,3 +303,29 @@ def test_set_control_bypasses_the_lane_map():
     br.set_control("fx", 11, 100)
     assert ("cc", 11, 100) in voice.sent
     br.set_control("nobody", 11, 1)                    # unknown dev: no-op
+
+
+def test_shutdown_shuts_the_pool_even_when_a_voice_fails_to_silence():
+    # D6 (2026-09-11): at process shutdown the hub may already be dead, so
+    # a voice's all_off() raises. The failure is reported (re-raised), but
+    # the pool's own shutdown -- which is where pyarco's arco.finish() runs,
+    # the flag that stops Ugen.__del__ from writing to the dead socket at
+    # interpreter exit -- must still happen.
+    from control.audio import FakeVoice
+
+    class DeadVoice(FakeVoice):
+        def all_off(self) -> None:
+            raise BrokenPipeError(32, "Broken pipe")
+
+    class DeadPool(FakePool):
+        def acquire(self):
+            voice = DeadVoice()
+            self.acquired.append(voice)
+            return voice
+
+    pool = DeadPool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("dev1", _role(ugens=PLAYER_UGENS))
+    with pytest.raises(BrokenPipeError):
+        bridge.shutdown()
+    assert pool.shut

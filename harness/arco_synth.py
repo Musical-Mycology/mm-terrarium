@@ -164,15 +164,25 @@ class ArcoSynthPool:
     def shutdown(self) -> None:
         """Silence every channel, then drop the Flsyn so pyarco's destructor
         frees the Arco ugen id. Boundary rule 1: Control owns the id space,
-        which means freeing it at unload (see arco/doc/pyarco.md, "Ugen IDs")."""
-        if self._flsyn is not None:
-            for chan in range(16):
-                self._flsyn.alloff(chan)
+        which means freeing it at unload (see arco/doc/pyarco.md, "Ugen IDs").
+
+        finish() runs in a finally: if the hub is already dead the alloff()
+        calls raise (BrokenPipeError), and that failure is reported to the
+        caller -- but arco.finish() must still have run, because it sets
+        the `arco.finished` flag pyarco's Ugen.__del__ consults before
+        sending /arco/free at interpreter exit. Skipping it leaves one
+        "Exception ignored in __del__" traceback per live ugen on the way
+        out of the process (D6, 2026-09-11)."""
+        try:
+            if self._flsyn is not None:
+                for chan in range(16):
+                    self._flsyn.alloff(chan)
+        finally:
             self._flsyn = None
-        if self._arco is not None:
-            self._arco.finish()
-            self._arco = None
-        self._sched = None
+            if self._arco is not None:
+                self._arco.finish()
+                self._arco = None
+            self._sched = None
 
     def quiesce(self) -> None:
         """Drop every handle to a hub that is already dead, with NO wire
