@@ -1259,6 +1259,120 @@ git add .
 git commit -m "feat(firmware): tower build target, 120 px, 2.4 A limiter, no sensors"
 ```
 
+## Task A8 [FW]: Native scenario replay against the exported contract
+
+**Owner:** Victor. **Gated on:** mm-terrarium's device contract kit Phase 3
+(the first `test/contract/` export) landing first -- do not start this task
+until `test/contract/contract.json` and `test/contract/scenarios/*.json`
+exist in this repo.
+
+**Files:**
+- Create: `test/test_scenarios/test_scenarios.cpp`, `tools/scenario2h.py`
+- Modify: `platformio.ini` (reuse the `[env:native]` environment Task A3 added)
+
+**Interfaces:**
+- Consumes: `test/contract/contract.json`, `test/contract/scenarios/*.json`
+  (mm-terrarium's `tools/export_contract.py` output, committed here), the
+  `link_*`/`frames_*`/`gestures_core.h` interfaces from A1-A4.
+- Produces: a native (Mac-hosted, `pio test -e native`) replay of every
+  `"rev1"`-or-`"any"`-tagged scenario against the Arduino-free
+  session/classification code, plus two contract checks: the vendored
+  o2lite exposes a blob type and a 4096-byte message cap, and the
+  built-in Rev 1 thresholds (`TAP_MAX_S`, `HOLD_MIN_S`) match
+  `contract.json`'s `instruments.tuneshroom_rev1.triggers`.
+
+- [ ] **Step 1: Embed each scenario file as a header, in the style of A5's `wav2h.py`**
+
+```python
+# tools/scenario2h.py
+"""scenario2h: JSON scenario file -> a C header holding it as a raw string.
+Usage: scenario2h.py in.json name > out.h"""
+import json, sys
+path, name = sys.argv[1], sys.argv[2]
+text = json.dumps(json.load(open(path)))            # re-serialize compactly; content is unchanged
+escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+print(f'#pragma once\nstatic const char *{name}_json = "{escaped}";')
+```
+
+Run it for every `test/contract/scenarios/*.json` file into
+`test/test_scenarios/scenarios_generated/`, and commit the generated
+headers alongside the source JSON (both are checked in, same as A5's
+`tick.h`/`hold.h` next to `tick.wav`/`hold.wav`) so `pio test` needs no
+network or generation step.
+
+- [ ] **Step 2: A header-only JSON parser, tests only**
+
+Vendor a single-header JSON library (e.g. nlohmann/json's `json.hpp`) under
+`test/test_scenarios/`, used only by these tests -- never by `src/`, which
+must stay free of any dependency this heavy.
+
+- [ ] **Step 3: Write the replay driver and the two contract checks**
+
+```cpp
+// test/test_scenarios/test_scenarios.cpp
+#include <unity.h>
+#include "json.hpp"
+#include "../../src/sense/gestures_core.h"
+#include "../../src/render/frames_core.h"
+#include "scenarios_generated/boot_hello_heartbeat.h"
+// ... one #include per scenario_generated header ...
+#include "contract_generated.h"                      // scenario2h.py run once more on contract.json
+
+using nlohmann::json;
+
+void test_contract_declares_blob_and_4096_byte_cap() {
+  json c = json::parse(contract_json);
+  TEST_ASSERT_TRUE(std::find(c["link"]["arg_types"].begin(),
+                             c["link"]["arg_types"].end(), "b")
+                    != c["link"]["arg_types"].end());
+  TEST_ASSERT_EQUAL(4096, c["link"]["max_message_bytes"].get<int>());
+}
+
+void test_builtin_rev1_thresholds_match_the_export() {
+  json c = json::parse(contract_json);
+  json triggers = c["instruments"]["tuneshroom_rev1"]["triggers"];
+  TEST_ASSERT_FLOAT_WITHIN(0.001, triggers["tap"]["max_ms"].get<double>() / 1000.0,
+                           TouchClassifier::TAP_MAX_S);
+  TEST_ASSERT_FLOAT_WITHIN(0.001, triggers["hold"]["min_ms"].get<double>() / 1000.0,
+                           TouchClassifier::HOLD_MIN_S);
+}
+
+// One replay function per scenario: feed control_sends/gesture steps in
+// t order into a session built from gestures_core.h + frames_core.h, and
+// check expect_frame/expect_play/expect_out/expect_quiet the same way
+// mm-tuneshroom's replay runner will (see that repo's plan, Phase 4).
+void test_replay_boot_hello_heartbeat() {
+  json s = json::parse(boot_hello_heartbeat_json);
+  // ... drive FrameQueue/TouchClassifier/SwingDetector against s["steps"] ...
+  TEST_IGNORE_MESSAGE("replay driver not written yet");   // reports as
+                        // ignored, not passed, until the driver above it
+                        // is implemented: a visible gap, never a green
+                        // test that checks nothing
+}
+
+int main() {
+  UNITY_BEGIN();
+  RUN_TEST(test_contract_declares_blob_and_4096_byte_cap);
+  RUN_TEST(test_builtin_rev1_thresholds_match_the_export);
+  RUN_TEST(test_replay_boot_hello_heartbeat);
+  // ... one RUN_TEST per scenario ...
+  return UNITY_END();
+}
+```
+
+- [ ] **Step 4: Run and commit**
+
+Run: `pio test -e native -f test_scenarios`
+Expected: the two contract checks PASS immediately given a correct
+`contract.json`; `test_replay_boot_hello_heartbeat` and the other
+per-scenario tests report IGNORED until each replay driver is filled in,
+then PASS.
+
+```bash
+git add test/test_scenarios/ tools/scenario2h.py platformio.ini
+git commit -m "feat(firmware): native replay of the exported device contract scenarios"
+```
+
 ---
 
 # Phase B: Hardware (Sophia)
