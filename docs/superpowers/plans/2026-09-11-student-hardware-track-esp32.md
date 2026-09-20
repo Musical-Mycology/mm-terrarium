@@ -228,6 +228,9 @@ and note that in the README.
 #define PIXEL_COUNT 12
 #endif
 #define HEARTBEAT_S 5.0
+#ifndef INSTRUMENT_NAME
+#define INSTRUMENT_NAME "testshroom"
+#endif
 ```
 
 ```cpp
@@ -308,7 +311,16 @@ mkdir -p src/link/o2lite
 for f in o2lite.c o2lite.h o2base.h hostip.h hostipimpl.h o2liteesp32.cpp o2liteesp32.h; do
   cp ~/projects/o2/src/$f src/link/o2lite/$f
 done
-echo "Vendored from o2 commit $(git -C ~/projects/o2 rev-parse --short HEAD) on $(date +%F). Do not edit; report defects to Roger." > src/link/o2lite/VENDORED.md
+cat > src/link/o2lite/VENDORED.md <<EOF
+Vendored from o2 commit $(git -C ~/projects/o2 rev-parse --short HEAD) on $(date +%F).
+
+This copy carries blob-argument support and the 4096-byte message cap
+needed to read /role, /room and /leds. It also carries two Arduino-core
+build patches on top of upstream; list each one here (file, line, one
+sentence on what it changes and why) as it's made, and report it to Roger
+Dannenberg upstream the same day. Do not otherwise edit; pull a fresh copy
+from o2/src/ instead.
+EOF
 ```
 
 Do **not** copy `hostip.c` (the README says so; `hostipimpl.h` replaces it).
@@ -355,11 +367,18 @@ bool link_synced() { return o2l_time_get() >= 0; }
 double link_time() { return o2l_time_get(); }
 
 void link_hello() {
-  // Same shape as harness/o2_shroom.py's undeclared hello: typespec "s".
-  o2l_send_start("/game/hello", 0, "s", true);   // true = tcp (command)
+  // ssss [dev, name, protoversion, instrument] -- the carried-instrument
+  // hello shape (docs/carried-instrument-schema.md). name/protoversion are
+  // left blank, matching harness/o2_shroom.py's own declared-hello callers;
+  // INSTRUMENT_NAME is a build flag ("testshroom" for TEST-room bring-up,
+  // "tuneshroom_rev1" once Mushica lands -- see config.h).
+  o2l_send_start("/game/hello", 0, "ssss", true);   // true = tcp (command)
   o2l_add_string(DEVICE_NAME);
+  o2l_add_string("");
+  o2l_add_string("");
+  o2l_add_string(INSTRUMENT_NAME);
   o2l_send();
-  Serial.printf("HELLO sent t=%.3f\n", link_time());
+  Serial.printf("HELLO sent t=%.3f instrument=%s\n", link_time(), INSTRUMENT_NAME);
 }
 ```
 
@@ -385,6 +404,9 @@ void loop() {
   delay(2);
 }
 ```
+
+`INSTRUMENT_NAME` is defined in `config.h` (Task 0.3's scaffold, next to
+`HEARTBEAT_S`).
 
 - [ ] **Step 3: Build and flash; watch for sync and hello**
 
