@@ -1744,9 +1744,15 @@ git commit -m "feat(firmware): tower env JOIN_NODE set to the Room's node id"
 
 ```python
 # tests/test_mushica_bit.py
+from pathlib import Path
+
 import pytest
+from control.catalog import load_catalog
 from control.cues import FireFunction, ROOM
+from control.instrument import TUNESHROOM, satisfies
 from bits.mushica.mushica_bit import MushicaBit, PERFECT_S, GOOD_S
+
+ROOT = Path(__file__).resolve().parents[1]
 
 def make(bpm=100):
     bit = MushicaBit(config={"rhythm": {"bpm": bpm}})
@@ -1759,6 +1765,12 @@ def test_role_table_declares_one_scored_player_with_three_gestures():
     assert player.scored and player.capacity == 1
     assert set(player.uses) >= {"tap", "hold", "swing"}
     assert rt.node_map["MUSHICA_PLAYER_NODE"] == ["player"]
+
+def test_requires_admits_tuneshroom_rev1_and_refuses_tuneshroom():
+    req = make().instrument_requirements()[0]
+    rev1 = load_catalog(ROOT / "instruments").published["tuneshroom_rev1"]
+    assert satisfies(rev1, req) is None
+    assert satisfies(TUNESHROOM, req) is not None
 
 def test_verb_handlers_cover_tap_hold_swing():
     assert {"tap", "hold", "swing"} <= set(make().verb_handlers())
@@ -1894,6 +1906,7 @@ from control.functions import (
     Condition, ConditionSource, ScriptStep, Function, FunctionTable,
     FunctionTarget,
 )
+from control.instrument import InstrumentRequirement
 from control.roles import Role, RoleClass, RoleTable
 
 logger = logging.getLogger(__name__)
@@ -1956,6 +1969,7 @@ class MushicaBit(Bit):
         player = Role(
             name="player", role_class=RoleClass.UNIQUE, capacity=1, scored=True,
             uses=["tap", "hold", "swing"], breath=False,
+            requires="rev1",
             light_manifest={"instruments": [
                 {"instrument": "aurora", "target": "primary",
                  "params": {"hue": 0.58, "level": 0.35},
@@ -1968,6 +1982,19 @@ class MushicaBit(Bit):
         )
         return RoleTable(roles={"player": player},
                          node_map={"MUSHICA_PLAYER_NODE": ["player"]})
+
+    def instrument_requirements(self) -> tuple:
+        """The "rev1" slot the player role's `requires` names above: gates
+        a join on the five capabilities the device contract kit defines
+        for Rev 1 hardware (docs/superpowers/specs/
+        2026-09-16-device-contract-kit-design.md D8). A carrier declaring
+        `tuneshroom` (the app's full profile) is refused by name; the
+        board and the app's `rev1` hardware profile both satisfy it."""
+        return (InstrumentRequirement(
+            slot="rev1",
+            capabilities=frozenset({"light.pixels", "gesture.tap",
+                                    "gesture.hold", "gesture.swing",
+                                    "audio.samples"})),)
 
     def room_manifests(self) -> tuple[dict, dict]:
         # Targets are the TOWER room's zones (rooms/TOWER.toml, Task C1).
