@@ -33,6 +33,7 @@ from control.engine import GameServer
 from control.rooms import Room
 from control.terrarium_config import load_terrarium_config
 from devicelink.agent import DeviceLinkAgent
+from devicelink.contract import HELLO_INTERVAL_S
 from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, from_o2_arg
 
 from contract_kit.contract_bit import ContractBit
@@ -82,8 +83,11 @@ ROOM_FIXTURE_DEVS = {"main": "sim-main", "accent": "sim-accent"}
 # ONE call, so a coarse jump would render only the last of them.
 TICK_MS = round(1000.0 / 44.0)
 
-# The device's hello heartbeat interval (spec section 4.3, rule 1).
-HELLO_INTERVAL_MS = 5000
+# The device's hello heartbeat interval (spec section 4.3, rule 1),
+# derived from devicelink/contract.py's own HELLO_INTERVAL_S so this rig
+# and tools/export_contract.py's published lifecycle.hello_interval_s can
+# never drift apart.
+HELLO_INTERVAL_MS = round(HELLO_INTERVAL_S * 1000)
 
 # The replay tolerance every recorded expect_out/expect_play carries:
 # roughly two render ticks (TICK_MS * 2 = 46 ms, rounded up to a plain

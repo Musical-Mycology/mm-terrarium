@@ -16,11 +16,14 @@ between contract_kit.scenarios.ALL_SCENARIOS and the recordings on disk
 is a defect this tool refuses to paper over -- it is checked, and this
 tool exits loudly, before anything is written.
 
-`contract.json` also carries `step_schema`, `scenarios` and
-`replay_notes`, because a device author who holds only this export
+`contract.json` also carries `step_schema`, `scenarios`, `lifecycle_notes`
+and `replay_notes`, because a device author who holds only this export
 folder (not this repo) must be able to write a replay runner from it
-alone. Nothing in those three keys should ever point outside the export
-at a file the folder does not contain.
+alone. Nothing in those keys should ever point outside the export at a
+file the folder does not contain, and every cross-reference between keys
+must resolve inside the exported document itself (see
+tests/test_export_contract.py's
+test_every_dotted_cross_reference_resolves_in_the_export).
 """
 from __future__ import annotations
 
@@ -36,7 +39,7 @@ from control.lobby import LobbyConfig, TERRARIUM_ADMIN
 from control.role_config import carried_instrument_view
 from contract_kit.recorder import CUE_HORIZON_S
 from contract_kit.scenarios import ALL_SCENARIOS
-from devicelink.contract import HELLO_INTERVAL_S, VERB_TABLE
+from devicelink.contract import HELLO_INTERVAL_S, VERB_TABLE, row_for
 from devicelink.o2_transport import MAX_DEV_LEN
 from devicelink.protocol import O2_MAX_MSG_LEN
 
@@ -61,24 +64,59 @@ CONTRACT_VERSION = 1
 # figure read off running code.
 BENCH_TOLERANCE_MS = {"frame": 50, "heartbeat": 1000}
 
+
+def _hello_semantics_sentence() -> str:
+    """A prose sentence for step_schema.kinds.link.semantics and
+    lifecycle_notes.hello_interval_s, built from devicelink/contract.py's
+    own hello row so it cannot drift from the verb table."""
+    hello = row_for("up", "hello")
+    longest = hello.typespecs[-1]
+    args = ", ".join(hello.args)
+    return (f"On \"up\", the device sends /game/hello (typespec "
+           f"\"{longest}\": {args}) once the link is up, then repeats it "
+           f"every `lifecycle.hello_interval_s` seconds while the link "
+           f"stays up (spec section 4.3, rule 1). On \"down\", the device "
+           f"sends nothing and receives nothing. There is no session "
+           f"resume: after `lifecycle.stale_timeout_s` seconds of "
+           f"silence, Control has dropped the device, which must join "
+           f"again (spec section 4.3, rule 7).")
+
+
 # What every step kind in every committed recording looks like: every
 # field, its type, its unit, and what a placeholder value means. Verified
 # against contract_kit/recorder.py's step-producing methods and against a
-# scan of all eleven contract_kit/recordings/*.json files (no kind or
-# field appears in the recordings that isn't described here -- see
-# tests/test_export_contract.py's test_step_schema_covers_every_recorded_step_kind_and_field).
-# A device author holding only this export must be able to write a replay
-# runner from this object plus the scenario files alone.
+# scan of all eleven contract_kit/recordings/*.json files -- see
+# tests/test_export_contract.py's
+# test_step_schema_matches_the_recordings_exactly, which checks both
+# directions: no recorded kind/field is undescribed, and no described
+# kind/field is unused.
+#
+# Two shapes of "kinds" entry: one with a "fields" object describes a step
+# whose payload is itself a JSON object, keyed the way "fields" lists; one
+# with a "payload" string instead describes a step whose payload is a bare
+# scalar (currently only "link", whose value is the string "up" or "down",
+# not an object).
 STEP_SCHEMA = {
-    "t": ("int; milliseconds since the scenario's own start. `steps` is "
-         "sorted by `t`, ascending, stably (ties keep their original "
-         "relative order)."),
+    "notation": (
+        "Each entry under \"kinds\" describes one step kind, the key "
+        "other than \"t\" that a step object carries. A kind with a "
+        "\"fields\" object has a JSON object as its payload, one entry "
+        "described per key. A kind with a \"payload\" string instead has "
+        "a bare scalar as its payload, not an object."
+    ),
+    "t": (
+        "int; milliseconds since the scenario's own start. `steps` is "
+        "sorted by `t`, ascending, stably: steps sharing one `t` are "
+        "delivered and checked in file order, and file order within one "
+        "`t` is the order those things happened while recording."
+    ),
     "tolerance": (
         "In-process replay runs on a fake clock and allows an "
         "expect_frame to land up to one render tick (23 ms) late. "
         "expect_out and expect_play are instead checked against their "
         "own within_ms window, which starts at the step's own t. A live "
-        "bench replay uses this contract.json's lifecycle.bench_tolerance_ms."
+        "bench replay uses this export's `lifecycle.bench_tolerance_ms` "
+        "instead of either."
     ),
     "link_down_delivery": (
         "While the most recently seen link step is \"down\", a replay "
@@ -87,107 +125,203 @@ STEP_SCHEMA = {
         "and a device whose link is down receives none of them."
     ),
     "placeholders": {
-        "$DEV": ("the replaying device's own dev id, substituted for "
-                 "the id used while recording"),
-        "$KEY": ("in a control_sends string argument, a value whose "
-                 "shape must match (for example \"key=$KEY\") but whose "
-                 "actual number was never pinned"),
-        "*": "in expect_out.args, matches any value",
+        "$DEV": {
+            "meaning": (
+                "the replaying device's own dev id, substituted for "
+                "the id used while recording."
+            ),
+            "appears_in": ["control_sends.address", "expect_out.args"],
+        },
+        "$KEY": {
+            "meaning": (
+                "a join chime's key number, substituted because the "
+                "contract does not pin the number. Always embedded in "
+                "a larger string as \"key=$KEY\" (for example replacing "
+                "\"key=60\"). A runner matches the shape key=<integer> "
+                "and does not compare the integer itself."
+            ),
+            "appears_in": ["control_sends.args", "expect_play.params"],
+        },
+        "*": {
+            "meaning": "matches any value.",
+            "appears_in": ["expect_out.args"],
+        },
     },
     "scenario_fields": {
         "name": "str; snake_case, equal to the file's own stem.",
         "summary": "str; one line describing what the scenario covers.",
-        "profiles": ("list of str; the device profiles this scenario "
-                    "must pass in (\"rev1\" and/or \"any\")."),
-        "device": ("object, {\"join_node\": str or null}. When "
-                  "join_node is non-null, the device sends /game/join "
-                  "[\"$DEV\", join_node] right after its first hello on "
-                  "every link-up."),
+        "profiles": (
+            "list of str; the device profiles this scenario must pass "
+            "in (\"rev1\" and/or \"any\")."
+        ),
+        "device": (
+            "object, {\"join_node\": str or null}. When join_node is "
+            "non-null, the device sends /game/join [\"$DEV\", "
+            "join_node] right after its first hello on every link-up."
+        ),
         "steps": "list of step objects (see \"kinds\" below).",
     },
     "kinds": {
         "link": {
             "role": "input: the O2 link's state changes.",
-            "fields": {"link": "str; \"up\" or \"down\"."},
+            "payload": "string, one of \"up\" or \"down\".",
+            "semantics": _hello_semantics_sentence(),
         },
         "control_sends": {
-            "role": ("input: a message Control really sent while "
-                     "recording; deliver it to the device (subject to "
-                     "tolerance.link_down_delivery above)."),
+            "role": (
+                "input: a message Control really sent while "
+                "recording; deliver it to the device (subject to "
+                "`step_schema.link_down_delivery` above)."
+            ),
             "fields": {
                 "address": "str; \"/$DEV/<verb>\".",
                 "typespec": "str; the O2 typespec the message was sent with.",
-                "args": ("list; decoded arguments -- role and room "
-                        "args[0] is a JSON object, leds args[0] is a "
-                        "list of 36 ints (0-255), GRB, 3 per pixel, 12 "
-                        "pixels."),
-                "at": ("int ms on the same t timeline, or null; the "
-                      "presentation time the message carries. Only "
-                      "/leds ever carries one -- every other verb's at "
-                      "is null, meaning it has no presentation time, "
-                      "not that it is due at t=0."),
-                "malformed": ("bool; present and true only on a "
-                             "hand-authored step a device must drop "
-                             "without changing any state. Absent (not "
-                             "false) on every message actually captured "
-                             "from Control."),
+                "args": (
+                    "list; decoded arguments -- role and room args[0] "
+                    "is a JSON object, leds args[0] is a list of 36 "
+                    "ints (0-255), GRB, 3 per pixel, 12 pixels. A "
+                    "string argument may carry the $KEY placeholder "
+                    "(see placeholders)."
+                ),
+                "at": (
+                    "int ms on the same t timeline, or null; the "
+                    "presentation time the message carries. Only "
+                    "/leds ever carries one -- every other verb's at "
+                    "is null, meaning it has no presentation time, "
+                    "not that it is due at t=0."
+                ),
+                "malformed": (
+                    "bool; present and true only on a hand-authored "
+                    "step a device must drop without changing any "
+                    "state. Absent (not false) on every message "
+                    "actually captured from Control."
+                ),
             },
         },
         "gesture": {
-            "role": ("input: a classified gesture delivered to the "
-                     "device session at t."),
+            "role": (
+                "input: a classified gesture delivered to the device "
+                "session at t."
+            ),
             "fields": {
                 "kind": "str; \"tap\", \"hold\" or \"swing\".",
-                "onset_t": "int ms; when the gesture began (equals the step's own t).",
+                "onset_t": (
+                    "int ms; when the gesture began (equals the "
+                    "step's own t)."
+                ),
                 "duration_ms": "float; tap only -- how long the touch lasted.",
-                "held_s": ("float; hold only -- seconds the touch was "
-                          "held before release."),
-                "signed_g": ("float; swing only -- peak acceleration in "
-                            "g, negative means left."),
+                "held_s": (
+                    "float; hold only -- seconds the touch was held "
+                    "before release."
+                ),
+                "signed_g": (
+                    "float; swing only -- peak acceleration in g, "
+                    "negative means left."
+                ),
             },
         },
         "expect_out": {
-            "role": ("expectation: the device must send this message "
-                     "with a send time in [t, t + within_ms]."),
+            "role": (
+                "expectation: the device must send this message with "
+                "a send time in [t, t + within_ms]."
+            ),
             "fields": {
                 "address": "str; \"/game/<verb>\".",
                 "typespec": "str.",
-                "args": ("list; each element is a literal (numbers "
-                        "match within 1e-3), \"$DEV\", or \"*\" (see "
-                        "placeholders)."),
-                "stamp_t": ("int ms or null; the O2 timestamp the "
-                           "outbound message must carry, within 1 ms. "
-                           "null means the timestamp is not checked."),
-                "within_ms": ("int; width in ms of the send-time "
-                             "window, starting at t."),
+                "args": (
+                    "list; each element is a literal (numbers match "
+                    "within 1e-3), \"$DEV\", or \"*\" (see "
+                    "placeholders)."
+                ),
+                "stamp_t": (
+                    "int ms or null; the O2 timestamp the outbound "
+                    "message must carry, within 1 ms. null means the "
+                    "timestamp is not checked."
+                ),
+                "within_ms": (
+                    "int; width in ms of the send-time window, "
+                    "starting at t."
+                ),
             },
         },
         "expect_frame": {
-            "role": "expectation: the pixels showing at t (see tolerance above).",
+            "role": (
+                "expectation: the pixels showing at t (see tolerance "
+                "above)."
+            ),
             "fields": {
-                "grb": ("list of 36 ints, 0-255: 12 pixels x 3 "
-                       "channels, green-red-blue order."),
+                "grb": (
+                    "list of 36 ints, 0-255: 12 pixels x 3 channels, "
+                    "green-red-blue order."
+                ),
             },
         },
         "expect_play": {
-            "role": ("expectation: a play effect with this name and "
-                     "params is emitted in [t, t + within_ms]."),
+            "role": (
+                "expectation: a play effect with this name and "
+                "params is emitted in [t, t + within_ms]."
+            ),
             "fields": {
-                "name": ("str; the sample name. An unknown name is a "
-                        "device's own business, not checked here."),
-                "params": "str; the play verb's params argument.",
+                "name": (
+                    "str; the sample name. An unknown name is a "
+                    "device's own business, not checked here."
+                ),
+                "params": (
+                    "str; the play verb's params argument. May carry "
+                    "the $KEY placeholder (see placeholders)."
+                ),
                 "within_ms": "int.",
             },
         },
         "expect_quiet": {
-            "role": ("expectation: none of these addresses may have a "
-                     "send time in [t, t + for_ms)."),
+            "role": (
+                "expectation: none of these addresses may have a "
+                "send time in [t, t + for_ms)."
+            ),
             "fields": {
                 "addresses": "list of str.",
                 "for_ms": "int; width in ms of the window, starting at t.",
             },
         },
     },
+}
+
+# One-sentence prose companions to contract.json's "lifecycle" values,
+# keyed by the same names, each stating what the number means and its
+# unit. Checked against the code or the design spec, not guessed:
+# hello_interval_s and stale_timeout_s against devicelink/contract.py and
+# control/boot_config.py; lobby_double_tap_window_s against
+# control/lobby.py's DoubleTapDetector; cue_horizon_s against
+# control/boot_config.py's own BootConfig.cue_horizon comment and
+# contract_kit/recorder.py's CUE_HORIZON_S docstring; bench_tolerance_ms
+# against BENCH_TOLERANCE_MS's own comment above.
+LIFECYCLE_NOTES = {
+    "hello_interval_s": (
+        "Seconds between a device's /game/hello resends while its link "
+        "stays up (see `step_schema.kinds.link.semantics`)."
+    ),
+    "stale_timeout_s": (
+        "Seconds of silence after which Control has dropped a device, "
+        "which must join again on its next hello (see "
+        "`step_schema.kinds.link.semantics`)."
+    ),
+    "lobby_double_tap_window_s": (
+        "Seconds within which two count-1 taps from the same device in "
+        "the lobby are paired into a join; a single tap already carrying "
+        "count >= 2 joins immediately regardless of this window."
+    ),
+    "cue_horizon_s": (
+        "Seconds of lead time Control adds when it schedules a cue, "
+        "becoming the presentation time (`at`) on the /leds message the "
+        "device receives; every recorded `at` in every scenario assumes "
+        "this value."
+    ),
+    "bench_tolerance_ms": (
+        "Milliseconds of slack a live bench replay allows past a step's "
+        "own tolerance: frame for how late an expect_frame's pixels may "
+        "still appear, heartbeat for how late a /game/hello resend may "
+        "still arrive."
+    ),
 }
 
 # Plain-sentence replay rules a runner needs that the scenario files and
@@ -258,10 +392,10 @@ def _committed_recording_names() -> list[str]:
 def _validated_scenario_names() -> list[str]:
     """The sorted scenario names, after checking that
     contract_kit.scenarios.ALL_SCENARIOS and contract_kit/recordings/ name
-    exactly the same set. Exits loudly on any mismatch. Called from
-    export_contract() itself (not just from main()'s file-writing path),
-    so a mismatch is caught before this tool's payload is even built, let
-    alone written -- no partial export is ever possible.
+    exactly the same set. Exits loudly on any mismatch. Callers that
+    already hold a validated name list (main()) pass it straight to
+    export_contract() and _copy_scenarios() instead of calling this
+    again, so one export run validates exactly once.
     """
     expected = set(_scenario_names())
     committed = set(_committed_recording_names())
@@ -281,12 +415,12 @@ def _validated_scenario_names() -> list[str]:
     return sorted(expected)
 
 
-def _scenario_index() -> list[dict]:
+def _scenario_index(names: list[str]) -> list[dict]:
     """contract.json's "scenarios" key: name/profiles/summary per
     scenario, sorted by name, so a device repo can assert it holds the
     full committed set without globbing its own scenarios/ directory."""
     index = []
-    for name in _validated_scenario_names():
+    for name in names:
         data = json.loads((RECORDINGS_DIR / f"{name}.json").read_text())
         index.append({
             "name": data["name"],
@@ -296,7 +430,17 @@ def _scenario_index() -> list[dict]:
     return index
 
 
-def export_contract(*, commit: str) -> dict:
+def export_contract(*, commit: str,
+                    scenario_names: list[str] | None = None) -> dict:
+    """The contract.json payload. `scenario_names`, if given, must already
+    be validated (see _validated_scenario_names) -- passing it lets a
+    caller that already validated once (main()) skip doing so again.
+    Called with no `scenario_names` (as every test does), this function
+    validates the scenario set itself before returning, so a mismatch is
+    caught before any payload is built, let alone written.
+    """
+    names = (scenario_names if scenario_names is not None
+             else _validated_scenario_names())
     rev1 = load_catalog(REPO_ROOT / "instruments").published["tuneshroom_rev1"]
     verbs = sorted(
         (_verb_entry(row) for row in VERB_TABLE),
@@ -323,6 +467,7 @@ def export_contract(*, commit: str) -> dict:
             "cue_horizon_s": CUE_HORIZON_S,
             "bench_tolerance_ms": dict(BENCH_TOLERANCE_MS),
         },
+        "lifecycle_notes": dict(LIFECYCLE_NOTES),
         "instruments": {
             "tuneshroom_rev1": {
                 "instrument": carried_instrument_view(rev1),
@@ -330,20 +475,16 @@ def export_contract(*, commit: str) -> dict:
                             for t in rev1.event_triggers},
             },
         },
-        # _scenario_index() validates ALL_SCENARIOS against
-        # contract_kit/recordings/ and exits loudly on a mismatch, so this
-        # call (not main()'s writing code) is where an inconsistent
-        # scenario set is caught -- before anything is written (Minor 4).
-        "scenarios": _scenario_index(),
+        "scenarios": _scenario_index(names),
         "step_schema": STEP_SCHEMA,
         "replay_notes": list(REPLAY_NOTES),
     }
 
 
-def _copy_scenarios(out_dir: Path) -> int:
+def _copy_scenarios(out_dir: Path, names: list[str]) -> int:
     """Copy contract_kit/recordings/<name>.json byte for byte into
-    <out_dir>/scenarios/, one file per name in ALL_SCENARIOS."""
-    names = _validated_scenario_names()
+    <out_dir>/scenarios/, one file per name in `names` (already
+    validated by the caller)."""
     scenarios_dir = out_dir / "scenarios"
     scenarios_dir.mkdir(parents=True, exist_ok=True)
     for name in names:
@@ -365,12 +506,13 @@ def main(argv: list[str] | None = None) -> None:
     out_dir = Path(argv[0])
     commit = _head_commit()
 
-    # export_contract() validates the scenario set (via _scenario_index())
-    # before returning, so a mismatch exits here, before out_dir has any
-    # file written into it at all.
-    data = export_contract(commit=commit)
+    # Validate exactly once here, before out_dir has any file written
+    # into it. export_contract() and _copy_scenarios() both take the
+    # already-validated list instead of re-checking it themselves.
+    names = _validated_scenario_names()
+    data = export_contract(commit=commit, scenario_names=names)
     _write_json(out_dir / "contract.json", data)
-    count = _copy_scenarios(out_dir)
+    count = _copy_scenarios(out_dir, names)
     print(f"wrote {out_dir}/contract.json and {count} scenario files")
 
 

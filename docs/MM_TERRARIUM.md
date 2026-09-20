@@ -4838,15 +4838,18 @@ not a `firmware/` directory here).
   any diff. `tools/export_contract.py <out-dir>` packages the verb table,
   the Rev 1 instrument, the `lifecycle`/`limits` values (each read from the
   constant that owns it -- `hello_interval_s` from `devicelink/contract.py`'s
-  own `HELLO_INTERVAL_S`, so both `harness/o2_shroom.py` and the export
-  read the same number), and the eleven scenarios -- copied byte for byte
-  from `contract_kit/recordings/` -- into the folder every device repo
-  commits at `test/contract/`. `contract.json` also carries a `scenarios`
-  index (name/profiles/summary per scenario), a `step_schema` describing
-  every step kind and field with units and placeholder meanings, and
-  `replay_notes` stating the replay rules a scenario file alone does not
-  (all inline, so a device author holding only the export folder can write
-  a replay runner from it without this repo).
+  own `HELLO_INTERVAL_S`, so `harness/o2_shroom.py`, `contract_kit/recorder.py`'s
+  `HELLO_INTERVAL_MS` and the export all read the same number), and the
+  eleven scenarios -- copied byte for byte from `contract_kit/recordings/`
+  -- into the folder every device repo commits at `test/contract/`.
+  `contract.json` also carries a `scenarios` index (name/profiles/summary
+  per scenario), `lifecycle_notes` (a one-sentence prose companion per
+  `lifecycle` key, with units), a `step_schema` describing every step kind
+  and field with units and placeholder meanings (including which fields
+  each placeholder appears in, and the device's hello/heartbeat/no-resume
+  behavior), and `replay_notes` stating the replay rules a scenario file
+  alone does not (all inline, so a device author holding only the export
+  folder can write a replay runner from it without this repo).
 - **The change flow is one-way** (spec section 4.1): change the verb table
   (and Control, if needed) here, re-record the scenarios, re-export into
   each device repo, and that device's replay tests fail until it matches.
@@ -4870,7 +4873,7 @@ not a `firmware/` directory here).
   environment; the live bench replay feasibility spike (spec section 8);
   and an executable Mushica capability-gate test, which waits on the
   Mushica Bit to exist.
-- **Suite at HEAD:** `.venv/bin/python -m pytest tests -v` -- 2540 passed,
+- **Suite at HEAD:** `.venv/bin/python -m pytest tests -v` -- 2543 passed,
   1 skipped.
 
 ## Boundary rules (the load-bearing invariants)

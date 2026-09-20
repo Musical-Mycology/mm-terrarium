@@ -3111,8 +3111,9 @@ the folder at `test/contract/`.
 - `limits`: `{"max_message_bytes": 4096, "dev_id_max_len": <int from the code>, "reserved_dev_ids": [<from the code>]}`
 - `lifecycle`: `{"hello_interval_s": 5.0, "stale_timeout_s": 15.0, "lobby_double_tap_window_s": 1.5, "cue_horizon_s": <float from the code>, "bench_tolerance_ms": {"frame": 50, "heartbeat": 1000}}`
 - `instruments`: `{"tuneshroom_rev1": {"instrument": <carried_instrument_view>, "triggers": {<trigger name>: {<key>: number}}}}`
+- `lifecycle_notes`: a one-sentence prose companion per `lifecycle` key, keyed the same way, stating what the number means and its unit (for example what `hello_interval_s` governs, or what `bench_tolerance_ms`'s two sub-keys measure).
 - `scenarios`: a list sorted by `name`, one entry per committed scenario: `{"name": str, "profiles": [str, ...], "summary": str}` -- lets a device repo assert it holds the full committed set without globbing.
-- `step_schema`: every step kind and field described below (with types, units and what each placeholder means), plus the tolerance and link-down-delivery rules, so a device author holding only this export folder can write a replay runner from it alone.
+- `step_schema`: every step kind and field described below (with types, units and what each placeholder means, and which fields each placeholder actually appears in), plus the tolerance, link-down-delivery and hello/heartbeat/no-resume rules, so a device author holding only this export folder can write a replay runner from it alone. A `notation` entry explains that a "fields" object describes an object-payload step kind and a "payload" string describes a scalar-payload one (currently only `link`). Cross-references between keys are backtick-quoted dotted paths (for example `` `lifecycle.hello_interval_s` ``) that resolve inside the exported document itself.
 - `replay_notes`: a list of plain sentences stating replay rules a scenario file alone does not (which control_sends steps are hand-authored and why, stated inline, never as a pointer to a file outside this export).
 
 Scenario file keys (note: unlike `contract.json`, a scenario file carries
