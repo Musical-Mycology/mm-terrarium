@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = REPO_ROOT / "contract_kit" / "recordings"
 
 
-def main(argv: list[str] | None = None) -> None:
+def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for scenario_fn in ALL_SCENARIOS:
         data = scenario_fn()

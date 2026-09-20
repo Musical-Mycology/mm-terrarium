@@ -28,8 +28,10 @@ pytest.importorskip("luxaeterna")
 from contract_kit.contract_bit import (CONTRACT_PLAYER_NODE, KNOWN_SAMPLE,
                                        UNKNOWN_SAMPLE)
 from contract_kit.recorder import CUE_HORIZON_S, Recorder
-from contract_kit.scenarios import (ALL_SCENARIOS, NO_SUCH_NODE,
-                                    SIGNATURE_SETTLED_MS)
+from contract_kit.scenarios import (ALL_SCENARIOS, AUTHORED_NEWER_AT,
+                                    AUTHORED_NEWER_GRB, AUTHORED_OLDER_AT,
+                                    AUTHORED_OLDER_GRB, AUTHORED_PAIR_T,
+                                    NO_SUCH_NODE, SIGNATURE_SETTLED_MS)
 from devicelink.contract import row_for, typespec_allowed
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,6 +128,17 @@ def test_recording_matches_committed_json(scenario_fn):
         f"{fresh['name']} has drifted from its committed recording; re-run "
         f"`.venv/bin/python -m tools.record_scenarios` and review the diff "
         f"before committing")
+
+
+@pytest.mark.parametrize("scenario_fn", ALL_SCENARIOS, ids=lambda f: f.__name__)
+def test_the_committed_bytes_are_the_agreed_serialization(scenario_fn):
+    """The export format is UTF-8, `indent=2`, `sort_keys=True` and a
+    trailing newline. Every device repo diffs these files on re-export, so a
+    hand edit or a different writer that happens to parse the same would
+    still churn every one of them."""
+    path = RECORDINGS / f"{scenario_fn.__name__}.json"
+    raw = path.read_text(encoding="utf-8")
+    assert raw == json.dumps(json.loads(raw), indent=2, sort_keys=True) + "\n"
 
 
 def test_every_scenario_has_a_recording_and_nothing_else_is_committed():
@@ -283,26 +296,43 @@ def test_timed_frames_show_at_their_stamp_then_hold():
     # Onset + ContractBit's half-second lead + the cue horizon.
     assert look["control_sends"]["at"] == SIGNATURE_SETTLED_MS + 500 + HORIZON_MS
 
-    # Clause 2: two cues fell due together (both taps share one onset) and
-    # Control emitted ONE frame for them, carrying the newer cue's value.
-    # The comparison run taps once at the same moment, so the only
-    # difference between the two is the second cue.
+    # Clause 2, device side: the hand-authored pair. Two frames on ONE send
+    # time with two presentation times, both already past by the check that
+    # follows, and the NEWER one sent first, so a device that shows whatever
+    # arrived last records the wrong answer.
+    checks = _kind(data, "expect_frame")
+    assert [s["t"] for s in checks] == [SIGNATURE_SETTLED_MS, 5500, 6500,
+                                        12000]
+    pair = [s for s in frames if s["t"] == AUTHORED_PAIR_T]
+    assert len(pair) == 2
+    assert [s["control_sends"]["at"] for s in pair] == [AUTHORED_NEWER_AT,
+                                                        AUTHORED_OLDER_AT]
+    assert pair[0]["control_sends"]["at"] > pair[1]["control_sends"]["at"]
+    assert pair[0]["control_sends"]["args"][0] == AUTHORED_NEWER_GRB
+    assert pair[1]["control_sends"]["args"][0] == AUTHORED_OLDER_GRB
+    newest_check = checks[2]
+    assert newest_check["t"] > AUTHORED_NEWER_AT > AUTHORED_OLDER_AT
+    assert newest_check["expect_frame"]["grb"] == AUTHORED_NEWER_GRB
+    # Nothing real intervenes: Control had gone quiet well before the pair.
+    real_frames = [s for s in frames if s["t"] != AUTHORED_PAIR_T]
+    assert real_frames[-1]["t"] < AUTHORED_PAIR_T
+
+    # Clause 2, Control side: the two cues that fell due together (both taps
+    # share one onset) were collapsed into that single early-stamped frame,
+    # and it carries the NEWER cue's value. The comparison run taps once at
+    # the same moment, so the second cue is the only difference between them.
     onsets = [s["t"] for s in _outs(data, "/game/tap")]
     assert onsets == [SIGNATURE_SETTLED_MS, SIGNATURE_SETTLED_MS]
     assert len([s for s in frames
                 if s["control_sends"]["at"] == look["control_sends"]["at"]]) == 1
-    one_tap = _one_tap_control()
-    assert frames[-1]["control_sends"]["args"][0] != one_tap, (
+    assert real_frames[-1]["control_sends"]["args"][0] != _one_tap_control(), (
         "the second cue due at that moment made no difference, so this "
         "scenario no longer shows that the newest of several wins")
 
-    # Clause 3: the frames stop, and the last one is still what shows more
-    # than five seconds later.
-    checks = _kind(data, "expect_frame")
-    assert [s["t"] for s in checks] == [SIGNATURE_SETTLED_MS, 2600, 10000]
-    assert frames[-1]["t"] < 5000
-    assert checks[-1]["expect_frame"]["grb"] == frames[-1]["control_sends"]["args"][0]
-    assert checks[-1]["t"] - frames[-1]["t"] > 5000
+    # Clause 3: the frames stop, and the last one is still what shows almost
+    # six seconds later.
+    assert checks[-1]["expect_frame"]["grb"] == AUTHORED_NEWER_GRB
+    assert checks[-1]["t"] - AUTHORED_NEWER_AT > 5000
 
 
 def _one_tap_control():
@@ -477,14 +507,11 @@ def test_malformed_input_is_dropped_and_the_device_carries_on():
     assert all(reasons) and len(set(reasons)) == 3
 
     bad_t = bad[0]["t"]
-    # Nothing changed: the only role is the one granted before they arrived,
-    # and Control raised no error over them.
-    roles = [s["t"] for s in _sends(data, "/$DEV/role")
-             if not s["control_sends"].get("malformed")]
-    assert roles == [0]
-    assert _sends(data, "/$DEV/error") == []
-    # A later valid gesture still round-trips, and a later valid frame still
-    # shows.
+    # Nothing here asserts that Control's own state survived them: these
+    # three messages are authored, never sent, and never reach Control, so
+    # such an assertion could not fail. What the scenario really pins is the
+    # DEVICE side, below: after dropping all three it still round-trips a
+    # valid gesture and still shows a valid frame.
     play = _kind(data, "expect_play")[0]
     assert play["t"] > bad_t and play["expect_play"]["name"] == KNOWN_SAMPLE
     frame = _kind(data, "expect_frame")[0]

@@ -25,6 +25,11 @@ recording:
    cues. A timed look sent during it changes nothing a device can see, so
    `timed_frames_hold_last` waits for the signature to settle before it
    taps. See that scenario's docstring.
+One rule for replay runners, which applies to every scenario and bites in
+`link_loss_rejoin`: a runner must not deliver any `control_sends` step while
+the scenario's link is down. Those steps record what Control really sends,
+and a device with its link down receives none of them.
+
 3. The closing fade's last frame is a dim non-black frame, not black, and
    `/$DEV/release` follows it on the wire in the same millisecond while
    carrying no presentation time of its own. See `release_keeps_display`
@@ -47,10 +52,24 @@ NO_SUCH_NODE = "NO_SUCH_NODE"
 POST_ROLE_GESTURES = ["/game/hold", "/game/swing"]
 
 # How long ContractBit's player-role opening signature runs before the
-# role's own light manifest reaches the pixels. Measured from the recordings
-# (the last signature frame is sent at t=1503); scenarios that need a light
-# cue to be VISIBLE wait past this.
+# role's own light manifest reaches the pixels. Measured from the
+# recordings: the last signature frame is sent at t=1518 in
+# explicit_join_role, release_keeps_display and timed_frames_hold_last, and
+# at t=1503 in play_known_and_unknown, whose early tap shifts the tick phase
+# by one partial tick. Scenarios that need a light cue to be VISIBLE, or an
+# expect_frame that is not within one render tick of a frame change, wait
+# past this.
 SIGNATURE_SETTLED_MS = 2000
+
+# The hand-authored pair in timed_frames_hold_last. Two frames on one send
+# time with different presentation times, in colors no real frame in any
+# recording carries (pure blue and pure green in GRB order), so a device
+# showing the wrong one is unmistakable.
+AUTHORED_NEWER_GRB = [0, 0, 255] * 12
+AUTHORED_OLDER_GRB = [255, 0, 0] * 12
+AUTHORED_PAIR_T = 6000
+AUTHORED_NEWER_AT = 6200
+AUTHORED_OLDER_AT = 6100
 
 
 def boot_hello_heartbeat() -> dict:
@@ -115,38 +134,54 @@ def lobby_tap_join() -> dict:
                    join_node=None, with_room=True)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.advance_to(100)
-    rec.expect_frame(100)                  # the invite's first white flash
+    # Both frame checks sit near the middle of a 200 ms flash, clear of the
+    # render tick either side of it.
+    rec.advance_to(150)
+    rec.expect_frame(150)                  # the invite's first white flash
     rec.tap(1000, duration_ms=80.0)
     rec.tap(1600, duration_ms=80.0)        # 600 ms later, inside the window
-    rec.advance_to(1700)
-    rec.expect_frame(1700)                 # the accept flash, after the role
+    rec.advance_to(1750)
+    rec.expect_frame(1750)                 # the accept flash, after the role
     rec.advance_to(3500)
     rec.expect_play(3500, "chime")
     return rec.finish()
 
 
 def timed_frames_hold_last() -> dict:
-    """Rule 3, all three clauses: a frame shows at its own presentation
-    time, only the newest of several due shows, and the last frame holds
-    through silence.
+    """Rule 3, all three clauses.
 
-    The two taps share one onset, so ContractBit stamps both light cues for
-    the same moment with different values (40, then 100). Control collapses
-    them into ONE `/$DEV/leds` frame, stamped `at` the cue's own
-    presentation time rather than the tick it was sent on, and that frame
-    carries the SECOND cue's hue: the newest wins. Frames then stop for
-    good once the glide settles, and the closing `expect_frame` is more than
-    five seconds of silence later.
+    **A frame shows at its own presentation time.** The two taps share one
+    onset, so ContractBit stamps both light cues for the same moment.
+    Control collapses them into ONE `/$DEV/leds` frame carrying the SECOND
+    cue's hue, and stamps that frame `at` the cue's own presentation time
+    rather than at the tick it was sent on: it is the only frame in the file
+    whose `at` is earlier than its send time plus the cue horizon.
+
+    **When several are due, only the newest shows.** Control's own stream
+    never does this: it sends frames 23 ms apart, each stamped one cue
+    horizon ahead, so a device is never asked to choose. The pair at
+    t=AUTHORED_PAIR_T is therefore HAND-AUTHORED, like the three broken
+    inputs in `malformed_dropped`: two `/$DEV/leds` messages on one send
+    time, the NEWER presentation time sent first, so a device that simply
+    shows whatever arrived last fails the `expect_frame` that follows. Both
+    are due by then, and the expectation is the newer one. They sit well
+    after the look has settled and gone quiet, so they cannot be confused
+    with the glide.
+
+    **The last frame holds through silence.** The closing `expect_frame`
+    at 12000 is that same hand-authored newer frame, still showing almost
+    six seconds later.
 
     The taps wait for SIGNATURE_SETTLED_MS on purpose. A newly granted
     session plays a ~1.5 s opening signature that ignores light cues
     entirely, so a look sent inside that window is recorded but invisible,
     which would have made this scenario pass without testing anything.
+    Every `expect_frame` here is also placed well clear of the nearest frame
+    change, so a runner's one-render-tick of slack cannot decide any of them.
     """
     rec = Recorder(name="timed_frames_hold_last",
                    summary="A future-stamped frame shows at its time; of "
-                           "two cues due together only the newest shows; "
+                           "two frames due together only the newest shows; "
                            "the last frame holds through silence",
                    join_node=CONTRACT_PLAYER_NODE)
     rec.link_up(0)
@@ -155,10 +190,19 @@ def timed_frames_hold_last() -> dict:
     rec.expect_frame(SIGNATURE_SETTLED_MS)   # the settled role look
     rec.tap(SIGNATURE_SETTLED_MS, duration_ms=80.0)
     rec.tap(SIGNATURE_SETTLED_MS, duration_ms=80.0)
-    rec.advance_to(2600)
-    rec.expect_frame(2600)                   # the look, at its own stamp
-    rec.advance_to(10000)
-    rec.expect_frame(10000)                  # still holding, long after
+    rec.advance_to(5500)
+    rec.expect_frame(5500)                   # the look, settled and quiet
+    rec.advance_to(AUTHORED_PAIR_T)
+    # Hand-authored, newest presentation time FIRST (see the docstring).
+    rec.control_send_now("/$DEV/leds", "b", [AUTHORED_NEWER_GRB],
+                         at=AUTHORED_NEWER_AT)
+    rec.control_send_now("/$DEV/leds", "b", [AUTHORED_OLDER_GRB],
+                         at=AUTHORED_OLDER_AT)
+    rec.advance_to(6500)
+    rec.expect_frame(6500)                   # the newer of the two, not the
+                                             # one that arrived last
+    rec.advance_to(12000)
+    rec.expect_frame(12000)                  # still holding, long after
     return rec.finish()
 
 
@@ -242,9 +286,10 @@ def release_keeps_display() -> dict:
     rec.advance_to(3000)
     rec.expect_frame(3000)                   # the last fade frame
     rec.expect_quiet(3000, POST_ROLE_GESTURES, 5000)
+    rec.advance_to(5000)
+    rec.expect_hello(5000)                   # the heartbeat, after release
     rec.advance_to(8000)
     rec.expect_frame(8000)                   # still holding, 5 s later
-    rec.expect_hello(5000)
     return rec.finish()
 
 
@@ -279,8 +324,11 @@ def link_loss_rejoin() -> dict:
     there to hear it. When the link comes back the device hellos and joins
     again from scratch, and the join is granted again.
 
-    The `/$DEV/release` recorded during the link-down window is Control's
-    real behavior, and a replaying device is expected to never receive it.
+    A replay runner must NOT deliver any `control_sends` step while the
+    scenario's link is down. The 27 `/$DEV/leds` frames and the
+    `/$DEV/release` recorded between `link: down` at 2000 and `link: up` at
+    17000 are what Control really sends; the device never receives any of
+    them, which is the whole point of the scenario.
     """
     rec = Recorder(name="link_loss_rejoin",
                    summary="After 15 s of silence Control drops the device; "
