@@ -508,22 +508,98 @@ void link_join(const char *node) {
 bool link_joined() { return joined; }
 void link_on_frame(void (*cb)(double, const uint8_t *, int)) { frame_cb = cb; }
 void link_on_play(void (*cb)(const char *, const char *)) { play_cb = cb; }
+// D5: release ends the role but must not clear the display -- release_cb
+// is free to leave the last frame exactly where frames_tick() put it.
 void link_on_release(void (*cb)()) { release_cb = cb; }
 ```
 
-Call `register_methods()` at the end of `link_begin()`, after
-`o2l_set_services`. In `link_poll()`, after the heartbeat, add: if synced,
-not joined, and 3 s have passed since the last join attempt, call
-`link_join(JOIN_NODE)` (mirrors `--join-every` in `o2_shroom.py`). Add
+`register_methods()` is called ONCE, from the end of `link_begin()`, guarded
+by a static bool -- `o2l_method_new` only ever APPENDS a handler and never
+removes one, so calling `register_methods()` again on every reconnect
+(Step 2 re-runs `link_begin()`) would register each address's handler
+again on every reconnect and o2litepy/o2lite always dispatches to the
+FIRST match, silently freezing every handler at its state from the first
+registration:
+
+```cpp
+// src/link/link.cpp (link_begin, revised)
+static bool handlers_registered = false;
+
+void link_begin() {
+  connect_to_wifi(DEVICE_NAME, WIFI_SSID, WIFI_PASS);   // blocks until joined
+  o2l_initialize(ENSEMBLE);
+  o2l_set_services(DEVICE_NAME);
+  if (!handlers_registered) { register_methods(); handlers_registered = true; }
+  Serial.printf("O2LITE INIT ensemble=%s service=%s\n", ENSEMBLE, DEVICE_NAME);
+}
+```
+
+In `link_poll()`, after the heartbeat, add: if synced, not joined, and 3 s
+have passed since the last join attempt, call `link_join(JOIN_NODE)`
+(mirrors `--join-every` in `o2_shroom.py`). Add
 `-DJOIN_NODE=\"MUSHICA_PLAYER_NODE\"` to the `tuneshroom` env in
 `platformio.ini`.
 
-- [ ] **Step 2: Reconnect**
+- [ ] **Step 2: Reconnect, and re-check service ownership when the bridge changes**
 
-In `link_poll()`, if `WiFi.status() != WL_CONNECTED`, call `o2l_finish()`,
-then `link_begin()` again, and reset `joined = false`. Test it by power
-cycling the AP: the device must be back in the Console list within 30 s of
-the AP returning, with no reflash.
+o2lite auto-reconnects and stamps a new `o2l_bridge_id` when it does; a
+device that keeps running against a stale claim on `DEVICE_NAME` would
+sync its clock fine while every reply Control sends is silently dropped
+by the hub. Track the bridge id and re-verify ownership whenever it
+changes -- the same shape `harness/o2_shroom.py`'s `reconnect_recheck`
+already uses on the Python side, hand-rolled here the same way
+`devicelink/o2_transport.py`'s `verify_service_ownership` is: register a
+handler for `/DEVICE_NAME/_svcheck`, send a fixed nonce over TCP, and wait
+for it to route back.
+
+```cpp
+// src/link/link.cpp (additions)
+static long last_bridge_id = -1;
+static bool svcheck_received = false;
+static const int32_t SVCHECK_NONCE = 0x5643484B;   // "VCHK", matches the Python check
+
+static void on_svcheck(o2l_msg_ptr, const char *, void *, void *) {
+  if (o2l_get_int32() == SVCHECK_NONCE) svcheck_received = true;
+}
+
+static bool verify_ownership(double timeout_s) {
+  char addr[40];
+  snprintf(addr, 40, "/%s/_svcheck", DEVICE_NAME);
+  svcheck_received = false;
+  o2l_method_new(addr, "i", true, on_svcheck, NULL);
+  o2l_send_start(addr, 0, "i", true);   // tcp, same as the Python check
+  o2l_add_int32(SVCHECK_NONCE);
+  o2l_send();
+  double deadline = link_time() + timeout_s;
+  while (!svcheck_received && link_time() < deadline) { o2l_poll(); delay(5); }
+  return svcheck_received;
+}
+
+void link_poll() {
+  o2l_poll();
+  if (link_synced()) {
+    double now = link_time();
+    if (now - last_hello >= HEARTBEAT_S) { link_hello(); last_hello = now; }
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    o2l_finish();
+    link_begin();
+    joined = false;
+    last_bridge_id = -1;                 // force a fresh ownership check below
+  }
+  if (link_synced() && o2l_bridge_id != last_bridge_id) {
+    bool owned = verify_ownership(2.0);
+    Serial.printf("BRIDGE %ld -> %ld, ownership %s\n",
+                  last_bridge_id, o2l_bridge_id, owned ? "OK" : "LOST");
+    last_bridge_id = o2l_bridge_id;
+    if (!owned) joined = false;          // never trust a role granted on a service we no longer own
+  }
+}
+```
+
+Test by power cycling the AP: the device must be back in the Console list
+within 30 s of the AP returning, with no reflash, and `BRIDGE ... OK`
+printed once per reconnect rather than once per `link_poll()` call.
 
 - [ ] **Step 3: Verify against a running Bit**
 
