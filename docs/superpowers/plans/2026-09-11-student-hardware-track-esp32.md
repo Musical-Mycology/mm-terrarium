@@ -823,10 +823,14 @@ git commit -m "feat(firmware): timed frame queue and current limiter on 12 GRBW 
 
 **Interfaces:**
 - Consumes: `link_time()`, `o2l_send_*` (through a `link_send_gesture` added here).
-- Produces on the wire, all with the device's O2 stamp as the message time:
-  - `/game/tap  "sffi"  dev, peak_g, duration_ms, count` (existing shape; `bits/test/test_bit.py` documents it)
-  - `/game/hold "sfi"   dev, held_seconds, count` (new verb, Task C2 handles it)
-  - `/game/swing "sfi"  dev, signed_peak_g, count` (new verb; negative = left)
+- Produces on the wire, all with the device's O2 stamp as the message time
+  (`devicelink/contract.py`'s verb table is the checked source for these shapes):
+  - `/game/tap  "sffi"  dev, peak_g, duration_ms, count` (peak_g is 0 for a
+    touch tap; count is always 1 -- Control pairs double taps itself)
+  - `/game/hold "sfi"   dev, held_seconds, count` (new verb, Task C2 handles it; count always 1)
+  - `/game/swing "sfi"  dev, signed_peak_g, count` (new verb; negative = left; count always 1)
+  `tap` may be sent before a role (the lobby's tap-to-join handshake);
+  `hold` and `swing` wait until `link_joined()` is true.
 
 - [ ] **Step 1: Write the failing test for the pure classifier**
 
@@ -971,13 +975,18 @@ void gestures_begin() {
 }
 
 static void send(const Gesture &g) {
+  // count is always 1 on Rev 1 -- Control pairs double taps from two
+  // separate count=1 messages (D6); tap_count/hold_count/swing_count
+  // below are diagnostics only, not the wire value.
   switch (g.kind) {
     case GESTURE_TAP:
-      link_send_gesture("/game/tap", g.at, "sffi", 0.0f, g.value * 1000.0f, ++tap_count); break;
+      link_send_gesture("/game/tap", g.at, "sffi", 0.0f, g.value * 1000.0f, 1); ++tap_count; break;
     case GESTURE_HOLD:
-      link_send_gesture("/game/hold", g.at, "sfi", g.value, 0.0f, ++hold_count); break;
+      if (!link_joined()) return;   // hold waits for a role
+      link_send_gesture("/game/hold", g.at, "sfi", g.value, 0.0f, 1); ++hold_count; break;
     case GESTURE_SWING:
-      link_send_gesture("/game/swing", g.at, "sfi", g.value, 0.0f, ++swing_count); break;
+      if (!link_joined()) return;   // swing waits for a role
+      link_send_gesture("/game/swing", g.at, "sfi", g.value, 0.0f, 1); ++swing_count; break;
     default: return;
   }
   Serial.printf("GESTURE %d at=%.3f value=%.3f\n", g.kind, g.at, g.value);
