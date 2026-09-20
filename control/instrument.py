@@ -23,6 +23,8 @@ CAPABILITY_VOCABULARY: frozenset[str] = frozenset({
     "audio.mic",       # a microphone input reachable
     "gesture.tap",
     "gesture.tilt",
+    "gesture.hold",    # a held press/touch, reported via /game/hold
+    "gesture.swing",   # a signed lateral swing, reported via /game/swing
 })
 
 CUE_KINDS: tuple[str, ...] = ("midi", "play", "solid", "mute")

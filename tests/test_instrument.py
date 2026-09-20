@@ -142,7 +142,8 @@ def test_carried_instrument_pairs_instrument_and_dev():
 def test_vocabulary_and_cue_kinds_are_the_documented_sets():
     assert CAPABILITY_VOCABULARY == frozenset({
         "light.pixels", "light.surface", "audio.flsyn", "audio.samples",
-        "audio.mic", "gesture.tap", "gesture.tilt"})
+        "audio.mic", "gesture.tap", "gesture.tilt", "gesture.hold",
+        "gesture.swing"})
     assert CUE_KINDS == ("midi", "play", "solid", "mute")
 
 
@@ -205,6 +206,14 @@ def test_light_pixels_requires_the_12_led_floor():
         name="ok", capabilities=frozenset({"light.pixels"}), pixels=12))
     validate_instrument(Instrument(  # non-light.pixels exempt
         name="surface", capabilities=frozenset({"light.surface"})))
+
+
+def test_gesture_hold_and_gesture_swing_are_valid_capabilities():
+    assert {"gesture.hold", "gesture.swing"} <= CAPABILITY_VOCABULARY
+    inst = Instrument(name="rev1-check", pixels=12,
+                      capabilities=frozenset({"light.pixels", "gesture.hold",
+                                              "gesture.swing"}))
+    validate_instrument(inst)   # must not raise
 from control.instrument import SOLO_EVENTS, SoloConfig
 
 
