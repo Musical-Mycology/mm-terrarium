@@ -76,6 +76,13 @@ def next_heartbeat_time(now: float, interval: float) -> float:
 # enough that an unattended run still animates.
 SWEEP_RESUME_SECONDS = 5.0
 
+# The device's own re-hello cadence (GameServer.reap_stale expects a
+# heartbeat at least this often; see control/boot_config.py's
+# stale_timeout). Named here so tools/export_contract.py's "lifecycle"
+# section and its test can read the one place this number is defined,
+# instead of a bare literal buried in main()'s argparse default.
+HELLO_INTERVAL_S = 5.0
+
 
 def wants_verb(config: dict | None, verb: str) -> bool:
     """Whether the granted role wants this synthetic gesture. The role blob
@@ -443,7 +450,8 @@ def main() -> None:
                              "which is the only reliable ordering while the "
                              "upstream /host/clear defect stands (see "
                              "terrarium_boot's --arco-start-audio).")
-    parser.add_argument("--heartbeat-interval", type=float, default=5.0,
+    parser.add_argument("--heartbeat-interval", type=float,
+                         default=HELLO_INTERVAL_S,
                         help="Resend /game/hello every N seconds while "
                              "connected, so Control's GameServer.reap_stale "
                              "does not time this device out for going "
