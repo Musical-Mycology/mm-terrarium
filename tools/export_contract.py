@@ -70,16 +70,21 @@ def _hello_semantics_sentence() -> str:
     lifecycle_notes.hello_interval_s, built from devicelink/contract.py's
     own hello row so it cannot drift from the verb table."""
     hello = row_for("up", "hello")
+    bare = hello.typespecs[0]
     longest = hello.typespecs[-1]
     args = ", ".join(hello.args)
-    return (f"On \"up\", the device sends /game/hello (typespec "
-           f"\"{longest}\": {args}) once the link is up, then repeats it "
-           f"every `lifecycle.hello_interval_s` seconds while the link "
-           f"stays up (spec section 4.3, rule 1). On \"down\", the device "
-           f"sends nothing and receives nothing. There is no session "
-           f"resume: after `lifecycle.stale_timeout_s` seconds of "
-           f"silence, Control has dropped the device, which must join "
-           f"again (spec section 4.3, rule 7).")
+    return (f"On \"up\", the device sends /game/hello over "
+            f"{hello.transport} (typespec \"{longest}\": {args}) once "
+            f"the link is up, then repeats it every "
+            f"`lifecycle.hello_interval_s` seconds while the link stays "
+            f"up (spec section 4.3, rule 1). The verb table also allows "
+            f"the bare \"{bare}\" form, but a device declares its "
+            f"instrument in the fourth argument (\"{hello.args[-1]}\"), "
+            f"and Rev 1 devices always send \"{longest}\". On \"down\", "
+            f"the device sends nothing and receives nothing. There is "
+            f"no session resume: after `lifecycle.stale_timeout_s` "
+            f"seconds of silence, Control has dropped the device, which "
+            f"must join again (spec section 4.3, rule 7).")
 
 
 # What every step kind in every committed recording looks like: every
@@ -107,8 +112,10 @@ STEP_SCHEMA = {
     "t": (
         "int; milliseconds since the scenario's own start. `steps` is "
         "sorted by `t`, ascending, stably: steps sharing one `t` are "
-        "delivered and checked in file order, and file order within one "
-        "`t` is the order those things happened while recording."
+        "delivered and checked in file order. Within one `t`, a "
+        "captured control_sends step keeps its real relative order "
+        "among other captured control_sends steps; a runner should "
+        "otherwise use the file order across kinds."
     ),
     "tolerance": (
         "In-process replay runs on a fake clock and allows an "
@@ -313,14 +320,16 @@ LIFECYCLE_NOTES = {
     "cue_horizon_s": (
         "Seconds of lead time Control adds when it schedules a cue, "
         "becoming the presentation time (`at`) on the /leds message the "
-        "device receives; every recorded `at` in every scenario assumes "
-        "this value."
+        "device receives. A captured /leds control_sends step is stamped "
+        "about one cue horizon after it is sent; the hand-authored steps "
+        "named in `replay_notes` carry other leads. A runner must always "
+        "use each step's own `at` and never compute it."
     ),
     "bench_tolerance_ms": (
-        "Milliseconds of slack a live bench replay allows past a step's "
-        "own tolerance: frame for how late an expect_frame's pixels may "
-        "still appear, heartbeat for how late a /game/hello resend may "
-        "still arrive."
+        "Milliseconds of slack a live bench replay uses instead of "
+        "`step_schema.tolerance`: frame for how late an expect_frame's "
+        "pixels may still appear, heartbeat for how late a /game/hello "
+        "resend may still arrive."
     ),
 }
 

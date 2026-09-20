@@ -35,13 +35,19 @@ RECORDINGS_DIR = ROOT / "contract_kit" / "recordings"
 # the whole kind).
 SCHEMA_ENTRIES_NOT_YET_RECORDED: dict[tuple[str, str | None], str] = {}
 
-# Backticked dotted paths (`a.b.c`) inside step_schema/replay_notes text,
-# where the first segment names one of these top-level contract.json
-# keys, must resolve inside the emitted document. A dotted mention like
-# `control_sends.address` does NOT start with a top-level key (there is
-# no top-level "control_sends" in contract.json -- it names a step kind
-# and field instead), so it is correctly skipped by this filter.
+# Backticked dotted paths (`a.b.c`) inside step_schema/replay_notes/
+# lifecycle_notes text must resolve either from the document root or
+# from step_schema itself (some mentions name a step_schema key without
+# repeating "step_schema." -- see check_dotted_cross_references). A token
+# that resolves from neither is a real defect, unless it names a known
+# non-reference shape listed in NON_REFERENCE_DOTTED_TOKENS below.
 _DOTTED_REF_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)`")
+
+# Backticked dotted tokens known to not be cross-references, with the
+# reason. Kept empty on purpose: every backticked dotted token in
+# step_schema/replay_notes/lifecycle_notes today resolves from the
+# document root or from step_schema.
+NON_REFERENCE_DOTTED_TOKENS: dict[str, str] = {}
 
 
 def _stale_timeout_default() -> float:
@@ -276,6 +282,10 @@ def test_step_schema_matches_the_recordings_exactly():
                     f"step_schema describes {kind}.{field_name}, which "
                     f"no recording contains and which is not "
                     f"allow-listed")
+        else:
+            pytest.fail(
+                f"step_schema describes kind {kind!r} with neither "
+                f"\"payload\" nor \"fields\"")
 
 
 def test_placeholders_name_every_field_they_actually_appear_in():
@@ -301,22 +311,41 @@ def test_placeholders_name_every_field_they_actually_appear_in():
             f"but no recording puts {ph!r} there")
 
 
-def test_every_dotted_cross_reference_resolves_in_the_export():
-    data = export_contract(commit="abc123")
-    texts = list(_all_strings(data["step_schema"])) + list(data["replay_notes"])
+def check_dotted_cross_references(data: dict) -> tuple[list[str], int]:
+    """(failures, checked): every backticked dotted path in step_schema,
+    replay_notes and lifecycle_notes, resolved from the document root or
+    (failing that) from step_schema itself, unless allow-listed in
+    NON_REFERENCE_DOTTED_TOKENS. `failures` names every token that
+    resolved from neither. Shared by the test below and by a one-off
+    script proving a broken reference is caught."""
+    texts = (list(_all_strings(data["step_schema"]))
+            + list(data["replay_notes"])
+            + list(_all_strings(data["lifecycle_notes"])))
+    failures = []
     checked = 0
     for text in texts:
         for path in _DOTTED_REF_RE.findall(text):
-            top = path.split(".", 1)[0]
-            if top not in data:
-                continue  # not a reference into contract.json (e.g. a
-                          # "kind.field" mention like control_sends.address)
+            if path in NON_REFERENCE_DOTTED_TOKENS:
+                continue
             checked += 1
             try:
                 _resolve_dotted_path(data, path)
+                continue
+            except (KeyError, TypeError):
+                pass
+            try:
+                _resolve_dotted_path(data["step_schema"], path)
             except (KeyError, TypeError) as exc:
-                pytest.fail(f"backticked reference `{path}` does not "
-                           f"resolve in the export: {exc!r}")
+                failures.append(f"backticked reference `{path}` does not "
+                                f"resolve from the document root or from "
+                                f"step_schema: {exc!r}")
+    return failures, checked
+
+
+def test_every_dotted_cross_reference_resolves_in_the_export():
+    data = export_contract(commit="abc123")
+    failures, checked = check_dotted_cross_references(data)
+    assert not failures, "; ".join(failures)
     assert checked > 0, "no dotted cross-references found -- test is not exercising anything"
 
 
