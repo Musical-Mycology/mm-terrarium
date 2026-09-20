@@ -406,7 +406,9 @@ void loop() {
 ```
 
 `INSTRUMENT_NAME` is defined in `config.h` (Task 0.3's scaffold, next to
-`HEARTBEAT_S`).
+`HEARTBEAT_S`), defaulting to `"testshroom"` for TEST-room bring-up (D10).
+Task B4 Step 2 flips it to `"tuneshroom_rev1"` once the board is ready to
+join Mushica.
 
 - [ ] **Step 3: Build and flash; watch for sync and hello**
 
@@ -1493,7 +1495,25 @@ git commit -m "docs(hardware): Tower build, injection readings, controller in ba
 
 - [ ] **Step 1: Assemble the first article in its body with the tap-source decision from B2 applied**
 
-- [ ] **Step 2: Gate 1 (Fri Oct 9), recorded on video**
+- [ ] **Step 2: Declare `tuneshroom_rev1` before the board joins Mushica (D10)**
+
+Testshroom bring-up (Task 0.3 onward) built with `INSTRUMENT_NAME`
+defaulting to `"testshroom"` (`config.h`). Mushica's player role now
+`requires="rev1"` (Task C2), naming `gesture.hold` and `gesture.swing`
+among the capabilities it needs; `testshroom` does not declare either, so
+a board still on the default would be refused the same way a plain
+Testshroom is (Task C2 Step 5). In mm-devshroom's `config.h`, change
+`#define INSTRUMENT_NAME "testshroom"` to `#define INSTRUMENT_NAME
+"tuneshroom_rev1"`, rebuild and reflash the `tuneshroom` env, and commit
+the change there before Gate 1:
+
+```bash
+# in mm-devshroom
+git add .
+git commit -m "feat(firmware): declare tuneshroom_rev1 for Mushica (D10)"
+```
+
+- [ ] **Step 3: Gate 1 (Fri Oct 9), recorded on video**
 
 With Chris: `./terrarium.sh --room TOWER` (Task C1), load Mushica (Task C2),
 Tuneshroom joins, Tower bound. Play one call-and-response phase. Check off:
@@ -1504,9 +1524,10 @@ Tuneshroom joins, Tower bound. Play one call-and-response phase. Check off:
 - [ ] the Tower pulses on the beat and the progress bar fills on hits
 
 Pass: continue. Fail: Chris declares the o2ws phone browser the committed
-Tuneshroom the same day; Task B5 is cancelled; Tower work continues.
+Tuneshroom the same day (its `?profile=rev1` hardware profile satisfies the
+same gate, spec section 6.1); Task B5 is cancelled; Tower work continues.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add docs/hardware/tuneshroom-runbook.md
@@ -1730,7 +1751,8 @@ git commit -m "feat(firmware): tower env JOIN_NODE set to the Room's node id"
 - Consumes: `control.bit.Bit`; `control.roles` (`Role`, `RoleClass`,
   `RoleTable`); `control.cues` (`ROOM`, `TARGET`, `FireFunction`,
   `PlayCue`); `control.functions` (`Condition`, `ConditionSource`,
-  `ScriptStep`, `Function`, `FunctionTable`, `FunctionTarget`); verbs `tap`
+  `ScriptStep`, `Function`, `FunctionTable`, `FunctionTarget`);
+  `control.instrument` (`InstrumentRequirement`); verbs `tap`
   (`args = [dev, peak_g, duration_ms, count]`), `hold` (`[dev,
   held_seconds, count]`), `swing` (`[dev, signed_g, count]`) from Task A4;
   Room zones `beat` and `progress` from Task C1.
@@ -2222,11 +2244,18 @@ Expected: 9 PASS.
 
 - [ ] **Step 5: Play it in the simulator with a Testshroom**
 
-`./terrarium.sh --room TOWER`, load Mushica from the Console, join a
-Testshroom or the o2ws phone page as the player. Expected: the Tower
-simulator's base zone pulses every beat; the four calls sound as vibraphone
-tones; a tap inside the window lights the player and raises the progress
-zone. Record a 30 s screen capture into the PR.
+`./terrarium.sh --room TOWER`, load Mushica from the Console, then join with
+`.venv/bin/python -m harness.o2_shroom --node MUSHICA_PLAYER_NODE
+--instrument tuneshroom_rev1` as the player. The `--instrument` flag must be
+set: `harness/o2_shroom.py`'s own default (`testshroom`) declares
+`instruments/testshroom.toml`'s capabilities, which lack `gesture.hold` and
+`gesture.swing`, so the `requires="rev1"` gate above refuses it. The o2ws
+phone page needs mm-tuneshroom's hardware profile (`?profile=rev1`, device
+contract kit spec section 6.1) to satisfy the same gate; that profile lands
+in mm-tuneshroom's own Phase 2, so use the Testshroom path until it does.
+Expected: the Tower simulator's base zone pulses every beat; the four calls
+sound as vibraphone tones; a tap inside the window lights the player and
+raises the progress zone. Record a 30 s screen capture into the PR.
 
 - [ ] **Step 6: Commit**
 
