@@ -4804,6 +4804,65 @@ react to on this path.
   now pins the broadcast (name + reason) and its ordering ahead of
   `room_unloaded`.
 
+### `devicelink/contract.py`, `contract_kit/`, `tools/export_contract.py` -- the device contract kit (2026-09-20)
+`docs/superpowers/specs/2026-09-16-device-contract-kit-design.md`, Phases 1
+and 3, landed. mm-terrarium now owns one checked contract for the device
+wire, shared by three programs that speak it: the Python Testshroom
+(`harness/`), the Flutter Tuneshroom app (mm-tuneshroom, over o2ws), and
+the Rev 1 ESP32 firmware (**mm-devshroom**, a new repo owned by Victor --
+not a `firmware/` directory here).
+
+- **Verb table.** `devicelink/contract.py` holds one row per verb, up
+  (`/game/<verb>`) and down (`/<dev>/<verb>`), each with its typespecs,
+  argument names, transport (`tcp`/`udp-ok`) and whether it is allowed
+  before a role; `devicelink/o2_transport.py`'s `GAME_VERBS` is derived
+  from its up rows, so a new up verb is added in exactly one place. Two new
+  up verbs, `hold` and `swing` (`sfi` each), carry Rev 1's touch-hold and
+  accelerometer-swing gestures.
+- **Capabilities.** `gesture.hold` and `gesture.swing` join
+  `CAPABILITY_VOCABULARY` (`control/instrument.py`).
+- **Catalog.** A new published instrument, `instruments/tuneshroom_rev1.toml`
+  (12 pixels; `light.pixels`, `gesture.tap`, `gesture.hold`,
+  `gesture.swing`, `audio.samples`; no ambient light, functions, or solo
+  table) -- what Bit testing gates a Rev 1-only role on, the way Mushica's
+  planned player role will.
+- **Contract Bit, recorder, export.** A test-only `ContractBit`
+  (`contract_kit/`, never registered under `bits/`) exercises join,
+  timed frames, gestures, deny, release and malformed input against a
+  recording rig built on `O2LiteTransport`/`FakeO2Lite`. The `Recorder`
+  runs at the production cue horizon (`contract_kit/recorder.py`'s
+  `CUE_HORIZON_S`, read off `BootConfig.cue_horizon`'s own field default,
+  never restated as a literal). Eleven scenarios are committed as JSON
+  (`contract_kit/recordings/`) and re-recorded with
+  `.venv/bin/python -m tools.record_scenarios`; a regression test fails on
+  any diff. `tools/export_contract.py <out-dir>` packages the verb table,
+  the Rev 1 instrument, the `lifecycle`/`limits` values (each read from the
+  constant that owns it), and the eleven scenarios -- copied byte for byte
+  from `contract_kit/recordings/` -- into the folder every device repo
+  commits at `test/contract/`.
+- **The change flow is one-way** (spec section 4.1): change the verb table
+  (and Control, if needed) here, re-record the scenarios, re-export into
+  each device repo, and that device's replay tests fail until it matches.
+  Device repos never edit a verb or a scenario themselves.
+- **Two recorded observations worth knowing, not spec prose:**
+  - `release_keeps_display` shows `/$DEV/release` going out in the same
+    millisecond as the closing fade's last `/$DEV/leds` frame and right
+    after it on the wire, but `release` carries no presentation time while
+    that last frame is stamped one cue horizon (60 ms) into the future --
+    so a device receives the release before the frame it names is due to
+    show. Spec decision D5 is why a device must tolerate that order.
+  - A newly granted role plays an opening signature (about 1.5 s,
+    `contract_kit/scenarios.py`'s `SIGNATURE_SETTLED_MS`) during which
+    light cues sent to the device change nothing visible; scenarios that
+    need a cue to be visible wait for the signature to settle first.
+- **Not yet built.** The mm-tuneshroom Rev 1 hardware profile and its
+  scenario replay runner; mm-devshroom's native (Arduino-free) replay
+  environment; the live bench replay feasibility spike (spec section 8);
+  and an executable Mushica capability-gate test, which waits on the
+  Mushica Bit to exist.
+- **Suite at HEAD:** `.venv/bin/python -m pytest tests -v` -- 2536 passed,
+  1 skipped.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
