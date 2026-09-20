@@ -13,13 +13,13 @@
 against the Terrarium on a Mac by Fri Oct 30 (Alt Ctrl), and again from a
 cold start with a spare Tuneshroom by Fri Nov 13 (Dry Run 2).
 
-**Architecture:** One firmware image (`firmware/`, PlatformIO, Arduino-ESP32
+**Architecture:** One firmware image (mm-devshroom, PlatformIO, Arduino-ESP32
 core) with two build targets: `tuneshroom` (sensors, 12 pixels, speaker) and
 `tower` (120 pixels, no sensors). Both are thin o2lite devices: they report
 timestamped gestures as `/game/<verb>` and display `/ie<N>/leds` frames at
 their O2 `when`. All experience logic lives in the Mushica Bit
 (`bits/mushica/`) on the Terrarium; the Tower is a Room fixture bound like any
-device. Nothing outside `firmware/src/link/` touches the radio, so the board
+device. Nothing outside `src/link/` touches the radio, so the board
 target can change without a rewrite.
 
 **Tech Stack:** ESP32-P4 + ESP32-C6 dev board (fallback: ESP32-S3), PlatformIO
@@ -34,14 +34,15 @@ Terrarium side: Python 3.12+, pytest, mm-terrarium `control/`, `bits/`,
 
 Every task's requirements implicitly include this section.
 
-- **Repos in play:** `mm-terrarium` (firmware, Bit, rooms, runbooks) and `o2`
-  (read-only; vendored, never edited). Paths below are relative to
-  `mm-terrarium` unless prefixed.
+- **Repos in play:** `mm-terrarium` (Bit, rooms, runbooks), `mm-devshroom`
+  (firmware, owned by Victor) and `o2` (read-only; vendored, never edited).
+  Paths below are relative to `mm-terrarium` unless prefixed; firmware paths
+  are relative to mm-devshroom's own repo root.
 - **Test command, mm-terrarium:** `.venv/bin/python -m pytest tests -v`
   (never a bare `python3`; see `docs/MM_TERRARIUM.md`).
 - **Build command, firmware:** `pio run -e tuneshroom` / `pio run -e tower`
-  from `firmware/`; flash with `pio run -e <env> -t upload`; serial with
-  `pio device monitor -b 115200`.
+  from mm-devshroom's repo root; flash with `pio run -e <env> -t upload`;
+  serial with `pio device monitor -b 115200`.
 - **Bare metal only. The bench runs on its own AP and flat subnet, never
   campus wireless.** o2lite discovery is mDNS (`_o2proc._tcp`); client
   isolation or mDNS filtering on the AP looks like a firmware bug.
@@ -289,10 +290,10 @@ git commit -m "feat(firmware): PlatformIO project, WiFi smoke on the bench AP"
 ## Task A1 [FW]: o2lite hello reaches Control
 
 **Files:**
-- Create: `firmware/src/link/o2lite/` (vendored copies of `o2/src/o2lite.c`,
+- Create: `src/link/o2lite/` (vendored copies of `o2/src/o2lite.c`,
   `o2lite.h`, `o2base.h`, `hostip.h`, `hostipimpl.h`, `o2liteesp32.cpp`,
-  `o2liteesp32.h`), `firmware/src/link/link.h`, `firmware/src/link/link.cpp`
-- Modify: `firmware/src/main.cpp`
+  `o2liteesp32.h`), `src/link/link.h`, `src/link/link.cpp`
+- Modify: `src/main.cpp`
 
 **Interfaces:**
 - Produces: `link_begin()`, `link_poll()`, `bool link_synced()`,
@@ -303,11 +304,11 @@ git commit -m "feat(firmware): PlatformIO project, WiFi smoke on the bench AP"
 - [ ] **Step 1: Vendor o2lite exactly as `o2/arduino/README.md` says**
 
 ```bash
-mkdir -p firmware/src/link/o2lite
+mkdir -p src/link/o2lite
 for f in o2lite.c o2lite.h o2base.h hostip.h hostipimpl.h o2liteesp32.cpp o2liteesp32.h; do
-  cp ~/projects/o2/src/$f firmware/src/link/o2lite/$f
+  cp ~/projects/o2/src/$f src/link/o2lite/$f
 done
-echo "Vendored from o2 commit $(git -C ~/projects/o2 rev-parse --short HEAD) on $(date +%F). Do not edit; report defects to Roger." > firmware/src/link/o2lite/VENDORED.md
+echo "Vendored from o2 commit $(git -C ~/projects/o2 rev-parse --short HEAD) on $(date +%F). Do not edit; report defects to Roger." > src/link/o2lite/VENDORED.md
 ```
 
 Do **not** copy `hostip.c` (the README says so; `hostipimpl.h` replaces it).
@@ -315,7 +316,7 @@ Do **not** copy `hostip.c` (the README says so; `hostipimpl.h` replaces it).
 - [ ] **Step 2: Write the link module**
 
 ```cpp
-// firmware/src/link/link.h
+// src/link/link.h
 #pragma once
 void link_begin();          // WiFi, o2l_initialize, set_services, methods
 void link_poll();           // call every loop()
@@ -325,7 +326,7 @@ void link_hello();          // /game/hello, resent every HEARTBEAT_S
 ```
 
 ```cpp
-// firmware/src/link/link.cpp
+// src/link/link.cpp
 #include <Arduino.h>
 #include "link.h"
 #include "config.h"
@@ -363,7 +364,7 @@ void link_hello() {
 ```
 
 ```cpp
-// firmware/src/main.cpp
+// src/main.cpp
 #include <Arduino.h>
 #include "config.h"
 #include "link/link.h"
@@ -388,7 +389,7 @@ void loop() {
 - [ ] **Step 3: Build and flash; watch for sync and hello**
 
 ```bash
-cd firmware && pio run -e tuneshroom -t upload && pio device monitor -b 115200
+pio run -e tuneshroom -t upload && pio device monitor -b 115200
 ```
 
 Expected: `O2LITE INIT`, then `CLOCK SYNCED t=...` within 10 s of WiFi,
@@ -404,20 +405,20 @@ grep -E "hello.*ie1|ie1.*hello" ~/projects/mm-terrarium/control.log | tail -3
 ```
 
 Expected: a hello line for `ie1`. Open the Console and confirm `ie1` is in
-the device list. Screenshot it into `firmware/README.md`.
+the device list. Screenshot it into `README.md`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/
+git add .
 git commit -m "feat(firmware): vendored o2lite, link module, /game/hello heartbeat reaches Control"
 ```
 
 ## Task A2 [FW]: Join, role, room, release, and reconnect
 
 **Files:**
-- Modify: `firmware/src/link/link.h`, `firmware/src/link/link.cpp`,
-  `firmware/src/main.cpp`
+- Modify: `src/link/link.h`, `src/link/link.cpp`,
+  `src/main.cpp`
 
 **Interfaces:**
 - Consumes: `link_*` from A1.
@@ -429,7 +430,7 @@ git commit -m "feat(firmware): vendored o2lite, link module, /game/hello heartbe
 - [ ] **Step 1: Add the handlers**
 
 ```cpp
-// firmware/src/link/link.cpp  (additions)
+// src/link/link.cpp  (additions)
 static void (*frame_cb)(double, const uint8_t *, int) = nullptr;
 static void (*play_cb)(const char *, const char *) = nullptr;
 static void (*release_cb)() = nullptr;
@@ -515,16 +516,16 @@ confirm by adding a one-line print in `on_release`.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add firmware/
+git add .
 git commit -m "feat(firmware): join, role/room/leds/play/release handlers, WiFi reconnect"
 ```
 
 ## Task A3 [FW]: Timed LED frames on the 12 pixels, with a current limiter
 
 **Files:**
-- Create: `firmware/src/render/frames.h`, `firmware/src/render/frames.cpp`,
-  `firmware/test/test_frames/test_frames.cpp`
-- Modify: `firmware/src/main.cpp`, `firmware/platformio.ini` (native test env)
+- Create: `src/render/frames.h`, `src/render/frames.cpp`,
+  `test/test_frames/test_frames.cpp`
+- Modify: `src/main.cpp`, `platformio.ini` (native test env)
 
 **Interfaces:**
 - Consumes: `link_on_frame`, `link_time`.
@@ -545,7 +546,7 @@ test_build_src = no
 ```
 
 ```cpp
-// firmware/test/test_frames/test_frames.cpp
+// test/test_frames/test_frames.cpp
 #include <unity.h>
 #include <string.h>
 #include "../../src/render/frames_core.h"   // pure part, no Arduino
@@ -596,13 +597,13 @@ int main() {
 
 - [ ] **Step 2: Run it to see it fail**
 
-Run: `cd firmware && pio test -e native`
+Run: `pio test -e native`
 Expected: compile error, `frames_core.h` not found.
 
 - [ ] **Step 3: Write the pure core**
 
 ```cpp
-// firmware/src/render/frames_core.h
+// src/render/frames_core.h
 #pragma once
 #include <stdint.h>
 
@@ -639,13 +640,13 @@ struct FrameQueue {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cd firmware && pio test -e native`
+Run: `pio test -e native`
 Expected: 5 tests PASS.
 
 - [ ] **Step 5: Write the Arduino half and wire it**
 
 ```cpp
-// firmware/src/render/frames.h
+// src/render/frames.h
 #pragma once
 #include <stdint.h>
 void frames_begin(int pin, int count, float max_amps);
@@ -655,7 +656,7 @@ int  frames_late();
 ```
 
 ```cpp
-// firmware/src/render/frames.cpp
+// src/render/frames.cpp
 #include <Adafruit_NeoPixel.h>
 #include "frames.h"
 #include "frames_core.h"
@@ -704,17 +705,17 @@ clamp figure is wanted; for this task the acceptance is visual plus
 - [ ] **Step 7: Commit**
 
 ```bash
-git add firmware/
+git add .
 git commit -m "feat(firmware): timed frame queue and current limiter on 12 GRBW pixels"
 ```
 
 ## Task A4 [FW]: Gestures with O2 timestamps: tap, hold, swing
 
 **Files:**
-- Create: `firmware/src/sense/gestures.h`, `firmware/src/sense/gestures.cpp`,
-  `firmware/src/sense/gestures_core.h`,
-  `firmware/test/test_gestures/test_gestures.cpp`
-- Modify: `firmware/src/main.cpp`, `firmware/include/config.h`
+- Create: `src/sense/gestures.h`, `src/sense/gestures.cpp`,
+  `src/sense/gestures_core.h`,
+  `test/test_gestures/test_gestures.cpp`
+- Modify: `src/main.cpp`, `include/config.h`
 
 **Interfaces:**
 - Consumes: `link_time()`, `o2l_send_*` (through a `link_send_gesture` added here).
@@ -726,7 +727,7 @@ git commit -m "feat(firmware): timed frame queue and current limiter on 12 GRBW 
 - [ ] **Step 1: Write the failing test for the pure classifier**
 
 ```cpp
-// firmware/test/test_gestures/test_gestures.cpp
+// test/test_gestures/test_gestures.cpp
 #include <unity.h>
 #include "../../src/sense/gestures_core.h"
 
@@ -783,13 +784,13 @@ int main() {
 
 - [ ] **Step 2: Run it to see it fail**
 
-Run: `cd firmware && pio test -e native -f test_gestures`
+Run: `pio test -e native -f test_gestures`
 Expected: compile error, `gestures_core.h` not found.
 
 - [ ] **Step 3: Write the pure core**
 
 ```cpp
-// firmware/src/sense/gestures_core.h
+// src/sense/gestures_core.h
 #pragma once
 enum GestureKind { GESTURE_NONE, GESTURE_TAP, GESTURE_HOLD, GESTURE_SWING };
 struct Gesture { GestureKind kind; double at; float value; };
@@ -825,20 +826,20 @@ struct SwingDetector {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cd firmware && pio test -e native -f test_gestures`
+Run: `pio test -e native -f test_gestures`
 Expected: 6 tests PASS.
 
 - [ ] **Step 5: Write the Arduino half**
 
 ```cpp
-// firmware/src/sense/gestures.h
+// src/sense/gestures.h
 #pragma once
 void gestures_begin();
 void gestures_poll(double now);     // reads touch + LIS3DH, sends verbs
 ```
 
 ```cpp
-// firmware/src/sense/gestures.cpp
+// src/sense/gestures.cpp
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_LIS3DH.h>
@@ -923,7 +924,7 @@ on the bench and record the final values in the runbook.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add firmware/
+git add .
 git commit -m "feat(firmware): touch tap/hold and accelerometer swing, sent with O2 stamps"
 ```
 
@@ -931,10 +932,10 @@ git commit -m "feat(firmware): touch tap/hold and accelerometer swing, sent with
 
 **Owner:** Victor (firmware), Sophia (measurement).
 **Files:**
-- Create: `firmware/src/audio/samples.h`, `firmware/src/audio/samples.cpp`,
-  `firmware/data/tick.wav`, `firmware/data/hold.wav`, `firmware/tools/wav2h.py`,
+- Create: `src/audio/samples.h`, `src/audio/samples.cpp`,
+  `data/tick.wav`, `data/hold.wav`, `tools/wav2h.py`,
   `docs/hardware/tap-latency.md`
-- Modify: `firmware/src/main.cpp`, `firmware/src/sense/gestures.cpp`
+- Modify: `src/main.cpp`, `src/sense/gestures.cpp`
 
 **Interfaces:**
 - Produces: `audio_begin()`, `audio_play(const char *name)` (non-blocking,
@@ -943,7 +944,7 @@ git commit -m "feat(firmware): touch tap/hold and accelerometer swing, sent with
 - [ ] **Step 1: Convert two short samples to headers**
 
 ```python
-# firmware/tools/wav2h.py
+# tools/wav2h.py
 """wav2h: 16-bit mono WAV -> C header of int16 samples. Usage: wav2h.py in.wav name > out.h"""
 import struct, sys, wave
 w = wave.open(sys.argv[1]); name = sys.argv[2]
@@ -957,13 +958,13 @@ print(",".join(str(v) for v in vals)); print("};")
 
 Make `tick.wav` (a 30 ms 1 kHz click) and `hold.wav` (a 200 ms low hum) at
 22050 Hz mono 16-bit with any editor; run
-`python3 firmware/tools/wav2h.py firmware/data/tick.wav tick > firmware/src/audio/tick.h`
+`python3 tools/wav2h.py data/tick.wav tick > src/audio/tick.h`
 and the same for `hold`.
 
 - [ ] **Step 2: Write the I2S player**
 
 ```cpp
-// firmware/src/audio/samples.cpp
+// src/audio/samples.cpp
 #include <Arduino.h>
 #include <ESP_I2S.h>
 #include "samples.h"
@@ -1011,13 +1012,20 @@ record both runs.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add firmware/ docs/hardware/tap-latency.md
-git commit -m "feat(firmware): local tick/hold samples over I2S; tap-to-sound measured"
+# in mm-devshroom
+git add .
+git commit -m "feat(firmware): local tick/hold samples over I2S"
+```
+
+```bash
+# in mm-terrarium
+git add docs/hardware/tap-latency.md
+git commit -m "docs(hardware): tap-to-sound acoustic latency measured"
 ```
 
 ## Task A6 [FW]: Tap timestamp error measured
 
-**Owner:** Victor. **Files:** Create `firmware/tools/tap_period.py`,
+**Owner:** Victor. **Files:** Create `tools/tap_period.py`,
 `docs/hardware/tap-timestamp.md`.
 
 **Interfaces:**
@@ -1028,7 +1036,7 @@ git commit -m "feat(firmware): local tick/hold samples over I2S; tap-to-sound me
 - [ ] **Step 1: Write the analysis script**
 
 ```python
-# firmware/tools/tap_period.py
+# tools/tap_period.py
 """Read /game/tap stamps for one device out of control.log, report the
 inter-tap period statistics against a known mechanical period.
 
@@ -1060,15 +1068,22 @@ firmware commit in `docs/hardware/tap-timestamp.md`.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add firmware/tools/tap_period.py docs/hardware/tap-timestamp.md
+# in mm-devshroom
+git add tools/tap_period.py
+git commit -m "feat(firmware): tap timestamp analysis script"
+```
+
+```bash
+# in mm-terrarium
+git add docs/hardware/tap-timestamp.md
 git commit -m "docs(hardware): tap timestamp error measured against a 500 ms period"
 ```
 
 ## Task A7 [FW]: Tower build target
 
-**Owner:** Victor. **Files:** Modify `firmware/src/main.cpp`,
-`firmware/src/render/frames.cpp`, `firmware/platformio.ini`;
-Create `firmware/test/test_frames/test_tower_limit.cpp`.
+**Owner:** Victor. **Files:** Modify `src/main.cpp`,
+`src/render/frames.cpp`, `platformio.ini`;
+Create `test/test_frames/test_tower_limit.cpp`.
 
 **Interfaces:**
 - Produces: the `tower` environment: service `ie9`, 120 pixels on
@@ -1078,7 +1093,7 @@ Create `firmware/test/test_frames/test_tower_limit.cpp`.
 - [ ] **Step 1: Failing test for the Tower limiter at 120 px**
 
 ```cpp
-// firmware/test/test_frames/test_tower_limit.cpp
+// test/test_frames/test_tower_limit.cpp
 #include <unity.h>
 #include <string.h>
 #undef PIXEL_COUNT
@@ -1112,7 +1127,7 @@ TEST room's `main` fixture width matches, load Chase. Expected: the first
 - [ ] **Step 4: Commit**
 
 ```bash
-git add firmware/
+git add .
 git commit -m "feat(firmware): tower build target, 120 px, 2.4 A limiter, no sensors"
 ```
 
@@ -1281,7 +1296,7 @@ git commit -m "docs(hardware): units 2 and 3 built from the runbook; spares kit"
 **Files:**
 - Create: `rooms/TOWER.toml`, `instruments/tower.toml`,
   `tests/test_tower_room.py`
-- Modify: `firmware/platformio.ini` (the `tower` env's `JOIN_NODE`)
+- Modify (in mm-devshroom): `platformio.ini` (the `tower` env's `JOIN_NODE`)
 
 **Interfaces:**
 - Consumes: `rooms/TEST.toml` and `instruments/dev_strip_main.toml` as the
@@ -1429,9 +1444,9 @@ print(spec.profile.fixtures[0].name, getattr(spec, 'node_id', None) or spec)"
 The ROOM-class role's node id is what `control/rooms.py`'s role builder
 returns as its third value (`name, role, room.node_id`); if `RoomSpec` does
 not expose it directly, the Console's Join card lists every node when the
-TOWER room is loaded, so read it there. Put the id in `platformio.ini`:
-`-DJOIN_NODE=\"<id>\"` on the `tower` env, and record it in
-`docs/hardware/tower-runbook.md`.
+TOWER room is loaded, so read it there. Put the id in mm-devshroom's
+`platformio.ini`: `-DJOIN_NODE=\"<id>\"` on the `tower` env, commit that
+there, and record the id in mm-terrarium's `docs/hardware/tower-runbook.md`.
 
 - [ ] **Step 6: Bind the physical Tower once and confirm the recorded binding survives a restart**
 
@@ -1449,8 +1464,15 @@ loaded before `boot()` resolves the Room, and commit that separately.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add rooms/TOWER.toml instruments/tower.toml tests/test_tower_room.py firmware/platformio.ini
+# in mm-terrarium
+git add rooms/TOWER.toml instruments/tower.toml tests/test_tower_room.py
 git commit -m "feat(rooms): TOWER room and tower instrument; Tower binds as ie9"
+```
+
+```bash
+# in mm-devshroom
+git add platformio.ini
+git commit -m "feat(firmware): tower env JOIN_NODE set to the Room's node id"
 ```
 
 ## Task C2 [SW]: The Mushica Bit
@@ -1968,7 +1990,7 @@ git commit -m "docs: Alt Ctrl submission package and confirmation"
 
 ## Task D1: Firmware freeze and the flash runbook (Fri Nov 6)
 
-**Owner:** Victor. **Files:** Modify `firmware/README.md`.
+**Owner:** Victor. **Files:** Modify `README.md`.
 
 - [ ] **Step 1: Tag the image**
 
@@ -1976,14 +1998,14 @@ git commit -m "docs: Alt Ctrl submission package and confirmation"
 git tag -a firmware-dec4-rc1 -m "Deliverables Lock image" && git push --tags
 ```
 
-- [ ] **Step 2: Write the flash runbook in `firmware/README.md`: clone, `pio run -e tuneshroom -t upload`, the three serial lines to expect (`WIFI OK`, `CLOCK SYNCED`, `ROLE received`), and the two build flags a spare needs (`DEVICE_NAME`, `JOIN_NODE`)**
+- [ ] **Step 2: Write the flash runbook in `README.md`: clone, `pio run -e tuneshroom -t upload`, the three serial lines to expect (`WIFI OK`, `CLOCK SYNCED`, `ROLE received`), and the two build flags a spare needs (`DEVICE_NAME`, `JOIN_NODE`)**
 
 - [ ] **Step 3: Sophia flashes unit #2 from the README alone; every question is a README defect**
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add firmware/README.md
+git add README.md
 git commit -m "docs(firmware): flash runbook verified by a second person"
 ```
 
