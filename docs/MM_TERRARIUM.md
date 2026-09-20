@@ -4851,10 +4851,13 @@ not a `firmware/` directory here).
     that last frame is stamped one cue horizon (60 ms) into the future --
     so a device receives the release before the frame it names is due to
     show. Spec decision D5 is why a device must tolerate that order.
-  - A newly granted role plays an opening signature (about 1.5 s,
-    `contract_kit/scenarios.py`'s `SIGNATURE_SETTLED_MS`) during which
-    light cues sent to the device change nothing visible; scenarios that
-    need a cue to be visible wait for the signature to settle first.
+  - A newly granted role plays an opening signature that ignores light
+    cues; the recordings show its last frame sent at t=1518 ms (three
+    scenarios) or t=1503 ms (`play_known_and_unknown`, whose earlier tap
+    shifts the tick phase), so about 1.5 s. `contract_kit/scenarios.py`'s
+    `SIGNATURE_SETTLED_MS` is a separate, larger constant (2000 ms): the
+    point scenarios wait past before checking a cue, not the measured
+    signature length itself.
 - **Not yet built.** The mm-tuneshroom Rev 1 hardware profile and its
   scenario replay runner; mm-devshroom's native (Arduino-free) replay
   environment; the live bench replay feasibility spike (spec section 8);

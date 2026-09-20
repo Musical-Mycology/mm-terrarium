@@ -166,11 +166,17 @@ def test_export_fails_loudly_when_a_scenario_recording_is_missing(tmp_path, monk
 
 
 def test_export_fails_loudly_when_a_recording_has_no_scenario(tmp_path, monkeypatch):
+    import shutil
+
     import tools.export_contract as export_contract_module
 
-    (RECORDINGS_DIR / "orphan_scenario.json").write_text("{}\n", encoding="utf-8")
-    try:
-        with pytest.raises(SystemExit, match="orphan_scenario"):
-            export_contract_module.main([str(tmp_path)])
-    finally:
-        (RECORDINGS_DIR / "orphan_scenario.json").unlink()
+    # A throwaway copy of the recordings directory, not the committed one:
+    # writing an orphan file into the real contract_kit/recordings/ would
+    # leave it behind if the run were interrupted, or race a parallel run.
+    fake_recordings = tmp_path / "recordings"
+    shutil.copytree(RECORDINGS_DIR, fake_recordings)
+    (fake_recordings / "orphan_scenario.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(export_contract_module, "RECORDINGS_DIR", fake_recordings)
+
+    with pytest.raises(SystemExit, match="orphan_scenario"):
+        export_contract_module.main([str(tmp_path / "out")])
