@@ -2305,7 +2305,7 @@ git commit -m "docs(hardware): cold-start protocol and Dry Run 2 numbers"
 **Owner:** Chris. **Files:** Modify `docs/MM_TERRARIUM.md`,
 `mm-documents/MM_HARDWARE_DESIGN.md`.
 
-- [ ] **Step 1: Add a `firmware/` section to `docs/MM_TERRARIUM.md` under *Landed subsystems*: the two build targets, the thin-device rule, the verbs and their arg shapes, the limiter figures, the measured latency and stamp numbers with their dates**
+- [ ] **Step 1: Add a section to `docs/MM_TERRARIUM.md` under *Landed subsystems*: that Rev 1 firmware lives in its own repo, mm-devshroom (owned by Victor, D1 of `2026-09-16-device-contract-kit-design.md`), the two build targets, the thin-device rule, the verbs and their arg shapes (`devicelink/contract.py`'s verb table), the limiter figures, the measured latency and stamp numbers with their dates, and that mm-devshroom commits an export of the device contract kit at `test/contract/` (see that spec's section 4.2-4.3)**
 
 - [ ] **Step 2: In `MM_HARDWARE_DESIGN.md` §11, add rows for the ESP32-P4 (+C6) as the controller of every Instrument including the Tower, the ESP32-S3 as fallback stock, the Tower strip and supply; mark the Radxa row as spare stock and the Pi 5 venue box and 864 px array rows as post-show**
 
