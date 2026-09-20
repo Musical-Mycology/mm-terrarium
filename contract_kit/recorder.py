@@ -428,22 +428,43 @@ class Recorder:
         return round(timestamp * 1000)
 
     def expect_frame(self, t_ms: int) -> None:
-        """The pixels showing at `t_ms`: the newest frame whose own
-        presentation time is at or before `t_ms`.
+        """The pixels showing at `t_ms`: the frame with the NEWEST
+        presentation time at or before `t_ms` (spec section 4.3, rule 3).
 
-        Send time and presentation time differ by the cue horizon, so this
-        selects on `at`, not on when the frame crossed the wire. Raises if
+        Read off this recorder's own finished steps rather than off the
+        capture log, so the answer is exactly what a device replaying the
+        committed file would compute, and so hand-authored frames
+        (`control_send_now`) count too. Control's own stream never puts two
+        frames on one presentation time, so a scenario that wants to pin
+        "when several are due, only the newest shows" has to author the
+        pair; see contract_kit/scenarios.py's timed_frames_hold_last.
+
+        Selection is on `at`, not on send order: send time and presentation
+        time differ by the cue horizon, and an authored pair may deliberately
+        arrive newest-first. Frames flagged `malformed` are skipped, because
+        a frame the device must drop can never be the one showing. Raises if
         no frame is showing yet, rather than recording an expectation of
         nothing.
         """
-        showing = [values[0]
-                   for (_t, addr, ts, _typespec, values) in self._sent
-                   if addr == f"/{self.dev}/leds"
-                   and (self._presentation_ms(addr, ts) or 0) <= t_ms]
-        if not showing:
+        showing = None
+        newest_at: int | None = None
+        for step in self.finish()["steps"]:
+            msg = step.get("control_sends")
+            if msg is None or msg["address"] != "/$DEV/leds":
+                continue
+            if msg.get("malformed"):
+                continue
+            at = msg["at"] or 0
+            if at > t_ms:
+                continue
+            # `>=` and not `>`: two frames on the same presentation time are
+            # resolved by arrival, last one wins.
+            if newest_at is None or at >= newest_at:
+                newest_at, showing = at, msg["args"][0]
+        if showing is None:
             raise AssertionError(
                 f"no /leds frame is showing on {self.dev} at t={t_ms}ms")
-        self.steps.append({"t": t_ms, "expect_frame": {"grb": showing[-1]}})
+        self.steps.append({"t": t_ms, "expect_frame": {"grb": showing}})
 
     def expect_play(self, t_ms: int, name: str,
                     within_ms: int = DEFAULT_WITHIN_MS) -> None:

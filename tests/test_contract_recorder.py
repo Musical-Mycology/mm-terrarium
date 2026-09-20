@@ -291,6 +291,44 @@ def test_expect_frame_records_the_frame_showing_not_the_one_last_sent():
     assert showing[-1] is not leds[-1]     # later frames are still in flight
 
 
+def test_expect_frame_picks_the_newest_by_at_not_the_last_received():
+    """Spec rule 3's middle clause: when several frames are due, only the
+    NEWEST shows. Control's own stream never puts two frames on one
+    presentation time, so the pair here is hand-authored, and the newer one
+    is sent FIRST: a recorder that simply took whatever arrived last would
+    record the older payload."""
+    newer = [0, 0, 255] * 12
+    older = [255, 0, 0] * 12
+    rec = Recorder(name="t", summary="s", join_node=CONTRACT_PLAYER_NODE)
+    rec.link_up(0)
+    rec.advance_to(6000)
+    rec.control_send_now("/$DEV/leds", "b", [newer], at=6200)
+    rec.control_send_now("/$DEV/leds", "b", [older], at=6100)
+    rec.advance_to(6500)
+    rec.expect_frame(6500)
+    data = rec.finish()
+
+    frames = [s["expect_frame"] for s in data["steps"] if "expect_frame" in s]
+    assert frames[-1]["grb"] == newer
+
+
+def test_expect_frame_ignores_a_frame_step_flagged_malformed():
+    """A deliberately broken /leds step is what the device must DROP, so it
+    can never be the answer to "what is showing"."""
+    rec = Recorder(name="t", summary="s", join_node=CONTRACT_PLAYER_NODE)
+    rec.link_up(0)
+    rec.advance_to(6000)
+    rec.control_send_now("/$DEV/leds", "b", ["not a list"], at=6100,
+                         malformed=True)
+    rec.advance_to(6500)
+    rec.expect_frame(6500)
+    data = rec.finish()
+
+    grb = [s["expect_frame"] for s in data["steps"] if "expect_frame" in s][-1]
+    assert grb["grb"] != "not a list"
+    assert len(grb["grb"]) == 36
+
+
 def test_expect_frame_raises_rather_than_recording_nothing():
     rec = Recorder(name="t", summary="s", join_node=None)
     rec.link_up(0)
