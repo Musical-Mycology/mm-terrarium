@@ -85,9 +85,10 @@ TICK_MS = round(1000.0 / 44.0)
 # The device's hello heartbeat interval (spec section 4.3, rule 1).
 HELLO_INTERVAL_MS = 5000
 
-# The replay tolerance every recorded expectation carries: in-process
-# replay runs on a fake clock and allows a frame one render tick of slack
-# (spec section 4.3, "Timing").
+# The replay tolerance every recorded expect_out/expect_play carries:
+# roughly two render ticks (TICK_MS * 2 = 46 ms, rounded up to a plain
+# number), not the one render tick of slack expect_frame gets (spec
+# section 4.3, "Timing").
 DEFAULT_WITHIN_MS = 50
 
 # The only down verb devicelink/protocol.py stamps with a presentation
@@ -454,6 +455,10 @@ class Recorder:
                 continue
             if msg.get("malformed"):
                 continue
+            # `or 0`: every REAL /leds send always carries an int `at`
+            # (PRESENTATION_TIME_VERBS), so this only ever fires for a
+            # hand-authored control_send_now("/$DEV/leds", ..., at=None),
+            # which control_send_now itself allows.
             at = msg["at"] or 0
             if at > t_ms:
                 continue

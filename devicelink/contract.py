@@ -20,6 +20,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# How often a device should repeat /game/hello while connected (spec
+# section 4.3, rule 1: "Hello goes out only once the link is up, then
+# repeats every 5 s over TCP"). The contract owns this number;
+# harness/o2_shroom.py's --heartbeat-interval default and
+# tools/export_contract.py's exported lifecycle.hello_interval_s both
+# read it from here rather than restating it.
+HELLO_INTERVAL_S = 5.0
+
 
 @dataclass(frozen=True)
 class VerbRow:

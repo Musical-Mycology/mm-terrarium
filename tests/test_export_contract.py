@@ -16,10 +16,9 @@ from control.catalog import load_catalog
 from control.lobby import LobbyConfig, TERRARIUM_ADMIN
 from control.role_config import carried_instrument_view
 from contract_kit.scenarios import ALL_SCENARIOS
-from devicelink.contract import VERB_TABLE
+from devicelink.contract import HELLO_INTERVAL_S, VERB_TABLE
 from devicelink.o2_transport import MAX_DEV_LEN
 from devicelink.protocol import O2_MAX_MSG_LEN
-from harness.o2_shroom import HELLO_INTERVAL_S
 from tools.export_contract import export_contract, main
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +30,17 @@ def _stale_timeout_default() -> float:
         if field.name == "stale_timeout":
             return float(field.default)
     raise RuntimeError("BootConfig no longer declares stale_timeout")
+
+
+def _every_recorded_step() -> list[dict]:
+    """Every step dict, from every committed scenario recording, with
+    "t" stripped (only the kind key(s) matter for schema coverage)."""
+    steps = []
+    for path in sorted(RECORDINGS_DIR.glob("*.json")):
+        data = json.loads(path.read_text())
+        for step in data["steps"]:
+            steps.append({k: v for k, v in step.items() if k != "t"})
+    return steps
 
 
 def test_verbs_match_the_verb_table_exactly():
@@ -85,13 +95,74 @@ def test_lifecycle_publishes_the_cue_horizon_recordings_assume():
     assert data["lifecycle"]["cue_horizon_s"] == CUE_HORIZON_S
 
 
+def test_hello_interval_is_owned_by_the_contract_not_the_harness():
+    # Minor 2: the constant lives in devicelink/contract.py, and
+    # harness/o2_shroom.py imports it from there rather than the other
+    # way around.
+    from harness.o2_shroom import HELLO_INTERVAL_S as harness_value
+    assert harness_value is HELLO_INTERVAL_S
+
+
 def test_replay_notes_state_the_undocumented_replay_rules():
     data = export_contract(commit="abc123")
-    notes = " ".join(data["replay_notes"]).lower()
-    assert "control_sends" in " ".join(data["replay_notes"])
-    assert "link is down" in notes
-    assert "malformed" in notes
-    assert "hand-authored" in notes or "hand authored" in notes
+    joined = " ".join(data["replay_notes"])
+    lowered = joined.lower()
+    assert "control_sends" in joined
+    assert "link is down" in lowered
+    assert "malformed" in lowered
+    assert "hand-authored" in lowered
+    # Important 1: no replay note may point outside the export at a file
+    # this folder does not contain.
+    assert "docstring" not in lowered
+    assert "scenarios.py" not in lowered
+    # The timed_frames_hold_last facts are inlined, not just referenced.
+    assert "timed_frames_hold_last" in joined
+    assert "6200" in joined and "6100" in joined
+    assert "6000" in joined
+    assert "0, 0, 255" in joined and "255, 0, 0" in joined
+
+
+def test_step_schema_covers_every_recorded_step_kind_and_field():
+    data = export_contract(commit="abc123")
+    schema_kinds = data["step_schema"]["kinds"]
+    steps = _every_recorded_step()
+    assert steps, "no recordings found -- test fixture is broken"
+    for step in steps:
+        for kind, payload in step.items():
+            assert kind in schema_kinds, (
+                f"step kind {kind!r} appears in a recording but is not "
+                f"described in step_schema")
+            if isinstance(payload, dict):
+                described_fields = set(schema_kinds[kind]["fields"])
+                for field_name in payload:
+                    assert field_name in described_fields, (
+                        f"{kind}.{field_name} appears in a recording but "
+                        f"is not described in step_schema")
+
+
+def test_step_schema_states_the_tolerance_and_link_down_rules():
+    data = export_contract(commit="abc123")
+    schema = data["step_schema"]
+    assert "render tick" in schema["tolerance"]
+    assert "within_ms" in schema["tolerance"]
+    assert "down" in schema["link_down_delivery"]
+    assert "control_sends" in schema["link_down_delivery"]
+    assert set(schema["placeholders"]) == {"$DEV", "$KEY", "*"}
+
+
+def test_scenario_index_matches_the_files_written(tmp_path):
+    main([str(tmp_path)])
+    data = json.loads((tmp_path / "contract.json").read_text())
+    index = data["scenarios"]
+    assert [e["name"] for e in index] == sorted(e["name"] for e in index)
+    names_in_index = {e["name"] for e in index}
+    names_on_disk = {p.stem for p in (tmp_path / "scenarios").glob("*.json")}
+    assert names_in_index == names_on_disk
+    for entry in index:
+        recorded = json.loads(
+            (tmp_path / "scenarios" / f"{entry['name']}.json").read_text())
+        assert entry["profiles"] == recorded["profiles"]
+        assert entry["summary"] == recorded["summary"]
 
 
 def test_instruments_section_uses_the_carried_instrument_view():
@@ -115,6 +186,8 @@ def test_instrument_triggers_match_the_toml():
 
 def test_contract_version_and_provenance():
     data = export_contract(commit="abc123")
+    # This fix wave adds keys (step_schema, scenarios) but has not been
+    # published to any device repo yet, so contract_version stays 1.
     assert data["contract_version"] == 1
     assert data["_provenance"] == {"commit": "abc123", "tool": "export_contract/1"}
 
@@ -161,8 +234,13 @@ def test_export_fails_loudly_when_a_scenario_recording_is_missing(tmp_path, monk
 
     monkeypatch.setattr(export_contract_module, "_scenario_names",
                         lambda: [fn.__name__ for fn in fake_all_scenarios()])
+    out_dir = tmp_path / "out"
     with pytest.raises(SystemExit, match=missing):
-        export_contract_module.main([str(tmp_path)])
+        export_contract_module.main([str(out_dir)])
+    # Minor 4: nothing is written when validation fails, not even a
+    # partial contract.json.
+    assert not (out_dir / "contract.json").exists()
+    assert not out_dir.exists() or not any(out_dir.iterdir())
 
 
 def test_export_fails_loudly_when_a_recording_has_no_scenario(tmp_path, monkeypatch):
@@ -178,5 +256,8 @@ def test_export_fails_loudly_when_a_recording_has_no_scenario(tmp_path, monkeypa
     (fake_recordings / "orphan_scenario.json").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(export_contract_module, "RECORDINGS_DIR", fake_recordings)
 
+    out_dir = tmp_path / "out"
     with pytest.raises(SystemExit, match="orphan_scenario"):
-        export_contract_module.main([str(tmp_path / "out")])
+        export_contract_module.main([str(out_dir)])
+    assert not (out_dir / "contract.json").exists()
+    assert not out_dir.exists() or not any(out_dir.iterdir())

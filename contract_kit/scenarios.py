@@ -25,15 +25,15 @@ recording:
    cues. A timed look sent during it changes nothing a device can see, so
    `timed_frames_hold_last` waits for the signature to settle before it
    taps. See that scenario's docstring.
-One rule for replay runners, which applies to every scenario and bites in
-`link_loss_rejoin`: a runner must not deliver any `control_sends` step while
-the scenario's link is down. Those steps record what Control really sends,
-and a device with its link down receives none of them.
-
 3. The closing fade's last frame is a dim non-black frame, not black, and
    `/$DEV/release` follows it on the wire in the same millisecond while
    carrying no presentation time of its own. See `release_keeps_display`
    for the spec section 5.5 ordering answer.
+
+One rule for replay runners, which applies to every scenario and bites in
+`link_loss_rejoin`: a runner must not deliver any `control_sends` step while
+the scenario's link is down. Those steps record what Control really sends,
+and a device with its link down receives none of them.
 """
 from __future__ import annotations
 

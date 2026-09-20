@@ -13,9 +13,11 @@ from control.roles import Role, RoleClass, RoleTable
 CONTRACT_PLAYER_NODE = "CONTRACT_PLAYER_NODE"
 
 # The Rev 1 hardware capability set (instruments/tuneshroom_rev1.toml).
-# Defined once here; production code elsewhere imports this constant rather
-# than re-spelling the five capability tags. tests/test_contract_bit.py
-# checks this stays equal to the published catalog entry's own capabilities.
+# Defined once here so this module's own player role and
+# tests/test_contract_bit.py don't re-spell the five capability tags; no
+# production code outside contract_kit/ imports it (contract_kit/__init__.py).
+# tests/test_contract_bit.py checks this stays equal to the published
+# catalog entry's own capabilities.
 REV1_CAPABILITIES = frozenset({"light.pixels", "gesture.tap", "gesture.hold",
                                "gesture.swing", "audio.samples"})
 
