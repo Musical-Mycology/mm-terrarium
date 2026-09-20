@@ -1111,7 +1111,22 @@ Add `I2S_BCLK`, `I2S_LRC`, `I2S_DOUT` to `config.h` (record in the runbook).
 In `gestures.cpp`, call `audio_play("tick")` **before** `send()` on a tap
 and `audio_play("hold")` on a hold. In `main.cpp`, `audio_begin()` in
 `setup()`, `audio_pump()` every `loop()`, and `link_on_play(audio_play_cb)`
-where `audio_play_cb(name, params)` calls `audio_play(name)`.
+where `audio_play_cb` synthesizes the join ceremony's chime (D9: the board
+has no bundled "chime" sample, so it plays a short tone at the `key=`
+MIDI note instead of staying silent) and otherwise defers to `audio_play`:
+
+```cpp
+static void audio_play_cb(const char *name, const char *params) {
+  if (!strcmp(name, "chime")) {
+    int key = 69;                       // NOTE_SCALE's own default (A4)
+    const char *eq = strstr(params, "key=");
+    if (eq) key = atoi(eq + 4);
+    audio_play_tone_for_midi_key(key);  // a short sine/square burst at that pitch; no PCM asset needed
+    return;
+  }
+  audio_play(name);
+}
+```
 
 - [ ] **Step 3: Measure tap-to-sound acoustically (Sophia)**
 
