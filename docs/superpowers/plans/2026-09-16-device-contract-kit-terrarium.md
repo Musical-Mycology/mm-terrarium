@@ -3109,11 +3109,16 @@ the folder at `test/contract/`.
   - `pre_role` on an up row means a device may send it before holding a role; on a down row, that Control may send it before a role.
 - `link`: `{"arg_types": ["b", "f", "i", "s"], "max_message_bytes": 4096, "service_is_dev_id": true}`
 - `limits`: `{"max_message_bytes": 4096, "dev_id_max_len": <int from the code>, "reserved_dev_ids": [<from the code>]}`
-- `lifecycle`: `{"hello_interval_s": 5.0, "stale_timeout_s": 15.0, "lobby_double_tap_window_s": 1.5, "bench_tolerance_ms": {"frame": 50, "heartbeat": 1000}}`
+- `lifecycle`: `{"hello_interval_s": 5.0, "stale_timeout_s": 15.0, "lobby_double_tap_window_s": 1.5, "cue_horizon_s": <float from the code>, "bench_tolerance_ms": {"frame": 50, "heartbeat": 1000}}`
 - `instruments`: `{"tuneshroom_rev1": {"instrument": <carried_instrument_view>, "triggers": {<trigger name>: {<key>: number}}}}`
+- `scenarios`: a list sorted by `name`, one entry per committed scenario: `{"name": str, "profiles": [str, ...], "summary": str}` -- lets a device repo assert it holds the full committed set without globbing.
+- `step_schema`: every step kind and field described below (with types, units and what each placeholder means), plus the tolerance and link-down-delivery rules, so a device author holding only this export folder can write a replay runner from it alone.
+- `replay_notes`: a list of plain sentences stating replay rules a scenario file alone does not (which control_sends steps are hand-authored and why, stated inline, never as a pointer to a file outside this export).
 
-Scenario file keys:
-- `_provenance`: same shape as in `contract.json`
+Scenario file keys (note: unlike `contract.json`, a scenario file carries
+NO `_provenance` -- it is a byte-for-byte copy of the committed
+`contract_kit/recordings/<name>.json`, and `Recorder.finish()` never
+stamps one):
 - `name`: snake_case str, equal to the file stem
 - `summary`: a one-line str
 - `profiles`: a list containing `"rev1"` and/or `"any"`
