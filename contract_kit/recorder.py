@@ -5,6 +5,13 @@ message Control sends back into an EXPORT FORMAT v1 scenario dict
 (docs/superpowers/specs/2026-09-16-device-contract-kit-design.md sections
 4.2-4.3, 5.4).
 
+The rig runs at the PRODUCTION cue horizon (`BootConfig.cue_horizon`,
+currently 0.060 s), read from that dataclass's own field default rather
+than restated here. The horizon is what turns a cue's origin into the
+presentation time `at` that every recorded `/$DEV/leds` step carries, so
+recording at the library default of 0.0 would have published presentation
+times no installation ever produces.
+
 Determinism is the property that matters: a scenario's committed JSON is
 re-recorded by a regression test and any diff fails it. So nothing here
 reads a wall clock, a commit hash, a random number, or the iteration order
@@ -16,9 +23,11 @@ a plain CLI (tools/record_scenarios.py) with no pytest on the path.
 """
 from __future__ import annotations
 
+import dataclasses
 import re
 from pathlib import Path
 
+from control.boot_config import BootConfig
 from control.catalog import load_catalog
 from control.engine import GameServer
 from control.rooms import Room
@@ -29,6 +38,25 @@ from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, from_o2_arg
 from contract_kit.contract_bit import ContractBit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _production_cue_horizon() -> float:
+    """BootConfig.cue_horizon's shipped default, read off the dataclass.
+
+    BootConfig has two required fields (room_name, bit_name) so it cannot
+    simply be constructed here, and hard-coding 0.060 would let the rig
+    and production drift apart silently.
+    """
+    for field in dataclasses.fields(BootConfig):
+        if field.name == "cue_horizon":
+            return float(field.default)
+    raise RuntimeError("BootConfig no longer declares cue_horizon")
+
+
+# The presentation lead every recorded `at` is computed with. Production
+# wires this into GameServer(cue_horizon=) and DeviceLinkAgent(horizon=)
+# from BootConfig (harness/terrarium_boot.py); so does this rig.
+CUE_HORIZON_S = _production_cue_horizon()
 
 # The scripted device's real dev id. Replaced by "$DEV" everywhere in the
 # recorded output, so no scenario file ever names it.
@@ -62,10 +90,16 @@ HELLO_INTERVAL_MS = 5000
 # (spec section 4.3, "Timing").
 DEFAULT_WITHIN_MS = 50
 
+# The only down verb devicelink/protocol.py stamps with a presentation
+# time; every other builder leaves the envelope timestamp at 0.0. Reading
+# the verb rather than testing the timestamp is what keeps a real
+# presentation time of 0 distinct from "no declared time".
+PRESENTATION_TIME_VERBS = frozenset({"leds"})
+
 _KEY_RE = re.compile(r"key=\d+")
 
 
-def _normalize_key(value):
+def _normalize_key(value: object) -> object:
     """The lobby's join chime carries "key=<midi note>", which counts joins
     rather than describing the wire (devicelink/lobby_runtime.py). A device
     must not be asked to reproduce the number, so it becomes "$KEY"."""
@@ -104,12 +138,17 @@ class Recorder:
       anchored on DeviceLinkAgent's `_breath_origin`, which is the fake
       clock's 0.0 here; ContractBit's player role also sets `breath=False`
       and maps no cc:11 lane, so the feed never reaches the frame anyway.
-      The rendered surface still changes every tick, because the role's
-      aurora instrument animates on its own; that animation is a pure
-      function of the same fake clock, so it re-records identically.
+      The role's aurora declares an explicit `level`, which opts out of
+      that preset's own looping breathe, so the surface is steady for
+      steady inputs: frames go out only while the instrument's glide
+      settles into a cue's new value, and then stop.
+    - The ownership probe's retry loop. Its `clock` and `sleep` are the
+      fake clock and a fake-advancing sleep, so even a routing failure
+      would spend no wall-clock time.
     """
 
-    def __init__(self, *, name: str, summary: str, profiles=("rev1",),
+    def __init__(self, *, name: str, summary: str,
+                 profiles: tuple[str, ...] = ("rev1",),
                  join_node: str | None = None, with_room: bool = False,
                  dev: str = DEV) -> None:
         self.name = name
@@ -117,10 +156,17 @@ class Recorder:
         self.profiles = list(profiles)
         self.join_node = join_node
         self.dev = dev
+        # The presentation lead every recorded `at` was computed with.
+        # Public so Task 8's export can publish it alongside the scenarios.
+        self.cue_horizon = CUE_HORIZON_S
         # Hand-authored steps (inputs and expectations). Control's own
         # captured sends live in self._sent and are merged in finish().
         self.steps: list[dict] = []
         self._sent: list[tuple[int, str, float, str, list]] = []
+        # Every device message this rig has actually scripted, as
+        # (t_ms, "/game/<verb>", detail). The expect_* helpers check
+        # themselves against this rather than trusting the caller's t.
+        self._scripted: list[tuple[int, str, object]] = []
         self._now_ms = 0
         self._linked_up = False
         self._next_hello_ms: int | None = None
@@ -131,7 +177,15 @@ class Recorder:
         # with "actl,game".
         self._fake.set_services("actl")
         self._transport = O2LiteTransport()
-        self._transport.start(self._fake)
+        # The ownership probe's own wait loop defaults to time.monotonic
+        # and time.sleep. It succeeds on its first iteration against this
+        # fake, but the module's "no wall clock, no sleeps" promise has to
+        # hold on the failure path too, so both are supplied.
+        self._transport.start(self._fake, clock=self._fake.time_get,
+                              sleep=self._fake_sleep)
+        # The probe's sleep may have moved the fake clock; the scenario
+        # timeline starts at exactly 0.0 either way.
+        self._fake.set_time(0.0)
         # Wrapped AFTER start() returns, so the two _svcheck probes
         # verify_service_ownership sends during start() are never captured.
         # The wrapper filters anything not addressed to our own dev anyway,
@@ -142,6 +196,7 @@ class Recorder:
 
         catalog = load_catalog(REPO_ROOT / "instruments").published
         self._gs = GameServer({"ContractBit": ContractBit},
+                              cue_horizon=self.cue_horizon,
                               clock=self._fake.time_get,
                               carried_instruments=catalog)
         if with_room:
@@ -152,8 +207,14 @@ class Recorder:
             for fixture, fixture_dev in ROOM_FIXTURE_DEVS.items():
                 self._gs.room.bound[fixture] = fixture_dev
         self._agent = DeviceLinkAgent(self._gs, self._transport,
+                                      horizon=self.cue_horizon,
                                       clock=self._fake.time_get)
         self._gs.load_bit("ContractBit")
+
+    def _fake_sleep(self, seconds: float) -> None:
+        """Advance the fake clock instead of the wall clock, so the
+        ownership probe's retry loop terminates without a real sleep."""
+        self._fake.set_time(self._fake.time_get() + seconds)
 
     # --- capture -----------------------------------------------------------
 
@@ -182,7 +243,17 @@ class Recorder:
 
     def advance_to(self, target_ms: int) -> None:
         """Tick the rig forward to `target_ms`, one render tick at a time,
-        sending the device's hello heartbeat whenever one comes due."""
+        sending the device's hello heartbeat whenever one comes due.
+
+        A target already in the past is a scenario authored out of order,
+        which would silently record steps that never happened in that
+        sequence, so it raises rather than no-opping.
+        """
+        if target_ms < self._now_ms:
+            raise ValueError(
+                f"cannot advance to t={target_ms}ms: the scenario is "
+                f"already at t={self._now_ms}ms (steps run forward on one "
+                f"timeline)")
         while self._now_ms < target_ms:
             step_ms = min(TICK_MS, target_ms - self._now_ms)
             if (self._linked_up and self._next_hello_ms is not None
@@ -217,15 +288,28 @@ class Recorder:
         self._next_hello_ms = None
 
     def _send_hello(self, t_ms: int) -> None:
+        self._scripted.append((t_ms, "/game/hello", INSTRUMENT))
         self._fake.deliver("/game/hello", "ssss",
                            (self.dev, "contract-kit", "1", INSTRUMENT),
                            timestamp=t_ms / 1000.0)
         self._agent.poll()
 
     def _send_join(self, t_ms: int, node: str) -> None:
+        self._scripted.append((t_ms, "/game/join", node))
         self._fake.deliver("/game/join", "ss", (self.dev, node),
                            timestamp=t_ms / 1000.0)
         self._agent.poll()
+
+    def _scripted_at(self, t_ms: int, address: str) -> list:
+        return [detail for (t, addr, detail) in self._scripted
+                if t == t_ms and addr == address]
+
+    def _no_send_scripted(self, t_ms: int, address: str) -> str:
+        """The AssertionError text for an expectation the rig never
+        actually scripted, naming what it did script instead."""
+        scripted = sorted({(t, addr) for (t, addr, _d) in self._scripted})
+        return (f"no {address} scripted at t={t_ms}ms; this rig scripted "
+                f"{scripted}")
 
     def join_now(self, t_ms: int, node: str) -> None:
         """An explicit join sent LATER than link_up, for a scenario whose
@@ -255,6 +339,7 @@ class Recorder:
         self.advance_to(onset_t)
         self.steps.append({"t": onset_t, "gesture": {
             "kind": kind, "onset_t": onset_t, **detail}})
+        self._scripted.append((onset_t, f"/game/{kind}", detail))
         self._fake.deliver(f"/game/{kind}", typespec, wire_args,
                            timestamp=onset_t / 1000.0)
         self._agent.poll()
@@ -289,34 +374,76 @@ class Recorder:
     def expect_hello(self, t_ms: int) -> None:
         """The device must hello at `t_ms`. Everything but the dev id is a
         `*` placeholder: a device's own name, protoversion and instrument
-        are its business, not the contract's."""
+        are its business, not the contract's.
+
+        Raises unless this rig really did script a hello at `t_ms`, so a
+        recorded expectation can never be a time the caller guessed.
+        """
+        if not self._scripted_at(t_ms, "/game/hello"):
+            raise AssertionError(self._no_send_scripted(t_ms, "/game/hello"))
         self.steps.append({"t": t_ms, "expect_out": {
             "address": "/game/hello", "typespec": "ssss",
             "args": ["$DEV", "*", "*", "*"], "stamp_t": None,
             "within_ms": DEFAULT_WITHIN_MS}})
 
     def expect_join(self, t_ms: int, node: str) -> None:
-        """The device must join `node` at `t_ms`."""
+        """The device must join `node` at `t_ms`.
+
+        Raises unless this rig really did script that join, to that node,
+        at `t_ms`.
+        """
+        nodes = self._scripted_at(t_ms, "/game/join")
+        if node not in nodes:
+            if not nodes:
+                raise AssertionError(self._no_send_scripted(t_ms, "/game/join"))
+            raise AssertionError(
+                f"the join scripted at t={t_ms}ms was for {nodes!r}, "
+                f"not {node!r}")
         self.steps.append({"t": t_ms, "expect_out": {
             "address": "/game/join", "typespec": "ss",
             "args": ["$DEV", node], "stamp_t": None,
             "within_ms": DEFAULT_WITHIN_MS}})
 
     def expect_quiet(self, t_ms: int, addresses: list[str], for_ms: int) -> None:
-        """None of `addresses` may be sent from `t_ms` for `for_ms`."""
+        """None of `addresses` may be sent from `t_ms` for `for_ms`.
+
+        Raises if the rig itself scripted one of them inside that window:
+        an expect_quiet a scenario's own gestures contradict would be
+        asking a device to do the impossible.
+        """
+        clashes = [(t, addr) for (t, addr, _d) in self._scripted
+                   if addr in addresses and t_ms <= t < t_ms + for_ms]
+        if clashes:
+            raise AssertionError(
+                f"expect_quiet({t_ms}ms, for {for_ms}ms) contradicts this "
+                f"rig's own scripted sends {sorted(clashes)}")
         self.steps.append({"t": t_ms, "expect_quiet": {
             "addresses": list(addresses), "for_ms": for_ms}})
 
+    def _presentation_ms(self, addr: str, timestamp: float) -> int | None:
+        """The message's presentation time in scenario milliseconds, or
+        None for a verb that carries none."""
+        if addr.rsplit("/", 1)[-1] not in PRESENTATION_TIME_VERBS:
+            return None
+        return round(timestamp * 1000)
+
     def expect_frame(self, t_ms: int) -> None:
-        """The pixels showing at `t_ms`: the last /leds frame Control had
-        actually sent by then. Raises if there is none, rather than
-        recording an expectation of nothing."""
-        frames = [values[0] for (t, addr, _ts, _typespec, values) in self._sent
-                  if addr == f"/{self.dev}/leds" and t <= t_ms]
-        if not frames:
+        """The pixels showing at `t_ms`: the newest frame whose own
+        presentation time is at or before `t_ms`.
+
+        Send time and presentation time differ by the cue horizon, so this
+        selects on `at`, not on when the frame crossed the wire. Raises if
+        no frame is showing yet, rather than recording an expectation of
+        nothing.
+        """
+        showing = [values[0]
+                   for (_t, addr, ts, _typespec, values) in self._sent
+                   if addr == f"/{self.dev}/leds"
+                   and (self._presentation_ms(addr, ts) or 0) <= t_ms]
+        if not showing:
             raise AssertionError(
-                f"no /leds frame sent to {self.dev} by t={t_ms}ms")
-        self.steps.append({"t": t_ms, "expect_frame": {"grb": frames[-1]}})
+                f"no /leds frame is showing on {self.dev} at t={t_ms}ms")
+        self.steps.append({"t": t_ms, "expect_frame": {"grb": showing[-1]}})
 
     def expect_play(self, t_ms: int, name: str,
                     within_ms: int = DEFAULT_WITHIN_MS) -> None:
@@ -360,9 +487,7 @@ class Recorder:
                 "address": addr.replace(f"/{self.dev}/", "/$DEV/"),
                 "typespec": typespec,
                 "args": [_normalize_key(v) for v in values],
-                # timestamp 0.0 means "no declared presentation time"
-                # (devicelink/protocol.py's leds_event), not "at t=0".
-                "at": None if not timestamp else round(timestamp * 1000)}})
+                "at": self._presentation_ms(addr, timestamp)}})
         # Stable: sorted() is stable, so Control's captured sends keep their
         # real order among themselves within one millisecond, and the
         # hand-authored steps keep theirs.
