@@ -631,6 +631,12 @@ git commit -m "feat(firmware): join, role/room/leds/play/release handlers, WiFi 
   `frames_tick(now)` (shows the newest frame whose `when <= now`),
   `frames_limit(const uint8_t *grb, int n, float max_amps)` (pure; scales a
   frame so the modelled draw stays under `max_amps`), `int frames_late()`.
+  Rule 3 (docs/superpowers/specs/2026-09-16-device-contract-kit-design.md):
+  a frame shows at its presentation time; when several are due, only the
+  newest shows; the last frame holds through silence. `FrameQueue::due`
+  below already has this shape -- it advances `pick` to the LAST (highest-
+  index, i.e. most recently pushed) due frame and drops everything up to
+  and including it, so no code change is needed here, only this note.
 
 - [ ] **Step 1: Write the failing native test for the limiter and the queue**
 
