@@ -348,6 +348,23 @@ def test_control_send_now_appends_a_hand_authored_step():
         "at": 400}}]
 
 
+def test_a_hand_authored_step_can_declare_itself_malformed():
+    """The malformed-input scenario's own steps have to be distinguishable
+    from every real recorded message, because the contract's verb table
+    validates the real ones and must refuse these (spec section 4.3,
+    rule 6). A step that does NOT declare itself malformed carries no such
+    key, so ordinary recordings keep the published step shape."""
+    rec = Recorder(name="t", summary="s", join_node=None)
+    rec.link_up(0)
+    rec.advance_to(300)
+    rec.control_send_now("/$DEV/bogus", "s", ["hello"], malformed=True)
+    rec.control_send_now("/$DEV/play", "ss", ["tick", ""])
+    data = rec.finish()
+
+    assert _sends(data, "/$DEV/bogus")[0]["control_sends"]["malformed"] is True
+    assert "malformed" not in _sends(data, "/$DEV/play")[0]["control_sends"]
+
+
 def test_only_this_devices_traffic_is_captured():
     """The capture wrapper drops everything that is not addressed to the
     scripted device: the real ownership probe (driven here through the

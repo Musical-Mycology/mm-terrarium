@@ -469,13 +469,25 @@ class Recorder:
         self._agent.poll()
 
     def control_send_now(self, address: str, typespec: str, args: list,
-                         at: int | None = None) -> None:
+                         at: int | None = None,
+                         malformed: bool = False) -> None:
         """A hand-authored control_sends step (the malformed-input
         scenario) -- appended directly rather than captured, since it is
-        never actually sent through this rig's own O2 connection."""
-        self.steps.append({"t": self._now_ms, "control_sends": {
-            "address": address, "typespec": typespec, "args": list(args),
-            "at": at}})
+        never actually sent through this rig's own O2 connection.
+
+        `malformed=True` adds `"malformed": true` to the step. The contract
+        kit validates every recorded message against devicelink/contract.py,
+        and a deliberately broken input has to be told apart from a
+        recording that has drifted: a flagged step is required NOT to
+        validate, an unflagged one is required to validate. Steps that are
+        not flagged carry no such key at all, so ordinary recordings keep
+        the step shape the spec publishes.
+        """
+        step = {"address": address, "typespec": typespec, "args": list(args),
+                "at": at}
+        if malformed:
+            step["malformed"] = True
+        self.steps.append({"t": self._now_ms, "control_sends": step})
 
     # --- output ------------------------------------------------------------
 
