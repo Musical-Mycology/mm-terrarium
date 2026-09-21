@@ -1,0 +1,23 @@
+description = "Rev 1 ESP32 Tuneshroom board: 12-LED ring+stem, touch pad tap/hold, LIS3DH swing, local samples"
+pixels = 12
+capabilities = ["light.pixels", "gesture.tap", "gesture.hold", "gesture.swing", "audio.samples"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+
+[[event_triggers]]
+name = "tap"
+description = "touch pad release under the tap window"
+  [event_triggers.thresholds]
+  max_ms = 250
+
+[[event_triggers]]
+name = "hold"
+description = "touch pad held past the hold window"
+  [event_triggers.thresholds]
+  min_ms = 400
+
+[[event_triggers]]
+name = "swing"
+description = "a sustained lateral acceleration past the swing threshold"
+  [event_triggers.thresholds]
+  peak_g = 1.5
+  window_ms = 80

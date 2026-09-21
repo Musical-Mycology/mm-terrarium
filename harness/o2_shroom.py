@@ -25,6 +25,7 @@ import os
 import queue
 import sys
 
+from devicelink.contract import HELLO_INTERVAL_S
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.shroom_client import LED_CHANNELS, ShroomClient
@@ -443,7 +444,8 @@ def main() -> None:
                              "which is the only reliable ordering while the "
                              "upstream /host/clear defect stands (see "
                              "terrarium_boot's --arco-start-audio).")
-    parser.add_argument("--heartbeat-interval", type=float, default=5.0,
+    parser.add_argument("--heartbeat-interval", type=float,
+                        default=HELLO_INTERVAL_S,
                         help="Resend /game/hello every N seconds while "
                              "connected, so Control's GameServer.reap_stale "
                              "does not time this device out for going "

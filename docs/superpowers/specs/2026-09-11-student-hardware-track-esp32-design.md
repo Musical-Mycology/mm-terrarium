@@ -114,9 +114,14 @@ one Bit.
 
 ### 4.1 Firmware framework: Arduino-ESP32 core, in PlatformIO
 
-**(recommended)** Build the firmware on the Arduino-ESP32 core (3.2 or later,
-which carries ESP32-P4 board support and ESP-Hosted for the C6 radio), in a
-PlatformIO project committed to a new `firmware/` directory in mm-terrarium.
+**(recommended)** Build the firmware on the Arduino-ESP32 core, in a
+PlatformIO project in its own repo, **mm-devshroom** (owned by Victor) --
+not a `firmware/` directory in mm-terrarium (superseded by
+`2026-09-16-device-contract-kit-design.md` D1). The Tower Room profile and
+Mushica stay in mm-terrarium. Pin `platformio.ini` to pioarduino
+espressif32 55.3.311 (Arduino-ESP32 3.3.11), the release the project's
+vendored o2lite update is built against, rather than tracking the `stable`
+platform channel.
 
 - o2lite's ESP32 port is written for the Arduino environment
   (`o2/src/o2liteesp32.cpp` uses `WiFi.h`; `o2/arduino/README.md` is the
@@ -341,7 +346,8 @@ The track is complete when, on Dry Run 2 hardware:
       not by discipline.
 - [ ] A second Tuneshroom built from the runbook alone, by the person who
       did not build the first, joins and plays.
-- [ ] Firmware, runbooks and the Room profile are on `main` in mm-terrarium.
+- [ ] Firmware is on `main` in mm-devshroom; runbooks and the Room profile
+      are on `main` in mm-terrarium.
 
 ---
 

@@ -145,6 +145,19 @@ capability (e.g. a fixed installation surface like `venue_array`) is
 exempt -- the floor is about handheld/carried hosts, not every instrument
 in the vocabulary.
 
+### `gesture.hold` and `gesture.swing`
+
+Two more tags in `CAPABILITY_VOCABULARY` (`control/instrument.py`),
+alongside `gesture.tap`/`gesture.tilt`: `gesture.hold` for a held press
+reported over `/game/hold`, `gesture.swing` for a signed lateral swing
+reported over `/game/swing`. Both are new wire verbs; see
+`devicelink/contract.py`'s verb table for their exact shapes and
+`docs/superpowers/specs/2026-09-16-device-contract-kit-design.md` section
+5 for the design. Event trigger names are already unrestricted
+(`[A-Za-z0-9_-]+` with numeric thresholds, `control/triggers.py`), so no
+change was needed there to carry `hold`/`swing` thresholds in a role's
+`triggers` blob.
+
 ## Compatibility
 
 **mm-tuneshroom MUST send `"tuneshroom"` on hello before this deploys to a

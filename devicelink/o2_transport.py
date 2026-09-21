@@ -21,6 +21,7 @@ import logging
 import time
 
 from control.wire_json import dumps as _json_dumps
+from devicelink.contract import GAME_VERBS
 
 logger = logging.getLogger(__name__)
 
@@ -103,10 +104,10 @@ PYARCO_SERVICE = "actl"
 CONTROL_SERVICE = "game"
 SERVICES = f"{PYARCO_SERVICE},{CONTROL_SERVICE}"
 
-# Every /game/* verb the agent routes. Registered as full-path handlers so
-# o2lite dispatches straight into the drain queue.
-GAME_VERBS = ("hello", "join", "tilt", "tap", "shake", "capture",
-              "telemetry", "canvas", "start")
+# Every /game/* verb the agent routes, imported above from
+# devicelink/contract.py's verb table so GAME_VERBS is derived from it
+# rather than kept as a second, hand-maintained list. Registered as
+# full-path handlers so o2lite dispatches straight into the drain queue.
 
 
 # Inbound arguments are PULLED off the o2lite object one at a time, in

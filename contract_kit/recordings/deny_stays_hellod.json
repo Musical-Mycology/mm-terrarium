@@ -1,0 +1,164 @@
+{
+  "device": {
+    "join_node": "NO_SUCH_NODE"
+  },
+  "name": "deny_stays_hellod",
+  "profiles": [
+    "rev1"
+  ],
+  "steps": [
+    {
+      "link": "up",
+      "t": 0
+    },
+    {
+      "expect_out": {
+        "address": "/game/hello",
+        "args": [
+          "$DEV",
+          "*",
+          "*",
+          "*"
+        ],
+        "stamp_t": null,
+        "typespec": "ssss",
+        "within_ms": 50
+      },
+      "t": 0
+    },
+    {
+      "expect_out": {
+        "address": "/game/join",
+        "args": [
+          "$DEV",
+          "NO_SUCH_NODE"
+        ],
+        "stamp_t": null,
+        "typespec": "ss",
+        "within_ms": 50
+      },
+      "t": 0
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/room",
+        "args": [
+          {
+            "bit": "ContractBit",
+            "nodes": [
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_PLAYER_NODE",
+                "roles": [
+                  "player"
+                ],
+                "scored": true
+              }
+            ],
+            "state": "SETUP",
+            "version": "0.1"
+          }
+        ],
+        "at": null,
+        "typespec": "b"
+      },
+      "t": 0
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/deny",
+        "args": [
+          "no such node",
+          ""
+        ],
+        "at": null,
+        "typespec": "ss"
+      },
+      "t": 0
+    },
+    {
+      "expect_out": {
+        "address": "/game/hello",
+        "args": [
+          "$DEV",
+          "*",
+          "*",
+          "*"
+        ],
+        "stamp_t": null,
+        "typespec": "ssss",
+        "within_ms": 50
+      },
+      "t": 5000
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/room",
+        "args": [
+          {
+            "bit": "ContractBit",
+            "nodes": [
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_PLAYER_NODE",
+                "roles": [
+                  "player"
+                ],
+                "scored": true
+              }
+            ],
+            "state": "SETUP",
+            "version": "0.1"
+          }
+        ],
+        "at": null,
+        "typespec": "b"
+      },
+      "t": 5000
+    },
+    {
+      "expect_out": {
+        "address": "/game/hello",
+        "args": [
+          "$DEV",
+          "*",
+          "*",
+          "*"
+        ],
+        "stamp_t": null,
+        "typespec": "ssss",
+        "within_ms": 50
+      },
+      "t": 10000
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/room",
+        "args": [
+          {
+            "bit": "ContractBit",
+            "nodes": [
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_PLAYER_NODE",
+                "roles": [
+                  "player"
+                ],
+                "scored": true
+              }
+            ],
+            "state": "SETUP",
+            "version": "0.1"
+          }
+        ],
+        "at": null,
+        "typespec": "b"
+      },
+      "t": 10000
+    }
+  ],
+  "summary": "A join to an unknown node is denied; the device stays hello'd with its heartbeat running"
+}
