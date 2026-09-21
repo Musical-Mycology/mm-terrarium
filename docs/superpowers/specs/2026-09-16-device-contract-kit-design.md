@@ -260,9 +260,10 @@ Rows that change for Rev 1:
   - tilt and shake
   - the count-2 double tap on the display
 - **Gestures,** from two new detectors in `lib/sense/` named after the plan's `TouchClassifier` and `SwingDetector`:
-  - A screen press shorter than `tap.max_ms` sends a tap with `count` 1 and `peak_g` 0.
-  - A press held past `hold.min_ms` sends hold with its duration when released, stamped at touch-down.
+  - A screen press no longer than `tap.max_ms` sends a tap with `count` 1 and `peak_g` 0.
+  - A press held for at least `hold.min_ms` sends hold with its duration when released, stamped at touch-down.
   - A press between the two thresholds sends nothing, as on the board.
+  - Both bounds are inclusive, matching the firmware plan's `TouchClassifier` (`held <= TAP_MAX_S`, `held >= HOLD_MIN_S`). The swing detector re-arms only when the magnitude drops below `swing.peak_g`, as the firmware plan's `SwingDetector` does; a sign flip alone does not reset it. The app and the board use the same operators, so a change is made on both sides.
   - Swing is read from the accelerometer's lateral axis crossing `swing.peak_g` for `swing.window_ms`, with sign. Left and right buttons cover browsers without a usable accelerometer.
   - Once a role is held, thresholds come from the role blob's `triggers`. Before that (for the lobby join taps), they come from built-in constants that a test pins to `instruments.tuneshroom_rev1` in the export. The board does the same.
 - **Sound:** `tick` for a tap and `hold` for a hold, each played immediately before its gesture is sent, as plan A5 does on the board. `tool/make_samples.py` generates both to A5's spec: a 30 ms 1 kHz click and a 200 ms low hum.
