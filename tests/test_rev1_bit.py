@@ -12,12 +12,15 @@ from bits.rev1.rev1_bit import (
     REV1_SIM_NODE,
     SWING_NEG_RGB,
     SWING_POS_RGB,
+    HOLD_SAMPLE,
     TAP_HUE_STEPS,
+    TAP_SAMPLE,
     Rev1Bit,
 )
 from control.bit_registry import BitRegistry
 from control.catalog import load_catalog
-from control.cues import PlayCue, SolidCue
+from control.cues import FireFunction, PlayCue, SolidCue
+from control.functions import ConditionSource, FunctionTarget
 from control.engine import GameServer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,7 +91,7 @@ def test_taps_play_tick_and_step_the_hue_then_wrap():
     values = []
     for _ in range(len(TAP_HUE_STEPS) + 1):
         cues = tap("ie1", ["ie1", 0.0, 80.0, 1], at=10.0)
-        assert PlayCue("ie1", "tick", "") in cues
+        assert FireFunction("tap_tick", "ie1") in cues
         values.append(next(c for c in cues if isinstance(c, tuple))[3])
     assert values == [*TAP_HUE_STEPS, TAP_HUE_STEPS[0]]
     assert bit.status()["taps"] == len(TAP_HUE_STEPS) + 1
@@ -97,18 +100,17 @@ def test_taps_play_tick_and_step_the_hue_then_wrap():
 def test_hold_plays_hold_and_flashes_white():
     bit = Rev1Bit()
     cues = bit.verb_handlers()["hold"]("ie1", ["ie1", 0.65, 1], at=10.0)
-    assert PlayCue("ie1", "hold", "") in cues
-    solid = next(c for c in cues if isinstance(c, SolidCue))
-    assert solid.rgb == HOLD_RGB
+    assert cues == [FireFunction("hold_flash", "ie1")]
     assert bit.status()["holds"] == 1
     assert bit.status()["last_held_s"] == pytest.approx(0.65)
 
 
-@pytest.mark.parametrize("g,rgb", [(-2.1, SWING_NEG_RGB), (1.8, SWING_POS_RGB)])
-def test_swing_flash_color_follows_the_sign(g, rgb):
+@pytest.mark.parametrize("g,name", [(-2.1, "swing_negative"),
+                                    (1.8, "swing_positive")])
+def test_swing_fires_the_trigger_matching_its_sign(g, name):
     bit = Rev1Bit()
     cues = bit.verb_handlers()["swing"]("ie1", ["ie1", g, 1], at=10.0)
-    assert [c.rgb for c in cues if isinstance(c, SolidCue)] == [rgb]
+    assert cues == [FireFunction(name, "ie1")]
     assert bit.status()["last_swing_g"] == pytest.approx(g)
 
 
@@ -183,3 +185,52 @@ def test_a_gesture_from_an_unjoined_device_is_refused():
     gs.hello("ie1", "rev1-board", "1", instrument="tuneshroom_rev1")
     assert gs.data("ie1", "hold", ["ie1", 0.65, 1]) == "device not registered"
     assert play == [] and solid == []
+
+
+# --- triggers: what the Console's Triggers panel offers ---------------------
+
+def _script(name):
+    return [step.cue for step in Rev1Bit().function_table.functions[name].script]
+
+
+def test_declares_one_device_trigger_per_gesture_response():
+    table = Rev1Bit().function_table.functions
+    assert set(table) == {"tap_tick", "hold_flash",
+                          "swing_negative", "swing_positive"}
+    for name, verb in (("tap_tick", "tap"), ("hold_flash", "hold"),
+                       ("swing_negative", "swing"),
+                       ("swing_positive", "swing")):
+        fn = table[name]
+        assert fn.target is FunctionTarget.DEVICE, name
+        assert fn.condition.source is ConditionSource.GESTURE_VERB, name
+        assert fn.condition.verb == verb, name
+
+
+def test_trigger_scripts_carry_the_gesture_responses():
+    from control.cues import TARGET
+    assert _script("tap_tick") == [PlayCue(TARGET, TAP_SAMPLE, "")]
+    hold = _script("hold_flash")
+    assert PlayCue(TARGET, HOLD_SAMPLE, "") in hold
+    assert [c.rgb for c in hold if isinstance(c, SolidCue)] == [HOLD_RGB]
+    assert [c.rgb for c in _script("swing_negative")] == [SWING_NEG_RGB]
+    assert [c.rgb for c in _script("swing_positive")] == [SWING_POS_RGB]
+
+
+def test_a_manual_fire_reaches_the_board_but_does_not_count():
+    """The operator's Fire button is a response check, not a gesture: it
+    must land on the board and must not move the gesture counters."""
+    from control.functions import FIRED_BY_ADMIN_MANUAL
+    gs, _, play, solid = _server()
+    gs.hello("ie1", "rev1-board", "1", instrument="tuneshroom_rev1")
+    assert gs.join("ie1", REV1_PLAYER_NODE).granted
+    gs.run()
+
+    assert gs.fire_function("hold_flash", fired_by=FIRED_BY_ADMIN_MANUAL,
+                            dev="ie1") is None
+    assert gs.fire_function("swing_positive", fired_by=FIRED_BY_ADMIN_MANUAL,
+                            dev="ie1") is None
+    assert play == [("ie1", "hold", "")]
+    assert [(c[0], c[1]) for c in solid] == [("ie1", HOLD_RGB),
+                                            ("ie1", SWING_POS_RGB)]
+    assert gs.bit.status()["holds"] == 0
+    assert gs.bit.status()["swings"] == 0

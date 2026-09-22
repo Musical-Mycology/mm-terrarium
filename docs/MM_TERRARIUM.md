@@ -4951,6 +4951,16 @@ not a `firmware/` directory here).
 - **Simulated Rev 1 board vs. standard sim.** `run_stack --bit Rev1Bit`
   spawns `testshroom` devices on `REV1_SIM_NODE` (tap only). To exercise
   hold and swing from a sim, launch it by hand as a Rev 1 board as above.
+- **Triggers (2026-09-22).** Rev1Bit declares four DEVICE triggers, one per
+  gesture response: `tap_tick` (the `tick` sample), `hold_flash` (`hold`
+  plus 1 s white), `swing_negative` (0.5 s red) and `swing_positive`
+  (0.5 s blue). The gesture handlers fire these same triggers through
+  `FireFunction`, so a real gesture and the Console's Fire button share one
+  definition and a live gesture shows on its trigger's last-fired line. The
+  status counters move only in the handlers: a manual fire checks the
+  response and is not a gesture. The tap's hue step stays in `_on_tap`,
+  since it depends on the tap count; a manual `tap_tick` plays the sample
+  only. Live-verified over a real Arco the same day.
 - **Console fixes found bringing it up (2026-09-22).** Three things made
   a working board look dead from the Console: (1) Diagnostics Stop/Flash/
   Ping were greyed out for any device carrying its own instrument, because
