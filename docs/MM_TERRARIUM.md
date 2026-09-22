@@ -4975,6 +4975,15 @@ not a `firmware/` directory here).
   them and prints why, and says so when a role does not use swing. The
   WebSim page itself still gives no hint that the LED drawing is the tap
   target (luxaeterna's page).
+- **Triggers panel polish (2026-09-22).** A DEVICE trigger's picker no
+  longer offers bound Room fixtures (as the first option it was the
+  default, so a manual fire meant for a board landed on a strip); with no
+  device connected it shows "no device joined" and Fire is disabled. Fire
+  and the Diagnostics buttons carry the reason they are disabled as a
+  tooltip (no device, instrument lacks the function, instrument lacks the
+  light/audio capability a builtin needs). The empty state now reads "This
+  Bit declares no triggers. Diagnostics above works on any device.", and a
+  row pulses briefly on every fire, manual or gesture.
 
 ## Boundary rules (the load-bearing invariants)
 

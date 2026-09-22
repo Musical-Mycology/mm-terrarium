@@ -301,6 +301,13 @@ details.acc > .accbody { margin-top: 10px; }
 }
 .fn.fired-admin { border-left-color: var(--terra); }
 .fn.fired { border-left-color: var(--sage); }
+/* A brief mark on a row that just fired (functions.js onFunctionFired). */
+.fn.justfired { animation: fnpulse 1.2s ease-out; }
+@keyframes fnpulse {
+  from { box-shadow: 0 0 0 2px var(--gold); }
+  to   { box-shadow: 0 0 0 2px transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .fn.justfired { animation: none; outline: 2px solid var(--gold); } }
 .fn h3 { font-family: var(--f-disp); font-weight: 400; font-size: 14px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
 .fn .summary { font-size: 11px; color: var(--ink-dim); white-space: nowrap; }
 .fn .grow { flex: 1; }

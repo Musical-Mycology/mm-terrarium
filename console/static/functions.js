@@ -20,6 +20,7 @@ let fnDevices = [];                  // {dev, muted, fixture} offered by DEVICE/
 let currentDeviceTargets = new Map(); // name -> {target, fn} for rendered SURFACE/DEVICE pickers
 const cardByName = new Map();        // function name -> its row element (test hook)
 const infoBtnByName = new Map();     // function name -> its (i) button (test hook)
+const fireBtnByName = new Map();     // function name -> its Fire button (test hook)
 let openPopoverRow = null;           // the row whose popover is open, else null
 const ALL_OPTION = "@all";
 
@@ -57,6 +58,10 @@ export function _infoBtnFor(name) {
   return infoBtnByName.get(name);
 }
 
+export function _fireBtnFor(name) {
+  return fireBtnByName.get(name);
+}
+
 export function _diagRow() {
   return diagRowEl;
 }
@@ -75,6 +80,13 @@ export function _diagButton(name) {
 // operator's current selection when the live device list changes under it,
 // falling back to the first offered device only when the previous
 // selection is no longer available.
+//
+// withRoom (SURFACE targets, Diagnostics) offers All plus every surface,
+// Room fixtures included. Without it (DEVICE targets: "the firing device")
+// a bound Room fixture is never offered -- it used to be, and as the first
+// option it was the default, so a manual fire meant for a board landed on
+// a strip. With no device connected the picker holds one empty placeholder
+// and the row's Fire button stays disabled (refreshFireButton).
 function fillDevicePicker(picker, withRoom) {
   if (!picker) return;
   const previous = picker.value;
@@ -87,7 +99,16 @@ function fillDevicePicker(picker, withRoom) {
     picker.appendChild(option);
     values.push(ALL_OPTION);
   }
-  for (const { dev, muted, fixture } of fnDevices) {
+  const offered = withRoom ? fnDevices : fnDevices.filter((d) => !d.fixture);
+  if (!withRoom && !offered.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "no device joined";
+    picker.appendChild(option);
+    picker.value = "";
+    return;
+  }
+  for (const { dev, muted, fixture } of offered) {
     const option = document.createElement("option");
     option.value = dev;
     const base = fixture ? `${dev} (${fixture})` : dev;
@@ -151,13 +172,32 @@ function resolvedDescription(fn, surfaceValue) {
 function refreshCardCompatibility(fn, picker, card) {
   if (picker) {
     for (const option of picker.options) {
-      option.disabled = !isCompatible(fn, option.value);
+      option.disabled = option.value === "" || !isCompatible(fn, option.value);
     }
   }
   if (card) {
     card._descText = resolvedDescription(fn, picker ? picker.value : null);
     if (card._popDesc) card._popDesc.textContent = card._descText;
+    refreshFireButton(fn, picker, card._fireBtn);
   }
+}
+
+// Fire is disabled, with the reason as its tooltip, whenever the server
+// would only refuse it: no device to target, or a surface whose
+// instrument has no function of this name. A refusal after the click
+// told the operator the same thing, later and less clearly.
+function refreshFireButton(fn, picker, btn) {
+  if (!btn) return;
+  let reason = "";
+  if (picker && !picker.value) {
+    reason = "Join a device first: this trigger targets one device";
+  } else if (picker && !isCompatible(fn, picker.value)) {
+    const inst = surfaceInstruments[surfaceLookupKey(picker.value)];
+    reason = `Not available on ${picker.value}` +
+      (inst ? `: ${inst} has no ${fn.name}` : "");
+  }
+  btn.disabled = !!reason;
+  btn.title = reason;
 }
 
 function refreshAllCardCompatibility() {
@@ -201,12 +241,22 @@ function builtinsFor(pickerValue) {
   return inst ? builtinsMap[inst] || [] : [];
 }
 
+// What each builtin needs (control/builtins.py), for the disabled tooltip.
+const BUILTIN_NEEDS = { stop: "light or audio", flash: "light", ping: "audio" };
+
 function refreshDiagButtons() {
   if (!diagPicker) return;
-  const names = builtinsFor(diagPicker.value);
+  const value = diagPicker.value;
+  const names = builtinsFor(value);
+  const inst = surfaceInstruments[surfaceLookupKey(value)];
   // Stop first: it is the panic button.
   for (const name of ["stop", "flash", "ping"]) {
-    diagButtons[name].disabled = !names.includes(name);
+    const ok = names.includes(name);
+    diagButtons[name].disabled = !ok;
+    diagButtons[name].title = ok ? ""
+      : value === ALL_OPTION
+        ? `No connected surface has a ${BUILTIN_NEEDS[name]} capability`
+        : `${value}${inst ? ` (${inst})` : ""} has no ${BUILTIN_NEEDS[name]} capability`;
   }
 }
 
@@ -384,6 +434,8 @@ function buildRow(fn) {
       wire.send("fire_function", extra, fireBtn);
     };
     row.appendChild(fireBtn);
+    row._fireBtn = fireBtn;
+    fireBtnByName.set(fn.name, fireBtn);
 
     const firedLine = mk("div", "fired-line");
     applyFired(row, firedLine, lastFired[fn.name]);
@@ -402,6 +454,7 @@ function render(list) {
   cardByName.clear();
   closePopover();
   infoBtnByName.clear();
+  fireBtnByName.clear();
   // The diagnostics row is built once and reused across rebuilds -- clear()
   // just emptied the mount, so re-append the same node rather than
   // reconstructing it.
@@ -409,7 +462,8 @@ function render(list) {
 
   if (!list.length) {
     currentDeviceTargets = new Map();
-    mount.appendChild(mk("p", "muted", "No functions declared"));
+    mount.appendChild(mk("p", "muted",
+      "This Bit declares no triggers. Diagnostics above works on any device."));
     return true;
   }
 
@@ -440,11 +494,20 @@ function onFunctionsChanged(list) {
   else fnSignature = null;
 }
 
+const PULSE_MS = 1200;
+
 function onFunctionFired(fired) {
   if (!fired || !fired.name) return;
   lastFired[fired.name] = fired;
   const card = cardByName.get(fired.name);
   if (card && card._firedLine) applyFired(card, card._firedLine, fired);
+  // A brief mark on the row, so a fire (manual or from a live gesture) is
+  // noticeable without reading the fired-line text.
+  if (card) {
+    card.classList.add("justfired");
+    clearTimeout(card._pulseTimer);
+    card._pulseTimer = setTimeout(() => card.classList.remove("justfired"), PULSE_MS);
+  }
 }
 
 // ---------------------------------------------------------------------- init
