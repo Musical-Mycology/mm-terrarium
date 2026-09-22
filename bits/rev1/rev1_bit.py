@@ -5,6 +5,12 @@ lists it, a board joins REV1_PLAYER_NODE, and every gesture the board can
 send has one response a person at the bench can see and hear. It never
 completes on its own; unload it from the Console when the check is done.
 
+A standard tuneshroom (the harness sim's `testshroom`, or the app's
+`tuneshroom`) joins REV1_SIM_NODE instead, gated only on pixels and tap, and
+gets the same tap response. REV1_PLAYER_NODE keeps the full Rev 1 gate, so a
+board declaring the wrong instrument is still refused rather than admitted
+quietly.
+
 This is NOT the device contract. contract_kit/contract_bit.py's ContractBit
 and the recordings it produces are the contract, and ContractBit is kept
 unregistered on purpose (docs/superpowers/specs/
@@ -20,12 +26,17 @@ from control.instrument import InstrumentRequirement
 from control.roles import Role, RoleClass, RoleTable
 
 REV1_PLAYER_NODE = "REV1_PLAYER_NODE"
+REV1_SIM_NODE = "REV1_SIM_NODE"
 
 # The Rev 1 hardware capability set (instruments/tuneshroom_rev1.toml).
 # Spelled here rather than imported from contract_kit, which is test-only
 # and never imported by venue code (contract_kit/__init__.py).
 REV1_CAPABILITIES = frozenset({"light.pixels", "gesture.tap", "gesture.hold",
                                "gesture.swing", "audio.samples"})
+
+# What REV1_SIM_NODE asks for: enough to see a tap land. Both `testshroom`
+# and `tuneshroom` carry it, and so does `tuneshroom_rev1`.
+SIM_CAPABILITIES = frozenset({"light.pixels", "gesture.tap"})
 
 # The two samples the Rev 1 firmware bundles (plan Task A5,
 # src/audio/samples.cpp). A name outside these is the contract kit's
@@ -63,31 +74,40 @@ class Rev1Bit(Bit):
 
     @property
     def role_table(self) -> RoleTable:
-        player = Role(
-            name="player", role_class=RoleClass.SHARED, capacity=None,
-            scored=False, requires="rev1",
-            # Control's breath drives cc:11; this role maps only cc:74, so
-            # the breath could not move it anyway. Off so nothing but a
-            # gesture ever changes the board's frame.
-            breath=False,
-            uses=["tap", "hold", "swing"],
-            samples=[TAP_SAMPLE, HOLD_SAMPLE],
-            light_manifest={"instruments": [
-                {"instrument": "aurora", "target": "primary",
-                 "params": {"hue": 0.5, "level": 0.6},
-                 "lanes": [{"source": f"cc:{HUE_CC}", "dest": "hue"}]},
-            ]},
-        )
-        return RoleTable(roles={"player": player},
-                         node_map={REV1_PLAYER_NODE: ["player"]})
+        def role(name: str, requires: str, uses: list, samples: list) -> Role:
+            return Role(
+                name=name, role_class=RoleClass.SHARED, capacity=None,
+                scored=False, requires=requires,
+                # Control's breath drives cc:11; this role maps only cc:74,
+                # so the breath could not move it anyway. Off so nothing
+                # but a gesture ever changes the device's frame.
+                breath=False, uses=uses, samples=samples,
+                light_manifest={"instruments": [
+                    {"instrument": "aurora", "target": "primary",
+                     "params": {"hue": 0.5, "level": 0.6},
+                     "lanes": [{"source": f"cc:{HUE_CC}", "dest": "hue"}]},
+                ]},
+            )
+        # The sim role asks only for tap: a standard tuneshroom has no hold
+        # or swing, and harness/o2_shroom.py sends those two only when the
+        # role's `uses` names them (a long press goes out as a tap instead).
+        player = role("player", "rev1", ["tap", "hold", "swing"],
+                      [TAP_SAMPLE, HOLD_SAMPLE])
+        sim = role("sim", "sim", ["tap"], [TAP_SAMPLE])
+        return RoleTable(roles={"player": player, "sim": sim},
+                         node_map={REV1_PLAYER_NODE: ["player"],
+                                   REV1_SIM_NODE: ["sim"]})
 
     def instrument_requirements(self) -> tuple:
         """The "rev1" slot: the five Rev 1 capabilities, the same set as
         ContractBit's gate. The board (`tuneshroom_rev1`) satisfies it; the
         app's full `tuneshroom` profile and the harness `testshroom` do
-        not."""
+        not. The "sim" slot asks only for pixels and tap, which all three
+        satisfy."""
         return (InstrumentRequirement(slot="rev1",
-                                      capabilities=REV1_CAPABILITIES),)
+                                      capabilities=REV1_CAPABILITIES),
+                InstrumentRequirement(slot="sim",
+                                      capabilities=SIM_CAPABILITIES))
 
     def status(self) -> dict:
         return {"taps": self._taps,

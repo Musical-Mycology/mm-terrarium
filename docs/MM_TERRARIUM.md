@@ -4919,6 +4919,14 @@ not a `firmware/` directory here).
   `REV1_PLAYER_NODE` in the TEST or DEMO room; `tuneshroom` and
   `testshroom` carriers are refused by the same five-capability `rev1`
   gate ContractBit uses.
+- **Standard tuneshrooms join a second node (2026-09-22).**
+  `REV1_SIM_NODE` grants a `sim` role gated only on `light.pixels` and
+  `gesture.tap`, so a `testshroom` sim or the app's `tuneshroom` profile
+  can join and see the same tap response. Its `uses` is `["tap"]`, so the
+  sim sends a long press as a tap and never sends swing. It is the
+  manifest's `default_join_role`, so `run_stack --bit Rev1Bit` spawns
+  working devices. `REV1_PLAYER_NODE` keeps the full `rev1` gate: a board
+  declaring the wrong instrument is still refused there.
 - **One visible response per gesture.** Tap plays `tick` and steps the
   aurora hue through five cc:74 values; hold plays `hold` and flashes
   white for 1 s; swing flashes red (negative g) or blue (positive g) for
@@ -4940,9 +4948,9 @@ not a `firmware/` directory here).
   over a real Arco (`run_stack --bit Rev1Bit --devices 0` plus that sim):
   tap stepped the hue, hold flashed white, swing flashed red and blue, and
   Control logged no errors. See *WebSim two-way input* for the gating.
-- **Not yet built.** `run_stack --bit Rev1Bit` still spawns its default
-  device as a `testshroom` (`device_command` passes no `--instrument`),
-  which the `rev1` gate refuses; launch the sim by hand as above.
+- **Simulated Rev 1 board vs. standard sim.** `run_stack --bit Rev1Bit`
+  spawns `testshroom` devices on `REV1_SIM_NODE` (tap only). To exercise
+  hold and swing from a sim, launch it by hand as a Rev 1 board as above.
 
 ## Boundary rules (the load-bearing invariants)
 
