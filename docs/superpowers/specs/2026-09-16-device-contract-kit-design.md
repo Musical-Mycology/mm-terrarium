@@ -301,6 +301,8 @@ In both profiles, while a role is held, the last frame from Control stays up ind
 
 Victor owns this repo. These recommendations reach him through the plan amendments in §9.
 
+A standalone firmware-facing guide to the kit (the export, the session interface, the seven rules, the replay runner and what the recordings do and do not pin) is `docs/device-contract-guide.md`.
+
 - **Code layout:**
   - Arduino-only code (WiFi, touch pad, LIS3DH, NeoPixel, I2S) stays in `src/`.
   - Session logic and tap, hold and swing classification go in Arduino-free libraries under `lib/`.

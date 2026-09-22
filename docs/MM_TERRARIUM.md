@@ -4875,6 +4875,9 @@ not a `firmware/` directory here).
   Mushica Bit to exist.
 - **Suite at HEAD:** `.venv/bin/python -m pytest tests -v` -- 2543 passed,
   1 skipped.
+- **Firmware-facing guide:** `docs/device-contract-guide.md` walks a
+  device author through the export, the session interface, the seven
+  rules, building a C/C++ replay runner, and what the recordings pin.
 
 ## Boundary rules (the load-bearing invariants)
 
