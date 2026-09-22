@@ -845,6 +845,16 @@ def test_main_gates_the_tilt_sweep_and_the_tapper_on_uses():
     assert "on_show=" in src
 
 
+
+def test_main_hands_the_role_blob_to_the_gesture_drain():
+    """Source-level pin: hold and swing go out only for a role whose
+    `uses` lists them (tests/test_o2_shroom_input.py), which works only
+    if the tick loop passes the granted role blob through."""
+    import inspect
+    import harness.o2_shroom as mod
+    src = inspect.getsource(mod.main)
+    assert "args.dev, now, client.config)" in src
+
 from harness.o2_shroom import invite_seen
 
 

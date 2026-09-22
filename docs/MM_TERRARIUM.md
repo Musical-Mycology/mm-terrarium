@@ -2064,7 +2064,19 @@ no overdue-tilt burst. Gestures are dropped until the role is granted
 (same UDP-overtakes-TCP race guard as the sweep) and on `--no-join`
 (Room) runs. No `devicelink/protocol.py`, engine, or Bit changes:
 `tap`/`tilt` already ride the generic `/game/<verb>` path into TestBit's
-handlers. `ShroomClient` also gained the `tap()` encoder its docstring's
+handlers. **Hold and swing (2026-09-22, for Rev1Bit).** The page sends
+`{"type":"hold","held_seconds":s}` for a press held 400 ms or more without
+dragging, and `{"type":"swing","signed_peak_g":+/-2}` on ArrowLeft /
+ArrowRight (key auto-repeat ignored). `drain_gestures()` takes the granted
+role blob and sends `/game/hold sfi [dev, held_seconds, 1]` (stamped at
+touch-down: the release stamp minus `held_seconds`) and `/game/swing sfi
+[dev, signed_peak_g, 1]` **only when the role's `uses` lists the verb by
+name**. That is stricter than `wants_verb`, which is permissive for a role
+with no `uses`, because no pre-Rev 1 Bit handles either verb. Otherwise a
+hold goes out as the plain tap a long click always was (so TestBit and
+MetronomeBit operators see no change) and a swing is dropped. Both wait
+for a role (`pre_role` false), and the drain itself only runs once the
+role is in. `ShroomClient` also gained the `tap()` encoder its docstring's
 wire table had documented but never implemented. Live-verified
 2026-08-20 against a real Arco via `run_stack --ci --devices 1`: taps
 sent over ie1's WebSim socket came back as `/ie1/play` cues (click,
@@ -4919,10 +4931,18 @@ not a `firmware/` directory here).
   the capability set itself, because venue code does not import
   `contract_kit/`; `tests/test_rev1_bit.py` checks it equals both the
   published `tuneshroom_rev1` capabilities and ContractBit's copy.
-- **Not yet built.** A simulated Rev 1 device: `harness/o2_shroom.py`
-  sends only `/game/tap` and `/game/tilt`, so hold and swing are
-  exercised in-process (`GameServer.data`) and on a real board, not over
-  the wire from the sim.
+- **Simulated Rev 1 board (2026-09-22).** `harness/o2_shroom.py --node
+  REV1_PLAYER_NODE --instrument tuneshroom_rev1` joins Rev1Bit and drives
+  all three verbs from its WebSim canvas: click taps, a press held 400 ms
+  or more (the board's hold window) sends `/game/hold`, and the left/right
+  arrow keys send `/game/swing` at -2 g / +2 g. The sim's tone set carries
+  `tick` and `hold`, so both samples sound. Live-verified the same day
+  over a real Arco (`run_stack --bit Rev1Bit --devices 0` plus that sim):
+  tap stepped the hue, hold flashed white, swing flashed red and blue, and
+  Control logged no errors. See *WebSim two-way input* for the gating.
+- **Not yet built.** `run_stack --bit Rev1Bit` still spawns its default
+  device as a `testshroom` (`device_command` passes no `--instrument`),
+  which the `rev1` gate refuses; launch the sim by hand as above.
 
 ## Boundary rules (the load-bearing invariants)
 
