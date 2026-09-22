@@ -81,7 +81,10 @@ def test_join_at_link_up_gets_the_player_role_from_control():
 def test_join_now_joins_later_and_leaves_device_join_node_alone():
     """The device hellos with no node and only decides to join partway
     through: no role before the join, one after, and `device.join_node`
-    stays null so a replaying device does not join at link-up."""
+    stays null so a replaying device does not join at link-up. join_now
+    also records a `join` INPUT step, not just its own expect_out: a
+    runner needs something to deliver at t=600, not just something to
+    check the device eventually sent on its own."""
     rec = Recorder(name="t", summary="s", join_node=None)
     rec.link_up(0)
     rec.expect_hello(0)
@@ -97,6 +100,10 @@ def test_join_now_joins_later_and_leaves_device_join_node_alone():
     joins = [s for s in data["steps"]
              if s.get("expect_out", {}).get("address") == "/game/join"]
     assert [s["t"] for s in joins] == [600]
+    join_inputs = [s for s in data["steps"] if "join" in s]
+    assert join_inputs == [{"t": 600, "join": {"node": CONTRACT_PLAYER_NODE}}]
+    # The input precedes its own expect_out at the same t, like a gesture.
+    assert data["steps"].index(join_inputs[0]) < data["steps"].index(joins[0])
 
 
 def test_tap_plays_the_known_sample_and_stamps_a_future_look():
@@ -334,6 +341,35 @@ def test_expect_frame_raises_rather_than_recording_nothing():
     rec.link_up(0)
     with pytest.raises(AssertionError):
         rec.expect_frame(0)
+
+
+def test_expect_frame_held_repeats_the_pre_outage_frame_not_a_later_one():
+    """A link-down window: Control goes on sending real (unheard) frames
+    past `since_t_ms`, and expect_frame_held must still report what was
+    showing at `since_t_ms`, not whatever an ordinary expect_frame(t_ms)
+    would have found among those later, undelivered sends."""
+    rec = Recorder(name="t", summary="s", join_node=CONTRACT_PLAYER_NODE)
+    rec.link_up(0)
+    rec.advance_to(6000)
+    pre_outage = rec._frame_showing_at(6000)
+    # A later frame Control "sends" that a device whose link is down never
+    # actually hears -- exactly what a real stale-timeout reap fade would
+    # look like on the wire during an outage.
+    later = [9, 9, 9] * 12
+    rec.control_send_now("/$DEV/leds", "b", [later], at=6100)
+    rec.expect_frame_held(6050, since_t_ms=6000)
+    data = rec.finish()
+
+    held = [s["expect_frame"] for s in data["steps"] if "expect_frame" in s]
+    assert held == [{"grb": pre_outage}]
+    assert held[0]["grb"] != later
+
+
+def test_expect_frame_held_raises_when_nothing_had_reached_the_device_yet():
+    rec = Recorder(name="t", summary="s", join_node=None)
+    rec.link_up(0)
+    with pytest.raises(AssertionError):
+        rec.expect_frame_held(1000, since_t_ms=0)
 
 
 def test_expect_play_records_the_time_control_actually_sent_it():

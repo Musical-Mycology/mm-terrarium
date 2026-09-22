@@ -227,6 +227,21 @@ def test_replay_notes_state_the_undocumented_replay_rules():
     assert "6200" in joined and "6100" in joined
     assert "6000" in joined
     assert "0, 0, 255" in joined and "255, 0, 0" in joined
+    # A join step is an input a runner delivers, not something to infer
+    # from its own expect_out.
+    assert "join" in lowered and "infer" in lowered
+    # link_loss_keeps_display's outage expect_frame is hand-authored too,
+    # named explicitly rather than left implicit.
+    assert "link_loss_keeps_display" in joined
+    assert "8000" in joined
+
+
+def test_join_schema_describes_an_input_not_an_inferred_expectation():
+    data = export_contract(commit="abc123")
+    join_kind = data["step_schema"]["kinds"]["join"]
+    assert "input" in join_kind["role"]
+    assert set(join_kind["fields"]) == {"node"}
+    assert "str" in join_kind["fields"]["node"]
 
 
 def test_step_schema_matches_the_recordings_exactly():
@@ -385,16 +400,18 @@ def test_instrument_triggers_match_the_toml():
 
 def test_contract_version_and_provenance():
     data = export_contract(commit="abc123")
-    # Nothing has been published to a device repo yet, so contract_version
-    # stays 1 even though this and earlier fix waves added keys.
-    assert data["contract_version"] == 1
+    # This fix wave's "join" step kind and link_loss_keeps_display scenario
+    # are both observable by a device, so contract_version bumps from the
+    # published 1 to 2 (mm-tuneshroom's own guard and runner catch up in a
+    # follow-up there, not here).
+    assert data["contract_version"] == 2
     assert data["_provenance"] == {"commit": "abc123", "tool": "export_contract/1"}
 
 
 def test_main_writes_contract_and_scenario_files(tmp_path):
     main([str(tmp_path)])
     contract = json.loads((tmp_path / "contract.json").read_text())
-    assert contract["contract_version"] == 1
+    assert contract["contract_version"] == 2
     scenario_files = sorted(p.name for p in (tmp_path / "scenarios").glob("*.json"))
     assert scenario_files == sorted(f"{fn.__name__}.json" for fn in ALL_SCENARIOS)
 

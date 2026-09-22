@@ -396,6 +396,63 @@ def malformed_dropped() -> dict:
     return rec.finish()
 
 
+def link_loss_keeps_display() -> dict:
+    """Rule 8's two device-side halves, and the fresh join a compliant
+    device sends once the link is back: a lost link ends the device's
+    held role, in every profile, and a rev1 device (the board, and the
+    app's rev1 profile) keeps its last frame lit through the loss until a
+    fresh role's own frames replace it. The heartbeat halts while the
+    link is down (rule 1's own "while the link stays up").
+
+    "Role ends" is not itself something a device sends over the wire, so
+    nothing here checks it directly. What IS wire-observable, and what
+    this scenario actually pins, is its consequence: a device that
+    correctly cleared its role when the link fell re-joins from scratch
+    once the link is back (the `expect_out` pair at t=17000), exactly as
+    `link_loss_rejoin` already pins for Control's own 15 s reap. A device
+    that wrongly went on believing it still held a role across the outage
+    would have no reason to send that join again.
+
+    The outage-window `expect_frame` is HAND-AUTHORED
+    (`Recorder.expect_frame_held`), like the pair in
+    `timed_frames_hold_last`, and for the same structural reason: this
+    recorder can only observe what Control sends, and during a link loss
+    the device hears none of it. Control itself stays quiet here until its
+    own 15 s stale timeout starts the reap fade (at t=15018 -- well after
+    this scenario's own outage check at t=8000), but a runner replaying
+    this file must not depend on that timing either way; what the device
+    is still showing has to be told to the recording directly, as whatever
+    had already reached it before the link fell.
+
+    Whether a real Rev 1 board keeps its pixels lit through a link loss,
+    rather than going dark, is inferred from the firmware plan's A2 code,
+    not measured on hardware; Victor confirms it on the bench (spec
+    section 7) before mm-devshroom's replay tests adopt this scenario.
+    """
+    rec = Recorder(name="link_loss_keeps_display",
+                   summary="A lost link ends the role and halts the "
+                           "heartbeat; a rev1 device keeps its last frame "
+                           "lit through the outage and rejoins once the "
+                           "link is back",
+                   join_node=CONTRACT_PLAYER_NODE)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.expect_join(0, CONTRACT_PLAYER_NODE)
+    rec.advance_to(SIGNATURE_SETTLED_MS)
+    rec.expect_frame(SIGNATURE_SETTLED_MS)          # the settled role look
+    rec.link_down(SIGNATURE_SETTLED_MS)
+    rec.expect_quiet(SIGNATURE_SETTLED_MS,
+                     ["/game/hello", *POST_ROLE_GESTURES], 15000)
+    rec.expect_frame_held(8000, since_t_ms=SIGNATURE_SETTLED_MS)
+    rec.advance_to(17000)                           # 17 s of silence: past the 15 s
+    rec.link_up(17000)
+    rec.expect_hello(17000)
+    rec.expect_join(17000, CONTRACT_PLAYER_NODE)
+    rec.advance_to(17000 + SIGNATURE_SETTLED_MS)
+    rec.expect_frame(17000 + SIGNATURE_SETTLED_MS)  # the fresh role's settled look
+    return rec.finish()
+
+
 ALL_SCENARIOS: tuple[Callable[[], dict], ...] = (
     boot_hello_heartbeat,
     explicit_join_role,
@@ -408,4 +465,5 @@ ALL_SCENARIOS: tuple[Callable[[], dict], ...] = (
     link_loss_rejoin,
     error_no_state_change,
     malformed_dropped,
+    link_loss_keeps_display,
 )

@@ -321,16 +321,22 @@ class Recorder:
         device hellos with join_node=None and only decides to join partway
         through.
 
-        Sends the join through the same path every other scripted device
-        message takes, and records the device's own expect_out for it, so
-        finish() reports exactly what this rig did. `device.join_node`
-        stays None on purpose: a replaying device must not join at link-up
-        just because it joins later.
+        Records a `join` INPUT step (spec section 4.3's step kinds; this
+        kit's step_schema.kinds.join) naming the node, so a replaying
+        runner has something to DELIVER at `t_ms` -- a join is a decision
+        the device under test makes, and an expect_out alone cannot tell a
+        runner when to make it. The join is then sent through the same
+        path every other scripted device message takes, and its own
+        expect_out is recorded after, so finish() reports exactly what
+        this rig did. `device.join_node` stays None on purpose: a
+        replaying device must not join at link-up just because it joins
+        later.
 
         Records the expectation itself, so a caller does NOT also call
         expect_join for the same join.
         """
         self.advance_to(t_ms)
+        self.steps.append({"t": t_ms, "join": {"node": node}})
         self._send_join(t_ms, node)
         self.expect_join(t_ms, node)
 
@@ -432,7 +438,7 @@ class Recorder:
             return None
         return round(timestamp * 1000)
 
-    def expect_frame(self, t_ms: int) -> None:
+    def _frame_showing_at(self, t_ms: int) -> list:
         """The pixels showing at `t_ms`: the frame with the NEWEST
         presentation time at or before `t_ms` (spec section 4.3, rule 3).
 
@@ -448,8 +454,11 @@ class Recorder:
         time differ by the cue horizon, and an authored pair may deliberately
         arrive newest-first. Frames flagged `malformed` are skipped, because
         a frame the device must drop can never be the one showing. Raises if
-        no frame is showing yet, rather than recording an expectation of
-        nothing.
+        no frame is showing yet, rather than returning an answer of nothing.
+
+        Shared by expect_frame (t_ms is the check's own time) and
+        expect_frame_held (t_ms is a time BEFORE a link-down window, not
+        the check's own time inside it -- see that method).
         """
         showing = None
         newest_at: int | None = None
@@ -473,7 +482,41 @@ class Recorder:
         if showing is None:
             raise AssertionError(
                 f"no /leds frame is showing on {self.dev} at t={t_ms}ms")
-        self.steps.append({"t": t_ms, "expect_frame": {"grb": showing}})
+        return showing
+
+    def expect_frame(self, t_ms: int) -> None:
+        """The pixels showing at `t_ms` (see _frame_showing_at). Raises if
+        no frame is showing yet, rather than recording an expectation of
+        nothing.
+        """
+        self.steps.append(
+            {"t": t_ms, "expect_frame": {"grb": self._frame_showing_at(t_ms)}})
+
+    def expect_frame_held(self, t_ms: int, since_t_ms: int) -> None:
+        """A HAND-AUTHORED expect_frame for a moment inside a link-down
+        window: the device is asserted to still be showing whatever had
+        reached it BEFORE the outage began, at `since_t_ms`, not whatever
+        expect_frame's own "newest control_sends with at <= t_ms" search
+        would find by digging all the way up to `t_ms` itself.
+
+        That distinction matters only here: while the link is down,
+        Control goes on ticking and can go on sending `/$DEV/leds` into a
+        link the device cannot hear (this export's
+        step_schema.link_down_delivery rule), and if `t_ms` fell late
+        enough for one of THOSE sends to have an `at` at or before it,
+        plain expect_frame would report Control's own unheard traffic
+        instead of the frame the device is actually still showing. This
+        recorder can only ever observe what Control sent, never a device's
+        own screen, so the true answer -- "still whatever it had at
+        since_t_ms" -- has to be told to it directly rather than
+        re-derived from `t_ms`. See contract_kit/scenarios.py's
+        link_loss_keeps_display and this export's replay_notes.
+
+        Raises under the same condition expect_frame does if nothing had
+        reached the device by `since_t_ms`.
+        """
+        self.steps.append({"t": t_ms, "expect_frame": {
+            "grb": self._frame_showing_at(since_t_ms)}})
 
     def expect_play(self, t_ms: int, name: str,
                     within_ms: int = DEFAULT_WITHIN_MS) -> None:

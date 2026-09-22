@@ -131,6 +131,7 @@ Device repos never change a verb or a scenario themselves. The wire changes only
 - **Inputs:**
   - `control_sends`: a recorded Control message, with its presentation time `at` (on the same timeline as `t`) when it has one
   - `gesture`: `tap`, `hold {held_s}` or `swing {signed_g}`
+  - `join {node}`: the device joining `node`, later than link-up (a join AT link-up is instead the scenario's own `device.join_node` field). A runner delivers this as an input; it must not infer a join from the `expect_out` that follows it, which checks what the device under test sends and cannot also be the runner's own cue to send it.
   - `link`: `up` or `down`
 - **Expectations:**
   - `expect_out`: a message the device must send, with `$DEV` and `*` placeholders
@@ -171,8 +172,13 @@ Device repos never change a verb or a scenario themselves. The wire changes only
 5. `count` is the number of taps in one gesture, and Rev 1 devices always send 1. Gesture timestamps mark the gesture's onset.
 6. An unknown sample name is ignored. A malformed or unknown message is dropped without changing state.
 7. There is no session resume: after 15 s of silence Control has dropped the device, which must join again.
+8. A lost link ends the device's held role, in every profile. A rev1 device (the board, and the app's rev1 profile) keeps its last frame lit through the loss until a fresh role's own frames replace it; other profiles fall back to their own no-role behavior instead (the app's full profile reverts to ambient light). The hello heartbeat halts while the link is down (rule 1's own "while the link stays up").
 
-**The first eleven `rev1` scenarios**
+Rule 8's first half ("role ends") is not itself something a device sends over the wire, so no scenario checks it directly. What IS wire-observable, and what `link_loss_keeps_display` (below) actually pins, is its consequence: a device that correctly cleared its role when the link fell re-joins from scratch once the link is back, exactly as `link_loss_rejoin` already pins for Control's own 15 s reap. A device that wrongly went on believing it still held a role across the outage would have no reason to send that join again.
+
+Whether a real Rev 1 board keeps its pixels lit through a link loss, rather than going dark, is inferred from the firmware plan's A2 code, not measured on hardware; Victor confirms it on the bench (§7) before mm-devshroom's replay tests adopt this scenario.
+
+**The twelve `rev1` scenarios**
 
 | # | Scenario | Covers |
 |---|---|---|
@@ -187,8 +193,13 @@ Device repos never change a verb or a scenario themselves. The wire changes only
 | 9 | `link_loss_rejoin` | Rule 7 |
 | 10 | `error_no_state_change` | `/error` changes nothing |
 | 11 | `malformed_dropped` | Rule 6 |
+| 12 | `link_loss_keeps_display` | Rule 8; a rev1 device's display and heartbeat across a link loss, and the fresh rejoin that proves its role really ended |
 
 Re-checking service ownership after a reconnect happens inside the link, so only the bench replay can cover it.
+
+`link_loss_keeps_display`'s outage-window `expect_frame` is hand-authored, like the pair in `timed_frames_hold_last`: the recorder can only observe what Control sends, and during a link loss the device hears none of it, so what the device is still showing has to be stated directly (as whatever had already reached it before the link fell) rather than read off Control's own, unheard traffic.
+
+This wave (2026-09-22, found while mm-tuneshroom replayed the export — [mm-tuneshroom PR #29](https://github.com/Musical-Mycology/mm-tuneshroom/pull/29)) bumps `contract_version` from 1 to 2: both the `join` step kind and `link_loss_keeps_display` are observable by a device. mm-tuneshroom updates its own guard and runner to match in a follow-up there, not in this repo.
 
 ## 5. mm-terrarium changes
 
