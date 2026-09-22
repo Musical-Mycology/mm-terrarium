@@ -9,7 +9,8 @@ from __future__ import annotations
 import queue
 
 from harness.o2_shroom import (INPUT_QUEUE_MAX, SWEEP_RESUME_SECONDS,
-                               drain_gestures, enqueue_input)
+                               discard_pre_role, drain_gestures,
+                               enqueue_input)
 
 
 def _q(*msgs, stamp=None):
@@ -101,12 +102,27 @@ def test_a_role_without_hold_gets_a_long_press_as_a_tap():
     assert sent == [("/game/tap", 2.0, "sffi", "ie1", 1.0, 50.0, 1)]
 
 
-def test_a_role_without_swing_drops_it():
+def test_a_role_without_swing_drops_it(capsys):
     sent = []
     drain_gestures(_q({"type": "swing", "signed_peak_g": 2.0}),
                    lambda *a: sent.append(a), "ie1", now=2.0,
                    config={"uses": ["tap", "tilt"]})
     assert sent == []
+    # Said out loud: a silent drop reads as a broken page.
+    assert "swing ignored: this role does not use swing" in capsys.readouterr().out
+
+
+def test_pre_role_gestures_are_discarded_and_reported(capsys):
+    """Before a role, a click must not wait in the queue and then burst out
+    with stale stamps the moment the role lands; it is dropped, and the
+    operator is told why."""
+    q = _q({"type": "tap", "count": 1}, {"type": "swing", "signed_peak_g": 2.0})
+    assert discard_pre_role(q, "waiting for a role from Control") == 2
+    assert q.empty()
+    out = capsys.readouterr().out
+    assert "2 gesture(s) ignored: waiting for a role from Control" in out
+    assert discard_pre_role(q, "x") == 0
+    assert capsys.readouterr().out == ""
 
 
 def test_a_role_declaring_no_uses_gets_neither_rev1_verb():

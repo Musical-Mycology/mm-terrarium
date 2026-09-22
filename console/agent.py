@@ -789,16 +789,26 @@ class ConsoleAgent:
             return []
 
     def _present_instruments(self) -> dict:
-        """Room fixture instruments plus TUNESHROOM, keyed by instrument
-        name -- exactly the set GameServer.load_bit checks name-fires
+        """Room fixture instruments, TUNESHROOM, and every connected
+        device's carried instrument, keyed by instrument name.
+
+        The first two are the set GameServer.load_bit checks name-fires
         against (control/engine.py's carried_instruments/room_instruments
-        blend)."""
+        blend). The carried ones are here because every name in
+        _current_surface_instruments must resolve in `builtins` and
+        `instrument_functions`: without them a device declaring its own
+        instrument (a Rev 1 board, the harness sim's testshroom) got no
+        Stop/Flash/Ping in the Diagnostics row."""
         gs = self.game_server
         instruments = {}
         if gs.room is not None:
             for fixture in gs.room.profile.fixtures:
                 instruments[fixture.instrument.name] = fixture.instrument
         instruments[TUNESHROOM.name] = TUNESHROOM
+        for info in gs.devices.all():
+            carried = getattr(info, "carried", None)
+            if carried is not None:
+                instruments.setdefault(carried.name, carried)
         return instruments
 
     def _current_instrument_functions(self) -> dict:

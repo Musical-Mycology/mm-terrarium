@@ -186,12 +186,34 @@ def drain_gestures(q: "queue.Queue", send, dev: str, now: float,
                     raise ValueError(g)
                 if config is not None and "swing" in (config.get("uses") or []):
                     send("/game/swing", when, "sfi", dev, g, 1)
+                elif config is not None:
+                    print("swing ignored: this role does not use swing",
+                          flush=True)
             else:
                 raise ValueError(kind)
         except (KeyError, TypeError, ValueError):
             if not complained:
                 print(f"dropping operator gesture {msg!r}", flush=True)
                 complained = True
+
+
+def discard_pre_role(q: "queue.Queue", reason: str) -> int:
+    """Empty the gesture queue before a role has arrived, and say so.
+
+    Without this, clicks made while the join is pending sat in the queue
+    and all went out at once, with stale stamps, the moment the role
+    landed; and until then the page looked dead with nothing in the
+    terminal to say why. Returns how many were dropped."""
+    dropped = 0
+    while True:
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            break
+        dropped += 1
+    if dropped:
+        print(f"{dropped} gesture(s) ignored: {reason}", flush=True)
+    return dropped
 
 
 def parent_is_gone(expected_ppid, getppid=os.getppid) -> bool:
@@ -826,6 +848,12 @@ def main() -> None:
                     print(f"handshake: invite seen, double-tap sent at {now:.3f}",
                           flush=True)
                 invite_flag[0] = False
+                if not args.no_join and not _gestures_ready(client):
+                    discard_pre_role(
+                        operator_input,
+                        "join denied; see the deny line above"
+                        if client.last_deny is not None
+                        else f"waiting for a role on {args.node}")
                 if not args.no_join and _gestures_ready(client):
                     if next_tilt is None:
                         next_tilt = now   # first tilt fires now the role is in

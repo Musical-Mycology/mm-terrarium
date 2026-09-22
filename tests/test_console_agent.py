@@ -2401,3 +2401,31 @@ def test_prepare_attempts_are_logged_to_the_console():
     assert logs[-2]["message"] == "prepare MetronomeBit from web:gem-1: accepted"
     assert logs[-1]["message"] == "prepare MetronomeBit from web:gem-2: refused (busy)"
     assert logs[-2]["level"] == "info" and logs[-1]["level"] == "warn"
+
+
+def test_builtins_cover_every_connected_devices_carried_instrument():
+    # The Diagnostics row enables Stop/Flash/Ping per device by looking the
+    # device's surface_instruments entry up in `builtins`. A device carrying
+    # its own instrument (the harness sim's testshroom, a Rev 1 board's
+    # tuneshroom_rev1) must get an entry, or all three buttons stay greyed
+    # out for it -- and the Triggers panel offers the operator nothing.
+    from pathlib import Path
+    from control.catalog import load_catalog
+    catalog = load_catalog(Path(__file__).resolve().parents[1] / "instruments")
+    rev1 = catalog.get("published", "tuneshroom_rev1").instrument
+    testshroom = catalog.get("published", "testshroom").instrument
+    gs = GameServer({"TestBit": TestBit},
+                    carried_instruments={"tuneshroom_rev1": rev1,
+                                         "testshroom": testshroom})
+    agent = ConsoleAgent(gs, FakeConsoleServer())
+    gs.hello("rev1a", "rev1-board", "1", instrument="tuneshroom_rev1")
+    gs.hello("sim1", "sim", "1", instrument="testshroom")
+    gs.hello("bare", "bare", "1")
+
+    snapshot = agent.snapshot()
+    surfaces = snapshot["surface_instruments"]
+    for dev in ("rev1a", "sim1"):
+        assert snapshot["builtins"][surfaces[dev]] == ["flash", "ping", "stop"], dev
+    # An undeclared hello resolves to defaultshroom, which has no audio
+    # capability, so no ping -- but it still resolves.
+    assert snapshot["builtins"][surfaces["bare"]] == ["flash", "stop"]

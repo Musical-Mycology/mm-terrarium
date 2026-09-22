@@ -4951,6 +4951,20 @@ not a `firmware/` directory here).
 - **Simulated Rev 1 board vs. standard sim.** `run_stack --bit Rev1Bit`
   spawns `testshroom` devices on `REV1_SIM_NODE` (tap only). To exercise
   hold and swing from a sim, launch it by hand as a Rev 1 board as above.
+- **Console fixes found bringing it up (2026-09-22).** Three things made
+  a working board look dead from the Console: (1) Diagnostics Stop/Flash/
+  Ping were greyed out for any device carrying its own instrument, because
+  `ConsoleAgent._present_instruments` fed `builtins` only the Room's
+  fixture instruments and `tuneshroom`; it now adds every connected
+  device's carried instrument. (2) The Registration rollup counted only
+  Scored and Jam, so Rev1Bit's shared unscored roles showed nowhere; it
+  gains a `Shared` row (only when a Bit declares such a role) and a
+  `Devices` row (connected non-fixture devices, and how many hold a role).
+  (3) `o2_shroom` queued clicks made before its role arrived and sent
+  them all at once, with stale stamps, when the role landed; it now drops
+  them and prints why, and says so when a role does not use swing. The
+  WebSim page itself still gives no hint that the LED drawing is the tap
+  target (luxaeterna's page).
 
 ## Boundary rules (the load-bearing invariants)
 
