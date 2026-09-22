@@ -28,10 +28,13 @@ _RATE = 22050
 
 # name -> list of (frequency_hz, seconds) segments, matching the two sample
 # names TestBit declares (bits/test/test_bit.py: click on tap, chime on
-# double-tap).
+# double-tap) and the two the Rev 1 firmware bundles, which Rev1Bit plays
+# (bits/rev1/rev1_bit.py: tick on tap, hold on hold).
 SIM_TONES: dict[str, list[tuple[float, float]]] = {
     "click": [(2000.0, 0.03)],
     "chime": [(1318.5, 0.09), (1760.0, 0.12)],
+    "tick": [(1500.0, 0.02)],
+    "hold": [(660.0, 0.25)],
 }
 
 

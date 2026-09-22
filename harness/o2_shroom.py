@@ -127,7 +127,8 @@ def enqueue_input(q: "queue.Queue", msg: dict, stamp: float | None) -> None:
                 pass
 
 
-def drain_gestures(q: "queue.Queue", send, dev: str, now: float):
+def drain_gestures(q: "queue.Queue", send, dev: str, now: float,
+                   config: dict | None = None):
     """Translate every queued browser gesture into a /game/* send.
 
     `send` has o2lite.send's signature: send(address, time, typespec,
@@ -142,7 +143,16 @@ def drain_gestures(q: "queue.Queue", send, dev: str, now: float):
     outside it. Returns the stamp of the drained tilt if any tilt went
     out (the caller suspends its synthetic sweep against it), else None.
     Malformed entries are dropped with one diagnostic per drain,
-    mirroring the engine's drop-this-frame rule."""
+    mirroring the engine's drop-this-frame rule.
+
+    `config` is the granted role blob (client.config). hold and swing are
+    Rev 1 verbs that wait for a role (pre_role false in
+    devicelink/contract.py), so they go out only when the role's `uses`
+    lists them by name -- stricter than wants_verb, because no Bit written
+    before Rev 1 handles either. Otherwise a hold (the page's long press)
+    goes out as the plain tap it was before hold existed, and a swing is
+    dropped. A hold is stamped at touch-down, `held_seconds` before its
+    release-time stamp, as the contract row says."""
     tilted = None
     complained = False
     while True:
@@ -160,6 +170,22 @@ def drain_gestures(q: "queue.Queue", send, dev: str, now: float):
                 gamma = max(-90.0, min(90.0, float(msg["gamma"])))
                 send("/game/tilt", when, "sf", dev, gamma)
                 tilted = when
+            elif kind == "hold":
+                held = float(msg["held_seconds"])
+                if not (math.isfinite(held) and held >= 0.0):
+                    raise ValueError(held)
+                if config is None:
+                    continue
+                if "hold" in (config.get("uses") or []):
+                    send("/game/hold", when - held, "sfi", dev, held, 1)
+                else:
+                    send("/game/tap", when, "sffi", dev, 1.0, 50.0, 1)
+            elif kind == "swing":
+                g = float(msg["signed_peak_g"])
+                if not math.isfinite(g):
+                    raise ValueError(g)
+                if config is not None and "swing" in (config.get("uses") or []):
+                    send("/game/swing", when, "sfi", dev, g, 1)
             else:
                 raise ValueError(kind)
         except (KeyError, TypeError, ValueError):
@@ -814,7 +840,7 @@ def main() -> None:
                         if tapper.armed:
                             print("role uses tap: beat tapper armed", flush=True)
                     operator = drain_gestures(operator_input, o2lite.send,
-                                              args.dev, now)
+                                              args.dev, now, client.config)
                     if operator is not None:
                         last_operator_tilt = operator
                     sweeping = (wants_verb(client.config, "tilt")

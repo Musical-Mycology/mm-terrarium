@@ -43,6 +43,15 @@ def test_build_sim_player_preloads_click_and_chime():
     assert len(ran) == 2
 
 
+def test_build_sim_player_carries_rev1bits_samples():
+    """A sim declaring tuneshroom_rev1 plays what a Rev 1 board would:
+    Rev1Bit's role declares exactly the two samples the firmware bundles."""
+    from bits.rev1.rev1_bit import Rev1Bit
+    player = build_sim_player(runner=lambda path: None)
+    for name in Rev1Bit().role_table.roles["player"].samples:
+        player.play(name)             # a missing name raises KeyError
+
+
 def test_play_key_parses_the_ceremony_params():
     assert play_key("key=71") == 71
     assert play_key("") is None
