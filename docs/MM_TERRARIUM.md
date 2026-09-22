@@ -4900,6 +4900,30 @@ not a `firmware/` directory here).
   device author through the export, the session interface, the seven
   rules, building a C/C++ replay runner, and what the recordings pin.
 
+### `bits/rev1/` -- Rev1Bit, the Rev 1 board bench check (2026-09-22)
+- **What it is.** A packaged, Console-visible Bit ("Rev 1 Board Check")
+  for bringing up an mm-devshroom board on a live stack: the Rev 1
+  counterpart of TestBit. A board carrying `tuneshroom_rev1` joins
+  `REV1_PLAYER_NODE` in the TEST or DEMO room; `tuneshroom` and
+  `testshroom` carriers are refused by the same five-capability `rev1`
+  gate ContractBit uses.
+- **One visible response per gesture.** Tap plays `tick` and steps the
+  aurora hue through five cc:74 values; hold plays `hold` and flashes
+  white for 1 s; swing flashes red (negative g) or blue (positive g) for
+  0.5 s. `tick` and `hold` are the two samples the firmware bundles (ESP32
+  plan Task A5). The Console status table shows tap/hold/swing counts,
+  the last held seconds and the last signed swing g. It never completes
+  on its own; unload it when the check is done.
+- **Not the contract.** ContractBit and its recordings stay the contract
+  and stay unregistered (contract kit spec section 5.4). Rev1Bit spells
+  the capability set itself, because venue code does not import
+  `contract_kit/`; `tests/test_rev1_bit.py` checks it equals both the
+  published `tuneshroom_rev1` capabilities and ContractBit's copy.
+- **Not yet built.** A simulated Rev 1 device: `harness/o2_shroom.py`
+  sends only `/game/tap` and `/game/tilt`, so hold and swing are
+  exercised in-process (`GameServer.data`) and on a real board, not over
+  the wire from the sim.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
