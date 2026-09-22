@@ -9,6 +9,7 @@ from bits.rev1.rev1_bit import (
     HOLD_RGB,
     REV1_CAPABILITIES,
     REV1_PLAYER_NODE,
+    REV1_SIM_NODE,
     SWING_NEG_RGB,
     SWING_POS_RGB,
     TAP_HUE_STEPS,
@@ -36,7 +37,15 @@ def test_package_is_discovered_and_visible_in_the_console():
     assert row["hidden"] is False
     cfg = reg.resolve_config("Rev1Bit", {})
     assert cfg.node_for("player") == REV1_PLAYER_NODE
+    assert cfg.node_for("sim") == REV1_SIM_NODE
     assert reg.bit_class("Rev1Bit") is Rev1Bit
+
+
+def test_run_stacks_spawned_devices_join_the_sim_node():
+    """run_stack spawns its default devices as `testshroom`, which the rev1
+    gate refuses, so the manifest's default join role is the sim node."""
+    cfg = BitRegistry.discover().resolve_config("Rev1Bit", {})
+    assert cfg.join_node() == REV1_SIM_NODE
 
 
 # --- the capability gate ---------------------------------------------------
@@ -60,6 +69,15 @@ def test_player_role_requires_rev1_and_declares_the_firmware_samples():
     assert player.breath is False
     assert set(player.uses) == {"tap", "hold", "swing"}
     assert player.samples == ["tick", "hold"]
+
+
+def test_sim_role_asks_only_for_tap():
+    rt = Rev1Bit().role_table
+    sim = rt.roles["sim"]
+    assert rt.node_map[REV1_SIM_NODE] == ["sim"]
+    assert sim.requires == "sim"
+    assert sim.uses == ["tap"]
+    assert sim.light_manifest == rt.roles["player"].light_manifest
 
 
 # --- handlers, unit level --------------------------------------------------
@@ -144,6 +162,20 @@ def test_every_gesture_reaches_the_board_through_the_engine():
     assert gs.bit.status()["taps"] == 1
     assert gs.bit.status()["holds"] == 1
     assert gs.bit.status()["swings"] == 1
+
+
+@pytest.mark.parametrize("instrument",
+                         ["testshroom", "tuneshroom", "tuneshroom_rev1"])
+def test_any_tap_capable_shroom_joins_the_sim_node_and_its_tap_lands(instrument):
+    gs, light, play, _ = _server()
+    gs.hello("ie1", f"{instrument}-dev", "1", instrument=instrument)
+    granted = gs.join("ie1", REV1_SIM_NODE)
+    assert granted.granted and granted.role == "sim"
+    gs.run()
+
+    assert gs.data("ie1", "tap", ["ie1", 1.0, 50.0, 1]) is None
+    assert play == [("ie1", "tick", "")]
+    assert [(c[0], c[2], c[3]) for c in light] == [("ie1", 74, TAP_HUE_STEPS[0])]
 
 
 def test_a_gesture_from_an_unjoined_device_is_refused():

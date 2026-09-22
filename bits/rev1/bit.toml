@@ -10,14 +10,15 @@ requires_terrarium_api = 1
 room_types = ["TEST", "DEMO"]
 default_room_type = "TEST"
 default_devices = 1
-default_join_role = "player"
+default_join_role = "sim"
 
 [launch.nodes]
 player = "REV1_PLAYER_NODE"
+sim = "REV1_SIM_NODE"
 
 [start]
 when = "immediate"
 
 [console]
 display_name = "Rev 1 Board Check"
-notes = "Join a Rev 1 board to REV1_PLAYER_NODE. Tap steps the hue, hold flashes white, swing flashes red (negative) or blue (positive)."
+notes = "Join a Rev 1 board to REV1_PLAYER_NODE, or a standard tuneshroom or sim to REV1_SIM_NODE (tap only). Tap steps the hue, hold flashes white, swing flashes red (negative) or blue (positive)."
