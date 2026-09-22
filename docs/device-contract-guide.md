@@ -6,6 +6,10 @@ that is Victor, who owns the Rev 1 ESP32-P4 firmware in **mm-devshroom**
 **Written:** 2026-09-22, against mm-terrarium `0896d5b` (`contract_version` 1,
 eleven scenarios) and the merged Dart runner in mm-tuneshroom
 ([PR #29](https://github.com/Musical-Mycology/mm-tuneshroom/pull/29)).
+**Updated the same day** for the fix wave that PR's replay found: a `join`
+step kind and a twelfth scenario, `link_loss_keeps_display`
+(`contract_version` 2). This closes open items 1 and 4 in section 9 below;
+they are left in place, marked resolved, rather than renumbered.
 
 **Binding spec:** `docs/superpowers/specs/2026-09-16-device-contract-kit-design.md`
 (sections 4.2, 4.3, 5.1, 7 and 9). **Firmware plan it amends:**
@@ -20,7 +24,7 @@ The contract is one checked description of the device wire: the verb table
 (every `/game/<verb>` a device may send and every `/<dev>/<verb>` Control may
 send, with typespecs, argument names, transport and whether it is allowed
 before a role), the Rev 1 instrument and its gesture thresholds, the lifecycle
-numbers, and eleven recorded scenarios that pin what a device must do. It is
+numbers, and twelve recorded scenarios that pin what a device must do. It is
 owned by mm-terrarium, which implements it as Control. A device repo
 (mm-tuneshroom for the Flutter app, mm-devshroom for the board) commits an
 **export** of it and replays the scenarios against its own session code. The
@@ -63,7 +67,7 @@ mm-devshroom has no `test/contract/` yet and no `[env:native]` in
 | Check | Why |
 |---|---|
 | `_provenance.tool` equals `export_contract/1` and `_provenance.commit` is 12 hex characters | catches a hand-made or partial folder |
-| `contract_version` equals the number the runner was written for (1 today) | a bump means a device can observe a difference; review the runner against the new `step_schema` before changing the number |
+| `contract_version` equals the number the runner was written for (2 today) | a bump means a device can observe a difference; review the runner against the new `step_schema` before changing the number |
 | the `scenarios` index and the files under `scenarios/` match, both ways | the tool never deletes stale files |
 | each file's `name` equals its stem and its `profiles` equal its index row; no file has `_provenance` | a stale or edited copy |
 | the built-in Rev 1 thresholds equal `instruments.tuneshroom_rev1.triggers` | `tap.max_ms`, `hold.min_ms`, `swing.peak_g`, `swing.window_ms`; the plan names the firmware constants `TouchClassifier::TAP_MAX_S` and `HOLD_MIN_S` in seconds, so divide by 1000 |
@@ -78,7 +82,7 @@ the export folder.
 | Key | What it holds | What a runner does with it |
 |---|---|---|
 | `_provenance` | `commit` (12 hex) and `tool` | guard only |
-| `contract_version` | integer, 1 | refuse to run on any other value |
+| `contract_version` | integer, 2 | refuse to run on any other value |
 | `verbs` | one row per verb: `address`, `direction` (`up` or `down`), `typespecs`, `args`, `transport` (`tcp` or `udp-ok`), `pre_role`, `notes` | the shapes your send path and handlers must match; `pre_role` false means the session must not send it without a role |
 | `link` | `arg_types` (`b`, `f`, `i`, `s`), `max_message_bytes` 4096, `service_is_dev_id` true | what the o2lite link must be able to do; the dev id is the O2 service name |
 | `limits` | `dev_id_max_len` 31, `max_message_bytes` 4096, `reserved_dev_ids` (`terrarium`) | validate your own dev id |
@@ -205,14 +209,16 @@ mm-tuneshroom), restated for a C or C++ test build.
    with a future `at`; no exported scenario does that today.)
 5. **`join_node`.** Construct the session with `device.join_node` when it is
    non-null, so every `linkUp` sends the join after its hello.
-6. **Late join inference.** The export has no `join` input step yet: the
-   recorder's `join_now` writes only the `expect_out`. `error_no_state_change`
-   (t=6000) and `gestures_after_role` (t=1000) carry `expect_out /game/join`
-   with `join_node` null. When an `expect_out` for `/game/join` is not explained
-   by a link-up at that `t` with a matching `join_node`, the runner calls
-   `join(node)` at that `t` first and labels the expectation as inferred in its
-   report. That one expectation cannot fail meaningfully; everything after it
-   can. This is follow-up 1 in section 9.
+6. **Join input steps (RESOLVED; was "late join inference").** A `join` step
+   (`{"node": "..."}`) is the device deciding to join, later than link-up:
+   call `join(node)` when the runner delivers it, at its own `t`, the same
+   as any other input. `error_no_state_change` (t=6000) and
+   `gestures_after_role` (t=1000) now each carry a `join` step immediately
+   before the `expect_out /game/join` it used to leave you to infer; check
+   that `expect_out` the ordinary way, not as a cue to send anything. Do
+   not infer a join from an `expect_out` instead -- `step_schema.kinds.join`
+   says so directly. This was follow-up 1 in section 9; it is resolved as
+   of `contract_version` 2.
 7. **Matching, with the exact tolerances:**
 
    | Expectation | Match |
@@ -247,7 +253,7 @@ checks and the `scenarios` index.
 ## 7. Proving the runner has teeth
 
 A runner is green the moment it exists if it checks nothing, so mm-tuneshroom's
-`test/contract_replay_test.dart` carries must-fail cases beside the eleven
+`test/contract_replay_test.dart` carries must-fail cases beside the twelve
 replays. Port these; each is an inline scenario or a stub target:
 
 | Must-fail case | How the Dart test builds it |
@@ -262,9 +268,11 @@ replays. Port these; each is an inline scenario or a stub target:
 | `timed_frames_hold_last` without a timed queue | run the real session with the hold-until-due mode off (show every frame on arrival); the report must fail and one failure must be at t=6500 |
 
 Also prove the runner rules: a `control_sends` inside a down window is never
-delivered and the session has no role afterwards; a late join is inferred and
-counted; a join explained by `join_node` at link-up is not counted; `$KEY`
-matches `key=<integer>` and not a specific number.
+delivered and the session has no role afterwards; a `join` step is delivered
+as an input and its own `expect_out` checked like any other send, never
+inferred from it; a join explained by `join_node` at link-up is delivered by
+`linkUp` instead, with no separate `join` step; `$KEY` matches
+`key=<integer>` and not a specific number.
 
 **Mutation check.** Once everything is green, neuter one matcher at a time
 (make `expect_frame` always pass, drop the stamp comparison, widen the quiet
@@ -278,38 +286,47 @@ the next section.
 onset stamps of rule 5 and the pre-role quiet windows of rule 2. A device that
 gets any of these wrong fails a replay.
 
-**Not pinned by any scenario:**
+**RESOLVED, as of `contract_version` 2:** a twelfth scenario,
+`link_loss_keeps_display`, adds rule 8 and closes follow-up 4 below. Read
+literally, the two decisions this section used to say were pinned only by
+mm-tuneshroom's own unit tests are:
 
-- **"A lost link ends the role."** No recording checks the session's state
-  after `link: "down"` before the next `link: "up"`.
-- **"Rev 1 keeps its display through a link loss."** No scenario holds a role
-  across a link drop with a later `expect_frame`. `link_loss_rejoin` has no
-  `expect_frame` at all inside or after its down window.
+- **"A lost link ends the role."** Still not something any scenario checks
+  directly -- a device's own internal role state never crosses the wire, so
+  no exported step can name it. What the new scenario checks instead is its
+  wire-observable consequence: a device that correctly cleared its role
+  re-joins from scratch once the link is back, the same way
+  `link_loss_rejoin` already pins for Control's own 15 s reap. A device that
+  wrongly kept believing it still held a role would have no reason to send
+  that join again, and would fail the `expect_out /game/join` pair at t=17000
+  in the new scenario.
+- **"Rev 1 keeps its display through a link loss."** Now pinned:
+  `link_loss_keeps_display` holds a role across a link drop with a later
+  `expect_frame` (hand-authored, per `replay_notes` -- this recorder cannot
+  observe a device's own screen during an outage, only what Control sends,
+  and during the outage the device hears none of it).
 
-Both are decisions the Tuneshroom app made to mirror the board (addendum
-sections 5.1 and 5.2 in mm-tuneshroom). Reverting either leaves all eleven
-scenarios green; they are pinned by unit tests in mm-tuneshroom only. The
-second one was **inferred** from plan Task A2's reconnect code, which only
-sets `joined = false` and clears nothing on the NeoPixels. It was not
-measured. Victor should confirm on the bench that the board really keeps its
-pixels when WiFi drops, and say so in mm-devshroom's `README.md` or a test.
-If the board blanks, the app's decision 2 is the one to revisit, not the
-board.
+This was **inferred** from plan Task A2's reconnect code, which only sets
+`joined = false` and clears nothing on the NeoPixels; it was not measured.
+Victor should still confirm on the bench that the board really keeps its
+pixels when WiFi drops, and say so in mm-devshroom's `README.md` or a test,
+before mm-devshroom's replay tests adopt `link_loss_keeps_display`. If the
+board blanks, the app's decision 2 (and this scenario) is what needs
+revisiting, not the board.
 
 ## 9. Open items a firmware author will meet
 
 From the addendum's section 8 and this guide:
 
-1. **No `join` input step kind.** Until mm-terrarium's recorder writes one
-   from `join_now` (with a `contract_version` bump), the runner infers late
-   joins (section 6, rule 6).
+1. **No `join` input step kind. RESOLVED 2026-09-22** (`contract_version` 2):
+   `join_now` now writes one; see section 6, rule 6.
 2. **`any` retags.** `boot_hello_heartbeat`, `deny_stays_hellod` and
    `explicit_join_role` are candidates to be retagged `any`; on the board
    both tags run the one profile, so nothing changes for firmware.
 3. **Spec 4.2 quotes the script-form invocation**, which does not run. Use
    the module form in section 2.
-4. **No link-drop-with-role scenario.** Recording one is the way to pin the
-   two decisions in section 8; it is exactly the Rev 1 behavior they mirror.
+4. **No link-drop-with-role scenario. RESOLVED 2026-09-22** (`contract_version`
+   2): `link_loss_keeps_display` is that recording; see section 8.
 5. **Hands-free reconnect is not in the contract.** Plan Task A2 step 2 does
    reconnect and re-check ownership; the scenarios only see the resulting
    `linkDown` and `linkUp`. The bench replay (spec section 8, not yet run) is

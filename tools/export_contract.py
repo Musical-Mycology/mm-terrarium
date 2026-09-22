@@ -51,9 +51,12 @@ TOOL_VERSION = "export_contract/1"
 # link/limits/lifecycle value, the tuneshroom_rev1 instrument, or a
 # scenario's steps (spec section 4.2). A device repo pins this number in
 # its own replay tests so an export that changes it cannot be adopted
-# silently. Nothing in this export has been published to a device repo
-# yet, so this fix wave keeps it at 1 even though it adds keys.
-CONTRACT_VERSION = 1
+# silently. This export has now been published (mm-tuneshroom committed
+# it at test/contract/ and found two gaps replaying it -- mm-tuneshroom
+# PR #29), so this fix wave's new "join" step kind and
+# link_loss_keeps_display scenario bump it from 1 to 2; mm-tuneshroom
+# updates its own guard and runner in a follow-up, not here.
+CONTRACT_VERSION = 2
 
 # The live bench replay's timing tolerances (spec section 4.2, "the
 # tolerances the live bench replay uses"; section 8). No single constant
@@ -115,7 +118,9 @@ STEP_SCHEMA = {
         "delivered and checked in file order. Within one `t`, a "
         "captured control_sends step keeps its real relative order "
         "among other captured control_sends steps; a runner should "
-        "otherwise use the file order across kinds."
+        "otherwise use the file order across kinds -- an input step "
+        "(gesture, join) always precedes its own expect_out at the same "
+        "t, the same way a gesture does."
     ),
     "tolerance": (
         "In-process replay runs on a fake clock and allows an "
@@ -225,6 +230,22 @@ STEP_SCHEMA = {
                     "float; swing only -- peak acceleration in g, "
                     "negative means left."
                 ),
+            },
+        },
+        "join": {
+            "role": (
+                "input: the device deciding to join \"node\", LATER than "
+                "its link coming up (a join AT link-up is instead the "
+                "scenario's own device.join_node field -- see "
+                "step_schema.scenario_fields -- delivered when the link "
+                "comes up). A runner delivers this as an input at t and "
+                "must not infer a join from the expect_out that follows "
+                "it -- an expect_out checks what the device under test "
+                "sends, and cannot also be the runner's own cue to send "
+                "it."
+            ),
+            "fields": {
+                "node": "str; the node name this join names.",
             },
         },
         "expect_out": {
@@ -352,6 +373,19 @@ REPLAY_NOTES = [
     "expect_frame steps at t=6500 and t=12000 both expect the newer one "
     "(at=6200, blue), because a device must select the frame with the "
     "newest presentation time, not the one that arrived most recently.",
+    "A join step is the device deciding to join, later than link-up; a "
+    "runner delivers it as an input to the device under test and must "
+    "not instead infer a join from the expect_out that follows it -- see "
+    "`step_schema.kinds.join`.",
+    "In link_loss_keeps_display, the expect_frame step at t=8000 (inside "
+    "the link-down window that runs from t=2000 to t=17000) is "
+    "hand-authored, like the pair in timed_frames_hold_last: it repeats "
+    "the same pixels as the expect_frame at t=2000, the moment just "
+    "before the link fell, because during a link loss the device hears "
+    "none of whatever Control goes on sending (see "
+    "`step_schema.link_down_delivery`) and a runner must not compute "
+    "this one from a later control_sends step the way an ordinary "
+    "expect_frame would.",
 ]
 
 

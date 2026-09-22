@@ -389,6 +389,12 @@ def test_gestures_after_role_shows_all_three_shapes_and_the_pre_role_rule():
     assert errors[0]["control_sends"]["args"] == ["tap",
                                                   "device not registered"]
 
+    # The join at role_t is a `join` INPUT step, not just its expect_out.
+    join_inputs = _kind(data, "join")
+    assert len(join_inputs) == 1
+    assert join_inputs[0]["t"] == role_t
+    assert join_inputs[0]["join"] == {"node": CONTRACT_PLAYER_NODE}
+
 
 def test_deny_leaves_the_device_hellod_with_its_heartbeat_running():
     data = _load("deny_stays_hellod")
@@ -489,6 +495,12 @@ def test_an_error_changes_nothing():
     assert len(role) == 1 and role[0]["t"] > errors[0]["t"]
     assert _outs(data, "/game/join")[0]["t"] == role[0]["t"]
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000]
+    # The late join is a `join` INPUT a runner delivers, not just an
+    # expect_out it has to infer the timing of on its own.
+    join_inputs = _kind(data, "join")
+    assert len(join_inputs) == 1
+    assert join_inputs[0]["t"] == role[0]["t"]
+    assert join_inputs[0]["join"] == {"node": CONTRACT_PLAYER_NODE}
 
 
 def test_malformed_input_is_dropped_and_the_device_carries_on():
@@ -520,3 +532,43 @@ def test_malformed_input_is_dropped_and_the_device_carries_on():
                     if s["t"] > bad_t and not s["control_sends"].get("malformed")]
     assert later_frames
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000]
+
+
+def test_link_loss_keeps_display_holds_the_frame_and_rejoins():
+    """Rule 8's two device-side halves. "Role ends" leaves no message of
+    its own, so what this actually checks is its wire-observable
+    consequence: a device that cleared its role on link loss re-joins
+    from scratch once the link is back, the same way link_loss_rejoin
+    already pins for Control's own 15 s reap."""
+    data = _load("link_loss_keeps_display")
+    links = [(s["t"], s["link"]) for s in _kind(data, "link")]
+    assert links == [(0, "up"), (2000, "down"), (17000, "up")]
+
+    # The heartbeat halts across the whole outage and resumes on
+    # reconnection.
+    assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 17000]
+
+    # A fresh join at reconnection: the device did not go on believing it
+    # still held a role through the outage.
+    joins = _outs(data, "/game/join")
+    assert [s["t"] for s in joins] == [0, 17000]
+    for step in joins:
+        assert step["expect_out"]["args"] == ["$DEV", CONTRACT_PLAYER_NODE]
+    roles = [s["t"] for s in _sends(data, "/$DEV/role")]
+    assert roles == [0, 17000]
+
+    # The outage-window frame is HAND-AUTHORED (Recorder.expect_frame_held):
+    # it repeats the pre-outage look rather than anything read off
+    # Control's own reap fade, which the device never hears.
+    checks = _kind(data, "expect_frame")
+    assert [s["t"] for s in checks] == [2000, 8000, 19000]
+    assert checks[1]["expect_frame"]["grb"] == checks[0]["expect_frame"]["grb"]
+    # The fresh role really does reach the pixels again after reconnect.
+    assert [s for s in _frames(data) if s["t"] >= 17000]
+
+    # hello, hold and swing are all held quiet for the whole outage.
+    quiet = _kind(data, "expect_quiet")[0]
+    assert quiet["t"] == 2000
+    assert set(quiet["expect_quiet"]["addresses"]) == {
+        "/game/hello", "/game/hold", "/game/swing"}
+    assert quiet["t"] + quiet["expect_quiet"]["for_ms"] == 17000

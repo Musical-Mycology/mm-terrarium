@@ -129,6 +129,12 @@
       "t": 5000
     },
     {
+      "join": {
+        "node": "CONTRACT_PLAYER_NODE"
+      },
+      "t": 6000
+    },
+    {
       "expect_out": {
         "address": "/game/join",
         "args": [

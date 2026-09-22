@@ -4840,7 +4840,7 @@ not a `firmware/` directory here).
   constant that owns it -- `hello_interval_s` from `devicelink/contract.py`'s
   own `HELLO_INTERVAL_S`, so `harness/o2_shroom.py`, `contract_kit/recorder.py`'s
   `HELLO_INTERVAL_MS` and the export all read the same number), and the
-  eleven scenarios -- copied byte for byte from `contract_kit/recordings/`
+  twelve scenarios -- copied byte for byte from `contract_kit/recordings/`
   -- into the folder every device repo commits at `test/contract/`.
   `contract.json` also carries a `scenarios` index (name/profiles/summary
   per scenario), `lifecycle_notes` (a one-sentence prose companion per
@@ -4850,6 +4850,25 @@ not a `firmware/` directory here).
   behavior), and `replay_notes` stating the replay rules a scenario file
   alone does not (all inline, so a device author holding only the export
   folder can write a replay runner from it without this repo).
+- **2026-09-22 fix wave (mm-tuneshroom replaying the export found two
+  gaps -- [mm-tuneshroom PR #29](https://github.com/Musical-Mycology/mm-tuneshroom/pull/29)),
+  bumping `contract_version` from 1 to 2:**
+  - A `join` step kind: `Recorder.join_now` now records the device's
+    decision to join, later than link-up, as its own INPUT step (`{"node":
+    ...}`), alongside the `expect_out` it already wrote. Before this, a
+    late join (`error_no_state_change`, `gestures_after_role`) carried only
+    the expectation, so a runner had nothing to deliver and had to infer
+    the join from the very message it was supposed to be checking.
+  - A twelfth scenario, `link_loss_keeps_display`: a rev1 device's role
+    ends and its display holds through a link loss (new rule 8), pinned by
+    the wire-observable proof that a compliant device re-joins from
+    scratch once the link is back, the same way `link_loss_rejoin` already
+    pins Control's own 15 s reap. Its outage-window `expect_frame` is
+    hand-authored (`Recorder.expect_frame_held`), like the pair in
+    `timed_frames_hold_last`: this recorder can only observe what Control
+    sends, and during the outage the device hears none of it.
+  - mm-tuneshroom updates its own `contract_version` guard and drops its
+    runner's late-join inference in a follow-up there, not in this repo.
 - **The change flow is one-way** (spec section 4.1): change the verb table
   (and Control, if needed) here, re-record the scenarios, re-export into
   each device repo, and that device's replay tests fail until it matches.
@@ -4873,8 +4892,10 @@ not a `firmware/` directory here).
   environment; the live bench replay feasibility spike (spec section 8);
   and an executable Mushica capability-gate test, which waits on the
   Mushica Bit to exist.
-- **Suite at HEAD:** `.venv/bin/python -m pytest tests -v` -- 2543 passed,
-  1 skipped.
+- **Suite at HEAD:** `.venv/bin/python -m pytest tests -v` -- 2551 passed,
+  1 skipped, 2 failed (`tests/test_terrarium_boot.py`'s
+  `arco_ready_timeout` pair; pre-existing on `main`, unrelated to this
+  entry -- not touched by this fix wave).
 - **Firmware-facing guide:** `docs/device-contract-guide.md` walks a
   device author through the export, the session interface, the seven
   rules, building a C/C++ replay runner, and what the recordings pin.
