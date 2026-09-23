@@ -818,3 +818,93 @@ def test_uplink_must_be_a_table():
     with pytest.raises(TerrariumConfigError) as err:
         parse_terrarium_config("uplink = 1\n" + MINIMAL, source="t")
     assert err.value.key == "uplink"
+
+
+ARTNET_BASE = MINIMAL.replace('color_order = "GRB"', 'color_order = "RGBW"').replace(
+    'backends = ["devicelink"]', 'backends = ["devicelink", "array"]')
+
+
+def _with_artnet(extra: str):
+    return parse_terrarium_config(ARTNET_BASE + "\n" + textwrap.dedent(extra),
+                                  source="t.toml")
+
+
+def test_an_artnet_output_parses_with_defaults():
+    cfg = _with_artnet("""
+        [[artnet]]
+        room = "ONE"
+        fixture = "main"
+        host = "127.0.0.1"
+        max_amps = 3.0
+    """)
+    (out,) = cfg.artnet_outputs
+    assert (out.room, out.fixture, out.host, out.max_amps) == ("ONE", "main", "127.0.0.1", 3.0)
+    assert (out.start_universe, out.port, out.amps_per_pixel_full,
+            out.lead_ms, out.keepalive_ms) == (0, 6454, 0.025, 0.0, 250.0)
+
+
+@pytest.mark.parametrize("body, needle", [
+    ('room = "NOPE"\nfixture = "main"\nhost = "h"\nmax_amps = 1.0', "unknown room"),
+    ('room = "ONE"\nfixture = "nope"\nhost = "h"\nmax_amps = 1.0', "unknown fixture"),
+    ('room = "ONE"\nfixture = "main"\nhost = "h"', "max_amps"),
+    ('room = "ONE"\nfixture = "main"\nhost = "h"\nmax_amps = 0', "max_amps"),
+    ('room = "ONE"\nfixture = "main"\nmax_amps = 1.0', "host"),
+    ('room = "ONE"\nfixture = "main"\nhost = "h"\nmax_amps = 1.0\nstart_universe = -1', "start_universe"),
+    ('room = "ONE"\nfixture = "main"\nhost = "h"\nmax_amps = 1.0\nbogus = 1', "unknown key"),
+])
+def test_a_bad_artnet_entry_is_a_located_error(body, needle):
+    with pytest.raises(TerrariumConfigError, match=needle) as exc:
+        _with_artnet("[[artnet]]\n" + body)
+    assert exc.value.key.startswith("artnet[0]")
+
+
+def test_an_rgb_fixture_cannot_be_an_artnet_output():
+    text = MINIMAL + '\n[[artnet]]\nroom = "ONE"\nfixture = "main"\nhost = "h"\nmax_amps = 1.0\n'
+    with pytest.raises(TerrariumConfigError, match="RGBW"):
+        parse_terrarium_config(text, source="t.toml")
+
+
+def test_duplicate_and_overlapping_outputs_are_refused():
+    entry = '[[artnet]]\nroom = "ONE"\nfixture = "main"\nhost = "h"\nmax_amps = 1.0\n'
+    with pytest.raises(TerrariumConfigError, match="more than one"):
+        _with_artnet(entry + entry)
+
+
+def test_validate_rooms_accepts_an_array_room_covered_by_artnet():
+    cfg = _with_artnet('[[artnet]]\nroom = "ONE"\nfixture = "main"\nhost = "h"\nmax_amps = 1.0\n')
+    assert validate_rooms(cfg, array_backend_configured=False)["ONE"] is None
+
+
+def test_validate_rooms_names_the_uncovered_fixtures():
+    cfg = _with_artnet("")
+    reason = validate_rooms(cfg, array_backend_configured=False)["ONE"]
+    assert "array" in reason and "main" in reason
+
+
+def _big_rgbw_fixture_base():
+    """ARTNET_BASE's ONE.main fixture, expanded past 128 px (two blocks,
+    each within the 170 px per-block cap, totalling 150 px) so a
+    start_universe near the Art-Net maximum produces a multi-universe span
+    that can exceed it."""
+    return ARTNET_BASE.replace(
+        '[[rooms.ONE.fixtures.blocks]]\nname = "b1"\nstart = 0\ncount = 10',
+        '[[rooms.ONE.fixtures.blocks]]\nname = "b1"\nstart = 0\ncount = 75\n'
+        '[[rooms.ONE.fixtures.blocks]]\nname = "b2"\nstart = 75\ncount = 75',
+    ).replace(
+        '[[rooms.ONE.fixtures.zones]]\nname = "all"\nstart = 0\ncount = 10',
+        '[[rooms.ONE.fixtures.zones]]\nname = "all"\nstart = 0\ncount = 150',
+    )
+
+
+def test_artnet_universes_beyond_the_artnet_maximum_are_refused():
+    text = _big_rgbw_fixture_base() + textwrap.dedent("""
+        [[artnet]]
+        room = "ONE"
+        fixture = "main"
+        host = "127.0.0.1"
+        max_amps = 1.0
+        start_universe = 32767
+    """)
+    with pytest.raises(TerrariumConfigError, match="32767") as exc:
+        parse_terrarium_config(text, source="t.toml")
+    assert exc.value.key == "artnet[0]"

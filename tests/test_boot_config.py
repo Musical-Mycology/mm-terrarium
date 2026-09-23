@@ -1,3 +1,5 @@
+import pytest
+
 from control.boot_config import BootConfig
 
 
@@ -12,10 +14,11 @@ def test_array_backend_configured_true_for_simulator():
     assert config.array_backend_configured is True
 
 
-def test_array_backend_configured_true_for_real_host():
-    config = BootConfig(room_name="DEMO", bit_name="TestBit",
-                        array_backend="10.44.0.50")
-    assert config.array_backend_configured is True
+def test_a_host_string_is_no_longer_an_array_backend():
+    """Spec 2026-09-23 section 6.1: a real array is configured by [[artnet]]
+    entries in terrarium.toml, never by a host here."""
+    with pytest.raises(ValueError, match=r"\[\[artnet\]\]"):
+        BootConfig(room_name="DEMO", bit_name=None, array_backend="10.44.0.50")
 
 
 def test_default_timeouts():
