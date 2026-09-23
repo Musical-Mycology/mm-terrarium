@@ -5153,10 +5153,38 @@ backend" for DEMO. Design:
 - **No physical LED has been driven yet.** Everything above is verified
   against `harness/artnet_listen.py` and loopback UDP only. The spec's
   section 9 hardware bring-up checklist is entirely pending.
+- **Bring-up prerequisite: the shipped entry point always ALSO spawns a
+  WebSim simulator for an `[[artnet]]` fixture.** `harness/terrarium_boot.py`
+  always sets `BootConfig.array_backend="simulator"` for DEMO (see the
+  comment at its `BootConfig(...)` call), and the Terrarium's fast bind path
+  spawns a simulator for every fixture regardless of that Room's own
+  backends. So under this entry point, an `[[artnet]]`-covered fixture
+  BOTH binds a spawned WebSim simulator AND receives real Art-Net frames --
+  it also gets the simulator's 3456-channel `/leds` frames over O2 in
+  addition to Art-Net. `control/terrarium_config.py`'s `validate_rooms`
+  only reaches its `[[artnet]]`-coverage branch (loading an array-backed
+  Room on `[[artnet]]` coverage alone, with no simulator) when
+  `array_backend_configured` is False, i.e. `BootConfig.array_backend is
+  None` -- never true under `harness/terrarium_boot.py`. A follow-up should
+  skip spawning the simulator for a fixture that already has `[[artnet]]`
+  coverage before hardware bring-up proceeds: the spec's section 9 step 4
+  "unbound array fixture" mute test assumes the array fixture has no
+  simulator competing with it.
+- **Bring-up prerequisite: the Console cannot target or show the mute state
+  of an unbound fixture.** `console/static/functions.js`'s
+  `fillDevicePicker` only lists devices that have joined (`fnDevices`, fed
+  by `onDevicesChanged`) plus, for a SURFACE-targeted picker, an "All"
+  catch-all option; an unbound `[[artnet]]` fixture never appears as its
+  own device-picker entry, so an operator can reach it only through "All",
+  and there is nowhere in the UI showing whether that unbound fixture is
+  currently muted. This needs a fix before a multi-fixture venue Room asks
+  an operator to manage individual fixtures by name.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**2659 passed, 1 skipped**; `.venv/bin/python -m tools.render_diagrams
---check` reports the deep-dive's generated diagrams current.
+**2662 passed, 1 skipped** (final-review fix wave: +3 tests, see
+`.superpowers/sdd/2026-09-23-artnet-fixture-sink/final-fix-report.md`);
+`.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
+generated diagrams current.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -5726,7 +5754,13 @@ Kept explicit so the doc doesn't over-claim:
   (`harness/room_simulator.py`, `harness/o2_shroom.py`); nothing implements
   the same seam against actual Tuneshroom hardware yet. **No hardware
   exists** still applies (see that entry above) until the bring-up
-  checklist is run.
+  checklist is run. Two bring-up prerequisites, both described in the
+  *`devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture name,
+  native RGBW* entry above: (1) `harness/terrarium_boot.py` always spawns a
+  WebSim simulator alongside any `[[artnet]]` fixture, so a follow-up must
+  skip that simulator for `[[artnet]]`-covered fixtures first; (2) the
+  Console's device picker cannot target or show the mute state of an
+  unbound fixture, which a multi-fixture venue Room will need.
 - ~~**Nothing drives the Room's light during a live run.**~~ **Closed
   2026-08-14** by `Bit.cues(at)` (see the `Bit` interface bullet above);
   `TestBit`'s implementation and its live confirmation are described in the

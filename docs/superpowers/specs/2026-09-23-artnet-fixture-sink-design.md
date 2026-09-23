@@ -304,8 +304,12 @@ mm-terrarium RGBW task. Nothing else in luxaeterna changes.
   is the fallback if it shows up.
 - **Lifecycle.**
   - `start()` runs in `_setup_room`.
-  - `close()` runs in `unwire_room`: set stop, notify, send one all-black
-    (limited) frame, join with a 2 s timeout, close the backend.
+  - `close()` runs in `unwire_room`: set stop, notify, join with a 2 s
+    timeout, then -- only if the sender thread has exited by then -- send
+    one all-black (limited) frame; if it is still alive, warn and skip the
+    black frame (sending now would race the still-running thread on the
+    same backend/socket); then close the backend. (amended 2026-09-23
+    after the final review)
   - WLED then holds black until its realtime timeout and falls back to its
     default preset. §9 sets that preset to off, so the array stays dark
     between Rooms.
@@ -347,8 +351,10 @@ mm-terrarium RGBW task. Nothing else in luxaeterna changes.
 - **Routing.**
   - An unbound fixture receives a LightCue, a SolidCue override and a mute
     by `@fixture:` name.
-  - A bound dev canonicalizes to its token in `muted`, `FunctionFired.devs`
-    and generator suppression.
+  - A bound dev canonicalizes to its token in `muted` (and `is_muted`) only.
+    `FunctionFired.devs` and generator suppression keep the engine's own
+    spelling -- the bound dev when bound, per §4.1 -- and do not
+    canonicalize to the token. (amended 2026-09-23 after the final review)
   - A `PlayCue` to an unbound fixture drops, logged once.
   - The existing bound-fixture tests pass unchanged, as a regression guard
     (§4.1 names the 12 partially-bound expectations that change).
