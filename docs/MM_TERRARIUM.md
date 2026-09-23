@@ -674,6 +674,12 @@ every claim below is about code, not about a measured installation.
 - **`local_sample.py`** — preloaded sample playback for the sub-20 ms tap path.
   `last_latency_ms` measures **dispatch, not sound**; the real tap-to-sound
   figure has to be read off a waveform and must not be quoted from this number.
+- **`artnet_listen.py`** (2026-09-23) — a strict fake WLED receiver: it
+  rejects what a real WLED unit would reject (boundary rule 5), standing
+  in for hardware in the offline `ArtNetFixtureSink` e2e test. `--websim`
+  gives it a live canvas for a no-hardware demo run. See the
+  *`devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture name,
+  native RGBW* entry below.
 
 **Dependency note:** `array_smoke` and `render_bench.main()` need luxaeterna's
 `pixelspan`, `universeset` and `power` modules. Those are on luxaeterna `main`
@@ -3969,8 +3975,10 @@ instrument on its light side too, not only its audio side. Design:
   name) and `DeviceLinkSink` (added when a device binds the fixture,
   removed on release, sending `protocol.leds_event(dev, frame,
   when=when)`). A physical controller (a microcontroller o2lite client, or
-  a luxaeterna DMX/Art-Net/Enttec backend) is a later third implementation
-  that touches nothing upstream of this protocol.
+  a luxaeterna DMX/Art-Net/Enttec backend) is the third implementation:
+  `ArtNetFixtureSink` landed 2026-09-23 (see the *`devicelink/artnet_sink.py`,
+  `[[artnet]]`, routing by fixture name, native RGBW* entry below) and
+  touches nothing upstream of this protocol.
 - **`@fixture:<name>` addresses one fixture by name; the Room-spec owner
   rule gates who may use it.** `control/cues.py`'s `fixture_dev`/
   `fixture_name` are the only places that spell the `@fixture:` prefix.
@@ -4046,12 +4054,14 @@ instrument on its light side too, not only its audio side. Design:
   `console/agent.py`. `control/teardown.py`, `control/engine.py` and
   `bits/test/test_bit.py` had stale RoomBridge/canonical-dev prose
   reworded to match.
-- **Accepted limitation (spec section 5.2): an unbound fixture renders but
-  receives no Bit cues until a device binds.** Its session (ambient,
+- ~~**Accepted limitation (spec section 5.2): an unbound fixture renders
+  but receives no Bit cues until a device binds.** Its session (ambient,
   generators, breath) runs and its Console strip paints, but Control's
   resolver only ever produces bound devs, so no cue can reach it by name
   alone. Cue routing by fixture name, for a fixture that never binds a
-  device, is a named follow-up (spec section 11).
+  device, is a named follow-up (spec section 11).~~ **Closed 2026-09-23:**
+  see the *`devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture
+  name, native RGBW* entry below.
 - **Final-review fix wave (2026-09-01).** Deleting `RoomProfile`'s
   cross-fixture generator lane rule (above) left a real gap: nothing
   refused an instrument-owned GENERATOR addressed to `cues.ROOM`, so two
@@ -5074,6 +5084,80 @@ not a `firmware/` directory here).
   Bit declares no triggers. Diagnostics above works on any device.", and a
   row pulses briefly on every fire, manual or gesture.
 
+### `devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture name, native RGBW (2026-09-23)
+Closes the follow-up named by the *Per-fixture light sessions* entry above
+(spec section 11) and the *Not yet built* entry "A real-hardware Room
+backend" for DEMO. Design:
+[`.../2026-09-23-artnet-fixture-sink-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-23-artnet-fixture-sink-design.md).
+
+- **Every declared fixture is addressable by name, bound or not.**
+  `control/engine.py`'s `_fixture_target` returns the bound dev when one is
+  bound, else the `@fixture:<name>` token itself, so a cue routed to an
+  unbound fixture no longer silently drops at the engine. `GameServer.muted`
+  is now keyed by that same token (`_mute_key`/`is_muted`), so a mute set
+  before a device binds survives the bind, and a mute set while bound
+  survives a rebind.
+- **`devicelink/agent.py` keys overrides, mutes and feeds by fixture, not
+  by dev.** `_fixture_key`/`_fixture_for` canonicalize to `@fixture:<name>`;
+  a play cue addressed to a fixture with no bound device still drops (a
+  WLED output has no o2lite session to answer to), now with a warning
+  logged once per Room rather than silently, matching the accepted
+  limitation this closes.
+- **Persistent per-Room physical outputs.** `outputs_for`/`_ensure_outputs`
+  build one long-lived `ArtNetFixtureSink` per `[[artnet]]` entry at Room
+  load and keep it across renders (a fresh sink every tick would drop its
+  thread and socket); `_close_outputs` tears them down, sending a
+  close-to-black frame, on Room unload.
+- **`ArtNetFixtureSink` (`devicelink/artnet_sink.py`), the third
+  `FixtureSink`.** `send_frame` only queues (a lock, a push, a notify --
+  boundary rule 2: nothing it does can raise into the engine tick); a
+  sender thread holds each frame until it is due (minus the controller's
+  measured `lead_ms`), coalescing so a stall never backs up, and resends
+  the last frame every `keepalive_ms` so WLED stays in realtime mode
+  across a lost packet. Every frame -- including keepalives and the
+  close-to-black frame -- passes a `PowerLimiter` first; the close frame is
+  skipped rather than blocking if the sender thread is stuck. `PixelSpan`
+  and `UniverseSet` split a fixture wider than 128 px (4 ch/px RGBW) across
+  the universes it needs. `outputs_factory` builds a Room's sinks from its
+  `[[artnet]]` config.
+- **`[[artnet]]` in `terrarium.toml`** (`control/terrarium_config.py`'s
+  `ArtNetOutput`): `room`, `fixture`, `host` and `max_amps` are required
+  (no opt-out on the power limit); `start_universe` (default 0), `port`
+  (default 6454), `amps_per_pixel_full` (default 0.025), `lead_ms`
+  (default 0) and `keepalive_ms` (default 250) have defaults. Located
+  validation refuses `start_universe`/span combinations whose universes
+  exceed the Art-Net maximum (32767). `validate_rooms` now loads an
+  `array`-backed room when EITHER the simulator is configured OR every one
+  of its fixtures has `[[artnet]]` coverage -- a real array is no longer
+  gated on the simulator flag alone. `BootConfig.array_backend` still
+  accepts only `None` or `"simulator"`; Art-Net coverage is read from
+  config, not a boot flag.
+- **Native RGBW fixtures, end to end.** `RoomFixture.channels` derives
+  from `color_order` (validated at load) instead of assuming 3 ch/px; the
+  DEMO room's `array` fixture is now RGBW end to end (864 px x 4 ch = 3456
+  channels). The Console's `surface.js` `_decodePixels` decodes by the
+  fixture's own color order, so an RGBW strip's white channel actually
+  paints. `console/static/design.js` is unchanged on purpose -- the design
+  bench renders a Shroom capability, which stays GRB.
+- **`harness/artnet_listen.py`, a strict fake WLED receiver.** Rejects
+  what a real WLED unit would reject (boundary rule 5), so it stands in
+  for hardware in the offline e2e sink test; `--websim` gives it a live
+  canvas for a no-hardware demo run.
+- **MEASURED 2026-09-23, a dev-box figure, not a venue measurement:** live
+  `run_stack --no-bit --room DEMO` against a real Arco, with `[[artnet]]`
+  pointed at `127.0.0.1` and `python -m harness.artnet_listen` receiving,
+  ran at **~33 fps received (interval p50 ~30 ms), 0 sequence gaps, 0 bad
+  packets**. That is below the 44 Hz engine tick; the cause has not been
+  investigated and is an open item for hardware bring-up (spec section 9),
+  not a diagnosed bug.
+- **No physical LED has been driven yet.** Everything above is verified
+  against `harness/artnet_listen.py` and loopback UDP only. The spec's
+  section 9 hardware bring-up checklist is entirely pending.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2659 passed, 1 skipped**; `.venv/bin/python -m tools.render_diagrams
+--check` reports the deep-dive's generated diagrams current.
+
 ## Boundary rules (the load-bearing invariants)
 
 These are the rules that keep the architecture coherent as real outputs land —
@@ -5632,16 +5716,17 @@ Kept explicit so the doc doesn't over-claim:
   Registration Node convention) remains a later decision; the console is the
   first concrete answer for a web panel, and as of 2026-08-17 it is actually
   openable during a run and shows the Room.
-- **A real-hardware Room backend, for either room.** Both TEST and DEMO's
-  only backend today is the browser simulator (`harness/room_simulator.py`,
-  `harness/o2_shroom.py`); nothing implements the same seam against actual
-  Tuneshroom/array hardware yet. For DEMO specifically, `RoomBlock`
-  boundaries are declarative-only (see the *`RoomBlock`, and the DEMO room*
-  section above) — no real Art-Net/multi-controller output backend exists;
-  `harness/array_smoke.py` drives the real 864 px array standalone but is not
-  wired into `load_room()` (the config-defined-rooms slice's replacement for
-  `boot()` — see the *Terrarium lifecycle and config-defined rooms* entry
-  below).
+- **A real-hardware Room backend, for either room.** **Closed 2026-09-23
+  for DEMO over Art-Net, pending the spec section 9 hardware bring-up**
+  (see the *`devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture
+  name, native RGBW* entry above): `ArtNetFixtureSink` and `[[artnet]]`
+  wire DEMO's `array` fixture into `load_room()` for real, but no physical
+  LED has been driven yet -- only `harness/artnet_listen.py` and loopback
+  UDP. TEST's only backend remains the browser simulator
+  (`harness/room_simulator.py`, `harness/o2_shroom.py`); nothing implements
+  the same seam against actual Tuneshroom hardware yet. **No hardware
+  exists** still applies (see that entry above) until the bring-up
+  checklist is run.
 - ~~**Nothing drives the Room's light during a live run.**~~ **Closed
   2026-08-14** by `Bit.cues(at)` (see the `Bit` interface bullet above);
   `TestBit`'s implementation and its live confirmation are described in the

@@ -1,8 +1,8 @@
 # Art-Net FixtureSink: Room fixtures drive WLED ESP32 controllers
 
 **Date:** 2026-09-23
-**Status:** Approved design, pre-implementation. Brainstormed and approved
-section by section with Chris, 2026-09-23.
+**Status:** Implemented (Tasks 1-8 of
+plans/2026-09-23-artnet-fixture-sink.md); hardware bring-up (§9) pending.
 **Closes:** the follow-ups named in
 [`2026-09-01-per-fixture-light-sessions-design.md`](2026-09-01-per-fixture-light-sessions-design.md)
 §11: "Hardware `FixtureSink` (luxaeterna backend ...) and cue routing by

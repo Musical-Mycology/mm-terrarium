@@ -13,3 +13,15 @@ room_paths = ["rooms"]
 # tenant_slug = "your-tenant"
 # secret = "0000000000000000000000000000000000000000000000000000000000000000"
 # url = "wss://fairyring.example/uplink"
+
+# [[artnet]]
+# A Room fixture's physical output to a WLED ESP32 controller (Art-Net).
+# The fixture must be color_order = "RGBW". max_amps is required: outputs
+# sharing one PSU must SUM to <= 80% of its rating. For a no-hardware run,
+# point host at 127.0.0.1 and run `python -m harness.artnet_listen`.
+# room = "DEMO"
+# fixture = "array"
+# host = "<WLED controller IP>"
+# start_universe = 0
+# max_amps = 10.0
+# lead_ms = 0          # measured at bring-up (spec section 9 step 6)
