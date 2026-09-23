@@ -19,7 +19,7 @@ from control.bit_registry import BitRegistry
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.cues import ROOM, SolidCue
+from control.cues import ROOM, SolidCue, fixture_dev
 from control.rooms import Room
 from control.terrarium_config import load_terrarium_config
 
@@ -2354,14 +2354,14 @@ def test_unwire_room_drops_a_muted_fixtures_latched_override(two_fixture_agent):
     gs.hello(main, "sim", "1", None)
     agent.poll()
     agent._on_mute_change(main, True)
-    assert agent._overrides[main] == ((0, 0, 0), 0.0, None)
+    assert agent._overrides[fixture_dev("main")] == ((0, 0, 0), 0.0, None)
 
     gs.room = None
     agent.unwire_room()
     agent.server.sent.clear()
     agent.poll()
 
-    assert main not in agent._overrides
+    assert fixture_dev("main") not in agent._overrides
     assert main not in agent._override_only
     assert not [m for dev, m in agent.server.sent
                 if dev == main and m["address"] == f"/{main}/leds"]
@@ -2382,7 +2382,7 @@ def test_override_expiry_clears_only_that_fixtures_last_frame():
 
     agent._fixtures["main"].last_frame = b"\x01"
     agent._fixtures["accent"].last_frame = b"\x02"
-    agent._overrides["sim-room-main"] = ((0, 0, 0), 0.0, agent._clock() - 1.0)
+    agent._overrides[fixture_dev("main")] = ((0, 0, 0), 0.0, agent._clock() - 1.0)
 
     agent._tick_overrides()
 
@@ -2437,3 +2437,82 @@ def test_a_join_after_hello_keeps_the_browsers_wire_flavor(rig):
     server.deliver("c1", "/game/join", "ss", ["ie-abc123", "TEST_PLAYER_NODE"])
     agent.poll()
     assert server.protoversions["ie-abc123"] == "o2ws/1"
+
+
+# --- routing by fixture name (spec 2026-09-23 section 4.2) -----------------
+
+def test_an_unbound_fixture_receives_a_room_cue_by_name(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    sessions = _fake_sessions(monkeypatch)
+    DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([(ROOM, 0xB0, 74, 99)], at=100.0)
+    assert sessions["room_test_main"].fed[-1] == (0xB0, 74, 99)
+    assert sessions["room_test_accent"].fed[-1] == (0xB0, 74, 99)
+
+
+def test_a_solid_cue_paints_an_unbound_fixture(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    frames = {}
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0,
+                            on_room_frame=lambda n, f: frames.__setitem__(n, f))
+    gs._dispatch_cues([SolidCue(fixture_dev("main"), (255, 0, 0), 1.0, 5.0)],
+                      at=100.0)
+    agent._render_room()
+    assert frames["main"] == bytes([0, 255, 0]) * 60     # GRB red
+
+
+def test_a_bound_devs_mute_is_keyed_by_its_fixture(monkeypatch):
+    gs = _room_ready_game_server(bound={"main": "sim-room-main"})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    agent._on_mute_change("sim-room-main", True)
+    assert agent._overrides[fixture_dev("main")] == ((0, 0, 0), 0.0, None)
+    assert "sim-room-main" not in agent._overrides
+    assert fixture_dev("main") in agent._muted
+
+
+def test_a_mute_latched_while_unbound_still_blacks_the_fixture_after_a_bind(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=lambda: 100.0)
+    agent._on_mute_change(fixture_dev("main"), True)
+    gs.room.bound["main"] = "sim-room-main"
+    server.bind_dev("sim-room-main", "c")
+    agent._render_room()
+    (frame,) = [m["args"][0] for d, m in server.sent if d == "sim-room-main"]
+    assert bytes(frame) == bytes(180)
+
+
+def test_a_play_cue_for_an_unbound_fixture_is_dropped_and_warned_once(monkeypatch, caplog):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=lambda: 100.0)
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        agent._on_play_cue(fixture_dev("main"), "click", "")
+        agent._on_play_cue(fixture_dev("main"), "click", "")
+    assert server.sent == []
+    assert sum("main" in r.message for r in caplog.records) == 1
+
+
+def test_a_fixture_token_override_never_reaches_the_player_pass(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=lambda: 100.0)
+    agent._on_solid_cue(fixture_dev("main"), (0, 0, 255), 1.0, 5.0, 100.0)
+    agent.poll()
+    assert not [m for _d, m in server.sent if m["address"].startswith("/@")]
+
+
+def test_accept_flash_reaches_an_unbound_fixture(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    agent._flash_fixtures_now((0, 255, 0), 1)
+    agent._drain_light_cues()
+    assert agent._overrides[fixture_dev("main")][0] == (0, 255, 0)
+    assert agent._overrides[fixture_dev("accent")][0] == (0, 255, 0)

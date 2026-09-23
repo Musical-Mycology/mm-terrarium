@@ -10,6 +10,7 @@ from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.lobby import (GREEN, HUE_CC, LOBBY_DRONE_KEY, LOBBY_PROGRAM, RED,
                            StartRequest, TERRARIUM_ADMIN, WHITE)
+from control.cues import fixture_dev
 from control.rooms import Room
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
@@ -84,8 +85,8 @@ def test_running_swaps_back_to_the_bits_room_declaration(monkeypatch):
     assert ("main", 0xC0, 89, 0) in audio.fed                    # TestBit's program restored
     # accept: one green flash on both fixtures
     agent.poll()
-    assert agent._overrides["sim-main"][0] == GREEN
-    assert agent._overrides["sim-accent"][0] == GREEN
+    assert agent._overrides[fixture_dev("main")][0] == GREEN
+    assert agent._overrides[fixture_dev("accent")][0] == GREEN
 
 
 def test_hello_invites_with_two_white_flashes_and_double_tap_joins(monkeypatch):
@@ -185,11 +186,11 @@ def test_minimum_not_met_flashes_fixtures_red_twice(monkeypatch):
     server.deliver("c1", "/game/start", "ss", ["ie5", "k"])
     agent.poll()
     assert gs.state is State.SETUP
-    assert agent._overrides["sim-main"][0] == RED
+    assert agent._overrides[fixture_dev("main")][0] == RED
     _poll(agent, clk, 0.3)
-    assert "sim-main" not in agent._overrides
+    assert fixture_dev("main") not in agent._overrides
     _poll(agent, clk, 0.25)
-    assert agent._overrides["sim-main"][0] == RED
+    assert agent._overrides[fixture_dev("main")][0] == RED
 
 
 def test_web_start_queue_is_drained_on_poll(monkeypatch):

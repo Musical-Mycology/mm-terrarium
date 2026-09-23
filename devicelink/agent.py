@@ -24,7 +24,7 @@ import queue
 from dataclasses import dataclass, field, replace
 
 from control.breath import BREATH_CC, breath_cc
-from control.cues import TARGET
+from control.cues import TARGET, fixture_dev, fixture_name
 from control.engine import GameServer
 from control.fixture_sink import ConsoleFrameSink, DeviceLinkSink
 from control.functions import FunctionKind
@@ -135,8 +135,8 @@ class DeviceLinkAgent:
         # override, applied at the two send seams (_render_frames,
         # _render_room) ahead of the changed-frame comparison. A latched mute
         # blackout is just an entry with rgb=(0,0,0), level=0.0, expires=None
-        # -- see _on_mute_change. Keyed by the real fixture dev for a Room
-        # fixture, the same way _last_frames is.
+        # -- see _on_mute_change. Keyed by @fixture:<name> for a Room
+        # fixture (_fixture_key).
         self._overrides: dict[str, tuple[tuple[int, int, int], float,
                                          float | None]] = {}
         # devs currently latched mute-blackout. Checked by _feed_breath (skip
@@ -236,6 +236,11 @@ class DeviceLinkAgent:
         # dev ids already refused by _handle's reserved-identity guard, so a
         # device sending on a loop is logged once rather than once a tick.
         self._refused_ids: set[str] = set()
+        # fixture tokens already warned about a dropped play cue (see
+        # _on_play_cue), so a Bit looping the same cue against an unbound
+        # fixture logs once per Room, not once a tick. Cleared in
+        # unwire_room, mirroring _refused_ids's own per-connection scope.
+        self._warned_play: set[str] = set()
         # devs with no session of their own (hello'd, never joined -- the
         # ones the lobby invites) that currently show a non-black override
         # frame and so still owe one black frame when it expires. Kept
@@ -393,8 +398,7 @@ class DeviceLinkAgent:
 
         def feed_light(name, status, d1, d2):
             st = self._fixtures.get(name)
-            dev = gs.room.bound.get(name) if gs.room is not None else None
-            if st is None or (dev is not None and dev in self._muted):
+            if st is None or fixture_dev(name) in self._muted:
                 return
             try:
                 st.session.feed_midi(status, d1, d2)
@@ -422,8 +426,7 @@ class DeviceLinkAgent:
 
         return LobbySinks(
             fixture_names=lambda: list(self._fixtures),
-            bound_dev=lambda name: (gs.room.bound.get(name)
-                                    if gs.room is not None else None),
+            bound_dev=lambda name: fixture_dev(name) if name in self._fixtures else None,
             feed_light=feed_light, feed_audio=feed_audio,
             set_audio_control=set_audio_control, play_note=play_note,
             set_override=set_override, send_play=send_play,
@@ -478,9 +481,7 @@ class DeviceLinkAgent:
         for i in range(count):
             at = now + i * spacing
             for name in self._fixtures:
-                dev = gs.room.bound.get(name)
-                if dev is None:
-                    continue
+                dev = fixture_dev(name)
                 self._light_cues.push(at, ("__flash__", dev, rgb, at), now=now)
 
     def _drain_start_requests(self) -> None:
@@ -665,6 +666,7 @@ class DeviceLinkAgent:
         if self.game_server.room is not None:
             gone |= {d for d in self.game_server.room.bound.values()
                      if d is not None}
+        gone |= {fixture_dev(n) for n in self._fixtures}
         for dev in gone:
             self._overrides.pop(dev, None)
             self._override_only.discard(dev)
@@ -682,25 +684,36 @@ class DeviceLinkAgent:
         # the Room that just left.
         self._room_cues = TimedQueue()
         self._light_cues = TimedQueue()
+        self._warned_play.clear()
 
     def controllers(self) -> dict[str, dict[int, int]]:
         """Live controller read-out per fixture name, for the Console."""
         return {name: dict(st.controllers) for name, st in self._fixtures.items()}
 
-    def _fixture_for_dev(self, dev: str) -> _FixtureState | None:
+    def _fixture_key(self, dev: str) -> str:
+        """The agent's own key for `dev`: @fixture:<name> for anything that
+        addresses a Room fixture -- the token itself, or a device currently
+        bound to one -- and `dev` unchanged for a player. Fixture state
+        (overrides, mutes, queued feeds) is keyed by fixture, so it survives
+        a device binding or rebinding mid-run. Spec 2026-09-23 section 4.2."""
+        if fixture_name(dev) is not None:
+            return dev
         gs = self.game_server
-        if gs.room is None:
-            return None
-        for name, bound in gs.room.bound.items():
-            if bound == dev:
-                return self._fixtures.get(name)
-        return None
+        if gs.room is not None:
+            for name, bound in gs.room.bound.items():
+                if bound == dev:
+                    return fixture_dev(name)
+        return dev
+
+    def _fixture_for(self, dev: str) -> _FixtureState | None:
+        name = fixture_name(self._fixture_key(dev))
+        return None if name is None else self._fixtures.get(name)
 
     def _invalidate_frame(self, dev: str) -> None:
         """Force the next render for `dev` to resend even if unchanged (an
         override landed or expired)."""
         self._last_frames.pop(dev, None)
-        st = self._fixture_for_dev(dev)
+        st = self._fixture_for(dev)
         if st is not None:
             st.last_frame = None
 
@@ -808,6 +821,7 @@ class DeviceLinkAgent:
         force a resend this tick (see _apply_override's use at both send
         seams) so it goes out immediately, stamped with the cue's own `when`
         rather than this tick's stream-frame origin."""
+        dev = self._fixture_key(dev)
         expires = None if duration is None else when + duration
         self._overrides[dev] = (rgb, level, expires)
         self._invalidate_frame(dev)
@@ -822,6 +836,7 @@ class DeviceLinkAgent:
         queues and voice are purged/silenced independently. Guarded like
         every other engine sink here: a failing Room-audio silence must not
         propagate into the engine tick (boundary rule 2)."""
+        dev = self._fixture_key(dev)
         if muted:
             self._muted.add(dev)
             self._overrides[dev] = ((0, 0, 0), 0.0, None)
@@ -833,7 +848,7 @@ class DeviceLinkAgent:
             # guards on self._muted as a second line of defense, but the
             # purge here is what keeps the queue itself from growing stale.
             self._light_cues.purge(lambda payload: payload[0] == dev)
-            st = self._fixture_for_dev(dev)
+            st = self._fixture_for(dev)
             if st is not None:
                 self._room_cues.purge(lambda payload: payload[0] == st.name)
                 if (self._room_audio is not None
@@ -911,8 +926,8 @@ class DeviceLinkAgent:
                 logger.exception("fixture %s render failed; skipping frame", fixture.name)
                 continue
             frame = bytes(st.universe.get_frame()[:fixture.pixel_count * 3])
-            if dev is not None:
-                frame = self._apply_override(dev, frame, fixture.color_order)
+            frame = self._apply_override(fixture_dev(fixture.name), frame,
+                                         fixture.color_order)
             if dev != st.last_dev:
                 # A rebind (or a first binding) has to resend even if this
                 # fixture's own bytes have not moved.
@@ -1041,11 +1056,11 @@ class DeviceLinkAgent:
         bound = set(gs.room.bound.values()) if gs.room is not None else set()
         for dev in list(set(self._overrides) | self._override_only):
             # Only a KNOWN device that is not a Room fixture may be painted
-            # here. `bound` is checked as well as _fixture_for_dev because
+            # here. `bound` is checked as well as _fixture_for because
             # the two disagree while a Room is being torn down, and a
             # fixture dev must never be handed a 36-channel player frame.
-            if (dev in self.bridges or dev in bound
-                    or self._fixture_for_dev(dev) is not None
+            if (fixture_name(dev) is not None or dev in self.bridges
+                    or dev in bound or self._fixture_for(dev) is not None
                     or gs.devices.get(dev) is None):
                 self._override_only.discard(dev)
                 continue
@@ -1395,7 +1410,7 @@ class DeviceLinkAgent:
         _FixtureState; every other dev is a player device on self.bridges,
         keyed into self._pending_at as before.
         """
-        st = self._fixture_for_dev(dev)
+        st = self._fixture_for(dev)
         if st is not None:
             try:
                 st.session.feed_midi(status, d1, d2)
@@ -1471,10 +1486,11 @@ class DeviceLinkAgent:
         fixture owns its own session, so there is nothing to collapse and no
         canonical dev to collapse onto.
         """
+        dev = self._fixture_key(dev)
         if dev in self._muted:
             return
         now = self._clock()
-        st = self._fixture_for_dev(dev)
+        st = self._fixture_for(dev)
         if st is not None:
             self._room_cues.push(when, (st.name, status, data1, data2), now=now)
         feed_at = None if when is None else when - self._horizon
@@ -1491,6 +1507,15 @@ class DeviceLinkAgent:
         """Forward a Bit's local-sample cue to the device. Unlike the light
         path there is no session to consult: the device owns its samples, and
         Control only names one. An unknown name is the device's business."""
+        if fixture_name(dev) is not None:
+            # Task 2 only produces a token for a fixture with no bound
+            # device; a play cue names a sample ON a device, so there is
+            # nowhere to send it. Logged once per Room.
+            if dev not in self._warned_play:
+                self._warned_play.add(dev)
+                logger.warning("play cue for %s: no device bound; dropping "
+                               "(logged once per Room)", dev)
+            return
         self._send(dev, protocol.play_event(dev, name, params))
 
     def on_registration_change(self) -> None:
