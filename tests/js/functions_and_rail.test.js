@@ -225,5 +225,40 @@ const FUNCTIONS = [
     assert.ok(!reg.includes("Testshroom 1"), "no per-device rows in sidebar");
   }
 
+  {
+    // Devices row: connected non-fixture devices, and how many hold a role.
+    // sim-room is a bound fixture, so it counts under Fixtures only.
+    const reg = byId.get("registrationCard").innerHTML;
+    assert.ok(/Devices[\s\S]*?3 · 2 joined/.test(reg), "devices rollup connected/joined");
+    // No shared-unscored role declared (MetronomeBit shape): no Shared row.
+    assert.ok(!reg.includes("Shared"), "Shared row only when a Bit declares one");
+  }
+
+  // Rev1Bit shape: SHARED, unscored roles -- neither Scored nor Jam. A
+  // joined board used to vanish from the rollup entirely.
+  send({ event: "snapshot", state: "RUNNING", loaded_bit: "Rev1Bit",
+         roles: [{ role: "player", class: "SHARED", capacity: null, scored: false },
+                 { role: "sim", class: "SHARED", capacity: null, scored: false }],
+         registration: [{ role: "player", count: 1, capacity: null }],
+         devices: [{ dev: "rev1a", name: "rev1-board", role: "player" }],
+         bit_status: {}, functions: [],
+         room: { room_type: "TEST", capability: { pixel_count: 864,
+                 color_order: "GRB", zones: [] }, fixtures: [], instruments: [],
+                 controllers: {} } });
+  {
+    const reg = byId.get("registrationCard").innerHTML;
+    assert.ok(/Shared[\s\S]*?1\/∞/.test(reg), "shared unscored roles counted");
+    assert.ok(/Devices[\s\S]*?1 · 1 joined/.test(reg), "the board shows as a joined device");
+  }
+  // devices_changed alone refreshes the Devices row (a lobby device that
+  // said hello but has not joined yet).
+  send({ event: "devices_changed",
+         devices: [{ dev: "rev1a", name: "rev1-board", role: "player" },
+                   { dev: "sim1", name: "sim", role: null }] });
+  {
+    const reg = byId.get("registrationCard").innerHTML;
+    assert.ok(/Devices[\s\S]*?2 · 1 joined/.test(reg), "devices_changed refreshes the rollup");
+  }
+
   console.log("functions_and_rail: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

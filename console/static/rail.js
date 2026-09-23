@@ -6,6 +6,7 @@ import * as wire from "./wire.js";
 let rolesByName = {};        // role name -> role_view() dict, for scored/jam classing
 let registrationRows = [];   // last registration_changed/snapshot rows: {role, count, capacity}
 let currentRoom = null;      // last snapshot/room_changed room, for the fixtures rollup
+let deviceRows = [];         // last snapshot/devices_changed devices, for the Devices rollup
 let pointerOverLog = false;
 
 function clear(node) {
@@ -24,17 +25,24 @@ function mk(tag, className, text) {
 // Category rollup across declared roles: a declared role with no
 // registration row still counts (as 0), so Jam reads 0/∞ rather than
 // disappearing before anyone joins. Roles without a declaration (roles
-// list empty or lagging) fall into neither category.
+// list empty or lagging) fall into neither category. An unscored role that
+// is neither Jam nor Room (Rev1Bit's shared bench roles) is "Shared", shown
+// only when the Bit declares one so game Bits keep their three lines.
 function rollup() {
   const countByRole = {};
   for (const row of registrationRows) countByRole[row.role] = row.count;
 
   const sums = { scored: { count: 0, cap: 0, unbounded: false },
+                 shared: { count: 0, cap: 0, unbounded: false, declared: false },
                  jam: { count: 0, cap: 0, unbounded: false } };
   for (const decl of Object.values(rolesByName)) {
-    const isJam = String(decl.class).toLowerCase() === "jam";
-    const bucket = decl.scored ? sums.scored : isJam ? sums.jam : null;
+    const cls = String(decl.class).toLowerCase();
+    const bucket = decl.scored ? sums.scored
+      : cls === "jam" ? sums.jam
+      : cls === "room" ? null
+      : sums.shared;
     if (!bucket) continue;
+    if (bucket === sums.shared) bucket.declared = true;
     bucket.count += countByRole[decl.role] || 0;
     if (decl.capacity == null) bucket.unbounded = true;
     else bucket.cap += decl.capacity;
@@ -43,12 +51,23 @@ function rollup() {
   const fixtures = (currentRoom && currentRoom.fixtures) || [];
   const bound = fixtures.filter((f) => f.dev).length;
 
+  // Devices: every connected device that is not a bound Room fixture, and
+  // how many of those hold a role. A device that said hello but was never
+  // granted a role still shows here, so "connected but not joined" is
+  // visible without leaving the Live view.
+  const fixtureDevs = new Set(fixtures.map((f) => f.dev).filter(Boolean));
+  const players = deviceRows.filter((d) => !d.fixture && !fixtureDevs.has(d.dev));
+  const joined = players.filter((d) => d.role).length;
+
   const fmt = (b) => `${b.count}/${b.unbounded ? "∞" : b.cap}`;
-  return [
+  const rows = [
     ["Fixtures", `${bound}/${fixtures.length}`],
     ["Scored", fmt(sums.scored)],
-    ["Jam", fmt(sums.jam)],
   ];
+  if (sums.shared.declared) rows.push(["Shared", fmt(sums.shared)]);
+  rows.push(["Jam", fmt(sums.jam)]);
+  rows.push(["Devices", `${players.length} · ${joined} joined`]);
+  return rows;
 }
 
 function renderRegistration() {
@@ -107,6 +126,11 @@ export function init() {
     for (const role of m.roles || []) rolesByName[role.role] = role;
     registrationRows = m.registration || [];
     currentRoom = m.room || null;
+    deviceRows = m.devices || [];
+    renderRegistration();
+  });
+  wire.on("devices_changed", (m) => {
+    deviceRows = m.devices || [];
     renderRegistration();
   });
   wire.on("registration_changed", (m) => {
