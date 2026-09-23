@@ -21,7 +21,9 @@ cannot drift apart.
 """
 
 from control.bit import Bit
-from control.cues import PlayCue, SolidCue
+from control.cues import TARGET, FireFunction, PlayCue, SolidCue
+from control.functions import (Condition, ConditionSource, Function,
+                               FunctionTable, FunctionTarget, ScriptStep)
 from control.instrument import InstrumentRequirement
 from control.roles import Role, RoleClass, RoleTable
 
@@ -120,27 +122,80 @@ class Rev1Bit(Bit):
         return {"tap": self._on_tap, "hold": self._on_hold,
                 "swing": self._on_swing}
 
+    @property
+    def function_table(self) -> FunctionTable:
+        """One DEVICE trigger per gesture response, so the Console's Triggers
+        panel can fire each on a chosen board without touching it.
+
+        The gesture handlers below fire these same triggers, so a real
+        gesture and the operator's Fire button share one definition, and a
+        live gesture shows up on its trigger's last-fired line. The counters
+        in status() move only in the handlers: a manual fire checks the
+        response, it is not a gesture. The tap's hue step stays in _on_tap
+        because it depends on how many taps came before; tap_tick is the
+        stateless part (the sample)."""
+        def gesture(name, verb, description):
+            return Condition(name=name, description=description,
+                             source=ConditionSource.GESTURE_VERB, verb=verb)
+
+        def flash(rgb, seconds):
+            return ScriptStep(0.0, SolidCue(TARGET, rgb, FLASH_LEVEL, seconds))
+
+        return FunctionTable(functions={
+            "tap_tick": Function(
+                name="tap_tick",
+                description=f"Tap response: play `{TAP_SAMPLE}`. A real tap "
+                            "also steps the hue; a manual fire does not.",
+                target=FunctionTarget.DEVICE,
+                condition=gesture("tapped", "tap", "A tap on the touch pad"),
+                script=(ScriptStep(0.0, PlayCue(TARGET, TAP_SAMPLE, "")),)),
+            "hold_flash": Function(
+                name="hold_flash",
+                description=f"Hold response: play `{HOLD_SAMPLE}` and flash "
+                            f"white for {HOLD_FLASH_S:g} s",
+                target=FunctionTarget.DEVICE,
+                condition=gesture("held", "hold",
+                                  "Touch pad held past the hold window"),
+                script=(ScriptStep(0.0, PlayCue(TARGET, HOLD_SAMPLE, "")),
+                        flash(HOLD_RGB, HOLD_FLASH_S))),
+            "swing_negative": Function(
+                name="swing_negative",
+                description=f"Negative swing response: flash red for "
+                            f"{SWING_FLASH_S:g} s",
+                target=FunctionTarget.DEVICE,
+                condition=gesture("swung_negative", "swing",
+                                  "A swing with negative peak g"),
+                script=(flash(SWING_NEG_RGB, SWING_FLASH_S),)),
+            "swing_positive": Function(
+                name="swing_positive",
+                description=f"Positive swing response: flash blue for "
+                            f"{SWING_FLASH_S:g} s",
+                target=FunctionTarget.DEVICE,
+                condition=gesture("swung_positive", "swing",
+                                  "A swing with positive peak g"),
+                script=(flash(SWING_POS_RGB, SWING_FLASH_S),)),
+        })
+
     def _on_tap(self, dev: str, args: list, at: float) -> list:
-        """args: [dev, peak_g, duration_ms, count]. Plays `tick` and steps
+        """args: [dev, peak_g, duration_ms, count]. Fires tap_tick and steps
         the hue. Every tap steps once: Rev 1 always sends count 1."""
         value = TAP_HUE_STEPS[self._taps % len(TAP_HUE_STEPS)]
         self._taps += 1
-        return [PlayCue(dev, TAP_SAMPLE, ""),
+        return [FireFunction("tap_tick", dev),
                 (dev, 0xB0, HUE_CC, value)]
 
     def _on_hold(self, dev: str, args: list, at: float) -> list:
-        """args: [dev, held_seconds, count]. Plays `hold` and flashes white."""
+        """args: [dev, held_seconds, count]. Fires hold_flash."""
         self._holds += 1
         self._last_held_s = float(args[1]) if len(args) > 1 else None
-        return [PlayCue(dev, HOLD_SAMPLE, ""),
-                SolidCue(dev, HOLD_RGB, FLASH_LEVEL, HOLD_FLASH_S)]
+        return [FireFunction("hold_flash", dev)]
 
     def _on_swing(self, dev: str, args: list, at: float) -> list:
-        """args: [dev, signed_peak_g, count]. Flashes red for a negative
-        swing and blue for a positive one, so the sign the accelerometer
-        reported is checkable by eye."""
+        """args: [dev, signed_peak_g, count]. Fires swing_negative (red) or
+        swing_positive (blue), so the sign the accelerometer reported is
+        checkable by eye."""
         g = float(args[1]) if len(args) > 1 else 0.0
         self._swings += 1
         self._last_swing_g = g
-        rgb = SWING_NEG_RGB if g < 0 else SWING_POS_RGB
-        return [SolidCue(dev, rgb, FLASH_LEVEL, SWING_FLASH_S)]
+        return [FireFunction("swing_negative" if g < 0 else "swing_positive",
+                             dev)]
