@@ -5181,8 +5181,8 @@ backend" for DEMO. Design:
   an operator to manage individual fixtures by name.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**2662 passed, 1 skipped** (final-review fix wave: +3 tests, see
-`.superpowers/sdd/2026-09-23-artnet-fixture-sink/final-fix-report.md`);
+**2662 passed, 1 skipped** (the final-review fix wave, commit `efe21c9`,
+added 3 tests);
 `.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
 generated diagrams current.
 
