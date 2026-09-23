@@ -220,9 +220,9 @@ def _running(bit_cls=ScriptBit, bound=None, clock=None):
 def test_manual_fire_dispatches_every_step_with_its_offset():
     gs, light, _ = _running()
     assert gs.fire_function("sweep", fired_by="admin-manual") is None
-    assert [c[0] for c in light] == ["sim-room-main"] * 3
-    assert [c[4] for c in light] == [100.0, 100.5, 102.0]
-    assert [c[3] for c in light] == [127, 40, 0]
+    assert [c[0] for c in light] == ["sim-room-main", fixture_dev("accent")] * 3
+    assert [c[4] for c in light] == [100.0, 100.0, 100.5, 100.5, 102.0, 102.0]
+    assert [c[3] for c in light] == [127, 127, 40, 40, 0, 0]
 
 
 def test_a_verb_handler_fire_shares_the_gestures_presentation_time():
@@ -271,7 +271,7 @@ def test_fires_returned_fire_with_explicit_at_overrides_the_ticks_at():
 
     gs, light, _ = _running(bit_cls=GridFiresBit)
     gs.tick(0.01)                      # tick's own `at` would be 100.0
-    assert [c[4] for c in light] == [500.0, 500.5, 502.0]
+    assert [c[4] for c in light] == [500.0, 500.0, 500.5, 500.5, 502.0, 502.0]
 
 
 def test_fires_returning_a_plain_cue_tuple_is_dropped_not_dispatched():
@@ -330,7 +330,8 @@ def test_generator_cues_dispatch_once_per_running_tick():
     on_light_cue, exactly like a scripted fire's steps."""
     gs, light, _ = _running(bit_cls=GeneratorBit)
     gs.tick(3.0)
-    assert light == [("sim-room-main", 0xB0, 74, 127, pytest.approx(100.0))]
+    assert light == [("sim-room-main", 0xB0, 74, 127, pytest.approx(100.0)),
+                     (fixture_dev("accent"), 0xB0, 74, 127, pytest.approx(100.0))]
 
 
 def test_scripted_fire_suppresses_the_generator_lane_it_writes_and_it_resumes():
@@ -381,8 +382,8 @@ def test_the_record_reports_what_the_fire_resolved_to():
     record = observer.fired[0]
     assert record.name == "sweep"
     assert record.condition == "round_won"
-    assert record.devs == ("sim-room-main",)
-    assert record.steps == 3
+    assert record.devs == ("sim-room-main", fixture_dev("accent"))
+    assert record.steps == 6
     assert record.at == 100.0
 
 
@@ -433,13 +434,16 @@ def test_a_fixture_cue_reaches_only_that_fixture():
     assert [c[0] for c in light] == ["sim-room-accent"]
 
 
-def test_a_cue_at_an_unbound_fixture_is_dropped_and_warned_once(caplog):
+def test_a_cue_at_an_unbound_fixture_reaches_it_by_name(caplog):
+    """Spec 2026-09-23 section 4.1: an unbound fixture is addressable by
+    name. Its cue goes out as the @fixture: token, with no warning."""
     gs, light, _ = _running(bound={"main": "sim-room-main"})
     with caplog.at_level("WARNING"):
         gs._dispatch_cues([(fixture_dev("accent"), 0xB0, 74, 5),
                            (fixture_dev("accent"), 0xB0, 74, 6)], at=1.0)
-    assert light == []
-    assert sum("accent" in r.message for r in caplog.records) == 1
+    assert light == [(fixture_dev("accent"), 0xB0, 74, 5, 1.0),
+                     (fixture_dev("accent"), 0xB0, 74, 6, 1.0)]
+    assert not [r for r in caplog.records if "accent" in r.message]
 
 
 class DriftAuroraBit(_BaseBit):
@@ -497,27 +501,38 @@ def test_room_devs_resolve_in_profile_declaration_order_not_bind_order():
     assert [c[0] for c in light] == ["sim-room-main", "sim-room-accent"] * 3
 
 
-def test_resolve_target_on_an_unbound_room_returns_nothing():
-    """_resolve_target's room_devs block must short-circuit on "is anything
-    bound" before ever walking the profile's fixtures -- an empty Room must
-    never reach a profile that happens to be misshapen for its own gate."""
+def test_resolve_target_on_an_unbound_room_returns_every_fixture_by_name():
     from control.rooms import Room
 
     gs = GameServer({}, clock=lambda: 0.0)
     gs.room = Room(name="DEMO", profile=_Room({}).profile, node_id="ROOM_DEMO_NODE")
-    assert gs._resolve_target(FunctionTarget.ROOM, None) == []
+    assert gs._resolve_target(FunctionTarget.ROOM, None) == [
+        fixture_dev("main"), fixture_dev("accent")]
+
+
+def test_a_bound_fixture_still_resolves_to_its_dev():
+    gs, light, _ = _running(bound={"main": "sim-room-main",
+                                   "accent": "sim-room-accent"})
+    assert gs._resolve_devs(fixture_dev("accent")) == ["sim-room-accent"]
+    assert gs._resolve_devs(ROOM) == ["sim-room-main", "sim-room-accent"]
+
+
+def test_an_unbound_fixture_token_resolves_to_its_instrument():
+    gs, _, _ = _running(bound={})
+    assert gs._instrument_for(fixture_dev("accent")) is \
+        gs.room.profile.fixtures[1].instrument
 
 
 def test_all_resolves_to_the_room_plus_registered_players_deduped():
     gs, light, _ = _running()
     gs.fire_function("everywhere", fired_by="admin-manual")
-    assert [c[0] for c in light] == ["sim-room-main", "ie1"]
+    assert [c[0] for c in light] == ["sim-room-main", fixture_dev("accent"), "ie1"]
 
 
 def test_all_never_lists_a_room_bound_device_twice():
     gs, light, _ = _running(bound={"main": "ie1"})
     gs.fire_function("everywhere", fired_by="admin-manual")
-    assert [c[0] for c in light] == ["ie1"]
+    assert [c[0] for c in light] == ["ie1", fixture_dev("accent")]
 
 
 def test_a_device_target_with_no_device_is_refused_not_silently_empty():
@@ -550,7 +565,7 @@ def test_surface_fire_without_dev_refused():
 def test_surface_fire_with_room_sentinel_lights_the_room():
     gs, light, _ = _running()
     assert gs.fire_function("spot", fired_by="admin-manual", dev=ROOM) is None
-    assert [c[0] for c in light] == ["sim-room-main"]
+    assert [c[0] for c in light] == ["sim-room-main", fixture_dev("accent")]
 
 
 def test_an_undeclared_trigger_with_no_dev_is_refused_as_a_bare_surface_fire():
@@ -576,15 +591,15 @@ def test_firing_with_no_bit_running_falls_through_the_ladder():
     assert reason is not None and "no surface given" in reason
 
 
-def test_a_room_target_with_no_room_bound_fires_and_reaches_nothing():
-    """A fire that reached nothing must be visible as such, not absent."""
+def test_a_room_target_with_nothing_bound_reaches_every_fixture_by_name():
+    """An unbound Room is still addressable by fixture name."""
     gs, light, _ = _running(bound={})
     observer = Recorder()
     gs.add_observer(observer)
     assert gs.fire_function("sweep", fired_by="admin-manual") is None
-    assert light == []
-    assert observer.fired[0].devs == ()
-    assert observer.fired[0].steps == 0
+    assert [c[0] for c in light] == [fixture_dev("main"), fixture_dev("accent")] * 3
+    assert observer.fired[0].devs == (fixture_dev("main"), fixture_dev("accent"))
+    assert observer.fired[0].steps == 6
 
 
 def test_a_raising_observer_does_not_stop_the_cues_or_its_peers():
@@ -594,7 +609,7 @@ def test_a_raising_observer_does_not_stop_the_cues_or_its_peers():
     gs.add_observer(raiser)
     gs.add_observer(recorder)
     assert gs.fire_function("sweep", fired_by="admin-manual") is None
-    assert len(light) == 3
+    assert len(light) == 6
     assert raiser.calls == 1
     assert len(recorder.fired) == 1
 
@@ -604,7 +619,7 @@ def test_an_unknown_trigger_from_a_bit_does_not_break_neighbouring_cues():
     gs, light, _ = _running()
     gs._dispatch_cues([(ROOM, 0xB0, 74, 5), FireFunction("nope"),
                        (ROOM, 0xB0, 74, 6)], 100.0)
-    assert [c[3] for c in light] == [5, 6]
+    assert [c[3] for c in light] == [5, 5, 6, 6]
 
 
 def test_a_bit_whose_function_table_raises_is_refused_not_crashed():

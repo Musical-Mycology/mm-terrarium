@@ -13,7 +13,7 @@ import time
 
 from control.bit import Bit
 from control.cues import (ALL, ROOM, FireFunction, LightCue, MuteCue, PlayCue,
-                          SolidCue, fixture_name)
+                          SolidCue, fixture_dev, fixture_name)
 from control.device_pool import DevicePool
 from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
@@ -415,7 +415,6 @@ class GameServer:
         # a Bit, so `origin + horizon` still lives only in data()/tick().
         bit.cue_horizon = self._horizon
         self._warned_no_room = False
-        self._warned_unbound = set()
         self.bit_name = name
         self.registration = registration
         self._slot_requirements = {r.slot: r for r in requirements}
@@ -725,39 +724,43 @@ class GameServer:
                             FIRED_BY_GESTURE_VERB)
         return None
 
+    def _fixture_target(self, name: str) -> str:
+        """The dev a cue for fixture `name` is delivered as: the bound device
+        when there is one, else the fixture's own @fixture: token. Every
+        declared fixture is addressable, bound or not -- spec
+        2026-09-23-artnet-fixture-sink-design.md section 4.1. A bound
+        fixture keeps its dev spelling, so the transport sends to that
+        device exactly as before."""
+        bound = self.room.bound.get(name) if self.room is not None else None
+        return bound if bound is not None else fixture_dev(name)
+
     def _room_devs(self) -> list[str]:
-        """Every bound fixture dev, in the profile's declaration order (the
-        Room's ordered fixture list), never dict/bind order."""
-        if self.room is None or not self.room.bound:
+        """One target per DECLARED fixture, in the profile's declaration
+        order (never dict/bind order): the bound dev, or @fixture:<name>."""
+        if self.room is None:
             return []
-        return [self.room.bound[f.name] for f in self.room.profile.fixtures
-                if f.name in self.room.bound]
+        return [self._fixture_target(f.name) for f in self.room.profile.fixtures]
 
     def _resolve_devs(self, dev: str) -> list[str]:
-        """cues.ROOM -> every bound fixture dev (a broadcast); @fixture:<name>
-        -> that fixture's bound dev; anything else passes through as itself.
+        """cues.ROOM -> every declared fixture (a broadcast); @fixture:<name>
+        -> that fixture's target; anything else passes through as itself.
 
-        An empty list means drop, never raise. Warned once per Bit load per
-        missing target rather than once per cue: a 20 Hz gesture stream
-        would otherwise flood the log."""
+        An empty list means drop, never raise. Only a ROOM cue with no Room
+        loaded drops, warned once per Bit load. load_bit already refuses a
+        Bit naming a fixture its Room does not declare."""
         if dev == ROOM:
             devs = self._room_devs()
             if not devs and not self._warned_no_room:
                 self._warned_no_room = True
-                logger.warning("Bit emitted a ROOM cue with no Room bound; "
+                logger.warning("Bit emitted a ROOM cue with no Room loaded; "
                                "dropping (logged once per Bit load)")
             return devs
         name = fixture_name(dev)
         if name is None:
             return [dev]
-        bound = self.room.bound.get(name) if self.room is not None else None
-        if bound is None:
-            if name not in self._warned_unbound:
-                self._warned_unbound.add(name)
-                logger.warning("cue addressed to fixture %r, which is not "
-                               "bound; dropping (logged once per Bit load)", name)
+        if self.room is None:
             return []
-        return [bound]
+        return [self._fixture_target(name)]
 
     def _bit_fixture_names(self, function_table, light_manifest) -> set[str]:
         """Every fixture name a Bit's declarations address: @fixture: devs on
@@ -815,7 +818,8 @@ class GameServer:
     def _resolve_target(self, target, dev: str | None) -> list[str]:
         """A function's declared target, resolved to the devs it lands on.
 
-        Returns every bound Room fixture dev for ROOM, in declaration order
+        Returns every declared Room fixture's target for ROOM (its bound
+        dev, or @fixture:<name>), in declaration order
         -- this is the one-method change the N-fixture Room slice makes; no
         Bit's function declaration changes alongside it (design spec section
         5). This full list is what FunctionFired.devs reports, and (since
@@ -874,9 +878,11 @@ class GameServer:
         """The Instrument behind a resolved dev: a bound Room fixture's
         declared instrument, else the device's carried instrument
         (TUNESHROOM default -- same fallback _check_cue_kinds uses)."""
-        if self.room is not None and self.room.bound:
+        if self.room is not None:
+            name = fixture_name(dev)
             for fixture in self.room.profile.fixtures:
-                if self.room.bound.get(fixture.name) == dev:
+                if (fixture.name == name
+                        or self.room.bound.get(fixture.name) == dev):
                     return fixture.instrument
         info = self.devices.get(dev)
         if info is None:
