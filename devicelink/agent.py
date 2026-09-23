@@ -671,6 +671,13 @@ class DeviceLinkAgent:
             self._overrides.pop(dev, None)
             self._override_only.discard(dev)
             self._last_frames.pop(dev, None)
+        # Belt and braces alongside the engine's own GameServer._mute_key
+        # canonicalization: a latched mute never lapses on its own (see
+        # _on_mute_change), so if one somehow survived under a fixture
+        # token here, it must not haunt the next Room that declares a
+        # same-named fixture.
+        for name in self._fixtures:
+            self._muted.discard(fixture_dev(name))
         if self._room_audio is not None:
             for name in list(self._room_audio_fixtures):
                 self._room_audio.stop_drone(name)
@@ -787,9 +794,9 @@ class DeviceLinkAgent:
         its session frame instead of the stale override. `_invalidate_frame`
         forces a resend even if the session's own frame happens to be
         unchanged from before the override started. Overrides are per
-        fixture: `_overrides` is keyed by the real fixture dev, and only that
-        one fixture's cached last frame is cleared. No fan-out to other
-        bound fixtures here."""
+        fixture: `_overrides` is keyed by @fixture:<name> for a Room
+        fixture (_fixture_key), and only that one fixture's cached last
+        frame is cleared. No fan-out to other bound fixtures here."""
         now = self._clock()
         for dev, (_rgb, _lvl, expires) in list(self._overrides.items()):
             if expires is None or now < expires:

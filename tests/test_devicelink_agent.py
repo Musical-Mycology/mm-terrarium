@@ -19,7 +19,7 @@ from control.bit_registry import BitRegistry
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.cues import ROOM, SolidCue, fixture_dev
+from control.cues import ROOM, MuteCue, SolidCue, fixture_dev
 from control.rooms import Room
 from control.terrarium_config import load_terrarium_config
 
@@ -2516,3 +2516,60 @@ def test_accept_flash_reaches_an_unbound_fixture(monkeypatch):
     agent._drain_light_cues()
     assert agent._overrides[fixture_dev("main")][0] == (0, 255, 0)
     assert agent._overrides[fixture_dev("accent")][0] == (0, 255, 0)
+
+
+# --- mute-key canonicalization across a bind/rebind (fix round 1, spec ----
+# --- 2026-09-23 section 8.3) ------------------------------------------------
+
+def test_a_mute_latched_while_unbound_lifts_after_a_bind_and_clear(monkeypatch):
+    """Scenario A: a MuteCue against an unbound fixture's own token stores
+    that token in GameServer.muted (GameServer._mute_key). Binding a device
+    afterwards must not orphan the latch under a dev spelling nothing looks
+    up again: _clear_mutes still has to find and lift it, and the agent's
+    own override must go with it."""
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=100.0)
+    assert fixture_dev("main") in agent._muted
+
+    gs.room.bound["main"] = "sim-room-main"
+    gs._clear_mutes(["sim-room-main"])
+
+    assert fixture_dev("main") not in agent._muted
+    assert fixture_dev("main") not in agent._overrides
+    assert not gs.is_muted("sim-room-main")
+
+
+def test_a_mute_latched_while_bound_lifts_after_a_rebind(monkeypatch):
+    """Scenario B: a MuteCue against a bound dev is stored under its
+    fixture's token (not the bound dev). Rebinding to a different dev and
+    then clearing via GameServer.muted's own current contents must still
+    find and lift it -- a rebind must not leave a mute latched forever
+    under a token no future bind ever reintroduces."""
+    gs = _room_ready_game_server(bound={"main": "sim-room-A"})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue("sim-room-A")], at=100.0)
+    assert fixture_dev("main") in agent._muted
+
+    gs.room.bound["main"] = "sim-room-B"
+    gs._clear_mutes(list(gs.muted))
+
+    assert fixture_dev("main") not in agent._muted
+
+
+def test_unwire_room_drops_every_fixtures_muted_token(monkeypatch):
+    """Belt and braces alongside GameServer's own canonicalization: even if
+    a mute somehow survived under a fixture token, unwire_room must not let
+    it haunt the next Room that declares a same-named fixture."""
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    agent._on_mute_change(fixture_dev("main"), True)
+    assert fixture_dev("main") in agent._muted
+
+    gs.room = None
+    agent.unwire_room()
+
+    assert fixture_dev("main") not in agent._muted

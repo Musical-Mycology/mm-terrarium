@@ -711,9 +711,21 @@ def test_room_mute_cue_mutes_every_bound_fixture_with_one_notify():
 
     gs._dispatch_cues([MuteCue(ROOM)], at=100.0)
 
-    assert gs.muted >= {"sim-room-main", "sim-room-accent"}
+    assert gs.is_muted("sim-room-main") and gs.is_muted("sim-room-accent")
     assert set(mute_calls) == {("sim-room-main", True), ("sim-room-accent", True)}
     assert len(devices_changes) == 1
+
+
+def test_is_muted_agrees_for_a_bound_dev_and_its_fixture_token():
+    """A MuteCue against a bound fixture's dev stores the canonical
+    @fixture:<name> token in self.muted (GameServer._mute_key), so
+    is_muted must answer True for BOTH the bound dev that latched it and
+    that fixture's own token -- the two are the same surface (fix round 1,
+    spec 2026-09-23 section 8.3)."""
+    gs, _, _ = _running(bound={"main": "sim-room-main"})
+    gs._dispatch_cues([MuteCue("sim-room-main")], at=100.0)
+    assert gs.is_muted("sim-room-main")
+    assert gs.is_muted(fixture_dev("main"))
 
 
 def test_non_mute_fire_clears_mute_first():

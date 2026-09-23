@@ -142,7 +142,13 @@ class GameServer:
         self.on_mute_change = None
         # Resolved dev ids currently latched dark/silent by a MuteCue (the
         # Stop function). Cleared per-dev by any non-mute fire at that surface
-        # (see fire_function/_clear_mutes) and wholesale on _unload.
+        # (see fire_function/_clear_mutes) and wholesale on _unload. A Room
+        # fixture is always stored canonicalized to its @fixture:<name> token
+        # (_mute_key), whether the MuteCue landed while bound or not, so a
+        # later bind/rebind cannot orphan the latch under a dev spelling
+        # nothing will ever look up again (spec 2026-09-23 section 8.3).
+        # Every write and read goes through _mute_key/is_muted, never a raw
+        # `in`/`add`/`discard` against a bound dev.
         self.muted: set[str] = set()
         # Observers registered via add_observer(). Each may implement any of
         # on_state_change(old, new), on_registration_change(),
@@ -734,6 +740,29 @@ class GameServer:
         bound = self.room.bound.get(name) if self.room is not None else None
         return bound if bound is not None else fixture_dev(name)
 
+    def _mute_key(self, dev: str) -> str:
+        """The canonical key `dev` is stored under in `self.muted`: its own
+        @fixture:<name> token when it already is one, else the token of
+        whichever fixture it is CURRENTLY bound to, else `dev` unchanged.
+        Mirrors devicelink/agent.py's DeviceLinkAgent._fixture_key -- both
+        exist so a mute latched under one dev spelling (bound or not) is
+        still found under whatever spelling is current when it is queried
+        or cleared, across a bind or rebind mid-run (spec 2026-09-23
+        section 8.3)."""
+        if fixture_name(dev) is not None:
+            return dev
+        if self.room is not None:
+            for name, bound in self.room.bound.items():
+                if bound == dev:
+                    return fixture_dev(name)
+        return dev
+
+    def is_muted(self, dev: str) -> bool:
+        """Whether `dev` is currently latched mute -- resolved through
+        _mute_key so a bound dev and its fixture's token always agree,
+        regardless of which spelling actually landed in `self.muted`."""
+        return self._mute_key(dev) in self.muted
+
     def _room_devs(self) -> list[str]:
         """One target per DECLARED fixture, in the profile's declaration
         order (never dict/bind order): the bound dev, or @fixture:<name>."""
@@ -1057,11 +1086,18 @@ class GameServer:
             self._generators.suppress(lanes, at + span)
 
     def _clear_mutes(self, devs) -> None:
-        """Any non-mute fire at a surface un-latches it (spec section 4)."""
+        """Any non-mute fire at a surface un-latches it (spec section 4).
+        Looked up (and discarded) by `d`'s CURRENT _mute_key, not `d`
+        itself -- a mute latched under one spelling (a token while unbound,
+        a bound dev while bound) must still be found here after a bind or
+        rebind changes which spelling is current. `on_mute_change` is
+        called with `d` as given; the agent applies its own canonicalizing
+        key (DeviceLinkAgent._fixture_key)."""
         cleared_any = False
         for d in devs:
-            if d in self.muted:
-                self.muted.discard(d)
+            k = self._mute_key(d)
+            if k in self.muted:
+                self.muted.discard(k)
                 cleared_any = True
                 if self.on_mute_change is not None:
                     try:
@@ -1120,7 +1156,7 @@ class GameServer:
                     devs = self._resolve_devs(cue.dev)
                     if devs:
                         for dev in devs:
-                            self.muted.add(dev)
+                            self.muted.add(self._mute_key(dev))
                         self._notify("on_devices_change")
                     for dev in devs:
                         if sink is None:
@@ -1129,7 +1165,7 @@ class GameServer:
                 elif isinstance(cue, PlayCue):
                     sink = self.on_play_cue
                     for dev in self._resolve_devs(cue.dev):
-                        if dev in self.muted:
+                        if self.is_muted(dev):
                             continue
                         if sink is None:
                             continue
