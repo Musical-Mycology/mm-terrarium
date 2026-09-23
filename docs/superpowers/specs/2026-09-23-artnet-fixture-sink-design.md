@@ -95,19 +95,25 @@ DeviceLinkAgent._on_light_cue ─► fixture session feed (by name) ─► _rend
 
 ### 4.1 Cue routing by fixture name (`control/engine.py`)
 
-- `_room_devs()` returns `cues.fixture_dev(f.name)` for **every** declared
-  fixture, in profile order, bound or not.
-- `_resolve_devs("@fixture:x")` returns `["@fixture:x"]`. `load_bit` already
-  refuses undeclared names (`_bit_fixture_names`), so `_warned_unbound` and
-  its drop path are deleted.
-- A new `_canonical_target(dev)` maps a pass-through dev that is currently
-  bound to a fixture to that fixture's token, and leaves every other dev
-  alone. `_resolve_devs` applies it on the pass-through branch, so a Console
-  SURFACE fire aimed at a bound dev, the lobby, and `DEVICE`/`SURFACE`
-  targets in `_resolve_target` all yield one spelling per fixture. As a
-  result `self.muted`, `FunctionFired.devs`, generator lane keys
-  (`GeneratorRunner.suppress`) and `_check_cue_kinds` all agree.
+*(Amended 2026-09-23 while writing the plan. The first draft made the token
+the engine's only spelling, even for bound fixtures. That contradicted §8.3's
+promise that bound-fixture tests pass unchanged, and a prototype showed it
+would rewrite ~146 `sim-room-*` assertions for no behavioral gain. The
+engine now keeps a bound fixture's dev, and the agent canonicalizes (§4.2).)*
+
+- A new `_fixture_target(name)` returns the bound dev when the fixture is
+  bound, else `cues.fixture_dev(name)`.
+- `_room_devs()` returns `_fixture_target(f.name)` for **every** declared
+  fixture, in profile order. It returns `[]` only when no Room is loaded.
+- `_resolve_devs("@fixture:x")` returns `[_fixture_target("x")]`. `load_bit`
+  already refuses undeclared names (`_bit_fixture_names`), so
+  `_warned_unbound` and its drop path are deleted.
 - `_instrument_for("@fixture:x")` returns that fixture's instrument.
+- As a result, an unbound fixture receives every Room broadcast, `@fixture:`
+  cue, SolidCue and mute as `@fixture:<name>`. A bound fixture's cues go to
+  its dev exactly as before. The only existing tests whose expectations
+  change are the 12 in `tests/test_engine_functions.py` whose `_Room` binds
+  only `main`: the unbound `accent` now appears as `@fixture:accent`.
 - `cues.py` stays the only module that spells the `@fixture:` prefix.
 
 ### 4.2 Agent (`devicelink/agent.py`)
@@ -245,8 +251,10 @@ keepalive_ms = 250
   and **W = 0**, repeated `len(frame) // channels + 1` times.
 - **Console.**
   - `control/room_view.py` fixture entries gain `color_order`.
-  - `console/static/surface.js` and `design.js` decode each fixture by its
-    own order and width, replacing the hardcoded `channels[i*3]=g`.
+  - `console/static/surface.js` decodes each fixture by its own order and
+    width, replacing the hardcoded `channels[i*3]=g`.
+  - `design.js` is unchanged (amended 2026-09-23): the design bench
+    renders a Shroom capability, which is always GRB.
   - W is displayed additively as (r+w, g+w, b+w), clipped to 255.
 - **Simulator.** `harness/o2_shroom.py` and `harness/websim_leds.py` size by
   `pixel_count * channels`.
@@ -342,7 +350,8 @@ mm-terrarium RGBW task. Nothing else in luxaeterna changes.
   - A bound dev canonicalizes to its token in `muted`, `FunctionFired.devs`
     and generator suppression.
   - A `PlayCue` to an unbound fixture drops, logged once.
-  - The existing bound-fixture tests pass unchanged, as a regression guard.
+  - The existing bound-fixture tests pass unchanged, as a regression guard
+    (§4.1 names the 12 partially-bound expectations that change).
 - **RGBW.**
   - profile `channels`, slices and `color_order` validation;
   - agent universe sizing and override (W = 0);
