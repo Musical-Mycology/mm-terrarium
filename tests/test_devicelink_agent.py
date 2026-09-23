@@ -2584,3 +2584,63 @@ def test_an_rgbw_solid_override_leaves_white_dark(monkeypatch):
     agent._on_solid_cue(fixture_dev("array"), (255, 0, 0), 1.0, 5.0, 100.0)
     agent._render_room()
     assert frames["array"] == bytes([255, 0, 0, 0]) * 864
+
+
+class _FakeOutput:
+    def __init__(self):
+        self.frames, self.started, self.closed = [], 0, 0
+
+    def start(self):
+        self.started += 1
+
+    def close(self):
+        self.closed += 1
+
+    def send_frame(self, frame, when):
+        self.frames.append((bytes(frame), when))
+
+
+def _outputs_rig(monkeypatch, bound=None):
+    gs = _room_ready_game_server(bound={} if bound is None else bound)
+    _fake_sessions(monkeypatch)
+    calls, out = [], _FakeOutput()
+
+    def outputs_for(room_name, profile):
+        calls.append(room_name)
+        return {"main": [out]}
+
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0,
+                            outputs_for=outputs_for)
+    return gs, agent, out, calls
+
+
+def test_a_configured_output_starts_with_the_room_and_gets_unbound_frames(monkeypatch):
+    gs, agent, out, calls = _outputs_rig(monkeypatch)
+    assert calls == ["TEST"] and out.started == 1
+    agent._render_room()
+    assert len(out.frames) == 1 and len(out.frames[0][0]) == 180
+
+
+def test_outputs_follow_the_room_not_the_bit(monkeypatch):
+    gs, agent, out, calls = _outputs_rig(monkeypatch)
+    agent._setup_room()
+    agent.rewire_room()
+    assert calls == ["TEST"] and out.closed == 0
+
+
+def test_unwire_room_closes_outputs(monkeypatch):
+    gs, agent, out, calls = _outputs_rig(monkeypatch)
+    gs.room = None
+    agent.unwire_room()
+    assert out.closed == 1
+
+
+def test_a_raising_outputs_factory_never_breaks_the_room(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+
+    def boom(room_name, profile):
+        raise RuntimeError("no network")
+
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0, outputs_for=boom)
+    agent._render_room()                       # must not raise

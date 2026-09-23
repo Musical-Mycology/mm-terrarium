@@ -199,3 +199,60 @@ def test_the_fake_refuses_exactly_what_the_real_backend_refuses(payload):
     finally:
         real.close()
         rx.close()
+
+
+def test_outputs_factory_builds_one_sink_per_matching_output():
+    from control.terrarium_config import ArtNetOutput, load_terrarium_config
+    from devicelink.artnet_sink import outputs_factory
+
+    profile = load_terrarium_config("terrarium.toml").rooms["DEMO"].profile
+    made = []
+
+    def backend_cls(host, port):
+        made.append((host, port))
+        return StrictFakeArtNet(host, port)
+
+    outputs_for = outputs_factory(
+        (ArtNetOutput(room="DEMO", fixture="array", host="127.0.0.1",
+                      max_amps=10.0, port=16454, lead_ms=20.0),
+         ArtNetOutput(room="OTHER", fixture="x", host="127.0.0.1", max_amps=1.0)),
+        clock=lambda: 100.0, backend_cls=backend_cls)
+    built = outputs_for("DEMO", profile)
+    (sink,) = built["array"]
+    assert made == [("127.0.0.1", 16454)]
+    assert sink.name == "DEMO-array"
+    sink.send_frame(bytes(864 * 4), when=100.02)
+    sink._service_once(100.001)                # lead 20 ms: due at ~100.0
+    assert len(sink._backend.sent) == 7
+
+
+def test_send_frame_never_raises_on_a_bad_when_or_a_bad_frame():
+    sink, backend, now = _sink()
+    sink.send_frame(bytes(16), when=None)          # bad `when`
+    sink.send_frame(None, when=100.0)               # bad frame
+    assert backend.sent == []
+
+
+def test_close_skips_the_black_frame_when_the_sender_thread_is_stuck(monkeypatch):
+    """A backend `send` blocked past the join timeout must not race
+    close()'s own black-frame send on the same backend/socket."""
+    import devicelink.artnet_sink as artnet_sink
+
+    monkeypatch.setattr(artnet_sink, "_CLOSE_JOIN_S", 0.05)
+    sink, backend, now = _sink()
+    backend.gate = threading.Event()                # unset: send() blocks
+    sink.start()
+    sink.send_frame(bytes(16), when=100.0)
+    try:
+        # Give the sender thread a moment to pick the frame up and block
+        # inside backend.send() -- once it has, close()'s join will time out.
+        for _ in range(200):
+            if backend.opens > 0:
+                break
+            time.sleep(0.01)
+        stuck_thread = sink._thread
+        sink.close()
+        assert backend.sent == []                   # no black frame raced in
+    finally:
+        backend.gate.set()                           # release the sender thread
+        stuck_thread.join(timeout=5.0)                # avoid leaking the thread

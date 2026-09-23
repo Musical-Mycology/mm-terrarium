@@ -97,7 +97,7 @@ class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, server, *, clock,
                  capability=None, room_audio=None, horizon: float = 0.0,
                  room_profile=None, on_room_frame=None, on_join_denied=None,
-                 stale_timeout: float = 15.0):
+                 stale_timeout: float = 15.0, outputs_for=None):
         self.game_server = game_server
         self.server = server
         self._capability = capability
@@ -258,6 +258,14 @@ class DeviceLinkAgent:
         # waits on each request's reply slot.
         self.prepare_requests: queue.Queue[PrepareRequest] | None = None
         self.prepare_authority = None
+        # Physical outputs (spec 2026-09-23 section 4.2): built once per
+        # Room by outputs_for(room_name, profile) -> {fixture: [sink]},
+        # started, handed every changed frame via _sinks_for, closed on
+        # unwire. They own threads and sockets, so unlike the per-render
+        # sinks they persist across renders AND across Bit loads.
+        self._outputs_for = outputs_for
+        self._outputs: dict[str, list] = {}
+        self._outputs_key = None
         self._setup_room()
         game_server.add_observer(self)
         game_server.on_release = self._on_release
@@ -279,6 +287,7 @@ class DeviceLinkAgent:
         self._fixtures = {}
         self._ambient_start = None
         if room is None:
+            self._ensure_outputs()
             return
         if self._room_profile is None:
             self._room_profile = room.profile
@@ -317,6 +326,39 @@ class DeviceLinkAgent:
         if blob is None:
             self._ambient_start = self._clock()
         self._grant_room_audio(role)
+        self._ensure_outputs()
+
+    def _ensure_outputs(self) -> None:
+        room = self.game_server.room
+        key = None if room is None else (room.name, self._room_profile)
+        if key == self._outputs_key:
+            return
+        self._close_outputs()
+        self._outputs_key = key
+        if key is None or self._outputs_for is None:
+            return
+        try:
+            built = self._outputs_for(room.name, self._room_profile) or {}
+        except Exception:
+            logger.exception("building physical outputs for Room %s failed; "
+                             "the Room runs without them", room.name)
+            return
+        for name, sinks in built.items():
+            for sink in sinks:
+                try:
+                    sink.start()
+                except Exception:
+                    logger.exception("output for fixture %s failed to start", name)
+            self._outputs[name] = list(sinks)
+
+    def _close_outputs(self) -> None:
+        outputs, self._outputs = self._outputs, {}
+        for name, sinks in outputs.items():
+            for sink in sinks:
+                try:
+                    sink.close()
+                except Exception:
+                    logger.exception("output for fixture %s failed to close", name)
 
     def _bit_fixture_light(self, fixture_name: str) -> dict | None:
         """The loaded Bit's ROOM light declaration sliced for one fixture,
@@ -655,6 +697,8 @@ class DeviceLinkAgent:
         cleanup just above: nothing must consult a runner or a start time
         built for a Room that is gone."""
         self._exit_lobby(restore_light=False)
+        self._close_outputs()
+        self._outputs_key = None
         # Before self._fixtures goes: every fixture dev's override (a
         # latched mute blackout has no expiry and so never lapses on its
         # own) and cached frame. Left behind, _render_frames' override-only
@@ -726,14 +770,16 @@ class DeviceLinkAgent:
 
     def _sinks_for(self, name: str, dev: str | None) -> list:
         """Every sink one fixture's frame goes to right now: the Console's
-        display strip whenever one is wired, and the bound devicelink device
-        when there is one. An unbound fixture still renders -- it just has
-        no device sink."""
+        display strip whenever one is wired, the bound devicelink device
+        when there is one, and the fixture's physical outputs (Art-Net) when
+        configured. An unbound fixture still renders -- it just has no
+        device sink."""
         sinks = []
         if self._on_room_frame is not None:
             sinks.append(ConsoleFrameSink(name, self._on_room_frame))
         if dev is not None:
             sinks.append(DeviceLinkSink(dev, self._send, protocol.leds_event))
+        sinks.extend(self._outputs.get(name, ()))
         return sinks
 
     @property

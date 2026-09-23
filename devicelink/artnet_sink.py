@@ -32,6 +32,7 @@ from control.timed_queue import TimedQueue
 logger = logging.getLogger(__name__)
 
 CHANNELS_PER_PIXEL = 4          # RGBW: 128 px per universe, no straddling
+_CLOSE_JOIN_S = 2.0              # close()'s wait for the sender thread to exit
 
 
 class ArtNetFixtureSink:
@@ -63,16 +64,24 @@ class ArtNetFixtureSink:
 
     # --- tick thread -------------------------------------------------------
     def send_frame(self, frame: bytes, when: float) -> None:
-        if len(frame) != self._width:
-            if not self._warned_width:
-                self._warned_width = True
-                logger.warning("art-net output %s: frame width %d, expected "
-                               "%d; dropping (logged once)", self.name,
-                               len(frame), self._width)
-            return
-        with self._cond:
-            self._queue.push(when - self._lead, bytes(frame), now=self._clock())
-            self._cond.notify()
+        """Runs on the engine tick (boundary rule 2): must never raise,
+        whatever it is handed -- a wrong-width frame, `when=None`, a
+        non-sized frame, or a failing clock all just drop the frame."""
+        try:
+            if len(frame) != self._width:
+                if not self._warned_width:
+                    self._warned_width = True
+                    logger.warning("art-net output %s: frame width %d, expected "
+                                   "%d; dropping (logged once)", self.name,
+                                   len(frame), self._width)
+                return
+            with self._cond:
+                self._queue.push(when - self._lead, bytes(frame), now=self._clock())
+                self._cond.notify()
+        except Exception as exc:
+            self._throttle.log(f"send_frame:{self.name}", logging.WARNING,
+                               "art-net output %s: send_frame failed: %s; "
+                               "dropping frame", self.name, exc)
 
     # --- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -87,10 +96,22 @@ class ArtNetFixtureSink:
         with self._cond:
             self._stop = True
             self._cond.notify()
+        thread_stuck = False
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=_CLOSE_JOIN_S)
+            thread_stuck = self._thread.is_alive()
             self._thread = None
-        self._send(bytes(self._width))          # leave the array dark
+        if thread_stuck:
+            # The sender thread is still inside a backend call past our
+            # join timeout -- calling _send() here would race it on the
+            # same backend/socket, so the black frame is skipped rather
+            # than sent concurrently.
+            self._throttle.log(f"close:{self.name}", logging.WARNING,
+                               "art-net output %s: sender thread still running "
+                               "after %.1fs close timeout; skipping the black "
+                               "frame", self.name, _CLOSE_JOIN_S)
+        else:
+            self._send(bytes(self._width))          # leave the array dark
         try:
             self._backend.close()
         except Exception:
@@ -174,3 +195,33 @@ class ArtNetFixtureSink:
             self._first_ok = True
             logger.info("art-net output %s: first frame sent", self.name)
         return True
+
+
+def outputs_factory(outputs, *, clock: Callable[[], float], backend_cls=None):
+    """terrarium.toml's [[artnet]] entries -> DeviceLinkAgent's outputs_for.
+    One ArtNetFixtureSink per entry whose room is the one being loaded."""
+    if backend_cls is None:
+        from luxaeterna.backends.artnet import ArtNet as backend_cls
+
+    def outputs_for(room_name: str, profile) -> dict[str, list]:
+        built: dict[str, list] = {}
+        for o in outputs:
+            if o.room != room_name:
+                continue
+            fixture = next((f for f in profile.fixtures if f.name == o.fixture), None)
+            if fixture is None:
+                continue
+            built.setdefault(o.fixture, []).append(ArtNetFixtureSink(
+                name=f"{o.room}-{o.fixture}",
+                pixel_count=fixture.pixel_count,
+                start_universe=o.start_universe,
+                budget=PowerBudget(max_amps=o.max_amps,
+                                   amps_per_pixel_full=o.amps_per_pixel_full,
+                                   channels_per_pixel=CHANNELS_PER_PIXEL),
+                backend=backend_cls(host=o.host, port=o.port),
+                clock=clock,
+                lead=o.lead_ms / 1000.0,
+                keepalive=o.keepalive_ms / 1000.0))
+        return built
+
+    return outputs_for
