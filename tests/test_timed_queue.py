@@ -111,6 +111,16 @@ def test_purge_on_an_empty_queue_does_nothing():
     assert q.due(0.0) == []
 
 
+def test_next_due_is_the_earliest_pending_time_or_none():
+    q = TimedQueue()
+    assert q.next_due() is None
+    q.push(5.0, "b", now=0.0)
+    q.push(2.0, "a", now=0.0)
+    assert q.next_due() == 2.0
+    q.due(2.0)
+    assert q.next_due() == 5.0
+
+
 def test_lateness_is_bounded_so_a_long_installation_cannot_leak():
     """This runs on a Radxa for as long as the room is up."""
     from control.timed_queue import _MAX_LATENESS_SAMPLES
