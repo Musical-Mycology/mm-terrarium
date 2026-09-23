@@ -2559,6 +2559,33 @@ def test_a_mute_latched_while_bound_lifts_after_a_rebind(monkeypatch):
     assert fixture_dev("main") not in agent._muted
 
 
+def test_a_mute_latched_as_a_player_survives_a_bind_then_unload(monkeypatch):
+    """Regression (final review), companion to control/engine.py's
+    test_clear_mutes_finds_raw_dev_after_it_binds_to_a_fixture: a dev muted
+    while it was still a raw, unbound player -- not yet a fixture token --
+    then bound to a fixture, then released by a Bit unload
+    (GameServer._clear_mutes(list(gs.muted)), what _unload calls), must
+    actually come free on both sides once it unbinds again: engine-side
+    (GameServer.is_muted) and agent-side (_muted/_overrides), under EITHER
+    spelling -- the raw dev or the fixture's own @fixture: token."""
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+
+    gs._dispatch_cues([MuteCue("sim-room-main")], at=100.0)
+    assert "sim-room-main" in gs.muted
+
+    gs.room.bound["main"] = "sim-room-main"
+    gs._clear_mutes(list(gs.muted))
+    gs.room.bound.pop("main")
+
+    assert not gs.is_muted("sim-room-main")
+    assert "sim-room-main" not in agent._muted
+    assert fixture_dev("main") not in agent._muted
+    assert "sim-room-main" not in agent._overrides
+    assert fixture_dev("main") not in agent._overrides
+
+
 def test_unwire_room_drops_every_fixtures_muted_token(monkeypatch):
     """Belt and braces alongside GameServer's own canonicalization: even if
     a mute somehow survived under a fixture token, unwire_room must not let
@@ -2633,6 +2660,46 @@ def test_unwire_room_closes_outputs(monkeypatch):
     gs.room = None
     agent.unwire_room()
     assert out.closed == 1
+
+
+class _FakeFailingStartOutput:
+    """A sink whose start() always raises -- e.g. a socket bind failure."""
+
+    def __init__(self):
+        self.frames, self.closed = [], 0
+
+    def start(self):
+        raise OSError("no network")
+
+    def close(self):
+        self.closed += 1
+
+    def send_frame(self, frame, when):
+        self.frames.append((bytes(frame), when))
+
+
+def test_a_sink_whose_start_raises_is_dropped_not_registered(monkeypatch):
+    """_ensure_outputs: a sink whose start() raises is logged (as now) and
+    DROPPED -- not kept in self._outputs to receive frames it never set
+    itself up for. A sibling sink for the same fixture whose start()
+    succeeds must still receive every frame normally."""
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    good, bad = _FakeOutput(), _FakeFailingStartOutput()
+
+    def outputs_for(room_name, profile):
+        return {"main": [bad, good]}
+
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0,
+                            outputs_for=outputs_for)
+    assert good.started == 1
+
+    agent._render_room()
+
+    assert len(good.frames) == 1
+    assert bad.frames == []
+    assert bad not in agent._outputs.get("main", [])
+    assert good in agent._outputs.get("main", [])
 
 
 def test_a_raising_outputs_factory_never_breaks_the_room(monkeypatch):

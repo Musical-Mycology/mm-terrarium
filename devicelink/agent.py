@@ -344,12 +344,20 @@ class DeviceLinkAgent:
                              "the Room runs without them", room.name)
             return
         for name, sinks in built.items():
+            started = []
             for sink in sinks:
                 try:
                     sink.start()
                 except Exception:
                     logger.exception("output for fixture %s failed to start", name)
-            self._outputs[name] = list(sinks)
+                    continue
+                started.append(sink)
+            # Only sinks whose start() succeeded are registered -- a sink
+            # that raised is logged above and dropped, not kept around to
+            # receive frames it never set itself up for (amended 2026-09-23
+            # after the final review).
+            if started:
+                self._outputs[name] = started
 
     def _close_outputs(self) -> None:
         outputs, self._outputs = self._outputs, {}
@@ -890,19 +898,19 @@ class DeviceLinkAgent:
         queues and voice are purged/silenced independently. Guarded like
         every other engine sink here: a failing Room-audio silence must not
         propagate into the engine tick (boundary rule 2)."""
-        dev = self._fixture_key(dev)
+        key = self._fixture_key(dev)
         if muted:
-            self._muted.add(dev)
-            self._overrides[dev] = ((0, 0, 0), 0.0, None)
-            self._invalidate_frame(dev)
+            self._muted.add(key)
+            self._overrides[key] = ((0, 0, 0), 0.0, None)
+            self._invalidate_frame(key)
             # Drop cues already queued for this dev -- otherwise they drain
             # into the LightSession under the blackout override while
             # muted, and un-mute reveals stale mid-script state instead of
             # the session's own idle/breath frame. _drain_light_cues also
             # guards on self._muted as a second line of defense, but the
             # purge here is what keeps the queue itself from growing stale.
-            self._light_cues.purge(lambda payload: payload[0] == dev)
-            st = self._fixture_for(dev)
+            self._light_cues.purge(lambda payload: payload[0] == key)
+            st = self._fixture_for(key)
             if st is not None:
                 self._room_cues.purge(lambda payload: payload[0] == st.name)
                 if (self._room_audio is not None
@@ -912,9 +920,18 @@ class DeviceLinkAgent:
                     except Exception:
                         logger.exception("mute silence failed for %s", st.name)
         else:
-            self._muted.discard(dev)
-            self._overrides.pop(dev, None)
-            self._invalidate_frame(dev)
+            # Discard BOTH the dev's CURRENT key and its raw spelling --
+            # mirrors control/engine.py's GameServer._clear_mutes (amended
+            # 2026-09-23 after the final review). A mute latched while `dev`
+            # was still an unbound player is stored here under its raw
+            # spelling; if `dev` binds to a fixture before the matching
+            # unmute arrives, _fixture_key(dev) now resolves to the
+            # fixture's token, and a lookup keyed only by that current
+            # resolution would miss the raw entry and leave it stuck.
+            for k in {key, dev}:
+                self._muted.discard(k)
+                self._overrides.pop(k, None)
+                self._invalidate_frame(k)
 
     def _tick_audio(self) -> None:
         """Drive AudioBridge.tick() once per poll(): the only place the

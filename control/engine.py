@@ -170,7 +170,6 @@ class GameServer:
         # _MAX_GESTURE_LEAD). A rising count means a device's clock is wrong.
         self.rejected_stamps = 0
         self._warned_no_room = False     # once-per-Bit-load ROOM drop warning
-        self._warned_unbound: set[str] = set()  # once-per-Bit-load per @fixture drop
         # Provenance stamp for the active Room, set by control/terrarium.py's
         # load_room on success and cleared by unload_room (also on a failed
         # load's unwind). {} outside a Room. join() and fire_function() read
@@ -1092,12 +1091,27 @@ class GameServer:
         a bound dev while bound) must still be found here after a bind or
         rebind changes which spelling is current. `on_mute_change` is
         called with `d` as given; the agent applies its own canonicalizing
-        key (DeviceLinkAgent._fixture_key)."""
+        key (DeviceLinkAgent._fixture_key).
+
+        Also checks the RAW `d` itself, not just its current _mute_key: a
+        dev muted while unbound (e.g. as a plain player) and later bound to
+        a fixture leaves its raw-spelling entry in `self.muted` unreachable
+        by _mute_key alone once bound (_mute_key(d) now resolves to the
+        fixture token). Discarding both spellings keeps `_unload` (which
+        calls `_clear_mutes(list(self.muted))`) from leaving a stale raw
+        entry latched across a bind/unbind (amended 2026-09-23 after the
+        final review)."""
         cleared_any = False
         for d in devs:
+            found = False
             k = self._mute_key(d)
             if k in self.muted:
                 self.muted.discard(k)
+                found = True
+            if d in self.muted:
+                self.muted.discard(d)
+                found = True
+            if found:
                 cleared_any = True
                 if self.on_mute_change is not None:
                     try:

@@ -728,6 +728,27 @@ def test_is_muted_agrees_for_a_bound_dev_and_its_fixture_token():
     assert gs.is_muted(fixture_dev("main"))
 
 
+def test_clear_mutes_finds_raw_dev_after_it_binds_to_a_fixture():
+    """Regression (final review): a mute latched under a dev's RAW spelling
+    while it was an unbound player must still be found by _clear_mutes
+    after that dev later binds to a fixture. _mute_key(dev) now resolves
+    to the fixture's @fixture: token, so a lookup keyed only by
+    _mute_key(d) misses the raw "ie1" entry still sitting in self.muted,
+    leaving it latched forever across a Bit unload/unbind cycle."""
+    gs, _, _ = _running(bound={})
+    gs._dispatch_cues([MuteCue("ie1")], at=None)
+    assert "ie1" in gs.muted
+
+    gs.room.bound["main"] = "ie1"   # ie1 now bound to fixture main
+    assert gs._mute_key("ie1") == fixture_dev("main")
+
+    gs._clear_mutes(list(gs.muted))   # what Bit unload (_unload) does
+
+    gs.room.bound.pop("main")   # ie1 unbinds again
+    assert not gs.is_muted("ie1")
+    assert not gs.muted
+
+
 def test_non_mute_fire_clears_mute_first():
     gs, _, _ = _running()
     gs.muted.add("ie1")
