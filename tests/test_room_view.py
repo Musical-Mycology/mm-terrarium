@@ -306,3 +306,10 @@ def test_the_room_role_name_never_appears_in_the_view():
     view = _view()
     view["capability"].pop("surface_id")
     assert room_role_name("TEST") not in json.dumps(view)
+
+
+def test_fixtures_view_carries_each_fixtures_color_order():
+    from control.room_view import fixtures_view
+    room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    assert [f["color_order"] for f in fixtures_view(TEST_PROFILE, room)] == \
+        [f.color_order for f in TEST_PROFILE.fixtures]

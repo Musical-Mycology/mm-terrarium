@@ -29,11 +29,12 @@ def identify_blocks_frame(profile, fixture_name: str) -> bytes:
     control/room_profile.py's RoomBlock)."""
     fixture = next(f for f in profile.fixtures if f.name == fixture_name)
     order = fixture.color_order.upper()
-    frame = bytearray(fixture.pixel_count * 3)
+    width = len(order)
+    frame = bytearray(fixture.pixel_count * width)
     for i, block in enumerate(fixture.blocks):
-        rgb = dict(zip("RGB", BLOCK_PALETTE[i % len(BLOCK_PALETTE)]))
+        rgb = dict(zip("RGB", BLOCK_PALETTE[i % len(BLOCK_PALETTE)]), W=0)
         px = bytes(rgb[ch] for ch in order)
-        frame[block.start * 3:(block.start + block.count) * 3] = \
+        frame[block.start * width:(block.start + block.count) * width] = \
             px * block.count
     return bytes(frame)
 

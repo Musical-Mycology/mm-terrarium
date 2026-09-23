@@ -127,7 +127,7 @@ def test_shipped_config_matches_code_profiles_golden():
     assert demo_room.profile.surface_id == "room_demo"
     assert [f.name for f in demo_room.profile.fixtures] == ["array"]
     array = demo_room.profile.fixtures[0]
-    assert array.color_order == "GRB"
+    assert array.color_order == "RGBW"
     assert [(b.name, b.start, b.count) for b in array.blocks] == [
         ("m1", 0, 144), ("m2", 144, 144), ("m3", 288, 144),
         ("m4", 432, 144), ("m5", 576, 144), ("m6", 720, 144),
@@ -693,7 +693,7 @@ backends = ["devicelink", "array"]
 
   [[rooms.DEMO.fixtures]]
   name = "array"
-  color_order = "GRB"
+  color_order = "RGBW"
   instrument = "venue_array"
     [[rooms.DEMO.fixtures.blocks]]
     name = "m1"

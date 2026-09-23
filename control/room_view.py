@@ -124,6 +124,7 @@ def fixtures_view(profile, room, canvas_urls=None) -> list[dict]:
         out.append({
             "name": name,
             "pixel_count": fixture.pixel_count,
+            "color_order": fixture.color_order,
             "channel_start": start,
             "channel_count": count,
             "zones": [{"name": f"{name}.{z.name}", "start": z.start, "count": z.count}

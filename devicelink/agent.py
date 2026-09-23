@@ -312,7 +312,7 @@ class DeviceLinkAgent:
             session = build_session(LightManifest.from_dict(light), cap, clock=self._clock)
             self._fixtures[fixture.name] = _FixtureState(
                 name=fixture.name, session=session,
-                universe=Universe(channel_count=fixture.pixel_count * 3),
+                universe=Universe(channel_count=fixture.pixel_count * fixture.channels),
                 generators=generators)
         if blob is None:
             self._ambient_start = self._clock()
@@ -810,15 +810,16 @@ class DeviceLinkAgent:
         surface's own channel order. `rgb` is always stated R, G, B -- a
         SolidCue names a colour, not a wire layout -- so a GRB strip (every
         strip this Room ships) needs the channels reordered here or green
-        lands as red."""
+        lands as red. A SolidCue names an RGB colour; on an RGBW strip W
+        stays 0."""
         entry = self._overrides.get(dev)
         if entry is None:
             return frame
         rgb, level, _expires = entry
-        by_name = dict(zip("RGB", rgb))
+        by_name = {**dict(zip("RGB", rgb)), "W": 0}
         pixel = bytes(max(0, min(255, round(by_name[ch] * level)))
-                      for ch in color_order[:3])
-        reps = len(frame) // 3 + 1
+                      for ch in color_order)
+        reps = len(frame) // len(pixel) + 1
         return (pixel * reps)[:len(frame)]
 
     def _on_solid_cue(self, dev: str, rgb: tuple[int, int, int],
@@ -932,7 +933,7 @@ class DeviceLinkAgent:
             except Exception:
                 logger.exception("fixture %s render failed; skipping frame", fixture.name)
                 continue
-            frame = bytes(st.universe.get_frame()[:fixture.pixel_count * 3])
+            frame = bytes(st.universe.get_frame()[:fixture.pixel_count * fixture.channels])
             frame = self._apply_override(fixture_dev(fixture.name), frame,
                                          fixture.color_order)
             if dev != st.last_dev:

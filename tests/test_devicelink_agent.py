@@ -179,7 +179,7 @@ class FakeFixtureSession:
         self.swaps = getattr(self, "swaps", []) + [manifest]
 
     def render_into(self, universe):
-        universe.set_range(0, bytes([self._last & 0xFF]) * (self.cap.pixel_count * 3))
+        universe.set_range(0, bytes([self._last & 0xFF]) * (self.cap.pixel_count * len(self.cap.color_order)))
 
 
 def _fake_sessions(monkeypatch):
@@ -806,7 +806,7 @@ def _room_ready_game_server(bound=None):
 def _demo_room_ready_game_server(bound=None):
     """DEMO-flavored sibling of _room_ready_game_server(): TestBit loaded
     against RoomType.DEMO instead of TEST, with DEMO's one fixture ("array",
-    864px / 2592 channels -- see control/room_profile.py's ROOM_PROFILES)
+    864px / 3456 channels -- see control/room_profile.py's ROOM_PROFILES)
     bound. This is the regression coverage for the ChannelError bug: nothing
     before this test drove _render_room() above 512 channels."""
     if bound is None:
@@ -823,7 +823,7 @@ def _demo_room_ready_game_server(bound=None):
 
 def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
     """Regression test for the DEMO Room ChannelError bug: DEMO's profile is
-    864px / 2592 channels, well past one DMX universe. Before the
+    864px / 3456 channels, well past one DMX universe. Before the
     channel_count fix, _setup_room() built the Room's light sink over a
     hardcoded 512-channel Universe, so every render_into() call raised
     ChannelError -- caught and silently swallowed by _render_room(), so the
@@ -835,7 +835,7 @@ def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
 
     array = next(f for f in DEMO_PROFILE.fixtures if f.name == "array")
     universe = agent._fixtures["array"].universe
-    assert len(universe) == array.pixel_count * 3
+    assert len(universe) == array.pixel_count * 4
 
     agent._render_room()   # must not raise, and must actually send a frame
 
@@ -2573,3 +2573,14 @@ def test_unwire_room_drops_every_fixtures_muted_token(monkeypatch):
     agent.unwire_room()
 
     assert fixture_dev("main") not in agent._muted
+
+
+def test_an_rgbw_solid_override_leaves_white_dark(monkeypatch):
+    gs = _demo_room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    frames = {}
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0,
+                            on_room_frame=lambda n, f: frames.__setitem__(n, f))
+    agent._on_solid_cue(fixture_dev("array"), (255, 0, 0), 1.0, 5.0, 100.0)
+    agent._render_room()
+    assert frames["array"] == bytes([255, 0, 0, 0]) * 864

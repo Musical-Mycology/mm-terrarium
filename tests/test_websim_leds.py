@@ -45,19 +45,19 @@ def test_identify_blocks_frame_paints_demo_blocks_distinctly():
     profile = room_profile("DEMO")
     frame = identify_blocks_frame(profile, "array")
     (array,) = profile.fixtures
-    assert len(frame) == array.pixel_count * 3          # 2592
+    assert len(frame) == array.pixel_count * 4          # 3456
     # First pixel of each 144px block carries that block's own palette
-    # color, GRB order per the profile.
+    # color, RGBW order per the profile, W dark.
     for i, block in enumerate(array.blocks):
         r, g, b = BLOCK_PALETTE[i % len(BLOCK_PALETTE)]
-        offset = block.start * 3
-        assert frame[offset:offset + 3] == bytes((g, r, b))
+        offset = block.start * 4
+        assert frame[offset:offset + 4] == bytes((r, g, b, 0))
     # Adjacent blocks differ at their boundary.
     for prev, cur in zip(array.blocks, array.blocks[1:]):
-        last_of_prev = (cur.start - 1) * 3
-        first_of_cur = cur.start * 3
-        assert frame[last_of_prev:last_of_prev + 3] != \
-            frame[first_of_cur:first_of_cur + 3]
+        last_of_prev = (cur.start - 1) * 4
+        first_of_cur = cur.start * 4
+        assert frame[last_of_prev:last_of_prev + 4] != \
+            frame[first_of_cur:first_of_cur + 4]
 
 
 def test_identify_blocks_frame_works_for_a_single_block_fixture():

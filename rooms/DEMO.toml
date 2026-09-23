@@ -3,7 +3,8 @@ backends = ["devicelink", "array"]
 
 [[fixtures]]
 name = "array"
-color_order = "GRB"
+# Art-Net wire order. WLED's own LED settings carry the strip's physical GRBW.
+color_order = "RGBW"
 instrument = "venue_array"
   [[fixtures.blocks]]
   name = "m1"

@@ -690,18 +690,30 @@ function render() {
 
 // -------------------------------------------------------------------- frames
 
+// One fixture frame -> [r, g, b] per pixel. The width comes from the
+// fixture's color_order (3 for GRB/RGB, 4 for RGBW); W is drawn additively
+// onto r, g and b, clipped at 255. Spec 2026-09-23 section 6.2.
+export function _decodePixels(channels, colorOrder) {
+  const order = colorOrder || "GRB";
+  const width = order.length;
+  const n = Math.floor(channels.length / width);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const v = {};
+    for (let j = 0; j < width; j++) v[order[j]] = channels[i * width + j] || 0;
+    const w = v.W || 0;
+    out.push([Math.min(255, (v.R || 0) + w), Math.min(255, (v.G || 0) + w),
+              Math.min(255, (v.B || 0) + w)]);
+  }
+  return out;
+}
+
 function onRoomFrame(msg) {
   // rule 9: a frame for a fixture this panel has no strip for is a no-op.
   if (!canvasesByName[msg.fixture]) return;
-  const channels = msg.channels || [];
-  const pixelCount = Math.floor(channels.length / 3);
-  const pixels = [];
-  for (let i = 0; i < pixelCount; i++) {
-    const g = channels[i * 3] || 0;
-    const r = channels[i * 3 + 1] || 0;
-    const b = channels[i * 3 + 2] || 0;
-    pixels.push([r, g, b]);
-  }
+  const fixture = ((currentRoom && currentRoom.fixtures) || [])
+    .find((f) => f.name === msg.fixture);
+  const pixels = _decodePixels(msg.channels || [], fixture && fixture.color_order);
   lastPaintByName[msg.fixture] = pixels;
   lastFrameAt[msg.fixture] = Date.now();
   repaintFixture(msg.fixture);

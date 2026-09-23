@@ -8,6 +8,7 @@ const ROOM = {
     zones: [{ name: "main.left", start: 0, count: 20 }] },
   fixtures: [
     { name: "main", pixel_count: 60, channel_start: 0, channel_count: 180,
+      color_order: "GRB",
       zones: [{ name: "main.left", start: 0, count: 20 },
               { name: "main.center", start: 20, count: 20 },
               { name: "main.right", start: 40, count: 20 }], dev: "sim-room-main",
@@ -19,6 +20,7 @@ const ROOM = {
                     accepted_cues: ["midi", "solid"],
                     event_triggers: [{ name: "tap", thresholds: { z_delta: 2.5 } }] } },
     { name: "accent", pixel_count: 30, channel_start: 180, channel_count: 90,
+      color_order: "GRB",
       zones: [{ name: "accent.low", start: 0, count: 15 },
               { name: "accent.high", start: 15, count: 15 }], dev: null, url: null,
       instrument: { name: "generic_surface",
@@ -54,6 +56,12 @@ const ROOM = {
       { kind: "audio", instrument: "flsyn", lanes: [{ source: "cc:74", dest: "cc:74" }] },
     ]).map((r) => [r.source, r.readers.map((x) => `${x.instrument} ${x.dest}`).join(" · ")]),
     [["cc:11", "aurora level"], ["cc:74", "aurora hue · flsyn cc:74"], ["note", "bloom trigger"]]);
+
+  // pure pixel decode: width from color_order, W drawn additively
+  assert.deepStrictEqual(surface._decodePixels([255, 0, 0], "GRB"), [[0, 255, 0]]);
+  assert.deepStrictEqual(surface._decodePixels([10, 20, 30, 5], "RGBW"), [[15, 25, 35]]);
+  assert.deepStrictEqual(surface._decodePixels([10, 0, 0, 250], "RGBW"), [[255, 250, 250]]);
+  assert.deepStrictEqual(surface._decodePixels([1, 2, 3], undefined), [[2, 1, 3]]); // GRB default
 
   surface.init();
   wire.connect({ WebSocketImpl: FakeSocket });
