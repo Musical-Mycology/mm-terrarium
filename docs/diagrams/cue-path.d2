@@ -5,14 +5,22 @@ data: "GameServer.data(): at = origin + cue_horizon"
 handler: "Bit handler"
 selfcues: "Bit.cues(at)"
 dispatch: "GameServer._dispatch_cues"
-sink: "on_light_cue (transport-owned sink): push to TimedQueue"
-dev_render: "Device renders frame"
-room_render: "Room renders light+drone"
+sink: "on_light_cue (transport-owned sink)"
+light: "Feed light session now"
+audio: "Queue audio for at"
+render: "Control renders frame"
+arco_voice: "Arco voice fed at at"
+fsink: "FixtureSink.send_frame(frame, when=at)"
+dev_show: "Device holds the frame, displays it at at"
 
 gesture -> data: raw gesture stamp
 data -> handler: at, never the horizon itself
 handler -> dispatch
 selfcues -> dispatch
 dispatch -> sink: ROOM resolved to bound fixture devs
-sink -> dev_render: on time
-sink -> room_render: on time
+sink -> light
+sink -> audio
+light -> render
+audio -> arco_voice
+render -> fsink: luxaeterna render_into
+fsink -> dev_show: over the wire

@@ -1,0 +1,22 @@
+direction: down
+
+cues: "Bit cues, lobby, generators, breath"
+sessions: "luxaeterna LightSession per device and per fixture"
+fsink: "FixtureSink.send_frame(frame, when)"
+devlink: "DeviceLinkSink"
+console: "ConsoleFrameSink"
+artnet: "ArtNet sink"
+arco: "Arco hub"
+shroom: "Tuneshroom shows it at when"
+strip: "Console strip"
+wled: "WLED ESP32"
+
+cues -> sessions: feed_midi and swap, in-process, 0 hops
+sessions -> fsink: render_into at 44 Hz, changed frames only
+fsink -> devlink
+fsink -> console
+fsink -> artnet: PLANNED
+devlink -> arco: /<dev>/leds
+console -> strip
+artnet -> wled: Art-Net UDP
+arco -> shroom: relayed over o2lite

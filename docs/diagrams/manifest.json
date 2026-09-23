@@ -16,12 +16,12 @@
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "cue-path",
       "outputs": {
-        "out/cue-path.svg": "d1fc1a808695f7425e92126c724ea49de21726435f141502be542672341cdcaf",
-        "out/cue-path.txt": "e4995c77478a7ca3287dc988f0a38407141bce3f509571eba477c3f4174912d7"
+        "out/cue-path.svg": "f53c9deb736918383dd0dd0718f8b415e217d51acf6d4f4c1d763641a5702336",
+        "out/cue-path.txt": "fea51fff152cff5696a02412f3528d875dd13eae404f02fac6c18a23b5c30a57"
       },
       "renderer": "d2",
       "source": "cue-path.d2",
-      "source_sha256": "d7b92cac5cea0f40997d90128e9a23b2b48ff4dedda30fa0a4416f4022581704"
+      "source_sha256": "abdabd29f97cb992bd3b03c2415ab2a7791aa02ddae528c716a49c4c43ee313c"
     },
     "lifecycle": {
       "inject_into": "docs/MM_TERRARIUM.md",
@@ -33,6 +33,17 @@
       "renderer": "d2",
       "source": "lifecycle.d2",
       "source_sha256": "31836d898fcbe51e6c3cde2f2f507a53a2e225c76be2fbb29fe8207ab6cb774e"
+    },
+    "light-path": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "light-path",
+      "outputs": {
+        "out/light-path.svg": "7c0f963cf12fea130dbfba7d09a3220a2aa18aae6d1e25486104b6e5ff6a39df",
+        "out/light-path.txt": "448483687e31f20e561dd9eabcc34721a3bc2dbc1f2a76ea816a222b6f073fb2"
+      },
+      "renderer": "d2",
+      "source": "light-path.d2",
+      "source_sha256": "84e6870d2b367aaf6a2abf3e42981e5639e13f39c7840127becbab67ccc4893d"
     },
     "player-flow": {
       "inject_into": "docs/MM_TERRARIUM.md",
