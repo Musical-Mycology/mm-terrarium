@@ -100,6 +100,12 @@ class TimedQueue:
         wrong with muting a device that has no cues in flight."""
         self._items = [item for item in self._items if not predicate(item[2])]
 
+    def next_due(self) -> float | None:
+        """The earliest pending release time, or None when empty. Lets a
+        sender thread sleep exactly until the next payload is due
+        (devicelink/artnet_sink.py)."""
+        return min((item[0] for item in self._items), default=None)
+
     def pending(self) -> int:
         """How many payloads are still waiting. Used by sync_bench and by
         teardown, which must not drop work still in flight."""

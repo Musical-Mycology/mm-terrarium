@@ -37,6 +37,29 @@ class UplinkConfig:
     url: str = ""
 
 
+@dataclass(frozen=True)
+class ArtNetOutput:
+    """One [[artnet]] entry: a Room fixture's physical output to a WLED
+    controller. Pure data; devicelink/artnet_sink.py's outputs_factory
+    builds the sink. Spec 2026-09-23 section 6.1."""
+    room: str
+    fixture: str
+    host: str
+    max_amps: float
+    start_universe: int = 0
+    port: int = 6454
+    amps_per_pixel_full: float = 0.025
+    lead_ms: float = 0.0
+    keepalive_ms: float = 250.0
+
+
+_ARTNET_KEYS = frozenset({"room", "fixture", "host", "max_amps",
+                          "start_universe", "port", "amps_per_pixel_full",
+                          "lead_ms", "keepalive_ms"})
+_PIXELS_PER_RGBW_UNIVERSE = 128
+_ARTNET_MAX_UNIVERSE = 32767
+
+
 class TerrariumConfigError(Exception):
     def __init__(self, *, source: str, key: str, message: str) -> None:
         self.source = source
@@ -82,6 +105,9 @@ class TerrariumConfig:
     admin_devices: tuple[str, ...] = ()
     # [uplink], None when the table is absent: no uplink is built at boot.
     uplink: UplinkConfig | None = None
+    # [[artnet]] entries: one per Room fixture wired to a real WLED
+    # controller. Empty means no Art-Net output is configured anywhere.
+    artnet_outputs: tuple[ArtNetOutput, ...] = ()
 
 
 def load_terrarium_config(path: str) -> TerrariumConfig:
@@ -128,6 +154,7 @@ def load_terrarium_config(path: str) -> TerrariumConfig:
             source=path, key="rooms",
             message="at least one room required: a [rooms.<NAME>] table or a "
                     "rooms catalog entry")
+    validate_artnet_outputs(config.artnet_outputs, rooms, source=path)
     return replace(config, rooms=rooms, instrument_roots=roots, room_roots=room_roots)
 
 
@@ -206,15 +233,18 @@ def parse_terrarium_config(text: str, source: str,
             source=source, key="rooms",
             message="at least one room required: a [rooms.<NAME>] table or a "
                     "rooms catalog entry")
+    artnet = _parse_artnet(raw.get("artnet"), source=source)
     rooms: dict[str, RoomSpec] = {}
     for rname, rraw in rooms_raw.items():
         rooms[rname] = _parse_room(rname, rraw, source=source,
                                    instruments=instruments)
+    if require_rooms:
+        validate_artnet_outputs(artnet, rooms, source=source)
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
     return TerrariumConfig(schema=schema, name=name, bit_paths=bit_paths,
                            rooms=rooms, instruments=instruments,
                            version=f"{schema}-{digest}", admin_devices=admin_devices,
-                           uplink=uplink)
+                           uplink=uplink, artnet_outputs=artnet)
 
 
 _LANE_DEV_WIRE = {"room": ROOM, "target": TARGET}
@@ -495,6 +525,96 @@ def _parse_room(rname: str, rraw: dict, *, source: str,
     )
 
 
+def _parse_artnet(raw, *, source: str) -> tuple[ArtNetOutput, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise TerrariumConfigError(source=source, key="artnet",
+                                   message="expected [[artnet]] tables")
+    out = []
+    for i, entry in enumerate(raw):
+        key = f"artnet[{i}]"
+
+        def err(message, key=key):
+            return TerrariumConfigError(source=source, key=key, message=message)
+
+        if not isinstance(entry, dict):
+            raise err("expected a table")
+        unknown = sorted(set(entry) - _ARTNET_KEYS)
+        if unknown:
+            raise err(f"unknown key(s) {unknown}; known: {sorted(_ARTNET_KEYS)}")
+        for name in ("room", "fixture", "host"):
+            if not isinstance(entry.get(name), str) or not entry[name]:
+                raise err(f"{name} is a required non-empty string")
+        amps = entry.get("max_amps")
+        if isinstance(amps, bool) or not isinstance(amps, (int, float)) or amps <= 0:
+            raise err("max_amps is required and must be a positive number "
+                      "(power limiting has no opt-out)")
+        start = entry.get("start_universe", 0)
+        if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+            raise err("start_universe must be an integer >= 0")
+        port = entry.get("port", 6454)
+        if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+            raise err("port must be an integer in 1-65535")
+        numbers = {}
+        for name, default in (("amps_per_pixel_full", 0.025), ("lead_ms", 0.0),
+                              ("keepalive_ms", 250.0)):
+            v = entry.get(name, default)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+                raise err(f"{name} must be a number >= 0")
+            numbers[name] = float(v)
+        if numbers["amps_per_pixel_full"] == 0 or numbers["keepalive_ms"] == 0:
+            raise err("amps_per_pixel_full and keepalive_ms must be > 0")
+        out.append(ArtNetOutput(room=entry["room"], fixture=entry["fixture"],
+                                host=entry["host"], max_amps=float(amps),
+                                start_universe=start, port=port, **numbers))
+    return tuple(out)
+
+
+def validate_artnet_outputs(outputs, rooms: dict, *, source: str) -> None:
+    """Cross-check [[artnet]] against the rooms it names: the room and
+    fixture exist, the fixture is RGBW, one output per fixture, no two
+    outputs on one host:port share a universe, and no output's universe
+    span exceeds the Art-Net maximum (15-bit port-address, 0-32767;
+    luxaeterna's ArtNet._build_packet packs the universe as `<H`, which
+    only accepts 0-65535, so this refusal happens before that packing ever
+    sees an out-of-range value)."""
+    seen: dict[tuple[str, str], int] = {}
+    spans: dict[tuple[str, int], list[tuple[int, int, int]]] = {}
+    for i, out in enumerate(outputs):
+        key = f"artnet[{i}]"
+        spec = rooms.get(out.room)
+        if spec is None:
+            raise TerrariumConfigError(source=source, key=key,
+                message=f"unknown room {out.room!r}; known: {sorted(rooms)}")
+        fixture = next((f for f in spec.profile.fixtures if f.name == out.fixture), None)
+        if fixture is None:
+            raise TerrariumConfigError(source=source, key=key,
+                message=f"unknown fixture {out.fixture!r} in room {out.room!r}; "
+                        f"known: {[f.name for f in spec.profile.fixtures]}")
+        if fixture.color_order != "RGBW":
+            raise TerrariumConfigError(source=source, key=key,
+                message=f"fixture {out.fixture!r} is {fixture.color_order}; an "
+                        f"Art-Net output needs color_order = \"RGBW\" (the wire order)")
+        if (out.room, out.fixture) in seen:
+            raise TerrariumConfigError(source=source, key=key,
+                message=f"fixture {out.room}.{out.fixture} has more than one "
+                        f"[[artnet]] output (first: artnet[{seen[(out.room, out.fixture)]}])")
+        seen[(out.room, out.fixture)] = i
+        count = -(-fixture.pixel_count // _PIXELS_PER_RGBW_UNIVERSE)
+        lo, hi = out.start_universe, out.start_universe + count - 1
+        if hi > _ARTNET_MAX_UNIVERSE:
+            raise TerrariumConfigError(source=source, key=key,
+                message=f"universes {lo}-{hi} exceed the Art-Net maximum "
+                        f"{_ARTNET_MAX_UNIVERSE}")
+        for (olo, ohi, oi) in spans.setdefault((out.host, out.port), []):
+            if lo <= ohi and olo <= hi:
+                raise TerrariumConfigError(source=source, key=key,
+                    message=f"universes {lo}-{hi} on {out.host}:{out.port} "
+                            f"overlap artnet[{oi}] ({olo}-{ohi})")
+        spans[(out.host, out.port)].append((lo, hi, i))
+
+
 def resolve_bit_roots(config: TerrariumConfig, config_path: str) -> list[Path]:
     """config.bit_paths, resolved to filesystem roots for BitRegistry.scan().
     A relative entry is anchored at config_path's own directory (not the
@@ -512,11 +632,20 @@ def validate_rooms(config: TerrariumConfig, *,
     """Per-room loadability, boot-time. None = loadable; else the reason.
     The room actually being loaded fails hard on its reason
     (control/terrarium.py); the rest of the set is advisory, surfaced on
-    the Console rooms panel and CLI listings. No silent downgrade."""
+    the Console rooms panel and CLI listings. No silent downgrade.
+
+    `array_backend_configured` means the simulator; a real array is
+    `[[artnet]]` coverage of every fixture."""
     out: dict[str, str | None] = {}
+    covered = {(o.room, o.fixture) for o in config.artnet_outputs}
     for name, spec in config.rooms.items():
-        if "array" in spec.backends and not array_backend_configured:
-            out[name] = f"{name} requires an array backend, none configured"
-        else:
-            out[name] = None
+        out[name] = None
+        if "array" not in spec.backends or array_backend_configured:
+            continue
+        missing = [f.name for f in spec.profile.fixtures
+                   if (name, f.name) not in covered]
+        if missing:
+            out[name] = (f"{name} requires an array backend, none configured: "
+                         f"no simulator, and no [[artnet]] output for "
+                         f"fixture(s) {missing}")
     return out

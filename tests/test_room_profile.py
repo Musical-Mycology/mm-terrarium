@@ -158,7 +158,8 @@ def test_demo_profile_matches_the_real_array_scale():
     (array,) = profile.fixtures
     assert array.name == "array"          # matches tests/test_room_binding.py
     assert array.pixel_count == 864
-    assert profile.channel_count == 2592
+    assert profile.channel_count == 3456
+    assert array.color_order == "RGBW"
     assert [b.name for b in array.blocks] == ["m1", "m2", "m3", "m4", "m5", "m6"]
     assert all(b.count == 144 for b in array.blocks)
     assert [z.name for z in array.zones] == ["left", "center", "right"]
@@ -359,3 +360,18 @@ def test_uplink_never_imports_harness():
     uplink_dir = pathlib.Path(__file__).resolve().parent.parent / "uplink"
     offenders = _module_level_import_offenders(uplink_dir, ("harness",))
     assert offenders == [], "uplink/ must not import harness/:\n" + "\n".join(offenders)
+
+
+def test_rgbw_fixture_has_four_channels_and_sizes_the_profile():
+    profile = RoomProfile(surface_id="r", fixtures=(
+        _fixture(name="a", color_order="RGBW", blocks=(RoomBlock("a", 0, 10),)),))
+    assert profile.fixtures[0].channels == 4
+    assert profile.channel_count == 40
+    assert profile.fixture_slices() == (("a", 0, 40),)
+
+
+@pytest.mark.parametrize("order", ["RG", "RGBB", "RGBX", "RGBWW", "rgb"])
+def test_a_color_order_that_is_not_a_permutation_of_rgb_or_rgbw_is_refused(order):
+    with pytest.raises(ValueError, match="color_order"):
+        RoomProfile(surface_id="r", fixtures=(
+            _fixture(name="a", color_order=order, blocks=(RoomBlock("a", 0, 10),)),))

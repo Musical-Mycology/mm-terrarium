@@ -26,8 +26,9 @@ class BootConfig:
     # instantiation, exactly as before this field existed.
     bit_config: BitConfig | None = None
     arco_soundfont: str | None = None
-    # None = no array backend configured; "simulator" = Terrarium spawns
-    # one (Spec 2's job); any other string = a real ArtNet/WLED host.
+    # None = no simulated array; "simulator" = Terrarium spawns one. A real
+    # array is wired by [[artnet]] entries in terrarium.toml (spec
+    # 2026-09-23-artnet-fixture-sink-design.md section 6.1), never here.
     array_backend: str | None = None
     arco_ready_timeout: float = 15.0
     room_setup_timeout: float = 30.0
@@ -79,3 +80,10 @@ class BootConfig:
     @property
     def array_backend_configured(self) -> bool:
         return self.array_backend is not None
+
+    def __post_init__(self) -> None:
+        if self.array_backend not in (None, "simulator"):
+            raise ValueError(
+                f"array_backend must be None or 'simulator', got "
+                f"{self.array_backend!r}; a real array is configured by "
+                f"[[artnet]] entries in terrarium.toml")

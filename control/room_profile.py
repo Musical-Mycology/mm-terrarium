@@ -17,12 +17,10 @@ from control.instrument import (Instrument, InstrumentError,
                                  validate_instrument,
                                  validate_instrument_manifests)
 
-# A single luxaeterna Universe is 512 DMX channels, so one BLOCK -- one
-# physical LED device / one controller's worth -- caps at 170 px RGB (see
-# RoomBlock). A whole profile may exceed this by declaring more blocks;
-# anything larger than one universe per block needs PixelSpan/UniverseSet
-# (luxaeterna has them; harness/array_smoke.py uses them for the 864 px venue
-# array) and is out of scope for this slice (non-goal N5).
+# One BLOCK is one physical run (a meter of strip, one controller output),
+# capped at 170 px. Universes are no longer a block's concern: an Art-Net
+# output spans as many as its fixture needs through luxaeterna's PixelSpan
+# (devicelink/artnet_sink.py).
 _MAX_PROFILE_PIXELS = 170
 
 
@@ -45,8 +43,8 @@ class RoomZone:
 class RoomBlock:
     """A physical LED device's own pixel range within a Fixture -- the
     build-out unit ("which literal LED device drives this pixel range").
-    Individually capped at _MAX_PROFILE_PIXELS (one DMX universe / one
-    controller's worth). Purely declarative this slice: no simulator or
+    Individually capped at _MAX_PROFILE_PIXELS (one physical run). Purely
+    declarative this slice: no simulator or
     backend consumes block boundaries for output routing yet -- a future
     real per-controller adapter reads them off the profile with no further
     data-model change needed. Only harness/o2_shroom.py's
@@ -78,6 +76,12 @@ class RoomFixture:
         must tile the fixture exactly (validated in RoomProfile)."""
         return sum(b.count for b in self.blocks)
 
+    @property
+    def channels(self) -> int:
+        """Channels per pixel on this fixture's wire: 3 for RGB orders, 4 for
+        RGBW. Spec 2026-09-23 section 6.2."""
+        return len(self.color_order)
+
 
 @dataclass(frozen=True)
 class RoomProfile:
@@ -99,6 +103,12 @@ class RoomProfile:
         if len(names) != len(set(names)):
             raise ValueError(
                 f"profile {self.surface_id!r} has duplicate fixture names: {names}")
+        for fixture in self.fixtures:
+            if sorted(fixture.color_order) not in (sorted("RGB"), sorted("RGBW")):
+                raise ValueError(
+                    f"fixture {fixture.name!r} color_order "
+                    f"{fixture.color_order!r} must be a permutation of RGB "
+                    f"or RGBW")
         orders = {f.color_order for f in self.fixtures}
         if len(orders) > 1:
             raise ValueError(
@@ -169,12 +179,9 @@ class RoomProfile:
 
     @property
     def channel_count(self) -> int:
-        """Wire width of one rendered frame, whole-profile. Three channels
-        per pixel, matching the GRB wire devicelink/protocol.py's leds_event
-        carries today. The RGBW question (widening to four) is a separate
-        open decision about the Tuneshroom's white die and does not belong
-        to the Room."""
-        return self.pixel_count * 3
+        """Wire width of one rendered frame, whole-profile: each fixture's
+        pixels times its own channels (3 for RGB, 4 for RGBW)."""
+        return sum(f.pixel_count * f.channels for f in self.fixtures)
 
     @property
     def color_order(self) -> str:
@@ -205,6 +212,7 @@ class RoomProfile:
         out: list[tuple[str, int, int]] = []
         offset = 0
         for fixture in self.fixtures:
-            out.append((fixture.name, offset * 3, fixture.pixel_count * 3))
-            offset += fixture.pixel_count
+            width = fixture.pixel_count * fixture.channels
+            out.append((fixture.name, offset, width))
+            offset += width
         return tuple(out)

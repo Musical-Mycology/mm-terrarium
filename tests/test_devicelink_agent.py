@@ -19,7 +19,7 @@ from control.bit_registry import BitRegistry
 from control.breath import BREATH_CC
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
-from control.cues import ROOM, SolidCue
+from control.cues import ROOM, MuteCue, SolidCue, fixture_dev
 from control.rooms import Room
 from control.terrarium_config import load_terrarium_config
 
@@ -179,7 +179,7 @@ class FakeFixtureSession:
         self.swaps = getattr(self, "swaps", []) + [manifest]
 
     def render_into(self, universe):
-        universe.set_range(0, bytes([self._last & 0xFF]) * (self.cap.pixel_count * 3))
+        universe.set_range(0, bytes([self._last & 0xFF]) * (self.cap.pixel_count * len(self.cap.color_order)))
 
 
 def _fake_sessions(monkeypatch):
@@ -806,7 +806,7 @@ def _room_ready_game_server(bound=None):
 def _demo_room_ready_game_server(bound=None):
     """DEMO-flavored sibling of _room_ready_game_server(): TestBit loaded
     against RoomType.DEMO instead of TEST, with DEMO's one fixture ("array",
-    864px / 2592 channels -- see control/room_profile.py's ROOM_PROFILES)
+    864px / 3456 channels -- see control/room_profile.py's ROOM_PROFILES)
     bound. This is the regression coverage for the ChannelError bug: nothing
     before this test drove _render_room() above 512 channels."""
     if bound is None:
@@ -823,7 +823,7 @@ def _demo_room_ready_game_server(bound=None):
 
 def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
     """Regression test for the DEMO Room ChannelError bug: DEMO's profile is
-    864px / 2592 channels, well past one DMX universe. Before the
+    864px / 3456 channels, well past one DMX universe. Before the
     channel_count fix, _setup_room() built the Room's light sink over a
     hardcoded 512-channel Universe, so every render_into() call raised
     ChannelError -- caught and silently swallowed by _render_room(), so the
@@ -835,7 +835,7 @@ def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
 
     array = next(f for f in DEMO_PROFILE.fixtures if f.name == "array")
     universe = agent._fixtures["array"].universe
-    assert len(universe) == array.pixel_count * 3
+    assert len(universe) == array.pixel_count * 4
 
     agent._render_room()   # must not raise, and must actually send a frame
 
@@ -2354,14 +2354,14 @@ def test_unwire_room_drops_a_muted_fixtures_latched_override(two_fixture_agent):
     gs.hello(main, "sim", "1", None)
     agent.poll()
     agent._on_mute_change(main, True)
-    assert agent._overrides[main] == ((0, 0, 0), 0.0, None)
+    assert agent._overrides[fixture_dev("main")] == ((0, 0, 0), 0.0, None)
 
     gs.room = None
     agent.unwire_room()
     agent.server.sent.clear()
     agent.poll()
 
-    assert main not in agent._overrides
+    assert fixture_dev("main") not in agent._overrides
     assert main not in agent._override_only
     assert not [m for dev, m in agent.server.sent
                 if dev == main and m["address"] == f"/{main}/leds"]
@@ -2382,7 +2382,7 @@ def test_override_expiry_clears_only_that_fixtures_last_frame():
 
     agent._fixtures["main"].last_frame = b"\x01"
     agent._fixtures["accent"].last_frame = b"\x02"
-    agent._overrides["sim-room-main"] = ((0, 0, 0), 0.0, agent._clock() - 1.0)
+    agent._overrides[fixture_dev("main")] = ((0, 0, 0), 0.0, agent._clock() - 1.0)
 
     agent._tick_overrides()
 
@@ -2437,3 +2437,277 @@ def test_a_join_after_hello_keeps_the_browsers_wire_flavor(rig):
     server.deliver("c1", "/game/join", "ss", ["ie-abc123", "TEST_PLAYER_NODE"])
     agent.poll()
     assert server.protoversions["ie-abc123"] == "o2ws/1"
+
+
+# --- routing by fixture name (spec 2026-09-23 section 4.2) -----------------
+
+def test_an_unbound_fixture_receives_a_room_cue_by_name(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    sessions = _fake_sessions(monkeypatch)
+    DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([(ROOM, 0xB0, 74, 99)], at=100.0)
+    assert sessions["room_test_main"].fed[-1] == (0xB0, 74, 99)
+    assert sessions["room_test_accent"].fed[-1] == (0xB0, 74, 99)
+
+
+def test_a_solid_cue_paints_an_unbound_fixture(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    frames = {}
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0,
+                            on_room_frame=lambda n, f: frames.__setitem__(n, f))
+    gs._dispatch_cues([SolidCue(fixture_dev("main"), (255, 0, 0), 1.0, 5.0)],
+                      at=100.0)
+    agent._render_room()
+    assert frames["main"] == bytes([0, 255, 0]) * 60     # GRB red
+
+
+def test_a_bound_devs_mute_is_keyed_by_its_fixture(monkeypatch):
+    gs = _room_ready_game_server(bound={"main": "sim-room-main"})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    agent._on_mute_change("sim-room-main", True)
+    assert agent._overrides[fixture_dev("main")] == ((0, 0, 0), 0.0, None)
+    assert "sim-room-main" not in agent._overrides
+    assert fixture_dev("main") in agent._muted
+
+
+def test_a_mute_latched_while_unbound_still_blacks_the_fixture_after_a_bind(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=lambda: 100.0)
+    agent._on_mute_change(fixture_dev("main"), True)
+    gs.room.bound["main"] = "sim-room-main"
+    server.bind_dev("sim-room-main", "c")
+    agent._render_room()
+    (frame,) = [m["args"][0] for d, m in server.sent if d == "sim-room-main"]
+    assert bytes(frame) == bytes(180)
+
+
+def test_a_play_cue_for_an_unbound_fixture_is_dropped_and_warned_once(monkeypatch, caplog):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=lambda: 100.0)
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        agent._on_play_cue(fixture_dev("main"), "click", "")
+        agent._on_play_cue(fixture_dev("main"), "click", "")
+    assert server.sent == []
+    assert sum("main" in r.message for r in caplog.records) == 1
+
+
+def test_a_fixture_token_override_never_reaches_the_player_pass(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=lambda: 100.0)
+    agent._on_solid_cue(fixture_dev("main"), (0, 0, 255), 1.0, 5.0, 100.0)
+    agent.poll()
+    assert not [m for _d, m in server.sent if m["address"].startswith("/@")]
+
+
+def test_accept_flash_reaches_an_unbound_fixture(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    agent._flash_fixtures_now((0, 255, 0), 1)
+    agent._drain_light_cues()
+    assert agent._overrides[fixture_dev("main")][0] == (0, 255, 0)
+    assert agent._overrides[fixture_dev("accent")][0] == (0, 255, 0)
+
+
+# --- mute-key canonicalization across a bind/rebind (fix round 1, spec ----
+# --- 2026-09-23 section 8.3) ------------------------------------------------
+
+def test_a_mute_latched_while_unbound_lifts_after_a_bind_and_clear(monkeypatch):
+    """Scenario A: a MuteCue against an unbound fixture's own token stores
+    that token in GameServer.muted (GameServer._mute_key). Binding a device
+    afterwards must not orphan the latch under a dev spelling nothing looks
+    up again: _clear_mutes still has to find and lift it, and the agent's
+    own override must go with it."""
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=100.0)
+    assert fixture_dev("main") in agent._muted
+
+    gs.room.bound["main"] = "sim-room-main"
+    gs._clear_mutes(["sim-room-main"])
+
+    assert fixture_dev("main") not in agent._muted
+    assert fixture_dev("main") not in agent._overrides
+    assert not gs.is_muted("sim-room-main")
+
+
+def test_a_mute_latched_while_bound_lifts_after_a_rebind(monkeypatch):
+    """Scenario B: a MuteCue against a bound dev is stored under its
+    fixture's token (not the bound dev). Rebinding to a different dev and
+    then clearing via GameServer.muted's own current contents must still
+    find and lift it -- a rebind must not leave a mute latched forever
+    under a token no future bind ever reintroduces."""
+    gs = _room_ready_game_server(bound={"main": "sim-room-A"})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue("sim-room-A")], at=100.0)
+    assert fixture_dev("main") in agent._muted
+
+    gs.room.bound["main"] = "sim-room-B"
+    gs._clear_mutes(list(gs.muted))
+
+    assert fixture_dev("main") not in agent._muted
+
+
+def test_a_mute_latched_as_a_player_survives_a_bind_then_unload(monkeypatch):
+    """Regression (final review), companion to control/engine.py's
+    test_clear_mutes_finds_raw_dev_after_it_binds_to_a_fixture: a dev muted
+    while it was still a raw, unbound player -- not yet a fixture token --
+    then bound to a fixture, then released by a Bit unload
+    (GameServer._clear_mutes(list(gs.muted)), what _unload calls), must
+    actually come free on both sides once it unbinds again: engine-side
+    (GameServer.is_muted) and agent-side (_muted/_overrides), under EITHER
+    spelling -- the raw dev or the fixture's own @fixture: token."""
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+
+    gs._dispatch_cues([MuteCue("sim-room-main")], at=100.0)
+    assert "sim-room-main" in gs.muted
+
+    gs.room.bound["main"] = "sim-room-main"
+    gs._clear_mutes(list(gs.muted))
+    gs.room.bound.pop("main")
+
+    assert not gs.is_muted("sim-room-main")
+    assert "sim-room-main" not in agent._muted
+    assert fixture_dev("main") not in agent._muted
+    assert "sim-room-main" not in agent._overrides
+    assert fixture_dev("main") not in agent._overrides
+
+
+def test_unwire_room_drops_every_fixtures_muted_token(monkeypatch):
+    """Belt and braces alongside GameServer's own canonicalization: even if
+    a mute somehow survived under a fixture token, unwire_room must not let
+    it haunt the next Room that declares a same-named fixture."""
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    agent._on_mute_change(fixture_dev("main"), True)
+    assert fixture_dev("main") in agent._muted
+
+    gs.room = None
+    agent.unwire_room()
+
+    assert fixture_dev("main") not in agent._muted
+
+
+def test_an_rgbw_solid_override_leaves_white_dark(monkeypatch):
+    gs = _demo_room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    frames = {}
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0,
+                            on_room_frame=lambda n, f: frames.__setitem__(n, f))
+    agent._on_solid_cue(fixture_dev("array"), (255, 0, 0), 1.0, 5.0, 100.0)
+    agent._render_room()
+    assert frames["array"] == bytes([255, 0, 0, 0]) * 864
+
+
+class _FakeOutput:
+    def __init__(self):
+        self.frames, self.started, self.closed = [], 0, 0
+
+    def start(self):
+        self.started += 1
+
+    def close(self):
+        self.closed += 1
+
+    def send_frame(self, frame, when):
+        self.frames.append((bytes(frame), when))
+
+
+def _outputs_rig(monkeypatch, bound=None):
+    gs = _room_ready_game_server(bound={} if bound is None else bound)
+    _fake_sessions(monkeypatch)
+    calls, out = [], _FakeOutput()
+
+    def outputs_for(room_name, profile):
+        calls.append(room_name)
+        return {"main": [out]}
+
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0,
+                            outputs_for=outputs_for)
+    return gs, agent, out, calls
+
+
+def test_a_configured_output_starts_with_the_room_and_gets_unbound_frames(monkeypatch):
+    gs, agent, out, calls = _outputs_rig(monkeypatch)
+    assert calls == ["TEST"] and out.started == 1
+    agent._render_room()
+    assert len(out.frames) == 1 and len(out.frames[0][0]) == 180
+
+
+def test_outputs_follow_the_room_not_the_bit(monkeypatch):
+    gs, agent, out, calls = _outputs_rig(monkeypatch)
+    agent._setup_room()
+    agent.rewire_room()
+    assert calls == ["TEST"] and out.closed == 0
+
+
+def test_unwire_room_closes_outputs(monkeypatch):
+    gs, agent, out, calls = _outputs_rig(monkeypatch)
+    gs.room = None
+    agent.unwire_room()
+    assert out.closed == 1
+
+
+class _FakeFailingStartOutput:
+    """A sink whose start() always raises -- e.g. a socket bind failure."""
+
+    def __init__(self):
+        self.frames, self.closed = [], 0
+
+    def start(self):
+        raise OSError("no network")
+
+    def close(self):
+        self.closed += 1
+
+    def send_frame(self, frame, when):
+        self.frames.append((bytes(frame), when))
+
+
+def test_a_sink_whose_start_raises_is_dropped_not_registered(monkeypatch):
+    """_ensure_outputs: a sink whose start() raises is logged (as now) and
+    DROPPED -- not kept in self._outputs to receive frames it never set
+    itself up for. A sibling sink for the same fixture whose start()
+    succeeds must still receive every frame normally."""
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    good, bad = _FakeOutput(), _FakeFailingStartOutput()
+
+    def outputs_for(room_name, profile):
+        return {"main": [bad, good]}
+
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0,
+                            outputs_for=outputs_for)
+    assert good.started == 1
+
+    agent._render_room()
+
+    assert len(good.frames) == 1
+    assert bad.frames == []
+    assert bad not in agent._outputs.get("main", [])
+    assert good in agent._outputs.get("main", [])
+
+
+def test_a_raising_outputs_factory_never_breaks_the_room(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+
+    def boom(room_name, profile):
+        raise RuntimeError("no network")
+
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0, outputs_for=boom)
+    agent._render_room()                       # must not raise

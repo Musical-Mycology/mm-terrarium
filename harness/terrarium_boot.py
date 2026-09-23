@@ -260,6 +260,17 @@ def make_arco_process_cls(arco_popen, settle: float):
     return arco_process_cls
 
 
+def _artnet_outputs(terrarium_config, clock):
+    """terrarium.toml's [[artnet]] entries as the agent's outputs_for, or
+    None when there are none. The import is local so a box with no Art-Net
+    output never touches the Art-Net module."""
+    outputs = getattr(terrarium_config, "artnet_outputs", ())
+    if not outputs:
+        return None
+    from devicelink.artnet_sink import outputs_factory
+    return outputs_factory(outputs, clock=clock)
+
+
 def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
          room_binding: RoomBindingRegistry, room_spec=None,
          terrarium_config: TerrariumConfig | None = None,
@@ -412,7 +423,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         agent = DeviceLinkAgent(gs, server, room_audio=room_audio,
                                 horizon=config.cue_horizon, clock=clock,
                                 on_join_denied=on_join_denied,
-                                stale_timeout=config.stale_timeout)
+                                stale_timeout=config.stale_timeout,
+                                outputs_for=_artnet_outputs(terrarium_config, clock))
     except BaseException:
         # A loaded Terrarium has already spawned Arco AND the simulator by
         # this point, and main() cannot clean either up: build() never
@@ -1665,8 +1677,9 @@ def main() -> None:
         # boot's Room actually has one, so a later Console load_room of a
         # DIFFERENT Room (one that DOES declare "array") is never refused
         # for want of an array backend this boot never anticipated. A real
-        # venue box passes its own array_backend host later; this harness
-        # entry point never does.
+        # array is wired by [[artnet]] entries in terrarium.toml (spec
+        # 2026-09-23 section 6.1), never through array_backend -- this
+        # harness entry point always declares the simulator here.
         array_backend="simulator")
     if args.horizon is not None:
         config.cue_horizon = args.horizon

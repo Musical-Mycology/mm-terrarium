@@ -212,11 +212,11 @@ def test_explicit_fixture_fire_is_not_collapsed(two_fixture_gs):
     a fire at one fixture simply never touches another."""
     gs, main_dev, accent_dev = two_fixture_gs
     gs.fire_function("stop", fired_by="admin-manual", dev=accent_dev)
-    assert accent_dev in gs.muted
-    assert main_dev not in gs.muted
+    assert gs.is_muted(accent_dev)
+    assert not gs.is_muted(main_dev)
 
 
 def test_all_fire_reaches_every_fixture(two_fixture_gs):
     gs, main_dev, accent_dev = two_fixture_gs
     gs.fire_function("stop", fired_by="admin-manual", dev="@all")
-    assert {main_dev, accent_dev} <= gs.muted
+    assert gs.is_muted(main_dev) and gs.is_muted(accent_dev)

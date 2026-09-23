@@ -881,7 +881,7 @@ class ConsoleAgent:
             if assigned is not None and assigned[2] != RoleClass.ROOM:
                 role_name = assigned[1]
             out.append(protocol.device_view(
-                info, role_name, urls.get(info.dev), info.dev in gs.muted,
+                info, role_name, urls.get(info.dev), gs.is_muted(info.dev),
                 bound_fixtures.get(info.dev)))
         return out
 

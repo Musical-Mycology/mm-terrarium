@@ -434,7 +434,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
 
         profile = load_terrarium_config("terrarium.toml").rooms[room_type].profile
         capability = to_fixture_capability(profile, fixture)
-        channels = capability.pixel_count * 3
+        channels = capability.pixel_count * len(capability.color_order)
 
     on_input = (None if input_queue is None
                 else lambda msg: enqueue_input(

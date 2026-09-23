@@ -13,7 +13,7 @@ import time
 
 from control.bit import Bit
 from control.cues import (ALL, ROOM, FireFunction, LightCue, MuteCue, PlayCue,
-                          SolidCue, fixture_name)
+                          SolidCue, fixture_dev, fixture_name)
 from control.device_pool import DevicePool
 from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
@@ -142,7 +142,13 @@ class GameServer:
         self.on_mute_change = None
         # Resolved dev ids currently latched dark/silent by a MuteCue (the
         # Stop function). Cleared per-dev by any non-mute fire at that surface
-        # (see fire_function/_clear_mutes) and wholesale on _unload.
+        # (see fire_function/_clear_mutes) and wholesale on _unload. A Room
+        # fixture is always stored canonicalized to its @fixture:<name> token
+        # (_mute_key), whether the MuteCue landed while bound or not, so a
+        # later bind/rebind cannot orphan the latch under a dev spelling
+        # nothing will ever look up again (spec 2026-09-23 section 8.3).
+        # Every write and read goes through _mute_key/is_muted, never a raw
+        # `in`/`add`/`discard` against a bound dev.
         self.muted: set[str] = set()
         # Observers registered via add_observer(). Each may implement any of
         # on_state_change(old, new), on_registration_change(),
@@ -164,7 +170,6 @@ class GameServer:
         # _MAX_GESTURE_LEAD). A rising count means a device's clock is wrong.
         self.rejected_stamps = 0
         self._warned_no_room = False     # once-per-Bit-load ROOM drop warning
-        self._warned_unbound: set[str] = set()  # once-per-Bit-load per @fixture drop
         # Provenance stamp for the active Room, set by control/terrarium.py's
         # load_room on success and cleared by unload_room (also on a failed
         # load's unwind). {} outside a Room. join() and fire_function() read
@@ -415,7 +420,6 @@ class GameServer:
         # a Bit, so `origin + horizon` still lives only in data()/tick().
         bit.cue_horizon = self._horizon
         self._warned_no_room = False
-        self._warned_unbound = set()
         self.bit_name = name
         self.registration = registration
         self._slot_requirements = {r.slot: r for r in requirements}
@@ -725,39 +729,66 @@ class GameServer:
                             FIRED_BY_GESTURE_VERB)
         return None
 
+    def _fixture_target(self, name: str) -> str:
+        """The dev a cue for fixture `name` is delivered as: the bound device
+        when there is one, else the fixture's own @fixture: token. Every
+        declared fixture is addressable, bound or not -- spec
+        2026-09-23-artnet-fixture-sink-design.md section 4.1. A bound
+        fixture keeps its dev spelling, so the transport sends to that
+        device exactly as before."""
+        bound = self.room.bound.get(name) if self.room is not None else None
+        return bound if bound is not None else fixture_dev(name)
+
+    def _mute_key(self, dev: str) -> str:
+        """The canonical key `dev` is stored under in `self.muted`: its own
+        @fixture:<name> token when it already is one, else the token of
+        whichever fixture it is CURRENTLY bound to, else `dev` unchanged.
+        Mirrors devicelink/agent.py's DeviceLinkAgent._fixture_key -- both
+        exist so a mute latched under one dev spelling (bound or not) is
+        still found under whatever spelling is current when it is queried
+        or cleared, across a bind or rebind mid-run (spec 2026-09-23
+        section 8.3)."""
+        if fixture_name(dev) is not None:
+            return dev
+        if self.room is not None:
+            for name, bound in self.room.bound.items():
+                if bound == dev:
+                    return fixture_dev(name)
+        return dev
+
+    def is_muted(self, dev: str) -> bool:
+        """Whether `dev` is currently latched mute -- resolved through
+        _mute_key so a bound dev and its fixture's token always agree,
+        regardless of which spelling actually landed in `self.muted`."""
+        return self._mute_key(dev) in self.muted
+
     def _room_devs(self) -> list[str]:
-        """Every bound fixture dev, in the profile's declaration order (the
-        Room's ordered fixture list), never dict/bind order."""
-        if self.room is None or not self.room.bound:
+        """One target per DECLARED fixture, in the profile's declaration
+        order (never dict/bind order): the bound dev, or @fixture:<name>."""
+        if self.room is None:
             return []
-        return [self.room.bound[f.name] for f in self.room.profile.fixtures
-                if f.name in self.room.bound]
+        return [self._fixture_target(f.name) for f in self.room.profile.fixtures]
 
     def _resolve_devs(self, dev: str) -> list[str]:
-        """cues.ROOM -> every bound fixture dev (a broadcast); @fixture:<name>
-        -> that fixture's bound dev; anything else passes through as itself.
+        """cues.ROOM -> every declared fixture (a broadcast); @fixture:<name>
+        -> that fixture's target; anything else passes through as itself.
 
-        An empty list means drop, never raise. Warned once per Bit load per
-        missing target rather than once per cue: a 20 Hz gesture stream
-        would otherwise flood the log."""
+        An empty list means drop, never raise. Only a ROOM cue with no Room
+        loaded drops, warned once per Bit load. load_bit already refuses a
+        Bit naming a fixture its Room does not declare."""
         if dev == ROOM:
             devs = self._room_devs()
             if not devs and not self._warned_no_room:
                 self._warned_no_room = True
-                logger.warning("Bit emitted a ROOM cue with no Room bound; "
+                logger.warning("Bit emitted a ROOM cue with no Room loaded; "
                                "dropping (logged once per Bit load)")
             return devs
         name = fixture_name(dev)
         if name is None:
             return [dev]
-        bound = self.room.bound.get(name) if self.room is not None else None
-        if bound is None:
-            if name not in self._warned_unbound:
-                self._warned_unbound.add(name)
-                logger.warning("cue addressed to fixture %r, which is not "
-                               "bound; dropping (logged once per Bit load)", name)
+        if self.room is None:
             return []
-        return [bound]
+        return [self._fixture_target(name)]
 
     def _bit_fixture_names(self, function_table, light_manifest) -> set[str]:
         """Every fixture name a Bit's declarations address: @fixture: devs on
@@ -815,7 +846,8 @@ class GameServer:
     def _resolve_target(self, target, dev: str | None) -> list[str]:
         """A function's declared target, resolved to the devs it lands on.
 
-        Returns every bound Room fixture dev for ROOM, in declaration order
+        Returns every declared Room fixture's target for ROOM (its bound
+        dev, or @fixture:<name>), in declaration order
         -- this is the one-method change the N-fixture Room slice makes; no
         Bit's function declaration changes alongside it (design spec section
         5). This full list is what FunctionFired.devs reports, and (since
@@ -874,9 +906,11 @@ class GameServer:
         """The Instrument behind a resolved dev: a bound Room fixture's
         declared instrument, else the device's carried instrument
         (TUNESHROOM default -- same fallback _check_cue_kinds uses)."""
-        if self.room is not None and self.room.bound:
+        if self.room is not None:
+            name = fixture_name(dev)
             for fixture in self.room.profile.fixtures:
-                if self.room.bound.get(fixture.name) == dev:
+                if (fixture.name == name
+                        or self.room.bound.get(fixture.name) == dev):
                     return fixture.instrument
         info = self.devices.get(dev)
         if info is None:
@@ -1051,11 +1085,33 @@ class GameServer:
             self._generators.suppress(lanes, at + span)
 
     def _clear_mutes(self, devs) -> None:
-        """Any non-mute fire at a surface un-latches it (spec section 4)."""
+        """Any non-mute fire at a surface un-latches it (spec section 4).
+        Looked up (and discarded) by `d`'s CURRENT _mute_key, not `d`
+        itself -- a mute latched under one spelling (a token while unbound,
+        a bound dev while bound) must still be found here after a bind or
+        rebind changes which spelling is current. `on_mute_change` is
+        called with `d` as given; the agent applies its own canonicalizing
+        key (DeviceLinkAgent._fixture_key).
+
+        Also checks the RAW `d` itself, not just its current _mute_key: a
+        dev muted while unbound (e.g. as a plain player) and later bound to
+        a fixture leaves its raw-spelling entry in `self.muted` unreachable
+        by _mute_key alone once bound (_mute_key(d) now resolves to the
+        fixture token). Discarding both spellings keeps `_unload` (which
+        calls `_clear_mutes(list(self.muted))`) from leaving a stale raw
+        entry latched across a bind/unbind (amended 2026-09-23 after the
+        final review)."""
         cleared_any = False
         for d in devs:
+            found = False
+            k = self._mute_key(d)
+            if k in self.muted:
+                self.muted.discard(k)
+                found = True
             if d in self.muted:
                 self.muted.discard(d)
+                found = True
+            if found:
                 cleared_any = True
                 if self.on_mute_change is not None:
                     try:
@@ -1114,7 +1170,7 @@ class GameServer:
                     devs = self._resolve_devs(cue.dev)
                     if devs:
                         for dev in devs:
-                            self.muted.add(dev)
+                            self.muted.add(self._mute_key(dev))
                         self._notify("on_devices_change")
                     for dev in devs:
                         if sink is None:
@@ -1123,7 +1179,7 @@ class GameServer:
                 elif isinstance(cue, PlayCue):
                     sink = self.on_play_cue
                     for dev in self._resolve_devs(cue.dev):
-                        if dev in self.muted:
+                        if self.is_muted(dev):
                             continue
                         if sink is None:
                             continue
