@@ -57,7 +57,7 @@ const BUILTINS = {
   const mount = byId.get("functionsMount");
   assert.ok(functions._diagRow(), "diagnostics row should build even with no functions");
   assert.ok(mount.innerHTML.includes("Diagnostics"), "diagnostics row rendered into the mount");
-  assert.ok(mount.innerHTML.includes("No functions declared"));
+  assert.ok(mount.innerHTML.includes("This Bit declares no triggers"));
 
   const diagPicker = functions._diagPicker();
   assert.ok(diagPicker, "diagnostics picker should exist");
