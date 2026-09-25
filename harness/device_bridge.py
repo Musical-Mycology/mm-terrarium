@@ -1,9 +1,9 @@
-"""DeviceBridge: in-process stand-in for a device consuming /ie<N>/role.
+"""DeviceBridge: Control's per-device light session for /ie<N>/role.
 
 Turns a granted JoinResult's composed light-manifest-v2 blob into a luxaeterna
-LightSession (the device's local renderer), and maps GameServer release onto
-session.clear() (the device-side CLOSING fade). This is the seam the real
-o2lite transport will replace in Slice 2."""
+LightSession, and maps GameServer release onto session.clear() (the CLOSING
+fade). Control renders the session and ships its frames to the device over
+o2lite (devicelink/agent.py); the device runs no renderer."""
 
 from __future__ import annotations
 

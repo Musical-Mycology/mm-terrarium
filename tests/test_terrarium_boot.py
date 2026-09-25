@@ -1512,8 +1512,7 @@ def test_run_duration_hold_is_infinite():
 
 
 def test_run_duration_hold_beats_seconds():
-    """--hold and --seconds together: --hold wins, matching
-    harness/devicelink_smoke.py's _run_duration."""
+    """--hold and --seconds together: --hold wins."""
     assert _run_duration(_args(seconds=5.0, hold=True)) == float("inf")
 
 

@@ -1,5 +1,5 @@
 """DeviceLinkAgent: inbound dispatch and the registration path, against an
-in-process fake server (no sockets -- see test_devicelink_server.py)."""
+in-process fake transport (no sockets)."""
 
 import time
 from dataclasses import replace
@@ -30,7 +30,7 @@ from devicelink.agent import DeviceLinkAgent, _DEVICE_CHANNELS
 
 
 class FakeServer:
-    """Same tick-thread API as DeviceLinkServer, no sockets."""
+    """Same tick-thread API as O2LiteTransport, no sockets."""
 
     def __init__(self):
         self.new_clients = []
@@ -61,7 +61,7 @@ class FakeServer:
         self._devs.pop(dev, None)
 
     def send(self, dev, msg):
-        # Mirrors DeviceLinkServer.send: an unbound dev is a silent no-op
+        # An unbound dev is a silent no-op
         # (boundary rule 2), not a recorded send.
         if dev not in self._devs:
             return
