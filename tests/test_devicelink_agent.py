@@ -2586,6 +2586,94 @@ def test_a_mute_latched_as_a_player_survives_a_bind_then_unload(monkeypatch):
     assert fixture_dev("main") not in agent._overrides
 
 
+# --- a player's mute carries over on bind (spec 2026-09-25 -----------------
+# --- mute-key-bind-migration) -----------------------------------------------
+
+def _player_then_room(monkeypatch, *, mute_as_player):
+    """ie1 joins TEST_PLAYER_NODE (so it holds a player bridge), is
+    optionally muted as that player, then taps in through the REAL join
+    path as the armed `main` fixture (GameServer.join -> _bind_room). The
+    ROOM join cannot build a bridge (no role config), so ie1 keeps its
+    player bridge: the one _feed_breath iterates."""
+    _fake_sessions(monkeypatch)
+    clk = _Clock()
+    binding = RoomBindingRegistry(clock=clk)
+    gs = GameServer({"TestBit": TestBit}, room_binding=binding, clock=clk)
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+    gs.load_bit("TestBit")
+    _hello(server, agent, client="c1", dev="ie1")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    assert "ie1" in agent.bridges
+    if mute_as_player:
+        gs._dispatch_cues([MuteCue("ie1")], at=clk())
+        assert gs.muted == {"ie1"} and agent._muted == {"ie1"}
+    binding.arm("TEST", "main", window_seconds=10.0)
+    server.deliver("c1", "/game/join", "ss", ["ie1", "ROOM_TEST_NODE"])
+    agent.poll()
+    assert gs.room.bound["main"] == "ie1"
+    assert "ie1" in agent.bridges
+    return gs, agent, clk
+
+
+def _breaths_after_advance(agent, clk, dev="ie1"):
+    """Advance past the ~47 ms breath quantization step and poll once;
+    return the cc:11 feeds `dev`'s bridge session received."""
+    seen = []
+    agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
+    clk.advance(1.0)
+    agent.poll()
+    return [m for m in seen if m[0] == 0xB0 and m[1] == BREATH_CC]
+
+
+def test_a_player_mute_carries_over_to_the_fixture_on_both_sides(monkeypatch):
+    """The defect: muted as a player, then bound. Engine and agent must
+    both hold ONLY the fixture token -- the Console (is_muted) and the
+    device (breath, blackout) agree the fixture is muted."""
+    gs, agent, clk = _player_then_room(monkeypatch, mute_as_player=True)
+
+    assert gs.muted == {fixture_dev("main")}
+    assert gs.is_muted(fixture_dev("main"))
+    assert agent._muted == {fixture_dev("main")}
+    assert agent._overrides[fixture_dev("main")] == ((0, 0, 0), 0.0, None)
+    assert "ie1" not in agent._overrides
+    assert _breaths_after_advance(agent, clk) == []
+
+
+def test_a_carried_over_mute_lifts_and_breath_resumes(monkeypatch):
+    gs, agent, clk = _player_then_room(monkeypatch, mute_as_player=True)
+
+    gs._clear_mutes(["ie1"])
+
+    assert gs.muted == set()
+    assert agent._muted == set()
+    assert fixture_dev("main") not in agent._overrides
+    assert _breaths_after_advance(agent, clk)
+
+
+def test_a_muted_fixtures_bound_device_is_not_fed_breath(monkeypatch):
+    """The mirror defect: the fixture is muted by its own token while ie1
+    is bound; _feed_breath used to check the raw "ie1", miss the token,
+    and keep breathing a muted fixture's device."""
+    gs, agent, clk = _player_then_room(monkeypatch, mute_as_player=False)
+    assert _breaths_after_advance(agent, clk)      # breathing before the mute
+
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk())
+
+    assert agent._muted == {fixture_dev("main")}
+    assert _breaths_after_advance(agent, clk) == []
+
+
+def test_an_unmuted_bound_device_still_breathes(monkeypatch):
+    """Guard against over-suppression from reading the mute by
+    _fixture_key: nothing muted, the bound device keeps breathing."""
+    gs, agent, clk = _player_then_room(monkeypatch, mute_as_player=False)
+    assert agent._muted == set()
+    assert _breaths_after_advance(agent, clk)
+
+
 def test_unwire_room_drops_every_fixtures_muted_token(monkeypatch):
     """Belt and braces alongside GameServer's own canonicalization: even if
     a mute somehow survived under a fixture token, unwire_room must not let

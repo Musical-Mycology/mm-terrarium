@@ -139,10 +139,11 @@ class DeviceLinkAgent:
         # fixture (_fixture_key).
         self._overrides: dict[str, tuple[tuple[int, int, int], float,
                                          float | None]] = {}
-        # devs currently latched mute-blackout. Checked by _feed_breath (skip
-        # feeding cc:11) and _on_light_cue (drop the cue) -- transport-seam
-        # suppression; PlayCue is already suppressed engine-side via
-        # GameServer.muted.
+        # Mute-blackout latches, keyed like _overrides: @fixture:<name> for a
+        # Room fixture (_fixture_key), the raw dev for a player. Checked by
+        # _feed_breath (skip feeding cc:11) and _on_light_cue (drop the cue),
+        # both through _fixture_key -- transport-seam suppression; PlayCue is
+        # already suppressed engine-side via GameServer.muted.
         self._muted: set[str] = set()
         # dev -> the URL of that device's own browser canvas, reported by
         # /game/canvas (simulators only; hardware and phones never send
@@ -471,7 +472,7 @@ class DeviceLinkAgent:
             self._on_solid_cue(dev, rgb, level, duration, self._clock())
 
         def send_play(dev, name, params):
-            if dev not in self._muted:
+            if self._fixture_key(dev) not in self._muted:
                 self._send(dev, protocol.play_event(dev, name, params))
 
         return LobbySinks(
@@ -928,6 +929,10 @@ class DeviceLinkAgent:
             # unmute arrives, _fixture_key(dev) now resolves to the
             # fixture's token, and a lookup keyed only by that current
             # resolution would miss the raw entry and leave it stuck.
+            # GameServer._migrate_mute_on_bind relies on this: on a bind it
+            # sends (dev, False) to drop the raw player-era entry, then
+            # (token, True) to latch the fixture (spec 2026-09-25
+            # mute-key-bind-migration section 3.1).
             for k in {key, dev}:
                 self._muted.discard(k)
                 self._overrides.pop(k, None)
@@ -1057,7 +1062,10 @@ class DeviceLinkAgent:
         for dev, bridge in list(self.bridges.items()):
             if dev in self._closing or bridge.session is None:
                 continue
-            if dev in self._muted:
+            # By fixture key, not raw dev: a bound device's mute is latched
+            # under its fixture's @fixture: token (spec 2026-09-25
+            # mute-key-bind-migration section 3.2).
+            if self._fixture_key(dev) in self._muted:
                 continue
             if dev in self._breathless:
                 continue

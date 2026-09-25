@@ -5103,6 +5103,23 @@ backend" for DEMO. Design:
   WLED output has no o2lite session to answer to), now with a warning
   logged once per Room rather than silently, matching the accepted
   limitation this closes.
+- **A player's mute carries over when the device binds (2026-09-25).**
+  Design:
+  [`.../2026-09-25-mute-key-bind-migration-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-mute-key-bind-migration-design.md).
+  A device muted while still a plain player is latched under its raw dev
+  id; `GameServer._bind_room` now moves that entry to the fixture's
+  `@fixture:<name>` token (`_migrate_mute_on_bind`) and tells the agent
+  through `on_mute_change` (unmute the raw dev, then mute the token), so
+  `GameServer.muted` and `DeviceLinkAgent._muted` hold one canonical
+  spelling and the Console Room panel shows the fixture muted. A bind is
+  not a fire, so it never un-latches. `_feed_breath` and the lobby
+  `send_play` sink now read the mute through `_fixture_key`, which also
+  fixed a mirror defect: a device that was a player before binding keeps
+  its player bridge (the ROOM join builds none), and `_feed_breath` used to
+  keep breathing it after its fixture was muted. Binds that bypass
+  `_bind_room` (`control/terrarium.py`'s fast path, at Room load when
+  nothing is muted) still rely on the both-spellings discard in
+  `_clear_mutes` and the agent's unmute branch.
 - **Persistent per-Room physical outputs.** `outputs_for`/`_ensure_outputs`
   build one long-lived `ArtNetFixtureSink` per `[[artnet]]` entry at Room
   load and keep it across renders (a fresh sink every tick would drop its
@@ -5201,6 +5218,8 @@ added 3 tests);
 generated diagrams current.
 
 **Test baseline after the 2026-09-25 no-simulator follow-up:** `.venv/bin/python -m pytest tests -q` -> **2673 passed, 1 skipped**.
+
+**Test baseline after the 2026-09-25 mute carry-over fix:** `.venv/bin/python -m pytest tests -q` -> **2680 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 
