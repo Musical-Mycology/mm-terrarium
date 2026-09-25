@@ -627,6 +627,15 @@ def resolve_bit_roots(config: TerrariumConfig, config_path: str) -> list[Path]:
     return roots
 
 
+def artnet_fixtures(config: TerrariumConfig, room_name: str) -> frozenset[str]:
+    """Names of room_name's fixtures that have an [[artnet]] output. Such a
+    fixture is driven by its ArtNetFixtureSink and never binds a device:
+    control/terrarium.py's load_room neither spawns a simulator for it nor
+    waits for a tap on it. Spec 2026-09-25-artnet-fixture-no-simulator."""
+    return frozenset(o.fixture for o in config.artnet_outputs
+                     if o.room == room_name)
+
+
 def validate_rooms(config: TerrariumConfig, *,
                    array_backend_configured: bool) -> dict[str, str | None]:
     """Per-room loadability, boot-time. None = loadable; else the reason.
@@ -637,13 +646,13 @@ def validate_rooms(config: TerrariumConfig, *,
     `array_backend_configured` means the simulator; a real array is
     `[[artnet]]` coverage of every fixture."""
     out: dict[str, str | None] = {}
-    covered = {(o.room, o.fixture) for o in config.artnet_outputs}
     for name, spec in config.rooms.items():
         out[name] = None
         if "array" not in spec.backends or array_backend_configured:
             continue
+        covered = artnet_fixtures(config, name)
         missing = [f.name for f in spec.profile.fixtures
-                   if (name, f.name) not in covered]
+                   if f.name not in covered]
         if missing:
             out[name] = (f"{name} requires an array backend, none configured: "
                          f"no simulator, and no [[artnet]] output for "

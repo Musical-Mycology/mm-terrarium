@@ -7,8 +7,8 @@ import pytest
 from control.cues import TARGET
 from control.functions import Function, FunctionKind, GeneratorSpec
 from control.terrarium_config import (
-    TerrariumConfigError, load_terrarium_config, parse_terrarium_config,
-    resolve_bit_roots, validate_rooms,
+    TerrariumConfigError, artnet_fixtures, load_terrarium_config,
+    parse_terrarium_config, resolve_bit_roots, validate_rooms,
 )
 
 MINIMAL = """
@@ -879,6 +879,19 @@ def test_validate_rooms_names_the_uncovered_fixtures():
     cfg = _with_artnet("")
     reason = validate_rooms(cfg, array_backend_configured=False)["ONE"]
     assert "array" in reason and "main" in reason
+
+
+def test_artnet_fixtures_filters_by_room():
+    from control.terrarium_config import ArtNetOutput, TerrariumConfig
+    cfg = TerrariumConfig(
+        schema=1, name="t", bit_paths=(), rooms={}, version="v",
+        artnet_outputs=(
+            ArtNetOutput(room="DEMO", fixture="array", host="h", max_amps=1.0),
+            ArtNetOutput(room="DEMO", fixture="fiber", host="h2", max_amps=1.0),
+            ArtNetOutput(room="OTHER", fixture="x", host="h", max_amps=1.0)))
+    assert artnet_fixtures(cfg, "DEMO") == frozenset({"array", "fiber"})
+    assert artnet_fixtures(cfg, "OTHER") == frozenset({"x"})
+    assert artnet_fixtures(cfg, "TEST") == frozenset()
 
 
 def _big_rgbw_fixture_base():
