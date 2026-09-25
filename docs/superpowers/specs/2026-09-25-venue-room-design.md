@@ -81,7 +81,11 @@ Rules for completing them:
   separately in PR #144
   ([`2026-09-25-console-fixture-targets-design.md`](2026-09-25-console-fixture-targets-design.md)).
   VENUE depends on it for operator use, but not for this slice's tests.
-- The 33 fps vs 44 Hz gap. The in-flight `claude/tick-pacing` spec owns it.
+- The 33 fps vs 44 Hz gap. PR #142 addressed it separately
+  ([`2026-09-25-tick-pacing-design.md`](2026-09-25-tick-pacing-design.md)):
+  the 44 Hz tick is now paced to deadlines. The VENUE loopback figures
+  (bars 32.6 fps, fiber 32.5 fps) were measured before PR #142 and have
+  not been re-measured.
 - Retiring or reshaping DEMO.
 - Multiple controllers per fixture.
 
@@ -334,7 +338,7 @@ Append to the 2026-09-23 spec's §9 step 8 when VENUE is on hardware:
   ([`2026-09-25-console-fixture-targets-design.md`](2026-09-25-console-fixture-targets-design.md)),
   which lets an operator target and see the mute state of unbound `bars`
   and `fiber` by name.
-- **Independent:** `claude/tick-pacing`.
+- **Independent:** `claude/tick-pacing`, since landed as PR #142.
 - **Follow-ups:** white-aware `venue_array` and `venue_fiber` together, and
   an RGBW SolidCue; a starfield preset for the fiber ambient; fixing the
   PSU row in `MM_HARDWARE_DESIGN.md` once I3 is answered.

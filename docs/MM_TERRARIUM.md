@@ -5364,12 +5364,17 @@ Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycol
   packets. For comparison, PR #143's own loopback run (DEMO, one
   receiver, recorded in the 2026-09-23 entry above) received **~34-40 fps,
   0 sequence gaps, 0 bad packets**. Both VENUE figures are below the 44 Hz
-  engine tick -- the same open item as the 2026-09-23 DEMO measurement
-  above, owned by the `claude/tick-pacing` spec, not investigated here.
-  No physical LED driven yet.
+  engine tick, the same item as the 2026-09-23 DEMO measurement above.
+  PR #142 has since addressed it
+  ([`.../2026-09-25-tick-pacing-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-tick-pacing-design.md);
+  the *`harness/tick_pacer.py` -- the 44 Hz tick paced to deadlines* entry
+  above): the loss was the tick loop's sleep overshoot, not the sink, and
+  the tick is now paced to deadlines. That entry's after-figures are
+  DEMO-only. The VENUE figures here were measured before PR #142 and have
+  not been re-measured. No physical LED driven yet.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**2716 passed, 1 skipped** (after merging PR #143 and PR #144);
+**2729 passed, 1 skipped** (after merging PR #143, PR #144 and PR #142);
 `.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
 generated diagrams current.
 
