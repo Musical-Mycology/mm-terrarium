@@ -1859,6 +1859,52 @@ def test_wait_for_room_ready_exits_when_the_parent_is_gone(monkeypatch):
     assert reason == "parent-gone"
 
 
+def _run_roomless(monkeypatch, wait_results, serve_results, *,
+                  terrarium=None, gs=None, agent=None, **kw):
+    """Shared driver for the _serve_roomless tests below: builds the
+    common FakeTerrarium/FakeGS/FakeAgent scaffold (unless overridden),
+    monkeypatches harness.terrarium_boot._wait_for_room_ready and
+    _serve_rounds to return wait_results/serve_results in sequence (one
+    entry consumed per call -- StopIteration if a test calls either more
+    often than it supplied results for, which is a bug signal, not a
+    silent repeat), calls _serve_roomless once, and returns
+    (reason, terrarium, wait_calls, serve_calls) so each test can layer
+    its own extra assertions (e.g. on a custom terrarium's unload_calls,
+    or on a restart_clients/stop_clients closure passed via **kw)."""
+    import harness.terrarium_boot as terrarium_boot_module
+    from harness.terrarium_boot import _serve_roomless
+
+    if terrarium is None:
+        terrarium = RoomlessTerrarium()
+        terrarium.state = TerrariumState.ROOM_READY
+    if gs is None:
+        gs = StaticGS(State.IDLE)
+    if agent is None:
+        agent = FakeAgent()
+
+    wait_iter = iter(wait_results)
+    serve_iter = iter(serve_results)
+    wait_calls = []
+    serve_calls = []
+
+    def fake_wait_for_room_ready(agent, terr, **kwargs):
+        wait_calls.append(1)
+        return next(wait_iter)
+
+    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
+                          console_agent=None, terrarium=None, **_kw):
+        serve_calls.append(1)
+        return next(serve_iter)
+
+    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
+                        fake_wait_for_room_ready)
+    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
+                        fake_serve_rounds)
+
+    reason = _serve_roomless(gs, agent, terrarium, **kw)
+    return reason, terrarium, wait_calls, serve_calls
+
+
 def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
         monkeypatch):
     """main()'s top-level loop for a NO_ROOM boot: wait for a Room, serve
@@ -1866,38 +1912,12 @@ def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
     name -- return to the NO_ROOM wait rather than stopping outright when
     `_serve_rounds` reports "no-room" (a Console `unload_room` mid-serve).
     A second lap then runs to "parent-gone" so this test terminates."""
-    import harness.terrarium_boot as terrarium_boot_module
-    from control.terrarium import TerrariumState
-    from harness.terrarium_boot import _serve_roomless
-
-    terrarium = types.SimpleNamespace(state=TerrariumState.ROOM_READY,
-                                      arco=FakeArco())
-    serve_rounds_calls = []
-
-    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
-                          console_agent=None, terrarium=None, **_kw):
-        serve_rounds_calls.append(terrarium.state)
-        if len(serve_rounds_calls) == 1:
-            terrarium.state = TerrariumState.NO_ROOM
-            return "no-room"
-        return "parent-gone"
-
-    def fake_wait_for_room_ready(agent, terr, **kwargs):
-        # A fresh Console load_room would leave terrarium ROOM_READY again
-        # -- fake_serve_rounds above only flips it to NO_ROOM for the first
-        # lap's "no-room" return, so this stands in for that next load.
-        terr.state = TerrariumState.ROOM_READY
-        return "ready"
-
-    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
-                        fake_serve_rounds)
-    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
-                        fake_wait_for_room_ready)
-
-    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium)
+    reason, terrarium, wait_calls, serve_calls = _run_roomless(
+        monkeypatch, wait_results=["ready", "ready"],
+        serve_results=["no-room", "parent-gone"])
 
     assert reason == "parent-gone"
-    assert len(serve_rounds_calls) == 2
+    assert len(serve_calls) == 2
 
 
 def test_serve_roomless_stops_clients_on_no_room(monkeypatch):
@@ -1905,33 +1925,13 @@ def test_serve_roomless_stops_clients_on_no_room(monkeypatch):
     "no-room" lap -- the room went down under live Arco clients (a Console
     hard abort or `unload_room`), so the transport/pool need to be stopped
     before the next NO_ROOM wait, not left running against a dead hub."""
-    import harness.terrarium_boot as terrarium_boot_module
-    from control.terrarium import TerrariumState
-    from harness.terrarium_boot import _serve_roomless
-
-    terrarium = types.SimpleNamespace(state=TerrariumState.ROOM_READY,
-                                      arco=FakeArco())
     calls = []
-    serve_rounds_calls = []
 
-    def fake_wait_for_room_ready(agent, terr, **kwargs):
-        return "ready"
-
-    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
-                          console_agent=None, terrarium=None, **_kw):
-        serve_rounds_calls.append(1)
-        if len(serve_rounds_calls) == 1:
-            return "no-room"
-        return "parent-gone"
-
-    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
-                        fake_wait_for_room_ready)
-    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
-                        fake_serve_rounds)
-
-    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium,
-                             stop_clients=lambda: calls.append("stop"),
-                             restart_clients=lambda: None)
+    reason, terrarium, wait_calls, serve_calls = _run_roomless(
+        monkeypatch, wait_results=["ready", "ready"],
+        serve_results=["no-room", "parent-gone"],
+        stop_clients=lambda: calls.append("stop"),
+        restart_clients=lambda: None)
 
     assert reason == "parent-gone"
     assert calls == ["stop"]
@@ -1945,36 +1945,21 @@ def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
     must restart them itself (pool first, then transport, mirroring
     `_recycle_room`'s own order) before serving, or the process would sit
     in ROOM_READY with a live Arco but dead clients."""
-    import harness.terrarium_boot as terrarium_boot_module
-    from control.terrarium import TerrariumState
-    from harness.terrarium_boot import _serve_roomless
-
     terrarium = RoomlessTerrarium(unload_to_no_room=False)
     calls = []
-
-    def fake_wait_for_room_ready(agent, terr, **kwargs):
-        return "ready"
-
-    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
-                          console_agent=None, terrarium=None, **_kw):
-        calls.append("serve-rounds")
-        return "parent-gone"
 
     def restart_clients():
         calls.append("pool-start")
         calls.append("transport-start")
         return None
 
-    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
-                        fake_wait_for_room_ready)
-    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
-                        fake_serve_rounds)
-
-    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium,
-                             restart_clients=restart_clients)
+    reason, terrarium, wait_calls, serve_calls = _run_roomless(
+        monkeypatch, wait_results=["ready"], serve_results=["parent-gone"],
+        terrarium=terrarium, restart_clients=restart_clients)
 
     assert reason == "parent-gone"
-    assert calls == ["pool-start", "transport-start", "serve-rounds"]
+    assert calls == ["pool-start", "transport-start"]
+    assert len(serve_calls) == 1
     assert len(terrarium.unload_calls) == 0
 
 
@@ -1984,36 +1969,12 @@ def test_serve_roomless_skips_restart_when_recycle_already_succeeded(
     (the ordinary case -- no prior failed recycle, or `_recycle_room`
     already restarted the clients itself), `_serve_roomless` must not
     restart them again."""
-    import harness.terrarium_boot as terrarium_boot_module
-    from control.terrarium import TerrariumState
-    from harness.terrarium_boot import _serve_roomless
-
-    terrarium = types.SimpleNamespace(state=TerrariumState.ROOM_READY,
-                                      arco=FakeArco())
-    calls = []
-
-    def fake_wait_for_room_ready(agent, terr, **kwargs):
-        return "ready"
-
-    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
-                          console_agent=None, terrarium=None, **_kw):
-        calls.append("serve-rounds")
-        return "parent-gone"
-
-    def restart_clients():
-        # Simulates the real closure's own "nothing was stopped" no-op.
-        return None
-
-    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
-                        fake_wait_for_room_ready)
-    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
-                        fake_serve_rounds)
-
-    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium,
-                             restart_clients=restart_clients)
+    reason, terrarium, wait_calls, serve_calls = _run_roomless(
+        monkeypatch, wait_results=["ready"], serve_results=["parent-gone"],
+        restart_clients=lambda: None)
 
     assert reason == "parent-gone"
-    assert calls == ["serve-rounds"]
+    assert len(serve_calls) == 1
 
 
 def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
@@ -2022,38 +1983,16 @@ def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
     unload the Room (so ROOM_READY never lies about live clients) and
     loop back to the NO_ROOM wait rather than serving with dead clients --
     never calling `_serve_rounds` for that lap."""
-    import harness.terrarium_boot as terrarium_boot_module
-    from control.terrarium import TerrariumState
-    from harness.terrarium_boot import _serve_roomless
-
     terrarium = RoomlessTerrarium()
-    wait_calls = []
-    serve_rounds_calls = []
 
-    def fake_wait_for_room_ready(agent, terr, **kwargs):
-        wait_calls.append(1)
-        if len(wait_calls) == 1:
-            return "ready"
-        return "parent-gone"
-
-    def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
-                          console_agent=None, terrarium=None, **_kw):
-        serve_rounds_calls.append(1)
-        return "parent-gone"
-
-    def restart_clients():
-        return "injected restart failure"
-
-    monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
-                        fake_wait_for_room_ready)
-    monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
-                        fake_serve_rounds)
-
-    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium,
-                             restart_clients=restart_clients)
+    reason, terrarium, wait_calls, serve_calls = _run_roomless(
+        monkeypatch, wait_results=["ready", "parent-gone"],
+        serve_results=[],
+        terrarium=terrarium,
+        restart_clients=lambda: "injected restart failure")
 
     assert reason == "parent-gone"
-    assert serve_rounds_calls == []
+    assert serve_calls == []
     assert terrarium.unload_calls == [True]
     assert len(wait_calls) == 2
 
