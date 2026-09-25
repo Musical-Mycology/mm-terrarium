@@ -91,6 +91,33 @@ def test_abort_command_drives_game_server():
     assert server.state.name == "IDLE"
 
 
+def test_restart_command_reloads_the_same_bit_with_its_config():
+    agent, server, transport = make_agent()
+    server.load_bit("test_bit")
+    server.run()
+    cfg_before = getattr(server.bit, "config", None)
+    transport.push_incoming({"command": "restart"})
+
+    agent.poll()
+
+    assert server.bit_name == "test_bit"
+    assert getattr(server.bit, "config", None) is cfg_before
+    assert server.state.name == "SETUP"   # reloaded, not just aborted
+    assert not [m for m in transport.sent if m["event"] == "error"]
+
+
+def test_restart_command_with_no_bit_sends_error_event():
+    agent, server, transport = make_agent()
+    transport.push_incoming({"command": "restart"})
+
+    agent.poll()  # must not raise
+
+    errors = [m for m in transport.sent if m["event"] == "error"]
+    assert len(errors) == 1
+    assert errors[0]["command"] == "restart"
+    assert errors[0]["message"] == "no bit loaded"
+
+
 def test_invalid_command_sends_error_event_without_raising():
     agent, server, transport = make_agent()
     transport.push_incoming({"command": "run"})  # requires SETUP; server is IDLE

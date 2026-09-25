@@ -671,10 +671,10 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
     Exiting the instant state hit IDLE would freeze every device on its
     last frame.
 
-    "restarted" -- a Console RESTART landed mid-round: the engine left
-    IDLE and is now in LOADING/LOADED/SETUP without this function having
-    called run() again. Only a Console restart can do that while this
-    function is running.
+    "restarted" -- a Console or uplink RESTART landed mid-round: the
+    engine left IDLE and is now in LOADING/LOADED/SETUP without this
+    function having called run() again. Only a restart can do that while
+    this function is running.
 
     "arco-exited" -- the Arco subprocess is gone. Fail loud: silent
     degradation in a venue is worse than a visible stop.
@@ -714,8 +714,9 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
         _pump_uplink(uplink)
         gs.tick(1.0 / 44.0)
         if gs.state in (State.LOADING, State.LOADED, State.SETUP):
-            # Only a Console restart can put the engine here while this
-            # function is running: run() was already called before entry.
+            # Only a restart (Console or uplink) can put the engine here
+            # while this function is running: run() was already called
+            # before entry.
             return "restarted"
         if gs.state == State.IDLE and not getattr(agent, "closing", 0):
             return "completed"
