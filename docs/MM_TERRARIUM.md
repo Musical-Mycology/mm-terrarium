@@ -658,7 +658,9 @@ every claim below is about code, not about a measured installation.
 - **`render_bench.py`** — frame-timing statistics (mean, min, p95, worst frame).
   See *Host platform* below for why the worst-frame figure is the one that
   matters. `summarise()` and `measure()` take no luxaeterna dependency, so they
-  run in the core offline suite.
+  run in the core offline suite. `measure()` paces to deadlines with
+  `harness/tick_pacer.py` (2026-09-25), so a platform's sleep overshoot is
+  not read as a slow loop.
 - **`shroom_client.py`** — the Radxa Tuneshroom's `devicelink` participation.
   Socket-free by design: `handle()` takes a decoded message and returns the
   address it handled or `""` if it dropped the frame, so the whole protocol
@@ -5147,9 +5149,11 @@ backend" for DEMO. Design:
   `run_stack --no-bit --room DEMO` against a real Arco, with `[[artnet]]`
   pointed at `127.0.0.1` and `python -m harness.artnet_listen` receiving,
   ran at **~33 fps received (interval p50 ~30 ms), 0 sequence gaps, 0 bad
-  packets**. That is below the 44 Hz engine tick; the cause has not been
-  investigated and is an open item for hardware bring-up (spec section 9),
-  not a diagnosed bug.
+  packets**. That is below the 44 Hz engine tick. **Diagnosed and fixed
+  2026-09-25:** the tick loop itself ran ~37 Hz because each loop slept a
+  fixed 1/44 after its work and macOS oversleeps that by ~4 ms; the sink
+  only ever forwarded what the tick gave it. See the *`harness/tick_pacer.py`
+  -- the 44 Hz tick paced to deadlines* entry below for the figures.
 - **No physical LED has been driven yet.** Everything above is verified
   against `harness/artnet_listen.py` and loopback UDP only. The spec's
   section 9 hardware bring-up checklist is entirely pending.
@@ -5243,6 +5247,77 @@ Closes the Console bring-up prerequisite above. Design:
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2692 passed, 1 skipped** (on top of the no-simulator follow-up's
 2673).
+
+### `harness/tick_pacer.py` -- the 44 Hz tick paced to deadlines (2026-09-25)
+
+Spec: [`docs/superpowers/specs/2026-09-25-tick-pacing-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-tick-pacing-design.md).
+Answers the Art-Net entry's "~33 fps against a 44 Hz tick" item above.
+
+**All figures below are dev-box figures** (the development Mac), measured
+with the same live `run_stack --ci --no-bit --room DEMO` against a real
+Arco, `[[artnet]]` for `DEMO/array` pointed at `127.0.0.1:16454`, and
+`python -m harness.artnet_listen --port 16454 --pixels 864` receiving. A
+scratch timing probe (not committed) timed the tick, the sink and the
+send path; the listener timed arrival.
+
+- **Where the loss was: the tick, not the sink.** Before the fix the tick
+  loop (`DeviceLinkAgent.poll` to `poll`) ran **36.2-37.5 Hz**, interval
+  p50 ~27.5 ms. Work per tick was small (`poll` p50 ~0.5 ms,
+  `_render_room` ~0.45 ms); `sleep(1.0 / 44.0)` asked for 22.7 ms and got
+  **p50 ~26.8 ms**. A bare `time.sleep(0.02273)` on the same box: p50
+  27.05 ms, p95 28.98 ms. The three 44 Hz loops in
+  `harness/terrarium_boot.py` (`_wait_in_setup`, `_serve_until_done`,
+  `_wait_for_load`) slept that fixed interval after their work, so the
+  period was work plus the actual (overshot) sleep.
+- **Ruled out, by measurement:** the sink's sender thread sent one frame
+  per queued frame (`_send` p50 0.3 ms; 0 keepalives, 0 late, 0 errors);
+  `PowerLimiter.apply` plus universe packing over 3456 channels costs
+  ~0.2 ms; GIL contention has nothing to hide behind at 0.5 ms of work per
+  22.7 ms period. The original ~33 fps is the same mechanism under more
+  host load.
+- **`render_bench` had the same flaw.** `measure()` slept
+  `frame_interval - elapsed`, repaying work but not oversleep, so it read
+  **37.78 fps mean, p95 27.78 ms** for a loop that could run at 44 -- the
+  tool built to catch a slow loop was slow itself.
+- **The fix: `TickPacer(period, *, clock, sleep)`.** `wait()` sleeps to an
+  absolute deadline and advances it one period, so work and oversleep are
+  repaid on the next tick and the MEAN holds at `1 / period`. A wait more
+  than one period late resyncs instead of bursting (a stall is lost time,
+  never a run of back-to-back ticks). The three loops take `pacer=None`
+  and build `TickPacer(_TICK_PERIOD, sleep=sleep)` on their own `sleep`
+  seam but TickPacer's own `time.monotonic`, NOT the loop's `clock=`:
+  existing tests script that clock with fixed-length iterators. `gs.tick`
+  keeps its nominal `1.0 / 44.0` dt. `render_bench.measure()` takes
+  `clock=`/`sleep=` and paces the same way.
+- **After (2026-09-25):** the tick holds **43.4-44.0 Hz** (interval p50
+  ~22.7 ms, p95 ~26.8 ms). `render_bench --host 127.0.0.1 --pixels 864
+  --seconds 25`: **44.00 fps mean**, p95 27.07 ms, worst 36.71 ms.
+- **The received rate is now the content's change rate, ~38-39 fps.** With
+  the tick at 44, about 13% of ticks render a fixture frame byte-identical
+  to the previous one (~190 `send_frame` calls per 220 ticks), and
+  `_render_room` correctly skips those (WLED holds the frame; the sink's
+  250 ms keepalive covers a lost packet). Sink sends ~37-38 Hz and the
+  listener receives **~38-39 fps** (interval p50 ~23.5 ms, p99 ~48 ms: one
+  skipped tick), 0 sequence gaps, 0 bad packets. Before the fix only ~2%
+  of ticks were skipped, consistent with DEMO's ambient content changing
+  at a fixed ~38/s in real time whatever the tick rate; that cause is
+  inferred from the numbers, not traced. No distinct frame is lost.
+- **Not fixed: per-tick jitter.** Deadline pacing fixes the mean, not the
+  ~4 ms each macOS sleep adds, so `render_bench`'s p95 <= 25 ms pass line
+  still fails on a Mac (27.07 ms). A sleep-short-then-spin finish is the
+  follow-up if bring-up needs it. **The Dec 4 Terrarium is a Mac**, so this
+  is the show box's behavior, not just the dev box's.
+- **Fixed in luxaeterna, not here: `MultiUniverseOutputLoop._loop`**
+  (`luxaeterna/universeset.py`) slept `interval - elapsed` the same way and
+  ran slow wherever sleep overshoots. luxaeterna#23 paces it (and
+  `OutputLoop._loop`) to deadlines with its own local `TickPacer`; it held
+  44.01 fps on the dev Mac.
+  `render_bench` drives `_loop_once()` itself, so it does not time that
+  loop.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2705 passed, 1 skipped** (merged on top of the Console fixture-targets
+slice's 2692).
 
 ### `rooms/VENUE.toml`, `instruments/venue_fiber.toml`, `[psus]` -- the VENUE Room (2026-09-25)
 Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-venue-room-design.md).
@@ -5383,6 +5458,12 @@ output loop synchronously rather than reading `MultiUniverseOutputLoop.fps`,
 because that property is a smoothed once-per-second average — exactly the
 averaging the tool exists to defeat. **No venue-box figures have been recorded
 yet**; the box does not exist.
+
+**Pace to deadlines, never a fixed sleep after the work.** macOS oversleeps
+a 22.7 ms `time.sleep` by ~4 ms (dev-box figure, 2026-09-23), which held
+Control's 44 Hz tick to ~37 Hz until `harness/tick_pacer.py` (2026-09-25).
+Any new fixed-rate loop in this repo should use `TickPacer`. Pacing fixes
+the mean rate, not per-tick jitter: on a Mac, p95 frame time stays ~27 ms.
 
 ## Relationships to other repos
 

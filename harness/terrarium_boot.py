@@ -40,6 +40,7 @@ from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH
 from harness.o2_shroom import parent_is_gone
 from harness.signals import sigterm_as_keyboard_interrupt
+from harness.tick_pacer import TickPacer
 from harness.www_server import WWW_PORT, WwwServer, lan_ip
 
 LOG_FORMAT = "%(levelname)s %(name)s: %(message)s"
@@ -495,12 +496,17 @@ def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
         print(f"teardown step {name!r} failed: {exc!r}", file=sys.stderr)
 
 
+# Control's render tick. Paced to deadlines by TickPacer, never a fixed
+# sleep after the work: see harness/tick_pacer.py for the measured cost.
+_TICK_PERIOD = 1.0 / 44.0
+
+
 def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
                    console_agent=None, arco=None, gs=None,
                    condition: StartCondition | None = None,
                    game_server=None, announce_swaps: bool = False,
-                   terrarium=None, uplink=None) -> str:
+                   terrarium=None, uplink=None, pacer=None) -> str:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
@@ -570,6 +576,9 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     print says so instead of counting down, since there is nothing to
     count down to -- the hold only ends on a state change or the
     condition's own timeout_seconds via start_decision.
+
+    pacer, when given, replaces the default TickPacer(1/44) built on this
+    function's own `sleep` (tests inject one); see harness/tick_pacer.py.
     """
     admin = condition is not None and condition.when == "admin"
     if setup_seconds <= 0 and not admin:
@@ -578,6 +587,8 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     start = clock()
     deadline = None if admin else start + setup_seconds
     next_countdown = start + 15.0
+    if pacer is None:
+        pacer = TickPacer(_TICK_PERIOD, sleep=sleep)
     while True:
         now = clock()
         if deadline is not None and now >= deadline:
@@ -634,12 +645,13 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
             else:
                 print(f"SETUP open, {deadline - now:.0f}s remaining", flush=True)
             next_countdown = now + 15.0
-        sleep(1.0 / 44.0)
+        pacer.wait()
 
 
 def _serve_until_done(gs, agent, arco, clock=time.monotonic,
                       sleep=time.sleep, parent_pid: int | None = None,
-                      console_agent=None, terrarium=None, uplink=None) -> str:
+                      console_agent=None, terrarium=None, uplink=None,
+                      pacer=None) -> str:
     """Tick until the Bit finishes, Arco dies, the parent is gone, or the
     Room goes down. Returns the reason.
 
@@ -682,7 +694,12 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
     agent.poll() -- the same tick loop, so the console's picture of the run
     (bit status, Room frames, registration) is never more than one tick
     stale.
+
+    pacer, when given, replaces the default TickPacer(1/44) built on this
+    function's own `sleep` (tests inject one); see harness/tick_pacer.py.
     """
+    if pacer is None:
+        pacer = TickPacer(_TICK_PERIOD, sleep=sleep)
     while True:
         arco = _live_arco(terrarium, arco)
         if parent_is_gone(parent_pid):
@@ -703,12 +720,13 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
             return "restarted"
         if gs.state == State.IDLE and not getattr(agent, "closing", 0):
             return "completed"
-        sleep(1.0 / 44.0)
+        pacer.wait()
 
 
 def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
-                   console_agent=None, terrarium=None, uplink=None) -> str:
+                   console_agent=None, terrarium=None, uplink=None,
+                   pacer=None) -> str:
     """Hold in IDLE until a console `load_bit` moves the engine out of it --
     the between-rounds counterpart to `_wait_in_setup`'s in-SETUP hold.
 
@@ -732,9 +750,14 @@ def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
     misreport an operator-driven unload as "arco-exited". `_serve_rounds`
     threads this straight through so a --room-less serve loop returns to
     the NO_ROOM wait rather than treating an intentional unload as a crash.
+
+    pacer, when given, replaces the default TickPacer(1/44) built on this
+    function's own `sleep` (tests inject one); see harness/tick_pacer.py.
     """
     if gs.state is not State.IDLE:
         return "loaded"
+    if pacer is None:
+        pacer = TickPacer(_TICK_PERIOD, sleep=sleep)
     while True:
         arco = _live_arco(terrarium, arco)
         if parent_is_gone(parent_pid):
@@ -750,7 +773,7 @@ def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
         gs.tick(1.0 / 44.0)
         if gs.state is not State.IDLE:
             return "loaded"
-        sleep(1.0 / 44.0)
+        pacer.wait()
 
 
 def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,

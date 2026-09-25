@@ -123,3 +123,35 @@ def test_measure_closes_the_backend_even_when_a_tick_raises():
     with pytest.raises(RuntimeError):
         measure(loop, 0.05)
     assert loop.closed == 1
+
+
+class _OversleepingTime:
+    """A clock that moves only when slept on or worked, with a sleep that
+    overshoots 4 ms: the dev-Mac figure for time.sleep(1/44) (2026-09-23)."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds + 0.004
+
+
+def test_measure_holds_the_nominal_rate_despite_sleep_overshoot():
+    """Pre-fix, measure() slept `frame_interval - elapsed` and never repaid
+    the overshoot, so on a Mac it reported ~37.8 fps for a loop that could
+    run at 44: the bench itself was slow."""
+    t = _OversleepingTime()
+    loop = FakeLoop()
+
+    def work() -> int:
+        t.now += 0.001
+        loop.ticks += 1
+        return 7
+
+    loop._loop_once = work
+    stats = measure(loop, 2.0, clock=t.clock, sleep=t.sleep)
+    assert stats.mean_fps == pytest.approx(44.0, rel=0.01)
+    assert stats.frames == loop.ticks
