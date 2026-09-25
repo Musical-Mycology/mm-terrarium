@@ -5121,10 +5121,11 @@ backend" for DEMO. Design:
   keep breathing it after its fixture was muted. Closed 2026-09-25: a ROOM
   join now drops that bridge (see *A muted surface ignores every SolidCue;
   a Room join drops the player bridge* below). `_render_frames` now
-  applies the override by `_fixture_key` too, so a formerly-player bound
-  device's stale player bridge stays dark while its fixture is muted. A
-  direct `room.bound` write (mainly tests, not `control/terrarium.py`'s
-  real fast path, which runs at Room load while nothing is muted yet)
+  applies the override by `_fixture_key` too, so (at the time) a
+  formerly-player bound device's stale player bridge stayed dark while its
+  fixture is muted. A direct `room.bound` write (mainly tests, not
+  `control/terrarium.py`'s real fast path, which runs at Room load while
+  nothing is muted yet)
   still relies on the both-spellings discard in `_clear_mutes` and the
   agent's unmute branch, as a safety net.
 - **Persistent per-Room physical outputs.** `outputs_for`/`_ensure_outputs`
@@ -5461,7 +5462,14 @@ Design:
   and a device that had joined as a player kept its bridge, so it got two
   LED streams (36-channel player frames and the fixture's frames).
 - **Still open:** registration releases the player role on a ROOM role
-  switch, but the engine never calls `Bit.on_leave` for it.
+  switch, but the engine never calls `Bit.on_leave` for it. Also,
+  `harness/o2_shroom.py`'s one-shot mode (no `--persist`) treats an
+  unanswered `--join-retry` deny as the end of the round: a one-shot sim
+  that taps in as a Room fixture with `--join-retry` prints
+  `DEVICE_JOIN_DENIED` and exits while still bound. Exposure is low
+  (Terrarium-spawned fixture sims use `--no-join`, and `run_stack` devices
+  join the Bit's join node, not a ROOM node), but firmware that retries an
+  unanswered join should be checked before hardware bring-up.
 
 **Test baseline after this fix:** `.venv/bin/python -m pytest tests -q` -> **2758 passed, 1 skipped**.
 

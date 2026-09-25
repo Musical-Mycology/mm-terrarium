@@ -321,6 +321,7 @@ def test_start_feedback_flash_leaves_a_muted_fixture_dark(monkeypatch):
     """_flash_fixtures (start feedback) goes through the set_override sink;
     a muted fixture must keep its latched blackout, an unmuted one flashes."""
     gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    server.bind_dev("sim-main", object())
     gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk.t)
 
     agent._lobby.feedback(FEEDBACK_REFUSED)
@@ -332,3 +333,7 @@ def test_start_feedback_flash_leaves_a_muted_fixture_dark(monkeypatch):
         entry = agent._overrides.get(fixture_dev("accent"))
         saw_accent_flash |= entry is not None and entry[0] == RED
     assert saw_accent_flash
+    main_leds = [m["args"][0] for (d, m) in server.sent
+                 if d == "sim-main" and m["address"] == "/sim-main/leds"]
+    assert main_leds
+    assert all(bytes(f) == bytes(len(f)) for f in main_leds)

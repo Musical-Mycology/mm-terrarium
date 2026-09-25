@@ -2854,12 +2854,16 @@ def test_the_lobby_set_override_sink_respects_a_fixture_mute(monkeypatch):
     gs = _room_ready_game_server()
     _fake_sessions(monkeypatch)
     clk = _Clock(100.0)
-    agent = DeviceLinkAgent(gs, FakeServer(), clock=clk)
+    frames = {}
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=clk,
+                            on_room_frame=lambda n, f: frames.__setitem__(n, f))
     gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk())
 
     agent._lobby_sinks().set_override("sim-room-main", (0, 255, 0), 1.0, 0.25)
 
     assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+    agent._render_room()
+    assert frames["main"] == bytes(len(frames["main"]))
 
 
 def test_the_flash_sentinel_respects_a_fixture_mute(monkeypatch):

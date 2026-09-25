@@ -1125,11 +1125,12 @@ class DeviceLinkAgent:
                     self._check_closing_bound(dev)
                 continue
             frame = bytes(universe.get_frame()[:_DEVICE_CHANNELS])
-            # By fixture key, not raw dev: a device that joined as a player
-            # then bound to a Room fixture keeps its player bridge (the ROOM
-            # join builds none), so a mute latched under the fixture's token
-            # must still black this frame out (spec 2026-09-25
-            # mute-key-bind-migration section 3.2).
+            # By fixture key, not raw dev: this loop renders any dev that
+            # still holds a bridge (a ROOM join now drops it, but a dev can
+            # be bound to a fixture some other way, e.g. a direct
+            # room.bound write -- the fast-path shape), so a mute latched
+            # under the fixture's token must still black this frame out
+            # (spec 2026-09-25 mute-key-bind-migration section 3.2).
             frame = self._apply_override(self._fixture_key(dev), frame, order)
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame

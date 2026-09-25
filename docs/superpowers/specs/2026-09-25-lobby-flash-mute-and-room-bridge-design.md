@@ -83,7 +83,14 @@ Non-goals:
   no `/error`. Its fixture frames start arriving on `/<dev>/leds`. A
   `--join-retry` client re-joins once, gets `deny "no such node"` (the arm
   was used up by the bind) and stops retrying. A dedicated "bound" event
-  would be a protocol change, so it is out of scope.
+  would be a protocol change, so it is out of scope. In `harness/o2_shroom.py`'s
+  one-shot mode (no `--persist`), `lobby_round_over` treats that retry deny
+  as the end of the round, so a one-shot sim that taps in as a Room fixture
+  with `--join-retry` prints `DEVICE_JOIN_DENIED` and exits while still
+  bound. Exposure is low: Terrarium-spawned fixture sims are launched with
+  `--no-join` (`control/simulator_process.py`, `harness/terrarium_boot.py`),
+  and `run_stack` devices join the Bit's join node, not a ROOM node. Firmware
+  that retries an unanswered join should be checked before hardware bring-up.
 - The fast-path bind (`control/terrarium.py` `_bind_room_fast_path`) does not
   go through `_on_join`. A spawned simulator was never a player, so it has
   no bridge to drop.
