@@ -89,7 +89,7 @@ RAINBOW_LEVEL_CC = 21        # room rainbow's level lane (finale only)
 
 class MetronomeBit(Bit):
     version = "0.1"
-    room_types = {"DEMO"}
+    room_types = {"DEMO", "VENUE"}
 
     BEAT_S = BEAT_S
     BEATS_PER_CYCLE = BEATS_PER_CYCLE

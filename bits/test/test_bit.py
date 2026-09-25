@@ -38,7 +38,7 @@ class TestBit(Bit):
     # TestBit is the reference fixture for BOTH shipped rooms, so the
     # Scored/Jam validation loop works in either. control/boot.py reads
     # this off the class before instantiation.
-    room_types = {"TEST", "DEMO"}
+    room_types = {"TEST", "DEMO", "VENUE"}
 
     # Seconds for one full out-and-back sweep of the Room's ambient hue.
     ROOM_DRIFT_PERIOD = 12.0
