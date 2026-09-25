@@ -6,6 +6,7 @@ from bits.test.test_bit import TestBit
 from console.agent import ConsoleAgent
 from control.bit_config import ManifestError, merge_overrides, parse_manifest
 from control.boot_config import BootConfig
+from control.cues import fixture_dev
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
@@ -2429,3 +2430,43 @@ def test_builtins_cover_every_connected_devices_carried_instrument():
     # An undeclared hello resolves to defaultshroom, which has no audio
     # capability, so no ping -- but it still resolves.
     assert snapshot["builtins"][surfaces["bare"]] == ["flash", "stop"]
+
+
+def test_room_fixtures_report_mute_state_for_an_unbound_fixture():
+    gs, srv, agent = _room_console()
+    gs.muted.add(fixture_dev("accent"))
+    by_name = {f["name"]: f for f in agent.snapshot()["room"]["fixtures"]}
+    assert by_name["accent"]["muted"] is True
+    assert by_name["main"]["muted"] is False
+
+
+def test_room_fixtures_report_mute_state_for_a_bound_fixture():
+    gs, srv, agent = _room_console()
+    gs.muted.add(gs._mute_key("sim-room-main"))
+    by_name = {f["name"]: f for f in agent.snapshot()["room"]["fixtures"]}
+    assert by_name["main"]["muted"] is True
+
+
+def test_a_fixture_mute_change_broadcasts_room_changed():
+    gs, srv, agent = _room_console()
+    agent.poll()
+    srv.broadcasts.clear()
+    gs.muted.add(fixture_dev("accent"))
+    agent.poll()
+    changed = [b for b in srv.broadcasts if b["event"] == "room_changed"]
+    assert len(changed) == 1
+    by_name = {f["name"]: f for f in changed[0]["room"]["fixtures"]}
+    assert by_name["accent"]["muted"] is True
+
+
+def test_surface_instruments_key_every_declared_fixture_by_token():
+    gs, srv, agent = _room_console()
+    si = agent.snapshot()["surface_instruments"]
+    assert si[fixture_dev("main")] == "generic_surface"
+    assert si[fixture_dev("accent")] == "generic_surface"
+
+
+def test_surface_instruments_carry_no_fixture_tokens_without_a_room():
+    gs, srv, agent = _server_with_agent()
+    si = agent.snapshot()["surface_instruments"]
+    assert not [k for k in si if k.startswith("@fixture:")]
