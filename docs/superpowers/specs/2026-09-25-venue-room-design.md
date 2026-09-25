@@ -95,7 +95,7 @@ Rules for completing them:
 | D4 | **`fiber` is 3 × N px.** It has one block per engine (`e1`..`e3`, N px each) and one zone per bundle (`b1`..`b3`, aligned 1:1 with the blocks). | One colour per bundle and independent control is exactly a zone per bundle. A block per engine lets `--identify-blocks` (`harness/o2_shroom.py`) paint each engine's range a distinct colour on the WebSim canvas, which checks the profile. N is I1, and the user chose to model each engine's physical LEDs rather than use WLED grouping. | I1. |
 | D5 | **A new light-only instrument, `instruments/venue_fiber.toml`.** It carries capabilities `["light.surface"]`, no `audio.flsyn`, and no white. | A second fixture with `venue_array` would start a second FluidSynth drone. Light-only keeps one room voice. W = 0 follows the 2026-09-23 non-goal. | A white-aware instrument slice. That is the named follow-up, and it would upgrade both instruments together. |
 | D6 | **(recommended) Both outputs use `start_universe = 0` and port 6454 on hardware. On loopback, the fiber output sets `port = 6455`.** | Each controller is its own host, so universes never overlap on hardware, and both WLEDs keep their default start universe. `harness/artnet_listen.py` binds one port with no address reuse, and it decodes one contiguous strip. So a no-hardware run needs one listener per output, on its own port. The overlap validator keys on host:port, so the loopback config passes. | A listener that serves several fixtures on one port. |
-| D7 | **A fixture with `[[artnet]]` coverage counts as covered for binding.** Load never spawns a simulator for it, never waits for a device to bind it, and never fails for lack of one (§9). | Without this, G2 is impossible: an all-Art-Net room times out in `wait_for_room_binding` (§9.1). It also closes PR #140's "double-bind" bring-up prerequisite. | None. |
+| D7 | **VENUE depends on PR #143's covered-fixture binding; this spec does not change binding.** PR #143 ([`2026-09-25-artnet-fixture-no-simulator-design.md`](2026-09-25-artnet-fixture-no-simulator-design.md)) landed separately: a fixture with `[[artnet]]` coverage gets no simulator, is never waited for, and never fails a load for lack of a device (§9). | Without it, G2 is impossible: an all-Art-Net room would time out in `wait_for_room_binding`. PR #143 also closed PR #140's "double-bind" bring-up prerequisite. | None. |
 | D8 | **(recommended) An optional `psu` key on `[[artnet]]` and a `[psus.<name>]` table with `amps`, so the validator enforces the 80 % sum.** | VENUE is the first room where two outputs share a supply. If the budget is wrong, it surfaces only as a brownout at the venue. The check is a few lines in a validator that already exists. | If PSU topology is to stay a bring-up checklist item only, drop §8. The config comment would then carry the rule, as today. |
 | D9 | **(recommended) TestBit and MetronomeBit gain `"VENUE"` in `room_types`. Rev1Bit, ChaseBit and MinigameBit do not.** | TestBit is the reference scored-and-jam Bit, and every shipped room has one. MetronomeBit is the production game, and VENUE is where it will run. Both address the room only through `primary`, so no fixture-specific code changes. Rev1Bit is a board bench check. ChaseBit and MinigameBit are TEST-only today. | If MetronomeBit's feel on the fiber (its `primary` also lights the bundles) is wrong, give it fixture-scoped targets (`bars`) in a follow-up. |
 | D10 | **No shipped Bit gains a `@fixture:` function in this slice.** A test-only Bit exercises `@fixture:bars` and `@fixture:fiber`. | `_bit_fixture_names` refuses to load a Bit that names a fixture the room lacks. A `@fixture:fiber` step in TestBit would break TestBit on TEST and DEMO. | Per-room function tables. They don't exist today. |
@@ -242,42 +242,28 @@ shared PSU, fiber is 0.6 A. At 12.5 A the bars get 9.4 A; at 20 A they get
   gains `psus: dict[str, float]`. Neither is read at runtime; they exist
   for validation only.
 
-## 9. Binding an Art-Net-covered fixture (`control/terrarium.py`)
+## 9. Binding an Art-Net-covered fixture (dependency on PR #143)
 
-### 9.1 The defect this closes
+This spec makes no binding change. Covered-fixture binding landed
+separately in PR #143
+([`2026-09-25-artnet-fixture-no-simulator-design.md`](2026-09-25-artnet-fixture-no-simulator-design.md)):
+`Terrarium.load_room` passes the Room's `[[artnet]]`-covered fixtures
+(`artnet_fixtures(config, room)` in `control/terrarium_config.py`) as
+`skip`, so a covered fixture gets no simulator, is not reconnected to a
+recorded binding, and is never armed or waited for. VENUE depends on that
+behaviour.
 
-Found by reading the code, not by a run. `Terrarium.load_room` calls
-`_bind_room_fast_path`, and then, unless every fixture is bound,
-`wait_for_room_binding`. That function raises `RoomBindingTimeout` when no
-fixture binds within `room_setup_timeout`, and `load_room` re-raises it as
-`RoomLoadError`. A Room whose fixtures are all Art-Net-covered, loaded
-with no simulator factory, has nothing to bind. So the "load on
-`[[artnet]]` coverage alone" branch that `validate_rooms` allows since
-PR #140 cannot finish a load. Under `harness/terrarium_boot.py` the
-opposite happens: the simulator factory is always present, so every
-Art-Net fixture also binds a WebSim simulator. That is PR #140's recorded
-double-bind prerequisite.
+The one VENUE-specific fact: both VENUE fixtures, `bars` and `fiber`, are
+covered, so VENUE loads with nothing bound and no wait (G2).
 
-### 9.2 The change
-
-- **`Terrarium` computes `covered`** at `load_room`: the set of fixture
-  names in this room that have an `[[artnet]]` entry
-  (`self.config.artnet_outputs`).
-- **`_bind_room_fast_path(..., covered)` skips covered fixtures**, both
-  the simulator spawn and the recorded-device reconnect. A covered fixture
-  stays unbound, and its output drives it.
-- **`load_room` waits only for uncovered fixtures.**
-  `wait_for_room_binding` takes the fixtures to wait for. It is not called
-  when that set is empty. Its "no fixture ever bound" timeout counts a
-  covered fixture as present. So VENUE, with both fixtures covered, loads
-  with no wait. A room with one covered and one uncovered fixture still
-  arms and waits for the uncovered one, exactly as today.
-- **An admin tap may still bind a covered fixture.** Nothing refuses it,
-  and the device and the Art-Net output then both receive frames, as a
-  bound fixture with an output does today. This is not a goal and not
-  blocked.
-- `Room.fully_bound` keeps its meaning (every fixture bound). The new
-  "every fixture bound or covered" check is local to `load_room`.
+Arming a covered fixture: this spec defers to the deep-dive's record in
+`docs/MM_TERRARIUM.md` (the 2026-09-23 `[[artnet]]` entry). The Console's
+`ArmRoomCommand` (`console/agent.py`) still arms any fixture name without
+checking `[[artnet]]` coverage, so an operator who arms `bars` or `fiber`
+and taps would give that fixture a `DeviceLinkSink` alongside its Art-Net
+output, contrary to the parent spec's D2. That is a recorded gap: the
+Console follow-up should refuse arming a fixture in
+`artnet_fixtures(config, room)`. This slice does not implement the refusal.
 
 ## 10. Bits
 
@@ -311,13 +297,11 @@ All offline, per the existing suite rules
    is accepted at exactly 80 % and refused just above it. An unknown `psu`
    and an unknown `[psus]` key give located errors. An output with no
    `psu` is unchecked.
-4. **Binding.**
-   - With both fixtures covered and a simulator factory present, VENUE
-     loads, spawns no simulator and does not wait.
-   - With both covered and no factory, VENUE loads. This is the §9.1
-     regression test. It fails on today's `main`.
-   - With one covered fixture, the other still binds or waits as today.
-   - DEMO with no `[[artnet]]` behaves exactly as today.
+4. **Binding.** Covered-fixture binding is PR #143's, and its tests live
+   with it in `tests/test_terrarium.py` (spawn, wait, mixed-room and
+   all-Art-Net cases). This slice adds only a VENUE-shaped guard: with no
+   `[[artnet]]` output and no simulator factory, a VENUE load still fails
+   with "no device joined", so coverage never masks a Room nothing drives.
 5. **Bits.** TestBit and MetronomeBit load on VENUE. A test-only Bit with
    `@fixture:fiber` and `fiber.b2` targets loads on VENUE and is refused
    on DEMO. `role_config.slice_light_manifest` binds a `fiber.b2`
@@ -355,12 +339,14 @@ Append to the 2026-09-23 spec's §9 step 8 when VENUE is on hardware:
 
 ## 14. Implementation order (for writing-plans)
 
-1. §9, binding of covered fixtures, with the §9.1 regression test first. It
-   stands alone and fixes PR #140's prerequisite for DEMO too.
+1. §9, binding of covered fixtures. Landed separately in PR #143
+   ([`2026-09-25-artnet-fixture-no-simulator-design.md`](2026-09-25-artnet-fixture-no-simulator-design.md)),
+   which also fixed PR #140's prerequisite for DEMO. VENUE depends on it;
+   nothing to build here.
 2. §8, PSU validation.
 3. §6, `venue_fiber`, including the zone-target check.
 4. §5, `rooms/VENUE.toml`, with N from I1 or N = 1 per §2.
 5. §10, Bit `room_types` and the test-only fixture Bit.
 6. §7, `terrarium.toml` comments, and the §11.6 end-to-end run.
-7. Deep-dive sync: a new VENUE entry, the addressing convention, and
-   removing the double-bind prerequisite from the 2026-09-23 entry.
+7. Deep-dive sync: a new VENUE entry and the addressing convention. PR #143
+   already closed the double-bind prerequisite in the 2026-09-23 entry.

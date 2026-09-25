@@ -5202,7 +5202,7 @@ generated diagrams current.
 
 **Test baseline after the 2026-09-25 no-simulator follow-up:** `.venv/bin/python -m pytest tests -q` -> **2673 passed, 1 skipped**.
 
-### `rooms/VENUE.toml`, `instruments/venue_fiber.toml`, covered-fixture binding, `[psus]` -- the VENUE Room (2026-09-25)
+### `rooms/VENUE.toml`, `instruments/venue_fiber.toml`, `[psus]` -- the VENUE Room (2026-09-25)
 Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-venue-room-design.md).
 
 - **VENUE is the real venue Room: two RGBW fixtures, each on its own WLED
@@ -5216,11 +5216,15 @@ Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycol
   12.5 A) and whether the fiber shares that PSU are the spec's section 2
   inputs, still open. `rooms/VENUE.toml` and `tests/test_venue_room.py`'s
   `N` change together when they close.
-- **An `[[artnet]]`-covered fixture needs no binding.** `load_room` spawns
-  no simulator for it, reattaches no recorded device to it, and does not
-  wait for it; an all-Art-Net Room loads with nothing bound. Before this,
-  such a Room timed out in `wait_for_room_binding` (found by reading, then
-  pinned by a regression test).
+- **VENUE relies on PR #143 for covered-fixture binding; this slice did
+  not change binding.** Per PR #143
+  ([`.../2026-09-25-artnet-fixture-no-simulator-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-artnet-fixture-no-simulator-design.md);
+  see its closed bring-up prerequisite in the *`devicelink/artnet_sink.py`,
+  `[[artnet]]`, routing by fixture name, native RGBW* entry above), an
+  `[[artnet]]` fixture gets no simulator and is never waited on. Both
+  VENUE fixtures are covered, so VENUE loads with nothing bound. Arming a
+  covered fixture from the Console is the gap that entry records
+  (`ArmRoomCommand` does not yet refuse it); this slice adds no refusal.
 - **`[psus.<name>]` and `[[artnet]] psu`.** Outputs naming one PSU must sum
   `max_amps` to at most 80 % of its `amps`, checked at config load across
   every room. An output with no `psu` is unchecked.
@@ -5234,9 +5238,12 @@ Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycol
 - **MEASURED 2026-09-25, loopback, not hardware:** `run_stack --no-bit
   --room VENUE` against two `harness/artnet_listen.py` receivers: bars
   32.6 fps / 0 gaps / 0 bad packets; fiber 32.5 fps / 0 gaps / 0 bad
-  packets. Both below the 44 Hz engine tick -- the same open item as the
-  2026-09-23 DEMO measurement above, owned by the `claude/tick-pacing`
-  spec, not investigated here. No physical LED driven yet.
+  packets. For comparison, PR #143's own loopback run (DEMO, one
+  receiver, recorded in the 2026-09-23 entry above) received **~34-40 fps,
+  0 sequence gaps, 0 bad packets**. Both VENUE figures are below the 44 Hz
+  engine tick -- the same open item as the 2026-09-23 DEMO measurement
+  above, owned by the `claude/tick-pacing` spec, not investigated here.
+  No physical LED driven yet.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2697 passed, 1 skipped** (after merging PR #143);
