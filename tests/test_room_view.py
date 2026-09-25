@@ -322,3 +322,12 @@ def test_fixtures_default_to_unmuted():
 def test_fixtures_carry_muted_only_for_named_fixtures():
     view = room_view(_room(), TEST_PROFILE, _role(), {}, muted={"accent"})
     assert [f["muted"] for f in view["fixtures"]] == [False, True]
+
+
+def test_fixtures_default_to_not_artnet():
+    assert [f["artnet"] for f in _view()["fixtures"]] == [False, False]
+
+
+def test_fixtures_carry_artnet_only_for_named_fixtures():
+    view = room_view(_room(), TEST_PROFILE, _role(), {}, artnet={"accent"})
+    assert [f["artnet"] for f in view["fixtures"]] == [False, True]

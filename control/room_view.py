@@ -102,7 +102,7 @@ def _instrument_view(instrument) -> dict:
     }
 
 
-def fixtures_view(profile, room, canvas_urls=None, muted=None) -> list[dict]:
+def fixtures_view(profile, room, canvas_urls=None, muted=None, artnet=None) -> list[dict]:
     """One entry per fixture: its own pixel count, its zones (already
     namespaced <fixture>.<zone> by RoomProfile.zones), its channel offset
     into the concatenated frame, and which dev is bound (None if not yet).
@@ -119,9 +119,15 @@ def fixtures_view(profile, room, canvas_urls=None, muted=None) -> list[dict]:
     `muted` is an iterable of fixture NAMES currently latched mute (the caller
     resolves them through the engine, keeping this module engine-free); each
     row's `muted` is whether its name is in it.
+
+    `artnet` is an iterable of fixture NAMES driven by an [[artnet]] output
+    (the caller resolves them from the Terrarium config); each row's
+    `artnet` is whether its name is in it. Such a fixture never binds a
+    device, so the Room panel offers it no Arm button.
     """
     urls = canvas_urls or {}
     muted_names = set(muted or ())
+    artnet_names = set(artnet or ())
     out = []
     for name, start, count in profile.fixture_slices():
         fixture = next(f for f in profile.fixtures if f.name == name)
@@ -137,12 +143,14 @@ def fixtures_view(profile, room, canvas_urls=None, muted=None) -> list[dict]:
             "dev": dev,
             "url": urls.get(dev) if dev else None,
             "muted": name in muted_names,
+            "artnet": name in artnet_names,
             "instrument": _instrument_view(fixture.instrument),
         })
     return out
 
 
-def room_view(room, profile, role, controllers: dict, canvas_urls=None, muted=None) -> dict | None:
+def room_view(room, profile, role, controllers: dict, canvas_urls=None, muted=None,
+             artnet=None) -> dict | None:
     """Build the Console's whole Room panel payload.
 
     Returns None when no Room is configured, which the panel renders as
@@ -189,7 +197,7 @@ def room_view(room, profile, role, controllers: dict, canvas_urls=None, muted=No
             merged.setdefault(cc, value)
     return {
         "room_type": room.name,
-        "fixtures": fixtures_view(profile, room, canvas_urls, muted),
+        "fixtures": fixtures_view(profile, room, canvas_urls, muted, artnet),
         "capability": capability_view(profile),
         "instruments": instruments,
         "controllers": merged,
