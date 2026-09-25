@@ -16,7 +16,8 @@ from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
-from tests.fakes import FakeAgent, FakeArco, StaticGS, TickingGS
+from tests.fakes import (FakeAgent, FakeArco, FakeObservable, RecordingClient,
+                         RoomlessTerrarium, StaticGS, TickingGS)
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium import TerrariumState
@@ -38,6 +39,21 @@ TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
 ))
 TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
                      node_id="ROOM_TEST_NODE", profile=TEST_PROFILE)
+
+
+class _RecordingPopen(FakePopen):
+    """FakePopen that appends its label to `order` on the first signal
+    it receives while still running."""
+
+    def __init__(self, label, order):
+        super().__init__()
+        self._label = label
+        self._order = order
+
+    def send_signal(self, sig):
+        if self.returncode is None:
+            self._order.append(self._label)
+        super().send_signal(sig)
 
 
 def _fake_arco(command, popen=None, record=None):
@@ -199,19 +215,8 @@ def test_shutdown_stops_the_simulator_before_arco():
     left this success path wrong, which is why the order is now a
     consequence of registration rather than a list."""
     order = []
-
-    class _RecordingPopen(FakePopen):
-        def __init__(self, label):
-            super().__init__()
-            self._label = label
-
-        def send_signal(self, sig):
-            if self.returncode is None:
-                order.append(self._label)
-            super().send_signal(sig)
-
-    arco_popen = _RecordingPopen("arco")
-    sim_popen = _RecordingPopen("simulator")
+    arco_popen = _RecordingPopen("arco", order)
+    sim_popen = _RecordingPopen("simulator", order)
 
     config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown, terrarium = build(
@@ -260,18 +265,8 @@ def test_full_o2lite_unwind_order_through_main(monkeypatch):
     monkeypatch.setattr(O2LiteTransport, "stop",
                         lambda self: order.append("o2lite-transport"))
 
-    class _RecordingPopen(FakePopen):
-        def __init__(self, label):
-            super().__init__()
-            self._label = label
-
-        def send_signal(self, sig):
-            if self.returncode is None:
-                order.append(self._label)
-            super().send_signal(sig)
-
-    arco_popen = _RecordingPopen("arco")
-    sim_popen = _RecordingPopen("simulator")
+    arco_popen = _RecordingPopen("arco", order)
+    sim_popen = _RecordingPopen("simulator", order)
 
     fake_o2 = FakeO2Lite()
     fake_o2.set_services("actl")
@@ -325,18 +320,8 @@ def test_shutdown_stops_the_synth_pool_after_the_transport_and_before_arco(
     monkeypatch.setattr(AudioBridge, "shutdown",
                         lambda self: order.append("room-audio"))
 
-    class _RecordingPopen(FakePopen):
-        def __init__(self, label):
-            super().__init__()
-            self._label = label
-
-        def send_signal(self, sig):
-            if self.returncode is None:
-                order.append(self._label)
-            super().send_signal(sig)
-
-    arco_popen = _RecordingPopen("arco")
-    sim_popen = _RecordingPopen("simulator")
+    arco_popen = _RecordingPopen("arco", order)
+    sim_popen = _RecordingPopen("simulator", order)
 
     fake_o2 = FakeO2Lite()
     fake_o2.set_services("actl")
@@ -941,8 +926,7 @@ def test_room_down_mid_run_returns_no_room_not_arco_exited():
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _serve_until_done
 
-    class FakeTerrarium:
-        state = TerrariumState.NO_ROOM
+    terrarium = types.SimpleNamespace(state=TerrariumState.NO_ROOM)
 
     reason = _serve_until_done(
         StaticGS(State.RUNNING,
@@ -950,7 +934,7 @@ def test_room_down_mid_run_returns_no_room_not_arco_exited():
         FakeAgent(poll_error=AssertionError("must not poll once the room is down")),
         FakeArco(returncode=1),                      # dead process too
         sleep=lambda _s: None,
-        terrarium=FakeTerrarium())
+        terrarium=terrarium)
     assert reason == "no-room"
 
 
@@ -1852,12 +1836,11 @@ def test_wait_for_room_ready_returns_immediately_when_already_ready():
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _wait_for_room_ready
 
-    class FakeTerrarium:
-        state = TerrariumState.ROOM_READY
+    terrarium = types.SimpleNamespace(state=TerrariumState.ROOM_READY)
 
     reason = _wait_for_room_ready(
         FakeAgent(poll_error=AssertionError("must not poll when already ready")),
-        FakeTerrarium())
+        terrarium)
     assert reason == "ready"
 
 
@@ -1873,11 +1856,7 @@ def test_wait_for_room_ready_polls_until_a_console_load_room_lands():
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _wait_for_room_ready
 
-    class FakeTerrarium:
-        def __init__(self):
-            self.state = TerrariumState.NO_ROOM
-
-    terrarium = FakeTerrarium()
+    terrarium = types.SimpleNamespace(state=TerrariumState.NO_ROOM)
 
     class FakeConsoleAgent:
         """Stands in for a scripted console `load_room` command: on its
@@ -1910,13 +1889,12 @@ def test_wait_for_room_ready_exits_when_the_parent_is_gone(monkeypatch):
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _wait_for_room_ready
 
-    class FakeTerrarium:
-        state = TerrariumState.NO_ROOM
+    terrarium = types.SimpleNamespace(state=TerrariumState.NO_ROOM)
 
     monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
                         lambda pid: True)
 
-    reason = _wait_for_room_ready(FakeAgent(), FakeTerrarium(),
+    reason = _wait_for_room_ready(FakeAgent(), terrarium,
                                   parent_pid=999, sleep=lambda _s: None)
     assert reason == "parent-gone"
 
@@ -1932,12 +1910,8 @@ def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _serve_roomless
 
-    class FakeTerrarium:
-        def __init__(self):
-            self.state = TerrariumState.ROOM_READY
-            self.arco = FakeArco()
-
-    terrarium = FakeTerrarium()
+    terrarium = types.SimpleNamespace(state=TerrariumState.ROOM_READY,
+                                      arco=FakeArco())
     serve_rounds_calls = []
 
     def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
@@ -1975,12 +1949,8 @@ def test_serve_roomless_stops_clients_on_no_room(monkeypatch):
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _serve_roomless
 
-    class FakeTerrarium:
-        def __init__(self):
-            self.state = TerrariumState.ROOM_READY
-            self.arco = FakeArco()
-
-    terrarium = FakeTerrarium()
+    terrarium = types.SimpleNamespace(state=TerrariumState.ROOM_READY,
+                                      arco=FakeArco())
     calls = []
     serve_rounds_calls = []
 
@@ -2019,16 +1989,7 @@ def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _serve_roomless
 
-    class FakeTerrarium:
-        def __init__(self):
-            self.state = TerrariumState.ROOM_READY
-            self.arco = FakeArco()
-            self.unload_calls = 0
-
-        def unload_room(self, force=False):
-            self.unload_calls += 1
-
-    terrarium = FakeTerrarium()
+    terrarium = RoomlessTerrarium(unload_to_no_room=False)
     calls = []
 
     def fake_wait_for_room_ready(agent, terr, **kwargs):
@@ -2054,7 +2015,7 @@ def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
 
     assert reason == "parent-gone"
     assert calls == ["pool-start", "transport-start", "serve-rounds"]
-    assert terrarium.unload_calls == 0
+    assert len(terrarium.unload_calls) == 0
 
 
 def test_serve_roomless_skips_restart_when_recycle_already_succeeded(
@@ -2067,12 +2028,8 @@ def test_serve_roomless_skips_restart_when_recycle_already_succeeded(
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _serve_roomless
 
-    class FakeTerrarium:
-        def __init__(self):
-            self.state = TerrariumState.ROOM_READY
-            self.arco = FakeArco()
-
-    terrarium = FakeTerrarium()
+    terrarium = types.SimpleNamespace(state=TerrariumState.ROOM_READY,
+                                      arco=FakeArco())
     calls = []
 
     def fake_wait_for_room_ready(agent, terr, **kwargs):
@@ -2109,17 +2066,7 @@ def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _serve_roomless
 
-    class FakeTerrarium:
-        def __init__(self):
-            self.state = TerrariumState.ROOM_READY
-            self.arco = FakeArco()
-            self.unload_calls = []
-
-        def unload_room(self, force=False):
-            self.unload_calls.append(force)
-            self.state = TerrariumState.NO_ROOM
-
-    terrarium = FakeTerrarium()
+    terrarium = RoomlessTerrarium()
     wait_calls = []
     serve_rounds_calls = []
 
@@ -2158,18 +2105,12 @@ def test_restart_room_clients_starts_pool_then_transport():
     import harness.terrarium_boot as terrarium_boot
 
     calls = []
-
-    class FakePool:
-        def start(self):
-            calls.append("pool-start")
-
-    class FakeTransport:
-        def start(self, o2, *, pump=None):
-            calls.append(("transport-start", o2))
+    pool = RecordingClient(calls, "pool")
+    transport = RecordingClient(calls, "transport")
 
     o2 = object()
     reason = terrarium_boot._restart_room_clients(
-        transport=FakeTransport(), pool=FakePool(), o2lite=o2)
+        transport=transport, pool=pool, o2lite=o2)
     assert reason is None
     assert calls == ["pool-start", ("transport-start", o2)]
 
@@ -2181,16 +2122,10 @@ def test_restart_room_clients_catches_a_raising_start_and_returns_reason():
     "reason string, never raises" contract as `_recycle_room`."""
     import harness.terrarium_boot as terrarium_boot
 
-    class FailingPool:
-        def start(self):
-            raise RuntimeError("injected pool failure")
-
-    class FakeTransport:
-        def start(self, o2, *, pump=None):
-            pass
-
     reason = terrarium_boot._restart_room_clients(
-        transport=FakeTransport(), pool=FailingPool())
+        transport=RecordingClient([], "transport"),
+        pool=RecordingClient([], "pool",
+                             start_error=RuntimeError("injected pool failure")))
     assert reason == "injected pool failure"
 
 
@@ -2203,35 +2138,19 @@ def test_restart_room_clients_quiesces_the_pool_when_the_transport_fails():
     before returning the transport's failure reason."""
     import harness.terrarium_boot as terrarium_boot
 
-    class FakePool:
-        def __init__(self):
-            self.calls = []
-
-        def start(self):
-            self.calls.append("start")
-
-        def quiesce(self):
-            self.calls.append("quiesce")
-
-    class FailingTransport:
-        def start(self, o2, *, pump=None):
-            raise RuntimeError("no clock")
-
-    pool = FakePool()
+    pool = RecordingClient([], "pool")
     reason = terrarium_boot._restart_room_clients(
-        transport=FailingTransport(), pool=pool, o2lite=None)
+        transport=RecordingClient([], "transport",
+                                  start_error=RuntimeError("no clock")),
+        pool=pool, o2lite=None)
     assert reason == "no clock"
-    assert pool.calls == ["start", "quiesce"]
+    assert pool.calls == ["pool-start", "pool-quiesce"]
 
-    class SucceedingTransport:
-        def start(self, o2, *, pump=None):
-            pass
-
-    pool2 = FakePool()
+    pool2 = RecordingClient([], "pool")
     reason2 = terrarium_boot._restart_room_clients(
-        transport=SucceedingTransport(), pool=pool2, o2lite=None)
+        transport=RecordingClient([], "transport"), pool=pool2, o2lite=None)
     assert reason2 is None
-    assert pool2.calls == ["start"]
+    assert pool2.calls == ["pool-start"]
 
 
 def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
@@ -2244,8 +2163,7 @@ def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _wait_for_load
 
-    class FakeTerrarium:
-        state = TerrariumState.NO_ROOM
+    terrarium = types.SimpleNamespace(state=TerrariumState.NO_ROOM)
 
     reason = _wait_for_load(
         StaticGS(State.IDLE,
@@ -2253,7 +2171,7 @@ def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
         FakeAgent(poll_error=AssertionError("must not poll past the no-room check")),
         FakeArco(poll_error=AssertionError(
             "must not poll arco past the no-room check")),
-        terrarium=FakeTerrarium())
+        terrarium=terrarium)
     assert reason == "no-room"
 
 
@@ -2343,25 +2261,15 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
     import types
 
     import harness.terrarium_boot as terrarium_boot_module
-    from control.terrarium import TerrariumState
 
     _mock_o2lite_module(monkeypatch, terrarium_boot_module)
 
-    class _FakeObservable:
-        room = None
-        state = TerrariumState.NO_ROOM
-        bit = None
-        bit_name = None
-
-        def add_observer(self, observer):
-            pass
-
     def fake_build(config, bit_registry, **kwargs):
-        gs = _FakeObservable()
+        gs = FakeObservable()
         server = object()
         agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
         teardown = TeardownStack()
-        terrarium = _FakeObservable()
+        terrarium = FakeObservable()
         return gs, server, agent, None, teardown, terrarium
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
@@ -2397,25 +2305,15 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
     import types
 
     import harness.terrarium_boot as terrarium_boot_module
-    from control.terrarium import TerrariumState
 
     _mock_o2lite_module(monkeypatch, terrarium_boot_module)
 
-    class _FakeObservable:
-        room = None
-        state = TerrariumState.NO_ROOM
-        bit = None
-        bit_name = None
-
-        def add_observer(self, observer):
-            pass
-
     def fake_build(config, bit_registry, **kwargs):
-        gs = _FakeObservable()
+        gs = FakeObservable()
         server = object()
         agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
         teardown = TeardownStack()
-        terrarium = _FakeObservable()
+        terrarium = FakeObservable()
         return gs, server, agent, None, teardown, terrarium
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
@@ -2454,25 +2352,15 @@ def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
     import types
 
     import harness.terrarium_boot as terrarium_boot_module
-    from control.terrarium import TerrariumState
 
     _mock_o2lite_module(monkeypatch, terrarium_boot_module)
 
-    class _FakeObservable:
-        room = None
-        state = TerrariumState.NO_ROOM
-        bit = None
-        bit_name = None
-
-        def add_observer(self, observer):
-            pass
-
     def fake_build(config, bit_registry, **kwargs):
-        gs = _FakeObservable()
+        gs = FakeObservable()
         server = object()
         agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
         teardown = TeardownStack()
-        terrarium = _FakeObservable()
+        terrarium = FakeObservable()
         return gs, server, agent, None, teardown, terrarium
 
     def fake_serve_roomless(gs, agent, terrarium, *, console_agent=None,
@@ -2520,14 +2408,7 @@ def test_main_no_room_boot_skips_transport_start_and_leaves_clients_stopped(
         O2LiteTransport, "start",
         lambda self, o2, *, pump=None: transport_calls.append("start"))
 
-    class FakePool:
-        def __init__(self):
-            self.calls = []
-
-        def start(self):
-            self.calls.append("start")
-
-    pool = FakePool()
+    pool = RecordingClient([], "pool")
 
     class _FakeTerrarium:
         arco = None
@@ -2580,7 +2461,7 @@ def test_main_no_room_boot_skips_transport_start_and_leaves_clients_stopped(
     reason = restart_clients()
 
     assert reason is None
-    assert pool.calls == ["start"]
+    assert pool.calls == ["pool-start"]
     assert transport_calls == ["start"]
 
 
@@ -2604,23 +2485,12 @@ def test_recycle_room_orders_client_stops_before_unload_and_restarts_after():
             calls.append("recycle")
             return None
 
-    class FakeTransport:
-        def stop(self):
-            calls.append("transport-stop")
-
-        def start(self, o2, *, pump=None):
-            calls.append(("transport-start", o2))
-
-    class FakePool:
-        def quiesce(self):
-            calls.append("pool-quiesce")
-
-        def start(self):
-            calls.append("pool-start")
+    transport = RecordingClient(calls, "transport")
+    pool = RecordingClient(calls, "pool")
 
     o2 = object()
     reason = terrarium_boot._recycle_room(
-        FakeTerrarium(), transport=FakeTransport(), pool=FakePool(), o2lite=o2)
+        FakeTerrarium(), transport=transport, pool=pool, o2lite=o2)
     assert reason is None
     assert calls == ["transport-stop", "pool-quiesce", "recycle",
                      "pool-start", ("transport-start", o2)]
@@ -2642,19 +2512,11 @@ def test_recycle_room_failure_skips_restarts_and_returns_reason():
         def recycle_room(self):
             return "arco failed to start: injected"
 
-    class FakeTransport:
-        def stop(self):
-            calls.append("transport-stop")
-
-    class FakePool:
-        def quiesce(self):
-            calls.append("pool-quiesce")
-
-        def start(self):
-            calls.append("pool-start")
+    transport = RecordingClient(calls, "transport")
+    pool = RecordingClient(calls, "pool")
 
     reason = terrarium_boot._recycle_room(
-        FakeTerrarium(), transport=FakeTransport(), pool=FakePool())
+        FakeTerrarium(), transport=transport, pool=pool)
     assert reason == "arco failed to start: injected"
     assert "pool-start" not in calls
 
@@ -3214,11 +3076,10 @@ def test_room_wiring_rewires_once_after_a_retried_restart_succeeds():
         def rewire_room(self): calls.append("rewire")
         def unwire_room(self): calls.append("unwire")
 
-    class FakeTerrarium:
-        state = TerrariumState.ROOM_READY
+    terrarium = types.SimpleNamespace(state=TerrariumState.ROOM_READY)
 
     attempts = iter(["clock never synced", None])
-    wiring = _RoomWiring(Agent(), FakeTerrarium(),
+    wiring = _RoomWiring(Agent(), terrarium,
                          restart_clients=lambda: next(attempts))
 
     wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
@@ -3246,8 +3107,7 @@ def test_room_wiring_does_not_rewire_twice_when_room_ready_refires():
         def rewire_room(self): calls.append("rewire")
         def unwire_room(self): calls.append("unwire")
 
-    class FakeTerrarium:
-        state = TerrariumState.ROOM_READY
+    terrarium = types.SimpleNamespace(state=TerrariumState.ROOM_READY)
 
     attempts = iter(["clock never synced", None])
 
@@ -3257,7 +3117,7 @@ def test_room_wiring_does_not_rewire_twice_when_room_ready_refires():
             wiring.on_clients_restarted()    # as main()'s closure does
         return reason
 
-    wiring = _RoomWiring(Agent(), FakeTerrarium(),
+    wiring = _RoomWiring(Agent(), terrarium,
                          restart_clients=restart_clients)
 
     wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
@@ -3284,10 +3144,9 @@ def test_room_wiring_drops_the_pending_rewire_on_no_room():
         def rewire_room(self): calls.append("rewire")
         def unwire_room(self): calls.append("unwire")
 
-    class FakeTerrarium:
-        state = TerrariumState.NO_ROOM
+    terrarium = types.SimpleNamespace(state=TerrariumState.NO_ROOM)
 
-    wiring = _RoomWiring(Agent(), FakeTerrarium(),
+    wiring = _RoomWiring(Agent(), terrarium,
                          restart_clients=lambda: "clock never synced")
 
     wiring.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
@@ -3306,18 +3165,16 @@ def test_wait_in_setup_holds_without_a_deadline_for_an_admin_start():
     from control.bit_config import StartCondition
     from harness.terrarium_boot import _wait_in_setup
 
-    class GS:
-        state = State.SETUP
-        bit_name = "X"
-        registration = None
-        bit = None
-
     ticks = iter([0.0, 1.0, 2.0, 50.0, 60.0])
     cond = StartCondition(when="admin", min_scored=0, key="k",
                           timeout_seconds=55.0, on_timeout="abort")
-    reason = _wait_in_setup(FakeAgent(), 0.0, clock=lambda: next(ticks),
-                            sleep=lambda _s: None, gs=GS(), condition=cond,
-                            game_server=GS())
+    reason = _wait_in_setup(
+        FakeAgent(), 0.0, clock=lambda: next(ticks), sleep=lambda _s: None,
+        gs=types.SimpleNamespace(state=State.SETUP, bit_name="X",
+                                 registration=None, bit=None),
+        condition=cond,
+        game_server=types.SimpleNamespace(state=State.SETUP, bit_name="X",
+                                          registration=None, bit=None))
     assert reason == "timeout-abort"
 
 
@@ -3325,13 +3182,8 @@ def test_wait_in_setup_admin_yields_on_state_change_not_on_setup_seconds():
     from control.bit_config import StartCondition
     from harness.terrarium_boot import _wait_in_setup
 
-    class GS:
-        state = State.SETUP
-        bit_name = "X"
-        registration = None
-        bit = None
-
-    gs = GS()
+    gs = types.SimpleNamespace(state=State.SETUP, bit_name="X",
+                               registration=None, bit=None)
     polls = []
 
     class FakeAgent:
