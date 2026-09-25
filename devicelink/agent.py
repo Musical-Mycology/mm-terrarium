@@ -1279,6 +1279,18 @@ class DeviceLinkAgent:
             self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
             self._notify_join_denied(dev, args[1], result.reason)
             return
+        if result.role_class == RoleClass.ROOM:
+            # A ROOM grant binds dev to a Room fixture (GameServer._bind_room)
+            # and carries no role config, so there is no bridge to build and
+            # nothing to tell the device: its fixture's frames start arriving
+            # on /<dev>/leds. Registration already released any player role
+            # dev held (a role switch), so drop that role's bridge too, or dev
+            # gets two LED streams (spec 2026-09-25
+            # lobby-flash-mute-and-room-bridge section 3.2).
+            self._drop_player_bridge(dev)
+            if self._lobby is not None:
+                self._lobby.forget(dev)
+            return
         bridge = DeviceBridge(capability=self._capability, clock=self._clock)
         try:
             bridge.on_grant(result)
@@ -1309,6 +1321,25 @@ class DeviceLinkAgent:
         if self._lobby is not None:
             self._lobby.forget(dev)
         self._send(dev, protocol.role_event(dev, result.config))
+
+    def _drop_player_bridge(self, dev: str) -> None:
+        """Forget dev's player-side render state at once: no closing fade
+        (the fixture's frames take over dev's LEDs this tick), no
+        /<dev>/release (dev is not leaving) and no server.drop_dev (its
+        connection stays live). _canvas_urls stays, and _muted is left to
+        the engine's bind migration, which already moves a raw player mute
+        onto the fixture token. A no-op for a dev that never held a
+        bridge."""
+        self.bridges.pop(dev, None)
+        self._universes.pop(dev, None)
+        self._last_frames.pop(dev, None)
+        self._pending_at.pop(dev, None)
+        self._last_breath.pop(dev, None)
+        self._breathless.discard(dev)
+        self._closing.pop(dev, None)
+        self._closing_revived.discard(dev)
+        self._overrides.pop(dev, None)
+        self._override_only.discard(dev)
 
     def _on_verb(self, dev: str, verb: str, args: list,
                  gesture_time: float = 0.0, client=None) -> None:
