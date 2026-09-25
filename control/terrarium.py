@@ -47,12 +47,16 @@ class RoomBindingTimeout(Exception):
 
 def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
                          simulator_factory, known_device_connected,
-                         teardown) -> None:
+                         teardown, covered=frozenset()) -> None:
     """Attempt the no-tap-needed path per fixture: a Terrarium-spawned
     simulator, or a reconnect to a previously recorded physical device.
     Leaves any fixture unbound (absent from room.bound) if neither applies
     -- wait_for_room_binding below is what holds for a fresh admin-armed
     tap, not this function's job.
+
+    A fixture in `covered` has an [[artnet]] output that drives it, so it
+    is skipped entirely: no simulator competes with the output and no
+    recorded device is reattached (spec 2026-09-25 section 9).
 
     The factory is handed the teardown stack and the fixture name, and
     registers whatever it spawns, so an orphaned Room simulator is
@@ -62,6 +66,8 @@ def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
     """
     profile = room.profile
     for fixture in profile.fixtures:
+        if fixture.name in covered:
+            continue
         if simulator_factory is not None:
             dev = simulator_factory(teardown, fixture.name)
             room.bound[fixture.name] = dev
@@ -74,24 +80,28 @@ def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
 
 def wait_for_room_binding(gs: GameServer, room_binding: RoomBindingRegistry,
                           timeout: float, *, tick, clock=time.monotonic,
-                          sleep=time.sleep) -> None:
-    """Hold until every fixture is bound (each admin-armed tap grants one
-    fixture's ROOM-class join) or the shared timeout budget elapses,
-    arming fixtures one at a time in the profile's declaration order.
+                          sleep=time.sleep, covered=frozenset()) -> None:
+    """Hold until every fixture not in `covered` is bound (each admin-armed
+    tap grants one fixture's ROOM-class join) or the shared timeout budget
+    elapses, arming fixtures one at a time in the profile's declaration
+    order. A covered fixture has an [[artnet]] output, so it is never
+    waited for and counts as present (spec 2026-09-25 section 9).
     `tick` is called once per iteration -- driving whatever transport/tick
     loop might deliver that join -- so this function has no transport
     opinion of its own.
 
-    Raises RoomBindingTimeout only when NO fixture ever binds. A Room that
-    is SOME but not all fixtures bound after the timeout proceeds anyway --
-    see design spec section 7: one unresponsive fixture must not fail the
-    whole boot.
+    Raises RoomBindingTimeout only when NO fixture ever binds and none is
+    covered. A Room that is SOME but not all fixtures bound after the
+    timeout proceeds anyway -- see design spec section 7: one unresponsive
+    fixture must not fail the whole boot.
     """
     profile = gs.room.profile
-    if gs.room.fully_bound(profile):
+    pending = [f for f in profile.fixtures
+               if f.name not in gs.room.bound and f.name not in covered]
+    if not pending:
         return
     deadline = clock() + timeout
-    for fixture in profile.fixtures:
+    for fixture in pending:
         if fixture.name in gs.room.bound:
             continue
         remaining = deadline - clock()
@@ -102,10 +112,11 @@ def wait_for_room_binding(gs: GameServer, room_binding: RoomBindingRegistry,
             tick()
             sleep(0.05)
         room_binding.disarm(gs.room.name)
-    if not gs.room.bound:
+    if not gs.room.bound and not covered:
         raise RoomBindingTimeout(
             f"no device joined as {gs.room.name} Room within {timeout}s")
-    missing = [f.name for f in profile.fixtures if f.name not in gs.room.bound]
+    missing = [f.name for f in profile.fixtures
+               if f.name not in gs.room.bound and f.name not in covered]
     if missing:
         logger.warning("Room %s partially bound; missing fixtures: %s",
                        gs.room.name, missing)
@@ -315,16 +326,21 @@ class Terrarium:
             self._progress("binding fixtures")
             if self.binding_store_path is not None:
                 self.room_binding.load(self.binding_store_path)
+            covered = frozenset(o.fixture for o in self.config.artnet_outputs
+                                if o.room == spec.name)
             _bind_room_fast_path(room, self.room_binding,
                                  self._simulator_factory_with_recording(),
-                                 self.known_device_connected, stack)
+                                 self.known_device_connected, stack,
+                                 covered=covered)
 
-            if not room.fully_bound(room.profile):
+            if any(f.name not in room.bound and f.name not in covered
+                   for f in room.profile.fixtures):
                 try:
                     wait_for_room_binding(
                         self.gs, self.room_binding,
                         self.boot_config.room_setup_timeout,
-                        tick=self.tick or (lambda: self.gs.tick(0.05)))
+                        tick=self.tick or (lambda: self.gs.tick(0.05)),
+                        covered=covered)
                 except RoomBindingTimeout as exc:
                     raise RoomLoadError(str(exc)) from exc
 

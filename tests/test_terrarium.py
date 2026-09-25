@@ -12,7 +12,7 @@ from tests.instrument_fixtures import GENERIC_SURFACE
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium import Terrarium, TerrariumState
-from control.terrarium_config import RoomSpec, TerrariumConfig
+from control.terrarium_config import ArtNetOutput, RoomSpec, TerrariumConfig
 from tests.test_engine import RoomCapableBit
 
 TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
@@ -421,3 +421,89 @@ def test_loading_room_is_cleared_after_a_failed_load():
         ownership_probe=lambda: "another Console owns this room")
     assert terrarium.load_room("TEST") is not None
     assert terrarium.loading_room is None
+
+
+VENUE_PROFILE = RoomProfile(surface_id="room_venue", fixtures=(
+    RoomFixture(name="bars", color_order="RGBW",
+               blocks=(RoomBlock("m1", 0, 10),),
+               zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),
+    RoomFixture(name="fiber", color_order="RGBW",
+               blocks=(RoomBlock("e1", 0, 3),),
+               zones=(RoomZone("all", 0, 3),), instrument=GENERIC_SURFACE),
+))
+VENUE_SPEC = RoomSpec(name="VENUE", description="",
+                      backends=("devicelink", "array"),
+                      node_id="ROOM_VENUE_NODE", profile=VENUE_PROFILE)
+
+
+def _venue_config(*covered):
+    """A config holding only VENUE, with an [[artnet]] output for each
+    fixture name in `covered`."""
+    return TerrariumConfig(
+        schema=1, name="test-terrarium", bit_paths=(),
+        rooms={"VENUE": VENUE_SPEC}, version="1-test",
+        artnet_outputs=tuple(
+            ArtNetOutput(room="VENUE", fixture=f, host="127.0.0.1", max_amps=1.0)
+            for f in covered))
+
+
+def _spy_factory(spawned):
+    def factory(teardown, fixture):
+        spawned.append(fixture)
+        return f"sim-{fixture}-dev"
+    return factory
+
+
+def test_an_all_artnet_room_loads_with_no_simulator_and_no_device():
+    """Spec 2026-09-25 section 9.1: with no simulator factory, nothing can
+    bind, and before the fix the load waited room_setup_timeout and then
+    failed with RoomBindingTimeout."""
+    terrarium = make_terrarium(
+        config=_venue_config("bars", "fiber"),
+        boot_config=BootConfig(room_name="VENUE", bit_name="RoomCapableBit",
+                               room_setup_timeout=0.2))
+    terrarium.simulator_factory = None
+    assert terrarium.load_room("VENUE") is None
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert terrarium.room.bound == {}
+
+
+def test_an_artnet_covered_fixture_never_spawns_a_simulator():
+    spawned = []
+    terrarium = make_terrarium(
+        config=_venue_config("bars", "fiber"),
+        simulator_factory=_spy_factory(spawned),
+        boot_config=BootConfig(room_name="VENUE", bit_name="RoomCapableBit",
+                               array_backend="simulator",
+                               room_setup_timeout=0.2))
+    assert terrarium.load_room("VENUE") is None
+    assert spawned == []
+    assert terrarium.room.bound == {}
+
+
+def test_an_uncovered_fixture_still_binds_beside_a_covered_one():
+    spawned = []
+    terrarium = make_terrarium(
+        config=_venue_config("bars"),
+        simulator_factory=_spy_factory(spawned),
+        boot_config=BootConfig(room_name="VENUE", bit_name="RoomCapableBit",
+                               array_backend="simulator",
+                               room_setup_timeout=0.2))
+    assert terrarium.load_room("VENUE") is None
+    assert spawned == ["fiber"]
+    assert terrarium.room.bound == {"fiber": "sim-fiber-dev"}
+
+
+def test_an_uncovered_fixture_with_nothing_to_bind_still_times_out():
+    """Coverage of one fixture must not mask a Room where nothing at all
+    drives the other: with no factory and no output on either fixture the
+    load still fails, exactly as before."""
+    terrarium = make_terrarium(
+        config=_venue_config(),
+        boot_config=BootConfig(room_name="VENUE", bit_name="RoomCapableBit",
+                               array_backend="simulator",
+                               room_setup_timeout=0.2))
+    terrarium.simulator_factory = None
+    reason = terrarium.load_room("VENUE")
+    assert reason is not None and "no device joined" in reason
+    assert terrarium.state == TerrariumState.NO_ROOM
