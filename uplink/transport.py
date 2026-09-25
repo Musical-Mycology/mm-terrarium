@@ -1,11 +1,17 @@
 """Transport implementations for the uplink -- the only code that touches
 an actual socket. See design spec section 3.
+
+Every transport offers what UplinkAgent needs from a connection to
+fairyring: `connected`, `connect()`, `send(msg)` and a non-blocking
+`receive()` that returns None when nothing is waiting. `durable` is True
+when a send() that returns without raising has left the box on a real
+socket; the agent replays and trims its journal only then (spec
+2026-09-13 section 6.3).
 """
 
 import json
 import logging
 from collections import deque
-from typing import Protocol
 
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect as ws_connect
@@ -13,29 +19,6 @@ from websockets.sync.client import connect as ws_connect
 from control.wire_json import dumps as _json_dumps
 
 logger = logging.getLogger(__name__)
-
-
-class Transport(Protocol):
-    """What UplinkAgent needs from a connection to fairyring. Non-blocking:
-    receive() returns None immediately when there's nothing waiting.
-    """
-
-    connected: bool
-    # True when a send() that returns without raising has left the box on
-    # a real socket; the agent replays and trims its journal only then
-    # (spec 2026-09-13 section 6.3).
-    durable: bool
-
-    def connect(self) -> None:
-        """Establish (or re-establish) the connection."""
-
-    def send(self, msg: dict) -> None:
-        """Send one message. Callers are expected to check `connected`
-        first -- behavior when disconnected is implementation-defined."""
-
-    def receive(self) -> dict | None:
-        """Return the next queued inbound message, or None if none
-        waiting."""
 
 
 class FakeTransport:

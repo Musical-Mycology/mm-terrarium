@@ -2374,7 +2374,7 @@ enumerate, configure, and launch Bits without importing their code first.
   seconds, transport, default join role, `[launch.nodes]` role->join-node
   map), `[start]` (start condition — see below), `[console]` (display name,
   notes), `[results]` (declarative result keys), and the Bit-specific
-  `[rhythm]`/`[ambient]` blocks. `merge_overrides` re-validates after
+  `[rhythm]` block. `merge_overrides` re-validates after
   applying CLI/profile overrides — an override can't silently produce an
   invalid config; it fails the same way a bad manifest would.
 - **`Bit(config)` + `GameServer.load_bit(name, config=None)`.** The engine

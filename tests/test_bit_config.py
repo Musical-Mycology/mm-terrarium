@@ -64,7 +64,7 @@ def test_minimal_manifest_fills_defaults():
     assert cfg.identity.kind == "game"
     assert cfg.launch.room_types == ("TEST",)
     assert cfg.start.when == "immediate"
-    assert cfg.rhythm is None and cfg.ambient is None
+    assert cfg.rhythm is None
     assert cfg.join_node() is None
 
 

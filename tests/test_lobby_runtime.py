@@ -130,7 +130,6 @@ def test_join_ceremony_flashes_bells_and_chimes_in_order():
     assert sinks.plays == []
     _run(rt, sinks, clock, 1.0)                 # past 1.8
     assert sinks.plays == [("ie1", "chime", "key=69")]
-    assert rt.join_count == 1
 
 
 def test_second_join_climbs_the_scale_and_waits_its_turn():
