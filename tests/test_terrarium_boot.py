@@ -15,6 +15,7 @@ from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
+from tests.fakes import FakeAgent, FakeArco
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium import TerrariumState
@@ -616,33 +617,23 @@ def test_wait_in_setup_polls_for_the_requested_window():
     join before run() closes it."""
     from harness.terrarium_boot import _wait_in_setup
 
-    polls = []
-
-    class FakeAgent:
-        def poll(self):
-            polls.append(1)
-
+    agent = FakeAgent()
     ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
-    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+    reason = _wait_in_setup(agent, 1.0, clock=lambda: next(ticks),
                             sleep=lambda _s: None)
     assert reason == "expired"
-    assert len(polls) >= 3
+    assert agent.polls >= 3
 
 
 def test_wait_in_setup_returns_immediately_when_not_requested():
     """Default 0 preserves the existing load-straight-into-run behavior."""
     from harness.terrarium_boot import _wait_in_setup
 
-    polls = []
-
-    class FakeAgent:
-        def poll(self):
-            polls.append(1)
-
-    reason = _wait_in_setup(FakeAgent(), 0.0, clock=lambda: 0.0,
+    agent = FakeAgent()
+    reason = _wait_in_setup(agent, 0.0, clock=lambda: 0.0,
                             sleep=lambda _s: None)
     assert reason == "expired"
-    assert polls == []
+    assert agent.polls == 0
 
 
 def test_wait_in_setup_drains_arco_every_iteration():
@@ -651,18 +642,6 @@ def test_wait_in_setup_drains_arco_every_iteration():
     tee 11 minutes after spawn, static o2debug.log, no drone at RUNNING).
     Every loop that holds while Arco is alive must drain Arco's pty."""
     from harness.terrarium_boot import _wait_in_setup
-
-    class FakeAgent:
-        def poll(self):
-            pass
-
-    class FakeArco:
-        def __init__(self):
-            self.polls = 0
-
-        def poll(self):
-            self.polls += 1
-            return None                      # still running
 
     ticks = iter([0.0, 0.1, 0.2, 0.3, 0.4, 1.1, 1.2])
     arco = FakeArco()
@@ -678,10 +657,6 @@ def test_wait_in_setup_returns_state_changed_when_the_engine_leaves_setup():
     InvalidTransition killed the harness. The hold must yield instead."""
     from control.state import State
     from harness.terrarium_boot import _wait_in_setup
-
-    class FakeAgent:
-        def poll(self):
-            pass
 
     class FakeGs:
         def __init__(self):
@@ -704,10 +679,6 @@ def test_wait_in_setup_returns_state_changed_when_the_engine_leaves_setup():
 def test_wait_in_setup_yields_on_abort_too():
     from control.state import State
     from harness.terrarium_boot import _wait_in_setup
-
-    class FakeAgent:
-        def poll(self):
-            pass
 
     class FakeGs:
         state = State.IDLE                   # operator aborted instantly
@@ -751,10 +722,6 @@ def test_wait_in_setup_announces_a_bit_swapped_in_by_one_console_poll(
     from harness.terrarium_boot import _wait_in_setup
     from harness import markers
 
-    class FakeAgent:
-        def poll(self):
-            pass
-
     class FakeGs:
         def __init__(self):
             self.state = State.SETUP
@@ -787,10 +754,6 @@ def test_wait_in_setup_swap_detection_is_silent_in_one_shot_mode(capsys):
     from harness.terrarium_boot import _wait_in_setup
     from harness import markers
 
-    class FakeAgent:
-        def poll(self):
-            pass
-
     class FakeGs:
         def __init__(self):
             self.state = State.SETUP
@@ -810,10 +773,6 @@ def test_wait_in_setup_swap_detection_is_silent_in_one_shot_mode(capsys):
 
 def test_wait_in_setup_prints_a_countdown(capsys):
     from harness.terrarium_boot import _wait_in_setup
-
-    class FakeAgent:
-        def poll(self):
-            pass
 
     t = {"now": 0.0}
 
@@ -840,17 +799,12 @@ def test_wait_in_setup_exits_early_when_the_parent_is_gone(monkeypatch):
 
     monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
                         lambda pid: True)
-    polls = []
-
-    class FakeAgent:
-        def poll(self):
-            polls.append(1)
-
+    agent = FakeAgent()
     ticks = iter([0.0, 0.1, 0.2, 5.0])
-    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+    reason = _wait_in_setup(agent, 1.0, clock=lambda: next(ticks),
                             sleep=lambda _s: None, parent_pid=111)
     assert reason == "parent-gone"
-    assert polls == []          # returned before ever polling the agent
+    assert agent.polls == 0          # returned before ever polling the agent
 
 
 def test_wait_in_setup_ignores_a_live_parent():
@@ -878,10 +832,6 @@ def test_wait_in_setup_returns_players_met_when_threshold_crossed():
     and `game_server` through this loop."""
     from control.bit_config import StartCondition
     from harness.terrarium_boot import _wait_in_setup
-
-    class FakeAgent:
-        def poll(self):
-            pass
 
     class FakeRole:
         scored = True
@@ -936,16 +886,6 @@ def test_serve_until_done_stops_when_the_bit_completes():
             if self.ticks >= 3:
                 self.state = State.IDLE
 
-    class FakeAgent:
-        closing = 0
-
-        def poll(self):
-            pass
-
-    class FakeArco:
-        def poll(self):
-            return None
-
     reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
                                sleep=lambda _s: None)
     assert reason == "completed"
@@ -969,16 +909,6 @@ def test_serve_until_done_reports_restart():
             if self.ticks >= 3:
                 self.state = State.LOADED     # a restart landed mid-poll
 
-    class FakeAgent:
-        closing = 0
-
-        def poll(self):
-            pass
-
-    class FakeArco:
-        def poll(self):
-            return None
-
     reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
                                sleep=lambda _s: None)
     assert reason == "restarted"
@@ -995,17 +925,7 @@ def test_serve_until_done_stops_when_arco_dies():
         def tick(self, dt):
             pass
 
-    class FakeAgent:
-        closing = 0
-
-        def poll(self):
-            pass
-
-    class FakeArco:
-        def poll(self):
-            return 1                      # exited
-
-    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(returncode=1),
                                sleep=lambda _s: None)
     assert reason == "arco-exited"
 
@@ -1029,18 +949,10 @@ def test_serve_until_done_stops_when_the_parent_is_gone(monkeypatch):
         def tick(self, dt):
             raise AssertionError("must not tick once the parent is gone")
 
-    class FakeAgent:
-        closing = 0
-
-        def poll(self):
-            raise AssertionError("must not poll once the parent is gone")
-
-    class FakeArco:
-        def poll(self):
-            return None
-
-    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
-                               sleep=lambda _s: None, parent_pid=111)
+    reason = _serve_until_done(
+        FakeGS(),
+        FakeAgent(poll_error=AssertionError("must not poll once the parent is gone")),
+        FakeArco(), sleep=lambda _s: None, parent_pid=111)
     assert reason == "parent-gone"
 
 
@@ -1067,10 +979,6 @@ def test_serve_until_done_lets_closing_devices_finish_their_fade():
             if self.polls >= 4:
                 self.closing = 0
 
-    class FakeArco:
-        def poll(self):
-            return None
-
     agent = FakeAgent()
     _serve_until_done(FakeGS(), agent, FakeArco(), sleep=lambda _s: None)
     assert agent.closing == 0
@@ -1091,22 +999,15 @@ def test_room_down_mid_run_returns_no_room_not_arco_exited():
         def tick(self, dt):
             raise AssertionError("must not tick once the room is down")
 
-    class FakeAgent:
-        closing = 0
-
-        def poll(self):
-            raise AssertionError("must not poll once the room is down")
-
-    class FakeArco:
-        def poll(self):
-            return 1                      # dead process too
-
     class FakeTerrarium:
         state = TerrariumState.NO_ROOM
 
-    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
-                               sleep=lambda _s: None,
-                               terrarium=FakeTerrarium())
+    reason = _serve_until_done(
+        FakeGS(),
+        FakeAgent(poll_error=AssertionError("must not poll once the room is down")),
+        FakeArco(returncode=1),                      # dead process too
+        sleep=lambda _s: None,
+        terrarium=FakeTerrarium())
     assert reason == "no-room"
 
 
@@ -1125,18 +1026,6 @@ class _FakeBit:
     def __init__(self, config, role_table=None):
         self.config = config
         self.role_table = role_table
-
-
-class _FakeArco:
-    def poll(self):
-        return None
-
-
-class _FakeAgent:
-    closing = 0
-
-    def poll(self):
-        pass
 
 
 class _FakeConsoleAgent:
@@ -1222,7 +1111,7 @@ def test_serve_rounds_cycles_idle_load_run_idle(monkeypatch, capsys):
     monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
                         fake_parent_is_gone)
 
-    reason = _serve_rounds(gs, _FakeAgent(), _FakeArco(),
+    reason = _serve_rounds(gs, FakeAgent(), FakeArco(),
                            console_agent=console_agent)
 
     assert reason == "parent-gone"
@@ -1307,7 +1196,7 @@ def test_serve_rounds_honors_players_condition_per_round(monkeypatch):
     monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
                         fake_parent_is_gone)
 
-    reason = _serve_rounds(gs, _FakeAgent(), _FakeArco(),
+    reason = _serve_rounds(gs, FakeAgent(), FakeArco(),
                            console_agent=console_agent)
 
     assert reason == "parent-gone"
@@ -1353,7 +1242,7 @@ def test_serve_rounds_does_not_reannounce_a_bit_already_loaded_on_entry(
     orig = tb.parent_is_gone
     tb.parent_is_gone = fake_parent_is_gone
     try:
-        reason = _serve_rounds(gs, _FakeAgent(), _FakeArco())
+        reason = _serve_rounds(gs, FakeAgent(), FakeArco())
     finally:
         tb.parent_is_gone = orig
 
@@ -1435,7 +1324,7 @@ def test_round_end_never_touches_the_room(monkeypatch, capsys):
                         fake_parent_is_gone)
 
     calls = []
-    reason = _serve_rounds(gs, _FakeAgent(), _FakeArco(),
+    reason = _serve_rounds(gs, FakeAgent(), FakeArco(),
                            console_agent=console_agent, terrarium=terrarium)
 
     assert reason == "parent-gone"
@@ -1459,11 +1348,10 @@ def test_wait_for_load_returns_loaded_immediately_when_not_idle():
         def tick(self, dt):
             raise AssertionError("must not tick when already loaded")
 
-    class FakeAgent:
-        def poll(self):
-            raise AssertionError("must not poll when already loaded")
-
-    reason = _wait_for_load(FakeGS(), FakeAgent(), _FakeArco())
+    reason = _wait_for_load(
+        FakeGS(),
+        FakeAgent(poll_error=AssertionError("must not poll when already loaded")),
+        FakeArco())
     assert reason == "loaded"
 
 
@@ -2029,11 +1917,9 @@ def test_wait_for_room_ready_returns_immediately_when_already_ready():
     class FakeTerrarium:
         state = TerrariumState.ROOM_READY
 
-    class FakeAgent:
-        def poll(self):
-            raise AssertionError("must not poll when already ready")
-
-    reason = _wait_for_room_ready(FakeAgent(), FakeTerrarium())
+    reason = _wait_for_room_ready(
+        FakeAgent(poll_error=AssertionError("must not poll when already ready")),
+        FakeTerrarium())
     assert reason == "ready"
 
 
@@ -2054,13 +1940,6 @@ def test_wait_for_room_ready_polls_until_a_console_load_room_lands():
             self.state = TerrariumState.NO_ROOM
 
     terrarium = FakeTerrarium()
-
-    class FakeAgent:
-        def __init__(self):
-            self.polls = 0
-
-        def poll(self):
-            self.polls += 1
 
     class FakeConsoleAgent:
         """Stands in for a scripted console `load_room` command: on its
@@ -2096,10 +1975,6 @@ def test_wait_for_room_ready_exits_when_the_parent_is_gone(monkeypatch):
     class FakeTerrarium:
         state = TerrariumState.NO_ROOM
 
-    class FakeAgent:
-        def poll(self):
-            pass
-
     monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
                         lambda pid: True)
 
@@ -2122,16 +1997,12 @@ def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
     class FakeTerrarium:
         def __init__(self):
             self.state = TerrariumState.ROOM_READY
-            self.arco = _FakeArco()
+            self.arco = FakeArco()
 
     class FakeGS:
         state = State.IDLE
 
         def tick(self, dt):
-            pass
-
-    class FakeAgent:
-        def poll(self):
             pass
 
     terrarium = FakeTerrarium()
@@ -2175,16 +2046,12 @@ def test_serve_roomless_stops_clients_on_no_room(monkeypatch):
     class FakeTerrarium:
         def __init__(self):
             self.state = TerrariumState.ROOM_READY
-            self.arco = _FakeArco()
+            self.arco = FakeArco()
 
     class FakeGS:
         state = State.IDLE
 
         def tick(self, dt):
-            pass
-
-    class FakeAgent:
-        def poll(self):
             pass
 
     terrarium = FakeTerrarium()
@@ -2229,7 +2096,7 @@ def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
     class FakeTerrarium:
         def __init__(self):
             self.state = TerrariumState.ROOM_READY
-            self.arco = _FakeArco()
+            self.arco = FakeArco()
             self.unload_calls = 0
 
         def unload_room(self, force=False):
@@ -2239,10 +2106,6 @@ def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
         state = State.IDLE
 
         def tick(self, dt):
-            pass
-
-    class FakeAgent:
-        def poll(self):
             pass
 
     terrarium = FakeTerrarium()
@@ -2287,16 +2150,12 @@ def test_serve_roomless_skips_restart_when_recycle_already_succeeded(
     class FakeTerrarium:
         def __init__(self):
             self.state = TerrariumState.ROOM_READY
-            self.arco = _FakeArco()
+            self.arco = FakeArco()
 
     class FakeGS:
         state = State.IDLE
 
         def tick(self, dt):
-            pass
-
-    class FakeAgent:
-        def poll(self):
             pass
 
     terrarium = FakeTerrarium()
@@ -2339,7 +2198,7 @@ def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
     class FakeTerrarium:
         def __init__(self):
             self.state = TerrariumState.ROOM_READY
-            self.arco = _FakeArco()
+            self.arco = FakeArco()
             self.unload_calls = []
 
         def unload_room(self, force=False):
@@ -2350,10 +2209,6 @@ def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
         state = State.IDLE
 
         def tick(self, dt):
-            pass
-
-    class FakeAgent:
-        def poll(self):
             pass
 
     terrarium = FakeTerrarium()
@@ -2494,12 +2349,10 @@ def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
         def poll(self):
             raise AssertionError("must not poll arco past the no-room check")
 
-    class FakeAgent:
-        def poll(self):
-            raise AssertionError("must not poll past the no-room check")
-
-    reason = _wait_for_load(FakeGS(), FakeAgent(), FakeArco(),
-                            terrarium=FakeTerrarium())
+    reason = _wait_for_load(
+        FakeGS(),
+        FakeAgent(poll_error=AssertionError("must not poll past the no-room check")),
+        FakeArco(), terrarium=FakeTerrarium())
     assert reason == "no-room"
 
 
@@ -3349,11 +3202,7 @@ def test_serve_until_done_polls_the_terrariums_arco_not_a_stale_handle():
     the loop must poll the NEW handle from the next iteration on."""
     from harness.terrarium_boot import _serve_until_done
 
-    class Arco:
-        def __init__(self): self.polls = 0; self.exit = None
-        def poll(self): self.polls += 1; return self.exit
-
-    old, new = Arco(), Arco()
+    old, new = FakeArco(), FakeArco()
 
     class T:
         state = TerrariumState.ROOM_READY
@@ -3363,10 +3212,6 @@ def test_serve_until_done_polls_the_terrariums_arco_not_a_stale_handle():
         state = State.RUNNING
         def tick(self, dt): pass
 
-    class Agent:
-        closing = 0
-        def poll(self): pass
-
     class Console:
         def __init__(self): self.n = 0
         def poll(self):
@@ -3374,9 +3219,9 @@ def test_serve_until_done_polls_the_terrariums_arco_not_a_stale_handle():
             if self.n == 2:
                 T.arco = new            # the switch
             if self.n == 4:
-                new.exit = 0            # the NEW Arco exits
+                new.returncode = 0            # the NEW Arco exits
 
-    reason = _serve_until_done(GS(), Agent(), old, console_agent=Console(),
+    reason = _serve_until_done(GS(), FakeAgent(), old, console_agent=Console(),
                                terrarium=T(), sleep=lambda _s: None)
     assert reason == "arco-exited"
     assert new.polls >= 1
@@ -3563,10 +3408,6 @@ def test_wait_in_setup_holds_without_a_deadline_for_an_admin_start():
     from control.bit_config import StartCondition
     from harness.terrarium_boot import _wait_in_setup
 
-    class FakeAgent:
-        def poll(self):
-            pass
-
     class GS:
         state = State.SETUP
         bit_name = "X"
@@ -3742,10 +3583,6 @@ def test_wait_in_setup_pumps_the_uplink():
     from harness.terrarium_boot import _wait_in_setup
     pumps = []
 
-    class FakeAgent:
-        def poll(self):
-            pass
-
     class Up:
         def maintain_connection(self):
             pumps.append("m")
@@ -3782,18 +3619,13 @@ def test_wait_in_setup_paces_each_iteration_with_the_pacer():
     (harness/tick_pacer.py) instead."""
     from harness.terrarium_boot import _wait_in_setup
 
-    polls = []
-
-    class FakeAgent:
-        def poll(self):
-            polls.append(1)
-
+    agent = FakeAgent()
     pacer, sleeps = _CountingPacer(), []
     ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
-    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+    reason = _wait_in_setup(agent, 1.0, clock=lambda: next(ticks),
                             sleep=_no_fixed_sleep(sleeps), pacer=pacer)
     assert reason == "expired"
-    assert pacer.waits == len(polls) == 3
+    assert pacer.waits == agent.polls == 3
     assert sleeps == []
 
 
@@ -3810,14 +3642,8 @@ def test_serve_until_done_paces_each_iteration_with_the_pacer():
             if self.ticks >= 3:
                 self.state = State.IDLE
 
-    class FakeAgent:
-        closing = 0
-
-        def poll(self):
-            pass
-
     pacer, sleeps = _CountingPacer(), []
-    reason = _serve_until_done(FakeGS(), FakeAgent(), _FakeArco(),
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
                                sleep=_no_fixed_sleep(sleeps), pacer=pacer)
     assert reason == "completed"
     assert pacer.waits == 2              # no wait after the completing tick
@@ -3837,12 +3663,8 @@ def test_wait_for_load_paces_each_iteration_with_the_pacer():
             if self.ticks >= 3:
                 self.state = State.LOADED
 
-    class FakeAgent:
-        def poll(self):
-            pass
-
     pacer, sleeps = _CountingPacer(), []
-    reason = _wait_for_load(FakeGS(), FakeAgent(), _FakeArco(),
+    reason = _wait_for_load(FakeGS(), FakeAgent(), FakeArco(),
                             sleep=_no_fixed_sleep(sleeps), pacer=pacer)
     assert reason == "loaded"
     assert pacer.waits == 2
@@ -3864,14 +3686,8 @@ def test_the_default_pacer_routes_through_the_loops_sleep_seam():
             if self.ticks >= 3:
                 self.state = State.IDLE
 
-    class FakeAgent:
-        closing = 0
-
-        def poll(self):
-            pass
-
     sleeps = []
-    reason = _serve_until_done(FakeGS(), FakeAgent(), _FakeArco(),
+    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
                                sleep=_no_fixed_sleep(sleeps))
     assert reason == "completed"
     # Two paced waits, both through the injected seam. (With a no-op sleep
