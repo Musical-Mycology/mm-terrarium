@@ -3880,3 +3880,41 @@ def test_the_default_pacer_routes_through_the_loops_sleep_seam():
     # only positivity is asserted, not the value.)
     assert len(sleeps) == 2
     assert all(s > 0 for s in sleeps)
+
+
+def test_build_spawns_no_simulator_for_an_artnet_covered_fixture():
+    """The shipped entry point always declares array_backend="simulator"
+    and always hands the Terrarium an _O2SimulatorFactory. A fixture with
+    an [[artnet]] output must still get no simulator process (spec
+    2026-09-25-artnet-fixture-no-simulator)."""
+    pytest.importorskip("luxaeterna")
+    from control.terrarium_config import ArtNetOutput, TerrariumConfig
+    import dataclasses
+    from tests.test_terrarium import DEMO_SPEC
+    # [[artnet]] fixtures are RGBW (validate_artnet_outputs); the shared
+    # DEMO_SPEC is GRB, so give the sink a real RGBW fixture.
+    rgbw = dataclasses.replace(DEMO_SPEC.profile.fixtures[0],
+                               color_order="RGBW")
+    demo = dataclasses.replace(DEMO_SPEC, profile=dataclasses.replace(
+        DEMO_SPEC.profile, fixtures=(rgbw,)))
+    terrarium_config = TerrariumConfig(
+        schema=1, name="t", bit_paths=(), rooms={"DEMO": demo},
+        version="v", artnet_outputs=(ArtNetOutput(
+            room="DEMO", fixture="array", host="127.0.0.1", port=1,
+            max_amps=1.0),))
+    sim_popen = FakePopen()
+    config = BootConfig(room_name=None, bit_name="TestBit",
+                        array_backend="simulator")
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), room_spec=None,
+        terrarium_config=terrarium_config, transport=_fake_transport(),
+        clock=time.monotonic, arco_process_cls=_fake_arco,
+        simulator_popen=sim_popen, room_audio=_fake_room_audio())
+    try:
+        assert terrarium.load_room("DEMO") is None
+        assert sim_popen.commands == []
+        assert terrarium.room.bound == {}
+    finally:
+        terrarium.unload_room(force=True)
+        teardown.close()

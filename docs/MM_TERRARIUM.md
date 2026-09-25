@@ -5157,38 +5157,96 @@ backend" for DEMO. Design:
 - **No physical LED has been driven yet.** Everything above is verified
   against `harness/artnet_listen.py` and loopback UDP only. The spec's
   section 9 hardware bring-up checklist is entirely pending.
-- **Bring-up prerequisite: the shipped entry point always ALSO spawns a
-  WebSim simulator for an `[[artnet]]` fixture.** `harness/terrarium_boot.py`
-  always sets `BootConfig.array_backend="simulator"` for DEMO (see the
-  comment at its `BootConfig(...)` call), and the Terrarium's fast bind path
-  spawns a simulator for every fixture regardless of that Room's own
-  backends. So under this entry point, an `[[artnet]]`-covered fixture
-  BOTH binds a spawned WebSim simulator AND receives real Art-Net frames --
-  it also gets the simulator's 3456-channel `/leds` frames over O2 in
-  addition to Art-Net. `control/terrarium_config.py`'s `validate_rooms`
-  only reaches its `[[artnet]]`-coverage branch (loading an array-backed
-  Room on `[[artnet]]` coverage alone, with no simulator) when
-  `array_backend_configured` is False, i.e. `BootConfig.array_backend is
-  None` -- never true under `harness/terrarium_boot.py`. A follow-up should
-  skip spawning the simulator for a fixture that already has `[[artnet]]`
-  coverage before hardware bring-up proceeds: the spec's section 9 step 4
-  "unbound array fixture" mute test assumes the array fixture has no
-  simulator competing with it.
-- **Bring-up prerequisite: the Console cannot target or show the mute state
-  of an unbound fixture.** `console/static/functions.js`'s
-  `fillDevicePicker` only lists devices that have joined (`fnDevices`, fed
-  by `onDevicesChanged`) plus, for a SURFACE-targeted picker, an "All"
-  catch-all option; an unbound `[[artnet]]` fixture never appears as its
-  own device-picker entry, so an operator can reach it only through "All",
-  and there is nowhere in the UI showing whether that unbound fixture is
-  currently muted. This needs a fix before a multi-fixture venue Room asks
-  an operator to manage individual fixtures by name.
+- ~~**Bring-up prerequisite: the shipped entry point always ALSO spawns a
+  WebSim simulator for an `[[artnet]]` fixture.**~~ **Closed 2026-09-25**
+  ([`.../2026-09-25-artnet-fixture-no-simulator-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-artnet-fixture-no-simulator-design.md)).
+  `control/terrarium_config.py`'s `artnet_fixtures(config, room)` names a
+  Room's covered fixtures, and `Terrarium.load_room` hands that set as
+  `skip` to both `_bind_room_fast_path` (no simulator spawn, no reconnect
+  to a recorded binding) and `wait_for_room_binding` (never armed, never
+  waited for). A covered fixture stays out of `room.bound`, so DEMO's
+  `array` is genuinely unbound under `harness/terrarium_boot.py` even
+  though that entry point still declares `array_backend="simulator"`, and
+  the spec section 9 step 4 unbound-fixture mute test now hits an unbound
+  fixture. A covered fixture counts as driven: `RoomBindingTimeout` fires
+  only for a Room with no covered fixture and nothing bound, so an
+  all-Art-Net Room loads with no wait. That also fixed a latent defect:
+  the `array_backend=None` path `validate_rooms` admits on coverage alone
+  used to time out in `wait_for_room_binding` ("no device joined as DEMO
+  Room") because nothing could ever bind `array`. Uncovered fixtures, and
+  boxes with no `[[artnet]]`, are unchanged. **MEASURED 2026-09-25, a
+  dev-box figure:** live `run_stack --no-bit --room DEMO` against a real
+  Arco, with a scratch `[[artnet]]` entry at `127.0.0.1:16454` and
+  `python -m harness.artnet_listen --port 16454 --pixels 864` receiving,
+  logged `Room DEMO: fixture(s) ['array'] driven by [[artnet]]; no
+  simulator, no device bound`, spawned no simulator process, and received
+  **~34-40 fps, 0 sequence gaps, 0 bad packets**.
+- **(Closed 2026-09-25) Bring-up prerequisite: the Console could not target
+  or show the mute state of an unbound fixture.** See *Console fixture
+  targets and fixture mute state (2026-09-25)* below.
+- **Still open: the Console's `ArmRoomCommand` (`console/agent.py`) arms
+  any fixture name without checking `[[artnet]]` coverage** (found by the
+  2026-09-25 no-simulator follow-up's final review), so an operator who arms
+  `array` and taps would bind a device to an Art-Net fixture, giving it a
+  `DeviceLinkSink` alongside its Art-Net output (contrary to the parent
+  spec's D2). A follow-up should refuse arming a fixture in
+  `artnet_fixtures(config, room)`. The Console fixture-targets slice below
+  does not change arming.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2662 passed, 1 skipped** (the final-review fix wave, commit `efe21c9`,
 added 3 tests);
 `.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
 generated diagrams current.
+
+**Test baseline after the 2026-09-25 no-simulator follow-up:** `.venv/bin/python -m pytest tests -q` -> **2673 passed, 1 skipped**.
+
+### `console/static/functions.js`, `surface.js`, `control/room_view.py` -- Console fixture targets and fixture mute state (2026-09-25)
+Closes the Console bring-up prerequisite above. Design:
+[`.../2026-09-25-console-fixture-targets-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-console-fixture-targets-design.md).
+
+- **Every declared fixture is a named picker target, bound or not.** SURFACE
+  and Diagnostics pickers list All, then each fixture in profile order
+  (value `@fixture:<name>`, label `<name> (<dev>)` or `<name> (unbound)`,
+  plus ` (muted)`), then only devices NOT bound to a fixture: a bound
+  fixture's device is reached as its fixture, never as a second row.
+  DEVICE pickers are unchanged and still never offer a fixture.
+- **Fixture rows come from the Room payload, signature-gated.**
+  `functions.js` reads `room.fixtures[]` off `snapshot`/`room_changed` and
+  refills pickers only when a fixture's `(name, dev, muted)` changes;
+  `room_changed` fires on every live controller value, and an unconditional
+  refill would close an open `<select>` under the operator.
+- **A picker keeps a selected device's row when that device binds to a
+  fixture.** Losing the selection to the `@all` fallback would leave
+  Fire/Stop enabled on the wrong, broader target (one Stop would then mute
+  every surface), so a refill maps the previous value to its fixture row
+  before giving up: first via the device list's own `fixture` field, then
+  via the fixture list's `dev`, covering either arrival order between
+  `devices_changed` and `room_changed`.
+- **`functions.js` holds each row's picker by reference**
+  (`currentDeviceTargets`), the same pattern `diagPicker` uses, rather than
+  re-looking it up by id on refill: a refill must mutate the exact node the
+  row owns.
+- **Engine.** `_resolve_target` resolves a SURFACE `@fixture:` dev through
+  `_resolve_devs`, so a fire at a bound fixture lands on (and
+  `FunctionFired.devs` reports) its dev; `fire_function` refuses a token
+  naming no declared fixture (`no fixture '<name>' in Room '<room>'`) or
+  any token with no Room loaded.
+- **Wire, additive.** `room.fixtures[i].muted` (`gs.is_muted(fixture_dev(
+  name))`, computed in `ConsoleAgent._current_room`; `room_view.py` stays
+  engine-free and takes the muted NAMES) and a
+  `surface_instruments["@fixture:<name>"]` key per declared fixture, so
+  compatibility and Diagnostics buttons work for an unbound fixture.
+- **Room panel.** Each fixture head carries a `Muted` chip after its
+  binding controls, toggled in place via `hidden`, outside `bindStateKey`:
+  a mute change never rebuilds the head, so an armed Release confirm-tap
+  survives it (pinned by `tests/js/fixture_mute_chip.test.js`).
+- **Not verified live.** Offline suite only; no Console session against a
+  real Arco or Art-Net fixture has exercised this yet.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2692 passed, 1 skipped** (on top of the no-simulator follow-up's
+2673).
 
 ### `harness/tick_pacer.py` -- the 44 Hz tick paced to deadlines (2026-09-25)
 
@@ -5258,7 +5316,8 @@ send path; the listener timed arrival.
   loop.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**2675 passed, 1 skipped**.
+**2705 passed, 1 skipped** (merged on top of the Console fixture-targets
+slice's 2692).
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -5834,13 +5893,11 @@ Kept explicit so the doc doesn't over-claim:
   (`harness/room_simulator.py`, `harness/o2_shroom.py`); nothing implements
   the same seam against actual Tuneshroom hardware yet. **No hardware
   exists** still applies (see that entry above) until the bring-up
-  checklist is run. Two bring-up prerequisites, both described in the
+  checklist is run. One bring-up prerequisite remains, described in the
   *`devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture name,
-  native RGBW* entry above: (1) `harness/terrarium_boot.py` always spawns a
-  WebSim simulator alongside any `[[artnet]]` fixture, so a follow-up must
-  skip that simulator for `[[artnet]]`-covered fixtures first; (2) the
-  Console's device picker cannot target or show the mute state of an
-  unbound fixture, which a multi-fixture venue Room will need.
+  native RGBW* entry above (the simulator-alongside-`[[artnet]]` one closed
+  2026-09-25): the Console's device picker cannot target or show the mute
+  state of an unbound fixture, which a multi-fixture venue Room will need.
 - ~~**Nothing drives the Room's light during a live run.**~~ **Closed
   2026-08-14** by `Bit.cues(at)` (see the `Bit` interface bullet above);
   `TestBit`'s implementation and its live confirmation are described in the

@@ -10,6 +10,7 @@ import time
 
 from console import protocol
 from control.bit_config import ManifestError
+from control.cues import fixture_dev
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.lobby import TERRARIUM_ADMIN
 from control.roles import RoleClass
@@ -750,7 +751,11 @@ class ConsoleAgent:
                     "room controllers source raised; reporting no live values")
                 controllers = {}
         urls = self._canvas_urls() if self._canvas_urls else {}
-        return room_view(gs.room, profile, role, controllers, urls)
+        # By fixture token, so an unbound fixture's mute shows too
+        # (GameServer.is_muted canonicalizes a bound dev to the same key).
+        muted = {f.name for f in profile.fixtures
+                 if gs.is_muted(fixture_dev(f.name))}
+        return room_view(gs.room, profile, role, controllers, urls, muted)
 
     def _broadcast_room_if_changed(self) -> None:
         room = self._current_room()
@@ -815,7 +820,8 @@ class ConsoleAgent:
         return instrument_functions_view(self._present_instruments())
 
     def _current_surface_instruments(self) -> dict:
-        """dev -> instrument name, for every bound Room fixture and every
+        """dev -> instrument name, for every declared Room fixture (keyed by
+        its `@fixture:<name>` token), every bound fixture's dev, and every
         connected device: a bound fixture's dev maps to that fixture's
         instrument, and every other connected device maps to its carried
         instrument (TUNESHROOM's name when uncarried)."""
@@ -830,6 +836,12 @@ class ConsoleAgent:
         room_binding = (self.terrarium.room_binding if self.terrarium is not None
                        else gs.room_binding)
         out: dict[str, str] = {}
+        if gs.room is not None:
+            # Every declared fixture by its @fixture: token, bound or not:
+            # the Console's pickers offer fixtures by name, so an unbound
+            # fixture needs an instrument to check compatibility against.
+            for fixture in gs.room.profile.fixtures:
+                out[fixture_dev(fixture.name)] = fixture.instrument.name
         if gs.room is not None and room_binding is not None:
             for fixture in gs.room.profile.fixtures:
                 dev = room_binding.bound_device(gs.room.name, fixture.name)

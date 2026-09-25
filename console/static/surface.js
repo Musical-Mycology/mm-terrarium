@@ -36,6 +36,7 @@ let instSummaryMetaEl = null;
 let instMountEl = null;
 let functionsAccEl = null;           // created once, outside the per-fixture rebuild path
 let fixtureElByName = new Map();     // fixture name -> its .fixture wrapper element
+let muteChipByName = new Map();      // fixture name -> its "Muted" chip, toggled in place (rule 1)
 let bindStateByName = new Map();     // fixture name -> last-rendered binding-state key
 let laneTableEl = null;              // <table class="lanes"> inside instMountEl
 let laneRowBySource = new Map();     // lane source ("cc:74") -> its <tr>
@@ -118,6 +119,11 @@ export function _bindCtlFor(name) {
   if (!wrap) return undefined;
   const head = wrap.children[0];
   return head && head.children[1];
+}
+
+// The fixture head's "Muted" chip, so tests can assert it toggles in place.
+export function _muteChipFor(name) {
+  return muteChipByName.get(name);
 }
 
 // -------------------------------------------------------------- painting
@@ -275,14 +281,27 @@ export function instrumentTags(instrument) {
   return row;
 }
 
+// Fills a fixture head: name, binding controls, then the Muted chip. The
+// chip comes AFTER the binding controls so _bindCtlFor (children[1]) is
+// unchanged, and it is shown/hidden in place on every render rather than
+// being part of bindStateKey: a mute change must never rebuild the head
+// and discard an armed Release confirm-tap.
+function fillFixtureHead(head, fixture) {
+  head.appendChild(mk("span", "fixname", fixture.name));
+  head.appendChild(bindingControls(fixture));
+  const chip = mk("span", "chip solid-rose", "Muted");
+  chip.hidden = !fixture.muted;
+  head.appendChild(chip);
+  muteChipByName.set(fixture.name, chip);
+}
+
 function buildFixture(fixture) {
   const wrap = document.createElement("div");
   wrap.className = "fixture";
   wrap.id = `fixture-${fixture.name}`;
 
   const head = mk("div", "fixhead");
-  head.appendChild(mk("span", "fixname", fixture.name));
-  head.appendChild(bindingControls(fixture));
+  fillFixtureHead(head, fixture);
   wrap.appendChild(head);
 
   const blockrows = mk("div", "blockrows");
@@ -545,6 +564,7 @@ function render() {
     lastPaintByName = {};
     lastFrameAt = {};
     armedFixtures.clear();
+    muteChipByName.clear();
     card.appendChild(mk("p", "muted", "No Room configured"));
     return;
   }
@@ -588,6 +608,7 @@ function render() {
       const oldEl = fixtureElByName.get(oldName);
       if (oldEl) oldEl.remove();
       fixtureElByName.delete(oldName);
+      muteChipByName.delete(oldName);
       delete fixtureShapes[oldName];
     }
   }
@@ -614,11 +635,12 @@ function render() {
           const oldHead = existing.children[0];
           if (oldHead) {
             clear(oldHead);
-            oldHead.appendChild(mk("span", "fixname", fixture.name));
-            oldHead.appendChild(bindingControls(fixture));
+            fillFixtureHead(oldHead, fixture);
           }
           bindStateByName.set(fixture.name, nextBindKey);
         }
+        const muteChip = muteChipByName.get(fixture.name);
+        if (muteChip) muteChip.hidden = !fixture.muted;
         // Preserve the canvas list under this fixture's own name.
         if (canvasesByName[fixture.name]) {
           newCanvasesByName[fixture.name] = canvasesByName[fixture.name];

@@ -16,8 +16,11 @@ import * as wire from "./wire.js";
 
 let fnSignature = null;              // JSON of the last-rendered declaration
 const lastFired = {};                // function name -> its last fire record (survives rebuilds)
-let fnDevices = [];                  // {dev, muted, fixture} offered by DEVICE/SURFACE pickers
-let currentDeviceTargets = new Map(); // name -> {target, fn} for rendered SURFACE/DEVICE pickers
+let fnDevices = [];                  // {dev, muted, fixture} from devices_changed; fixture-bound ones are offered as their fixture
+let fnFixtures = [];                 // {name, dev, muted}: declared Room fixtures, profile order
+let fixtureSignature = "[]";         // last fnFixtures applied to the pickers (rule 1 gate)
+const FIXTURE_PREFIX = "@fixture:";  // the engine's fixture token; the only JS speller
+let currentDeviceTargets = new Map(); // name -> {target, fn, picker} for rendered SURFACE/DEVICE pickers
 const cardByName = new Map();        // function name -> its row element (test hook)
 const infoBtnByName = new Map();     // function name -> its (i) button (test hook)
 const fireBtnByName = new Map();     // function name -> its Fire button (test hook)
@@ -76,62 +79,99 @@ export function _diagButton(name) {
 
 // ---------------------------------------------------------- device pickers
 
-// Ported verbatim from the pre-redesign functions.js: preserves the
-// operator's current selection when the live device list changes under it,
-// falling back to the first offered device only when the previous
+// Preserves the operator's current selection when the offered list changes
+// under it, falling back to the first option only when the previous
 // selection is no longer available.
 //
-// withRoom (SURFACE targets, Diagnostics) offers All plus every surface,
-// Room fixtures included. Without it (DEVICE targets: "the firing device")
-// a bound Room fixture is never offered -- it used to be, and as the first
-// option it was the default, so a manual fire meant for a board landed on
-// a strip. With no device connected the picker holds one empty placeholder
-// and the row's Fire button stays disabled (refreshFireButton).
+// withRoom (SURFACE targets, Diagnostics) offers All, then every declared
+// Room fixture BY NAME (value @fixture:<name>, bound or not -- the engine
+// resolves the token to the bound dev), then every device not bound to a
+// fixture (a bound device is already reachable as its fixture). Without it
+// (DEVICE targets: "the firing device") a Room fixture is never offered --
+// it used to be, and as the first option it was the default, so a manual
+// fire meant for a board landed on a strip. With no device connected the
+// picker holds one empty placeholder and the row's Fire button stays
+// disabled (refreshFireButton).
 function fillDevicePicker(picker, withRoom) {
   if (!picker) return;
   const previous = picker.value;
   clear(picker);
   const values = [];
+  const add = (value, text) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    picker.appendChild(option);
+    values.push(value);
+  };
   if (withRoom) {
-    const option = document.createElement("option");
-    option.value = ALL_OPTION;
-    option.textContent = "All";
-    picker.appendChild(option);
-    values.push(ALL_OPTION);
+    add(ALL_OPTION, "All");
+    for (const { name, dev, muted } of fnFixtures) {
+      const base = `${name} (${dev || "unbound"})`;
+      add(FIXTURE_PREFIX + name, muted ? `${base} (muted)` : base);
+    }
   }
-  const offered = withRoom ? fnDevices : fnDevices.filter((d) => !d.fixture);
+  const offered = fnDevices.filter((d) => !d.fixture);
   if (!withRoom && !offered.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "no device joined";
-    picker.appendChild(option);
+    add("", "no device joined");
     picker.value = "";
     return;
   }
-  for (const { dev, muted, fixture } of offered) {
-    const option = document.createElement("option");
-    option.value = dev;
-    const base = fixture ? `${dev} (${fixture})` : dev;
-    option.textContent = muted ? `${base} (muted)` : base;
-    picker.appendChild(option);
-    values.push(dev);
+  for (const { dev, muted } of offered) {
+    add(dev, muted ? `${dev} (muted)` : dev);
   }
-  if (values.indexOf(previous) >= 0) picker.value = previous;
+  if (values.indexOf(previous) >= 0) {
+    picker.value = previous;
+    return;
+  }
+  // The previous selection can vanish because its device just bound to a
+  // fixture (the device row is only listed unbound). Map it to that
+  // fixture's row before giving up and falling back to the first option --
+  // fnDevices goes first because devices_changed can arrive before
+  // room_changed, and fnFixtures covers the reverse arrival order.
+  const byDevice = fnDevices.find((d) => d.dev === previous && d.fixture);
+  const mappedName = byDevice
+    ? byDevice.fixture
+    : (fnFixtures.find((f) => f.dev === previous) || {}).name;
+  const mappedValue = mappedName ? FIXTURE_PREFIX + mappedName : null;
+  if (mappedValue && values.indexOf(mappedValue) >= 0) picker.value = mappedValue;
   else if (values.length) picker.value = values[0];
 }
 
-function onDevicesChanged(devices) {
-  fnDevices = (devices || []).map((d) => (
-    { dev: d.dev, muted: !!d.muted, fixture: d.fixture || null }));
+// A picker value as an operator reads it: a fixture token by its name.
+function targetLabel(value) {
+  return value && value.startsWith(FIXTURE_PREFIX)
+    ? value.slice(FIXTURE_PREFIX.length) : value;
+}
+
+function refillPickers() {
   if (diagPicker) {
     fillDevicePicker(diagPicker, true);
     refreshDiagButtons();
   }
   for (const [name, info] of currentDeviceTargets) {
-    const picker = document.getElementById("functionDev_" + name);
-    fillDevicePicker(picker, info.target === "SURFACE");
-    refreshCardCompatibility(info.fn, picker, cardByName.get(name));
+    fillDevicePicker(info.picker, info.target === "SURFACE");
+    refreshCardCompatibility(info.fn, info.picker, cardByName.get(name));
   }
+}
+
+function onDevicesChanged(devices) {
+  fnDevices = (devices || []).map((d) => (
+    { dev: d.dev, muted: !!d.muted, fixture: d.fixture || null }));
+  refillPickers();
+}
+
+// Rule 1: room_changed fires on every live controller value, so the
+// fixture rows are applied (and pickers refilled) only when a fixture's
+// name, binding or mute state actually changed. Returns whether it did.
+function applyRoomFixtures(room) {
+  const next = ((room && room.fixtures) || []).map((f) => (
+    { name: f.name, dev: f.dev || null, muted: !!f.muted }));
+  const signature = JSON.stringify(next);
+  if (signature === fixtureSignature) return false;
+  fixtureSignature = signature;
+  fnFixtures = next;
+  return true;
 }
 
 // -------------------------------------------------------- instrument compat
@@ -193,7 +233,7 @@ function refreshFireButton(fn, picker, btn) {
     reason = "Join a device first: this trigger targets one device";
   } else if (picker && !isCompatible(fn, picker.value)) {
     const inst = surfaceInstruments[surfaceLookupKey(picker.value)];
-    reason = `Not available on ${picker.value}` +
+    reason = `Not available on ${targetLabel(picker.value)}` +
       (inst ? `: ${inst} has no ${fn.name}` : "");
   }
   btn.disabled = !!reason;
@@ -203,8 +243,7 @@ function refreshFireButton(fn, picker, btn) {
 function refreshAllCardCompatibility() {
   refreshDiagButtons();
   for (const [name, info] of currentDeviceTargets) {
-    refreshCardCompatibility(info.fn, document.getElementById("functionDev_" + name),
-      cardByName.get(name));
+    refreshCardCompatibility(info.fn, info.picker, cardByName.get(name));
   }
 }
 
@@ -413,6 +452,16 @@ function buildRow(fn) {
     fillDevicePicker(picker, fn.target === "SURFACE");
     picker.onchange = () => refreshCardCompatibility(fn, picker, row);
   }
+  // Held directly, the same pattern diagPicker already uses above, rather
+  // than re-looked-up by id: a refill must keep mutating this exact node
+  // regardless of whether its id is still registered, independent of any
+  // getElementById quirk (the node test stub's included -- _dom_stub.js
+  // auto-vivifies a fresh placeholder for an id it has not seen, which a
+  // real browser's getElementById would not do). currentDeviceTargets
+  // carries this reference only for the current rows; the next full
+  // render() replaces both the Map and every row, so a detached picker
+  // is retained no longer than that.
+  row._picker = picker;
   row.appendChild(mk("span", "grow"));
 
   const infoBtn = mk("button", "infobtn", "i");
@@ -475,7 +524,7 @@ function render(list) {
     fnlist.appendChild(row);
     cardByName.set(fn.name, row);
     if (fn.target === "DEVICE" || fn.target === "SURFACE") {
-      currentDeviceTargets.set(fn.name, { target: fn.target, fn });
+      currentDeviceTargets.set(fn.name, { target: fn.target, fn, picker: row._picker });
     }
   }
   return true;
@@ -514,9 +563,13 @@ function onFunctionFired(fired) {
 
 export function init() {
   wire.on("snapshot", (m) => {
+    applyRoomFixtures(m.room);
     onDevicesChanged(m.devices);
     updateInstrumentData(m);
     onFunctionsChanged(m.functions);
+  });
+  wire.on("room_changed", (m) => {
+    if (applyRoomFixtures(m.room)) refillPickers();
   });
   wire.on("functions_changed", (m) => {
     updateInstrumentData(m);
