@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import time
+import types
 from pathlib import Path
 
 from bits.test.test_bit import TestBit
@@ -15,7 +16,7 @@ from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
-from tests.fakes import FakeAgent, FakeArco
+from tests.fakes import FakeAgent, FakeArco, StaticGS, TickingGS
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium import TerrariumState
@@ -658,11 +659,7 @@ def test_wait_in_setup_returns_state_changed_when_the_engine_leaves_setup():
     from control.state import State
     from harness.terrarium_boot import _wait_in_setup
 
-    class FakeGs:
-        def __init__(self):
-            self.state = State.SETUP
-
-    gs = FakeGs()
+    gs = types.SimpleNamespace(state=State.SETUP)
     calls = {"n": 0}
 
     def clock():
@@ -680,11 +677,9 @@ def test_wait_in_setup_yields_on_abort_too():
     from control.state import State
     from harness.terrarium_boot import _wait_in_setup
 
-    class FakeGs:
-        state = State.IDLE                   # operator aborted instantly
-
     reason = _wait_in_setup(FakeAgent(), 10.0, clock=iter(
-        [0.0, 0.1]).__next__, sleep=lambda s: None, gs=FakeGs())
+        [0.0, 0.1]).__next__, sleep=lambda s: None,
+        gs=types.SimpleNamespace(state=State.IDLE))
     assert reason == "state-changed"
 
 
@@ -722,12 +717,7 @@ def test_wait_in_setup_announces_a_bit_swapped_in_by_one_console_poll(
     from harness.terrarium_boot import _wait_in_setup
     from harness import markers
 
-    class FakeGs:
-        def __init__(self):
-            self.state = State.SETUP
-            self.bit_name = "OldBit"
-
-    gs = FakeGs()
+    gs = types.SimpleNamespace(state=State.SETUP, bit_name="OldBit")
 
     reason = _wait_in_setup(FakeAgent(), 10.0, clock=iter(
         [0.0, 0.1]).__next__, sleep=lambda s: None, gs=gs,
@@ -754,12 +744,7 @@ def test_wait_in_setup_swap_detection_is_silent_in_one_shot_mode(capsys):
     from harness.terrarium_boot import _wait_in_setup
     from harness import markers
 
-    class FakeGs:
-        def __init__(self):
-            self.state = State.SETUP
-            self.bit_name = "OldBit"
-
-    gs = FakeGs()
+    gs = types.SimpleNamespace(state=State.SETUP, bit_name="OldBit")
 
     reason = _wait_in_setup(FakeAgent(), 10.0, clock=iter(
         [0.0, 0.1]).__next__, sleep=lambda s: None, gs=gs,
@@ -849,12 +834,8 @@ def test_wait_in_setup_returns_players_met_when_threshold_crossed():
         def counts(self):
             return [("player", self._count, None)]
 
-    class FakeGameServer:
-        def __init__(self):
-            self.bit = FakeBit()
-            self.registration = FakeRegistration(0)
-
-    game_server = FakeGameServer()
+    game_server = types.SimpleNamespace(bit=FakeBit(),
+                                        registration=FakeRegistration(0))
     ticks = iter([0.0, 0.1, 0.2])
 
     def clock():
@@ -876,17 +857,8 @@ def test_serve_until_done_stops_when_the_bit_completes():
     from control.state import State
     from harness.terrarium_boot import _serve_until_done
 
-    class FakeGS:
-        def __init__(self):
-            self.state = State.RUNNING
-            self.ticks = 0
-
-        def tick(self, dt):
-            self.ticks += 1
-            if self.ticks >= 3:
-                self.state = State.IDLE
-
-    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+    reason = _serve_until_done(TickingGS(State.RUNNING, State.IDLE),
+                               FakeAgent(), FakeArco(),
                                sleep=lambda _s: None)
     assert reason == "completed"
 
@@ -899,17 +871,8 @@ def test_serve_until_done_reports_restart():
     from control.state import State
     from harness.terrarium_boot import _serve_until_done
 
-    class FakeGS:
-        def __init__(self):
-            self.state = State.RUNNING
-            self.ticks = 0
-
-        def tick(self, dt):
-            self.ticks += 1
-            if self.ticks >= 3:
-                self.state = State.LOADED     # a restart landed mid-poll
-
-    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+    reason = _serve_until_done(TickingGS(State.RUNNING, State.LOADED),
+                               FakeAgent(), FakeArco(),
                                sleep=lambda _s: None)
     assert reason == "restarted"
 
@@ -919,13 +882,8 @@ def test_serve_until_done_stops_when_arco_dies():
     from control.state import State
     from harness.terrarium_boot import _serve_until_done
 
-    class FakeGS:
-        state = State.RUNNING
-
-        def tick(self, dt):
-            pass
-
-    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(returncode=1),
+    reason = _serve_until_done(StaticGS(State.RUNNING), FakeAgent(),
+                               FakeArco(returncode=1),
                                sleep=lambda _s: None)
     assert reason == "arco-exited"
 
@@ -943,14 +901,9 @@ def test_serve_until_done_stops_when_the_parent_is_gone(monkeypatch):
     monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
                         lambda pid: True)
 
-    class FakeGS:
-        state = State.RUNNING
-
-        def tick(self, dt):
-            raise AssertionError("must not tick once the parent is gone")
-
     reason = _serve_until_done(
-        FakeGS(),
+        StaticGS(State.RUNNING,
+                tick_error=AssertionError("must not tick once the parent is gone")),
         FakeAgent(poll_error=AssertionError("must not poll once the parent is gone")),
         FakeArco(), sleep=lambda _s: None, parent_pid=111)
     assert reason == "parent-gone"
@@ -963,12 +916,6 @@ def test_serve_until_done_lets_closing_devices_finish_their_fade():
     from control.state import State
     from harness.terrarium_boot import _serve_until_done
 
-    class FakeGS:
-        state = State.IDLE
-
-        def tick(self, dt):
-            pass
-
     class FakeAgent:
         def __init__(self):
             self.closing = 2
@@ -980,7 +927,8 @@ def test_serve_until_done_lets_closing_devices_finish_their_fade():
                 self.closing = 0
 
     agent = FakeAgent()
-    _serve_until_done(FakeGS(), agent, FakeArco(), sleep=lambda _s: None)
+    _serve_until_done(StaticGS(State.IDLE), agent, FakeArco(),
+                      sleep=lambda _s: None)
     assert agent.closing == 0
     assert agent.polls >= 4
 
@@ -993,17 +941,12 @@ def test_room_down_mid_run_returns_no_room_not_arco_exited():
     from control.terrarium import TerrariumState
     from harness.terrarium_boot import _serve_until_done
 
-    class FakeGS:
-        state = State.RUNNING
-
-        def tick(self, dt):
-            raise AssertionError("must not tick once the room is down")
-
     class FakeTerrarium:
         state = TerrariumState.NO_ROOM
 
     reason = _serve_until_done(
-        FakeGS(),
+        StaticGS(State.RUNNING,
+                tick_error=AssertionError("must not tick once the room is down")),
         FakeAgent(poll_error=AssertionError("must not poll once the room is down")),
         FakeArco(returncode=1),                      # dead process too
         sleep=lambda _s: None,
@@ -1342,14 +1285,9 @@ def test_wait_for_load_returns_loaded_immediately_when_not_idle():
     before this is ever called, so there is nothing to wait for."""
     from harness.terrarium_boot import _wait_for_load
 
-    class FakeGS:
-        state = State.SETUP
-
-        def tick(self, dt):
-            raise AssertionError("must not tick when already loaded")
-
     reason = _wait_for_load(
-        FakeGS(),
+        StaticGS(State.SETUP,
+                tick_error=AssertionError("must not tick when already loaded")),
         FakeAgent(poll_error=AssertionError("must not poll when already loaded")),
         FakeArco())
     assert reason == "loaded"
@@ -1999,12 +1937,6 @@ def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
             self.state = TerrariumState.ROOM_READY
             self.arco = FakeArco()
 
-    class FakeGS:
-        state = State.IDLE
-
-        def tick(self, dt):
-            pass
-
     terrarium = FakeTerrarium()
     serve_rounds_calls = []
 
@@ -2028,7 +1960,7 @@ def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
     monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
                         fake_wait_for_room_ready)
 
-    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium)
+    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium)
 
     assert reason == "parent-gone"
     assert len(serve_rounds_calls) == 2
@@ -2047,12 +1979,6 @@ def test_serve_roomless_stops_clients_on_no_room(monkeypatch):
         def __init__(self):
             self.state = TerrariumState.ROOM_READY
             self.arco = FakeArco()
-
-    class FakeGS:
-        state = State.IDLE
-
-        def tick(self, dt):
-            pass
 
     terrarium = FakeTerrarium()
     calls = []
@@ -2073,7 +1999,7 @@ def test_serve_roomless_stops_clients_on_no_room(monkeypatch):
     monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
                         fake_serve_rounds)
 
-    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium,
+    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium,
                              stop_clients=lambda: calls.append("stop"),
                              restart_clients=lambda: None)
 
@@ -2102,12 +2028,6 @@ def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
         def unload_room(self, force=False):
             self.unload_calls += 1
 
-    class FakeGS:
-        state = State.IDLE
-
-        def tick(self, dt):
-            pass
-
     terrarium = FakeTerrarium()
     calls = []
 
@@ -2129,7 +2049,7 @@ def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
     monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
                         fake_serve_rounds)
 
-    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium,
+    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium,
                              restart_clients=restart_clients)
 
     assert reason == "parent-gone"
@@ -2152,12 +2072,6 @@ def test_serve_roomless_skips_restart_when_recycle_already_succeeded(
             self.state = TerrariumState.ROOM_READY
             self.arco = FakeArco()
 
-    class FakeGS:
-        state = State.IDLE
-
-        def tick(self, dt):
-            pass
-
     terrarium = FakeTerrarium()
     calls = []
 
@@ -2178,7 +2092,7 @@ def test_serve_roomless_skips_restart_when_recycle_already_succeeded(
     monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
                         fake_serve_rounds)
 
-    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium,
+    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium,
                              restart_clients=restart_clients)
 
     assert reason == "parent-gone"
@@ -2205,12 +2119,6 @@ def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
             self.unload_calls.append(force)
             self.state = TerrariumState.NO_ROOM
 
-    class FakeGS:
-        state = State.IDLE
-
-        def tick(self, dt):
-            pass
-
     terrarium = FakeTerrarium()
     wait_calls = []
     serve_rounds_calls = []
@@ -2234,7 +2142,7 @@ def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
     monkeypatch.setattr(terrarium_boot_module, "_serve_rounds",
                         fake_serve_rounds)
 
-    reason = _serve_roomless(FakeGS(), FakeAgent(), terrarium,
+    reason = _serve_roomless(StaticGS(State.IDLE), FakeAgent(), terrarium,
                              restart_clients=restart_clients)
 
     assert reason == "parent-gone"
@@ -2339,20 +2247,13 @@ def test_wait_for_load_returns_no_room_when_terrarium_leaves_room_ready():
     class FakeTerrarium:
         state = TerrariumState.NO_ROOM
 
-    class FakeGS:
-        state = State.IDLE
-
-        def tick(self, dt):
-            raise AssertionError("must not tick past the no-room check")
-
-    class FakeArco:
-        def poll(self):
-            raise AssertionError("must not poll arco past the no-room check")
-
     reason = _wait_for_load(
-        FakeGS(),
+        StaticGS(State.IDLE,
+                tick_error=AssertionError("must not tick past the no-room check")),
         FakeAgent(poll_error=AssertionError("must not poll past the no-room check")),
-        FakeArco(), terrarium=FakeTerrarium())
+        FakeArco(poll_error=AssertionError(
+            "must not poll arco past the no-room check")),
+        terrarium=FakeTerrarium())
     assert reason == "no-room"
 
 
@@ -3208,10 +3109,6 @@ def test_serve_until_done_polls_the_terrariums_arco_not_a_stale_handle():
         state = TerrariumState.ROOM_READY
         arco = old
 
-    class GS:
-        state = State.RUNNING
-        def tick(self, dt): pass
-
     class Console:
         def __init__(self): self.n = 0
         def poll(self):
@@ -3221,7 +3118,8 @@ def test_serve_until_done_polls_the_terrariums_arco_not_a_stale_handle():
             if self.n == 4:
                 new.returncode = 0            # the NEW Arco exits
 
-    reason = _serve_until_done(GS(), FakeAgent(), old, console_agent=Console(),
+    reason = _serve_until_done(StaticGS(State.RUNNING), FakeAgent(), old,
+                               console_agent=Console(),
                                terrarium=T(), sleep=lambda _s: None)
     assert reason == "arco-exited"
     assert new.polls >= 1
@@ -3632,18 +3530,9 @@ def test_wait_in_setup_paces_each_iteration_with_the_pacer():
 def test_serve_until_done_paces_each_iteration_with_the_pacer():
     from harness.terrarium_boot import _serve_until_done
 
-    class FakeGS:
-        def __init__(self):
-            self.state = State.RUNNING
-            self.ticks = 0
-
-        def tick(self, dt):
-            self.ticks += 1
-            if self.ticks >= 3:
-                self.state = State.IDLE
-
     pacer, sleeps = _CountingPacer(), []
-    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+    reason = _serve_until_done(TickingGS(State.RUNNING, State.IDLE),
+                               FakeAgent(), FakeArco(),
                                sleep=_no_fixed_sleep(sleeps), pacer=pacer)
     assert reason == "completed"
     assert pacer.waits == 2              # no wait after the completing tick
@@ -3653,18 +3542,9 @@ def test_serve_until_done_paces_each_iteration_with_the_pacer():
 def test_wait_for_load_paces_each_iteration_with_the_pacer():
     from harness.terrarium_boot import _wait_for_load
 
-    class FakeGS:
-        def __init__(self):
-            self.state = State.IDLE
-            self.ticks = 0
-
-        def tick(self, dt):
-            self.ticks += 1
-            if self.ticks >= 3:
-                self.state = State.LOADED
-
     pacer, sleeps = _CountingPacer(), []
-    reason = _wait_for_load(FakeGS(), FakeAgent(), FakeArco(),
+    reason = _wait_for_load(TickingGS(State.IDLE, State.LOADED),
+                            FakeAgent(), FakeArco(),
                             sleep=_no_fixed_sleep(sleeps), pacer=pacer)
     assert reason == "loaded"
     assert pacer.waits == 2
@@ -3676,18 +3556,9 @@ def test_the_default_pacer_routes_through_the_loops_sleep_seam():
     a test's no-op sleep still keeps the loop from really sleeping."""
     from harness.terrarium_boot import _serve_until_done
 
-    class FakeGS:
-        def __init__(self):
-            self.state = State.RUNNING
-            self.ticks = 0
-
-        def tick(self, dt):
-            self.ticks += 1
-            if self.ticks >= 3:
-                self.state = State.IDLE
-
     sleeps = []
-    reason = _serve_until_done(FakeGS(), FakeAgent(), FakeArco(),
+    reason = _serve_until_done(TickingGS(State.RUNNING, State.IDLE),
+                               FakeAgent(), FakeArco(),
                                sleep=_no_fixed_sleep(sleeps))
     assert reason == "completed"
     # Two paced waits, both through the injected seam. (With a no-op sleep
