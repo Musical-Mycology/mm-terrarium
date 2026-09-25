@@ -8,9 +8,10 @@ from bits.test.test_bit import TestBit
 from control.bit_registry import BitRegistry
 from control.breath import BREATH_CC
 from control.engine import GameServer
-from control.lobby import (GREEN, HUE_CC, LOBBY_DRONE_KEY, LOBBY_PROGRAM, RED,
-                           StartRequest, TERRARIUM_ADMIN, WHITE)
-from control.cues import fixture_dev
+from control.lobby import (FEEDBACK_REFUSED, GREEN, HUE_CC, LOBBY_DRONE_KEY,
+                           LOBBY_PROGRAM, RED, StartRequest, TERRARIUM_ADMIN,
+                           WHITE)
+from control.cues import MuteCue, fixture_dev
 from control.rooms import Room
 from control.state import State
 from devicelink.agent import DeviceLinkAgent
@@ -314,3 +315,20 @@ def test_prepare_raising_authority_answers_failed_and_keeps_polling(monkeypatch)
     assert (req.reply.accepted, req.reply.reason, req.reply.visible) == (
         False, "prepare failed", True)
     agent.poll()      # nothing left, no raise
+
+
+def test_start_feedback_flash_leaves_a_muted_fixture_dark(monkeypatch):
+    """_flash_fixtures (start feedback) goes through the set_override sink;
+    a muted fixture must keep its latched blackout, an unmuted one flashes."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk.t)
+
+    agent._lobby.feedback(FEEDBACK_REFUSED)
+    saw_accent_flash = False
+    for _ in range(int(2.0 / (1 / 44))):
+        clk.advance(1 / 44)
+        agent.poll()
+        assert agent._overrides[fixture_dev("main")] == ((0, 0, 0), 0.0, None)
+        entry = agent._overrides.get(fixture_dev("accent"))
+        saw_accent_flash |= entry is not None and entry[0] == RED
+    assert saw_accent_flash

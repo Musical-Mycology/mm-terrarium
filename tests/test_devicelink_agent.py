@@ -2758,6 +2758,107 @@ def test_an_rgbw_solid_override_leaves_white_dark(monkeypatch):
     assert frames["array"] == bytes([255, 0, 0, 0]) * 864
 
 
+# --- a muted surface ignores every SolidCue (spec 2026-09-25 ------------------
+# --- lobby-flash-mute-and-room-bridge section 3.1) ----------------------------
+
+_BLACKOUT = ((0, 0, 0), 0.0, None)
+
+
+def test_a_solid_cue_on_a_muted_fixture_keeps_the_blackout(monkeypatch):
+    """The core defect: a short SolidCue used to overwrite the latched
+    blackout, then expire, leaving the fixture lit while still muted."""
+    gs = _room_ready_game_server()
+    _fake_sessions(monkeypatch)
+    clk = _Clock(100.0)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=clk)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk())
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+
+    agent._on_solid_cue("sim-room-main", (0, 255, 0), 1.0, 0.25, clk())
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+    clk.advance(1.0)
+    agent.poll()
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+    assert fixture_dev("main") in agent._muted
+
+
+def test_the_lobby_set_override_sink_respects_a_fixture_mute(monkeypatch):
+    gs = _room_ready_game_server()
+    _fake_sessions(monkeypatch)
+    clk = _Clock(100.0)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=clk)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk())
+
+    agent._lobby_sinks().set_override("sim-room-main", (0, 255, 0), 1.0, 0.25)
+
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+
+
+def test_the_flash_sentinel_respects_a_fixture_mute(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=100.0)
+
+    agent._flash_fixtures_now((0, 255, 0), 1)
+    agent._drain_light_cues()
+
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+    assert agent._overrides[fixture_dev("accent")][0] == (0, 255, 0)
+
+
+def test_a_bit_solid_cue_is_dropped_for_a_muted_fixture(monkeypatch):
+    gs = _room_ready_game_server()
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=100.0)
+
+    gs._dispatch_cues([SolidCue(fixture_dev("main"), (255, 0, 0), 1.0, 0.5)],
+                      at=100.0)
+
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+
+
+def test_a_bit_solid_cue_is_dropped_for_a_muted_player():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    gs._dispatch_cues([MuteCue(dev)], at=clk())
+
+    gs._dispatch_cues([SolidCue(dev, (255, 0, 0), 1.0, 0.5)], at=clk())
+    clk.advance(1.0)
+    agent.poll()
+
+    assert agent._overrides[dev] == _BLACKOUT
+    assert set(_last_leds_payload(server, dev)) == {0}
+
+
+def test_a_non_mute_fire_still_unlatches_and_applies_its_solid(monkeypatch):
+    """The guard must not block the one sanctioned un-latch: the engine
+    clears the mute before it dispatches the fire's SolidCue."""
+    gs = _room_ready_game_server()
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=100.0)
+
+    assert gs.fire_function("flash", fired_by="admin-manual",
+                            dev=fixture_dev("main")) is None
+
+    assert fixture_dev("main") not in agent._muted
+    assert agent._overrides[fixture_dev("main")][0] == (255, 255, 255)
+
+
+def test_a_queued_join_flash_cannot_unblack_a_carried_over_mute(monkeypatch):
+    """The end-to-end case: ie1 joins as a scored player (the lobby queues
+    its green join flash), is muted, then binds to `main`. The queued flash
+    resolves to @fixture:main and used to un-black it for good."""
+    gs, agent, clk, server = _player_then_room(monkeypatch, mute_as_player=True)
+    assert agent._lobby is not None
+    for _ in range(int(3.0 / (1 / 44))):
+        clk.advance(1 / 44)
+        agent.poll()
+        assert agent._overrides.get(fixture_dev("main")) == _BLACKOUT
+    assert fixture_dev("main") in agent._muted
+
+
 class _FakeOutput:
     def __init__(self):
         self.frames, self.started, self.closed = [], 0, 0

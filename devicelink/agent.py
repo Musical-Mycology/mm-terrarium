@@ -883,8 +883,19 @@ class DeviceLinkAgent:
         """A Bit's SolidCue reached the engine sink. Store the override and
         force a resend this tick (see _apply_override's use at both send
         seams) so it goes out immediately, stamped with the cue's own `when`
-        rather than this tick's stream-frame origin."""
+        rather than this tick's stream-frame origin.
+
+        Dropped for a muted surface. Every SolidCue source lands here: the
+        engine (a Bit's SolidCue), the lobby's set_override sink (join,
+        invite and start-feedback flashes) and the __flash__ sentinel. An
+        override written over the latched blackout would expire and take
+        the blackout with it, leaving a muted surface lit. A non-mute fire
+        is unaffected: the engine clears the mute before it dispatches the
+        fire's cues (spec 2026-09-25 lobby-flash-mute-and-room-bridge
+        section 3.1)."""
         dev = self._fixture_key(dev)
+        if dev in self._muted:
+            return
         expires = None if duration is None else when + duration
         self._overrides[dev] = (rgb, level, expires)
         self._invalidate_frame(dev)
@@ -1530,10 +1541,9 @@ class DeviceLinkAgent:
         for payload in self._light_cues.due(self._clock()):
             if payload[0] == "__flash__":
                 # _flash_fixtures_now's sentinel: a feedback flash that has
-                # to outlive the lobby runtime that asked for it. Muted devs
-                # are checked here rather than purged in _on_mute_change,
-                # whose predicate matches on payload[0] == dev and so never
-                # matches a tagged payload.
+                # to outlive the lobby runtime that asked for it. `dev` is
+                # already a fixture token. _on_solid_cue's own mute guard is
+                # the one that matters; this check just skips the call.
                 _tag, dev, rgb, when = payload
                 if dev in self._muted:
                     continue
