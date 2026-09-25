@@ -5249,9 +5249,11 @@ send path; the listener timed arrival.
   still fails on a Mac (27.07 ms). A sleep-short-then-spin finish is the
   follow-up if bring-up needs it. **The Dec 4 Terrarium is a Mac**, so this
   is the show box's behavior, not just the dev box's.
-- **Not fixed here: luxaeterna's `MultiUniverseOutputLoop._run`**
-  (`luxaeterna/output.py`) sleeps `interval - elapsed` the same way and
-  runs slow wherever sleep overshoots; it is another repo's change.
+- **Fixed in luxaeterna, not here: `MultiUniverseOutputLoop._loop`**
+  (`luxaeterna/universeset.py`) slept `interval - elapsed` the same way and
+  ran slow wherever sleep overshoots. luxaeterna#23 paces it (and
+  `OutputLoop._loop`) to deadlines with its own local `TickPacer`; it held
+  44.01 fps on the dev Mac.
   `render_bench` drives `_loop_once()` itself, so it does not time that
   loop.
 

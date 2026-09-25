@@ -89,8 +89,9 @@ with `TickPacer(loop.frame_interval, clock=clock, sleep=sleep)` instead of
 `sleep(frame_interval - elapsed)`, and records the interval between
 successive tick *starts*. Its module docstring notes that it now measures
 the render path at a correctly paced rate, and that luxaeterna's own
-threaded loop (`MultiUniverseOutputLoop._run`, which has the same
-fixed-remaining-sleep pattern) is not what it times.
+threaded loop (`MultiUniverseOutputLoop._loop` in
+`luxaeterna/universeset.py`, which had the same fixed-remaining-sleep
+pattern until luxaeterna#23) is not what it times.
 
 ## 3. Out of scope
 
@@ -98,8 +99,10 @@ fixed-remaining-sleep pattern) is not what it times.
   per-tick jitter macOS sleep adds (render_bench's p95 <= 25 ms pass line
   may still fail on a Mac). A sleep-short-then-spin finish is a possible
   follow-up if bring-up needs it.
-- **luxaeterna's `MultiUniverseOutputLoop._run`** (`luxaeterna/output.py`):
-  same pattern, different repo; filed as a separate task.
+- **luxaeterna's `MultiUniverseOutputLoop._loop`**
+  (`luxaeterna/universeset.py`), and its single-universe `OutputLoop._loop`
+  (`luxaeterna/output.py`): same pattern, different repo; fixed there with a
+  local deadline pacer in luxaeterna#23.
 - The ~2% unchanged-frame skip in `DeviceLinkAgent._render_room` is correct
   behavior (the sink's keepalive covers it) and stays.
 

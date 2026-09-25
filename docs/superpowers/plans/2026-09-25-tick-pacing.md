@@ -493,8 +493,9 @@ Add to the module docstring, after the paragraph beginning "MM_TERRARIUM.md is e
 ```
 measure() paces its own ticks to deadlines (harness/tick_pacer.py). It times
 the render path at a correctly paced rate; it does NOT time luxaeterna's own
-threaded MultiUniverseOutputLoop._run, which still sleeps
-`frame_interval - elapsed` and so runs slow wherever sleep overshoots.
+threaded MultiUniverseOutputLoop._loop (luxaeterna/universeset.py), which
+slept `frame_interval - elapsed` and so ran slow wherever sleep overshoots
+until luxaeterna#23 paced it to deadlines too.
 ```
 
 - [ ] **Step 4: Verify**
