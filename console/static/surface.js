@@ -21,7 +21,8 @@ let fixtureShapes = {};              // fixture name -> last-seen {pixel_count, 
 let canvasesByName = {};             // fixture name -> [canvas, ...] (in pixel order across rows)
 let lastPaintByName = {};            // fixture name -> [[r,g,b], ...] per pixel
 let lastFrameAt = {};                // fixture name -> ms timestamp of last room_frame
-let armedFixtures = new Set();       // fixture names showing "Armed" until next room_changed
+let armedFixtures = new Set();       // fixture names showing "Armed" until a device binds or the arm_room is refused
+let pendingArm = null;               // fixture last sent arm_room; rolled back on its refusal
 
 // Structural elements this module owns, cached as module state rather than
 // re-located via getElementById -- the DOM stub (and, harmlessly, real
@@ -214,6 +215,15 @@ function bindingControls(fixture) {
     return wrap;
   }
 
+  // An [[artnet]]-covered fixture is driven by its Art-Net sink and never
+  // binds a device (the server refuses arming it), so there is no Arm.
+  if (fixture.artnet) {
+    const chip = mk("span", "chip sage", "Art-Net");
+    chip.title = "Driven by [[artnet]]; never binds a device";
+    wrap.appendChild(chip);
+    return wrap;
+  }
+
   if (armedFixtures.has(fixture.name)) {
     const chip = mk("span", "chip gold");
     chip.appendChild(mk("span", "dot"));
@@ -241,6 +251,7 @@ function bindingControls(fixture) {
   armBtn.onclick = () => { formRow.hidden = false; };
   confirmBtn.onclick = () => {
     const windowSeconds = Number(input.value) || 30;
+    pendingArm = fixture.name;
     wire.send("arm_room",
       { room_type: currentRoom.room_type, fixture: fixture.name, window_seconds: windowSeconds },
       confirmBtn);
@@ -339,6 +350,7 @@ function buildFixture(fixture) {
 // flag off the specific button element).
 function bindStateKey(fixture) {
   if (fixture.dev) return `dev:${fixture.dev}:${fixture.url || ""}`;
+  if (fixture.artnet) return "artnet";
   if (armedFixtures.has(fixture.name)) return "armed";
   return "unbound";
 }
@@ -564,6 +576,7 @@ function render() {
     lastPaintByName = {};
     lastFrameAt = {};
     armedFixtures.clear();
+    pendingArm = null;
     muteChipByName.clear();
     card.appendChild(mk("p", "muted", "No Room configured"));
     return;
@@ -754,6 +767,16 @@ export function init() {
     render();
   });
   wire.on("room_frame", onRoomFrame);
+
+  // A refused arm_room must not leave its fixture showing Armed. Not
+  // cleared on room_changed: controller values make that event frequent,
+  // and clearing there would race the refusal.
+  wire.on("error", (m) => {
+    if (m.command !== "arm_room" || pendingArm === null) return;
+    armedFixtures.delete(pendingArm);
+    pendingArm = null;
+    render();
+  });
 
   // Liveness is state, not decoration -- unlike tint transitions, this
   // interval is NOT skipped under prefers-reduced-motion.
