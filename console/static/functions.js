@@ -438,12 +438,15 @@ function buildRow(fn) {
     fillDevicePicker(picker, fn.target === "SURFACE");
     picker.onchange = () => refreshCardCompatibility(fn, picker, row);
   }
-  // Held directly (not re-looked-up by id) so a picker survives being
-  // refilled after its id briefly stops resolving -- e.g. the Room card
-  // (and everything under it, #functionsMount included) is torn down and
-  // rebuilt around a "no Room" tick; refillPickers must keep updating the
-  // same node the operator (and any earlier-captured reference) is looking
-  // at, not a fresh placeholder minted by a stale getElementById lookup.
+  // Held directly, the same pattern diagPicker already uses above, rather
+  // than re-looked-up by id: a refill must keep mutating this exact node
+  // regardless of whether its id is still registered, independent of any
+  // getElementById quirk (the node test stub's included -- _dom_stub.js
+  // auto-vivifies a fresh placeholder for an id it has not seen, which a
+  // real browser's getElementById would not do). currentDeviceTargets
+  // carries this reference only for the current rows; the next full
+  // render() replaces both the Map and every row, so a detached picker
+  // is retained no longer than that.
   row._picker = picker;
   row.appendChild(mk("span", "grow"));
 
