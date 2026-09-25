@@ -5229,7 +5229,7 @@ generated diagrams current.
 
 **Test baseline after the 2026-09-25 arm refusal:** `.venv/bin/python -m pytest tests -q` -> **2713 passed, 1 skipped**. Merged with PR #145 (VENUE room): **2737 passed, 1 skipped**.
 
-**Test baseline after the 2026-09-25 mute carry-over fix:** `.venv/bin/python -m pytest tests -q` -> **2683 passed, 1 skipped** (the final-review fix wave added 2 agent tests and 1 engine test on top of the 2680 this line originally reported).
+**Test baseline after the 2026-09-25 mute carry-over fix:** `.venv/bin/python -m pytest tests -q` -> **2683 passed, 1 skipped** (the final-review fix wave added 2 agent tests and 1 engine test on top of the 2680 this line originally reported). Merged with main at `ed5ec9f` (PR #146): **2747 passed, 1 skipped**.
 
 ### `console/static/functions.js`, `surface.js`, `control/room_view.py` -- Console fixture targets and fixture mute state (2026-09-25)
 Closes the Console bring-up prerequisite above. Design:
