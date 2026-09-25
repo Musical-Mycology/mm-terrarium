@@ -1860,7 +1860,7 @@ def test_wait_for_room_ready_exits_when_the_parent_is_gone(monkeypatch):
 
 
 def _run_roomless(monkeypatch, wait_results, serve_results, *,
-                  terrarium=None, gs=None, agent=None, **kw):
+                  terrarium=None, gs=None, agent=None, calls=None, **kw):
     """Shared driver for the _serve_roomless tests below: builds the
     common FakeTerrarium/FakeGS/FakeAgent scaffold (unless overridden),
     monkeypatches harness.terrarium_boot._wait_for_room_ready and
@@ -1870,7 +1870,11 @@ def _run_roomless(monkeypatch, wait_results, serve_results, *,
     silent repeat), calls _serve_roomless once, and returns
     (reason, terrarium, wait_calls, serve_calls) so each test can layer
     its own extra assertions (e.g. on a custom terrarium's unload_calls,
-    or on a restart_clients/stop_clients closure passed via **kw)."""
+    or on a restart_clients/stop_clients closure passed via **kw). When
+    `calls` is given, the `_serve_rounds` stub appends "serve-rounds" to
+    it too -- letting a test that also passes a restart_clients/
+    stop_clients closure writing to that SAME list assert one ordered
+    list across both, proving call order rather than just call counts."""
     import harness.terrarium_boot as terrarium_boot_module
     from harness.terrarium_boot import _serve_roomless
 
@@ -1894,6 +1898,8 @@ def _run_roomless(monkeypatch, wait_results, serve_results, *,
     def fake_serve_rounds(gs, agent, arco, *, parent_pid=None,
                           console_agent=None, terrarium=None, **_kw):
         serve_calls.append(1)
+        if calls is not None:
+            calls.append("serve-rounds")
         return next(serve_iter)
 
     monkeypatch.setattr(terrarium_boot_module, "_wait_for_room_ready",
@@ -1955,11 +1961,10 @@ def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
 
     reason, terrarium, wait_calls, serve_calls = _run_roomless(
         monkeypatch, wait_results=["ready"], serve_results=["parent-gone"],
-        terrarium=terrarium, restart_clients=restart_clients)
+        terrarium=terrarium, calls=calls, restart_clients=restart_clients)
 
     assert reason == "parent-gone"
-    assert calls == ["pool-start", "transport-start"]
-    assert len(serve_calls) == 1
+    assert calls == ["pool-start", "transport-start", "serve-rounds"]
     assert len(terrarium.unload_calls) == 0
 
 
@@ -1969,12 +1974,14 @@ def test_serve_roomless_skips_restart_when_recycle_already_succeeded(
     (the ordinary case -- no prior failed recycle, or `_recycle_room`
     already restarted the clients itself), `_serve_roomless` must not
     restart them again."""
+    calls = []
+
     reason, terrarium, wait_calls, serve_calls = _run_roomless(
         monkeypatch, wait_results=["ready"], serve_results=["parent-gone"],
-        restart_clients=lambda: None)
+        calls=calls, restart_clients=lambda: None)
 
     assert reason == "parent-gone"
-    assert len(serve_calls) == 1
+    assert calls == ["serve-rounds"]
 
 
 def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
