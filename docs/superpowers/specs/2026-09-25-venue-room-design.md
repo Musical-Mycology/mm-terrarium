@@ -1,8 +1,12 @@
 # The VENUE Room: LED bars and fiber engines on two WLED controllers
 
-Status: **draft, hardware inputs pending (§2).** Every design decision
-below is made. The inputs in §2 are hardware facts nobody has yet, and each
-one names the section it fills. Close §2 before writing-plans runs.
+Status: **approved for planning, hardware inputs pending (§2).** Every
+design decision below is made. The inputs in §2 are hardware facts nobody
+has yet, and each one names the section it fills. The plan
+(`docs/superpowers/plans/2026-09-25-venue-room.md`) builds with N = 1 under
+§2's rule and leaves every `max_amps` value as a named placeholder, so it
+can run before §2 closes. Closing §2 later is a data edit, not a code
+change.
 
 Base: `main` at `fbc5c2f`. PR #140 (the Art-Net FixtureSink) is merged.
 
@@ -164,10 +168,10 @@ accepted_cues = ["midi", "solid", "mute"]
 
 - **The ambient is `aurora` on `primary`, a slow breathing hue, the same
   across all three bundles.** Per-bundle colour comes from a Bit's
-  manifest targeting `fiber.b1`..`fiber.b3`. Whether an instrument's own
-  ambient may target zones is not confirmed. The plan's first task checks
-  that in `control/instrument.py`. If zone targets are legal, use one
-  `aurora` per bundle with distinct `hue`. If not, keep `primary`.
+  manifest targeting `fiber.b1`..`fiber.b3`. A per-bundle ambient (one
+  `aurora` per zone with distinct `hue`) is a follow-up. It needs
+  confirming that an instrument's own ambient may target its fixture's
+  local zone names, and that is not needed for this slice.
 - **No `play` cue and no `[[functions]]`.** The built-ins `flash` and
   `stop` come free from `light.surface` (`control/builtins.py`). `play`
   needs a sample voice this fixture does not have.
@@ -314,8 +318,9 @@ All offline, per the existing suite rules
    - DEMO with no `[[artnet]]` behaves exactly as today.
 5. **Bits.** TestBit and MetronomeBit load on VENUE. A test-only Bit with
    `@fixture:fiber` and `fiber.b2` targets loads on VENUE and is refused
-   on DEMO. A `fiber.b2` cue changes only pixels N..2N-1 of the fiber
-   frame.
+   on DEMO. `role_config.slice_light_manifest` binds a `fiber.b2`
+   target to zone `b2` on `fiber` and drops it from `bars`. That slicing
+   is what confines the cue to the middle bundle.
 6. **End to end, no hardware.** Two `harness/artnet_listen.py` receivers
    run on loopback: `--pixels 864` on port 6454, and `--pixels <3N>
    --port 6455`. Both see frames from their own output, with 0 bad packets
