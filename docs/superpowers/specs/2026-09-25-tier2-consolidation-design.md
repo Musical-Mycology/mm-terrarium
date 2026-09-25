@@ -48,8 +48,9 @@ production code.
    - `FakeClock(start=0.0)` with `.now` and `advance()`, for
      `test_capture_store.py`, `test_capture_bit.py`, `test_link.py`,
      `test_console_agent.py`.
-   - `FakeObservable` and `RecordingPopen(label, order)` (a `FakePopen`
-     subclass).
+   - `FakeObservable`. The three identical in-test `_RecordingPopen`
+     copies in `test_terrarium_boot.py` become one module-level class in
+     that file.
    - Data-only doubles (`FakeGs`, `GS`, state-only `FakeTerrarium`) become
      `types.SimpleNamespace(...)`.
 2. **Bespoke doubles stay local**, e.g. the GS that flips state on its third
@@ -91,7 +92,11 @@ temporarily and confirm the consolidated tests fail.
 4. **`parent_is_gone`** moves to `harness/signals.py`, and `o2_shroom.py`
    re-exports it so existing imports keep working. `run_stack.py` imports it
    from `signals` and no longer loads `o2_shroom` for it.
-5. **Config validation:**
+5. **Config validation (narrowed during planning):** only the `run_profile.py`
+   docstring fix ships. Reading every check showed only 3 to 5 of the 38
+   convert cleanly to a `get_typed` helper, so the helper and a shared
+   error base would add more lines than they remove. The original intent,
+   kept for the record:
    - `ManifestError` and `TerrariumConfigError` share a base class that
      formats `"source: [key] message"`.
    - A raising `get_typed(...)` helper replaces the mechanical isinstance
@@ -110,13 +115,15 @@ temporarily and confirm the consolidated tests fail.
 7. **Rename `DeviceLinkAgent.server` to `transport`** (parameter, attribute,
    about 27 sites across `devicelink/agent.py`, `tests/test_devicelink_agent.py`,
    `tests/test_terrarium_boot.py`, `harness/terrarium_boot.py`), including
-   the `devicelink_server` return slot. `console/agent.py`'s `self.server`
+   the `server = transport` alias in `build()` (the "devicelink_server"
+   return slot). Local `server` variables that destructure `build()`'s
+   result, in `main()` and in tests, are not renamed. `console/agent.py`'s `self.server`
    is a real ConsoleServer and is not renamed.
 
 **Verification:**
 - The full Python suite and the JS suite pass at every commit.
-- Mutation checks: flip the merged loop's exit predicate, and make
-  `get_typed` accept a wrong type. The tests must fail in both cases.
+- Mutation check: flip the merged loop's exit predicate; the tests must
+  fail.
 - Run `./smoke-test.sh` end to end before opening the PR.
 - Update `docs/MM_TERRARIUM.md` for the rename, the moved helper and
   `dom.js`.
