@@ -853,10 +853,15 @@ class GameServer:
         5). This full list is what FunctionFired.devs reports, and (since
         each fixture now has its own light session) also what a script's
         TARGET fanout dispatches to, one cue per resolved dev.
+        A SURFACE @fixture:<name> dev resolves through _resolve_devs (bound dev, else the token).
         """
         if target is FunctionTarget.DEVICE:
             return [dev] if dev else []
         if target is FunctionTarget.SURFACE and dev not in (ROOM, ALL):
+            # An operator-picked fixture (@fixture:<name>) lands where a cue
+            # for that fixture would: its bound dev, else the token itself.
+            if fixture_name(dev) is not None:
+                return self._resolve_devs(dev)
             return [dev] if dev else []
         room_devs = self._room_devs()
         if target is FunctionTarget.SURFACE and dev == ALL:
@@ -984,6 +989,15 @@ class GameServer:
                             f"no device given")
                 return (f"function {name!r} targets a surface; "
                         f"no surface given")
+            if target is FunctionTarget.SURFACE:
+                fname = fixture_name(dev)
+                if fname is not None:
+                    if self.room is None:
+                        return f"no Room loaded for fixture {fname!r}"
+                    if all(f.name != fname
+                           for f in self.room.profile.fixtures):
+                        return (f"no fixture {fname!r} in Room "
+                                f"{self.room.name!r}")
             if at is None:
                 at = self._clock() + self._horizon
             devs = self._resolve_target(target, dev)

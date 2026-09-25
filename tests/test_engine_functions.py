@@ -978,3 +978,50 @@ def test_stop_at_all_mutes_everything(gs_with_room):
     gs.fire_function("stop", fired_by="admin-manual", dev="@all")
     assert "ie1" in gs.muted
     assert len(gs.muted) >= 2               # the room's canonical dev too
+
+
+def test_a_surface_fire_at_a_bound_fixture_token_lands_on_its_dev():
+    gs, light, _ = _running(bound={"main": "sim-room-main"})
+    observer = Recorder()
+    gs.add_observer(observer)
+    assert gs.fire_function("spot", fired_by="admin-manual",
+                            dev=fixture_dev("main")) is None
+    assert [c[0] for c in light] == ["sim-room-main"]
+    assert observer.fired[0].devs == ("sim-room-main",)
+
+
+def test_a_surface_fire_at_an_unbound_fixture_token_lands_on_the_token():
+    gs, light, _ = _running(bound={"main": "sim-room-main"})
+    observer = Recorder()
+    gs.add_observer(observer)
+    assert gs.fire_function("spot", fired_by="admin-manual",
+                            dev=fixture_dev("accent")) is None
+    assert [c[0] for c in light] == [fixture_dev("accent")]
+    assert observer.fired[0].devs == (fixture_dev("accent"),)
+
+
+def test_stop_at_an_unbound_fixture_token_latches_its_mute_and_a_fire_clears_it():
+    gs, _, _ = _running(bound={"main": "sim-room-main"})
+    assert gs.fire_function("stop", fired_by="admin-manual",
+                            dev=fixture_dev("accent")) is None
+    assert gs.is_muted(fixture_dev("accent"))
+    assert not gs.is_muted(fixture_dev("main"))
+    assert gs.fire_function("spot", fired_by="admin-manual",
+                            dev=fixture_dev("accent")) is None
+    assert not gs.is_muted(fixture_dev("accent"))
+
+
+def test_a_surface_fire_at_an_undeclared_fixture_is_refused():
+    gs, light, _ = _running()
+    assert gs.fire_function("spot", fired_by="admin-manual",
+                            dev=fixture_dev("ghost")) == \
+        "no fixture 'ghost' in Room 'TEST'"
+    assert light == []
+
+
+def test_a_surface_fire_at_a_fixture_with_no_room_is_refused():
+    gs, light, _ = _running()
+    gs.room = None
+    assert gs.fire_function("stop", fired_by="admin-manual",
+                            dev=fixture_dev("accent")) == \
+        "no Room loaded for fixture 'accent'"
