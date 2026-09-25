@@ -3758,3 +3758,125 @@ def test_wait_in_setup_pumps_the_uplink():
     _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
                    sleep=lambda _s: None, uplink=Up())
     assert pumps[:2] == ["m", "p"] and len(pumps) >= 4
+
+
+class _CountingPacer:
+    """Stands in for TickPacer: counts wait() calls."""
+
+    def __init__(self):
+        self.waits = 0
+
+    def wait(self):
+        self.waits += 1
+
+
+def _no_fixed_sleep(sleeps):
+    def sleep(s):
+        sleeps.append(s)
+    return sleep
+
+
+def test_wait_in_setup_paces_each_iteration_with_the_pacer():
+    """The 2026-09-23 Art-Net run received ~33 fps against the 44 Hz tick:
+    a fixed sleep(1/44) after each tick runs at 1 / (work + actual sleep),
+    and macOS oversleeps 1/44 by ~4 ms. Each loop must pace to deadlines
+    (harness/tick_pacer.py) instead."""
+    from harness.terrarium_boot import _wait_in_setup
+
+    polls = []
+
+    class FakeAgent:
+        def poll(self):
+            polls.append(1)
+
+    pacer, sleeps = _CountingPacer(), []
+    ticks = iter([0.0, 0.1, 0.2, 0.3, 5.0])
+    reason = _wait_in_setup(FakeAgent(), 1.0, clock=lambda: next(ticks),
+                            sleep=_no_fixed_sleep(sleeps), pacer=pacer)
+    assert reason == "expired"
+    assert pacer.waits == len(polls) == 3
+    assert sleeps == []
+
+
+def test_serve_until_done_paces_each_iteration_with_the_pacer():
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        def __init__(self):
+            self.state = State.RUNNING
+            self.ticks = 0
+
+        def tick(self, dt):
+            self.ticks += 1
+            if self.ticks >= 3:
+                self.state = State.IDLE
+
+    class FakeAgent:
+        closing = 0
+
+        def poll(self):
+            pass
+
+    pacer, sleeps = _CountingPacer(), []
+    reason = _serve_until_done(FakeGS(), FakeAgent(), _FakeArco(),
+                               sleep=_no_fixed_sleep(sleeps), pacer=pacer)
+    assert reason == "completed"
+    assert pacer.waits == 2              # no wait after the completing tick
+    assert sleeps == []
+
+
+def test_wait_for_load_paces_each_iteration_with_the_pacer():
+    from harness.terrarium_boot import _wait_for_load
+
+    class FakeGS:
+        def __init__(self):
+            self.state = State.IDLE
+            self.ticks = 0
+
+        def tick(self, dt):
+            self.ticks += 1
+            if self.ticks >= 3:
+                self.state = State.LOADED
+
+    class FakeAgent:
+        def poll(self):
+            pass
+
+    pacer, sleeps = _CountingPacer(), []
+    reason = _wait_for_load(FakeGS(), FakeAgent(), _FakeArco(),
+                            sleep=_no_fixed_sleep(sleeps), pacer=pacer)
+    assert reason == "loaded"
+    assert pacer.waits == 2
+    assert sleeps == []
+
+
+def test_the_default_pacer_routes_through_the_loops_sleep_seam():
+    """No pacer given: the loop builds a TickPacer on its own `sleep`, so
+    a test's no-op sleep still keeps the loop from really sleeping."""
+    from harness.terrarium_boot import _serve_until_done
+
+    class FakeGS:
+        def __init__(self):
+            self.state = State.RUNNING
+            self.ticks = 0
+
+        def tick(self, dt):
+            self.ticks += 1
+            if self.ticks >= 3:
+                self.state = State.IDLE
+
+    class FakeAgent:
+        closing = 0
+
+        def poll(self):
+            pass
+
+    sleeps = []
+    reason = _serve_until_done(FakeGS(), FakeAgent(), _FakeArco(),
+                               sleep=_no_fixed_sleep(sleeps))
+    assert reason == "completed"
+    # Two paced waits, both through the injected seam. (With a no-op sleep
+    # the real clock barely moves, so the second deadline is ~2/44 away:
+    # only positivity is asserted, not the value.)
+    assert len(sleeps) == 2
+    assert all(s > 0 for s in sleeps)
