@@ -5207,7 +5207,7 @@ generated diagrams current.
 
 **Test baseline after the 2026-09-25 no-simulator follow-up:** `.venv/bin/python -m pytest tests -q` -> **2673 passed, 1 skipped**.
 
-**Test baseline after the 2026-09-25 arm refusal:** `.venv/bin/python -m pytest tests -q` -> **2713 passed, 1 skipped**.
+**Test baseline after the 2026-09-25 arm refusal:** `.venv/bin/python -m pytest tests -q` -> **2713 passed, 1 skipped**. Merged with PR #145 (VENUE room): **2737 passed, 1 skipped**.
 
 ### `console/static/functions.js`, `surface.js`, `control/room_view.py` -- Console fixture targets and fixture mute state (2026-09-25)
 Closes the Console bring-up prerequisite above. Design:
@@ -5378,8 +5378,10 @@ Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycol
   `[[artnet]]`, routing by fixture name, native RGBW* entry above), an
   `[[artnet]]` fixture gets no simulator and is never waited on. Both
   VENUE fixtures are covered, so VENUE loads with nothing bound. Arming a
-  covered fixture from the Console is the gap that entry records
-  (`ArmRoomCommand` does not yet refuse it); this slice adds no refusal.
+  covered fixture from the Console, the gap that entry recorded, closed
+  2026-09-25: `ArmRoomCommand` now refuses `bars` and `fiber`, and the Room
+  panel shows them as `Art-Net` with no Arm button (see *`console/agent.py`
+  -- Console refuses to arm an `[[artnet]]`-covered fixture* above).
 - **`[psus.<name>]` and `[[artnet]] psu`.** Outputs naming one PSU must sum
   `max_amps` to at most 80 % of its `amps`, checked at config load across
   every room. An output with no `psu` is unchecked.
