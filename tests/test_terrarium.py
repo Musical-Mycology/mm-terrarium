@@ -12,7 +12,8 @@ from control.rooms import Room
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.state import State
 from control.teardown import TeardownStack
-from control.terrarium import RoomBindingTimeout, Terrarium, TerrariumState, wait_for_room_binding
+from control.terrarium import (RoomBindingTimeout, Terrarium,
+                               TerrariumState, wait_for_room_binding)
 from control.terrarium_config import ArtNetOutput, RoomSpec, TerrariumConfig
 from tests.test_engine import RoomCapableBit
 
@@ -429,6 +430,8 @@ def _artnet(room, fixture):
                         max_amps=1.0)
 
 
+# Built directly, bypassing validate_artnet_outputs: TEST_SPEC/DEMO_SPEC
+# are GRB, which a parsed terrarium.toml would refuse for [[artnet]].
 def _config_with_artnet(rooms, *outputs):
     return TerrariumConfig(schema=1, name="test-terrarium", bit_paths=(),
                            rooms=rooms, version="1-test",

@@ -5179,7 +5179,14 @@ backend" for DEMO. Design:
   own device-picker entry, so an operator can reach it only through "All",
   and there is nowhere in the UI showing whether that unbound fixture is
   currently muted. This needs a fix before a multi-fixture venue Room asks
-  an operator to manage individual fixtures by name.
+  an operator to manage individual fixtures by name. Related, found by the
+  2026-09-25 no-simulator follow-up's final review: the Console's
+  `ArmRoomCommand` (`console/agent.py`) still arms any fixture name without
+  checking `[[artnet]]` coverage, so an operator who arms `array` and taps
+  would bind a device to an Art-Net fixture, giving it a `DeviceLinkSink`
+  alongside its Art-Net output (contrary to the parent spec's D2). The same
+  follow-up should refuse arming a fixture in `artnet_fixtures(config,
+  room)`.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2662 passed, 1 skipped** (the final-review fix wave, commit `efe21c9`,
