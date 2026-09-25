@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 # devicelink.agent imports harness.device_bridge, which needs the sibling
-# luxaeterna checkout. Guard it the same way tests/test_device_bridge.py and
-# tests/test_led_smoke.py do, so the core suite still collects without it
+# luxaeterna checkout. Guard it the same way tests/test_device_bridge.py
+# does, so the core suite still collects without it
 # (requirements-dev.txt states that contract).
 pytest.importorskip("luxaeterna")
 

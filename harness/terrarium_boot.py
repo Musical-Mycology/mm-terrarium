@@ -332,8 +332,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     reason: DeviceLinkAgent._tick_audio() ticks room_audio against this
     same clock (agent.py), so a welcome cue's due time (set at on_grant,
     against AudioBridge's own clock) and its expiry check (at tick, against
-    the agent's) have to agree -- harness/led_smoke.py's own
-    AudioBridge(pool, clock=clock) is the existing precedent for this.
+    the agent's) have to agree.
 
     It is ALSO threaded straight into GameServer, because the engine now
     computes every cue's target time and reads this clock both for a

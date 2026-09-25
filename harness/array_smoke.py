@@ -4,8 +4,8 @@ Usage:
     python -m harness.array_smoke --host 10.44.0.50 --pixels 288 --seconds 20
     python -m harness.array_smoke --host 10.44.0.50 --pixels 864   # full array
 
-This is the venue-side sibling of ``led_smoke.py``: same renderer, a real strip
-instead of a browser canvas, and a pixel count large enough to span universes.
+Same renderer as a Testshroom's, but a real strip instead of a browser canvas,
+and a pixel count large enough to span universes.
 
 Needs luxaeterna installed (see requirements-dev.txt).
 

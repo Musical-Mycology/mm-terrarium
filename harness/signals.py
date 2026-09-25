@@ -12,8 +12,8 @@ control/simulator_process.py sends it to the Room simulator
 it to harness/terrarium_boot.py. A bare `kill <pid>` sends it to any of
 them.
 
-This lived as an identical six-line copy in harness/led_smoke.py and
-harness/room_simulator.py, and was about to become a third and fourth. The
+This lived as an identical six-line copy in two harness scripts (both since
+deleted), and was about to become a third and fourth. The
 docstring is most of the value, so one copy means one place to record why.
 """
 
