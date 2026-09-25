@@ -313,3 +313,21 @@ def test_fixtures_view_carries_each_fixtures_color_order():
     room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
     assert [f["color_order"] for f in fixtures_view(TEST_PROFILE, room)] == \
         [f.color_order for f in TEST_PROFILE.fixtures]
+
+
+def test_fixtures_default_to_unmuted():
+    assert [f["muted"] for f in _view()["fixtures"]] == [False, False]
+
+
+def test_fixtures_carry_muted_only_for_named_fixtures():
+    view = room_view(_room(), TEST_PROFILE, _role(), {}, muted={"accent"})
+    assert [f["muted"] for f in view["fixtures"]] == [False, True]
+
+
+def test_fixtures_default_to_not_artnet():
+    assert [f["artnet"] for f in _view()["fixtures"]] == [False, False]
+
+
+def test_fixtures_carry_artnet_only_for_named_fixtures():
+    view = room_view(_room(), TEST_PROFILE, _role(), {}, artnet={"accent"})
+    assert [f["artnet"] for f in view["fixtures"]] == [False, True]

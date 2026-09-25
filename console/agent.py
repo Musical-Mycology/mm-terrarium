@@ -10,6 +10,7 @@ import time
 
 from console import protocol
 from control.bit_config import ManifestError
+from control.cues import fixture_dev
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.lobby import TERRARIUM_ADMIN
 from control.roles import RoleClass
@@ -17,7 +18,7 @@ from control.room_view import room_view
 from control.rooms import non_room_counts, room_role_name
 from control.state import State
 from control.terrarium import TerrariumState
-from control.terrarium_config import validate_rooms
+from control.terrarium_config import artnet_fixtures, validate_rooms
 from control.function_view import (
     function_fired_view, functions_view, instrument_functions_view)
 from control.functions import FIRED_BY_ADMIN_MANUAL
@@ -402,6 +403,10 @@ class ConsoleAgent:
             return protocol.error_event(
                 name, f"no {room_name} Room configured")
         if isinstance(command, protocol.ArmRoomCommand):
+            if command.fixture in self._artnet_fixtures(room_name):
+                return protocol.error_event(
+                    name, f"{command.fixture} is driven by [[artnet]] and "
+                          f"never binds a device; arming refused")
             gs.room_binding.arm(room_name, command.fixture, command.window_seconds)
         elif isinstance(command, protocol.ReleaseRoomCommand):
             gs.room_binding.release(room_name, command.fixture)
@@ -721,6 +726,14 @@ class ConsoleAgent:
     def _join_view(self) -> dict | None:
         return self._join_info() if self._join_info is not None else None
 
+    def _artnet_fixtures(self, room_name: str) -> frozenset[str]:
+        """room_name's fixtures driven by an [[artnet]] output. Such a
+        fixture never binds a device (parent spec D2), so it is never armed.
+        No Terrarium wired means no config and so no coverage."""
+        if self.terrarium is None:
+            return frozenset()
+        return artnet_fixtures(self.terrarium.config, room_name)
+
     def _current_room(self) -> dict | None:
         """Build the Room panel payload, or None when no Room is configured.
 
@@ -750,7 +763,12 @@ class ConsoleAgent:
                     "room controllers source raised; reporting no live values")
                 controllers = {}
         urls = self._canvas_urls() if self._canvas_urls else {}
-        return room_view(gs.room, profile, role, controllers, urls)
+        # By fixture token, so an unbound fixture's mute shows too
+        # (GameServer.is_muted canonicalizes a bound dev to the same key).
+        muted = {f.name for f in profile.fixtures
+                 if gs.is_muted(fixture_dev(f.name))}
+        return room_view(gs.room, profile, role, controllers, urls, muted,
+                         self._artnet_fixtures(gs.room.name))
 
     def _broadcast_room_if_changed(self) -> None:
         room = self._current_room()
@@ -815,7 +833,8 @@ class ConsoleAgent:
         return instrument_functions_view(self._present_instruments())
 
     def _current_surface_instruments(self) -> dict:
-        """dev -> instrument name, for every bound Room fixture and every
+        """dev -> instrument name, for every declared Room fixture (keyed by
+        its `@fixture:<name>` token), every bound fixture's dev, and every
         connected device: a bound fixture's dev maps to that fixture's
         instrument, and every other connected device maps to its carried
         instrument (TUNESHROOM's name when uncarried)."""
@@ -830,8 +849,19 @@ class ConsoleAgent:
         room_binding = (self.terrarium.room_binding if self.terrarium is not None
                        else gs.room_binding)
         out: dict[str, str] = {}
-        if gs.room is not None and room_binding is not None:
+        if gs.room is not None:
+            # Every declared fixture by its @fixture: token, bound or not:
+            # the Console's pickers offer fixtures by name, so an unbound
+            # fixture needs an instrument to check compatibility against.
             for fixture in gs.room.profile.fixtures:
+                out[fixture_dev(fixture.name)] = fixture.instrument.name
+        if gs.room is not None and room_binding is not None:
+            covered = self._artnet_fixtures(gs.room.name)
+            for fixture in gs.room.profile.fixtures:
+                # A covered fixture's recorded binding is never reconnected
+                # (load_room skips it), so its dev is stale.
+                if fixture.name in covered:
+                    continue
                 dev = room_binding.bound_device(gs.room.name, fixture.name)
                 if dev is not None:
                     out[dev] = fixture.instrument.name

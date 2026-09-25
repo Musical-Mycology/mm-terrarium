@@ -39,7 +39,8 @@ const BOARD = { dev: "rev1a", name: "rev1-board", role: "player" };
   // ---- empty state points at Diagnostics --------------------------------
   send({ event: "snapshot", state: "RUNNING", loaded_bit: "Rev1Bit", roles: [], registration: [],
          devices: [FIXTURE_DEV], bit_status: {}, functions: [], room: ROOM,
-         instrument_functions: {}, surface_instruments: { "sim-room-main": "dev_strip_main" },
+         instrument_functions: {},
+         surface_instruments: { "sim-room-main": "dev_strip_main", "@fixture:main": "dev_strip_main" },
          builtins: { dev_strip_main: ["flash", "stop"] } });
   const mount = byId.get("functionsMount");
   assert.ok(mount.innerHTML.includes("This Bit declares no triggers"),
@@ -48,7 +49,7 @@ const BOARD = { dev: "rev1a", name: "rev1-board", role: "player" };
 
   // ---- Diagnostics: a disabled button says why ---------------------------
   const diagPicker = functions._diagPicker();
-  diagPicker.value = "sim-room-main";
+  diagPicker.value = "@fixture:main";
   diagPicker.onchange();
   const ping = functions._diagButton("ping");
   assert.strictEqual(ping.disabled, true);
@@ -58,7 +59,8 @@ const BOARD = { dev: "rev1a", name: "rev1-board", role: "player" };
 
   // ---- DEVICE trigger with only a fixture connected: no target, no fire --
   send({ event: "functions_changed", functions: [HOLD_FLASH, IDENTIFY],
-         instrument_functions: {}, surface_instruments: { "sim-room-main": "dev_strip_main" },
+         instrument_functions: {},
+         surface_instruments: { "sim-room-main": "dev_strip_main", "@fixture:main": "dev_strip_main" },
          builtins: { dev_strip_main: ["flash", "stop"] } });
   const devPicker = byId.get("functionDev_hold_flash");
   assert.deepStrictEqual([...devPicker.options].map((o) => o.value), [""],
@@ -70,7 +72,7 @@ const BOARD = { dev: "rev1a", name: "rev1-board", role: "player" };
 
   // A SURFACE trigger still offers All and the fixture.
   const surfPicker = byId.get("functionDev_identify");
-  assert.deepStrictEqual([...surfPicker.options].map((o) => o.value), ["@all", "sim-room-main"]);
+  assert.deepStrictEqual([...surfPicker.options].map((o) => o.value), ["@all", "@fixture:main"]);
   assert.strictEqual(functions._fireBtnFor("identify").disabled, false);
 
   // ---- a board joins: it becomes the DEVICE target and Fire enables -------

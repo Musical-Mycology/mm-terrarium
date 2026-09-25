@@ -51,11 +51,17 @@ class ArtNetOutput:
     amps_per_pixel_full: float = 0.025
     lead_ms: float = 0.0
     keepalive_ms: float = 250.0
+    # Which [psus.<name>] this output's strip hangs on; None = unchecked.
+    psu: str | None = None
 
 
 _ARTNET_KEYS = frozenset({"room", "fixture", "host", "max_amps",
                           "start_universe", "port", "amps_per_pixel_full",
-                          "lead_ms", "keepalive_ms"})
+                          "lead_ms", "keepalive_ms", "psu"})
+_PSU_KEYS = frozenset({"amps"})
+# Outputs sharing one PSU must sum to at most this fraction of its rating
+# (spec 2026-09-23 section 6.3, enforced per spec 2026-09-25 section 8).
+_PSU_BUDGET_FRACTION = 0.8
 _PIXELS_PER_RGBW_UNIVERSE = 128
 _ARTNET_MAX_UNIVERSE = 32767
 
@@ -108,6 +114,8 @@ class TerrariumConfig:
     # [[artnet]] entries: one per Room fixture wired to a real WLED
     # controller. Empty means no Art-Net output is configured anywhere.
     artnet_outputs: tuple[ArtNetOutput, ...] = ()
+    # [psus.<name>] tables: PSU name -> rated amps. Validation only.
+    psus: dict[str, float] = field(default_factory=dict)
 
 
 def load_terrarium_config(path: str) -> TerrariumConfig:
@@ -234,6 +242,8 @@ def parse_terrarium_config(text: str, source: str,
             message="at least one room required: a [rooms.<NAME>] table or a "
                     "rooms catalog entry")
     artnet = _parse_artnet(raw.get("artnet"), source=source)
+    psus = _parse_psus(raw.get("psus"), source=source)
+    validate_psu_budgets(artnet, psus, source=source)
     rooms: dict[str, RoomSpec] = {}
     for rname, rraw in rooms_raw.items():
         rooms[rname] = _parse_room(rname, rraw, source=source,
@@ -244,7 +254,7 @@ def parse_terrarium_config(text: str, source: str,
     return TerrariumConfig(schema=schema, name=name, bit_paths=bit_paths,
                            rooms=rooms, instruments=instruments,
                            version=f"{schema}-{digest}", admin_devices=admin_devices,
-                           uplink=uplink, artnet_outputs=artnet)
+                           uplink=uplink, artnet_outputs=artnet, psus=psus)
 
 
 _LANE_DEV_WIRE = {"room": ROOM, "target": TARGET}
@@ -565,9 +575,13 @@ def _parse_artnet(raw, *, source: str) -> tuple[ArtNetOutput, ...]:
             numbers[name] = float(v)
         if numbers["amps_per_pixel_full"] == 0 or numbers["keepalive_ms"] == 0:
             raise err("amps_per_pixel_full and keepalive_ms must be > 0")
+        psu = entry.get("psu")
+        if psu is not None and (not isinstance(psu, str) or not psu):
+            raise err("psu must be a non-empty string naming a [psus.<name>] table")
         out.append(ArtNetOutput(room=entry["room"], fixture=entry["fixture"],
                                 host=entry["host"], max_amps=float(amps),
-                                start_universe=start, port=port, **numbers))
+                                start_universe=start, port=port, psu=psu,
+                                **numbers))
     return tuple(out)
 
 
@@ -613,6 +627,55 @@ def validate_artnet_outputs(outputs, rooms: dict, *, source: str) -> None:
                     message=f"universes {lo}-{hi} on {out.host}:{out.port} "
                             f"overlap artnet[{oi}] ({olo}-{ohi})")
         spans[(out.host, out.port)].append((lo, hi, i))
+
+
+def _parse_psus(raw, *, source: str) -> dict[str, float]:
+    """[psus.<name>] tables -> {name: rated amps}. Optional."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise TerrariumConfigError(source=source, key="psus",
+                                   message="expected [psus.<name>] tables")
+    out: dict[str, float] = {}
+    for name, entry in raw.items():
+        key = f"psus.{name}"
+        if not isinstance(entry, dict):
+            raise TerrariumConfigError(source=source, key=key,
+                                       message="expected a table")
+        unknown = sorted(set(entry) - _PSU_KEYS)
+        if unknown:
+            raise TerrariumConfigError(source=source, key=key,
+                message=f"unknown key(s) {unknown}; known: {sorted(_PSU_KEYS)}")
+        amps = entry.get("amps")
+        if isinstance(amps, bool) or not isinstance(amps, (int, float)) or amps <= 0:
+            raise TerrariumConfigError(source=source, key=key,
+                message="amps is required and must be a positive number "
+                        "(the PSU's rated current)")
+        out[name] = float(amps)
+    return out
+
+
+def validate_psu_budgets(outputs, psus: dict[str, float], *, source: str) -> None:
+    """Every output naming a PSU names a declared one, and each PSU's
+    outputs' max_amps sum to at most 80% of its rating. The sum spans every
+    room: only one Room loads at a time, but one box has one supply. An
+    output with no psu is not checked."""
+    loads: dict[str, list[tuple[int, float]]] = {}
+    for i, out in enumerate(outputs):
+        if out.psu is None:
+            continue
+        if out.psu not in psus:
+            raise TerrariumConfigError(source=source, key=f"artnet[{i}]",
+                message=f"unknown psu {out.psu!r}; known: {sorted(psus)}")
+        loads.setdefault(out.psu, []).append((i, out.max_amps))
+    for name, entries in loads.items():
+        total = sum(amps for _, amps in entries)
+        limit = _PSU_BUDGET_FRACTION * psus[name]
+        if total > limit + 1e-9:
+            parts = ", ".join(f"artnet[{i}] {amps:g} A" for i, amps in entries)
+            raise TerrariumConfigError(source=source, key=f"psus.{name}",
+                message=f"max_amps sum {total:g} A exceeds 80% of the "
+                        f"{psus[name]:g} A rating ({limit:g} A): {parts}")
 
 
 def resolve_bit_roots(config: TerrariumConfig, config_path: str) -> list[Path]:

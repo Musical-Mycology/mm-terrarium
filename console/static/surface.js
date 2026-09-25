@@ -21,7 +21,8 @@ let fixtureShapes = {};              // fixture name -> last-seen {pixel_count, 
 let canvasesByName = {};             // fixture name -> [canvas, ...] (in pixel order across rows)
 let lastPaintByName = {};            // fixture name -> [[r,g,b], ...] per pixel
 let lastFrameAt = {};                // fixture name -> ms timestamp of last room_frame
-let armedFixtures = new Set();       // fixture names showing "Armed" until next room_changed
+let armedFixtures = new Set();       // fixture names showing "Armed" until a device binds or the arm_room is refused
+let pendingArm = null;               // fixture last sent arm_room; rolled back on its refusal
 
 // Structural elements this module owns, cached as module state rather than
 // re-located via getElementById -- the DOM stub (and, harmlessly, real
@@ -36,6 +37,7 @@ let instSummaryMetaEl = null;
 let instMountEl = null;
 let functionsAccEl = null;           // created once, outside the per-fixture rebuild path
 let fixtureElByName = new Map();     // fixture name -> its .fixture wrapper element
+let muteChipByName = new Map();      // fixture name -> its "Muted" chip, toggled in place (rule 1)
 let bindStateByName = new Map();     // fixture name -> last-rendered binding-state key
 let laneTableEl = null;              // <table class="lanes"> inside instMountEl
 let laneRowBySource = new Map();     // lane source ("cc:74") -> its <tr>
@@ -118,6 +120,11 @@ export function _bindCtlFor(name) {
   if (!wrap) return undefined;
   const head = wrap.children[0];
   return head && head.children[1];
+}
+
+// The fixture head's "Muted" chip, so tests can assert it toggles in place.
+export function _muteChipFor(name) {
+  return muteChipByName.get(name);
 }
 
 // -------------------------------------------------------------- painting
@@ -208,6 +215,15 @@ function bindingControls(fixture) {
     return wrap;
   }
 
+  // An [[artnet]]-covered fixture is driven by its Art-Net sink and never
+  // binds a device (the server refuses arming it), so there is no Arm.
+  if (fixture.artnet) {
+    const chip = mk("span", "chip sage", "Art-Net");
+    chip.title = "Driven by [[artnet]]; never binds a device";
+    wrap.appendChild(chip);
+    return wrap;
+  }
+
   if (armedFixtures.has(fixture.name)) {
     const chip = mk("span", "chip gold");
     chip.appendChild(mk("span", "dot"));
@@ -235,6 +251,7 @@ function bindingControls(fixture) {
   armBtn.onclick = () => { formRow.hidden = false; };
   confirmBtn.onclick = () => {
     const windowSeconds = Number(input.value) || 30;
+    pendingArm = fixture.name;
     wire.send("arm_room",
       { room_type: currentRoom.room_type, fixture: fixture.name, window_seconds: windowSeconds },
       confirmBtn);
@@ -275,14 +292,27 @@ export function instrumentTags(instrument) {
   return row;
 }
 
+// Fills a fixture head: name, binding controls, then the Muted chip. The
+// chip comes AFTER the binding controls so _bindCtlFor (children[1]) is
+// unchanged, and it is shown/hidden in place on every render rather than
+// being part of bindStateKey: a mute change must never rebuild the head
+// and discard an armed Release confirm-tap.
+function fillFixtureHead(head, fixture) {
+  head.appendChild(mk("span", "fixname", fixture.name));
+  head.appendChild(bindingControls(fixture));
+  const chip = mk("span", "chip solid-rose", "Muted");
+  chip.hidden = !fixture.muted;
+  head.appendChild(chip);
+  muteChipByName.set(fixture.name, chip);
+}
+
 function buildFixture(fixture) {
   const wrap = document.createElement("div");
   wrap.className = "fixture";
   wrap.id = `fixture-${fixture.name}`;
 
   const head = mk("div", "fixhead");
-  head.appendChild(mk("span", "fixname", fixture.name));
-  head.appendChild(bindingControls(fixture));
+  fillFixtureHead(head, fixture);
   wrap.appendChild(head);
 
   const blockrows = mk("div", "blockrows");
@@ -320,6 +350,7 @@ function buildFixture(fixture) {
 // flag off the specific button element).
 function bindStateKey(fixture) {
   if (fixture.dev) return `dev:${fixture.dev}:${fixture.url || ""}`;
+  if (fixture.artnet) return "artnet";
   if (armedFixtures.has(fixture.name)) return "armed";
   return "unbound";
 }
@@ -545,6 +576,8 @@ function render() {
     lastPaintByName = {};
     lastFrameAt = {};
     armedFixtures.clear();
+    pendingArm = null;
+    muteChipByName.clear();
     card.appendChild(mk("p", "muted", "No Room configured"));
     return;
   }
@@ -588,6 +621,7 @@ function render() {
       const oldEl = fixtureElByName.get(oldName);
       if (oldEl) oldEl.remove();
       fixtureElByName.delete(oldName);
+      muteChipByName.delete(oldName);
       delete fixtureShapes[oldName];
     }
   }
@@ -614,11 +648,12 @@ function render() {
           const oldHead = existing.children[0];
           if (oldHead) {
             clear(oldHead);
-            oldHead.appendChild(mk("span", "fixname", fixture.name));
-            oldHead.appendChild(bindingControls(fixture));
+            fillFixtureHead(oldHead, fixture);
           }
           bindStateByName.set(fixture.name, nextBindKey);
         }
+        const muteChip = muteChipByName.get(fixture.name);
+        if (muteChip) muteChip.hidden = !fixture.muted;
         // Preserve the canvas list under this fixture's own name.
         if (canvasesByName[fixture.name]) {
           newCanvasesByName[fixture.name] = canvasesByName[fixture.name];
@@ -732,6 +767,16 @@ export function init() {
     render();
   });
   wire.on("room_frame", onRoomFrame);
+
+  // A refused arm_room must not leave its fixture showing Armed. Not
+  // cleared on room_changed: controller values make that event frequent,
+  // and clearing there would race the refusal.
+  wire.on("error", (m) => {
+    if (m.command !== "arm_room" || pendingArm === null) return;
+    armedFixtures.delete(pendingArm);
+    pendingArm = null;
+    render();
+  });
 
   // Liveness is state, not decoration -- unlike tint transitions, this
   // interval is NOT skipped under prefers-reduced-motion.

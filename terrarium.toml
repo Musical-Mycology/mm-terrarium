@@ -25,3 +25,32 @@ room_paths = ["rooms"]
 # start_universe = 0
 # max_amps = 10.0
 # lead_ms = 0          # measured at bring-up (spec section 9 step 6)
+
+# The VENUE room's two outputs, one WLED controller each (spec 2026-09-25
+# sections 7 and 8). Uncomment and replace every <...> placeholder. The
+# amps come from that spec's section 2 inputs: fiber gets its full draw
+# (3 x N x amps_per_pixel_full), bars get 80% of the PSU minus that. For a
+# no-hardware run, set both hosts to 127.0.0.1 and run one
+# `python -m harness.artnet_listen` per output (the fiber on --port 6455).
+# --- VENUE [[artnet]] example begin ---
+# [[artnet]]
+# room = "VENUE"
+# fixture = "bars"
+# host = "<WLED controller IP>"
+# start_universe = 0                # universes 0-6
+# max_amps = <BARS_MAX_AMPS>
+# psu = "led12v"
+#
+# [[artnet]]
+# room = "VENUE"
+# fixture = "fiber"
+# host = "<WLED controller IP>"
+# start_universe = 0
+# port = 6455                       # loopback only; omit on hardware
+# max_amps = <FIBER_MAX_AMPS>
+# amps_per_pixel_full = <FIBER_AMPS_PER_PIXEL>
+# psu = "led12v"                    # only if the fiber engines share this PSU
+#
+# [psus.led12v]
+# amps = <PSU_RATED_AMPS>
+# --- VENUE [[artnet]] example end ---

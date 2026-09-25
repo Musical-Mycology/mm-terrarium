@@ -658,7 +658,9 @@ every claim below is about code, not about a measured installation.
 - **`render_bench.py`** — frame-timing statistics (mean, min, p95, worst frame).
   See *Host platform* below for why the worst-frame figure is the one that
   matters. `summarise()` and `measure()` take no luxaeterna dependency, so they
-  run in the core offline suite.
+  run in the core offline suite. `measure()` paces to deadlines with
+  `harness/tick_pacer.py` (2026-09-25), so a platform's sleep overshoot is
+  not read as a slow loop.
 - **`shroom_client.py`** — the Radxa Tuneshroom's `devicelink` participation.
   Socket-free by design: `handle()` takes a decoded message and returns the
   address it handled or `""` if it dropped the frame, so the whole protocol
@@ -5167,9 +5169,11 @@ backend" for DEMO. Design:
   `run_stack --no-bit --room DEMO` against a real Arco, with `[[artnet]]`
   pointed at `127.0.0.1` and `python -m harness.artnet_listen` receiving,
   ran at **~33 fps received (interval p50 ~30 ms), 0 sequence gaps, 0 bad
-  packets**. That is below the 44 Hz engine tick; the cause has not been
-  investigated and is an open item for hardware bring-up (spec section 9),
-  not a diagnosed bug.
+  packets**. That is below the 44 Hz engine tick. **Diagnosed and fixed
+  2026-09-25:** the tick loop itself ran ~37 Hz because each loop slept a
+  fixed 1/44 after its work and macOS oversleeps that by ~4 ms; the sink
+  only ever forwarded what the tick gave it. See the *`harness/tick_pacer.py`
+  -- the 44 Hz tick paced to deadlines* entry below for the figures.
 - **No physical LED has been driven yet.** Everything above is verified
   against `harness/artnet_listen.py` and loopback UDP only. The spec's
   section 9 hardware bring-up checklist is entirely pending.
@@ -5197,22 +5201,23 @@ backend" for DEMO. Design:
   logged `Room DEMO: fixture(s) ['array'] driven by [[artnet]]; no
   simulator, no device bound`, spawned no simulator process, and received
   **~34-40 fps, 0 sequence gaps, 0 bad packets**.
-- **Bring-up prerequisite: the Console cannot target or show the mute state
-  of an unbound fixture.** `console/static/functions.js`'s
-  `fillDevicePicker` only lists devices that have joined (`fnDevices`, fed
-  by `onDevicesChanged`) plus, for a SURFACE-targeted picker, an "All"
-  catch-all option; an unbound `[[artnet]]` fixture never appears as its
-  own device-picker entry, so an operator can reach it only through "All",
-  and there is nowhere in the UI showing whether that unbound fixture is
-  currently muted. This needs a fix before a multi-fixture venue Room asks
-  an operator to manage individual fixtures by name. Related, found by the
-  2026-09-25 no-simulator follow-up's final review: the Console's
-  `ArmRoomCommand` (`console/agent.py`) still arms any fixture name without
-  checking `[[artnet]]` coverage, so an operator who arms `array` and taps
-  would bind a device to an Art-Net fixture, giving it a `DeviceLinkSink`
-  alongside its Art-Net output (contrary to the parent spec's D2). The same
-  follow-up should refuse arming a fixture in `artnet_fixtures(config,
-  room)`.
+- **(Closed 2026-09-25) Bring-up prerequisite: the Console could not target
+  or show the mute state of an unbound fixture.** Prerequisite (2) is now
+  fully closed, arming included: see *Console fixture targets and fixture
+  mute state (2026-09-25)* below for the targeting and mute-display half,
+  and the entry immediately below it for the arming half.
+- ~~**Still open: the Console's `ArmRoomCommand` (`console/agent.py`) arms
+  any fixture name without checking `[[artnet]]` coverage.**~~ **Closed
+  2026-09-25**
+  ([`.../2026-09-25-console-arm-refuses-artnet-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-console-arm-refuses-artnet-design.md)).
+  `console/agent.py` now refuses `arm_room` for a fixture in
+  `artnet_fixtures(config, room)` with `<fixture> is driven by [[artnet]]
+  and never binds a device; arming refused`; `room.fixtures[i].artnet`
+  flags coverage and the Room panel shows an `Art-Net` chip with no Arm
+  button on a covered fixture; a refused `arm_room` rolls back the
+  optimistic Armed chip on the surface; a covered fixture's stale recorded
+  binding no longer appears in `surface_instruments` (the `@fixture:<name>`
+  token entry still does).
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2662 passed, 1 skipped** (the final-review fix wave, commit `efe21c9`,
@@ -5222,7 +5227,218 @@ generated diagrams current.
 
 **Test baseline after the 2026-09-25 no-simulator follow-up:** `.venv/bin/python -m pytest tests -q` -> **2673 passed, 1 skipped**.
 
+**Test baseline after the 2026-09-25 arm refusal:** `.venv/bin/python -m pytest tests -q` -> **2713 passed, 1 skipped**. Merged with PR #145 (VENUE room): **2737 passed, 1 skipped**.
+
 **Test baseline after the 2026-09-25 mute carry-over fix:** `.venv/bin/python -m pytest tests -q` -> **2683 passed, 1 skipped** (the final-review fix wave added 2 agent tests and 1 engine test on top of the 2680 this line originally reported).
+
+### `console/static/functions.js`, `surface.js`, `control/room_view.py` -- Console fixture targets and fixture mute state (2026-09-25)
+Closes the Console bring-up prerequisite above. Design:
+[`.../2026-09-25-console-fixture-targets-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-console-fixture-targets-design.md).
+
+- **Every declared fixture is a named picker target, bound or not.** SURFACE
+  and Diagnostics pickers list All, then each fixture in profile order
+  (value `@fixture:<name>`, label `<name> (<dev>)` or `<name> (unbound)`,
+  plus ` (muted)`), then only devices NOT bound to a fixture: a bound
+  fixture's device is reached as its fixture, never as a second row.
+  DEVICE pickers are unchanged and still never offer a fixture.
+- **Fixture rows come from the Room payload, signature-gated.**
+  `functions.js` reads `room.fixtures[]` off `snapshot`/`room_changed` and
+  refills pickers only when a fixture's `(name, dev, muted)` changes;
+  `room_changed` fires on every live controller value, and an unconditional
+  refill would close an open `<select>` under the operator.
+- **A picker keeps a selected device's row when that device binds to a
+  fixture.** Losing the selection to the `@all` fallback would leave
+  Fire/Stop enabled on the wrong, broader target (one Stop would then mute
+  every surface), so a refill maps the previous value to its fixture row
+  before giving up: first via the device list's own `fixture` field, then
+  via the fixture list's `dev`, covering either arrival order between
+  `devices_changed` and `room_changed`.
+- **`functions.js` holds each row's picker by reference**
+  (`currentDeviceTargets`), the same pattern `diagPicker` uses, rather than
+  re-looking it up by id on refill: a refill must mutate the exact node the
+  row owns.
+- **Engine.** `_resolve_target` resolves a SURFACE `@fixture:` dev through
+  `_resolve_devs`, so a fire at a bound fixture lands on (and
+  `FunctionFired.devs` reports) its dev; `fire_function` refuses a token
+  naming no declared fixture (`no fixture '<name>' in Room '<room>'`) or
+  any token with no Room loaded.
+- **Wire, additive.** `room.fixtures[i].muted` (`gs.is_muted(fixture_dev(
+  name))`, computed in `ConsoleAgent._current_room`; `room_view.py` stays
+  engine-free and takes the muted NAMES) and a
+  `surface_instruments["@fixture:<name>"]` key per declared fixture, so
+  compatibility and Diagnostics buttons work for an unbound fixture.
+- **Room panel.** Each fixture head carries a `Muted` chip after its
+  binding controls, toggled in place via `hidden`, outside `bindStateKey`:
+  a mute change never rebuilds the head, so an armed Release confirm-tap
+  survives it (pinned by `tests/js/fixture_mute_chip.test.js`).
+- **Not verified live.** Offline suite only; no Console session against a
+  real Arco or Art-Net fixture has exercised this yet.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2692 passed, 1 skipped** (on top of the no-simulator follow-up's
+2673).
+
+### `console/agent.py` -- Console refuses to arm an `[[artnet]]`-covered fixture (2026-09-25)
+
+Closes the "Still open" `ArmRoomCommand` gap in the artnet entry above.
+Design:
+[`.../2026-09-25-console-arm-refuses-artnet-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-console-arm-refuses-artnet-design.md).
+
+- **`ArmRoomCommand` refuses a covered fixture.** New helper
+  `ConsoleAgent._artnet_fixtures(room_name)` wraps
+  `artnet_fixtures(config, room)`; `arm_room` for a fixture it names
+  returns an error event (`<fixture> is driven by [[artnet]] and never
+  binds a device; arming refused`) instead of calling
+  `gs.room_binding.arm`, closing the D2 gap the no-simulator follow-up
+  found.
+- **Wire and Room panel.** `fixtures_view`/`room_view` take `artnet=`, so
+  each `room.fixtures[i]` carries `artnet: bool`; `surface.js` shows an
+  `Art-Net` chip (no Arm button) for a covered unbound fixture, via a new
+  `"artnet"` `bindStateKey` state.
+- **Optimistic-arm rollback.** `arm_room` failing rolls back the
+  surface's optimistic Armed chip through `pendingArm`, so a refusal
+  leaves the fixture showing Not bound with Arm rather than a stuck gold
+  chip. Test: `tests/js/fixture_artnet_arm.test.js`.
+- **Stale binding cleanup.** `_current_surface_instruments` skips a
+  covered fixture's stale recorded binding; the `@fixture:<name>` token
+  entry stays so Diagnostics can still target it.
+- **Not verified live.** Offline suite only, same as the fixture-targets
+  slice above.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2713 passed, 1 skipped** (on top of the fixture-targets slice's 2692).
+
+### `harness/tick_pacer.py` -- the 44 Hz tick paced to deadlines (2026-09-25)
+
+Spec: [`docs/superpowers/specs/2026-09-25-tick-pacing-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-tick-pacing-design.md).
+Answers the Art-Net entry's "~33 fps against a 44 Hz tick" item above.
+
+**All figures below are dev-box figures** (the development Mac), measured
+with the same live `run_stack --ci --no-bit --room DEMO` against a real
+Arco, `[[artnet]]` for `DEMO/array` pointed at `127.0.0.1:16454`, and
+`python -m harness.artnet_listen --port 16454 --pixels 864` receiving. A
+scratch timing probe (not committed) timed the tick, the sink and the
+send path; the listener timed arrival.
+
+- **Where the loss was: the tick, not the sink.** Before the fix the tick
+  loop (`DeviceLinkAgent.poll` to `poll`) ran **36.2-37.5 Hz**, interval
+  p50 ~27.5 ms. Work per tick was small (`poll` p50 ~0.5 ms,
+  `_render_room` ~0.45 ms); `sleep(1.0 / 44.0)` asked for 22.7 ms and got
+  **p50 ~26.8 ms**. A bare `time.sleep(0.02273)` on the same box: p50
+  27.05 ms, p95 28.98 ms. The three 44 Hz loops in
+  `harness/terrarium_boot.py` (`_wait_in_setup`, `_serve_until_done`,
+  `_wait_for_load`) slept that fixed interval after their work, so the
+  period was work plus the actual (overshot) sleep.
+- **Ruled out, by measurement:** the sink's sender thread sent one frame
+  per queued frame (`_send` p50 0.3 ms; 0 keepalives, 0 late, 0 errors);
+  `PowerLimiter.apply` plus universe packing over 3456 channels costs
+  ~0.2 ms; GIL contention has nothing to hide behind at 0.5 ms of work per
+  22.7 ms period. The original ~33 fps is the same mechanism under more
+  host load.
+- **`render_bench` had the same flaw.** `measure()` slept
+  `frame_interval - elapsed`, repaying work but not oversleep, so it read
+  **37.78 fps mean, p95 27.78 ms** for a loop that could run at 44 -- the
+  tool built to catch a slow loop was slow itself.
+- **The fix: `TickPacer(period, *, clock, sleep)`.** `wait()` sleeps to an
+  absolute deadline and advances it one period, so work and oversleep are
+  repaid on the next tick and the MEAN holds at `1 / period`. A wait more
+  than one period late resyncs instead of bursting (a stall is lost time,
+  never a run of back-to-back ticks). The three loops take `pacer=None`
+  and build `TickPacer(_TICK_PERIOD, sleep=sleep)` on their own `sleep`
+  seam but TickPacer's own `time.monotonic`, NOT the loop's `clock=`:
+  existing tests script that clock with fixed-length iterators. `gs.tick`
+  keeps its nominal `1.0 / 44.0` dt. `render_bench.measure()` takes
+  `clock=`/`sleep=` and paces the same way.
+- **After (2026-09-25):** the tick holds **43.4-44.0 Hz** (interval p50
+  ~22.7 ms, p95 ~26.8 ms). `render_bench --host 127.0.0.1 --pixels 864
+  --seconds 25`: **44.00 fps mean**, p95 27.07 ms, worst 36.71 ms.
+- **The received rate is now the content's change rate, ~38-39 fps.** With
+  the tick at 44, about 13% of ticks render a fixture frame byte-identical
+  to the previous one (~190 `send_frame` calls per 220 ticks), and
+  `_render_room` correctly skips those (WLED holds the frame; the sink's
+  250 ms keepalive covers a lost packet). Sink sends ~37-38 Hz and the
+  listener receives **~38-39 fps** (interval p50 ~23.5 ms, p99 ~48 ms: one
+  skipped tick), 0 sequence gaps, 0 bad packets. Before the fix only ~2%
+  of ticks were skipped, consistent with DEMO's ambient content changing
+  at a fixed ~38/s in real time whatever the tick rate; that cause is
+  inferred from the numbers, not traced. No distinct frame is lost.
+- **Not fixed: per-tick jitter.** Deadline pacing fixes the mean, not the
+  ~4 ms each macOS sleep adds, so `render_bench`'s p95 <= 25 ms pass line
+  still fails on a Mac (27.07 ms). A sleep-short-then-spin finish is the
+  follow-up if bring-up needs it. **The Dec 4 Terrarium is a Mac**, so this
+  is the show box's behavior, not just the dev box's.
+- **Fixed in luxaeterna, not here: `MultiUniverseOutputLoop._loop`**
+  (`luxaeterna/universeset.py`) slept `interval - elapsed` the same way and
+  ran slow wherever sleep overshoots. luxaeterna#23 paces it (and
+  `OutputLoop._loop`) to deadlines with its own local `TickPacer`; it held
+  44.01 fps on the dev Mac.
+  `render_bench` drives `_loop_once()` itself, so it does not time that
+  loop.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2705 passed, 1 skipped** (merged on top of the Console fixture-targets
+slice's 2692).
+
+### `rooms/VENUE.toml`, `instruments/venue_fiber.toml`, `[psus]` -- the VENUE Room (2026-09-25)
+Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-venue-room-design.md).
+
+- **VENUE is the real venue Room: two RGBW fixtures, each on its own WLED
+  controller.** `bars` copies DEMO's `array` exactly (864 px, blocks
+  `m1`..`m6`, zones `left`/`center`/`right`, instrument `venue_array`).
+  `fiber` is one block (`e1`..`e3`) and one zone (`b1`..`b3`) per
+  fiber-optic engine, instrument `venue_fiber` (light only, so the Room
+  has one drone). DEMO stays the single-fixture dev room.
+- **N = 1 LED per fiber engine is a placeholder.** The engine part, its
+  current, the Terrarium PSU rating (the hardware doc says both 20 A and
+  12.5 A) and whether the fiber shares that PSU are the spec's section 2
+  inputs, still open. `rooms/VENUE.toml` and `tests/test_venue_room.py`'s
+  `N` change together when they close.
+- **VENUE relies on PR #143 for covered-fixture binding; this slice did
+  not change binding.** Per PR #143
+  ([`.../2026-09-25-artnet-fixture-no-simulator-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-artnet-fixture-no-simulator-design.md);
+  see its closed bring-up prerequisite in the *`devicelink/artnet_sink.py`,
+  `[[artnet]]`, routing by fixture name, native RGBW* entry above), an
+  `[[artnet]]` fixture gets no simulator and is never waited on. Both
+  VENUE fixtures are covered, so VENUE loads with nothing bound. Arming a
+  covered fixture from the Console, the gap that entry recorded, closed
+  2026-09-25: `ArmRoomCommand` now refuses `bars` and `fiber`, and the Room
+  panel shows them as `Art-Net` with no Arm button (see *`console/agent.py`
+  -- Console refuses to arm an `[[artnet]]`-covered fixture* above).
+- **`[psus.<name>]` and `[[artnet]] psu`.** Outputs naming one PSU must sum
+  `max_amps` to at most 80 % of its `amps`, checked at config load across
+  every room. An output with no `psu` is unchecked.
+- **Addressing, for Bit authors.** Script steps, generators and streams
+  use `@fixture:bars` / `@fixture:fiber`; ROOM light-manifest targets are
+  `bars`, `bars.left|center|right`, `fiber`, `fiber.b1|b2|b3`; `primary`
+  binds both fixtures. A Bit that names either fixture can list only rooms
+  that declare it. TestBit and MetronomeBit list VENUE.
+- **Operator gap closed by PR #144** (the *Console fixture targets and
+  fixture mute state (2026-09-25)* entry above): every declared fixture,
+  bound or not, is a named SURFACE and Diagnostics picker target, so
+  VENUE's `bars` and `fiber` appear as Console targets (`@fixture:bars`,
+  `@fixture:fiber`), each labelled with its binding and ` (muted)` when
+  muted, and each fixture head in the Room panel carries a `Muted` chip,
+  shown while that fixture is muted. Offline suite only; not yet
+  exercised in a live Console session.
+- **MEASURED 2026-09-25, loopback, not hardware:** `run_stack --no-bit
+  --room VENUE` against two `harness/artnet_listen.py` receivers: bars
+  32.6 fps / 0 gaps / 0 bad packets; fiber 32.5 fps / 0 gaps / 0 bad
+  packets. For comparison, PR #143's own loopback run (DEMO, one
+  receiver, recorded in the 2026-09-23 entry above) received **~34-40 fps,
+  0 sequence gaps, 0 bad packets**. Both VENUE figures are below the 44 Hz
+  engine tick, the same item as the 2026-09-23 DEMO measurement above.
+  PR #142 has since addressed it
+  ([`.../2026-09-25-tick-pacing-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-tick-pacing-design.md);
+  the *`harness/tick_pacer.py` -- the 44 Hz tick paced to deadlines* entry
+  above): the loss was the tick loop's sleep overshoot, not the sink, and
+  the tick is now paced to deadlines. That entry's after-figures are
+  DEMO-only. The VENUE figures here were measured before PR #142 and have
+  not been re-measured. No physical LED driven yet.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2729 passed, 1 skipped** (after merging PR #143, PR #144 and PR #142);
+`.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
+generated diagrams current.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -5309,6 +5525,12 @@ output loop synchronously rather than reading `MultiUniverseOutputLoop.fps`,
 because that property is a smoothed once-per-second average — exactly the
 averaging the tool exists to defeat. **No venue-box figures have been recorded
 yet**; the box does not exist.
+
+**Pace to deadlines, never a fixed sleep after the work.** macOS oversleeps
+a 22.7 ms `time.sleep` by ~4 ms (dev-box figure, 2026-09-23), which held
+Control's 44 Hz tick to ~37 Hz until `harness/tick_pacer.py` (2026-09-25).
+Any new fixed-rate loop in this repo should use `TickPacer`. Pacing fixes
+the mean rate, not per-tick jitter: on a Mac, p95 frame time stays ~27 ms.
 
 ## Relationships to other repos
 
@@ -5792,11 +6014,16 @@ Kept explicit so the doc doesn't over-claim:
   (`harness/room_simulator.py`, `harness/o2_shroom.py`); nothing implements
   the same seam against actual Tuneshroom hardware yet. **No hardware
   exists** still applies (see that entry above) until the bring-up
-  checklist is run. One bring-up prerequisite remains, described in the
+  checklist is run. Bring-up prerequisite (2), described in the
   *`devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture name,
-  native RGBW* entry above (the simulator-alongside-`[[artnet]]` one closed
-  2026-09-25): the Console's device picker cannot target or show the mute
-  state of an unbound fixture, which a multi-fixture venue Room will need.
+  native RGBW* entry above (prerequisite (1), the simulator-alongside-
+  `[[artnet]]` one, closed 2026-09-25): the Console's device picker could
+  not target or show the mute state of an unbound fixture, which a
+  multi-fixture venue Room will need. **Closed 2026-09-25**: targeting and
+  mute display by PR #144 (*Console fixture targets and fixture mute
+  state* entry above), arm refusal by the *`console/agent.py` -- Console
+  refuses to arm an `[[artnet]]`-covered fixture* entry above. The spec
+  section 9 hardware bring-up checklist is still entirely pending.
 - ~~**Nothing drives the Room's light during a live run.**~~ **Closed
   2026-08-14** by `Bit.cues(at)` (see the `Bit` interface bullet above);
   `TestBit`'s implementation and its live confirmation are described in the
@@ -5812,6 +6039,11 @@ Kept explicit so the doc doesn't over-claim:
   returns true for it) rebinds with no admin tap on the next `load_room` of
   the same room. See the *Terrarium lifecycle and config-defined rooms*
   entry below.
+- **VENUE's spec section 2 hardware inputs are still open:** fiber N (LEDs
+  per engine), fiber current, the Terrarium PSU rating, and whether the
+  fiber shares that PSU. A per-bundle fiber ambient (one `aurora` per zone
+  with a distinct hue, instead of one shared across all three bundles) is
+  also a follow-up.
 
 ## Design docs (in-repo, authoritative)
 
