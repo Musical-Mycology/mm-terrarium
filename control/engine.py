@@ -149,6 +149,9 @@ class GameServer:
         # nothing will ever look up again (spec 2026-09-23 section 8.3).
         # Every write and read goes through _mute_key/is_muted, never a raw
         # `in`/`add`/`discard` against a bound dev.
+        # A mute latched on a plain player (raw spelling) is moved to its
+        # fixture's token when that player binds (_migrate_mute_on_bind),
+        # so a bind through _bind_room never leaves a raw entry behind.
         self.muted: set[str] = set()
         # Observers registered via add_observer(). Each may implement any of
         # on_state_change(old, new), on_registration_change(),
@@ -605,7 +608,38 @@ class GameServer:
             if self.room_binding is not None:
                 self.room_binding.bind(self.room.name, fixture, dev)
             self.room.bound[fixture] = dev
+            self._migrate_mute_on_bind(dev, fixture)
         self._notify("on_devices_change")
+
+    def _migrate_mute_on_bind(self, dev: str, fixture: str) -> None:
+        """Carry a mute latched on `dev` while it was a plain player (stored
+        under its RAW spelling, since _mute_key(dev) was `dev` then) over to
+        the fixture it just bound to, so self.muted and the agent both hold
+        the one canonical @fixture:<name> token (spec
+        2026-09-25-mute-key-bind-migration section 3.1). Without this the
+        raw entry is unreachable by _mute_key once bound: is_muted reads
+        False and the Console shows the fixture unmuted while the agent,
+        still holding the raw spelling, keeps the device's breath off.
+
+        A bind is not a fire, so it never un-latches: Stop stays the panic
+        button until the next non-mute fire at the fixture.
+
+        The agent hears it through on_mute_change, in this order: unmute
+        `dev` first (its unmute branch discards BOTH the raw spelling and
+        the now-current token, dropping the stale raw blackout), then mute
+        the token (latching the fixture's blackout, purging its queued
+        cues, silencing its voice). The reverse order would have the
+        unmute discard the token just latched. If the fixture was already
+        muted by its own token the pair simply re-latches it."""
+        if dev not in self.muted:
+            return
+        token = fixture_dev(fixture)
+        self.muted.discard(dev)
+        self.muted.add(token)
+        sink = self.on_mute_change
+        if sink is not None:
+            sink(dev, False)
+            sink(token, True)
 
     def clear_devices(self) -> None:
         """Drop every known device and notify observers. Called by
@@ -1100,7 +1134,12 @@ class GameServer:
         fixture token). Discarding both spellings keeps `_unload` (which
         calls `_clear_mutes(list(self.muted))`) from leaving a stale raw
         entry latched across a bind/unbind (amended 2026-09-23 after the
-        final review)."""
+        final review).
+
+        Since 2026-09-25 _bind_room migrates such a raw entry to the
+        fixture token itself (_migrate_mute_on_bind), so this raw-spelling
+        discard is now a safety net for binds that bypass _bind_room
+        (control/terrarium.py's fast path writes room.bound directly)."""
         cleared_any = False
         for d in devs:
             found = False
