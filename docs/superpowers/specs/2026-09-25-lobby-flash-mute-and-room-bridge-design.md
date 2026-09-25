@@ -3,8 +3,8 @@
 Follow-up to
 [`2026-09-25-mute-key-bind-migration-design.md`](2026-09-25-mute-key-bind-migration-design.md).
 Fixes two pre-existing defects found by that branch's final review
-(`claude/interesting-bhaskara-62910e`). This branch stacks on that one and
-rebases onto `main` once it merges. Design approved by Chris 2026-09-25.
+(`claude/interesting-bhaskara-62910e`, merged as PR #147). Design approved
+by Chris 2026-09-25.
 
 ## 1. What the code does today (verified on the carry-over branch tip `c9d4d79` merged with `main@ed5ec9f`)
 
