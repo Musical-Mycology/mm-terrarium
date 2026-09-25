@@ -565,3 +565,42 @@ def test_wait_without_skip_still_raises_when_nothing_binds():
         wait_for_room_binding(gs, RoomBindingRegistry(), 0.2,
                               tick=lambda: None, clock=clock,
                               sleep=clock.sleep)
+
+
+VENUE_PROFILE = RoomProfile(surface_id="room_venue", fixtures=(
+    RoomFixture(name="bars", color_order="RGBW",
+               blocks=(RoomBlock("m1", 0, 10),),
+               zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),
+    RoomFixture(name="fiber", color_order="RGBW",
+               blocks=(RoomBlock("e1", 0, 3),),
+               zones=(RoomZone("all", 0, 3),), instrument=GENERIC_SURFACE),
+))
+VENUE_SPEC = RoomSpec(name="VENUE", description="",
+                      backends=("devicelink", "array"),
+                      node_id="ROOM_VENUE_NODE", profile=VENUE_PROFILE)
+
+
+def _venue_config(*covered):
+    """A config holding only VENUE, with an [[artnet]] output for each
+    fixture name in `covered`."""
+    return TerrariumConfig(
+        schema=1, name="test-terrarium", bit_paths=(),
+        rooms={"VENUE": VENUE_SPEC}, version="1-test",
+        artnet_outputs=tuple(
+            ArtNetOutput(room="VENUE", fixture=f, host="127.0.0.1", max_amps=1.0)
+            for f in covered))
+
+
+def test_an_uncovered_fixture_with_nothing_to_bind_still_times_out():
+    """A VENUE config with no [[artnet]] output on either fixture and no
+    simulator factory has nothing that can drive or bind a fixture, so the
+    load still fails with "no device joined" rather than loading empty."""
+    terrarium = make_terrarium(
+        config=_venue_config(),
+        boot_config=BootConfig(room_name="VENUE", bit_name="RoomCapableBit",
+                               array_backend="simulator",
+                               room_setup_timeout=0.2))
+    terrarium.simulator_factory = None
+    reason = terrarium.load_room("VENUE")
+    assert reason is not None and "no device joined" in reason
+    assert terrarium.state == TerrariumState.NO_ROOM

@@ -232,7 +232,7 @@ def test_test_bit_declares_room_manifests():
 
 
 def test_test_bit_supports_test_and_demo_rooms():
-    assert TestBit.room_types == {"TEST", "DEMO"}
+    assert TestBit.room_types == {"TEST", "DEMO", "VENUE"}
 
 
 def test_test_bit_role_table_declares_no_room_role_itself():

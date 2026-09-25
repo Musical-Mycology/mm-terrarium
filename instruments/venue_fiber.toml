@@ -1,0 +1,6 @@
+description = "Fiber-optic end-glow engines, one colour per bundle"
+capabilities = ["light.surface"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+  [ambient]
+  [ambient.light]
+  instruments = [ { instrument = "aurora", target = "primary" } ]
