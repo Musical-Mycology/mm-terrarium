@@ -592,9 +592,9 @@ def _venue_config(*covered):
 
 
 def test_an_uncovered_fixture_with_nothing_to_bind_still_times_out():
-    """Coverage of one fixture must not mask a Room where nothing at all
-    drives the other: with no factory and no output on either fixture the
-    load still fails, exactly as before."""
+    """A VENUE config with no [[artnet]] output on either fixture and no
+    simulator factory has nothing that can drive or bind a fixture, so the
+    load still fails with "no device joined" rather than loading empty."""
     terrarium = make_terrarium(
         config=_venue_config(),
         boot_config=BootConfig(room_name="VENUE", bit_name="RoomCapableBit",

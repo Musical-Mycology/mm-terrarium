@@ -5275,8 +5275,14 @@ Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycol
   `bars`, `bars.left|center|right`, `fiber`, `fiber.b1|b2|b3`; `primary`
   binds both fixtures. A Bit that names either fixture can list only rooms
   that declare it. TestBit and MetronomeBit list VENUE.
-- **Operator gap:** the Console cannot yet target or show the mute state
-  of an unbound fixture; `claude/console-fixture-targets` owns that.
+- **Operator gap closed by PR #144** (the *Console fixture targets and
+  fixture mute state (2026-09-25)* entry above): every declared fixture,
+  bound or not, is a named SURFACE and Diagnostics picker target, so
+  VENUE's `bars` and `fiber` appear as Console targets (`@fixture:bars`,
+  `@fixture:fiber`), each labelled with its binding and ` (muted)` when
+  muted, and each fixture head in the Room panel carries a `Muted` chip,
+  shown while that fixture is muted. Offline suite only; not yet
+  exercised in a live Console session.
 - **MEASURED 2026-09-25, loopback, not hardware:** `run_stack --no-bit
   --room VENUE` against two `harness/artnet_listen.py` receivers: bars
   32.6 fps / 0 gaps / 0 bad packets; fiber 32.5 fps / 0 gaps / 0 bad
@@ -5288,7 +5294,7 @@ Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycol
   No physical LED driven yet.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**2697 passed, 1 skipped** (after merging PR #143);
+**2716 passed, 1 skipped** (after merging PR #143 and PR #144);
 `.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
 generated diagrams current.
 

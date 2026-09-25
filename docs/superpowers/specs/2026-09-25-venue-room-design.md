@@ -77,10 +77,10 @@ Rules for completing them:
 
 - White-aware instruments and an RGBW SolidCue. Both are still the
   2026-09-23 follow-up, and W stays 0 on both fixtures in this slice.
-- Console targeting and mute display for unbound fixtures. The in-flight
-  `claude/console-fixture-targets` spec
-  (`2026-09-25-console-fixture-targets-design.md`) owns this. VENUE
-  depends on it for operator use, but not for this slice's tests.
+- Console targeting and mute display for unbound fixtures. That landed
+  separately in PR #144
+  ([`2026-09-25-console-fixture-targets-design.md`](2026-09-25-console-fixture-targets-design.md)).
+  VENUE depends on it for operator use, but not for this slice's tests.
 - The 33 fps vs 44 Hz gap. The in-flight `claude/tick-pacing` spec owns it.
 - Retiring or reshaping DEMO.
 - Multiple controllers per fixture.
@@ -330,8 +330,10 @@ Append to the 2026-09-23 spec's §9 step 8 when VENUE is on hardware:
 ## 13. Dependencies and follow-ups
 
 - **Depends on**, for operator use but not for this slice's tests: the
-  `claude/console-fixture-targets` spec, which lets an operator target and
-  see the mute state of unbound `bars` and `fiber` by name.
+  Console fixture-targets work, landed in PR #144
+  ([`2026-09-25-console-fixture-targets-design.md`](2026-09-25-console-fixture-targets-design.md)),
+  which lets an operator target and see the mute state of unbound `bars`
+  and `fiber` by name.
 - **Independent:** `claude/tick-pacing`.
 - **Follow-ups:** white-aware `venue_array` and `venue_fiber` together, and
   an RGBW SolidCue; a starfield preset for the fiber ambient; fixing the
