@@ -5170,7 +5170,13 @@ backend" for DEMO. Design:
   the `array_backend=None` path `validate_rooms` admits on coverage alone
   used to time out in `wait_for_room_binding` ("no device joined as DEMO
   Room") because nothing could ever bind `array`. Uncovered fixtures, and
-  boxes with no `[[artnet]]`, are unchanged.
+  boxes with no `[[artnet]]`, are unchanged. **MEASURED 2026-09-25, a
+  dev-box figure:** live `run_stack --no-bit --room DEMO` against a real
+  Arco, with a scratch `[[artnet]]` entry at `127.0.0.1:16454` and
+  `python -m harness.artnet_listen --port 16454 --pixels 864` receiving,
+  logged `Room DEMO: fixture(s) ['array'] driven by [[artnet]]; no
+  simulator, no device bound`, spawned no simulator process, and received
+  **~34-40 fps, 0 sequence gaps, 0 bad packets**.
 - **Bring-up prerequisite: the Console cannot target or show the mute state
   of an unbound fixture.** `console/static/functions.js`'s
   `fillDevicePicker` only lists devices that have joined (`fnDevices`, fed
