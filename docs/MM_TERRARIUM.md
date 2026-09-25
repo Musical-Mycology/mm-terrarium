@@ -439,8 +439,12 @@ Identity, the `bit_completed` `players` payload and the replay journal below
 are per
 [`2026-09-13-mycoquest-handoff-terrarium-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-13-mycoquest-handoff-terrarium-design.md).
 
-- Down-commands `load_bit` / `run` / `abort` map to `GameServer` calls (engine
-  errors become `error` events, never raised across the wire); up-events
+- Down-commands `load_bit` / `run` / `abort` / `restart` map to `GameServer`
+  calls (engine errors become `error` events, never raised across the wire).
+  `restart` is the Console's soft cycle (abort, then `load_bit` of the same
+  Bit with the same config; Room untouched; `no bit loaded` error when idle).
+  Until 2026-09-25 `parse_command` accepted it but `UplinkAgent._dispatch`
+  had no branch, so a broker restart was silently dropped. Up-events
   `state_changed` / `registration_changed` / `bit_completed` / `error` are
   pushed reactively from the observer hooks.
 - Built by `harness/terrarium_boot.py` only when `terrarium.toml` carries an

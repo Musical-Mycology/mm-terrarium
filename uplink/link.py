@@ -198,6 +198,19 @@ class UplinkAgent:
                     self._send(protocol.error_event(command_name, reason))
             elif isinstance(command, protocol.AbortCommand):
                 self.game_server.abort()
+            elif isinstance(command, protocol.RestartCommand):
+                # Same soft cycle as ConsoleAgent's RESTART (2026-09-01
+                # spec section 6): same bit, same resolved config, Room
+                # untouched. It composes abort + load_bit, both of which
+                # the uplink already accepts, so it grants no new reach.
+                gs = self.game_server
+                if gs.bit_name is None:
+                    self._send(protocol.error_event(command_name, "no bit loaded"))
+                    return
+                bit_name = gs.bit_name
+                cfg = getattr(gs.bit, "config", None)
+                gs.abort()
+                gs.load_bit(bit_name, config=cfg)
         except (InvalidTransition, BitLoadError) as exc:
             self._send(protocol.error_event(command_name, str(exc)))
 
