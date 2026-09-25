@@ -31,11 +31,14 @@ by the final review of the Console fixture-targets branch
   The Console and the device disagree until the next non-mute fire at the
   fixture, which clears both spellings (`GameServer._clear_mutes` and the
   agent's unmute branch each discard the raw and the canonical key).
-- **Mirror defect (found while tracing this one).** A bound fixture device
-  also has a player bridge in `DeviceLinkAgent.bridges` (`_on_join` builds
-  one for every granted join, ROOM class included). Muting the fixture
-  stores `@fixture:<name>`; `_feed_breath` checks the raw bound dev, misses
-  it, and keeps feeding breath to a muted fixture's device.
+- **Mirror defect (found while tracing this one).** A device that joined as
+  a player and then bound to a fixture keeps its player bridge in
+  `DeviceLinkAgent.bridges`: the ROOM join carries no role config, so
+  `_on_join` fails to build a new bridge and returns, leaving the old one
+  (verified by a probe on 2026-09-25). Muting the fixture stores
+  `@fixture:<name>`; `_feed_breath` checks the raw bound dev, misses it,
+  and keeps feeding breath to that bridge. A device that was never a
+  player has no bridge, so `_feed_breath` never sees it.
 
 ## 2. Goals and non-goals
 
@@ -130,7 +133,9 @@ is attached.
 `tests/test_engine_functions.py`:
 - **Carry-over through the real bind path.** A running GameServer with an
   armed Room binding; `MuteCue("ie1")` while unbound; `ie1` joins the armed
-  ROOM node (`_bind_room` runs). Then `gs.muted == {fixture_dev(name)}`,
+  ROOM node (`_bind_room` runs). The engine-test harness (`_running`) has
+  no ROOM role, so these call `_bind_room("ie1")` directly after arming;
+  the real `join` path is covered end to end by the agent tests below. Then `gs.muted == {fixture_dev(name)}`,
   `is_muted("ie1")` and `is_muted(fixture_dev(name))` are both True, and
   the recorded `on_mute_change` calls after the mute are exactly
   `[("ie1", False), (fixture_dev(name), True)]`.
