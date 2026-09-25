@@ -8,11 +8,12 @@ from control.device_pool import DevicePool
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from control.rooms import Room
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.state import State
 from control.teardown import TeardownStack
-from control.terrarium import Terrarium, TerrariumState
-from control.terrarium_config import RoomSpec, TerrariumConfig
+from control.terrarium import RoomBindingTimeout, Terrarium, TerrariumState, wait_for_room_binding
+from control.terrarium_config import ArtNetOutput, RoomSpec, TerrariumConfig
 from tests.test_engine import RoomCapableBit
 
 TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
@@ -421,3 +422,143 @@ def test_loading_room_is_cleared_after_a_failed_load():
         ownership_probe=lambda: "another Console owns this room")
     assert terrarium.load_room("TEST") is not None
     assert terrarium.loading_room is None
+
+
+def _artnet(room, fixture):
+    return ArtNetOutput(room=room, fixture=fixture, host="127.0.0.1",
+                        max_amps=1.0)
+
+
+def _config_with_artnet(rooms, *outputs):
+    return TerrariumConfig(schema=1, name="test-terrarium", bit_paths=(),
+                           rooms=rooms, version="1-test",
+                           artnet_outputs=tuple(outputs))
+
+
+class _RecordingBinding(RoomBindingRegistry):
+    def __init__(self):
+        super().__init__()
+        self.armed = []
+
+    def arm(self, room_name, fixture, window_seconds):
+        self.armed.append(fixture)
+        super().arm(room_name, fixture, window_seconds)
+
+
+def _recording_factory(calls):
+    def factory(teardown, fixture):
+        calls.append(fixture)
+        return f"sim-{fixture}-dev"
+    return factory
+
+
+def test_an_artnet_covered_fixture_gets_no_simulator_and_stays_unbound():
+    calls = []
+    binding = _RecordingBinding()
+    terrarium = make_terrarium(
+        _config_with_artnet({"DEMO": DEMO_SPEC}, _artnet("DEMO", "array")),
+        room_binding=binding, simulator_factory=_recording_factory(calls),
+        boot_config=BootConfig(room_name="DEMO", bit_name="RoomCapableBit",
+                               array_backend="simulator"))
+    assert terrarium.load_room("DEMO") is None
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert calls == []
+    assert binding.armed == []
+    assert terrarium.room.bound == {}
+
+
+def test_an_all_artnet_room_loads_without_the_simulator_flag():
+    """The array_backend=None path validate_rooms admits on [[artnet]]
+    coverage alone used to time out in wait_for_room_binding."""
+    terrarium = make_terrarium(
+        _config_with_artnet({"DEMO": DEMO_SPEC}, _artnet("DEMO", "array")),
+        boot_config=BootConfig(room_name="DEMO", bit_name="RoomCapableBit"))
+    terrarium.simulator_factory = None
+    assert terrarium.load_room("DEMO") is None
+    assert terrarium.room.bound == {}
+
+
+def test_a_mixed_room_spawns_a_simulator_only_for_its_uncovered_fixture():
+    calls = []
+    terrarium = make_terrarium(
+        _config_with_artnet({"TEST": TEST_SPEC}, _artnet("TEST", "accent")),
+        simulator_factory=_recording_factory(calls))
+    assert terrarium.load_room("TEST") is None
+    assert calls == ["main"]
+    assert terrarium.room.bound == {"main": "sim-main-dev"}
+
+
+def test_artnet_coverage_for_another_room_changes_nothing():
+    calls = []
+    terrarium = make_terrarium(
+        _config_with_artnet({"TEST": TEST_SPEC, "DEMO": DEMO_SPEC},
+                            _artnet("DEMO", "array")),
+        simulator_factory=_recording_factory(calls))
+    assert terrarium.load_room("TEST") is None
+    assert calls == ["main", "accent"]
+
+
+def test_a_recorded_binding_for_a_covered_fixture_is_not_reconnected():
+    binding = RoomBindingRegistry()
+    binding.bind("DEMO", "array", "old-dev")
+    terrarium = make_terrarium(
+        _config_with_artnet({"DEMO": DEMO_SPEC}, _artnet("DEMO", "array")),
+        room_binding=binding,
+        boot_config=BootConfig(room_name="DEMO", bit_name="RoomCapableBit"))
+    terrarium.simulator_factory = None
+    terrarium.known_device_connected = lambda dev: True
+    assert terrarium.load_room("DEMO") is None
+    assert terrarium.room.bound == {}
+
+
+def _waiting_gs(spec, bound=None):
+    gs = make_gs()
+    gs.room = Room(name=spec.name, profile=spec.profile, node_id=spec.node_id,
+                   bound=dict(bound or {}))
+    return gs
+
+
+class _StepClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def test_wait_never_arms_a_skipped_fixture():
+    binding = _RecordingBinding()
+    clock = _StepClock()
+    gs = _waiting_gs(TEST_SPEC)
+    wait_for_room_binding(gs, binding, 0.2, tick=lambda: None, clock=clock,
+                          sleep=clock.sleep, skip=frozenset({"main"}))
+    assert binding.armed == ["accent"]
+
+
+def test_wait_with_a_skipped_fixture_does_not_raise_when_nothing_binds():
+    clock = _StepClock()
+    gs = _waiting_gs(TEST_SPEC)
+    wait_for_room_binding(gs, RoomBindingRegistry(), 0.2, tick=lambda: None,
+                          clock=clock, sleep=clock.sleep,
+                          skip=frozenset({"accent"}))
+    assert gs.room.bound == {}
+
+
+def test_wait_returns_at_once_when_every_fixture_is_skipped():
+    binding = _RecordingBinding()
+    gs = _waiting_gs(DEMO_SPEC)
+    wait_for_room_binding(gs, binding, 0.2, tick=lambda: None,
+                          skip=frozenset({"array"}))
+    assert binding.armed == []
+
+
+def test_wait_without_skip_still_raises_when_nothing_binds():
+    clock = _StepClock()
+    gs = _waiting_gs(TEST_SPEC)
+    with pytest.raises(RoomBindingTimeout):
+        wait_for_room_binding(gs, RoomBindingRegistry(), 0.2,
+                              tick=lambda: None, clock=clock,
+                              sleep=clock.sleep)
