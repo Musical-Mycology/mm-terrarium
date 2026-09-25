@@ -10,6 +10,11 @@ synthesis while feeding a 44 Hz render loop. Numbers from a laptop do not carry
 over, and the M1a-era "under 50 ms" figure was measured with Control not in the
 path.
 
+measure() paces its own ticks to deadlines (harness/tick_pacer.py). It times
+the render path at a correctly paced rate; it does NOT time luxaeterna's own
+threaded MultiUniverseOutputLoop._run, which still sleeps
+`frame_interval - elapsed` and so runs slow wherever sleep overshoots.
+
 Usage (ON THE VENUE BOX, never a laptop):
     python -m harness.render_bench --host 10.44.0.50 --pixels 864 --seconds 120
 
@@ -23,6 +28,8 @@ import argparse
 import time
 from dataclasses import dataclass
 from typing import Sequence
+
+from harness.tick_pacer import TickPacer
 
 
 @dataclass(frozen=True)
@@ -53,24 +60,32 @@ def summarise(intervals: Sequence[float]) -> FrameStats:
     )
 
 
-def measure(loop, seconds: float) -> FrameStats:
+def measure(loop, seconds: float, *, clock=time.monotonic,
+            sleep=time.sleep) -> FrameStats:
     """Drive *loop* synchronously for *seconds*, timing every tick.
 
     Synchronous on purpose: the loop's own background thread reports a smoothed
     once-per-second FPS, which is exactly the averaging that hides a stall.
+
+    Paced by TickPacer (deadlines, not `frame_interval - elapsed`), so the
+    platform's sleep overshoot is repaid rather than read as a slow loop;
+    each interval is start-of-tick to start-of-next-tick.
     """
+    pacer = TickPacer(loop.frame_interval, clock=clock, sleep=sleep)
     intervals: list[float] = []
     loop.backend.open()
     try:
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            tick = time.monotonic()
+        deadline = clock() + seconds
+        prev: float | None = None
+        while True:
+            tick = clock()
+            if prev is not None:
+                intervals.append(tick - prev)
+            if tick >= deadline:
+                break
+            prev = tick
             loop._loop_once()
-            elapsed = time.monotonic() - tick
-            sleep = loop.frame_interval - elapsed
-            if sleep > 0:
-                time.sleep(sleep)
-            intervals.append(time.monotonic() - tick)
+            pacer.wait()
     finally:
         loop.backend.close()
     return summarise(intervals)
