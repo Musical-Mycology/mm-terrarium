@@ -5170,21 +5170,51 @@ backend" for DEMO. Design:
   coverage before hardware bring-up proceeds: the spec's section 9 step 4
   "unbound array fixture" mute test assumes the array fixture has no
   simulator competing with it.
-- **Bring-up prerequisite: the Console cannot target or show the mute state
-  of an unbound fixture.** `console/static/functions.js`'s
-  `fillDevicePicker` only lists devices that have joined (`fnDevices`, fed
-  by `onDevicesChanged`) plus, for a SURFACE-targeted picker, an "All"
-  catch-all option; an unbound `[[artnet]]` fixture never appears as its
-  own device-picker entry, so an operator can reach it only through "All",
-  and there is nowhere in the UI showing whether that unbound fixture is
-  currently muted. This needs a fix before a multi-fixture venue Room asks
-  an operator to manage individual fixtures by name.
+- **(Closed 2026-09-25) Bring-up prerequisite: the Console could not target
+  or show the mute state of an unbound fixture.** See *Console fixture
+  targets and fixture mute state (2026-09-25)* below.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2662 passed, 1 skipped** (the final-review fix wave, commit `efe21c9`,
 added 3 tests);
 `.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
 generated diagrams current.
+
+### `console/static/functions.js`, `surface.js`, `control/room_view.py` -- Console fixture targets and fixture mute state (2026-09-25)
+Closes the Console bring-up prerequisite above. Design:
+[`.../2026-09-25-console-fixture-targets-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-console-fixture-targets-design.md).
+
+- **Every declared fixture is a named picker target, bound or not.** SURFACE
+  and Diagnostics pickers list All, then each fixture in profile order
+  (value `@fixture:<name>`, label `<name> (<dev>)` or `<name> (unbound)`,
+  plus ` (muted)`), then only devices NOT bound to a fixture: a bound
+  fixture's device is reached as its fixture, never as a second row.
+  DEVICE pickers are unchanged and still never offer a fixture.
+- **Fixture rows come from the Room payload, signature-gated.**
+  `functions.js` reads `room.fixtures[]` off `snapshot`/`room_changed` and
+  refills pickers only when a fixture's `(name, dev, muted)` changes;
+  `room_changed` fires on every live controller value, and an unconditional
+  refill would close an open `<select>` under the operator.
+- **`functions.js` holds each row's picker by reference (`currentDeviceTargets`), the same pattern `diagPicker` uses, rather than re-looking it up by id on refill.**
+- **Engine.** `_resolve_target` resolves a SURFACE `@fixture:` dev through
+  `_resolve_devs`, so a fire at a bound fixture lands on (and
+  `FunctionFired.devs` reports) its dev; `fire_function` refuses a token
+  naming no declared fixture (`no fixture '<name>' in Room '<room>'`) or
+  any token with no Room loaded.
+- **Wire, additive.** `room.fixtures[i].muted` (`gs.is_muted(fixture_dev(
+  name))`, computed in `ConsoleAgent._current_room`; `room_view.py` stays
+  engine-free and takes the muted NAMES) and a
+  `surface_instruments["@fixture:<name>"]` key per declared fixture, so
+  compatibility and Diagnostics buttons work for an unbound fixture.
+- **Room panel.** Each fixture head carries a `Muted` chip after its
+  binding controls, toggled in place via `hidden`, outside `bindStateKey`:
+  a mute change never rebuilds the head, so an armed Release confirm-tap
+  survives it (pinned by `tests/js/fixture_mute_chip.test.js`).
+- **Not verified live.** Offline suite only; no Console session against a
+  real Arco or Art-Net fixture has exercised this yet.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2678 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 
