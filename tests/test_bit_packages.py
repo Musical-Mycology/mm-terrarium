@@ -40,3 +40,12 @@ def test_capturebit_package_resolves_and_constructs():
     cls = reg.bit_class("CaptureBit")
     bit = cls(config=reg.resolve_config("CaptureBit"))
     assert isinstance(bit.status(), dict)
+
+
+def test_no_shipped_bit_shows_placeholder_copy_in_the_console():
+    """A scaffolded bit.toml ships TODO description/notes; the Console
+    shows them verbatim to the operator."""
+    reg = BitRegistry.discover()
+    for row in reg.list_view(include_hidden=True):
+        for field in ("description", "notes"):
+            assert "TODO" not in (row.get(field) or ""), (row["name"], field)
