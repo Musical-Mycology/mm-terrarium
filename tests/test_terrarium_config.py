@@ -7,8 +7,9 @@ import pytest
 from control.cues import TARGET
 from control.functions import Function, FunctionKind, GeneratorSpec
 from control.terrarium_config import (
-    TerrariumConfigError, load_terrarium_config, parse_terrarium_config,
-    resolve_bit_roots, validate_rooms,
+    ArtNetOutput, TerrariumConfigError, load_terrarium_config,
+    parse_terrarium_config, resolve_bit_roots, validate_psu_budgets,
+    validate_rooms,
 )
 
 MINIMAL = """
@@ -908,3 +909,73 @@ def test_artnet_universes_beyond_the_artnet_maximum_are_refused():
     with pytest.raises(TerrariumConfigError, match="32767") as exc:
         parse_terrarium_config(text, source="t.toml")
     assert exc.value.key == "artnet[0]"
+
+
+def test_an_artnet_output_may_name_a_declared_psu():
+    cfg = _with_artnet("""
+        [[artnet]]
+        room = "ONE"
+        fixture = "main"
+        host = "127.0.0.1"
+        max_amps = 3.0
+        psu = "led12v"
+
+        [psus.led12v]
+        amps = 12.5
+    """)
+    (out,) = cfg.artnet_outputs
+    assert out.psu == "led12v"
+    assert cfg.psus == {"led12v": 12.5}
+
+
+def test_an_output_without_a_psu_is_unchecked():
+    cfg = _with_artnet("""
+        [[artnet]]
+        room = "ONE"
+        fixture = "main"
+        host = "127.0.0.1"
+        max_amps = 99.0
+    """)
+    assert cfg.artnet_outputs[0].psu is None
+    assert cfg.psus == {}
+
+
+@pytest.mark.parametrize("extra, key, needle", [
+    ('[[artnet]]\nroom = "ONE"\nfixture = "main"\nhost = "h"\nmax_amps = 1.0\npsu = "nope"\n',
+     "artnet[0]", "unknown psu"),
+    ('[[artnet]]\nroom = "ONE"\nfixture = "main"\nhost = "h"\nmax_amps = 1.0\npsu = ""\n',
+     "artnet[0]", "psu"),
+    ('[psus.p]\namps = 0\n', "psus.p", "amps"),
+    ('[psus.p]\namps = 12.5\nvolts = 12\n', "psus.p", "unknown key"),
+    ('psus = 3\n', "psus", "expected"),
+])
+def test_a_bad_psu_is_a_located_error(extra, key, needle):
+    # `psus = 3` must sit at the top level, before MINIMAL's tables.
+    text = (extra + ARTNET_BASE) if extra.startswith("psus =") else (
+        ARTNET_BASE + "\n" + extra)
+    with pytest.raises(TerrariumConfigError, match=needle) as exc:
+        parse_terrarium_config(text, source="t.toml")
+    assert exc.value.key == key
+
+
+def _out(fixture, amps, psu="p"):
+    return ArtNetOutput(room="R", fixture=fixture, host="h", max_amps=amps, psu=psu)
+
+
+def test_psu_budget_accepts_a_sum_of_exactly_80_percent():
+    validate_psu_budgets((_out("bars", 9.4), _out("fiber", 0.6)), {"p": 12.5},
+                         source="t")
+
+
+def test_psu_budget_refuses_a_sum_just_over_80_percent():
+    with pytest.raises(TerrariumConfigError, match="exceeds 80%") as exc:
+        validate_psu_budgets((_out("bars", 9.5), _out("fiber", 0.6)), {"p": 12.5},
+                             source="t")
+    assert exc.value.key == "psus.p"
+    assert "artnet[0]" in str(exc.value) and "artnet[1]" in str(exc.value)
+
+
+def test_psu_budget_ignores_outputs_on_other_or_no_psus():
+    validate_psu_budgets((_out("bars", 9.4), _out("fiber", 50.0, psu=None),
+                          _out("x", 3.0, psu="q")), {"p": 12.5, "q": 5.0},
+                         source="t")
