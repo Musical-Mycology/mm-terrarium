@@ -120,7 +120,21 @@ function fillDevicePicker(picker, withRoom) {
   for (const { dev, muted } of offered) {
     add(dev, muted ? `${dev} (muted)` : dev);
   }
-  if (values.indexOf(previous) >= 0) picker.value = previous;
+  if (values.indexOf(previous) >= 0) {
+    picker.value = previous;
+    return;
+  }
+  // The previous selection can vanish because its device just bound to a
+  // fixture (the device row is only listed unbound). Map it to that
+  // fixture's row before giving up and falling back to the first option --
+  // fnDevices goes first because devices_changed can arrive before
+  // room_changed, and fnFixtures covers the reverse arrival order.
+  const byDevice = fnDevices.find((d) => d.dev === previous && d.fixture);
+  const mappedName = byDevice
+    ? byDevice.fixture
+    : (fnFixtures.find((f) => f.dev === previous) || {}).name;
+  const mappedValue = mappedName ? FIXTURE_PREFIX + mappedName : null;
+  if (mappedValue && values.indexOf(mappedValue) >= 0) picker.value = mappedValue;
   else if (values.length) picker.value = values[0];
 }
 
