@@ -5232,6 +5232,8 @@ generated diagrams current.
 
 **Test baseline after the 2026-09-25 arm refusal:** `.venv/bin/python -m pytest tests -q` -> **2713 passed, 1 skipped**. Merged with PR #145 (VENUE room): **2737 passed, 1 skipped**.
 
+**Test baseline after the 2026-09-25 mute carry-over fix:** `.venv/bin/python -m pytest tests -q` -> **2683 passed, 1 skipped** (the final-review fix wave added 2 agent tests and 1 engine test on top of the 2680 this line originally reported). Merged with main at `ed5ec9f` (PR #146): **2747 passed, 1 skipped**.
+
 ### `console/static/functions.js`, `surface.js`, `control/room_view.py` -- Console fixture targets and fixture mute state (2026-09-25)
 Closes the Console bring-up prerequisite above. Design:
 [`.../2026-09-25-console-fixture-targets-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-console-fixture-targets-design.md).
@@ -5440,8 +5442,6 @@ Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycol
 **2729 passed, 1 skipped** (after merging PR #143, PR #144 and PR #142);
 `.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
 generated diagrams current.
-
-**Test baseline after the 2026-09-25 mute carry-over fix:** `.venv/bin/python -m pytest tests -q` -> **2683 passed, 1 skipped** (the final-review fix wave added 2 agent tests and 1 engine test on top of the 2680 this line originally reported).
 
 ### `devicelink/agent.py` -- A muted surface ignores every SolidCue; a Room join drops the player bridge (2026-09-25)
 Design:
