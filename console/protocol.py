@@ -40,12 +40,11 @@ __all__ = [
     "log_event",
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
     "room_changed_event", "join_changed_event", "room_frame_event",
-    "lobby_changed_event",
     "functions_changed_event", "function_fired_event", "FireFunctionCommand",
-    "ListDesignsCommand", "GetDesignCommand", "SaveDesignCommand",
+    "GetDesignCommand", "SaveDesignCommand",
     "PublishDesignCommand", "CloneDesignCommand",
     "design_row", "catalog_error_row",
-    "designs_listed_event", "designs_changed_event",
+    "designs_changed_event",
     "design_event",
     "BenchStartCommand", "BenchStopCommand", "BenchFireCommand",
     "BenchLaneCommand", "ListCapturesCommand", "CaptureStatsCommand",
@@ -83,16 +82,15 @@ def device_view(info, role_name, url=None, muted=False, fixture=None) -> dict:
             "fixture": fixture}
 
 
-def snapshot_event(*, state, installed_bits, loaded_bit, roles,
+def snapshot_event(*, state, loaded_bit, roles,
                    registration, devices, bit_status, room=None,
                    functions=None, terrarium_state=None, rooms=None,
                    instrument_functions=None, surface_instruments=None,
-                   builtins=None, designs=None, design_vocab=None, join=None,
-                   lobby=None) -> dict:
+                   builtins=None, designs=None, design_vocab=None,
+                   join=None) -> dict:
     return {
         "event": "snapshot",
         "state": state,
-        "installed_bits": installed_bits,
         "loaded_bit": loaded_bit,
         "roles": roles,
         "registration": registration,
@@ -108,7 +106,6 @@ def snapshot_event(*, state, installed_bits, loaded_bit, roles,
         "designs": designs or [],
         "design_vocab": design_vocab,
         "join": join,
-        "lobby": lobby,
     }
 
 
@@ -123,11 +120,6 @@ def join_changed_event(join) -> dict:
     `join` is control.join_info.build_join_info()'s output, or None when
     no join provider is wired up."""
     return {"event": "join_changed", "join": join}
-
-
-def lobby_changed_event(lobby: str | None) -> dict:
-    """The lobby is WAITING / FULL while a Bit sits in SETUP, else None."""
-    return {"event": "lobby_changed", "lobby": lobby}
 
 
 def room_frame_event(fixture: str, channels) -> dict:
@@ -200,11 +192,6 @@ class FireFunctionCommand:
 
 
 @dataclass
-class ListDesignsCommand:
-    kind: str = "instrument"
-
-
-@dataclass
 class GetDesignCommand:
     state: str
     name: str
@@ -246,10 +233,6 @@ def catalog_error_row(kind: str, message: str) -> dict:
     return {"name": "<rooms catalog>" if kind == "room" else "<instrument catalog>",
             "state": "published", "kind": kind, "error": message,
             "placeholder": True}
-
-
-def designs_listed_event(designs: list) -> dict:
-    return {"event": "designs_listed", "designs": designs}
 
 
 def designs_changed_event(designs: list) -> dict:
@@ -372,8 +355,6 @@ def parse_admin_command(msg: dict):
         if dev is not None and not isinstance(dev, str):
             raise ValueError("fire_function 'dev' must be a string when given")
         return FireFunctionCommand(name=name, dev=dev or None)
-    if command == "list_designs":
-        return ListDesignsCommand(kind=_design_kind(msg))
     if command == "get_design":
         state = msg.get("state")
         if state not in ("published", "draft"):

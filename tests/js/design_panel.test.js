@@ -29,7 +29,7 @@ const DESIGNS = [
   rows[1].onclick();
   assert.deepStrictEqual(selected, DESIGNS[1]);
 
-  // -- snapshot/designs_listed feed the panel's own list ------------------
+  // -- snapshot/designs_changed feed the panel's own list ------------------
   send({ event: "snapshot", designs: DESIGNS });
   assert.ok(byId.get("designList").innerHTML.includes("tuneshroom"));
 

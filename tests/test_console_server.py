@@ -48,7 +48,6 @@ def test_client_gets_snapshot_and_command_round_trips():
             # first poll drains the new client and sends its snapshot.
             snap = _recv_event(ws, agent, "snapshot")
             assert snap["state"] == "IDLE"
-            assert snap["installed_bits"] == ["TestBit"]
 
             ws.send(json.dumps({"command": "load_bit", "name": "TestBit"}))
             state = _recv_event(ws, agent, "state_changed")
