@@ -38,7 +38,9 @@ by the final review of the Console fixture-targets branch
   (verified by a probe on 2026-09-25). Muting the fixture stores
   `@fixture:<name>`; `_feed_breath` checks the raw bound dev, misses it,
   and keeps feeding breath to that bridge. A device that was never a
-  player has no bridge, so `_feed_breath` never sees it.
+  player has no bridge, so `_feed_breath` never sees it. The stale bridge
+  itself is removed by
+  [`2026-09-25-lobby-flash-mute-and-room-bridge-design.md`](2026-09-25-lobby-flash-mute-and-room-bridge-design.md).
 
 ## 2. Goals and non-goals
 

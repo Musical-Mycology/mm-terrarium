@@ -883,8 +883,19 @@ class DeviceLinkAgent:
         """A Bit's SolidCue reached the engine sink. Store the override and
         force a resend this tick (see _apply_override's use at both send
         seams) so it goes out immediately, stamped with the cue's own `when`
-        rather than this tick's stream-frame origin."""
+        rather than this tick's stream-frame origin.
+
+        Dropped for a muted surface. Every SolidCue source lands here: the
+        engine (a Bit's SolidCue), the lobby's set_override sink (join,
+        invite and start-feedback flashes) and the __flash__ sentinel. An
+        override written over the latched blackout would expire and take
+        the blackout with it, leaving a muted surface lit. A non-mute fire
+        is unaffected: the engine clears the mute before it dispatches the
+        fire's cues (spec 2026-09-25 lobby-flash-mute-and-room-bridge
+        section 3.1)."""
         dev = self._fixture_key(dev)
+        if dev in self._muted:
+            return
         expires = None if duration is None else when + duration
         self._overrides[dev] = (rgb, level, expires)
         self._invalidate_frame(dev)
@@ -1114,11 +1125,12 @@ class DeviceLinkAgent:
                     self._check_closing_bound(dev)
                 continue
             frame = bytes(universe.get_frame()[:_DEVICE_CHANNELS])
-            # By fixture key, not raw dev: a device that joined as a player
-            # then bound to a Room fixture keeps its player bridge (the ROOM
-            # join builds none), so a mute latched under the fixture's token
-            # must still black this frame out (spec 2026-09-25
-            # mute-key-bind-migration section 3.2).
+            # By fixture key, not raw dev: this loop renders any dev that
+            # still holds a bridge (a ROOM join now drops it, but a dev can
+            # be bound to a fixture some other way, e.g. a direct
+            # room.bound write -- the fast-path shape), so a mute latched
+            # under the fixture's token must still black this frame out
+            # (spec 2026-09-25 mute-key-bind-migration section 3.2).
             frame = self._apply_override(self._fixture_key(dev), frame, order)
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame
@@ -1268,6 +1280,18 @@ class DeviceLinkAgent:
             self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
             self._notify_join_denied(dev, args[1], result.reason)
             return
+        if result.role_class == RoleClass.ROOM:
+            # A ROOM grant binds dev to a Room fixture (GameServer._bind_room)
+            # and carries no role config, so there is no bridge to build and
+            # nothing to tell the device: its fixture's frames start arriving
+            # on /<dev>/leds. Registration already released any player role
+            # dev held (a role switch), so drop that role's bridge too, or dev
+            # gets two LED streams (spec 2026-09-25
+            # lobby-flash-mute-and-room-bridge section 3.2).
+            self._drop_player_bridge(dev)
+            if self._lobby is not None:
+                self._lobby.forget(dev)
+            return
         bridge = DeviceBridge(capability=self._capability, clock=self._clock)
         try:
             bridge.on_grant(result)
@@ -1298,6 +1322,25 @@ class DeviceLinkAgent:
         if self._lobby is not None:
             self._lobby.forget(dev)
         self._send(dev, protocol.role_event(dev, result.config))
+
+    def _drop_player_bridge(self, dev: str) -> None:
+        """Forget dev's player-side render state at once: no closing fade
+        (the fixture's frames take over dev's LEDs this tick), no
+        /<dev>/release (dev is not leaving) and no server.drop_dev (its
+        connection stays live). _canvas_urls stays, and _muted is left to
+        the engine's bind migration, which already moves a raw player mute
+        onto the fixture token. A no-op for a dev that never held a
+        bridge."""
+        self.bridges.pop(dev, None)
+        self._universes.pop(dev, None)
+        self._last_frames.pop(dev, None)
+        self._pending_at.pop(dev, None)
+        self._last_breath.pop(dev, None)
+        self._breathless.discard(dev)
+        self._closing.pop(dev, None)
+        self._closing_revived.discard(dev)
+        self._overrides.pop(dev, None)
+        self._override_only.discard(dev)
 
     def _on_verb(self, dev: str, verb: str, args: list,
                  gesture_time: float = 0.0, client=None) -> None:
@@ -1530,10 +1573,9 @@ class DeviceLinkAgent:
         for payload in self._light_cues.due(self._clock()):
             if payload[0] == "__flash__":
                 # _flash_fixtures_now's sentinel: a feedback flash that has
-                # to outlive the lobby runtime that asked for it. Muted devs
-                # are checked here rather than purged in _on_mute_change,
-                # whose predicate matches on payload[0] == dev and so never
-                # matches a tagged payload.
+                # to outlive the lobby runtime that asked for it. `dev` is
+                # already a fixture token. _on_solid_cue's own mute guard is
+                # the one that matters; this check just skips the call.
                 _tag, dev, rgb, when = payload
                 if dev in self._muted:
                     continue

@@ -2593,8 +2593,9 @@ def _player_then_room(monkeypatch, *, mute_as_player):
     """ie1 joins TEST_PLAYER_NODE (so it holds a player bridge), is
     optionally muted as that player, then taps in through the REAL join
     path as the armed `main` fixture (GameServer.join -> _bind_room). The
-    ROOM join cannot build a bridge (no role config), so ie1 keeps its
-    player bridge: the one _feed_breath iterates."""
+    ROOM join drops the player bridge (spec 2026-09-25
+    lobby-flash-mute-and-room-bridge section 3.2), so ie1 gets only the
+    fixture's frames."""
     _fake_sessions(monkeypatch)
     clk = _Clock()
     binding = RoomBindingRegistry(clock=clk)
@@ -2614,6 +2615,26 @@ def _player_then_room(monkeypatch, *, mute_as_player):
     server.deliver("c1", "/game/join", "ss", ["ie1", "ROOM_TEST_NODE"])
     agent.poll()
     assert gs.room.bound["main"] == "ie1"
+    assert "ie1" not in agent.bridges
+    return gs, agent, clk, server
+
+
+def _player_bound_directly(monkeypatch):
+    """ie1 joins TEST_PLAYER_NODE, then `main` is bound to it by writing
+    room.bound directly (the fast-path shape, no ROOM join), so ie1 still
+    holds its player bridge. Covers the _fixture_key mute reads in
+    _feed_breath and _render_frames for any bridge-holding bound dev."""
+    _fake_sessions(monkeypatch)
+    clk = _Clock()
+    gs = GameServer({"TestBit": TestBit}, clock=clk)
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+    gs.load_bit("TestBit")
+    _hello(server, agent, client="c1", dev="ie1")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    gs.room.bound["main"] = "ie1"
     assert "ie1" in agent.bridges
     return gs, agent, clk, server
 
@@ -2631,7 +2652,7 @@ def _breaths_after_advance(agent, clk, dev="ie1"):
 def test_a_player_mute_carries_over_to_the_fixture_on_both_sides(monkeypatch):
     """The defect: muted as a player, then bound. Engine and agent must
     both hold ONLY the fixture token -- the Console (is_muted) and the
-    device (breath, blackout) agree the fixture is muted."""
+    device (blackout) agree the fixture is muted."""
     gs, agent, clk, server = _player_then_room(monkeypatch, mute_as_player=True)
 
     assert gs.muted == {fixture_dev("main")}
@@ -2639,10 +2660,10 @@ def test_a_player_mute_carries_over_to_the_fixture_on_both_sides(monkeypatch):
     assert agent._muted == {fixture_dev("main")}
     assert agent._overrides[fixture_dev("main")] == ((0, 0, 0), 0.0, None)
     assert "ie1" not in agent._overrides
-    assert _breaths_after_advance(agent, clk) == []
+    assert "ie1" not in agent.bridges
 
 
-def test_a_carried_over_mute_lifts_and_breath_resumes(monkeypatch):
+def test_a_carried_over_mute_lifts(monkeypatch):
     gs, agent, clk, server = _player_then_room(monkeypatch, mute_as_player=True)
 
     gs._clear_mutes(["ie1"])
@@ -2650,14 +2671,12 @@ def test_a_carried_over_mute_lifts_and_breath_resumes(monkeypatch):
     assert gs.muted == set()
     assert agent._muted == set()
     assert fixture_dev("main") not in agent._overrides
-    assert _breaths_after_advance(agent, clk)
 
 
 def test_a_muted_fixtures_bound_device_is_not_fed_breath(monkeypatch):
-    """The mirror defect: the fixture is muted by its own token while ie1
-    is bound; _feed_breath used to check the raw "ie1", miss the token,
-    and keep breathing a muted fixture's device."""
-    gs, agent, clk, server = _player_then_room(monkeypatch, mute_as_player=False)
+    """_feed_breath reads the mute by _fixture_key: a bridge-holding dev
+    bound to a muted fixture is not breathed."""
+    gs, agent, clk, server = _player_bound_directly(monkeypatch)
     assert _breaths_after_advance(agent, clk)      # breathing before the mute
 
     gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk())
@@ -2669,7 +2688,7 @@ def test_a_muted_fixtures_bound_device_is_not_fed_breath(monkeypatch):
 def test_an_unmuted_bound_device_still_breathes(monkeypatch):
     """Guard against over-suppression from reading the mute by
     _fixture_key: nothing muted, the bound device keeps breathing."""
-    gs, agent, clk, server = _player_then_room(monkeypatch, mute_as_player=False)
+    gs, agent, clk, server = _player_bound_directly(monkeypatch)
     assert agent._muted == set()
     assert _breaths_after_advance(agent, clk)
 
@@ -2683,26 +2702,19 @@ def _player_frames_sent(server, dev="ie1"):
             and len(m["args"][0]) == _DEVICE_CHANNELS]
 
 
-def test_a_carried_over_mute_blacks_the_stale_player_bridge_too(monkeypatch):
-    """The defect: ie1 keeps its player bridge after binding to `main` (the
-    ROOM join builds none), and _render_frames used to read the override by
-    the raw dev, which the carried-over mute never latches under -- so the
-    stale player bridge kept rendering lit 36-channel frames to /ie1/leds
-    while the fixture was muted."""
-    gs, agent, clk, server = _player_then_room(monkeypatch, mute_as_player=True)
-    # The lobby's own scored-join ceremony (a separate, tracked-elsewhere
-    # set_override path) flashes white/green on the same fixture token
-    # shortly after this join; disabling it here keeps this test isolated
-    # to the _render_frames override-key defect under test.
+def test_a_fixture_muted_by_its_own_token_blacks_its_bound_players_bridge(monkeypatch):
+    """_render_frames reads the override by _fixture_key: a bridge-holding
+    dev bound to a muted fixture gets black 36-channel frames."""
+    gs, agent, clk, server = _player_bound_directly(monkeypatch)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk())
+    # Isolate from the lobby's own scored-join ceremony.
     agent._lobby = None
     server.sent.clear()
     for _ in range(5):
         clk.advance(0.2)
         # Force a resend each tick: the override paints the same colour
-        # every time it is applied, so without this the render would
-        # dedupe against its own last frame and never touch the wire again,
-        # proving nothing either way. Popping the cache makes each tick
-        # prove afresh what _apply_override actually produced this render.
+        # every time, so without this the render would dedupe against its
+        # own last frame and prove nothing either way.
         agent._last_frames.pop("ie1", None)
         agent.poll()
     frames = _player_frames_sent(server)
@@ -2710,25 +2722,81 @@ def test_a_carried_over_mute_blacks_the_stale_player_bridge_too(monkeypatch):
     assert all(f == bytes(_DEVICE_CHANNELS) for f in frames)
 
 
-def test_a_fixture_muted_by_its_own_token_blacks_its_bound_players_bridge(monkeypatch):
-    """Mirror of the above: the fixture is muted by its own token (not
-    carried over from a player mute) while ie1 is bound to it. Same stale
-    player bridge, same raw-dev override read."""
-    gs, agent, clk, server = _player_then_room(monkeypatch, mute_as_player=False)
-    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk())
-    # See the note in the sibling test above: isolate from the lobby's own
-    # scored-join ceremony, tracked separately.
-    agent._lobby = None
+@pytest.mark.parametrize("mute_as_player", [False, True])
+def test_a_room_join_leaves_one_led_stream(monkeypatch, mute_as_player):
+    """The double-stream defect: the stale player bridge kept sending
+    36-channel frames to /ie1/leds beside the fixture's own frames."""
+    gs, agent, clk, server = _player_then_room(monkeypatch,
+                                               mute_as_player=mute_as_player)
+    # The bind itself (inside _player_then_room) is a rebind for the
+    # fixture, so it already forced one fixture frame out to /ie1/leds --
+    # capture that before clearing. When muted, that frame's the last one:
+    # _render_room dedupes against st.last_frame, and a latched blackout
+    # never changes, so nothing more is sent for the rest of this test.
+    # That is correct (not the defect under test), so the "still reaches
+    # ie1" check below counts either that bind-time frame or a later one,
+    # while player-frame absence is still checked only from here on.
+    bound_fixture_frame_seen = any(
+        d == "ie1" and m["address"] == "/ie1/leds"
+        and len(m["args"][0]) != _DEVICE_CHANNELS
+        for d, m in server.sent)
     server.sent.clear()
-    for _ in range(5):
-        clk.advance(0.2)
-        # See the note in the sibling test above: force a resend each tick
-        # so the assertion proves what this render actually produced.
-        agent._last_frames.pop("ie1", None)
+    for _ in range(int(2.0 / (1 / 44))):
+        clk.advance(1 / 44)
         agent.poll()
-    frames = _player_frames_sent(server)
-    assert frames, "no 36-channel /ie1/leds frame was sent after the bind"
-    assert all(f == bytes(_DEVICE_CHANNELS) for f in frames)
+    assert _player_frames_sent(server) == []
+    assert bound_fixture_frame_seen or [
+        m for d, m in server.sent
+        if d == "ie1" and m["address"] == "/ie1/leds"], \
+        "the fixture's own frames must still reach ie1"
+
+
+def test_a_room_join_after_a_player_join_sends_no_error_and_no_role(monkeypatch):
+    _fake_sessions(monkeypatch)
+    clk = _Clock()
+    binding = RoomBindingRegistry(clock=clk)
+    gs = GameServer({"TestBit": TestBit}, room_binding=binding, clock=clk)
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+    gs.load_bit("TestBit")
+    _hello(server, agent, client="c1", dev="ie1")
+    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    agent.poll()
+    roles_before = len(server.addressed("/ie1/role"))
+    binding.arm("TEST", "main", window_seconds=10.0)
+
+    server.deliver("c1", "/game/join", "ss", ["ie1", "ROOM_TEST_NODE"])
+    agent.poll()
+
+    assert gs.room.bound["main"] == "ie1"
+    assert server.addressed("/ie1/error") == []
+    assert len(server.addressed("/ie1/role")) == roles_before
+    assert "ie1" not in agent.bridges
+    assert "ie1" not in agent._universes
+
+
+def test_a_never_a_player_room_join_sends_no_error(monkeypatch, caplog):
+    _fake_sessions(monkeypatch)
+    clk = _Clock()
+    binding = RoomBindingRegistry(clock=clk)
+    gs = GameServer({"TestBit": TestBit}, room_binding=binding, clock=clk)
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk)
+    gs.load_bit("TestBit")
+    _hello(server, agent, client="c2", dev="ie2")
+    binding.arm("TEST", "main", window_seconds=10.0)
+
+    server.deliver("c2", "/game/join", "ss", ["ie2", "ROOM_TEST_NODE"])
+    agent.poll()
+
+    assert gs.room.bound["main"] == "ie2"
+    assert server.addressed("/ie2/error") == []
+    assert server.addressed("/ie2/role") == []
+    assert "ie2" not in agent.bridges
+    assert not any("building the LightSession" in r.message
+                   for r in caplog.records)
 
 
 def test_unwire_room_drops_every_fixtures_muted_token(monkeypatch):
@@ -2756,6 +2824,111 @@ def test_an_rgbw_solid_override_leaves_white_dark(monkeypatch):
     agent._on_solid_cue(fixture_dev("array"), (255, 0, 0), 1.0, 5.0, 100.0)
     agent._render_room()
     assert frames["array"] == bytes([255, 0, 0, 0]) * 864
+
+
+# --- a muted surface ignores every SolidCue (spec 2026-09-25 ------------------
+# --- lobby-flash-mute-and-room-bridge section 3.1) ----------------------------
+
+_BLACKOUT = ((0, 0, 0), 0.0, None)
+
+
+def test_a_solid_cue_on_a_muted_fixture_keeps_the_blackout(monkeypatch):
+    """The core defect: a short SolidCue used to overwrite the latched
+    blackout, then expire, leaving the fixture lit while still muted."""
+    gs = _room_ready_game_server()
+    _fake_sessions(monkeypatch)
+    clk = _Clock(100.0)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=clk)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk())
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+
+    agent._on_solid_cue("sim-room-main", (0, 255, 0), 1.0, 0.25, clk())
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+    clk.advance(1.0)
+    agent.poll()
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+    assert fixture_dev("main") in agent._muted
+
+
+def test_the_lobby_set_override_sink_respects_a_fixture_mute(monkeypatch):
+    gs = _room_ready_game_server()
+    _fake_sessions(monkeypatch)
+    clk = _Clock(100.0)
+    frames = {}
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=clk,
+                            on_room_frame=lambda n, f: frames.__setitem__(n, f))
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=clk())
+
+    agent._lobby_sinks().set_override("sim-room-main", (0, 255, 0), 1.0, 0.25)
+
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+    agent._render_room()
+    assert frames["main"] == bytes(len(frames["main"]))
+
+
+def test_the_flash_sentinel_respects_a_fixture_mute(monkeypatch):
+    gs = _room_ready_game_server(bound={})
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=100.0)
+
+    agent._flash_fixtures_now((0, 255, 0), 1)
+    agent._drain_light_cues()
+
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+    assert agent._overrides[fixture_dev("accent")][0] == (0, 255, 0)
+
+
+def test_a_bit_solid_cue_is_dropped_for_a_muted_fixture(monkeypatch):
+    gs = _room_ready_game_server()
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=100.0)
+
+    gs._dispatch_cues([SolidCue(fixture_dev("main"), (255, 0, 0), 1.0, 0.5)],
+                      at=100.0)
+
+    assert agent._overrides[fixture_dev("main")] == _BLACKOUT
+
+
+def test_a_bit_solid_cue_is_dropped_for_a_muted_player():
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    gs._dispatch_cues([MuteCue(dev)], at=clk())
+
+    gs._dispatch_cues([SolidCue(dev, (255, 0, 0), 1.0, 0.5)], at=clk())
+    clk.advance(1.0)
+    agent.poll()
+
+    assert agent._overrides[dev] == _BLACKOUT
+    assert set(_last_leds_payload(server, dev)) == {0}
+
+
+def test_a_non_mute_fire_still_unlatches_and_applies_its_solid(monkeypatch):
+    """The guard must not block the one sanctioned un-latch: the engine
+    clears the mute before it dispatches the fire's SolidCue."""
+    gs = _room_ready_game_server()
+    _fake_sessions(monkeypatch)
+    agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0)
+    gs._dispatch_cues([MuteCue(fixture_dev("main"))], at=100.0)
+
+    assert gs.fire_function("flash", fired_by="admin-manual",
+                            dev=fixture_dev("main")) is None
+
+    assert fixture_dev("main") not in agent._muted
+    assert agent._overrides[fixture_dev("main")][0] == (255, 255, 255)
+
+
+def test_a_queued_join_flash_cannot_unblack_a_carried_over_mute(monkeypatch):
+    """The end-to-end case: ie1 joins as a scored player (the lobby queues
+    its green join flash), is muted, then binds to `main`. The queued flash
+    resolves to @fixture:main and used to un-black it for good."""
+    gs, agent, clk, server = _player_then_room(monkeypatch, mute_as_player=True)
+    assert agent._lobby is not None
+    for _ in range(int(3.0 / (1 / 44))):
+        clk.advance(1 / 44)
+        agent.poll()
+        assert agent._overrides.get(fixture_dev("main")) == _BLACKOUT
+    assert fixture_dev("main") in agent._muted
 
 
 class _FakeOutput:

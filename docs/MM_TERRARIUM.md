@@ -5122,11 +5122,14 @@ backend" for DEMO. Design:
   `send_play` sink now read the mute through `_fixture_key`, which also
   fixed a mirror defect: a device that was a player before binding keeps
   its player bridge (the ROOM join builds none), and `_feed_breath` used to
-  keep breathing it after its fixture was muted. `_render_frames` now
-  applies the override by `_fixture_key` too, so a formerly-player bound
-  device's stale player bridge stays dark while its fixture is muted. A
-  direct `room.bound` write (mainly tests, not `control/terrarium.py`'s
-  real fast path, which runs at Room load while nothing is muted yet)
+  keep breathing it after its fixture was muted. Closed 2026-09-25: a ROOM
+  join now drops that bridge (see *A muted surface ignores every SolidCue;
+  a Room join drops the player bridge* below). `_render_frames` now
+  applies the override by `_fixture_key` too, so (at the time) a
+  formerly-player bound device's stale player bridge stayed dark while its
+  fixture is muted. A direct `room.bound` write (mainly tests, not
+  `control/terrarium.py`'s real fast path, which runs at Room load while
+  nothing is muted yet)
   still relies on the both-spellings discard in `_clear_mutes` and the
   agent's unmute branch, as a safety net.
 - **Persistent per-Room physical outputs.** `outputs_for`/`_ensure_outputs`
@@ -5443,6 +5446,36 @@ Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycol
 **2729 passed, 1 skipped** (after merging PR #143, PR #144 and PR #142);
 `.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
 generated diagrams current.
+
+### `devicelink/agent.py` -- A muted surface ignores every SolidCue; a Room join drops the player bridge (2026-09-25)
+Design:
+[`.../2026-09-25-lobby-flash-mute-and-room-bridge-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-lobby-flash-mute-and-room-bridge-design.md).
+
+- **A SolidCue can no longer undo Stop.** `_on_solid_cue` drops the cue
+  when `_fixture_key(dev)` is muted. Before, any lobby flash (the scored-join
+  flash, the invite flash, `_flash_fixtures` start feedback) or a Bit's own
+  SolidCue overwrote the latched blackout, then expired and took the
+  blackout with it, so a muted surface rendered lit while `_muted` still
+  held it. A non-mute fire still un-latches: the engine clears the mute
+  before it dispatches the fire's cues.
+- **A ROOM join builds no bridge and sends no `/error`.** `_on_join`
+  short-circuits a ROOM-class grant: `_drop_player_bridge(dev)` forgets the
+  device's player-era bridge and render state (no fade, no `/release`, no
+  `drop_dev`), and nothing is sent. Before, every Room tap logged a
+  traceback and sent `/<dev>/error role "could not build light session"`,
+  and a device that had joined as a player kept its bridge, so it got two
+  LED streams (36-channel player frames and the fixture's frames).
+- **Still open:** registration releases the player role on a ROOM role
+  switch, but the engine never calls `Bit.on_leave` for it. Also,
+  `harness/o2_shroom.py`'s one-shot mode (no `--persist`) treats an
+  unanswered `--join-retry` deny as the end of the round: a one-shot sim
+  that taps in as a Room fixture with `--join-retry` prints
+  `DEVICE_JOIN_DENIED` and exits while still bound. Exposure is low
+  (Terrarium-spawned fixture sims use `--no-join`, and `run_stack` devices
+  join the Bit's join node, not a ROOM node), but firmware that retries an
+  unanswered join should be checked before hardware bring-up.
+
+**Test baseline after this fix:** `.venv/bin/python -m pytest tests -q` -> **2758 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 
