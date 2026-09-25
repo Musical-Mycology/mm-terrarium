@@ -630,7 +630,12 @@ class GameServer:
         the token (latching the fixture's blackout, purging its queued
         cues, silencing its voice). The reverse order would have the
         unmute discard the token just latched. If the fixture was already
-        muted by its own token the pair simply re-latches it."""
+        muted by its own token the pair simply re-latches it.
+
+        Each call is guarded on its own, matching _clear_mutes's existing
+        per-call try/except: a raising unmute must not stop the mute call
+        that follows it, or a broken sink would leave the fixture's own
+        blackout un-latched even though self.muted already says muted."""
         if dev not in self.muted:
             return
         token = fixture_dev(fixture)
@@ -638,8 +643,14 @@ class GameServer:
         self.muted.add(token)
         sink = self.on_mute_change
         if sink is not None:
-            sink(dev, False)
-            sink(token, True)
+            try:
+                sink(dev, False)
+            except Exception:
+                logger.exception("on_mute_change failed for %s", dev)
+            try:
+                sink(token, True)
+            except Exception:
+                logger.exception("on_mute_change failed for %s", token)
 
     def clear_devices(self) -> None:
         """Drop every known device and notify observers. Called by
@@ -1138,8 +1149,9 @@ class GameServer:
 
         Since 2026-09-25 _bind_room migrates such a raw entry to the
         fixture token itself (_migrate_mute_on_bind), so this raw-spelling
-        discard is now a safety net for binds that bypass _bind_room
-        (control/terrarium.py's fast path writes room.bound directly)."""
+        discard is now a safety net for direct room.bound writes (mainly
+        tests) rather than the real fast path, which runs at Room load
+        while GameServer.muted is still empty and so never needs it."""
         cleared_any = False
         for d in devs:
             found = False

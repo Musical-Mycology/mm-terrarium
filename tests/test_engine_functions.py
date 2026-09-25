@@ -796,6 +796,29 @@ def test_a_bind_with_nothing_muted_makes_no_mute_calls():
     assert calls == []
 
 
+def test_migrate_mute_on_bind_survives_a_raising_unmute_call():
+    """Each of _migrate_mute_on_bind's two on_mute_change calls is guarded
+    on its own (matching _clear_mutes's existing per-call try/except): a
+    sink that raises unmuting the raw dev must not stop the mute call that
+    follows it, so the fixture still ends up muted."""
+    gs, _, _ = _running(bound={})
+    gs._dispatch_cues([MuteCue("ie1")], at=100.0)
+    calls = []
+
+    def sink(dev, muted):
+        calls.append((dev, muted))
+        if (dev, muted) == ("ie1", False):
+            raise RuntimeError("boom")
+
+    gs.on_mute_change = sink
+    _armed(gs)
+
+    gs._bind_room("ie1")   # must not raise
+
+    assert calls == [("ie1", False), (fixture_dev("main"), True)]
+    assert gs.muted == {fixture_dev("main")}
+
+
 def test_a_carried_over_mute_lifts_on_the_next_non_mute_fire():
     """The carried-over latch is an ordinary fixture mute: the house rule
     (any non-mute fire at the surface un-latches it) applies unchanged."""

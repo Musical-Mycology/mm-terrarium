@@ -121,12 +121,18 @@ checks `fixture_dev(name)`.
 
 ## 4. Error handling
 
-`on_mute_change` is called unguarded here, as at the existing MuteCue and
-`_clear_mutes` call sites; the agent's `_on_mute_change` already guards
-its only fallible step (the Room-voice silence) so a failure cannot reach
-the engine tick (boundary rule 2). The migration mutates `self.muted`
-before calling out, so the engine's state is correct even if no transport
-is attached.
+Corrected after the final review: the existing call sites are already
+guarded, just not identically. `_clear_mutes` wraps its own `on_mute_change`
+call in a per-call try/except (`logger.exception("on_mute_change failed for
+%s", d)`); `_dispatch_cues` guards the whole per-cue block rather than the
+sink call alone. The migration now follows `_clear_mutes`'s pattern: each of
+its two `on_mute_change` calls (unmute the raw dev, mute the token) is
+wrapped in its own try/except, so a raising unmute cannot stop the mute
+call that follows it. The agent's `_on_mute_change` also already guards its
+only fallible step (the Room-voice silence) so a failure cannot reach the
+engine tick (boundary rule 2). The migration mutates `self.muted` before
+calling out, so the engine's state is correct even if no transport is
+attached.
 
 ## 5. Testing (TDD: each test written and seen failing first)
 

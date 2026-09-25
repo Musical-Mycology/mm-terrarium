@@ -1114,7 +1114,12 @@ class DeviceLinkAgent:
                     self._check_closing_bound(dev)
                 continue
             frame = bytes(universe.get_frame()[:_DEVICE_CHANNELS])
-            frame = self._apply_override(dev, frame, order)
+            # By fixture key, not raw dev: a device that joined as a player
+            # then bound to a Room fixture keeps its player bridge (the ROOM
+            # join builds none), so a mute latched under the fixture's token
+            # must still black this frame out (spec 2026-09-25
+            # mute-key-bind-migration section 3.2).
+            frame = self._apply_override(self._fixture_key(dev), frame, order)
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame
                 # The cue's own time when a cue produced this frame, else

@@ -5116,10 +5116,13 @@ backend" for DEMO. Design:
   `send_play` sink now read the mute through `_fixture_key`, which also
   fixed a mirror defect: a device that was a player before binding keeps
   its player bridge (the ROOM join builds none), and `_feed_breath` used to
-  keep breathing it after its fixture was muted. Binds that bypass
-  `_bind_room` (`control/terrarium.py`'s fast path, at Room load when
-  nothing is muted) still rely on the both-spellings discard in
-  `_clear_mutes` and the agent's unmute branch.
+  keep breathing it after its fixture was muted. `_render_frames` now
+  applies the override by `_fixture_key` too, so a formerly-player bound
+  device's stale player bridge stays dark while its fixture is muted. A
+  direct `room.bound` write (mainly tests, not `control/terrarium.py`'s
+  real fast path, which runs at Room load while nothing is muted yet)
+  still relies on the both-spellings discard in `_clear_mutes` and the
+  agent's unmute branch, as a safety net.
 - **Persistent per-Room physical outputs.** `outputs_for`/`_ensure_outputs`
   build one long-lived `ArtNetFixtureSink` per `[[artnet]]` entry at Room
   load and keep it across renders (a fresh sink every tick would drop its
@@ -5219,7 +5222,7 @@ generated diagrams current.
 
 **Test baseline after the 2026-09-25 no-simulator follow-up:** `.venv/bin/python -m pytest tests -q` -> **2673 passed, 1 skipped**.
 
-**Test baseline after the 2026-09-25 mute carry-over fix:** `.venv/bin/python -m pytest tests -q` -> **2680 passed, 1 skipped**.
+**Test baseline after the 2026-09-25 mute carry-over fix:** `.venv/bin/python -m pytest tests -q` -> **2683 passed, 1 skipped** (the final-review fix wave added 2 agent tests and 1 engine test on top of the 2680 this line originally reported).
 
 ## Boundary rules (the load-bearing invariants)
 
