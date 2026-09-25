@@ -5224,7 +5224,7 @@ Closes the Console bring-up prerequisite above. Design:
   real Arco or Art-Net fixture has exercised this yet.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
-**2678 passed, 1 skipped**.
+**2681 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 
