@@ -160,7 +160,7 @@ Constraints the file must satisfy, all enforced by existing validation:
 ```toml
 description = "Fiber-optic end-glow engines, one colour per bundle"
 capabilities = ["light.surface"]
-accepted_cues = ["midi", "solid", "mute"]
+accepted_cues = ["midi", "play", "solid", "mute"]
   [ambient]
   [ambient.light]
   instruments = [ { instrument = "aurora", target = "primary" } ]
@@ -172,9 +172,11 @@ accepted_cues = ["midi", "solid", "mute"]
   `aurora` per zone with distinct `hue`) is a follow-up. It needs
   confirming that an instrument's own ambient may target its fixture's
   local zone names, and that is not needed for this slice.
-- **No `play` cue and no `[[functions]]`.** The built-ins `flash` and
-  `stop` come free from `light.surface` (`control/builtins.py`). `play`
-  needs a sample voice this fixture does not have.
+- **No `[[functions]]`.** The built-ins `flash` and `stop` come free from
+  `light.surface` (`control/builtins.py`). `play` is accepted because
+  `tests/test_engine_functions.py`'s `test_shipped_instruments_accept_every_cue_kind`
+  requires every shipped instrument to accept every cue kind; the fixture
+  has no sample voice, so a `play` addressed to it does nothing.
 - The "spore-like starfield" look in the hardware doc is creative work
   and not in scope. Any registered luxaeterna preset (`bloom`, `glow`,
   `aurora`, `rainbow`) can replace `aurora` later.
@@ -260,7 +262,7 @@ double-bind prerequisite.
 
 - **`Terrarium` computes `covered`** at `load_room`: the set of fixture
   names in this room that have an `[[artnet]]` entry
-  (`self.config.artnet`).
+  (`self.config.artnet_outputs`).
 - **`_bind_room_fast_path(..., covered)` skips covered fixtures**, both
   the simulator spawn and the recorded-device reconnect. A covered fixture
   stays unbound, and its output drives it.

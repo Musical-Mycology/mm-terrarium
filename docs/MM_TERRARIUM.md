@@ -5153,8 +5153,11 @@ backend" for DEMO. Design:
 - **No physical LED has been driven yet.** Everything above is verified
   against `harness/artnet_listen.py` and loopback UDP only. The spec's
   section 9 hardware bring-up checklist is entirely pending.
-- **Bring-up prerequisite: the shipped entry point always ALSO spawns a
-  WebSim simulator for an `[[artnet]]` fixture.** `harness/terrarium_boot.py`
+- **Closed 2026-09-25 (the VENUE Room entry below):** an `[[artnet]]`-covered
+  fixture now spawns no simulator and is never waited for, and an
+  all-Art-Net Room loads with no bound device. The shipped entry point
+  always ALSO spawns a WebSim simulator for an `[[artnet]]` fixture.
+  `harness/terrarium_boot.py`
   always sets `BootConfig.array_backend="simulator"` for DEMO (see the
   comment at its `BootConfig(...)` call), and the Terrarium's fast bind path
   spawns a simulator for every fixture regardless of that Room's own
@@ -5183,6 +5186,47 @@ backend" for DEMO. Design:
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2662 passed, 1 skipped** (the final-review fix wave, commit `efe21c9`,
 added 3 tests);
+`.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
+generated diagrams current.
+
+### `rooms/VENUE.toml`, `instruments/venue_fiber.toml`, covered-fixture binding, `[psus]` -- the VENUE Room (2026-09-25)
+Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-venue-room-design.md).
+
+- **VENUE is the real venue Room: two RGBW fixtures, each on its own WLED
+  controller.** `bars` copies DEMO's `array` exactly (864 px, blocks
+  `m1`..`m6`, zones `left`/`center`/`right`, instrument `venue_array`).
+  `fiber` is one block (`e1`..`e3`) and one zone (`b1`..`b3`) per
+  fiber-optic engine, instrument `venue_fiber` (light only, so the Room
+  has one drone). DEMO stays the single-fixture dev room.
+- **N = 1 LED per fiber engine is a placeholder.** The engine part, its
+  current, the Terrarium PSU rating (the hardware doc says both 20 A and
+  12.5 A) and whether the fiber shares that PSU are the spec's section 2
+  inputs, still open. `rooms/VENUE.toml` and `tests/test_venue_room.py`'s
+  `N` change together when they close.
+- **An `[[artnet]]`-covered fixture needs no binding.** `load_room` spawns
+  no simulator for it, reattaches no recorded device to it, and does not
+  wait for it; an all-Art-Net Room loads with nothing bound. Before this,
+  such a Room timed out in `wait_for_room_binding` (found by reading, then
+  pinned by a regression test).
+- **`[psus.<name>]` and `[[artnet]] psu`.** Outputs naming one PSU must sum
+  `max_amps` to at most 80 % of its `amps`, checked at config load across
+  every room. An output with no `psu` is unchecked.
+- **Addressing, for Bit authors.** Script steps, generators and streams
+  use `@fixture:bars` / `@fixture:fiber`; ROOM light-manifest targets are
+  `bars`, `bars.left|center|right`, `fiber`, `fiber.b1|b2|b3`; `primary`
+  binds both fixtures. A Bit that names either fixture can list only rooms
+  that declare it. TestBit and MetronomeBit list VENUE.
+- **Operator gap:** the Console cannot yet target or show the mute state
+  of an unbound fixture; `claude/console-fixture-targets` owns that.
+- **MEASURED 2026-09-25, loopback, not hardware:** `run_stack --no-bit
+  --room VENUE` against two `harness/artnet_listen.py` receivers: bars
+  32.6 fps / 0 gaps / 0 bad packets; fiber 32.5 fps / 0 gaps / 0 bad
+  packets. Both below the 44 Hz engine tick -- the same open item as the
+  2026-09-23 DEMO measurement above, owned by the `claude/tick-pacing`
+  spec, not investigated here. No physical LED driven yet.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2689 passed, 1 skipped**;
 `.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
 generated diagrams current.
 
@@ -5776,6 +5820,11 @@ Kept explicit so the doc doesn't over-claim:
   returns true for it) rebinds with no admin tap on the next `load_room` of
   the same room. See the *Terrarium lifecycle and config-defined rooms*
   entry below.
+- **VENUE's spec section 2 hardware inputs are still open:** fiber N (LEDs
+  per engine), fiber current, the Terrarium PSU rating, and whether the
+  fiber shares that PSU. A per-bundle fiber ambient (one `aurora` per zone
+  with a distinct hue, instead of one shared across all three bundles) is
+  also a follow-up.
 
 ## Design docs (in-repo, authoritative)
 
