@@ -5121,6 +5121,26 @@ backend" for DEMO. Design:
   WLED output has no o2lite session to answer to), now with a warning
   logged once per Room rather than silently, matching the accepted
   limitation this closes.
+- **A player's mute carries over when the device binds (2026-09-25).**
+  Design:
+  [`.../2026-09-25-mute-key-bind-migration-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-mute-key-bind-migration-design.md).
+  A device muted while still a plain player is latched under its raw dev
+  id; `GameServer._bind_room` now moves that entry to the fixture's
+  `@fixture:<name>` token (`_migrate_mute_on_bind`) and tells the agent
+  through `on_mute_change` (unmute the raw dev, then mute the token), so
+  `GameServer.muted` and `DeviceLinkAgent._muted` hold one canonical
+  spelling and the Console Room panel shows the fixture muted. A bind is
+  not a fire, so it never un-latches. `_feed_breath` and the lobby
+  `send_play` sink now read the mute through `_fixture_key`, which also
+  fixed a mirror defect: a device that was a player before binding keeps
+  its player bridge (the ROOM join builds none), and `_feed_breath` used to
+  keep breathing it after its fixture was muted. `_render_frames` now
+  applies the override by `_fixture_key` too, so a formerly-player bound
+  device's stale player bridge stays dark while its fixture is muted. A
+  direct `room.bound` write (mainly tests, not `control/terrarium.py`'s
+  real fast path, which runs at Room load while nothing is muted yet)
+  still relies on the both-spellings discard in `_clear_mutes` and the
+  agent's unmute branch, as a safety net.
 - **Persistent per-Room physical outputs.** `outputs_for`/`_ensure_outputs`
   build one long-lived `ArtNetFixtureSink` per `[[artnet]]` entry at Room
   load and keep it across renders (a fresh sink every tick would drop its
@@ -5198,16 +5218,22 @@ backend" for DEMO. Design:
   simulator, no device bound`, spawned no simulator process, and received
   **~34-40 fps, 0 sequence gaps, 0 bad packets**.
 - **(Closed 2026-09-25) Bring-up prerequisite: the Console could not target
-  or show the mute state of an unbound fixture.** See *Console fixture
-  targets and fixture mute state (2026-09-25)* below.
-- **Still open: the Console's `ArmRoomCommand` (`console/agent.py`) arms
-  any fixture name without checking `[[artnet]]` coverage** (found by the
-  2026-09-25 no-simulator follow-up's final review), so an operator who arms
-  `array` and taps would bind a device to an Art-Net fixture, giving it a
-  `DeviceLinkSink` alongside its Art-Net output (contrary to the parent
-  spec's D2). A follow-up should refuse arming a fixture in
-  `artnet_fixtures(config, room)`. The Console fixture-targets slice below
-  does not change arming.
+  or show the mute state of an unbound fixture.** Prerequisite (2) is now
+  fully closed, arming included: see *Console fixture targets and fixture
+  mute state (2026-09-25)* below for the targeting and mute-display half,
+  and the entry immediately below it for the arming half.
+- ~~**Still open: the Console's `ArmRoomCommand` (`console/agent.py`) arms
+  any fixture name without checking `[[artnet]]` coverage.**~~ **Closed
+  2026-09-25**
+  ([`.../2026-09-25-console-arm-refuses-artnet-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-console-arm-refuses-artnet-design.md)).
+  `console/agent.py` now refuses `arm_room` for a fixture in
+  `artnet_fixtures(config, room)` with `<fixture> is driven by [[artnet]]
+  and never binds a device; arming refused`; `room.fixtures[i].artnet`
+  flags coverage and the Room panel shows an `Art-Net` chip with no Arm
+  button on a covered fixture; a refused `arm_room` rolls back the
+  optimistic Armed chip on the surface; a covered fixture's stale recorded
+  binding no longer appears in `surface_instruments` (the `@fixture:<name>`
+  token entry still does).
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2662 passed, 1 skipped** (the final-review fix wave, commit `efe21c9`,
@@ -5216,6 +5242,10 @@ added 3 tests);
 generated diagrams current.
 
 **Test baseline after the 2026-09-25 no-simulator follow-up:** `.venv/bin/python -m pytest tests -q` -> **2673 passed, 1 skipped**.
+
+**Test baseline after the 2026-09-25 arm refusal:** `.venv/bin/python -m pytest tests -q` -> **2713 passed, 1 skipped**. Merged with PR #145 (VENUE room): **2737 passed, 1 skipped**.
+
+**Test baseline after the 2026-09-25 mute carry-over fix:** `.venv/bin/python -m pytest tests -q` -> **2683 passed, 1 skipped** (the final-review fix wave added 2 agent tests and 1 engine test on top of the 2680 this line originally reported). Merged with main at `ed5ec9f` (PR #146): **2747 passed, 1 skipped**.
 
 ### `console/static/functions.js`, `surface.js`, `control/room_view.py` -- Console fixture targets and fixture mute state (2026-09-25)
 Closes the Console bring-up prerequisite above. Design:
@@ -5263,6 +5293,36 @@ Closes the Console bring-up prerequisite above. Design:
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2692 passed, 1 skipped** (on top of the no-simulator follow-up's
 2673).
+
+### `console/agent.py` -- Console refuses to arm an `[[artnet]]`-covered fixture (2026-09-25)
+
+Closes the "Still open" `ArmRoomCommand` gap in the artnet entry above.
+Design:
+[`.../2026-09-25-console-arm-refuses-artnet-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-console-arm-refuses-artnet-design.md).
+
+- **`ArmRoomCommand` refuses a covered fixture.** New helper
+  `ConsoleAgent._artnet_fixtures(room_name)` wraps
+  `artnet_fixtures(config, room)`; `arm_room` for a fixture it names
+  returns an error event (`<fixture> is driven by [[artnet]] and never
+  binds a device; arming refused`) instead of calling
+  `gs.room_binding.arm`, closing the D2 gap the no-simulator follow-up
+  found.
+- **Wire and Room panel.** `fixtures_view`/`room_view` take `artnet=`, so
+  each `room.fixtures[i]` carries `artnet: bool`; `surface.js` shows an
+  `Art-Net` chip (no Arm button) for a covered unbound fixture, via a new
+  `"artnet"` `bindStateKey` state.
+- **Optimistic-arm rollback.** `arm_room` failing rolls back the
+  surface's optimistic Armed chip through `pendingArm`, so a refusal
+  leaves the fixture showing Not bound with Arm rather than a stuck gold
+  chip. Test: `tests/js/fixture_artnet_arm.test.js`.
+- **Stale binding cleanup.** `_current_surface_instruments` skips a
+  covered fixture's stale recorded binding; the `@fixture:<name>` token
+  entry stays so Diagnostics can still target it.
+- **Not verified live.** Offline suite only, same as the fixture-targets
+  slice above.
+
+**Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
+**2713 passed, 1 skipped** (on top of the fixture-targets slice's 2692).
 
 ### `harness/tick_pacer.py` -- the 44 Hz tick paced to deadlines (2026-09-25)
 
@@ -5356,8 +5416,10 @@ Design: [`.../2026-09-25-venue-room-design.md`](https://github.com/Musical-Mycol
   `[[artnet]]`, routing by fixture name, native RGBW* entry above), an
   `[[artnet]]` fixture gets no simulator and is never waited on. Both
   VENUE fixtures are covered, so VENUE loads with nothing bound. Arming a
-  covered fixture from the Console is the gap that entry records
-  (`ArmRoomCommand` does not yet refuse it); this slice adds no refusal.
+  covered fixture from the Console, the gap that entry recorded, closed
+  2026-09-25: `ArmRoomCommand` now refuses `bars` and `fiber`, and the Room
+  panel shows them as `Art-Net` with no Arm button (see *`console/agent.py`
+  -- Console refuses to arm an `[[artnet]]`-covered fixture* above).
 - **`[psus.<name>]` and `[[artnet]] psu`.** Outputs naming one PSU must sum
   `max_amps` to at most 80 % of its `amps`, checked at config load across
   every room. An output with no `psu` is unchecked.
@@ -5968,11 +6030,16 @@ Kept explicit so the doc doesn't over-claim:
   (`harness/room_simulator.py`, `harness/o2_shroom.py`); nothing implements
   the same seam against actual Tuneshroom hardware yet. **No hardware
   exists** still applies (see that entry above) until the bring-up
-  checklist is run. One bring-up prerequisite remains, described in the
+  checklist is run. Bring-up prerequisite (2), described in the
   *`devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture name,
-  native RGBW* entry above (the simulator-alongside-`[[artnet]]` one closed
-  2026-09-25): the Console's device picker cannot target or show the mute
-  state of an unbound fixture, which a multi-fixture venue Room will need.
+  native RGBW* entry above (prerequisite (1), the simulator-alongside-
+  `[[artnet]]` one, closed 2026-09-25): the Console's device picker could
+  not target or show the mute state of an unbound fixture, which a
+  multi-fixture venue Room will need. **Closed 2026-09-25**: targeting and
+  mute display by PR #144 (*Console fixture targets and fixture mute
+  state* entry above), arm refusal by the *`console/agent.py` -- Console
+  refuses to arm an `[[artnet]]`-covered fixture* entry above. The spec
+  section 9 hardware bring-up checklist is still entirely pending.
 - ~~**Nothing drives the Room's light during a live run.**~~ **Closed
   2026-08-14** by `Bit.cues(at)` (see the `Bit` interface bullet above);
   `TestBit`'s implementation and its live confirmation are described in the

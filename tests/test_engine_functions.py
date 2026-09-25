@@ -12,6 +12,7 @@ from control.cues import ROOM, TARGET, MuteCue, PlayCue, SolidCue, fixture_dev
 from control.engine import BitLoadError, GameServer
 from control.instrument import CUE_KINDS, TUNESHROOM, Instrument
 from control.roles import Role, RoleClass, RoleTable
+from control.room_binding import RoomBindingRegistry
 from control.state import State
 from control.terrarium_config import load_terrarium_config
 from control.functions import (
@@ -747,6 +748,90 @@ def test_clear_mutes_finds_raw_dev_after_it_binds_to_a_fixture():
     gs.room.bound.pop("main")   # ie1 unbinds again
     assert not gs.is_muted("ie1")
     assert not gs.muted
+
+
+def _armed(gs, fixture="main"):
+    """Give a _running() GameServer a RoomBindingRegistry armed for
+    `fixture`. _running's _Room has no ROOM role, so these tests call
+    _bind_room directly -- the real join -> _bind_room path is covered end
+    to end in tests/test_devicelink_agent.py."""
+    gs.room_binding = RoomBindingRegistry(clock=lambda: 100.0)
+    gs.room_binding.arm("TEST", fixture, window_seconds=10.0)
+
+
+def test_a_player_mute_carries_over_to_the_fixture_on_bind():
+    """Spec 2026-09-25-mute-key-bind-migration section 3.1: a mute latched
+    on ie1 while it was a plain player (raw "ie1" in self.muted) moves to
+    the fixture's @fixture: token when ie1 binds, so is_muted agrees for
+    both spellings and the Console shows the fixture muted. The agent is
+    told through on_mute_change: unmute the raw dev FIRST, then mute the
+    token (the unmute discards both spellings, so the reverse order would
+    drop the token again)."""
+    gs, _, _ = _running(bound={})
+    gs._dispatch_cues([MuteCue("ie1")], at=100.0)
+    assert gs.muted == {"ie1"}
+    calls = []
+    gs.on_mute_change = lambda dev, m: calls.append((dev, m))
+    _armed(gs)
+
+    gs._bind_room("ie1")
+
+    assert gs.room.bound["main"] == "ie1"
+    assert gs.muted == {fixture_dev("main")}
+    assert gs.is_muted("ie1")
+    assert gs.is_muted(fixture_dev("main"))
+    assert calls == [("ie1", False), (fixture_dev("main"), True)]
+
+
+def test_a_bind_with_nothing_muted_makes_no_mute_calls():
+    gs, _, _ = _running(bound={})
+    calls = []
+    gs.on_mute_change = lambda dev, m: calls.append((dev, m))
+    _armed(gs)
+
+    gs._bind_room("ie1")
+
+    assert gs.room.bound["main"] == "ie1"
+    assert gs.muted == set()
+    assert calls == []
+
+
+def test_migrate_mute_on_bind_survives_a_raising_unmute_call():
+    """Each of _migrate_mute_on_bind's two on_mute_change calls is guarded
+    on its own (matching _clear_mutes's existing per-call try/except): a
+    sink that raises unmuting the raw dev must not stop the mute call that
+    follows it, so the fixture still ends up muted."""
+    gs, _, _ = _running(bound={})
+    gs._dispatch_cues([MuteCue("ie1")], at=100.0)
+    calls = []
+
+    def sink(dev, muted):
+        calls.append((dev, muted))
+        if (dev, muted) == ("ie1", False):
+            raise RuntimeError("boom")
+
+    gs.on_mute_change = sink
+    _armed(gs)
+
+    gs._bind_room("ie1")   # must not raise
+
+    assert calls == [("ie1", False), (fixture_dev("main"), True)]
+    assert gs.muted == {fixture_dev("main")}
+
+
+def test_a_carried_over_mute_lifts_on_the_next_non_mute_fire():
+    """The carried-over latch is an ordinary fixture mute: the house rule
+    (any non-mute fire at the surface un-latches it) applies unchanged."""
+    gs, _, _ = _running(bound={})
+    gs._dispatch_cues([MuteCue("ie1")], at=100.0)
+    _armed(gs)
+    gs._bind_room("ie1")
+
+    assert gs.fire_function("glow", fired_by="admin-manual",
+                            dev=fixture_dev("main")) is None
+
+    assert gs.muted == set()
+    assert not gs.is_muted("ie1")
 
 
 def test_non_mute_fire_clears_mute_first():

@@ -2490,3 +2490,52 @@ def test_surface_instruments_carry_no_fixture_tokens_without_a_room():
     gs, srv, agent = _server_with_agent()
     si = agent.snapshot()["surface_instruments"]
     assert not [k for k in si if k.startswith("@fixture:")]
+
+
+def _artnet_agent():
+    """TEST Room with `accent` covered by [[artnet]]: `main` binds its
+    simulator, `accent` stays unbound (PR #143's skip)."""
+    from tests.test_terrarium import TEST_SPEC, _artnet, _config_with_artnet
+    binding = RoomBindingRegistry()
+    gs = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
+    terrarium = make_terrarium(
+        _config_with_artnet({"TEST": TEST_SPEC}, _artnet("TEST", "accent")),
+        gs=gs, room_binding=binding)
+    assert terrarium.load_room("TEST") is None
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
+    return terrarium, binding, agent
+
+
+def test_arm_room_refuses_an_artnet_covered_fixture():
+    _terrarium, binding, agent = _artnet_agent()
+    error = agent._handle_command(
+        {"command": "arm_room", "room_type": "TEST", "fixture": "accent"})
+    assert error == {"event": "error", "command": "arm_room",
+                     "message": "accent is driven by [[artnet]] and never "
+                                "binds a device; arming refused"}
+    assert binding.armed_fixture("TEST") is None
+
+
+def test_arm_room_still_arms_an_uncovered_fixture_beside_a_covered_one():
+    _terrarium, binding, agent = _artnet_agent()
+    binding.release("TEST", "main")
+    error = agent._handle_command(
+        {"command": "arm_room", "room_type": "TEST", "fixture": "main"})
+    assert error is None
+    assert binding.armed_fixture("TEST") == "main"
+
+
+def test_room_payload_flags_the_artnet_covered_fixture():
+    _terrarium, _binding, agent = _artnet_agent()
+    fixtures = agent.snapshot()["room"]["fixtures"]
+    assert {f["name"]: f["artnet"] for f in fixtures} == \
+        {"main": False, "accent": True}
+
+
+def test_a_covered_fixtures_stale_binding_is_not_a_surface_instrument():
+    _terrarium, binding, agent = _artnet_agent()
+    binding.bind("TEST", "accent", "ie-stale")   # a recorded, never-reconnected binding
+    surface = agent._current_surface_instruments()
+    assert "ie-stale" not in surface
+    assert fixture_dev("accent") in surface
