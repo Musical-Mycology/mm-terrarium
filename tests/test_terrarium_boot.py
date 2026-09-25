@@ -1860,10 +1860,10 @@ def test_wait_for_room_ready_exits_when_the_parent_is_gone(monkeypatch):
 
 
 def _run_roomless(monkeypatch, wait_results, serve_results, *,
-                  terrarium=None, gs=None, agent=None, calls=None, **kw):
+                  terrarium=None, calls=None, **kw):
     """Shared driver for the _serve_roomless tests below: builds the
-    common FakeTerrarium/FakeGS/FakeAgent scaffold (unless overridden),
-    monkeypatches harness.terrarium_boot._wait_for_room_ready and
+    common RoomlessTerrarium (unless overridden)/StaticGS/FakeAgent
+    scaffold, monkeypatches harness.terrarium_boot._wait_for_room_ready and
     _serve_rounds to return wait_results/serve_results in sequence (one
     entry consumed per call -- StopIteration if a test calls either more
     often than it supplied results for, which is a bug signal, not a
@@ -1880,11 +1880,8 @@ def _run_roomless(monkeypatch, wait_results, serve_results, *,
 
     if terrarium is None:
         terrarium = RoomlessTerrarium()
-        terrarium.state = TerrariumState.ROOM_READY
-    if gs is None:
-        gs = StaticGS(State.IDLE)
-    if agent is None:
-        agent = FakeAgent()
+    gs = StaticGS(State.IDLE)
+    agent = FakeAgent()
 
     wait_iter = iter(wait_results)
     serve_iter = iter(serve_results)
@@ -1924,6 +1921,7 @@ def test_serve_roomless_loops_back_to_no_room_after_serve_rounds_no_room(
 
     assert reason == "parent-gone"
     assert len(serve_calls) == 2
+    assert terrarium.unload_calls == []
 
 
 def test_serve_roomless_stops_clients_on_no_room(monkeypatch):
@@ -1941,6 +1939,7 @@ def test_serve_roomless_stops_clients_on_no_room(monkeypatch):
 
     assert reason == "parent-gone"
     assert calls == ["stop"]
+    assert terrarium.unload_calls == []
 
 
 def test_serve_roomless_restarts_pool_then_transport_after_failed_recycle(
@@ -1982,6 +1981,7 @@ def test_serve_roomless_skips_restart_when_recycle_already_succeeded(
 
     assert reason == "parent-gone"
     assert calls == ["serve-rounds"]
+    assert terrarium.unload_calls == []
 
 
 def test_serve_roomless_unloads_and_returns_to_no_room_wait_when_restart_fails(
@@ -2028,11 +2028,18 @@ def test_restart_room_clients_catches_a_raising_start_and_returns_reason():
     "reason string, never raises" contract as `_recycle_room`."""
     import harness.terrarium_boot as terrarium_boot
 
+    transport_calls = []
+    pool_calls = []
     reason = terrarium_boot._restart_room_clients(
-        transport=RecordingClient([], "transport"),
-        pool=RecordingClient([], "pool",
+        transport=RecordingClient(transport_calls, "transport"),
+        pool=RecordingClient(pool_calls, "pool",
                              start_error=RuntimeError("injected pool failure")))
     assert reason == "injected pool failure"
+    # pool.start() raises before recording anything, and the transport is
+    # never reached because _restart_room_clients returns as soon as the
+    # pool fails (pool-before-transport, mirroring _recycle_room's order).
+    assert pool_calls == []
+    assert transport_calls == []
 
 
 def test_restart_room_clients_quiesces_the_pool_when_the_transport_fails():
@@ -2164,8 +2171,6 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
     it -- with build() and _serve_roomless stubbed out (no room, no live
     Arco needed) so only the argument plumbing through to ConsoleAgent's
     construction is exercised."""
-    import types
-
     import harness.terrarium_boot as terrarium_boot_module
 
     _mock_o2lite_module(monkeypatch, terrarium_boot_module)
@@ -2208,8 +2213,6 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
     builds, so the Console's design bench and capture panel are backed for
     real rather than answering error_event on every command. Same
     fake-build/fake-serve harness as the catalog-root test above."""
-    import types
-
     import harness.terrarium_boot as terrarium_boot_module
 
     _mock_o2lite_module(monkeypatch, terrarium_boot_module)
@@ -2255,8 +2258,6 @@ def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
     harness as the catalog-root and bench-session-factory tests above,
     but this one captures the full kwargs `_serve_roomless` was called
     with instead of reaching into the console_agent."""
-    import types
-
     import harness.terrarium_boot as terrarium_boot_module
 
     _mock_o2lite_module(monkeypatch, terrarium_boot_module)
@@ -2301,8 +2302,6 @@ def test_main_no_room_boot_skips_transport_start_and_leaves_clients_stopped(
     test_main_wires_stop_clients_into_the_no_room_boot_serve_loop above,
     extended with a transport spy and a pool double reachable through the
     built agent's `room_audio`."""
-    import types
-
     import harness.terrarium_boot as terrarium_boot_module
     from control.terrarium import TerrariumState
     from devicelink.o2_transport import O2LiteTransport
@@ -2384,14 +2383,12 @@ def test_recycle_room_orders_restarts_only_on_success(
     order (pool first, then transport). On failure there is no hub to
     restart against, so the restarts are skipped and the reason string
     propagates."""
-    import types as types_module
-
     import harness.terrarium_boot as terrarium_boot
 
     calls = []
 
-    terrarium = types_module.SimpleNamespace(
-        room=types_module.SimpleNamespace(name="TEST"),
+    terrarium = types.SimpleNamespace(
+        room=types.SimpleNamespace(name="TEST"),
         recycle_room=lambda: (calls.append("recycle") or recycle_result)
                             if recycle_result is None
                             else recycle_result)
@@ -2718,14 +2715,11 @@ def test_wait_for_room_ready_prints_nothing_when_already_ready(capsys):
     from harness import markers
     from harness.terrarium_boot import _wait_for_room_ready
 
-    class Ready:
-        state = TerrariumState.ROOM_READY
+    ready = types.SimpleNamespace(state=TerrariumState.ROOM_READY)
+    agent = FakeAgent(
+        poll_error=AssertionError("must not poll when already ready"))
 
-    class Agent:
-        def poll(self):
-            raise AssertionError("must not poll when already ready")
-
-    assert _wait_for_room_ready(Agent(), Ready()) == "ready"
+    assert _wait_for_room_ready(agent, ready) == "ready"
     assert markers.CONTROL_NO_ROOM_WAIT not in capsys.readouterr().out
 
 
