@@ -5195,7 +5195,17 @@ Closes the Console bring-up prerequisite above. Design:
   refills pickers only when a fixture's `(name, dev, muted)` changes;
   `room_changed` fires on every live controller value, and an unconditional
   refill would close an open `<select>` under the operator.
-- **`functions.js` holds each row's picker by reference (`currentDeviceTargets`), the same pattern `diagPicker` uses, rather than re-looking it up by id on refill.**
+- **A picker keeps a selected device's row when that device binds to a
+  fixture.** Losing the selection to the `@all` fallback would leave
+  Fire/Stop enabled on the wrong, broader target (one Stop would then mute
+  every surface), so a refill maps the previous value to its fixture row
+  before giving up: first via the device list's own `fixture` field, then
+  via the fixture list's `dev`, covering either arrival order between
+  `devices_changed` and `room_changed`.
+- **`functions.js` holds each row's picker by reference**
+  (`currentDeviceTargets`), the same pattern `diagPicker` uses, rather than
+  re-looking it up by id on refill: a refill must mutate the exact node the
+  row owns.
 - **Engine.** `_resolve_target` resolves a SURFACE `@fixture:` dev through
   `_resolve_devs`, so a fire at a bound fixture lands on (and
   `FunctionFired.devs` reports) its dev; `fire_function` refuses a token

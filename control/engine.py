@@ -853,7 +853,8 @@ class GameServer:
         5). This full list is what FunctionFired.devs reports, and (since
         each fixture now has its own light session) also what a script's
         TARGET fanout dispatches to, one cue per resolved dev.
-        A SURFACE @fixture:<name> dev resolves through _resolve_devs (bound dev, else the token).
+        A SURFACE @fixture:<name> dev resolves through _resolve_devs (bound
+        dev, else the token).
         """
         if target is FunctionTarget.DEVICE:
             return [dev] if dev else []

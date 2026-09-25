@@ -2459,6 +2459,26 @@ def test_a_fixture_mute_change_broadcasts_room_changed():
     assert by_name["accent"]["muted"] is True
 
 
+def test_stop_fire_at_an_unbound_fixture_mutes_then_a_non_mute_fire_unmutes():
+    """Spec section 7: _current_room reports `muted` after a Stop fired at
+    an unbound fixture token, and clears it again after a non-mute fire --
+    driven through the real fire_function path, not gs.muted set directly."""
+    gs, srv, agent = _room_console()
+    accent = fixture_dev("accent")
+
+    refusal = gs.fire_function("stop", fired_by="admin-manual", dev=accent)
+    assert refusal is None
+    by_name = {f["name"]: f for f in agent._current_room()["fixtures"]}
+    assert by_name["accent"]["muted"] is True
+
+    # GENERIC_SURFACE (tests/instrument_fixtures.py) supports flash besides
+    # stop -- a non-mute builtin fire should clear the latch.
+    refusal = gs.fire_function("flash", fired_by="admin-manual", dev=accent)
+    assert refusal is None
+    by_name = {f["name"]: f for f in agent._current_room()["fixtures"]}
+    assert by_name["accent"]["muted"] is False
+
+
 def test_surface_instruments_key_every_declared_fixture_by_token():
     gs, srv, agent = _room_console()
     si = agent.snapshot()["surface_instruments"]
