@@ -4,6 +4,7 @@ from bits.test.test_bit import TestBit
 from control.bit_config import ManifestError
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
+from tests.fakes import FakeClock
 from tests.test_engine import RoomCapableBit, make_room
 from uplink.journal import Journal
 from uplink.link import UplinkAgent
@@ -277,17 +278,6 @@ def test_the_reserved_terrarium_id_never_appears_in_players():
     completed = [m for m in transport.sent if m["event"] == "bit_completed"]
     assert completed[0]["players"] == [
         {"dev": "ie1", "role": "player", "class": "scored"}]
-
-
-class FakeClock:
-    def __init__(self, start: float = 0.0):
-        self.now = start
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 class FlakyTransport(FakeTransport):
