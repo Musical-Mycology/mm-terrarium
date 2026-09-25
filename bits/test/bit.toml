@@ -7,7 +7,7 @@ kind = "tool"
 requires_terrarium_api = 1
 
 [launch]
-room_types = ["TEST", "DEMO"]
+room_types = ["TEST", "DEMO", "VENUE"]
 default_room_type = "TEST"
 default_devices = 1
 default_join_role = "player"

@@ -17,7 +17,7 @@ def test_loads_and_validates():
 
 
 def test_demo_only():
-    assert MetronomeBit.room_types == {"DEMO"}
+    assert MetronomeBit.room_types == {"DEMO", "VENUE"}
 
 
 def test_third_player_is_denied_by_capacity():
