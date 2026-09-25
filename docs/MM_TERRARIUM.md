@@ -5153,23 +5153,30 @@ backend" for DEMO. Design:
 - **No physical LED has been driven yet.** Everything above is verified
   against `harness/artnet_listen.py` and loopback UDP only. The spec's
   section 9 hardware bring-up checklist is entirely pending.
-- **Bring-up prerequisite: the shipped entry point always ALSO spawns a
-  WebSim simulator for an `[[artnet]]` fixture.** `harness/terrarium_boot.py`
-  always sets `BootConfig.array_backend="simulator"` for DEMO (see the
-  comment at its `BootConfig(...)` call), and the Terrarium's fast bind path
-  spawns a simulator for every fixture regardless of that Room's own
-  backends. So under this entry point, an `[[artnet]]`-covered fixture
-  BOTH binds a spawned WebSim simulator AND receives real Art-Net frames --
-  it also gets the simulator's 3456-channel `/leds` frames over O2 in
-  addition to Art-Net. `control/terrarium_config.py`'s `validate_rooms`
-  only reaches its `[[artnet]]`-coverage branch (loading an array-backed
-  Room on `[[artnet]]` coverage alone, with no simulator) when
-  `array_backend_configured` is False, i.e. `BootConfig.array_backend is
-  None` -- never true under `harness/terrarium_boot.py`. A follow-up should
-  skip spawning the simulator for a fixture that already has `[[artnet]]`
-  coverage before hardware bring-up proceeds: the spec's section 9 step 4
-  "unbound array fixture" mute test assumes the array fixture has no
-  simulator competing with it.
+- ~~**Bring-up prerequisite: the shipped entry point always ALSO spawns a
+  WebSim simulator for an `[[artnet]]` fixture.**~~ **Closed 2026-09-25**
+  ([`.../2026-09-25-artnet-fixture-no-simulator-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-artnet-fixture-no-simulator-design.md)).
+  `control/terrarium_config.py`'s `artnet_fixtures(config, room)` names a
+  Room's covered fixtures, and `Terrarium.load_room` hands that set as
+  `skip` to both `_bind_room_fast_path` (no simulator spawn, no reconnect
+  to a recorded binding) and `wait_for_room_binding` (never armed, never
+  waited for). A covered fixture stays out of `room.bound`, so DEMO's
+  `array` is genuinely unbound under `harness/terrarium_boot.py` even
+  though that entry point still declares `array_backend="simulator"`, and
+  the spec section 9 step 4 unbound-fixture mute test now hits an unbound
+  fixture. A covered fixture counts as driven: `RoomBindingTimeout` fires
+  only for a Room with no covered fixture and nothing bound, so an
+  all-Art-Net Room loads with no wait. That also fixed a latent defect:
+  the `array_backend=None` path `validate_rooms` admits on coverage alone
+  used to time out in `wait_for_room_binding` ("no device joined as DEMO
+  Room") because nothing could ever bind `array`. Uncovered fixtures, and
+  boxes with no `[[artnet]]`, are unchanged. **MEASURED 2026-09-25, a
+  dev-box figure:** live `run_stack --no-bit --room DEMO` against a real
+  Arco, with a scratch `[[artnet]]` entry at `127.0.0.1:16454` and
+  `python -m harness.artnet_listen --port 16454 --pixels 864` receiving,
+  logged `Room DEMO: fixture(s) ['array'] driven by [[artnet]]; no
+  simulator, no device bound`, spawned no simulator process, and received
+  **~34-40 fps, 0 sequence gaps, 0 bad packets**.
 - **Bring-up prerequisite: the Console cannot target or show the mute state
   of an unbound fixture.** `console/static/functions.js`'s
   `fillDevicePicker` only lists devices that have joined (`fnDevices`, fed
@@ -5178,13 +5185,22 @@ backend" for DEMO. Design:
   own device-picker entry, so an operator can reach it only through "All",
   and there is nowhere in the UI showing whether that unbound fixture is
   currently muted. This needs a fix before a multi-fixture venue Room asks
-  an operator to manage individual fixtures by name.
+  an operator to manage individual fixtures by name. Related, found by the
+  2026-09-25 no-simulator follow-up's final review: the Console's
+  `ArmRoomCommand` (`console/agent.py`) still arms any fixture name without
+  checking `[[artnet]]` coverage, so an operator who arms `array` and taps
+  would bind a device to an Art-Net fixture, giving it a `DeviceLinkSink`
+  alongside its Art-Net output (contrary to the parent spec's D2). The same
+  follow-up should refuse arming a fixture in `artnet_fixtures(config,
+  room)`.
 
 **Test baseline for this slice:** `.venv/bin/python -m pytest tests -q` ->
 **2662 passed, 1 skipped** (the final-review fix wave, commit `efe21c9`,
 added 3 tests);
 `.venv/bin/python -m tools.render_diagrams --check` reports the deep-dive's
 generated diagrams current.
+
+**Test baseline after the 2026-09-25 no-simulator follow-up:** `.venv/bin/python -m pytest tests -q` -> **2673 passed, 1 skipped**.
 
 ## Boundary rules (the load-bearing invariants)
 
@@ -5754,13 +5770,11 @@ Kept explicit so the doc doesn't over-claim:
   (`harness/room_simulator.py`, `harness/o2_shroom.py`); nothing implements
   the same seam against actual Tuneshroom hardware yet. **No hardware
   exists** still applies (see that entry above) until the bring-up
-  checklist is run. Two bring-up prerequisites, both described in the
+  checklist is run. One bring-up prerequisite remains, described in the
   *`devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture name,
-  native RGBW* entry above: (1) `harness/terrarium_boot.py` always spawns a
-  WebSim simulator alongside any `[[artnet]]` fixture, so a follow-up must
-  skip that simulator for `[[artnet]]`-covered fixtures first; (2) the
-  Console's device picker cannot target or show the mute state of an
-  unbound fixture, which a multi-fixture venue Room will need.
+  native RGBW* entry above (the simulator-alongside-`[[artnet]]` one closed
+  2026-09-25): the Console's device picker cannot target or show the mute
+  state of an unbound fixture, which a multi-fixture venue Room will need.
 - ~~**Nothing drives the Room's light during a live run.**~~ **Closed
   2026-08-14** by `Bit.cues(at)` (see the `Bit` interface bullet above);
   `TestBit`'s implementation and its live confirmation are described in the
