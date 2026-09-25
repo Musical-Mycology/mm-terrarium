@@ -1,0 +1,23 @@
+[bit]
+name = "MinigameBit"
+version = "0.1.0"
+description = "TODO: one-line description"
+entry = "minigame_bit:MinigameBit"
+kind = "tool"
+requires_terrarium_api = 1
+
+[launch]
+room_types = ["TEST"]
+default_room_type = "TEST"
+default_devices = 1
+default_join_role = "player"
+
+[launch.nodes]
+player = "MINIGAME_PLAYER_NODE"
+
+[start]
+when = "immediate"
+
+[console]
+display_name = "Minigame"
+notes = "TODO: what an operator sees/does with this Bit"
