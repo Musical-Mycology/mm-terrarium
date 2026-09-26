@@ -99,8 +99,26 @@ class FakePool:
         self.shut = True
 
 
-def _cc_number(ref: str) -> int:
-    return int(ref[len(_CC_PREFIX):])
+def parse_cc_ref(ref, where: str | None = None) -> int:
+    """Parse a 'cc:<n>' reference (0-127). Both lane ends use this form:
+    the mapping to a synth parameter is FluidSynth's own reading of the
+    controller number, so there is no destination vocabulary for Control to
+    invent here. `where` locates the error message for a caller that has
+    one (control.role_config, validating a Bit's authored manifest at load
+    time); this module's own caller (AudioBridge.on_grant, reading an
+    already-validated Role) has none to give, since its lanes are expected
+    to have already passed this same check at load time -- see Tier 2
+    consolidation PR B item 6 for why that's safe."""
+    loc = where or "cc ref"
+    if not isinstance(ref, str) or not ref.startswith(_CC_PREFIX):
+        raise ValueError(f"{loc}: must be a {_CC_PREFIX!r} reference, got {ref!r}")
+    try:
+        num = int(ref[len(_CC_PREFIX):])
+    except ValueError:
+        raise ValueError(f"{loc}: {ref!r} is not a controller number") from None
+    if not 0 <= num <= 127:
+        raise ValueError(f"{loc}: controller {num} is outside 0-127")
+    return num
 
 
 class _DeviceAudio:
@@ -150,7 +168,7 @@ class AudioBridge:
             program = decl.get("program")
             if program is not None:
                 voice.program_change(int(program))
-            lanes = {_cc_number(lane["source"]): _cc_number(lane["dest"])
+            lanes = {parse_cc_ref(lane["source"]): parse_cc_ref(lane["dest"])
                      for lane in decl.get("lanes", [])}
             self._devices[dev] = _DeviceAudio(voice, lanes, decl.get("drone"))
         self._play_welcome(role)

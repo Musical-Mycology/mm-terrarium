@@ -17,7 +17,7 @@ this module, so the edge does not close a cycle.
 
 from copy import deepcopy
 
-from control.audio import WELCOME_INSTRUMENTS
+from control.audio import WELCOME_INSTRUMENTS, parse_cc_ref
 from control.function_view import function_view
 from control.instrument import Instrument
 from control.roles import Role, RoleTable
@@ -26,7 +26,6 @@ from control.roles import Role, RoleTable
 # any of them on a Role is a contract violation caught at Bit load.
 _COMPOSED_KEYS = ("welcome", "bit_name", "bit_version", "role")
 _WELCOME_HALVES = ("light", "audio")
-_CC_PREFIX = "cc:"
 
 
 def validate_role_declarations(role_table: RoleTable) -> None:
@@ -214,22 +213,6 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
     return config
 
 
-def _cc_number(ref, where: str) -> int:
-    """Parse a 'cc:<n>' reference. Both lane ends use this form: the mapping
-    to a synth parameter is FluidSynth's own reading of the controller number,
-    so there is no destination vocabulary for Control to invent here."""
-    if not isinstance(ref, str) or not ref.startswith(_CC_PREFIX):
-        raise ValueError(f"{where}: must be a {_CC_PREFIX!r} reference, got {ref!r}")
-    try:
-        num = int(ref[len(_CC_PREFIX):])
-    except ValueError:
-        raise ValueError(
-            f"{where}: {ref!r} is not a controller number") from None
-    if not 0 <= num <= 127:
-        raise ValueError(f"{where}: controller {num} is outside 0-127")
-    return num
-
-
 def validate_ugen_manifest(subject: Role | dict, where: str | None = None) -> None:
     """Shallow structural validation of an authored ugen_manifest.
     Deliberately provisional (v0): instrument names and programs belong to the
@@ -277,8 +260,8 @@ def validate_ugen_manifest(subject: Role | dict, where: str | None = None) -> No
                 if req not in lane:
                     raise ValueError(
                         f"{lane_where}: missing required field {req!r}")
-            _cc_number(lane["source"], f"{lane_where} source")
-            _cc_number(lane["dest"], f"{lane_where} dest")
+            parse_cc_ref(lane["source"], f"{lane_where} source")
+            parse_cc_ref(lane["dest"], f"{lane_where} dest")
 
 
 def _fixture(profile, name: str):
