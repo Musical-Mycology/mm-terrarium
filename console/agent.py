@@ -182,7 +182,7 @@ class ConsoleAgent:
     def _handle_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
         if name in ("arm_room", "release_room", "fire_function",
-                    "list_designs", "get_design", "save_design",
+                    "get_design", "save_design",
                     "publish_design", "clone_design",
                     "bench_start", "bench_stop", "bench_fire", "bench_lane",
                     "list_captures", "capture_stats", "replay_trace"):
@@ -373,8 +373,7 @@ class ConsoleAgent:
             command = protocol.parse_admin_command(msg)
         except ValueError as exc:
             return protocol.error_event(name, str(exc))
-        if isinstance(command, (protocol.ListDesignsCommand,
-                                protocol.GetDesignCommand,
+        if isinstance(command, (protocol.GetDesignCommand,
                                 protocol.SaveDesignCommand,
                                 protocol.PublishDesignCommand,
                                 protocol.CloneDesignCommand)):
@@ -481,8 +480,6 @@ class ConsoleAgent:
         from control.catalog import clone_entry, publish_entry, save_draft
         instruments = (self._instruments_for_rooms()
                        if command.kind == "room" else None)
-        if isinstance(command, protocol.ListDesignsCommand):
-            return protocol.designs_listed_event(self._design_rows())
         if isinstance(command, protocol.GetDesignCommand):
             # One unparseable published sibling fails the whole catalog
             # load, so this answers an error rather than raising out of
@@ -665,7 +662,6 @@ class ConsoleAgent:
         self._last_builtins = self._current_builtins()
         return protocol.snapshot_event(
             state=gs.state.name,
-            installed_bits=list(gs.bit_registry.keys()),
             loaded_bit=loaded_bit,
             roles=roles,
             registration=registration,
@@ -686,7 +682,6 @@ class ConsoleAgent:
                 "cue_kinds": list(CUE_KINDS),
             },
             join=self._join_view(),
-            lobby=gs.lobby_state(),
         )
 
     def _roles_view(self) -> list:
@@ -938,8 +933,6 @@ class ConsoleAgent:
         self.server.broadcast(protocol.state_changed_event(
             new_state.name, self.game_server.bit_name,
             terrarium_state=terrarium_state))
-        self.server.broadcast(
-            protocol.lobby_changed_event(self.game_server.lobby_state()))
         if new_state == State.UNLOADING:
             self._broadcast_bit_completed()
         # The Join card reads the loaded Bit's nodes, and the rail/rooms
@@ -996,8 +989,6 @@ class ConsoleAgent:
     def on_registration_change(self) -> None:
         self.server.broadcast(
             protocol.registration_changed_event(self._non_room_counts()))
-        self.server.broadcast(
-            protocol.lobby_changed_event(self.game_server.lobby_state()))
 
     def on_devices_change(self) -> None:
         self.server.broadcast(protocol.devices_changed_event(

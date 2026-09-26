@@ -60,12 +60,11 @@ def test_device_view_shape():
 
 def test_snapshot_event_shape():
     msg = protocol.snapshot_event(
-        state="SETUP", installed_bits=["TestBit"], loaded_bit="TestBit",
+        state="SETUP", loaded_bit="TestBit",
         roles=[{"role": "player"}], registration=[{"role": "player"}],
         devices=[{"dev": "ie3"}], bit_status={"elapsed": 0.0})
     assert msg["event"] == "snapshot"
     assert msg["state"] == "SETUP"
-    assert msg["installed_bits"] == ["TestBit"]
     assert msg["loaded_bit"] == "TestBit"
     assert msg["roles"] == [{"role": "player"}]
     assert msg["registration"] == [{"role": "player"}]
@@ -79,7 +78,7 @@ def test_snapshot_carries_terrarium_state_and_rooms():
     rooms = [{"name": "greenhouse", "description": "the greenhouse",
              "status": None, "active": True}]
     msg = protocol.snapshot_event(
-        state="SETUP", installed_bits=["TestBit"], loaded_bit="TestBit",
+        state="SETUP", loaded_bit="TestBit",
         roles=[], registration=[], devices=[], bit_status={},
         terrarium_state="ROOM_READY", rooms=rooms)
     assert msg["terrarium_state"] == "ROOM_READY"
@@ -89,7 +88,7 @@ def test_snapshot_carries_terrarium_state_and_rooms():
 def test_snapshot_carries_design_vocab_verbatim():
     vocab = {"capabilities": ["light.pixels"], "cue_kinds": ["midi"]}
     msg = protocol.snapshot_event(
-        state="SETUP", installed_bits=["TestBit"], loaded_bit="TestBit",
+        state="SETUP", loaded_bit="TestBit",
         roles=[], registration=[], devices=[], bit_status={},
         design_vocab=vocab)
     assert msg["design_vocab"] == vocab
@@ -97,7 +96,7 @@ def test_snapshot_carries_design_vocab_verbatim():
 
 def test_snapshot_design_vocab_defaults_to_none():
     msg = protocol.snapshot_event(
-        state="SETUP", installed_bits=["TestBit"], loaded_bit="TestBit",
+        state="SETUP", loaded_bit="TestBit",
         roles=[], registration=[], devices=[], bit_status={})
     assert msg["design_vocab"] is None
 
@@ -183,7 +182,7 @@ def test_room_changed_event_shape():
 def test_snapshot_carries_room():
     from console import protocol
     event = protocol.snapshot_event(
-        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        state="IDLE", loaded_bit=None, roles=[],
         registration=[], devices=[], bit_status={},
         room={"room_type": "TEST"})
     assert event["room"] == {"room_type": "TEST"}
@@ -192,14 +191,14 @@ def test_snapshot_carries_room():
 def test_snapshot_room_defaults_to_none():
     from console import protocol
     event = protocol.snapshot_event(
-        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        state="IDLE", loaded_bit=None, roles=[],
         registration=[], devices=[], bit_status={})
     assert event["room"] is None
 
 
 def test_snapshot_carries_a_functions_key():
     event = protocol.snapshot_event(
-        state="SETUP", installed_bits=[], loaded_bit=None, roles=[],
+        state="SETUP", loaded_bit=None, roles=[],
         registration=[], devices=[], bit_status={},
         functions=[{"name": "play_aurora"}])
     assert event["functions"] == [{"name": "play_aurora"}]
@@ -209,7 +208,7 @@ def test_snapshot_defaults_functions_to_an_empty_list():
     """An old caller that does not pass functions must still produce a key the
     browser can read, rather than an absent one it has to guard."""
     event = protocol.snapshot_event(
-        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        state="IDLE", loaded_bit=None, roles=[],
         registration=[], devices=[], bit_status={})
     assert event["functions"] == []
 
@@ -297,8 +296,6 @@ def test_design_admin_commands_parse():
         {"command": "clone_design", "source_state": "published",
          "source_name": "tuneshroom", "new_name": "fungiflute"})
     assert isinstance(cmd, protocol.CloneDesignCommand)
-    cmd = protocol.parse_admin_command({"command": "list_designs"})
-    assert isinstance(cmd, protocol.ListDesignsCommand)
 
 
 def test_design_command_missing_field_raises():
@@ -320,8 +317,6 @@ def test_clone_design_rejects_bad_source_state():
 
 
 def test_design_commands_default_kind_to_instrument():
-    cmd = protocol.parse_admin_command({"command": "list_designs"})
-    assert cmd.kind == "instrument"
     cmd = protocol.parse_admin_command({"command": "get_design",
                                         "state": "draft", "name": "wip"})
     assert cmd.kind == "instrument"
@@ -336,7 +331,8 @@ def test_design_commands_parse_an_explicit_room_kind():
 
 def test_unknown_design_kind_is_refused():
     with pytest.raises(ValueError, match="kind"):
-        protocol.parse_admin_command({"command": "list_designs", "kind": "venue"})
+        protocol.parse_admin_command({"command": "get_design", "state": "draft",
+                                      "name": "wip", "kind": "venue"})
 
 
 def test_design_row_shape():
@@ -349,11 +345,6 @@ def test_design_row_shape():
         "name": "glowcap", "state": "published", "error": None,
         "kind": "instrument"}
 
-
-def test_designs_listed_event_shape():
-    designs = [{"name": "a", "state": "published", "error": None}]
-    assert protocol.designs_listed_event(designs) == {
-        "event": "designs_listed", "designs": designs}
 
 
 def test_designs_changed_event_shape():
@@ -485,12 +476,12 @@ def test_restart_parses():
 
 def test_snapshot_carries_join_and_defaults_it_to_none():
     msg = protocol.snapshot_event(
-        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        state="IDLE", loaded_bit=None, roles=[],
         registration=[], devices=[], bit_status={})
     assert msg["join"] is None
     join = {"www_url": "http://10.0.0.7:8788/app/", "nodes": []}
     msg = protocol.snapshot_event(
-        state="IDLE", installed_bits=[], loaded_bit=None, roles=[],
+        state="IDLE", loaded_bit=None, roles=[],
         registration=[], devices=[], bit_status={}, join=join)
     assert msg["join"] == join
 

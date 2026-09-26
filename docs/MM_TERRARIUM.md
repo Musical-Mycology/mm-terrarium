@@ -542,6 +542,10 @@ Tuneshroom wire but is not defined *as* that wire. Definition anchor:
 module, or behavior change.
 
 ### `harness/` — the in-process LED-sim harness (Slice 1)
+**(Retired 2026-09-25: `led_smoke.py` and its tests are deleted; the o2lite
+Testshroom in `harness/o2_shroom.py` covers the same light-and-sound path
+end to end. `DeviceBridge` remains as Control's per-device light session.
+The history below is kept for the design reasoning.)**
 `DeviceBridge` + `led_smoke.py`: the first end-to-end exercise of the
 light-manifest-v2 seam. It grants TestBit's `player` role, feeds the composed
 `/ie<N>/role` blob into a luxaeterna `LightSession` (via a **dev/test dependency
@@ -619,7 +623,7 @@ own clock) and `BREATH_CC`. It moved out of `led_smoke.py`'s own `main()`
 because declaring `level` opts *every* renderer of that role out of its private
 breathing clock, not just this demo, so a generator living in one demo's
 `main()` would have left other consumers of the role rendering a static
-surface. `harness/led_smoke.py` and `devicelink/agent.py` both tick it now.
+surface. `devicelink/agent.py` ticks it.
 
 ### `control/audio.py` + `harness/arco_synth.py`: the first Arco write path
 `AudioBridge` is the audio-side sibling of `DeviceBridge`: it reads a role's
@@ -648,7 +652,7 @@ hardware track starting 2026-08-24 inherits working code rather than writing it.
 **None of them has touched real hardware.** They are offline-tested tools, and
 every claim below is about code, not about a measured installation.
 
-- **`array_smoke.py`** — the venue-side sibling of `led_smoke.py`: a real strip
+- **`array_smoke.py`** — the venue-side LED harness: a real strip
   over Art-Net instead of a browser canvas, and a pixel count large enough to
   span universes. The 6 m Terrarium array is 864 px × 4 ch = 3456 channels =
   **7 Art-Net universes**, and both `ArtNet.send()` and `Universe` are
@@ -2378,7 +2382,7 @@ enumerate, configure, and launch Bits without importing their code first.
   seconds, transport, default join role, `[launch.nodes]` role->join-node
   map), `[start]` (start condition — see below), `[console]` (display name,
   notes), `[results]` (declarative result keys), and the Bit-specific
-  `[rhythm]`/`[ambient]` blocks. `merge_overrides` re-validates after
+  `[rhythm]` block. `merge_overrides` re-validates after
   applying CLI/profile overrides — an override can't silently produce an
   invalid config; it fails the same way a bad manifest would.
 - **`Bit(config)` + `GameServer.load_bit(name, config=None)`.** The engine
@@ -3407,14 +3411,15 @@ its Status section records what shipped against what stays Plan 2.
   (`tests/test_catalog.py`) -- the code constant still exists (device
   hello still defaults to it, per the not-yet-built slice 3 below), but it
   is no longer the only instrument the catalog knows about.
-- **Console: five new admin commands, local-only, never uplink** --
-  `list_designs`/`get_design`/`save_design`/`publish_design`/
+- **Console: design admin commands, local-only, never uplink** --
+  `get_design`/`save_design`/`publish_design`/
   `clone_design` (`console/agent.py::_handle_design_command`), gated the
   same way as the pre-existing `arm_room`/`release_room`/`fire_function`
   admin commands: dispatched only from `_handle_admin_command`, which the
-  uplink's remote-command path never reaches. Three wire events --
-  `designs_listed`, `design` (one entry's text + errors), `designs_changed`
-  -- and a `"designs"` key on the snapshot. **Mutations reply
+  uplink's remote-command path never reaches. Two wire events --
+  `design` (one entry's text + errors) and `designs_changed` -- and a
+  `"designs"` key on the snapshot, which is how the panels get their list
+  (`list_designs`/`designs_listed` were removed 2026-09-25: nothing sent it). **Mutations reply
   `designs_changed` to the caller and separately broadcast the same event
   to every other connected client** (`self.server.broadcast(...)` then
   `return ...`), mirroring `_broadcast_functions_if_changed`'s fan-out --
@@ -4613,8 +4618,9 @@ gets by default.
 - **Harness:** `harness/o2_shroom.py --handshake`, keyed chime in
   `harness/sim_audio.py`, `run_stack --start-after-grant` and
   `--handshake-devices N`, `START_URL:` marker, a Start row (URL, QR, key,
-  wire row) on the Console's Join card, `lobby_changed` wire event and
-  `lobby` snapshot key.
+  wire row) on the Console's Join card. (A `lobby_changed` wire event and
+  `lobby` snapshot key shipped too, but no Console view read them; removed
+  2026-09-25.)
 - **Cross-repo follow-ups (not built):** mm-tuneshroom sends `/game/start`
   and renders frames and the keyed chime before a role; the MycoQuest admin
   site writes a device's GemID into the venue's `[admin] devices`.
@@ -5564,8 +5570,8 @@ its own virtual subnet, so neither arrives. Treat WSL2 as a non-starter rather
 than something to work around.
 
 Develop without hardware using luxaeterna's `WebSimBackend` (browser-canvas
-12-LED Shroom; `serve=False` for a headless frame recorder) — `harness/led_smoke.py`
-is the worked example. **Any timing figure must be measured on the venue box**,
+12-LED Shroom; `serve=False` for a headless frame recorder) — `harness/o2_shroom.py`'s
+`build()` is the worked example. **Any timing figure must be measured on the venue box**,
 which relays every hop above through the same process doing all room synthesis
 while feeding a 44 Hz render loop. The M1a-era "round trip under 50 ms" number
 does **not** carry over — it was measured with Control not in the path. See

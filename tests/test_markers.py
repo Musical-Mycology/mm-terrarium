@@ -53,8 +53,7 @@ def test_browse_url_marker_is_emitted_by_every_browser_surface():
     exists to prevent, one URL at a time.
 
     A Room fixture canvas is deliberately NOT one of these surfaces any
-    more: it prints markers.ROOM_URL instead (see
-    test_room_url_marker_is_emitted_by_room_simulator below), so
+    more: it prints markers.ROOM_URL instead (o2_shroom --no-join), so
     run_stack --open stops auto-opening it."""
     import harness.o2_shroom
     import harness.terrarium_boot

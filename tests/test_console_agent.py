@@ -11,6 +11,7 @@ from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.terrarium import TerrariumState
+from tests.fakes import FakeClock
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room, room_role_name
 from harness.terrarium_boot import _RoomWiring
@@ -136,7 +137,6 @@ def test_new_client_gets_a_snapshot_on_poll():
     assert client == "c1"
     assert msg["event"] == "snapshot"
     assert msg["state"] == "IDLE"
-    assert msg["installed_bits"] == ["TestBit"]
     assert msg["loaded_bit"] is None
 
 
@@ -499,14 +499,6 @@ def test_a_dead_console_client_is_dropped_not_retried_on_send():
     srv.fail_sends_to("c1")
     agent.poll()
     assert srv.dropped == ["c1"]
-
-
-class FakeClock:
-    def __init__(self, now=0.0):
-        self.now = now
-
-    def __call__(self):
-        return self.now
 
 
 def test_room_frames_are_broadcast_at_the_decimated_rate():
@@ -1438,7 +1430,8 @@ def test_device_view_rows_carry_the_instrument_name():
 
 def test_design_commands_error_without_catalog():
     gs, srv, agent = _server_with_agent()
-    reply = agent._handle_command({"command": "list_designs"})
+    reply = agent._handle_command({"command": "get_design",
+                                   "state": "published", "name": "glowcap"})
     assert reply["event"] == "error"
 
 
@@ -1447,9 +1440,6 @@ def test_design_roundtrip_via_agent(tmp_path):
     (root / "drafts").mkdir(parents=True)
     (root / "glowcap.toml").write_text('pixels = 12\ncapabilities = ["light.pixels"]\n')
     gs, srv, agent = _server_with_agent(catalog_root=root)
-    listed = agent._handle_command({"command": "list_designs"})
-    assert listed["event"] == "designs_listed"
-    assert listed["designs"][0]["name"] == "glowcap"
     assert agent.snapshot()["designs"][0]["name"] == "glowcap"
     assert agent._handle_command(
         {"command": "clone_design", "source_state": "published",
@@ -1596,7 +1586,8 @@ def test_room_design_command_without_a_rooms_root_is_an_error(tmp_path):
     inst, _rooms = _roots(tmp_path)
     gs, srv, agent = _server_with_agent(catalog_root=inst)
     srv.connect("c1")
-    srv.deliver("c1", {"command": "list_designs", "kind": "room"})
+    srv.deliver("c1", {"command": "get_design", "kind": "room",
+                       "state": "published", "name": "dev_room"})
     agent.poll()
     errors = [m for _c, m in srv.sent if m.get("event") == "error"]
     assert errors and errors[-1]["message"].startswith("no rooms catalog")
@@ -2372,18 +2363,6 @@ def test_run_goes_through_request_start_and_logs_the_outcome():
     assert gs.state.name == "RUNNING"
     logs = [m for m in srv.broadcasts if m.get("event") == "log"]
     assert logs[-1]["message"] == "start accepted: console"
-
-
-def test_lobby_changed_rides_registration_and_state_and_the_snapshot():
-    gs, srv, agent = _server_with_agent()
-    gs.load_bit("TestBit")
-    lobby = [m for m in srv.broadcasts if m.get("event") == "lobby_changed"]
-    assert lobby[-1]["lobby"] == "WAITING"
-    snap = agent.snapshot()
-    assert snap["lobby"] == "WAITING"
-    gs.request_start(None, "terrarium", "console")
-    lobby = [m for m in srv.broadcasts if m.get("event") == "lobby_changed"]
-    assert lobby[-1]["lobby"] is None
 
 
 def test_lobby_events_are_logged():

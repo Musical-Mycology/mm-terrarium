@@ -1,9 +1,9 @@
 // Design panel: list of declared designs (draft/published pairs) rendered
 // into #designList (instruments) and #roomDesignList (rooms), a raw-TOML
 // editor (#designText/#designErrors), and the Save/Publish/Clone actions.
-// Wire shapes are Task 5's verbatim: commands list_designs/get_design/
-// save_design/publish_design/clone_design; events designs_listed/design/
-// designs_changed (the snapshot carries the same rows under "designs").
+// Wire shapes: commands get_design/save_design/publish_design/clone_design;
+// events design/designs_changed (the snapshot carries the same rows under
+// "designs").
 //
 // Instruments and rooms share one catalog wire: every row carries a `kind`
 // ("instrument"|"room"), the two lists are the same rows filtered by it,
@@ -19,7 +19,7 @@
 import * as wire from "./wire.js";
 import { rebuild as rebuildForms } from "./design_forms.js";
 
-let lastDesigns = [];      // last-seen designs_listed/designs_changed/snapshot rows (both kinds)
+let lastDesigns = [];      // last-seen designs_changed/snapshot rows (both kinds)
 let current = null;        // {name, state, kind} of the open design, or null
 
 // A row/event without an explicit kind predates the rooms catalog.
@@ -140,7 +140,6 @@ export function init() {
   };
 
   wire.on("snapshot", (m) => onDesignsChanged(m.designs));
-  wire.on("designs_listed", (m) => onDesignsChanged(m.designs));
   wire.on("designs_changed", (m) => onDesignsChanged(m.designs));
   wire.on("design", (m) => openDesign(m));
 }

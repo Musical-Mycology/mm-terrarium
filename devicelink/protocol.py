@@ -5,8 +5,8 @@
 Typespec chars: 's' string, 'i' int32, 'f' float, 'b' blob (any JSON value;
 over real o2lite this becomes a serialized blob, per Design Rule 5).
 
-This module is the single source of truth for the wire shape. Its Dart
-counterpart is mm-tuneshroom lib/link/envelope.dart -- change both together.
+This is Control's internal message shape between O2LiteTransport and the
+agent; the device wire itself is o2lite.
 
 The telemetry-capture verbs at the foot of this file (/game/capture and
 /game/telemetry) are specified in docs/telemetry-trace-schema.md, which is

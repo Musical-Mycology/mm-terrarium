@@ -374,10 +374,15 @@ def test_recycle_room_load_failure_reports_and_lands_no_room(monkeypatch):
     assert terr.state is TerrariumState.NO_ROOM
 
 
-def test_arco_ready_timeout_override_wins_over_the_room_spec():
+@pytest.mark.parametrize("override,expect_room_spec_default", [
+    pytest.param(42.5, False, id="override_wins"),
+    pytest.param(None, True, id="defaults_to_room_spec"),
+])
+def test_arco_ready_timeout_resolution(override, expect_room_spec_default):
     """--arco-ready-timeout was a dead flag: harness/terrarium_boot.py set
     BootConfig.arco_ready_timeout, but load_room waited on the RoomSpec's
-    value. The Terrarium-level override now reaches the wait."""
+    value. The Terrarium-level override now reaches the wait, and falls
+    back to the RoomSpec's own value when no override is given."""
     seen = []
 
     class RecordingArco(FakeArco):
@@ -385,23 +390,15 @@ def test_arco_ready_timeout_override_wins_over_the_room_spec():
             seen.append(timeout)
             super().wait_ready(timeout)
 
-    terrarium = make_terrarium(arco_process_cls=RecordingArco,
-                               arco_ready_timeout=42.5)
+    kwargs = {"arco_process_cls": RecordingArco}
+    if override is not None:
+        kwargs["arco_ready_timeout"] = override
+    terrarium = make_terrarium(**kwargs)
     assert terrarium.load_room("TEST") is None
-    assert seen == [42.5]
-
-
-def test_arco_ready_timeout_defaults_to_the_room_spec_value():
-    seen = []
-
-    class RecordingArco(FakeArco):
-        def wait_ready(self, timeout):
-            seen.append(timeout)
-            super().wait_ready(timeout)
-
-    terrarium = make_terrarium(arco_process_cls=RecordingArco)
-    assert terrarium.load_room("TEST") is None
-    assert seen == [terrarium.config.rooms["TEST"].arco_ready_timeout]
+    if expect_room_spec_default:
+        assert seen == [terrarium.config.rooms["TEST"].arco_ready_timeout]
+    else:
+        assert seen == [override]
 
 
 def test_loading_room_is_set_only_during_load_room():

@@ -84,12 +84,6 @@ class RhythmConfig:
 
 
 @dataclass(frozen=True)
-class AmbientConfig:
-    jam_control: bool = False
-    default_pattern: str = ""
-
-
-@dataclass(frozen=True)
 class BitConfig:
     identity: BitIdentity
     launch: LaunchConfig
@@ -98,7 +92,6 @@ class BitConfig:
     results_keys: tuple[str, ...] = ()
     assets: tuple[tuple[str, str], ...] = ()
     rhythm: RhythmConfig | None = None
-    ambient: AmbientConfig | None = None
     lobby: LobbyConfig = DEFAULT_LOBBY
     extras: dict = field(default_factory=dict)
     # Stamped by BitRegistry.resolve_config, never parsed from the manifest:
@@ -357,19 +350,8 @@ def _parse_rhythm(raw: dict, *, source: str) -> RhythmConfig:
     )
 
 
-def _parse_ambient(raw: dict, *, source: str) -> AmbientConfig:
-    known = {"jam_control", "default_pattern"}
-    _warn_unknown_keys(raw, known, source=source, prefix="ambient")
-    return AmbientConfig(
-        jam_control=_get(raw, "jam_control", bool, False, source=source,
-                          prefix="ambient"),
-        default_pattern=_get(raw, "default_pattern", str, "", source=source,
-                              prefix="ambient"),
-    )
-
-
 _KNOWN_TOP_TABLES = {"bit", "launch", "start", "console", "results", "rhythm",
-                     "ambient", "lobby", "defaults", "assets"}
+                     "lobby", "defaults", "assets"}
 
 
 def parse_manifest(text: str, *, source: str) -> BitConfig:
@@ -413,14 +395,6 @@ def parse_manifest(text: str, *, source: str) -> BitConfig:
                 source, identity.kind)
         rhythm = _parse_rhythm(doc["rhythm"], source=source)
 
-    ambient = None
-    if "ambient" in doc:
-        if identity.kind != "ambient":
-            logger.warning(
-                "%s: [ambient] present on non-ambient kind %r; parsed anyway",
-                source, identity.kind)
-        ambient = _parse_ambient(doc["ambient"], source=source)
-
     extras = dict(doc.get("defaults", {}))
 
     return BitConfig(
@@ -431,7 +405,6 @@ def parse_manifest(text: str, *, source: str) -> BitConfig:
         results_keys=results_keys,
         assets=assets,
         rhythm=rhythm,
-        ambient=ambient,
         lobby=lobby,
         extras=extras,
     )
@@ -445,7 +418,6 @@ _OVERRIDE_TABLES = {
     "start": ("start", _parse_start, None),
     "console": ("console", _parse_console, None),
     "rhythm": ("rhythm", _parse_rhythm, RhythmConfig),
-    "ambient": ("ambient", _parse_ambient, AmbientConfig),
     "lobby": ("lobby", _parse_lobby, None),
 }
 
@@ -504,7 +476,7 @@ def merge_overrides(config: BitConfig, overrides: dict, *, source: str) -> BitCo
         current = getattr(config, field_name)
 
         # Determine the dataclass whose field names bound valid keys. When
-        # the current value is None (e.g. rhythm/ambient not present), we
+        # the current value is None (e.g. rhythm not present), we
         # still need a schema to validate against -- build a default instance.
         if current is None:
             current = default_factory()

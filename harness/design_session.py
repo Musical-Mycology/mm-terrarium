@@ -8,10 +8,9 @@ Deviations from the task-4 sketch, both forced by reading the real
 luxaeterna API rather than guessing it:
 
 - ``LightSession.render_into`` takes a ``luxaeterna.universe.Universe``,
-  not a plain buffer -- ``harness/led_smoke.py`` hands it a bare
-  ``Universe()`` (the DMX512 default, 512 channels) rather than sizing one
-  off the capability, so this module follows that same precedent instead
-  of computing a bespoke width. ``_channel_count()`` reports the number of
+  not a plain buffer. This module hands it a bare ``Universe()`` (the
+  DMX512 default, 512 channels) rather than sizing one off the capability
+  or computing a bespoke width. ``_channel_count()`` reports the number of
   channels the capability itself actually occupies (pixel_count *
   channels-per-pixel, from ``luxaeterna.synth.engine.channels_for``) purely
   so ``render()`` can hand back a right-sized slice of the Universe's

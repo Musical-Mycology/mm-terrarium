@@ -16,11 +16,6 @@ if TYPE_CHECKING:
     from control.room_profile import RoomProfile
 
 
-class RoomResolutionError(Exception):
-    """Raised when a target Room's recipe isn't satisfiable. Resolution
-    never downgrades to a lesser type -- see design spec section 3."""
-
-
 @dataclass
 class Room:
     """Resolved once at boot. `name` is the config-name string this Room

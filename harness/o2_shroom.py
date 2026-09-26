@@ -51,8 +51,8 @@ def tilt_sweep(elapsed: float) -> float:
     """A deterministic ping-pong ramp over [-90, 90] degrees.
 
     A triangle wave rather than a sawtooth: aurora glides its hue under
-    cc:74, so a wrap-around discontinuity reads as a visible snap. Same
-    shape as led_smoke.py's canned cc:74 ramp, which is what proved this
+    cc:74, so a wrap-around discontinuity reads as a visible snap. The
+    original LED harness's canned cc:74 ramp had this shape and proved it
     looks right.
     """
     phase = (elapsed % SWEEP_PERIOD) / SWEEP_PERIOD
@@ -395,7 +395,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
     """Construct the client and its LED backend WITHOUT opening a socket.
 
     Returns (client, backend). serve=False gives a record-only backend for
-    headless tests, matching led_smoke.py's build()/main() split.
+    headless tests (the build()/main() split).
 
     room_type, when given, renders that ROOM's ONE named fixture instead of
     a Testshroom's surface -- fixture is then required. This is the

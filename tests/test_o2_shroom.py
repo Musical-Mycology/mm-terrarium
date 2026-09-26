@@ -39,10 +39,8 @@ def test_tilt_sweep_is_periodic():
 
 
 def test_build_wires_the_client_and_backend():
-    """Mirrors tests/test_room_simulator.py's test_build_wires_the_client_
-    and_backend for the same socket-free build() seam: dev id and node
-    reach the client, an LED adapter is wired, and serve=False means no
-    socket was opened."""
+    """The socket-free build() seam: dev id and node reach the client, an
+    LED adapter is wired, and serve=False means no socket was opened."""
     pytest.importorskip("luxaeterna.backends.websim")
 
     client, backend = build("ie1", "TEST_PLAYER_NODE", serve=False)

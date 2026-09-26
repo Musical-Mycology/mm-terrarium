@@ -1378,8 +1378,7 @@ class DeviceLinkAgent:
     def on_state_change(self, old_state: State, new_state: State) -> None:
         """FluidSynth is silent without a note (see control/audio.py), so
         the Room's declared drone has to start once the Bit is actually
-        RUNNING and stop once it's UNLOADING -- mirrors harness/led_smoke.py's
-        own start_drone/on_release-adjacent handling for a player role.
+        RUNNING and stop once it's UNLOADING.
 
         UNLOADING also drops every still-pending timed cue. A trigger's cue
         script can schedule a step past its Bit's own completion, and the

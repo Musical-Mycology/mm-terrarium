@@ -8,8 +8,8 @@ they are reading the same number in the same tick rather than two clocks that
 happen to agree.
 
 Consequence worth stating plainly: every renderer of a level-declaring role has
-to be fed this, or it renders a static surface. harness/led_smoke.py and
-devicelink/agent.py both tick it for that reason.
+to be fed this, or it renders a static surface. devicelink/agent.py ticks it
+for that reason.
 
 Pure and dependency-free: no luxaeterna, no pyarco, no clock of its own.
 """

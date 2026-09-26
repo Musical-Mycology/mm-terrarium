@@ -1,7 +1,8 @@
 """FixtureSink: where one fixture's rendered frames go.
 
-A Room is loaded with all its instruments (one session per fixture) from
-Room load; devices are OUTPUTS that attach to a fixture. Each render hands
+A sink is anything with ``send_frame(frame: bytes, when: float)``. A Room
+is loaded with all its instruments (one session per fixture) from Room
+load; devices are OUTPUTS that attach to a fixture. Each render hands
 the fixture's changed frame to every sink it currently has: the Console's
 display strip always, the bound devicelink device when there is one, and
 later a physical controller. Pure stdlib (control/ discipline): the
@@ -13,13 +14,9 @@ section 5.3.
 from __future__ import annotations
 
 import logging
-from typing import Callable, Protocol
+from typing import Callable
 
 logger = logging.getLogger(__name__)
-
-
-class FixtureSink(Protocol):
-    def send_frame(self, frame: bytes, when: float) -> None: ...
 
 
 class ConsoleFrameSink:

@@ -73,8 +73,8 @@ def test_lane_remaps_the_controller_number():
 
 
 def test_program_change_rides_the_same_path():
-    # led_smoke's --program override goes through feed_midi like everything
-    # else; without 0xC0 handling that flag would silently do nothing.
+    # A program override goes through feed_midi like everything else;
+    # without 0xC0 handling it would silently do nothing.
     pool = FakePool()
     br = AudioBridge(pool)
     br.on_grant("dev1", _role(ugens=PLAYER_UGENS))

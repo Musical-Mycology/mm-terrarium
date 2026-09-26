@@ -66,10 +66,6 @@ class LobbyRuntime:
     def state(self) -> LobbyState:
         return self._state
 
-    @property
-    def join_count(self) -> int:
-        return self._joins
-
     def start(self) -> None:
         self._running = True
         self._origin = self._clock()

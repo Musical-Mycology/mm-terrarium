@@ -749,7 +749,6 @@ export function initForms() {
     if (m.design_vocab) vocab = m.design_vocab;
     if (m.designs) lastDesigns = m.designs;
   });
-  wire.on("designs_listed", (m) => { lastDesigns = m.designs || []; });
   wire.on("designs_changed", (m) => { lastDesigns = m.designs || []; });
   wire.on("design", (m) => {
     currentKind = m.kind || "instrument";
