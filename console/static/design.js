@@ -18,6 +18,7 @@
 // a published name lands as its draft.
 import * as wire from "./wire.js";
 import { rebuild as rebuildForms } from "./design_forms.js";
+import { mk, clear } from "./dom.js";
 
 let lastDesigns = [];      // last-seen designs_changed/snapshot rows (both kinds)
 let current = null;        // {name, state, kind} of the open design, or null
@@ -25,17 +26,6 @@ let current = null;        // {name, state, kind} of the open design, or null
 // A row/event without an explicit kind predates the rooms catalog.
 function kindOf(row) {
   return (row && row.kind) || "instrument";
-}
-
-function clear(node) {
-  node.textContent = "";
-}
-
-function mk(tag, className, text) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  if (text != null) e.textContent = text;
-  return e;
 }
 
 // -------------------------------------------------------------- rendering

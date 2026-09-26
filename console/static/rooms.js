@@ -10,6 +10,7 @@
 // wire.confirmTap keys off the specific button element).
 import * as wire from "./wire.js";
 import { instrumentTags } from "./surface.js";
+import { mk, clear } from "./dom.js";
 
 let roomsSignature = null;   // JSON of the last-rendered declaration
 let terrariumState = null;   // last-seen terrarium_state
@@ -28,17 +29,6 @@ const detailByName = new Map();     // room name -> its detail mount (active roo
 let currentRoom = null;   // room_view payload
 let deviceRows = [];      // [{dev, name, role}]
 let rolesByName = {};     // role name -> role_view dict, for device tags
-
-function clear(node) {
-  node.textContent = "";
-}
-
-function mk(tag, className, text) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  if (text != null) e.textContent = text;
-  return e;
-}
 
 // -------------------------------------------------------------- test hooks
 

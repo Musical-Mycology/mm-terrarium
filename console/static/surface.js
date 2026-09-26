@@ -11,6 +11,7 @@
 // other. The dev is still SHOWN (the binding chip), it is just not an
 // identity anything here is keyed on.
 import * as wire from "./wire.js";
+import { mk, clear } from "./dom.js";
 
 const FRAME_LIVE_MS = 2000;
 const PIX_PER_BLOCK = 144;
@@ -44,17 +45,6 @@ let laneRowBySource = new Map();     // lane source ("cc:74") -> its <tr>
 let laneValueBySource = new Map();   // lane source -> its value <td>
 let lanesSignature = null;           // JSON of the last-rendered instruments list
 let emptyMsgEl = null;               // "No voices declared" <p>, when instruments is empty
-
-function clear(node) {
-  node.textContent = "";
-}
-
-function mk(tag, className, text) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  if (text != null) e.textContent = text;
-  return e;
-}
 
 // ------------------------------------------------------------ persistence
 

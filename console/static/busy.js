@@ -5,6 +5,7 @@
 // Closes when the state settles; a failure keeps it up with the reason
 // and a Dismiss button. Generic surface: begin/stage/fail/end.
 import * as wire from "./wire.js";
+import { mk } from "./dom.js";
 
 let overlayEl = null;      // the .overlay node while shown, else null
 let stagesEl = null;       // .stages list inside it
@@ -13,13 +14,6 @@ let failed = false;        // true after fail(): state settling must not close i
 let requestedRoom = null;  // room name this tab last asked to load
 let activeRoom = null;     // active room name from snapshot/room_loaded
 const ROOM_COMMANDS = new Set(["load_room", "unload_room", "load_bit"]);
-
-function mk(tag, className, text) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  if (text != null) e.textContent = text;
-  return e;
-}
 
 export function _overlay() {
   return overlayEl;

@@ -2,6 +2,7 @@
 // buttons, the Load picker overlay, and the Bit status card.
 import * as wire from "./wire.js";
 import { buildInstrumentCard } from "./surface.js";
+import { mk, clear } from "./dom.js";
 
 const PHASES = {
   LOADING: ["Loaded", "gold"],
@@ -64,17 +65,6 @@ function rolesText(r) {
 
 function findBit(name) {
   return bits.find((b) => b.name === name) || null;
-}
-
-function clear(node) {
-  node.textContent = "";
-}
-
-function mk(tag, className, text) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  if (text != null) e.textContent = text;
-  return e;
 }
 
 const ICONS = {
