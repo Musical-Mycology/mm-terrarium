@@ -15,6 +15,9 @@ them.
 This lived as an identical six-line copy in two harness scripts (both since
 deleted), and was about to become a third and fourth. The
 docstring is most of the value, so one copy means one place to record why.
+
+This module also holds the parent-gone predicate shared by the launchers
+(harness/o2_shroom.py and harness/terrarium_boot.py).
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ def parent_is_gone(expected_ppid, getppid=os.getppid) -> bool:
     """True once this process's parent is no longer the one that spawned it.
 
     The Room simulator is spawned by harness/terrarium_boot.py and, with
-    --no-join, never exits on its own: main()'s loop below waits for a
+    --no-join, never exits on its own: o2_shroom.main()'s loop waits for a
     /release that only a live Control sends. So a Terrarium that dies
     without running its shutdown leaves this process running forever, and
     o2litepy reconnects it to the NEXT Arco that starts (o2lite.py:912

@@ -107,8 +107,9 @@ def parse_cc_ref(ref, where: str | None = None) -> int:
     one (control.role_config, validating a Bit's authored manifest at load
     time); this module's own caller (AudioBridge.on_grant, reading an
     already-validated Role) has none to give, since its lanes are expected
-    to have already passed this same check at load time -- see Tier 2
-    consolidation PR B item 6 for why that's safe."""
+    to have already passed this same check at load time -- on_grant's
+    roles were already validated by role_config.validate_ugen_manifest at
+    load."""
     loc = where or "cc ref"
     if not isinstance(ref, str) or not ref.startswith(_CC_PREFIX):
         raise ValueError(f"{loc}: must be a {_CC_PREFIX!r} reference, got {ref!r}")

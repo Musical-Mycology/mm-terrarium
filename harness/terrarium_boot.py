@@ -38,8 +38,7 @@ from control.terrarium_config import (TerrariumConfig, load_terrarium_config,
 from devicelink.agent import DeviceLinkAgent
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH
-from harness.o2_shroom import parent_is_gone
-from harness.signals import sigterm_as_keyboard_interrupt
+from harness.signals import parent_is_gone, sigterm_as_keyboard_interrupt
 from harness.tick_pacer import TickPacer
 from harness.www_server import WWW_PORT, WwwServer, lan_ip
 
@@ -500,11 +499,7 @@ _TICK_PERIOD = 1.0 / 44.0
 
 
 def _pump(agent, console_agent, uplink) -> None:
-    """One tick's worth of agent/console/uplink pumping, shared by every
-    poll loop in this module that needs it: agent.poll(), console_agent's
-    poll() when given, then drain the uplink. Factored out of
-    `_wait_for_load`/`_serve_until_done`'s identical three lines (Tier 2
-    consolidation, PR B item 2)."""
+    """One tick of agent, console and uplink pumping."""
     agent.poll()
     if console_agent is not None:
         console_agent.poll()
@@ -527,15 +522,13 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     `./smoke-test.sh --open --devices 1` (harness/run_stack.py), whose
     --setup-seconds forwards to this same knob.
 
-    parent_pid, when given, is checked every tick via
-    harness/signals.py's parent_is_gone (re-exported from
-    harness/o2_shroom.py for backward compatibility) -- see F5 in the
-    final review for why this reuses that predicate rather than a
-    second one. A
-    SIGKILLed or OOM-killed run_stack cannot signal this process, so the
-    only way to notice is to keep asking. Returns "parent-gone" if that
-    fired, so main() can skip straight to shutdown() instead of calling
-    gs.run() into a stack whose supervisor is already gone.
+    parent_pid, when given, is checked every tick via harness/signals.py's
+    parent_is_gone -- see F5 in the final review for why this reuses that
+    predicate rather than a second one. A SIGKILLed or OOM-killed
+    run_stack cannot signal this process, so the only way to notice is to
+    keep asking. Returns "parent-gone" if that fired, so main() can skip
+    straight to shutdown() instead of calling gs.run() into a stack whose
+    supervisor is already gone.
 
     console_agent, when given, is polled once per iteration too -- a device
     joining during SETUP is exactly what the console's registration view
@@ -610,10 +603,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
         arco = _live_arco(terrarium, arco)
         if arco is not None:
             arco.poll()
-        agent.poll()
-        if console_agent is not None:
-            console_agent.poll()
-        _pump_uplink(uplink)
+        _pump(agent, console_agent, uplink)
         if gs is not None and gs.state is not State.SETUP:
             return "state-changed"
         if gs is not None and getattr(gs, "bit_name", None) != initial_bit_name:
@@ -699,7 +689,7 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
     leaving Arco and the Room simulator running un-signalled in their own
     session -- the orphan class docs/upstream/2026-08-14-o2-service-and-
     discovery-report.md names as a venue-scale hazard. See
-    harness/o2_shroom.py's parent_is_gone for why this compares against a
+    harness/signals.py's parent_is_gone for why this compares against a
     recorded pid rather than watching getppid() for a change.
 
     console_agent, when given, is polled once per tick too, right after
@@ -733,9 +723,7 @@ def _run_tick_loop(gs, agent, arco, exit_predicate, *,
     """Shared body of `_wait_for_load` and `_serve_until_done`: tick
     agent/console/gs once per iteration, checking parent-gone, Room-down and
     Arco-liveness in that order every time (see both callers' docstrings
-    for why that order matters -- an operator-driven room-down or unload
-    has already torn Arco down by the time arco.poll() would notice, so
-    checking `terrarium` first avoids misreporting it as "arco-exited").
+    for why that order matters).
 
     `exit_predicate(gs, agent)` is called once per iteration, after
     `gs.tick()`, and must return a non-None reason string the instant its

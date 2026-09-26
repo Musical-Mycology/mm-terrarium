@@ -3814,7 +3814,7 @@ the serve-mode console flow; this slice stabilizes the load path. Design:
   `lazy_class_map()` excludes it and `resolve_config()` on it returns a
   located refusal (`ManifestError`, key `bit.enabled`), which is the
   loadable-ness authority for `run_stack`'s `--bit` path too. Console bit
-  cards omit disabled bits; `--list-bits` prints them with a `disabled`
+  cards omit disabled bits; `--list-bits` prints them with a `DISABLED`
   marker so they are not invisible; both CLI launchers refuse a disabled
   bit with a located message rather than loading it. `bits/metronome/
   bit.toml` gains `enabled = false` pending its redesign -- no other
