@@ -11,6 +11,7 @@ import pytest
 
 from capture.store import CaptureError, CaptureStore, new_session_id, wav_bytes
 from devicelink.protocol import (MOTION_AXES, CaptureCommand, TelemetryBatch)
+from tests.fakes import FakeClock
 
 BIT = {"name": "capture", "version": "0.1"}
 SOURCE = {"client": "mm-tuneshroom-capture", "app_version": "1.0.0+1",
@@ -20,17 +21,6 @@ SOURCE = {"client": "mm-tuneshroom-capture", "app_version": "1.0.0+1",
           "units": {"accel": "m/s^2", "gyro": "rad/s"},
           "audio_stream": "record.startStream",
           "audio": {"rate": 16000, "bits": 16, "channels": 1}}
-
-
-class FakeClock:
-    def __init__(self):
-        self.t = 0.0
-
-    def __call__(self):
-        return self.t
-
-    def advance(self, dt):
-        self.t += dt
 
 
 def open_cmd(capture_id="shake-021", label="shake", series=3):

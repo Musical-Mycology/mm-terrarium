@@ -11,6 +11,7 @@ from capture.store import CaptureStore
 from control.bit_registry import BitRegistry
 from control.engine import GameServer
 from control.roles import RoleClass
+from tests.fakes import FakeClock
 
 SOURCE = {"client": "mm-tuneshroom-capture", "app_version": "1.0.0+1",
           "platform": "ios 18.5", "device_model": "iPhone 15",
@@ -20,17 +21,6 @@ SOURCE = {"client": "mm-tuneshroom-capture", "app_version": "1.0.0+1",
 
 AXES = {"ax": [1.0, 1.0], "ay": [0.0, 0.0], "az": [9.8, 9.8],
         "gx": [0.0, 0.0], "gy": [0.0, 0.0], "gz": [0.0, 0.0]}
-
-
-class FakeClock:
-    def __init__(self):
-        self.t = 0.0
-
-    def __call__(self):
-        return self.t
-
-    def advance(self, dt):
-        self.t += dt
 
 
 def open_args(dev="ie1", capture_id="shake-021", label="shake", series=3):

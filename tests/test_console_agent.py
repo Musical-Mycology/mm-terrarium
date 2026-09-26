@@ -11,6 +11,7 @@ from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.terrarium import TerrariumState
+from tests.fakes import FakeClock
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room, room_role_name
 from harness.terrarium_boot import _RoomWiring
@@ -498,14 +499,6 @@ def test_a_dead_console_client_is_dropped_not_retried_on_send():
     srv.fail_sends_to("c1")
     agent.poll()
     assert srv.dropped == ["c1"]
-
-
-class FakeClock:
-    def __init__(self, now=0.0):
-        self.now = now
-
-    def __call__(self):
-        return self.now
 
 
 def test_room_frames_are_broadcast_at_the_decimated_rate():
