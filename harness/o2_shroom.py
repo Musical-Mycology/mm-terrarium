@@ -29,7 +29,7 @@ from devicelink.contract import HELLO_INTERVAL_S
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.shroom_client import LED_CHANNELS, ShroomClient
-from harness.signals import sigterm_as_keyboard_interrupt
+from harness.signals import parent_is_gone, sigterm_as_keyboard_interrupt
 
 # Printed once per hub-away transition by reconnect_recheck, so run_stack's
 # log watchers -- and a human tailing the console -- can key on one stable
@@ -214,32 +214,6 @@ def discard_pre_role(q: "queue.Queue", reason: str) -> int:
     if dropped:
         print(f"{dropped} gesture(s) ignored: {reason}", flush=True)
     return dropped
-
-
-def parent_is_gone(expected_ppid, getppid=os.getppid) -> bool:
-    """True once this process's parent is no longer the one that spawned it.
-
-    The Room simulator is spawned by harness/terrarium_boot.py and, with
-    --no-join, never exits on its own: main()'s loop below waits for a
-    /release that only a live Control sends. So a Terrarium that dies
-    without running its shutdown leaves this process running forever, and
-    o2litepy reconnects it to the NEXT Arco that starts (o2lite.py:912
-    connects whenever _tcp_socket is None, and _id_handler at :601
-    re-announces every service on connect). There it claims this same dev
-    name, and O2 refuses the new run's own simulator with "not from service
-    provider" (o2/src/bridge.cpp:231-237) -- silently, since /_o2/*/sv is
-    fire-and-forget. See docs/superpowers/specs/
-    2026-08-14-room-simulator-service-collision-design.md.
-
-    Compares against the pid the parent stamped in rather than watching
-    getppid() for a change: if the parent died before this process read its
-    argv, getppid() is ALREADY 1 and a change detector would wait forever.
-    Comparison against a recorded value is correct in either order.
-
-    expected_ppid None means the caller did not ask for this guard -- the
-    default for a hand-run device -- and it never fires.
-    """
-    return expected_ppid is not None and getppid() != expected_ppid
 
 
 def service_conflict(o2lite, dev: str, *, verify=None):

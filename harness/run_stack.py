@@ -60,8 +60,7 @@ from control.terrarium_config import load_terrarium_config, resolve_bit_roots
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.proc_tee import ProcTee
-from harness.o2_shroom import parent_is_gone
-from harness.signals import sigterm_as_keyboard_interrupt
+from harness.signals import parent_is_gone, sigterm_as_keyboard_interrupt
 from harness.www_server import WWW_PORT
 
 DEFAULT_ARCO_COMMAND = os.path.join(ARCO_PYTHONPATH, "apps/pytest/server")
