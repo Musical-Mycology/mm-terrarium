@@ -5090,6 +5090,22 @@ not a `firmware/` directory here).
   Bit declares no triggers. Diagnostics above works on any device.", and a
   row pulses briefly on every fire, manual or gesture.
 
+### `bits/minigame/` -- MinigameBit, a one-device bench toy (2026-09-24)
+- **What it is.** Victor's Console-visible single-Tuneshroom Bit
+  ("Minigame", TEST room) with a three-phase state machine: PENDING until
+  a hold starts a round, INGAME while the LED blinks white 10 times 2 s
+  apart (bit-adjudicated `blink` fires on its own grid through
+  `FireFunction(at=...)`), then END. A tap resets to PENDING from any
+  phase. No scoring; it never completes on its own.
+- **Player kept across run start (2026-09-25).** As first checked in
+  (`1ced5e9`), `on_run_start()` cleared the player, and joins land in
+  SETUP before it runs, so in the normal lobby order the Bit ignored every
+  gesture. It now keeps the joined player, like MetronomeBit.
+  `tests/test_minigame_bit.py` pins both join orders end to end.
+- **Hold needs a Rev 1 board or the sim.** The role `uses` hold, so
+  `harness/o2_shroom.py` sends a long press as `/game/hold`; standard
+  `tuneshroom`/`testshroom` hardware cannot send hold.
+
 ### `devicelink/artnet_sink.py`, `[[artnet]]`, routing by fixture name, native RGBW (2026-09-23)
 Closes the follow-up named by the *Per-fixture light sessions* entry above
 (spec section 11) and the *Not yet built* entry "A real-hardware Room

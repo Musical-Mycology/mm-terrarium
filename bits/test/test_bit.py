@@ -35,9 +35,9 @@ JAMMER_LEVEL_FULL = 0.80
 class TestBit(Bit):
     version = "0.1"
 
-    # TestBit is the reference fixture for BOTH shipped rooms, so the
-    # Scored/Jam validation loop works in either. control/boot.py reads
-    # this off the class before instantiation.
+    # TestBit is the reference fixture for every shipped room (TEST, DEMO
+    # and VENUE), so the Scored/Jam validation loop works in each.
+    # control/boot.py reads this off the class before instantiation.
     room_types = {"TEST", "DEMO", "VENUE"}
 
     # Seconds for one full out-and-back sweep of the Room's ambient hue.
@@ -73,7 +73,7 @@ class TestBit(Bit):
             name="player", role_class=RoleClass.SHARED, capacity=None,
             scored=True,
             # Gates join on the "player" slot this Bit declares in
-            # instrument_requirements() above -- the reference exemplar for
+            # instrument_requirements() below -- the reference exemplar for
             # Role.requires (spec section 4, section 10).
             requires="player",
             # What this role asks the device for. The simulator draws exactly
@@ -135,21 +135,6 @@ class TestBit(Bit):
                 ],
             },
         )
-        # The Room's own role. Its cc:74 lane is driven two ways now: by any
-        # player's tilt (see the declared tilt_hue stream function) and by
-        # this Bit's own declared "drift"
-        # GENERATOR function, so the Room animates whether or not anyone has
-        # joined.
-        # A field-rate gesture, like player's aurora -- no note lane, so it
-        # renders continuously under cc:74 without the note-triggered strobe
-        # TestBit's own docstring already explains. Deliberately no cc:11/
-        # level lane (unlike player): breath-feeding the Room is a real,
-        # separable enhancement, not needed to prove the Room renders at
-        # all. The instrument itself is `rainbow`, not `aurora`: a scrolling
-        # hue gradient across the Room's whole concatenated surface, which
-        # makes the cross-fixture property -- one declaration, one gradient
-        # spanning every fixture -- the thing the reference fixture visibly
-        # proves (see design spec section 9).
         roles = {"player": player, "jammer": jammer}
         node_map = {"TEST_PLAYER_NODE": ["player"],
                     "TEST_JAM_NODE": ["jammer"]}
@@ -168,6 +153,19 @@ class TestBit(Bit):
             capabilities=frozenset({"light.pixels", "gesture.tilt"})),)
 
     def room_manifests(self) -> tuple[dict, dict]:
+        """The Room's own light and drone. Its cc:74 lane is driven two
+        ways: by any player's tilt (the declared tilt_hue stream function)
+        and by this Bit's own "drift" GENERATOR function, so the Room
+        animates whether or not anyone has joined. A field-rate gesture,
+        like the player's aurora: no note lane, so it renders continuously
+        under cc:74 without a note-triggered strobe. Deliberately no
+        cc:11/level lane (unlike player): breath-feeding the Room is a
+        real, separable enhancement, not needed to prove the Room renders
+        at all. The instrument is `rainbow`, not `aurora`: a scrolling hue
+        gradient across the Room's whole concatenated surface, which makes
+        the cross-fixture property (one declaration, one gradient spanning
+        every fixture) the thing the reference fixture visibly proves (see
+        design spec section 9)."""
         room_light = {
             "instruments": [
                 {"instrument": "rainbow", "target": "primary",
@@ -239,7 +237,7 @@ class TestBit(Bit):
                 target=FunctionTarget.SURFACE,
                 condition=Condition(
                     name="tapped",
-                    description="Two-tap on the device",
+                    description="Any tap on the device",
                     source=ConditionSource.GESTURE_VERB,
                     verb="tap"),
                 script=(

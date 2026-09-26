@@ -1,7 +1,7 @@
 [bit]
 name = "MinigameBit"
 version = "0.1.0"
-description = "TODO: one-line description"
+description = "Single-Tuneshroom bench toy: hold starts 10 white blinks 2 s apart, tap resets"
 entry = "minigame_bit:MinigameBit"
 kind = "tool"
 requires_terrarium_api = 1
@@ -20,4 +20,4 @@ when = "immediate"
 
 [console]
 display_name = "Minigame"
-notes = "TODO: what an operator sees/does with this Bit"
+notes = "Join one device on MINIGAME_PLAYER_NODE. It waits in PENDING until a hold starts a round (INGAME): the LED blinks white 10 times, 2 s apart, then the round ends on its own (END). A tap resets to PENDING from any phase. No scoring, and it never completes on its own, so unload it when done. Hold needs a Rev 1 board or the simulator's long press; a standard Tuneshroom cannot send it."
