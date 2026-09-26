@@ -346,7 +346,6 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     # room_audio's ArcoSynthPool.start() below, and the caller starts the
     # transport on it AFTER this function returns -- and therefore
     # registers its teardown then, so it stops before everything here.
-    server = transport
     factory = _O2SimulatorFactory(
         config.o2_ensemble, popen=simulator_popen,
         # Resolved at spawn time: `terrarium` is assigned below, before any
@@ -420,7 +419,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
                 pool.start()
             room_audio = AudioBridge(pool, clock=clock)
 
-        agent = DeviceLinkAgent(gs, server, room_audio=room_audio,
+        agent = DeviceLinkAgent(gs, transport, room_audio=room_audio,
                                 horizon=config.cue_horizon, clock=clock,
                                 on_join_denied=on_join_denied,
                                 stale_timeout=config.stale_timeout,
@@ -438,7 +437,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         teardown.close()
         raise
 
-    return gs, server, agent, terrarium.arco, teardown, terrarium
+    return gs, transport, agent, terrarium.arco, teardown, terrarium
 
 
 def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
