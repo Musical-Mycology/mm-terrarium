@@ -500,6 +500,18 @@ def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
 _TICK_PERIOD = 1.0 / 44.0
 
 
+def _pump(agent, console_agent, uplink) -> None:
+    """One tick's worth of agent/console/uplink pumping, shared by every
+    poll loop in this module that needs it: agent.poll(), console_agent's
+    poll() when given, then drain the uplink. Factored out of
+    `_wait_for_load`/`_serve_until_done`'s identical three lines (Tier 2
+    consolidation, PR B item 2)."""
+    agent.poll()
+    if console_agent is not None:
+        console_agent.poll()
+    _pump_uplink(uplink)
+
+
 def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
                    console_agent=None, arco=None, gs=None,
@@ -697,6 +709,41 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
     pacer, when given, replaces the default TickPacer(1/44) built on this
     function's own `sleep` (tests inject one); see harness/tick_pacer.py.
     """
+
+    def _exit(gs, agent):
+        if gs.state in (State.LOADING, State.LOADED, State.SETUP):
+            # Only a restart (Console or uplink) can put the engine here
+            # while this function is running: run() was already called
+            # before entry.
+            return "restarted"
+        if gs.state == State.IDLE and not getattr(agent, "closing", 0):
+            return "completed"
+        return None
+
+    return _run_tick_loop(gs, agent, arco, _exit, parent_pid=parent_pid,
+                          console_agent=console_agent, terrarium=terrarium,
+                          uplink=uplink, pacer=pacer, sleep=sleep)
+
+
+def _run_tick_loop(gs, agent, arco, exit_predicate, *,
+                   parent_pid: int | None = None, console_agent=None,
+                   terrarium=None, uplink=None, pacer=None,
+                   sleep=time.sleep) -> str:
+    """Shared body of `_wait_for_load` and `_serve_until_done`: tick
+    agent/console/gs once per iteration, checking parent-gone, Room-down and
+    Arco-liveness in that order every time (see both callers' docstrings
+    for why that order matters -- an operator-driven room-down or unload
+    has already torn Arco down by the time arco.poll() would notice, so
+    checking `terrarium` first avoids misreporting it as "arco-exited").
+
+    `exit_predicate(gs, agent)` is called once per iteration, after
+    `gs.tick()`, and must return a non-None reason string the instant its
+    caller's own exit condition is met, else None to keep looping.
+
+    `parent_is_gone` is looked up as this module's own global on every
+    call (not captured into a local), so a test's
+    `monkeypatch.setattr("harness.terrarium_boot.parent_is_gone", ...)`
+    is honored from the very next tick."""
     if pacer is None:
         pacer = TickPacer(_TICK_PERIOD, sleep=sleep)
     while True:
@@ -708,18 +755,11 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
             return "no-room"
         if arco.poll() is not None:
             return "arco-exited"
-        agent.poll()
-        if console_agent is not None:
-            console_agent.poll()
-        _pump_uplink(uplink)
+        _pump(agent, console_agent, uplink)
         gs.tick(1.0 / 44.0)
-        if gs.state in (State.LOADING, State.LOADED, State.SETUP):
-            # Only a restart (Console or uplink) can put the engine here
-            # while this function is running: run() was already called
-            # before entry.
-            return "restarted"
-        if gs.state == State.IDLE and not getattr(agent, "closing", 0):
-            return "completed"
+        reason = exit_predicate(gs, agent)
+        if reason is not None:
+            return reason
         pacer.wait()
 
 
@@ -756,28 +796,17 @@ def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
     """
     if gs.state is not State.IDLE:
         return "loaded"
-    if pacer is None:
-        pacer = TickPacer(_TICK_PERIOD, sleep=sleep)
-    while True:
-        arco = _live_arco(terrarium, arco)
-        if parent_is_gone(parent_pid):
-            return "parent-gone"
-        if terrarium is not None and terrarium.state is not TerrariumState.ROOM_READY:
-            return "no-room"
-        if arco.poll() is not None:
-            return "arco-exited"
-        agent.poll()
-        if console_agent is not None:
-            console_agent.poll()
-        _pump_uplink(uplink)
-        gs.tick(1.0 / 44.0)
-        if gs.state is not State.IDLE:
-            return "loaded"
-        pacer.wait()
+
+    def _exit(gs, agent):
+        return "loaded" if gs.state is not State.IDLE else None
+
+    return _run_tick_loop(gs, agent, arco, _exit, parent_pid=parent_pid,
+                          console_agent=console_agent, terrarium=terrarium,
+                          uplink=uplink, pacer=pacer, sleep=sleep)
 
 
 def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
-                  console_agent=None, drain_arco=None, terrarium=None,
+                  console_agent=None, terrarium=None,
                   uplink=None) -> str:
     """The `--serve` round loop: load, hold, run, complete, repeat -- until
     the parent or Arco disappears. Each iteration is one round:
@@ -800,12 +829,6 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
       5. `_serve_until_done` -- run to completion. "completed" (which
          covers an in-round operator abort too -- both land back in IDLE)
          loops back to step 1 for the next round.
-
-    `drain_arco`, when given, is called once per iteration of the setup
-    and run legs in addition to `arco.poll()` -- an extra pty-drain hook
-    for callers whose Arco handle needs draining separately from its
-    liveness check. Unused by the two callers `arco.poll()` already
-    covers both concerns for.
     """
     def _end_round(bit_name, reason_text: str) -> None:
         """Announce the round's outcome (marker + console event). The
