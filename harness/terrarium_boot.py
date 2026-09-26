@@ -528,8 +528,10 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     --setup-seconds forwards to this same knob.
 
     parent_pid, when given, is checked every tick via
-    harness/o2_shroom.py's parent_is_gone -- see F5 in the final review
-    for why this reuses that predicate rather than a second one. A
+    harness/signals.py's parent_is_gone (re-exported from
+    harness/o2_shroom.py for backward compatibility) -- see F5 in the
+    final review for why this reuses that predicate rather than a
+    second one. A
     SIGKILLed or OOM-killed run_stack cannot signal this process, so the
     only way to notice is to keep asking. Returns "parent-gone" if that
     fired, so main() can skip straight to shutdown() instead of calling
