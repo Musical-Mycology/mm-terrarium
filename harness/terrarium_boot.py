@@ -22,7 +22,7 @@ from typing import Callable
 
 from control.arco_process import ArcoProcess
 from control.bit_config import StartCondition
-from control.bit_registry import BitRegistry
+from control.bit_registry import BitRegistry, print_bit_list
 from control.boot_config import BootConfig
 from control.engine import BitLoadError, GameServer
 from control.join_info import build_join_info
@@ -1629,14 +1629,7 @@ def main() -> None:
     registry = BitRegistry.scan(bit_roots)
 
     if args.list_bits:
-        for row in registry.list_view(include_hidden=True):
-            rooms = ",".join(row["room_types"])
-            status = "" if row.get("enabled", True) else "\tDISABLED"
-            print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"
-                 f"{rooms}\t{row['start']['when']}\t{row['description']}"
-                 f"{status}")
-        for err in registry.errors_view():
-            print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
+        print_bit_list(registry)
         sys.exit(0)
 
     if args.no_bit and (args.bit is not None or args.profile is not None):
