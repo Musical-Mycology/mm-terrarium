@@ -888,6 +888,26 @@ pending) and treated as the design. In `console/agent.py`:
   apart), `clone_entry` copies bytes, `publish_entry` re-validates, then
   renames atomically.
 
+#### LED layout models (`control/model_layout.py`)
+
+An instrument's `instruments/<name>.toml` may declare `model =
+"models/<name>.glb"`, a path relative to `instruments/`, pointing at an
+artist-authored glTF binary. `control/model_layout.py` (pure stdlib: no
+third-party glTF library) reads the file's JSON chunk only, finds LED
+marker spheres under a node named `LEDs` (one sublayer per zone, e.g.
+`LEDs::ring`), and resolves each into millimetre position, size band, and
+zone -- `Instrument.layout`, a tuple of `PixelLayout`. `Instrument.
+model_sha256` is the source file's own SHA-256; it ships on the
+carried-instrument wire blob (`docs/carried-instrument-schema.md`) only for
+an instrument that declares a model. A published instrument with a missing
+or invalid model fails to load, exactly like invalid TOML; a draft records
+the error on its `CatalogEntry` instead. See
+`docs/superpowers/specs/2026-09-28-3d-tuneshroom-model-and-view-design.md`
+in the mm-tuneshroom repo, sections 3-5, for the full picture -- the
+consumer is mm-tuneshroom's 3D view (`docs/instrument-model-guide.md` and
+`tools/bake_model.py` / `tools/export_models.py` arrive in PR T2). Neither
+the parser nor `Instrument.layout` is read by the server in this slice.
+
 #### Per-fixture light sessions and sinks
 
 - `DeviceLinkAgent._setup_room` gives every declared fixture, bound or not, its

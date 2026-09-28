@@ -112,7 +112,7 @@ vocabulary:
                  "status": 176, "data1": 74, "data2": 127},
                 {"offset": 1.0, "kind": "light", "dev": "target",
                  "status": 176, "data1": 74, "data2": 0}]}
-    /* ... one entry per declared Function, function_view's wire shape */
+    /* ... one entry per declared Function, function_view's wire shape; "model_sha256" (hex, optional) appears alongside "functions" when the instrument declares a model */
   ]
 }
 ```
@@ -124,6 +124,7 @@ vocabulary:
 | `pixels` | Int; 0 only for an instrument that never declared `light.pixels`. |
 | `ambient` | `{"light": ..., "ugen": ...}`, each the instrument's own manifest verbatim (deep-copied -- a host may render this but must never mutate the server's copy). Empty dict when the instrument declares no ambient manifest of that kind. |
 | `functions` | Every declared `Function`, kind-tagged, `function_view`'s existing wire shape (the same shape the Console's function cards already consume). |
+| `model_sha256` | Hex SHA-256 of the instrument's source `.glb`. Present **only** when the instrument declares a `model` key (`instruments/<name>.toml`); omitted entirely otherwise, so every instrument that declares no model keeps a byte-identical view. Lets a device (mm-tuneshroom) verify its bundled baked model matches the catalog's source before trusting it for the 3D view. See `docs/superpowers/specs/2026-09-28-3d-tuneshroom-model-and-view-design.md` in the mm-tuneshroom repo, sections 4-5. |
 
 ### The published-only rule
 
