@@ -1676,4 +1676,236 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   first is reported upstream; mm-tuneshroom's `web/o2ws.js` must stay
   byte-identical below its header.
 
-<!-- FILL:T8 tail sections: Boundary rules, Host platform, Relationships, Not yet built, Design docs -->
+## Boundary rules (the load-bearing invariants)
+
+Code, tests and other repos cite these by number, so a new rule is
+appended, never inserted.
+
+1. **Single writer to `/arco`.** Only Control builds ugen graphs and owns the
+   ugen id space. Interactive Elements express intent to `/game`; Control
+   decides the audio consequence. A device never touches `/arco`.
+2. **Uplink and console are monitor/control shells, never the hot loop.**
+   Both attach through the engine's observer list and are pumped from the
+   engine's tick loop, but an observer exception is logged, never raised
+   into the tick (`GameServer._notify`), and neither carries per-device
+   `join`/`tick` traffic. Gameplay never depends on either link's health.
+3. **Lux Aeterna is the lighting renderer, downstream of Bit cue logic.**
+   [Lux Aeterna](https://github.com/Musical-Mycology/luxaeterna) is MM's
+   Python DMX512 / Art-Net to WLED library, the visual analog of Arco,
+   rendering at 44 Hz (mm-documents `MM_HARDWARE_DESIGN.md`,
+   `mm-shrooms-app/shroom-installations-design.md`). The Console **monitors,
+   never drives**, as with Arco: it displays each role's `light_manifest`,
+   never instantiates ugens and never pushes frames into the Room's render
+   loop (the Design bench renders its own offline session). A Lux Aeterna
+   health read-out through `Bit.status()` is anticipated, not built.
+4. **An in-process consumer is reached by a Python method call, not by O2.**
+   o2lite `send()` has **no local short-circuit**: addressing a service from
+   the process that offers it round-trips through Arco. So Control drives
+   its own light sessions and Room voices by direct calls
+   (`session.feed_midi(...)`, `.swap(...)`, zero hops), and `game` and
+   `actl` stay **inbound-only** (devices to `game`, Arco to `actl`): Control
+   never messages itself (design doc, *Message Routing*). **One deliberate
+   exception:** `verify_service_ownership` (`devicelink/o2_transport.py`)
+   sends `game`, then `actl`, one self-addressed message at startup, before
+   the tick loop, using that very property as a measurement: it comes back
+   only if the hub routes the service here (*Service refusal*).
+5. **A test double must never be more permissive than the library it stands
+   for.** A `FakeO2Lite` once called handlers directly while real o2litepy
+   dispatches only inside `poll()`, so the suite and every review agreed a
+   transport worked that had never delivered a message. Encode a double's
+   *strictness* as well as its shape: what the real thing refuses, when it
+   dispatches, and what it requires you to call.
+
+## Host platform (gotcha)
+
+- **The Dec 4 Terrarium is a Mac** (its line-out feeds the PA) and the
+  Instruments are ESP32s on o2lite firmware (student hardware track spec,
+  section 4.5). The later venue target, bare-metal Linux on a Raspberry Pi 5
+  with an I2S DAC HAT, is deferred past the show (design doc, *Host
+  Platform*).
+- **No virtualized hosts.** O2 discovery and Art-Net to WLED are UDP on the
+  LAN; a NAT'd VM or **WSL2** host sits on its own subnet and gets neither.
+- **Develop without hardware** on luxaeterna's `WebSimBackend` (browser
+  canvas; `serve=False` records frames headless); `harness/o2_shroom.py`'s
+  `build()` is the worked example.
+- **Measure timing on the show machine**, which relays every hop through the
+  process doing all synthesis while feeding the 44 Hz render loop. The
+  M1a-era "round trip under 50 ms" had Control out of the path. Use
+  `harness/render_bench.py` (worst frame and p95 beside the mean; it drives
+  `_loop_once()` itself rather than trust a smoothed rate). No show-machine
+  figures are recorded yet.
+- **Pace to deadlines, never sleep after the work**: macOS oversleeps a
+  22.7 ms sleep by ~4 ms (44 Hz fell to ~37 Hz). New fixed-rate loops use
+  `TickPacer` (*Tick pacing*); it fixes the mean, not jitter (p95 ~27 ms).
+- **Arco needs a controlling terminal.** Curses opens `/dev/tty`, so a plain
+  `Popen` on a pipe fails (then reads as a readiness timeout); `script` does
+  not help. `pty_popen` (`control/arco_process.py`, `--arco-pty`) forks onto
+  a pty the child adopts. Two silent failures: `TERM` must be set, and the
+  pty needs a non-zero size (`TIOCSWINSZ`). An exec failure raises
+  `ArcoExecFailed` via a close-on-exec pipe (macOS reports EIO on the pty
+  master once the slave closes, so pty text never reaches the log);
+  `wait_ready` raises `ArcoExited` once the child dies. The pty master is
+  also Arco's only control surface (`_PtyProcess.write_console`). Drain it
+  (*Running it*).
+
+## Relationships to other repos
+
+- **arco / o2** (rbdannenberg upstream, Musical-Mycology forks): the engine
+  and transport; the Arco server *is* the room's O2 hub and sole
+  synthesizer. Two defects went to Roger Dannenberg
+  ([report](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/upstream/2026-08-14-o2-service-and-discovery-report.md)):
+  the silent service refusal is O2 as designed (*Service refusal*), and
+  o2litepy's missing ensemble filter is fixed upstream (`rbdannenberg/arco`
+  `379424e`; canonically `rbdannenberg/o2` `f21499e`), confirmed live.
+- **pyarco**: the Python layer Control builds ugen graphs through; dev/test
+  only, reached by `PYTHONPATH`, never vendored, never imported by
+  `control/audio.py`, so the suite runs offline. Source of truth: the
+  sibling `arco` checkout's `pyarco/` (Roger's `rbdannenberg/arco`, mirrored
+  to `Musical-Mycology/arco`), found by `harness/arco_paths.py` (*Running
+  it*). The standalone `Musical-Mycology/pyarco` repo is archived.
+- **o2litepy** (`arco/o2litepy/`): what pyarco and `O2LiteTransport` ride.
+  Nothing under `control/` or `devicelink/` imports it at module level (the
+  caller injects a connected object). `harness/arco_paths.ensure_o2litepy()`
+  is the one fallback, called by `run_stack`, `terrarium_boot` and
+  `o2_shroom`: if o2litepy is not importable it appends `ARCO_PYTHONPATH` to
+  `sys.path` and the children's `PYTHONPATH` (an explicit `PYTHONPATH`
+  wins). The canonical, pip-installable package is `rbdannenberg/o2`'s
+  `o2litepy/`; if Roger removes the identical arco copy, `ARCO_PYTHONPATH`
+  and every `PYTHONPATH=` recipe must repoint. Phase 3 of the connectivity
+  migration spec pins the package and retires the fallback.
+- **mm-tuneshroom**: the instrument app and browser simulator. Its web build
+  deploys into the Terrarium's `www/` as an artifact; the *application*
+  (Dart app, web build, native harness) never contains Terrarium-side logic.
+  Its `bits/` holds Terrarium-side Bit packages that ship with the
+  instrument they target (its GlowBit is the reference), consumed only through
+  `bit_paths`, never imported by the app. Shared contracts, synced by hand:
+  `devicelink/protocol.py` with `lib/link/envelope.dart`, the exported
+  device contract, `www/o2ws.js` with its `web/o2ws.js`, and
+  `docs/telemetry-trace-schema.md` (its capture client, derived thresholds
+  and simulator presets are unbuilt). The legacy M1a / Sensor-Check harness
+  stays there as a reference; nothing was ported.
+- **mm-devshroom**: Rev 1 ESP32 Tuneshroom firmware, consuming the exported
+  device contract.
+- **mm-fairyring**: the cloud broker, Terrarium `uplink/` to fairyring to
+  MycoQuest. `uplink/` is written against a protocol fairyring implements;
+  the broker is built in its own repo, not yet deployed. Its cross-repo
+  follow-ups doc lists the Terrarium-side items (*Not yet built*).
+- **mm-renquest (MycoQuest)**: `GET /prepare` and the uplink events, per the
+  [MycoQuest handoff spec](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-13-mycoquest-handoff-terrarium-design.md);
+  the deviations are under `uplink/`.
+- **Lux Aeterna** (boundary rule 3): role blobs carry `light_manifest` in
+  its v2 shape (`LightManifest.from_dict`;
+  `docs/superpowers/specs/2026-07-22-light-manifest-v2-adoption-design.md`).
+  This repo relies on: the WebSim canvas fitting a LINEAR surface of any
+  length in one row, and replaying its last frame to a late client (so a
+  one-shot `--identify-blocks` shows); `SurfaceCapability` refusing zones
+  that under-cover `pixel_count` at construction (`harness/room_surface.py`
+  conforms); and `LightSession.render_into` passing the injected clock's
+  reading as `t`, so fixture sessions sharing `DeviceLinkAgent`'s clock
+  scroll a `primary` rainbow as one gradient.
+
+## Not yet built / deferred
+
+Kept explicit so the doc does not over-claim.
+
+- **Native iOS/Android and Radxa apps cannot connect** until mm-tuneshroom's
+  FFI o2lite link lands (connectivity migration Phase 3, which also pins
+  o2litepy; `control/join_info.py`'s `NATIVE_NOTE`). o2ws timing on a real,
+  OS-focused phone on the venue LAN is unmeasured, and two of the three
+  `www/o2ws.js` patches are not reported upstream.
+- **The Tuneshroom LED wire cannot reach the white die.** The Rev 1 board's
+  12 pixels are RGBW, but `protocol.leds_event` ships 36 ints (12 px GRB)
+  and luxaeterna's `shroom_capability` says `color_order: "GRB"`, so a
+  driver must hardcode `w=0`. Widening to 48 means changing
+  `devicelink/protocol.py`, `shroom_capability`, the WebSim backend,
+  mm-tuneshroom's `lib/link/envelope.dart` and the contract together: **an
+  open decision, not a bug to quietly fix.**
+- **Contract kit:** mm-devshroom's native replay environment, the live bench
+  replay spike (spec section 8), and an executable Mushica capability-gate
+  test (waits on the Mushica Bit).
+- **Check join-retrying firmware before hardware bring-up.** One-shot
+  `o2_shroom` (no `--persist`) with `--join-retry` ends the round on an
+  unanswered deny: as a Room fixture it prints `DEVICE_JOIN_DENIED` and
+  exits while still bound. Low exposure (fixture sims use `--no-join`).
+- **Room liveness is undesigned**: Room-bound devices are never reaped
+  (liveness spec section 5).
+- **A device's clock-sync to Arco after Control has connected is unreliable**
+  in one remaining, upstream case. The intermittent half was this repo's
+  undrained Arco pty (*Running it*), fixed, and never headless-specific. What remains: pyarco's `arco.initialize()` always
+  sends `/host/clear` via `reset()`, and a client that synced **before**
+  that keeps a valid `time_get()` on a dead socket (measured: 120 joins
+  over 240 s, none received). `verify_service_ownership` makes this loud
+  (`FATAL: service ... is not routed back to this process`), not fixed.
+  Arco's `(S)tart` key restores sync (`--arco-start-audio`, off by
+  default: the toggle cannot be read, so it can stop running audio); same
+  family as "only the first client after an Arco start gets working audio".
+  On a failed live run read `o2debug.log`: `dropping message because service
+  was not found` means Control was not up yet (or a device's announcement
+  was lost; devices re-verify on reconnect); silence means a dead socket.
+- **Is the device-side `TimedQueue` redundant on o2lite?** O2 already
+  delivers at `when`, so "one gesture, one shared `T`" may be enforced a
+  layer lower. Unanswered; evidence in
+  [*Timed cues and `cue_horizon`*](#timed-cues-and-cue_horizon).
+- **Service refusal stays silent at the O2 layer**, a design constraint
+  here, detected by the probe and orphan guards, never fixed
+  ([*Service refusal*](#service-refusal)). Two Terrariums (two real Arco
+  hubs) on one network are not exercised against the ensemble fix.
+- **Arco synthesis** is provisional (one `Flsyn`, `ugen_manifest` v0;
+  *Audio*): no per-role synthesis beyond FluidSynth, no real
+  Flsyn-parameterizing schema, and no Arco audio to devices (they play local
+  samples on `play` cues).
+- **Scoring**: no framework; `Bit.on_complete()` is an empty hook and a Bit
+  reports only through `result()`. **A Bit is not told a player left**: a
+  ROOM role switch releases the player role, but `control/bit.py` has no
+  leave hook.
+- **No physical LED has been driven.** `[[artnet]]` wires DEMO and VENUE for
+  real, tested only against `harness/artnet_listen.py` and loopback; the
+  Art-Net spec's section 9 bring-up checklist is pending. Treat venue-array
+  and device tooling as unexercised until the student track's hardware
+  gates record otherwise. TEST's only backend is the browser simulator.
+- **VENUE hardware inputs** (venue Room spec section 2): LEDs per fiber
+  engine (N = 1 in `rooms/VENUE.toml` until supplied), fiber current, the
+  PSU rating, and whether the fiber shares it. A per-bundle fiber ambient
+  (one `aurora` per zone) is a follow-up.
+- **`RoomBindingRegistry` save/load does not persist in live runs.** Both
+  exist, and `Terrarium.load_room()`/`unload_room()` (`control/terrarium.py`)
+  call them given a `binding_store_path`, but `harness/terrarium_boot.py`'s
+  `main()` never passes one: each restart needs an admin-armed tap to rebind
+  a physical Room device.
+- **`deploy/`** (venue provisioning, networking) is planned in the README,
+  not created. **Operator control beyond the Console** (physical controls,
+  a Registration Node convention) is a later decision.
+- **mm-fairyring follow-ups here:** issue #100 (a `set_admin_devices`
+  down-command writing `[admin] devices` from a MycoQuest manifest, how the
+  admin site gets a GemID onto a box); issue #127 (a refused identity still
+  replays and clears the journal, then hot-loops the reconnect); two boxes
+  sharing an identity displace each other forever (4409); and
+  `bit_completed` needs a run id so a replay cannot credit a later quest.
+- **`GET /join.json`** on the LAN static server (mm-tuneshroom's
+  join-launcher spec, section 4.1) is unbuilt. It must serve `start: null`
+  (`start_key=None`), as it omits `qr_svg`: `start` carries the key and the
+  prepare URL.
+
+## Design docs (in-repo, authoritative)
+
+Each spec's Status line records what was live-verified; all specs are in
+`docs/superpowers/specs/`, linked from their sections above.
+
+- Canonical architecture: [`docs/control-gameserver-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/control-gameserver-design.md).
+- [Bootstrap](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-18-mm-terrarium-bootstrap-design.md); [first slice](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-20-control-gameserver-first-slice-design.md) (lifecycle engine, TestBit).
+- [Uplink](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md); [Console](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-21-terrarium-console-design.md); [Tuneshroom audio](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-06-tuneshroom-audio-design.md).
+- [Student hardware track, ESP32 revision](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-11-student-hardware-track-esp32-design.md):
+  the Dec 4 build (Tuneshroom firmware, Tower fixture, Mushica Bit, gates,
+  acceptance). The 2026-08-06 track spec (Radxa, Pi 5, 864 px array) is kept
+  only for its reasoning; none of its tasks started.
+- [Room concept and load sequence](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-room-concept-and-load-sequence-design.md) and the [Terrarium Visualization Simulator](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-10-terrarium-visualization-simulator-design.md) (TEST Room).
+- [Control on o2lite, and timed cues](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-12-control-o2lite-and-timed-cues-design.md); [load-bearing timed cues](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-load-bearing-timed-cues-design.md):
+  read its section 2 (the timing model) before touching cue timing.
+- [Teardown order and the stack runner](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-14-teardown-order-and-stack-runner-design.md).
+- Spec A, [Room panel and Room fixtures](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-room-panel-and-room-fixtures-design.md); Spec B, [Bit-declared triggers, cue scripts and conditions](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-17-bit-declared-triggers-and-cue-scripts-design.md); Spec C, [the N-fixture Room](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-18-n-fixture-room-design.md) (Spec B section 4.2's deferral).
+- Room/Instrument/Trigger restructure: [Instruments and Fixtures](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-27-instruments-and-fixtures-design.md) (Spec 2); [Functions and the Trigger rename](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-27-functions-and-trigger-rename-design.md) (Spec 3: acting side is Function, sensing side owns Trigger).
+- Cited under *Not yet built*: [o2lite connectivity migration](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-08-o2lite-connectivity-migration-design.md) (Phase 3 open), [device liveness](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-25-device-liveness-detection-design.md), [VENUE Room](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-venue-room-design.md).
+
+Game-design background (RenQuest integration, Bit scoring and loop rules,
+hardware) is in MM-internal docs (`mm-documents/mm-shrooms-app/`), not needed
+to work on this architecture.
