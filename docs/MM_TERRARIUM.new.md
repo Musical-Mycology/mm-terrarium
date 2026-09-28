@@ -906,7 +906,112 @@ pending) and treated as the design. In `console/agent.py`:
   `DeviceLinkAgent` sends it to joined devices on change (not muted, fading or
   `breath=False` ones); the lobby feeds the fixtures.
 
-<!-- FILL:T5 devicelink and contract_kit -->
+### `devicelink/`: the device-facing side over o2lite
+
+The inbound sibling of `console/` (trusted LAN, no auth).
+`devicelink/o2_transport.py` moves O2 messages; `DeviceLinkAgent`
+(`devicelink/agent.py`, transport-agnostic, driven by `poll()` each tick)
+holds a `LightSession` per joined device and per fixture, ships
+`JoinResult.config` verbatim as `/<dev>/role` and sends changed frames as
+`/<dev>/leds`. Design:
+[`2026-08-12-control-o2lite-and-timed-cues-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-12-control-o2lite-and-timed-cues-design.md).
+
+#### Transport
+
+- **`O2LiteTransport`** is Control's `game` service on the hub:
+  `drain_new_clients` (always empty; a device is anonymous until hello),
+  `drain_inbound`, `send`, `bind_dev`, `drop_dev`. It never imports
+  o2litepy (`start()` takes a connected object; `Blob` duck-types
+  `O2blob`), so the offline suite needs none. The agent holds it as
+  `.transport` (`.server` before PR #153) and requires `clock=`
+  (`o2lite.time_get`): one clock for Control and devices.
+- **Control is a guest on pyarco's connection** (one o2lite connection per
+  process). pyarco announces `actl`; `set_services` **replaces**, so
+  Control writes all of `SERVICES = "actl,game"`, or Arco's replies stop.
+- `start()` refuses an unsynced clock (`time_get() < 0`) or a missing
+  `actl`, then `verify_service_ownership` round-trips a TCP probe on
+  **both** services (resent every 2 s, 10 s timeout); either failing is
+  fatal (without `actl` the next ugen build hangs). Its `pump=` must drain
+  Arco's pty (see "The Arco pty gotcha" under Running it).
+- **o2lite facts**, each of which breaks the link if ignored:
+  - handlers take `(address, types, info)`, **pull** args in typespec
+    order (`pull_args`) and get the address without its leading `/`;
+  - a blob must have `.size`/`.data`; a bare int list raises (`to_o2_arg`);
+  - handlers run only inside `o2lite.poll()`, which `drain_inbound()` pumps;
+  - `method_new` appends and dispatch takes the **first** match, so the
+    svcheck handler is registered once per (connection, service);
+  - a **UDP** send right after `set_services()` can beat the registration
+    to the hub and vanish (Roger found it in his own test program): send
+    the first message over TCP, as the ownership probe does.
+- `bind_dev` refuses a dev id over 31 characters (`MAX_DEV_LEN`; it is the
+  device's O2 service name). `send()` to an unknown dev is a silent no-op
+  (so `/<dev>/release` goes out **before** `drop_dev`), and a typespec and
+  argument count that disagree are refused, never truncated.
+- **`FakeO2Lite` is as strict as o2litepy** (boundary rule 5): only
+  `poll()` dispatches, handlers are first-match, `refuse()` loses a claim.
+
+#### Message vocabulary
+
+- **`devicelink/contract.py`'s `VERB_TABLE`** is the source: a `VerbRow`
+  per verb (typespecs, arg names, `tcp`/`udp-ok`, `pre_role`). Up
+  (`/game/<verb>`): `hello` (`s`, or `ssss` naming the carried
+  instrument), `join`, `start`, `tap`, `tilt`, `shake`, `hold`, `swing`,
+  `canvas` (simulators), `capture`, `telemetry`. Down (`/<dev>/<verb>`,
+  all UDP): `role`, `deny`, `leds`, `play`, `release`, `error`, `room`.
+  `GAME_VERBS` derives from the up rows; `tests/test_devicelink_contract.py`
+  checks each `protocol.py` builder against the table.
+- In-process a message is an o2ws-shaped JSON envelope
+  (`protocol.Envelope`); on the wire, an O2 message. Malformed: dropped.
+- **Wire flavor.** o2ws has no blob type, so a hello `protoversion`
+  starting `o2ws/` gets three messages as strings; all else is identical:
+
+| Message | blob flavor (hardware, native, Testshroom) | string flavor (`o2ws/*`) |
+|---|---|---|
+| `/<dev>/role` | `b`, UTF-8 JSON of the composed config | `s`, the identical JSON text |
+| `/<dev>/room` | `b`, UTF-8 JSON of the room blob | `s`, the identical JSON text |
+| `/<dev>/leds` | `b`, raw channel bytes; timestamp is the presentation time | `s`, base64 of the identical bytes; same timestamp |
+
+- Only `O2LiteTransport.send` rewrites, keyed by the protoversion recorded
+  at hello (a join rebinds without erasing it); a string holding `0x03`
+  (o2ws's field end) is refused. The agent and `protocol.py` are blind.
+- `/<dev>/room` (state, Bit, nodes, counts) goes out on hello and every
+  state or registration change. `/game/telemetry` is chunked under the
+  4096-byte cap (`chunk_telemetry_batch`; `tests/test_capture_o2.py`).
+
+#### Join, release and overrides
+
+- **Release is asynchronous, and that is load-bearing.**
+  `LightSession.clear()` only enqueues the fade, so a device dropped at
+  release freezes on its last frame. It stays in `_closing`, rendered until
+  `CLOSING` ends, then gets `/<dev>/release` (`_MAX_CLOSING_FRAMES`, 200,
+  forces it). A rejoin clears it; drivers poll while `.closing` is nonzero.
+- **A ROOM join builds no bridge and sends nothing**; the fixture's frames
+  just start. `_drop_player_bridge` forgets a player-era bridge at once
+  (no fade, `/release` or `drop_dev`), else the device gets two LED
+  streams. The Bit is not told its player left (there is no leave hook).
+- **Overrides** (`SolidCue`, lobby flashes, mute blackout) are painted in
+  the strip's channel order (`SolidCue` names R, G, B; W stays 0). A
+  hello'd, unjoined device shows only its override, then one black frame.
+  `_finish_release` and `unwire_room` drop overrides, since a blackout
+  never expires. A muted surface ignores `SolidCue` (Cues, above).
+- **Lobby** (`devicelink/lobby_runtime.py`): FULL stops the drone, goes
+  green, breathes light only; RUNNING restores the Bit's light and program.
+
+#### Timed cues and `cue_horizon`
+
+- **`TimedQueue`** (`control/timed_queue.py`) releases `(when, payload)`
+  at the drain covering `when`; payload-generic (Control queues MIDI, a
+  device frames). `when=None` is not a clamp; a past `when` is. A sequence
+  number stops `sort()` comparing payloads. `lateness` holds signed
+  samples (bounded, 20000); `purge()` serves mute, `next_due()` Art-Net.
+- **One gesture, one `at`.** `GameServer.data()` computes `at = origin +
+  cue_horizon` once (`BootConfig.cue_horizon`, 0.060 s) for every cue,
+  device or `ROOM`. Light feeds the session now (held to `at - horizon`
+  if further out, so it cannot leak into a breath frame) and the frame is
+  stamped `at` for the device to hold; Room audio waits on `_room_cues`
+  until `at`. An uncued frame gets `clock() + horizon`. The earliest
+  pending `at` wins and is popped every render, never reused. (The
+  diagram's `Bit.cues(at)` is now `Bit.fires(at)` plus generators.)
 
 <!-- diagram:cue-path GENERATED by tools/render_diagrams.py -- do not hand-edit -->
 ```ascii
@@ -974,6 +1079,118 @@ pending) and treated as the design. In `console/agent.py`:
  └──────────────────────────────────────────┘        
 ```
 <!-- /diagram:cue-path -->
+
+**`cue_horizon` is measured, and 60 ms is right.** Live o2lite run, real
+Arco, 2418 frames at `--horizon 0` (nothing held, so genuine delivery):
+
+| p50 | p95 | p99 | p99.9 | worst |
+|-----|-----|-----|-------|-------|
+| 4.5 ms | 9.3 ms | **11.8 ms** | 38.6 ms | 80.2 ms |
+
+- The chain is Control's 44 Hz tick (22.7 ms) + delivery (11.8 ms p99) +
+  the device tick (~5 ms), about 40 ms: 60 ms leaves ~20 ms for jitter.
+  **p99, not worst case**: the horizon delays every cue, so sizing it to
+  one hiccup taxes every gesture.
+- **The trap: O2 delivers each frame at `when`**, so a device queue
+  re-checking on arrival finds it a few ms late at any horizon (93.3%
+  clamped at 150 ms, 95.6% at 300 ms, lateness near +3 ms): device clamp
+  counts (`ShroomClient.clamped`) saturate; read `lateness`.
+  `DeviceLinkAgent.clamped` (Room audio) still means "horizon too small".
+- **Method: measure at `--horizon 0`**; a generous horizon once produced a
+  false "~67 ms". Tooling: `TimedQueue.lateness` -> `ShroomClient.lateness`
+  -> `harness/o2_shroom.py --control-horizon --samples-out` ->
+  `python -m harness.sync_bench SAMPLES.json --offset <horizon>`, whose
+  `summarise()` takes absolute values: convert one-way latency first. All
+  dev-box figures; whether the device queue is redundant is open.
+
+#### Service refusal
+
+**A refused o2lite service announcement is unobservable from the client,
+and that is O2 working as designed** (Roger Dannenberg's ruling):
+
+- A service goes to one provider: full O2 picks the highest IP and port,
+  **o2lite keeps no fallback list (first-come-first-serve)**. Two claimants
+  of one name is a client design error; expect no upstream fix.
+- `/_o2/*/sv` is fire-and-forget: a refusal (`o2/src/bridge.cpp:231-237`)
+  logs on the hub only; the loser looks healthy while its traffic goes to
+  the winner. Roger sanctioned detecting it by round trip, which is what
+  `verify_service_ownership` does (it detects, never fixes).
+- **Naming meets the rule by construction** (`actl,game`,
+  `sim-room-<fixture>`, each player's dev id), his per-process namespacing
+  in substance. Names from `o2lite.bridge_id` (his other idea) are out:
+  unique per host only, and blind to the one collision seen, an orphaned
+  run re-claiming its own name on reconnect, which `--exit-with-parent`,
+  `TeardownStack` and the probe close (harness section).
+
+#### Browser guests over o2ws
+
+A browser cannot run o2lite's C library, so it joins as an o2ws guest of
+the hub with the string flavor. Design: [`2026-09-08-o2ws-browser-link-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-08-o2ws-browser-link-design.md).
+
+- **`harness/www_server.py`** serves `www/` on 8788 at `0.0.0.0` (LAN
+  guests, static files), not Arco: O2's HTTP server labels every file
+  `text/html`, which a Flutter build's `.wasm` and modules refuse. Arco
+  serves `www/` on 8080 for o2ws. A failed bind only warns; it prints
+  `WWW_URL:`. Flags: `--www-port` (`0` off), `run_stack --web-build DIR`.
+- **A Flutter build needs base href `/app/`** or the page is black:
+  `tool/sim build --base-href /app/`, or `run_stack.stage_web_build`
+  rewrites `<base href="/">`.
+- Cross-origin o2ws (page 8788, Arco 8080) works; `www/o2ws.js` carries
+  three upstream fixes (`www/` section). Real-phone timing is unmeasured.
+  A refused name is not retried (the dev id is fixed before connect).
+
+#### Fixture sinks and Art-Net
+
+Design: [`2026-09-23-artnet-fixture-sink-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-23-artnet-fixture-sink-design.md).
+
+- **Outputs persist per Room** (a per-tick sink would drop its thread and
+  socket): `_ensure_outputs` builds them once via `outputs_for` (a failed
+  `start()` drops that sink); `_close_outputs` closes them on unwire. A
+  play cue to an unbound fixture drops, warned once per Room.
+- **`ArtNetFixtureSink`** (`devicelink/artnet_sink.py`): `send_frame` only
+  locks, pushes and notifies (boundary rule 2). A sender thread sends at
+  `when - lead_ms` (WLED has no clock), newest due frame wins, and the last
+  frame repeats every `keepalive_ms` to hold realtime mode. Every frame,
+  close-to-black included, passes a `PowerLimiter`; a stuck thread skips
+  the black frame. RGBW only (4 ch/px, 128 px per universe).
+- **`[[artnet]]`** (`ArtNetOutput`): `room`, `fixture`, `host`, `max_amps`
+  required; `start_universe` 0, `port` 6454, `amps_per_pixel_full` 0.025,
+  `lead_ms` 0, `keepalive_ms` 250, `psu`. Refused: a non-RGBW fixture, two
+  outputs per fixture, overlapping universes per host:port, a universe
+  past 32767. Coverage and PSUs: Rooms and Room binding, above.
+- `harness/artnet_listen.py` is a strict fake WLED: DEMO got ~34-40 fps,
+  0 gaps (dev-box loopback). Spec section 9 gates real hardware.
+
+#### The device contract and `contract_kit/`
+
+One checked device-wire contract, owned here, shared by the Testshroom,
+mm-tuneshroom's Flutter app and mm-devshroom's Rev 1 ESP32 firmware
+(Victor's): the verb table, `instruments/tuneshroom_rev1.toml` and
+`HELLO_INTERVAL_S` (5 s; Testshroom, recorder and export all read it).
+Design: [`2026-09-16-device-contract-kit-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-16-device-contract-kit-design.md);
+firmware guide: `docs/device-contract-guide.md`.
+
+- **`contract_kit/`**: a test-only `ContractBit` (never under `bits/`) and
+  a `Recorder` driving the real engine and agent over `FakeO2Lite`,
+  deterministically, at `CUE_HORIZON_S` (read off `BootConfig`). Twelve
+  scenarios sit in `contract_kit/recordings/`; `.venv/bin/python -m
+  tools.record_scenarios` re-records; `tests/test_contract_scenarios.py`
+  fails on any diff.
+- **Export**: `.venv/bin/python -m tools.export_contract <out-dir>` writes
+  `contract.json` (verbs, limits, lifecycle values from their owning
+  constants, the Rev 1 instrument, scenario index, notes, `step_schema`)
+  and byte-copies the scenarios, refusing a mismatch with `ALL_SCENARIOS`.
+  Device repos commit it at `test/contract/`; it alone must suffice.
+- `CONTRACT_VERSION` (2) bumps on any device-observable change; 2 added
+  the `join` input step and `link_loss_keeps_display`, whose outage frame
+  is hand-authored (`expect_frame_held`): the recorder sees only Control.
+- **The change flow is one-way**: change the table (and Control) here,
+  re-record, re-export; device replays fail until they match. Device repos
+  never edit a verb or a scenario.
+- A device must tolerate: `/$DEV/release` leaving in the same millisecond
+  as the fade's last frame, stamped a horizon later (spec D5); and a ~1.5 s
+  role-opening signature that ignores light cues (`SIGNATURE_SETTLED_MS`,
+  2000, is the scenarios' wait, not that length).
 
 <!-- FILL:T6 harness -->
 
