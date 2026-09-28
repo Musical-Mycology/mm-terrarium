@@ -37,7 +37,7 @@ pytest>=8.0
 # sibling arco checkout when PYTHONPATH is unset).
 #
 # The audio path also needs a real General MIDI soundfont; FluidR3_GM.sf2 is the
-# expected one (see docs/MM_TERRARIUM.md, harness/ section).
+# expected one (see docs/MM_TERRARIUM.md, "Audio" under control/ section).
 #
 # o2litepy needs these two. tests/test_arco_synth.py skips without them, and
 # control/audio.py never imports pyarco at all, so the core suite runs offline.
