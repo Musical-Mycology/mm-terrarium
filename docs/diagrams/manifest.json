@@ -5,23 +5,23 @@
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "boot-teardown",
       "outputs": {
-        "out/boot-teardown.svg": "5bebbad36e52637002731cc91d62225c247eb9981e30304620c74058a95ace17",
-        "out/boot-teardown.txt": "95e58377fb8b016676cc538846d885331652fd6fe60e783390ffea606bfffd22"
+        "out/boot-teardown.svg": "a48db890abc03378f76b78f150bdff4cb2e46abb3f510d0889487cc5434a5a3e",
+        "out/boot-teardown.txt": "5b270ba1219a674cda16bf3f0cb5f35c15a63ac597309b1598c38e7774459583"
       },
       "renderer": "d2",
       "source": "boot-teardown.d2",
-      "source_sha256": "2599c9dbd8582ce54c6646a8729b03f14f3c401488ee99c67822ca48d02549cf"
+      "source_sha256": "1e8db2489a68ffdc968ac4c33c86fe2d8ed2c4be83d71c5160ddbd7de4928bc6"
     },
     "cue-path": {
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "cue-path",
       "outputs": {
-        "out/cue-path.svg": "f53c9deb736918383dd0dd0718f8b415e217d51acf6d4f4c1d763641a5702336",
-        "out/cue-path.txt": "fea51fff152cff5696a02412f3528d875dd13eae404f02fac6c18a23b5c30a57"
+        "out/cue-path.svg": "035f9f4352d28f5ca448684a0b9002c52ab17971d62c3f3425b1e54e79e20db8",
+        "out/cue-path.txt": "17cd4943f997127475b2491ca2c7dde7e88b25caf342161ebdf5d673b8ccfe93"
       },
       "renderer": "d2",
       "source": "cue-path.d2",
-      "source_sha256": "abdabd29f97cb992bd3b03c2415ab2a7791aa02ddae528c716a49c4c43ee313c"
+      "source_sha256": "c344ac20a647422fcf3743246e355158685b1da470b3c482629dadade090abc2"
     },
     "lifecycle": {
       "inject_into": "docs/MM_TERRARIUM.md",
@@ -38,12 +38,12 @@
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "light-path",
       "outputs": {
-        "out/light-path.svg": "7c0f963cf12fea130dbfba7d09a3220a2aa18aae6d1e25486104b6e5ff6a39df",
-        "out/light-path.txt": "448483687e31f20e561dd9eabcc34721a3bc2dbc1f2a76ea816a222b6f073fb2"
+        "out/light-path.svg": "e4b63cfbbcb4f24dac81452058ec9427bd6fe1506e370faf2597c79d6f947d22",
+        "out/light-path.txt": "304864ba2aa4cd7c0a3a79c4d57fc882d17323a3e96b466d3a87e2866285bcbe"
       },
       "renderer": "d2",
       "source": "light-path.d2",
-      "source_sha256": "84e6870d2b367aaf6a2abf3e42981e5639e13f39c7840127becbab67ccc4893d"
+      "source_sha256": "b290dffcaae4dda48d9fce41f11cbbadd71e75c7a795e81f82087054111d2ec1"
     },
     "player-flow": {
       "inject_into": "docs/MM_TERRARIUM.md",

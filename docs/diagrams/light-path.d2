@@ -5,7 +5,7 @@ sessions: "luxaeterna LightSession per device and per fixture"
 fsink: "FixtureSink.send_frame(frame, when)"
 devlink: "DeviceLinkSink"
 console: "ConsoleFrameSink"
-artnet: "ArtNet sink"
+artnet: "ArtNetFixtureSink"
 arco: "Arco hub"
 shroom: "Tuneshroom shows it at when"
 strip: "Console strip"
@@ -15,7 +15,7 @@ cues -> sessions: feed_midi and swap, in-process, 0 hops
 sessions -> fsink: render_into at 44 Hz, changed frames only
 fsink -> devlink
 fsink -> console
-fsink -> artnet: PLANNED
+fsink -> artnet: "[[artnet]]"
 devlink -> arco: /<dev>/leds
 console -> strip
 artnet -> wled: Art-Net UDP
