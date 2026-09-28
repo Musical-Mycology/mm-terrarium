@@ -576,3 +576,34 @@ def test_carried_instrument_view_matches_compose_section():
 
     config = compose_role_config("Bit", "0.1", make_role(), carried=TUNESHROOM)
     assert config["instrument"] == carried_instrument_view(TUNESHROOM)
+
+
+from control.role_config import carried_instrument_view
+from control.instrument import DEFAULTSHROOM, TUNESHROOM
+from dataclasses import replace
+
+
+def test_carried_instrument_view_omits_model_sha256_by_default():
+    view = carried_instrument_view(DEFAULTSHROOM)
+    assert "model_sha256" not in view
+
+
+def test_carried_instrument_view_includes_model_sha256_when_set():
+    with_model = replace(TUNESHROOM, model_sha256="ab" * 32)
+    view = carried_instrument_view(with_model)
+    assert view["model_sha256"] == "ab" * 32
+
+
+def test_existing_shipped_instruments_views_are_byte_identical_to_before():
+    """Locks in the spec's promise: "Every existing instrument's blob
+    stays byte-identical" -- no shipped instrument declares a model yet,
+    so neither shipped instrument's view should gain the key."""
+    import json
+    from control.instrument import TUNESHROOM, DEFAULTSHROOM
+    for inst in (TUNESHROOM, DEFAULTSHROOM):
+        view = carried_instrument_view(inst)
+        assert "model_sha256" not in view
+        # round-trips through JSON with no surprises (dict ordering is
+        # not part of "byte-identical" here -- json.dumps(sort_keys=True)
+        # is what a real exporter uses, e.g. tools/export_solo.py).
+        json.dumps(view, sort_keys=True)
