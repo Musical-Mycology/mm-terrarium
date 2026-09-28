@@ -5,18 +5,7 @@ import struct
 import pytest
 
 from control.model_layout import ModelLayoutError, read_glb_json
-
-GLB_MAGIC = 0x46546C67
-JSON_CHUNK_TYPE = 0x4E4F534A
-
-
-def _build_glb(gltf: dict) -> bytes:
-    body = json.dumps(gltf).encode("utf-8")
-    pad = (-len(body)) % 4
-    body += b" " * pad
-    header = struct.pack("<III", GLB_MAGIC, 2, 12 + 8 + len(body))
-    chunk_header = struct.pack("<II", len(body), JSON_CHUNK_TYPE)
-    return header + chunk_header + body
+from tests.glb_builder import GLB_MAGIC, JSON_CHUNK_TYPE, build_glb as _build_glb
 
 
 def test_read_glb_json_round_trips_a_minimal_document():
@@ -188,16 +177,12 @@ def _sphere_node(name: str, mesh_idx: int) -> dict:
     return {"name": name, "mesh": mesh_idx}
 
 
-def _sphere_mesh_and_accessor(center_m, radius_m, accessors: list) -> tuple:
-    """Appends one accessor (with min/max for a sphere at center_m with
-    radius radius_m) to `accessors` and returns a mesh dict pointing at
-    it."""
-    mn = [c - radius_m for c in center_m]
-    mx = [c + radius_m for c in center_m]
-    accessors.append({"componentType": 5126, "count": 1, "type": "VEC3",
-                      "min": mn, "max": mx})
-    accessor_idx = len(accessors) - 1
-    return {"primitives": [{"attributes": {"POSITION": accessor_idx}}]}
+from tests.glb_builder import accessor_only_box, mesh_with_position
+
+
+def _sphere_mesh_and_accessor(center_m, radius_m, accessors: list) -> dict:
+    accessors.append(accessor_only_box(center_m, radius_m))
+    return mesh_with_position(len(accessors) - 1)
 
 
 def _one_marker_document(center_m, radius_m, zone="ring"):
