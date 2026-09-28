@@ -1689,9 +1689,12 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
 - **MetronomeBit** (`bits/metronome/`, DEMO/VENUE, [design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-20-metronome-bit-design.md),
   [on o2lite](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-08-metronome-bit-on-o2lite-design.md)):
   8-beat call and response x4 over up to 2 `UNIQUE` players in turn; a
-  phrase needs all 4 answer taps within 50 ms and none off-grid (success:
+  phrase needs every answer beat tapped within 50 ms and none off-grid (success:
   fireworks; fail: red and bass; any success: a 10 s finale). `[rhythm]`
-  sets BPM (100; `profiles/dev-metronome.toml` 80), window, offset. Each
+  sets BPM (100; `profiles/dev-metronome.toml` 80), window, offset, and
+  `beats_per_cycle` (8), split evenly into call then answer beats
+  (`CALL_BEATS = beats_per_cycle // 2`); grading, clicks and the judgment
+  deadline all follow it (hard-coded 8 until 2026-09-28). Each
   consequence is a Function fired at its beat's `at`, audio Room-side only;
   the grid starts at the first `fires(at)` plus `LEAD_IN_S`, clearing the
   1.5 s role-opening signature.

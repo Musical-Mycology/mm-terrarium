@@ -61,7 +61,7 @@ def _finale_script():
 
 
 BEAT_S = 0.6                 # 100 BPM
-BEATS_PER_CYCLE = 8          # 4 call + 4 wait
+BEATS_PER_CYCLE = 8          # 4 call + 4 wait: call beats are the first half
 CYCLES = 4
 # luxaeterna plays a 1.5 s `sys:loaded` adoption ceremony on the player's
 # own strip the moment the role is granted (luxaeterna synth/status.py
@@ -255,7 +255,7 @@ class MetronomeBit(Bit):
             "metro_downbeat": Function(
                 name="metro_downbeat",
                 description="Hard click plus the green cc:74 flash on the "
-                            "downbeat of every 8-beat cycle",
+                            "downbeat of every cycle",
                 target=FunctionTarget.ROOM,
                 condition=_adjudicated(
                     "beat_downbeat", "Global beat index is on a cycle's "
@@ -268,11 +268,12 @@ class MetronomeBit(Bit):
             ),
             "metro_click": Function(
                 name="metro_click",
-                description="Soft click on a cycle's call beats 1-3",
+                description="Soft click on a cycle's call beats after the "
+                            "downbeat",
                 target=FunctionTarget.ROOM,
                 condition=_adjudicated(
-                    "beat_call", "Global beat index is a call beat (pos "
-                    "1, 2, or 3)"),
+                    "beat_call", "Global beat index is a call beat after "
+                    "the downbeat (pos 1 up to CALL_BEATS - 1)"),
                 script=(
                     ScriptStep(0.0, (TARGET, 0x90, CLICK_KEY, SOFT_VEL)),
                     ScriptStep(0.1, (TARGET, 0x80, CLICK_KEY, 0)),
@@ -398,6 +399,18 @@ class MetronomeBit(Bit):
         # matter if TOLERANCE_S approached BEAT_S.
         return cycle
 
+    @property
+    def CALL_BEATS(self) -> int:
+        """Call beats open each cycle; the rest are the answer (wait)
+        beats the turn player taps. An even split: 4+4 at the default 8,
+        2+2 at 4. Derived, not a separate knob, so `[rhythm]
+        beats_per_cycle` alone sets the cycle's shape."""
+        return self.BEATS_PER_CYCLE // 2
+
+    @property
+    def WAIT_BEATS(self) -> int:
+        return self.BEATS_PER_CYCLE - self.CALL_BEATS
+
     def _on_tap(self, dev: str, args: list, at: float) -> list:
         if self._t0 is None or self._done:
             return []
@@ -417,8 +430,9 @@ class MetronomeBit(Bit):
         phrase = self._phrase_for(cycle)
         # nearest wait-beat gridpoint of this cycle
         best_w, best_err = None, None
-        for w in range(4):
-            err = t - self._grid(cycle * 8 + 4 + w)
+        for w in range(self.WAIT_BEATS):
+            err = t - self._grid(
+                cycle * self.BEATS_PER_CYCLE + self.CALL_BEATS + w)
             if best_err is None or abs(err) < abs(best_err):
                 best_w, best_err = w, err
         self._tap_errors_ms.append(round(best_err * 1000.0, 1))
@@ -431,7 +445,8 @@ class MetronomeBit(Bit):
         return []
 
     def _grid(self, k: int) -> float:
-        """Absolute O2 time of global beat index `k` (0..31)."""
+        """Absolute O2 time of global beat index `k`
+        (0..CYCLES * BEATS_PER_CYCLE - 1)."""
         return self._t0 + k * self.BEAT_S
 
     def _beat_fires(self, k: int) -> list:
@@ -471,11 +486,11 @@ class MetronomeBit(Bit):
             else:
                 out.append(FireFunction("metro_pulse_player", dev=dev, at=t))
 
-        # Call beats (0-3): click, hard + green flash on the downbeat, soft
-        # otherwise (metro_downbeat / metro_click scripts).
+        # Call beats (0..CALL_BEATS-1): click, hard + green flash on the
+        # downbeat, soft otherwise (metro_downbeat / metro_click scripts).
         if pos == 0:
             out.append(FireFunction("metro_downbeat", at=t))
-        elif pos in (1, 2, 3):
+        elif pos < self.CALL_BEATS:
             out.append(FireFunction("metro_click", at=t))
 
         return out
@@ -528,7 +543,8 @@ class MetronomeBit(Bit):
         # catch-up, or the final call -- still judges each of them.
         while self._judged_cycles < self.CYCLES:
             c = self._judged_cycles
-            deadline = self._grid(c * 8 + 7) + self.TOLERANCE_S + self.JUDGE_SLACK_S
+            last_beat = (c + 1) * self.BEATS_PER_CYCLE - 1
+            deadline = self._grid(last_beat) + self.TOLERANCE_S + self.JUDGE_SLACK_S
             # Compared against `at - cue_horizon`, not `at`, for the same
             # reason _on_tap subtracts it: `at` is PRESENTATION time, one
             # horizon ahead of the clock, while a tap arrives in real time.
@@ -544,7 +560,8 @@ class MetronomeBit(Bit):
             dev = self._turn_dev(c)
             if dev is not None:
                 phrase = self._phrase_for(c)
-                success = phrase["hits"] == {0, 1, 2, 3} and not phrase["spoiled"]
+                success = (phrase["hits"] == set(range(self.WAIT_BEATS))
+                           and not phrase["spoiled"])
                 logger.info("cycle %d %s: %s (%d hits, spoiled=%s)",
                             c, dev, "success" if success else "fail",
                             len(phrase["hits"]), phrase["spoiled"])
