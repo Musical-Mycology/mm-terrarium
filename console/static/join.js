@@ -4,17 +4,7 @@
 // node with a server-rendered QR SVG, the node's URL and the Tuneshroom
 // `flutter run` line. Null hides the card (no guest page served).
 import * as wire from "./wire.js";
-
-function clear(node) {
-  node.textContent = "";
-}
-
-function mk(tag, className, text) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  if (text != null) e.textContent = text;
-  return e;
-}
+import { mk, clear } from "./dom.js";
 
 // Clipboard on a plain-HTTP LAN origin is not a secure context, so
 // navigator.clipboard is often undefined there; fall back to a hidden

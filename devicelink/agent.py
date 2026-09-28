@@ -94,12 +94,12 @@ _DEFAULT_FIXTURE_ROLE = Role(
 
 
 class DeviceLinkAgent:
-    def __init__(self, game_server: GameServer, server, *, clock,
+    def __init__(self, game_server: GameServer, transport, *, clock,
                  capability=None, room_audio=None, horizon: float = 0.0,
                  room_profile=None, on_room_frame=None, on_join_denied=None,
                  stale_timeout: float = 15.0, outputs_for=None):
         self.game_server = game_server
-        self.server = server
+        self.transport = transport
         self._capability = capability
         self._clock = clock
         # BootConfig.cue_horizon. Used two ways here. A frame with no cue
@@ -169,7 +169,7 @@ class DeviceLinkAgent:
         # reconnect that never rejoins -- exactly how the Room simulator
         # behaves) only rebinds the transport connection and leaves the
         # stale fade running untouched. Without this, _finish_release would
-        # later call self.server.drop_dev(dev) unconditionally and sever
+        # later call self.transport.drop_dev(dev) unconditionally and sever
         # the FRESH connection it just rebound, not the stale one.
         self._closing_revived: set[str] = set()
         # Control owns the breath now (control/breath.py): a role declaring
@@ -820,8 +820,8 @@ class DeviceLinkAgent:
 
     # --- driven once per tick-loop iteration -------------------------------
     def poll(self) -> None:
-        self.server.drain_new_clients()      # devices are anonymous until hello
-        for client, msg in self.server.drain_inbound():
+        self.transport.drain_new_clients()      # devices are anonymous until hello
+        for client, msg in self.transport.drain_inbound():
             try:
                 self._handle(client, msg)
             except Exception:
@@ -1266,7 +1266,7 @@ class DeviceLinkAgent:
         name = args[1] if len(args) > 1 else ""
         protoversion = args[2] if len(args) > 2 else ""
         instrument = args[3] if len(args) > 3 else None
-        self.server.bind_dev(dev, client, protoversion=protoversion)
+        self.transport.bind_dev(dev, client, protoversion=protoversion)
         self.game_server.hello(dev, name, protoversion, instrument)
         self._send(dev, protocol.room_event(dev, self._room_blob()))
 
@@ -1274,7 +1274,7 @@ class DeviceLinkAgent:
         if len(args) < 2:
             self._send(dev, protocol.error_event(dev, "join", "missing node"))
             return
-        self.server.bind_dev(dev, client)
+        self.transport.bind_dev(dev, client)
         result = self.game_server.join(dev, args[1])
         if not result.granted:
             self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
@@ -1466,7 +1466,7 @@ class DeviceLinkAgent:
                 self._send(dev, protocol.release_event(dev))
             except Exception:
                 logger.exception("release notify for %s failed", dev)
-            self.server.drop_dev(dev)
+            self.transport.drop_dev(dev)
             self._canvas_urls.pop(dev, None)
             return
         try:
@@ -1484,7 +1484,7 @@ class DeviceLinkAgent:
         """The closing fade (or the stuck-session guard) is done: drop the
         device from every map and send /<dev>/release.
 
-        self.server.drop_dev(dev) is skipped when dev has been proven alive
+        self.transport.drop_dev(dev) is skipped when dev has been proven alive
         (see self._closing_revived, set in _handle()) since THIS fade
         began: a hello-only reconnect -- a bare heartbeat resend, or a
         genuine reconnect that never rejoins -- can land while a prior
@@ -1521,7 +1521,7 @@ class DeviceLinkAgent:
         except Exception:
             logger.exception("release notify for %s failed", dev)
         if not revived:
-            self.server.drop_dev(dev)
+            self.transport.drop_dev(dev)
 
     def _feed_light_now(self, dev: str, status: int, d1: int, d2: int,
                         at: float | None) -> None:
@@ -1710,4 +1710,4 @@ class DeviceLinkAgent:
 
     # --- outbound -----------------------------------------------------------
     def _send(self, dev: str, msg: dict) -> None:
-        self.server.send(dev, msg)
+        self.transport.send(dev, msg)

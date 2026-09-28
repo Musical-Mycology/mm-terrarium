@@ -73,6 +73,7 @@ import {
   moveFixture,
   setFixtureInstrument,
 } from "./toml_edit.js";
+import { mk, clear } from "./dom.js";
 
 let vocab = { capabilities: [], cue_kinds: [] };
 let lastDesigns = [];      // last-seen catalog rows (both kinds) -- populates the fixture instrument picker
@@ -83,17 +84,6 @@ let debounceTimer = null;
 const DEBOUNCE_MS = 300;
 
 export const SECTION_BUILDERS = [];
-
-function clear(node) {
-  node.textContent = "";
-}
-
-function mk(tag, className, text) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  if (text != null) e.textContent = text;
-  return e;
-}
 
 // Depth-first search under `root` for the control carrying `key` as its
 // data-form-key attribute -- how applyEdit relocates the focused control

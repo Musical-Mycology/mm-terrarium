@@ -41,8 +41,8 @@ def parse_profile(text: str, *, source: str) -> RunProfile:
     An unknown `[run]` key WARNS rather than raising: a profile is a venue
     operator's own file, hand-edited, and a typo'd or forward-looking key
     (e.g. one a newer launcher understands but this one does not yet) should
-    not turn a working profile into a launch failure -- unlike a manifest's
-    unknown keys, which are strict (see bit_config.parse_manifest)."""
+    not turn a working profile into a launch failure. A Bit manifest's
+    unknown keys warn the same way (see bit_config._warn_unknown_keys)."""
     data = tomllib.loads(text)
 
     run = data.get("run", {})

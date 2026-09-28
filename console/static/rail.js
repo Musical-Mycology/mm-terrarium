@@ -2,23 +2,13 @@
 // Instruments pull and per-role rows moved to the center views (rooms.js
 // carries device detail; the Live view carries the log card).
 import * as wire from "./wire.js";
+import { mk, clear } from "./dom.js";
 
 let rolesByName = {};        // role name -> role_view() dict, for scored/jam classing
 let registrationRows = [];   // last registration_changed/snapshot rows: {role, count, capacity}
 let currentRoom = null;      // last snapshot/room_changed room, for the fixtures rollup
 let deviceRows = [];         // last snapshot/devices_changed devices, for the Devices rollup
 let pointerOverLog = false;
-
-function clear(node) {
-  node.textContent = "";
-}
-
-function mk(tag, className, text) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  if (text != null) e.textContent = text;
-  return e;
-}
 
 // ---------------------------------------------------------------- rollup
 

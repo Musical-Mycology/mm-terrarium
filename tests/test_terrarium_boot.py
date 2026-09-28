@@ -431,7 +431,7 @@ def test_build_can_run_the_agent_on_the_o2lite_transport():
     gs, server, agent, arco, teardown, terrarium = _build_with_fakes(config,
                                                      transport=transport)
     try:
-        assert agent.server is transport
+        assert agent.transport is transport
         assert fake.services == "actl,game"
     finally:
         shutdown(teardown, terrarium)

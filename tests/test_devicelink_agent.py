@@ -831,7 +831,7 @@ def test_render_room_does_not_raise_for_a_profile_wider_than_512_channels():
     gs = _demo_room_ready_game_server()
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
-    agent.server.bind_dev("sim-room-array", object())   # simulate the hello handshake
+    agent.transport.bind_dev("sim-room-array", object())   # simulate the hello handshake
 
     array = next(f for f in DEMO_PROFILE.fixtures if f.name == "array")
     universe = agent._fixtures["array"].universe
@@ -907,7 +907,7 @@ def test_render_room_sends_leds_event_when_frame_changes():
     server = FakeServer()
     agent = DeviceLinkAgent(gs, server, clock=time.monotonic)
     client = object()
-    agent.server.bind_dev("sim-room-main", client)   # simulate the hello handshake
+    agent.transport.bind_dev("sim-room-main", client)   # simulate the hello handshake
 
     agent._render_room()
 
@@ -1531,8 +1531,8 @@ def test_mute_of_one_fixture_blacks_only_its_slice(two_fixture_agent):
     agent._on_mute_change(accent_dev, True)
     agent.poll()
 
-    accent_frame = _last_leds_payload(agent.server, accent_dev)
-    main_frame = _last_leds_payload(agent.server, main_dev)
+    accent_frame = _last_leds_payload(agent.transport, accent_dev)
+    main_frame = _last_leds_payload(agent.transport, main_dev)
     assert set(accent_frame) == {0}
     assert set(main_frame) == {round(255 * 0.9)}
 
@@ -1546,13 +1546,13 @@ def test_mute_of_one_fixture_silences_only_its_voice(two_fixture_agent):
 def test_solid_cue_at_one_fixture_paints_only_its_slice(two_fixture_agent):
     agent, audio, main_dev, accent_dev = two_fixture_agent
     agent.poll()   # settle the initial render
-    main_before = _last_leds_payload(agent.server, main_dev)
+    main_before = _last_leds_payload(agent.transport, main_dev)
 
     agent._on_solid_cue(accent_dev, (255, 255, 255), 0.9, 5.0, agent._clock())
     agent.poll()
 
-    accent_frame = _last_leds_payload(agent.server, accent_dev)
-    main_frame = _last_leds_payload(agent.server, main_dev)
+    accent_frame = _last_leds_payload(agent.transport, accent_dev)
+    main_frame = _last_leds_payload(agent.transport, main_dev)
     assert set(accent_frame) == {round(255 * 0.9)}
     assert main_frame == main_before
 
@@ -2334,7 +2334,7 @@ def test_room_solid_cue_paints_every_bound_fixture(two_fixture_agent):
     gs = agent.game_server
     gs._dispatch_cues([SolidCue(ROOM, (255, 0, 0), 1.0, 5.0)], at=1.0)
     agent._render_room()
-    frames = {dev: bytes(msg["args"][0]) for dev, msg in agent.server.sent}
+    frames = {dev: bytes(msg["args"][0]) for dev, msg in agent.transport.sent}
     # Both TEST fixtures are GRB (rooms/TEST.toml), and a SolidCue names a
     # colour, not a wire layout -- so red goes out G=0, R=255, B=0.
     assert frames[main] == bytes([0, 255, 0]) * 60
@@ -2358,12 +2358,12 @@ def test_unwire_room_drops_a_muted_fixtures_latched_override(two_fixture_agent):
 
     gs.room = None
     agent.unwire_room()
-    agent.server.sent.clear()
+    agent.transport.sent.clear()
     agent.poll()
 
     assert fixture_dev("main") not in agent._overrides
     assert main not in agent._override_only
-    assert not [m for dev, m in agent.server.sent
+    assert not [m for dev, m in agent.transport.sent
                 if dev == main and m["address"] == f"/{main}/leds"]
 
 

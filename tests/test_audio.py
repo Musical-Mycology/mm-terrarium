@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from control.audio import AudioBridge, FakePool
+from control.audio import AudioBridge, FakePool, parse_cc_ref
 from control.roles import Role, RoleClass
 
 PLAYER_UGENS = {
@@ -21,6 +21,35 @@ PLAYER_UGENS = {
 def _role(name="player", ugens=None, welcome=None):
     return Role(name=name, role_class=RoleClass.SHARED, capacity=None,
                 scored=True, ugen_manifest=ugens or {}, welcome=welcome)
+
+
+def test_parse_cc_ref_parses_a_valid_reference():
+    assert parse_cc_ref("cc:74") == 74
+
+
+def test_parse_cc_ref_refuses_a_non_cc_string():
+    with pytest.raises(ValueError, match="cc:"):
+        parse_cc_ref("note:74")
+
+
+def test_parse_cc_ref_refuses_a_non_numeric_suffix():
+    with pytest.raises(ValueError, match="controller number"):
+        parse_cc_ref("cc:seventy")
+
+
+def test_parse_cc_ref_refuses_an_out_of_range_number():
+    with pytest.raises(ValueError, match="0-127"):
+        parse_cc_ref("cc:200")
+
+
+def test_parse_cc_ref_prefixes_the_message_with_where_when_given():
+    with pytest.raises(ValueError, match="role 'x' lane\\[0\\] source"):
+        parse_cc_ref("bogus", where="role 'x' lane[0] source")
+
+
+def test_parse_cc_ref_uses_a_generic_message_with_no_where():
+    with pytest.raises(ValueError):
+        parse_cc_ref("bogus")
 
 
 def test_grant_acquires_a_voice_and_sets_the_program():

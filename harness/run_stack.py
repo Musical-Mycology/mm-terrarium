@@ -52,7 +52,7 @@ import webbrowser
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urlunsplit
 
-from control.bit_registry import BitRegistry
+from control.bit_registry import BitRegistry, print_bit_list
 from control.process import stop_process
 from control.run_profile import RunProfile, parse_profile
 from control.teardown import TeardownStack
@@ -60,8 +60,7 @@ from control.terrarium_config import load_terrarium_config, resolve_bit_roots
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.proc_tee import ProcTee
-from harness.o2_shroom import parent_is_gone
-from harness.signals import sigterm_as_keyboard_interrupt
+from harness.signals import parent_is_gone, sigterm_as_keyboard_interrupt
 from harness.www_server import WWW_PORT
 
 DEFAULT_ARCO_COMMAND = os.path.join(ARCO_PYTHONPATH, "apps/pytest/server")
@@ -952,12 +951,7 @@ def main() -> None:
 
     if args.list_bits:
         registry = discover_registry(args.config)
-        for row in registry.list_view(include_hidden=True):
-            rooms = ",".join(row["room_types"])
-            print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"
-                 f"{rooms}\t{row['start']['when']}\t{row['description']}")
-        for err in registry.errors_view():
-            print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
+        print_bit_list(registry)
         raise SystemExit(0)
 
     cfg = config_from_args(args)

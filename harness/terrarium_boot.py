@@ -22,7 +22,7 @@ from typing import Callable
 
 from control.arco_process import ArcoProcess
 from control.bit_config import StartCondition
-from control.bit_registry import BitRegistry
+from control.bit_registry import BitRegistry, print_bit_list
 from control.boot_config import BootConfig
 from control.engine import BitLoadError, GameServer
 from control.join_info import build_join_info
@@ -38,8 +38,7 @@ from control.terrarium_config import (TerrariumConfig, load_terrarium_config,
 from devicelink.agent import DeviceLinkAgent
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH
-from harness.o2_shroom import parent_is_gone
-from harness.signals import sigterm_as_keyboard_interrupt
+from harness.signals import parent_is_gone, sigterm_as_keyboard_interrupt
 from harness.tick_pacer import TickPacer
 from harness.www_server import WWW_PORT, WwwServer, lan_ip
 
@@ -346,7 +345,6 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     # room_audio's ArcoSynthPool.start() below, and the caller starts the
     # transport on it AFTER this function returns -- and therefore
     # registers its teardown then, so it stops before everything here.
-    server = transport
     factory = _O2SimulatorFactory(
         config.o2_ensemble, popen=simulator_popen,
         # Resolved at spawn time: `terrarium` is assigned below, before any
@@ -420,7 +418,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
                 pool.start()
             room_audio = AudioBridge(pool, clock=clock)
 
-        agent = DeviceLinkAgent(gs, server, room_audio=room_audio,
+        agent = DeviceLinkAgent(gs, transport, room_audio=room_audio,
                                 horizon=config.cue_horizon, clock=clock,
                                 on_join_denied=on_join_denied,
                                 stale_timeout=config.stale_timeout,
@@ -438,7 +436,7 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
         teardown.close()
         raise
 
-    return gs, server, agent, terrarium.arco, teardown, terrarium
+    return gs, transport, agent, terrarium.arco, teardown, terrarium
 
 
 def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
@@ -500,6 +498,14 @@ def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
 _TICK_PERIOD = 1.0 / 44.0
 
 
+def _pump(agent, console_agent, uplink) -> None:
+    """One tick of agent, console and uplink pumping."""
+    agent.poll()
+    if console_agent is not None:
+        console_agent.poll()
+    _pump_uplink(uplink)
+
+
 def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    sleep=time.sleep, parent_pid: int | None = None,
                    console_agent=None, arco=None, gs=None,
@@ -516,13 +522,13 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     `./smoke-test.sh --open --devices 1` (harness/run_stack.py), whose
     --setup-seconds forwards to this same knob.
 
-    parent_pid, when given, is checked every tick via
-    harness/o2_shroom.py's parent_is_gone -- see F5 in the final review
-    for why this reuses that predicate rather than a second one. A
-    SIGKILLed or OOM-killed run_stack cannot signal this process, so the
-    only way to notice is to keep asking. Returns "parent-gone" if that
-    fired, so main() can skip straight to shutdown() instead of calling
-    gs.run() into a stack whose supervisor is already gone.
+    parent_pid, when given, is checked every tick via harness/signals.py's
+    parent_is_gone -- see F5 in the final review for why this reuses that
+    predicate rather than a second one. A SIGKILLed or OOM-killed
+    run_stack cannot signal this process, so the only way to notice is to
+    keep asking. Returns "parent-gone" if that fired, so main() can skip
+    straight to shutdown() instead of calling gs.run() into a stack whose
+    supervisor is already gone.
 
     console_agent, when given, is polled once per iteration too -- a device
     joining during SETUP is exactly what the console's registration view
@@ -597,10 +603,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
         arco = _live_arco(terrarium, arco)
         if arco is not None:
             arco.poll()
-        agent.poll()
-        if console_agent is not None:
-            console_agent.poll()
-        _pump_uplink(uplink)
+        _pump(agent, console_agent, uplink)
         if gs is not None and gs.state is not State.SETUP:
             return "state-changed"
         if gs is not None and getattr(gs, "bit_name", None) != initial_bit_name:
@@ -686,7 +689,7 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
     leaving Arco and the Room simulator running un-signalled in their own
     session -- the orphan class docs/upstream/2026-08-14-o2-service-and-
     discovery-report.md names as a venue-scale hazard. See
-    harness/o2_shroom.py's parent_is_gone for why this compares against a
+    harness/signals.py's parent_is_gone for why this compares against a
     recorded pid rather than watching getppid() for a change.
 
     console_agent, when given, is polled once per tick too, right after
@@ -697,6 +700,39 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
     pacer, when given, replaces the default TickPacer(1/44) built on this
     function's own `sleep` (tests inject one); see harness/tick_pacer.py.
     """
+
+    def _exit(gs, agent):
+        if gs.state in (State.LOADING, State.LOADED, State.SETUP):
+            # Only a restart (Console or uplink) can put the engine here
+            # while this function is running: run() was already called
+            # before entry.
+            return "restarted"
+        if gs.state == State.IDLE and not getattr(agent, "closing", 0):
+            return "completed"
+        return None
+
+    return _run_tick_loop(gs, agent, arco, _exit, parent_pid=parent_pid,
+                          console_agent=console_agent, terrarium=terrarium,
+                          uplink=uplink, pacer=pacer, sleep=sleep)
+
+
+def _run_tick_loop(gs, agent, arco, exit_predicate, *,
+                   parent_pid: int | None = None, console_agent=None,
+                   terrarium=None, uplink=None, pacer=None,
+                   sleep=time.sleep) -> str:
+    """Shared body of `_wait_for_load` and `_serve_until_done`: tick
+    agent/console/gs once per iteration, checking parent-gone, Room-down and
+    Arco-liveness in that order every time (see both callers' docstrings
+    for why that order matters).
+
+    `exit_predicate(gs, agent)` is called once per iteration, after
+    `gs.tick()`, and must return a non-None reason string the instant its
+    caller's own exit condition is met, else None to keep looping.
+
+    `parent_is_gone` is looked up as this module's own global on every
+    call (not captured into a local), so a test's
+    `monkeypatch.setattr("harness.terrarium_boot.parent_is_gone", ...)`
+    is honored from the very next tick."""
     if pacer is None:
         pacer = TickPacer(_TICK_PERIOD, sleep=sleep)
     while True:
@@ -708,18 +744,11 @@ def _serve_until_done(gs, agent, arco, clock=time.monotonic,
             return "no-room"
         if arco.poll() is not None:
             return "arco-exited"
-        agent.poll()
-        if console_agent is not None:
-            console_agent.poll()
-        _pump_uplink(uplink)
+        _pump(agent, console_agent, uplink)
         gs.tick(1.0 / 44.0)
-        if gs.state in (State.LOADING, State.LOADED, State.SETUP):
-            # Only a restart (Console or uplink) can put the engine here
-            # while this function is running: run() was already called
-            # before entry.
-            return "restarted"
-        if gs.state == State.IDLE and not getattr(agent, "closing", 0):
-            return "completed"
+        reason = exit_predicate(gs, agent)
+        if reason is not None:
+            return reason
         pacer.wait()
 
 
@@ -756,28 +785,17 @@ def _wait_for_load(gs, agent, arco, *, clock=time.monotonic,
     """
     if gs.state is not State.IDLE:
         return "loaded"
-    if pacer is None:
-        pacer = TickPacer(_TICK_PERIOD, sleep=sleep)
-    while True:
-        arco = _live_arco(terrarium, arco)
-        if parent_is_gone(parent_pid):
-            return "parent-gone"
-        if terrarium is not None and terrarium.state is not TerrariumState.ROOM_READY:
-            return "no-room"
-        if arco.poll() is not None:
-            return "arco-exited"
-        agent.poll()
-        if console_agent is not None:
-            console_agent.poll()
-        _pump_uplink(uplink)
-        gs.tick(1.0 / 44.0)
-        if gs.state is not State.IDLE:
-            return "loaded"
-        pacer.wait()
+
+    def _exit(gs, agent):
+        return "loaded" if gs.state is not State.IDLE else None
+
+    return _run_tick_loop(gs, agent, arco, _exit, parent_pid=parent_pid,
+                          console_agent=console_agent, terrarium=terrarium,
+                          uplink=uplink, pacer=pacer, sleep=sleep)
 
 
 def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
-                  console_agent=None, drain_arco=None, terrarium=None,
+                  console_agent=None, terrarium=None,
                   uplink=None) -> str:
     """The `--serve` round loop: load, hold, run, complete, repeat -- until
     the parent or Arco disappears. Each iteration is one round:
@@ -800,12 +818,6 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
       5. `_serve_until_done` -- run to completion. "completed" (which
          covers an in-round operator abort too -- both land back in IDLE)
          loops back to step 1 for the next round.
-
-    `drain_arco`, when given, is called once per iteration of the setup
-    and run legs in addition to `arco.poll()` -- an extra pty-drain hook
-    for callers whose Arco handle needs draining separately from its
-    liveness check. Unused by the two callers `arco.poll()` already
-    covers both concerns for.
     """
     def _end_round(bit_name, reason_text: str) -> None:
         """Announce the round's outcome (marker + console event). The
@@ -1606,14 +1618,7 @@ def main() -> None:
     registry = BitRegistry.scan(bit_roots)
 
     if args.list_bits:
-        for row in registry.list_view(include_hidden=True):
-            rooms = ",".join(row["room_types"])
-            status = "" if row.get("enabled", True) else "\tDISABLED"
-            print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"
-                 f"{rooms}\t{row['start']['when']}\t{row['description']}"
-                 f"{status}")
-        for err in registry.errors_view():
-            print(f"error: {err['path']}: {err['message']}", file=sys.stderr)
+        print_bit_list(registry)
         sys.exit(0)
 
     if args.no_bit and (args.bit is not None or args.profile is not None):

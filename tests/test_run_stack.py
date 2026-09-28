@@ -760,6 +760,44 @@ def test_list_bits_prints_every_discovered_bit_and_exits_zero(capsys):
     assert "MetronomeBit" in out
 
 
+def test_list_bits_marks_a_disabled_bit(capsys, tmp_path):
+    """run_stack's --list-bits used to omit the DISABLED column
+    terrarium_boot's copy already had -- both now share
+    control.bit_registry.print_bit_list."""
+    from harness.run_stack import main
+    import sys as _sys
+
+    pkg = tmp_path / "offbit"
+    pkg.mkdir()
+    (pkg / "bit.toml").write_text(
+        '[bit]\nname = "OffBit"\nentry = "m:C"\n'
+        'requires_terrarium_api = 1\nenabled = false\n')
+
+    config_path = tmp_path / "terrarium.toml"
+    config_path.write_text(
+        'schema = 1\n\n[terrarium]\nname = "test"\n'
+        'bit_paths = ["."]\n\n'
+        '[instruments.strip]\ncapabilities = []\n\n'
+        '[rooms.T]\ndescription = "d"\nbackends = ["devicelink"]\n'
+        '[[rooms.T.fixtures]]\nname = "main"\ncolor_order = "GRB"\n'
+        'instrument = "strip"\n'
+        '[[rooms.T.fixtures.blocks]]\nname = "main"\nstart = 0\ncount = 10\n')
+
+    argv = ["run_stack.py", "--list-bits", "--config", str(config_path)]
+    old_argv = _sys.argv
+    _sys.argv = argv
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+    finally:
+        _sys.argv = old_argv
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "OffBit" in out
+    assert "DISABLED" in out
+
+
 _CONTROL_OK_WITH_URLS = (
     f"{markers.CONTROL_ROOM_LOADED} TEST\n"
     f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"

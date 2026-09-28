@@ -1136,7 +1136,8 @@ inside both blocking loops, so a killed parent is detected without ever
 needing `/release` -- `harness/run_stack.py` now passes the identical flag
 to every player device it spawns, not just the Room simulator, **and
 `harness/terrarium_boot.py` carries the same flag now too**, reusing
-`o2_shroom`'s `parent_is_gone` predicate rather than a second copy and
+`parent_is_gone` (defined in `harness/signals.py`, re-exported from
+`o2_shroom` for backward compatibility) rather than a second copy and
 checking it in both `_wait_in_setup` and `_serve_until_done` so the exit
 runs the normal `finally: shutdown(teardown)` path. That last one closes
 the orphan path the other two cannot: `run_stack` SIGTERMs and Ctrl-Cs are
@@ -1164,7 +1165,7 @@ and a hangup (when one is delivered at all) hit Python's default SIGHUP
 disposition, killing the supervisor without running `TeardownStack`
 while its children, in their own sessions, never saw it. Two guards now:
 `run()` records `getppid()` at entry and `_hold` polls
-`o2_shroom.parent_is_gone` on every tick, ending the hold with
+`harness.signals.parent_is_gone` on every tick, ending the hold with
 `stage="parent-gone"` through the normal ordered teardown; and
 `harness/signals.py`'s `sigterm_as_keyboard_interrupt()` maps SIGHUP the
 same way as SIGTERM, unless SIGHUP is already `SIG_IGN` (what `nohup`
@@ -1736,7 +1737,9 @@ see the Design docs list below).
   map, still with **no build step** (a venue box must never need npm).
   (This split was later superseded by the ES-module front-end rewrite — see
   the dated section near the end of this file for the shipped six-module
-  layout.) Path
+  layout. `console/static/dom.js` now holds the shared `mk`/`clear`
+  DOM-construction helpers every panel module imports, rather than each
+  module carrying its own copy.) Path
   handling takes the request's **basename only**, so the server has no code
   path that touches the filesystem after construction and no request can
   escape `console/static/` or the extension allowlist.
@@ -3811,7 +3814,7 @@ the serve-mode console flow; this slice stabilizes the load path. Design:
   `lazy_class_map()` excludes it and `resolve_config()` on it returns a
   located refusal (`ManifestError`, key `bit.enabled`), which is the
   loadable-ness authority for `run_stack`'s `--bit` path too. Console bit
-  cards omit disabled bits; `--list-bits` prints them with a `disabled`
+  cards omit disabled bits; `--list-bits` prints them with a `DISABLED`
   marker so they are not invisible; both CLI launchers refuse a disabled
   bit with a located message rather than loading it. `bits/metronome/
   bit.toml` gains `enabled = false` pending its redesign -- no other

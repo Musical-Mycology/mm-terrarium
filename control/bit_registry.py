@@ -266,3 +266,19 @@ class BitRegistry:
 
     def errors_view(self) -> list[dict]:
         return [{"path": e.path, "message": e.message} for e in self.errors]
+
+
+def print_bit_list(registry: "BitRegistry") -> None:
+    """Print `--list-bits` output: one tab-separated row per discovered
+    package (name, version, kind, comma-joined room_types, start.when,
+    description), with a trailing DISABLED column for a disabled bit
+    (`bit.enabled = false`). Shared by harness/run_stack.py and
+    harness/terrarium_boot.py's `--list-bits`."""
+    for row in registry.list_view(include_hidden=True):
+        rooms = ",".join(row["room_types"])
+        status = "" if row.get("enabled", True) else "\tDISABLED"
+        print(f"{row['name']}\t{row['version']}\t{row['kind']}\t"
+             f"{rooms}\t{row['start']['when']}\t{row['description']}"
+             f"{status}")
+    for e in registry.errors_view():
+        print(f"error: {e['path']}: {e['message']}", file=sys.stderr)

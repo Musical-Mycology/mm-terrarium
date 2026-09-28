@@ -13,6 +13,7 @@
 // path so it survives any row rebuild -- a function that already fired
 // still shows its fired state after its row is recreated.
 import * as wire from "./wire.js";
+import { mk, clear } from "./dom.js";
 
 let fnSignature = null;              // JSON of the last-rendered declaration
 const lastFired = {};                // function name -> its last fire record (survives rebuilds)
@@ -39,17 +40,6 @@ const BUILTIN_NAMES = new Set(["flash", "stop", "ping"]);
 let diagRowEl = null;                // Diagnostics row, built once, reused across rebuilds
 let diagPicker = null;
 const diagButtons = {};              // "flash"/"stop"/"ping" -> button element
-
-function clear(node) {
-  node.textContent = "";
-}
-
-function mk(tag, className, text) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  if (text != null) e.textContent = text;
-  return e;
-}
 
 // -------------------------------------------------------------- test hooks
 
