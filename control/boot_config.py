@@ -62,7 +62,7 @@ class BootConfig:
     # Measured: 93.3% clamped at a 150 ms horizon and 95.6% at 300 ms, with
     # lateness pinned near +3 ms both times. The old "~67 ms" was just
     # 60 ms of horizon plus ~6 ms of that overhead. See
-    # docs/MM_TERRARIUM.md's "Not yet built / deferred".
+    # docs/MM_TERRARIUM.md's "Timed cues and `cue_horizon`" (devicelink/).
     #
     # Every figure above is a DEV-BOX figure. No venue-box measurement
     # exists, and none of these numbers carry from a dev box to the venue box.
