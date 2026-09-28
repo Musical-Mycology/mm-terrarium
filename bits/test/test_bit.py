@@ -37,7 +37,8 @@ class TestBit(Bit):
 
     # TestBit is the reference fixture for every shipped room (TEST, DEMO
     # and VENUE), so the Scored/Jam validation loop works in each.
-    # control/boot.py reads this off the class before instantiation.
+    # harness/terrarium_boot.py's build() reads this off the class before
+    # instantiation.
     room_types = {"TEST", "DEMO", "VENUE"}
 
     # Seconds for one full out-and-back sweep of the Room's ambient hue.

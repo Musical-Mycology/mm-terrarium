@@ -189,10 +189,8 @@ class Terrarium:
         if self.sweep is None and runs_dir is not None:
             self.sweep = lambda: sweep_stale(runs_dir)
         # Called with no arguments to produce each load_room's room-scoped
-        # stack; defaults to a fresh TeardownStack. control/boot.py's
-        # compat wrapper overrides this to hand back a caller-supplied
-        # stack (harness/terrarium_boot.py adopts the o2lite transport
-        # after boot() and needs its own step on the same stack).
+        # stack; defaults to a fresh TeardownStack. Injectable so a caller
+        # can hand back a stack of its own; nothing overrides it today.
         self.stack_factory = stack_factory
 
         self.state = TerrariumState.NO_ROOM
@@ -400,12 +398,12 @@ class Terrarium:
         return None
 
     def recycle_room(self) -> str | None:
-        """Unload and immediately reload the active Room, so the next Bit
-        round starts against a fresh Arco (and fresh fixture simulators).
-        The bit-cycle rule (design spec 2026-08-31): a long-lived Arco is
-        known-broken for round two upstream -- only the first client after
-        an Arco start gets working audio -- so closing a Bit recycles the
-        whole room rather than reusing its hub.
+        """Unload and immediately reload the active Room against a fresh
+        Arco (and fresh fixture simulators). Unwired: nothing in production
+        calls this, and a round ending must never churn Arco. It was built
+        for the bit-cycle rule (design spec 2026-08-31: only the first
+        client after an Arco start gets working audio, upstream) and is
+        kept, with its tests, as the recycle primitive.
 
         Returns None on success, else a reason string; never raises
         (load_room/unload_room's shared convention). A live Bit is aborted
@@ -416,7 +414,7 @@ class Terrarium:
         Callers that hold their own clients of the dying hub (the o2lite
         transport, ArcoSynthPool) must stop them BEFORE calling this and
         restart them after -- see harness/terrarium_boot.py's
-        _recycle_room, the one production call site."""
+        _recycle_room, which does so (itself called only from tests)."""
         if self.state != TerrariumState.ROOM_READY:
             return (f"cannot recycle: Terrarium is {self.state.value}, "
                     "not room_ready")

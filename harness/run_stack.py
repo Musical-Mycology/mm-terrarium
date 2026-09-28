@@ -32,11 +32,15 @@ WHY THE FLAGS ARE NOT OPTIONAL, all of these bought the hard way:
     re-claims its dev name on the next hub, where O2 silently refuses the
     next run's own client.
 
-WHAT IT CANNOT FIX. docs/MM_TERRARIUM.md records that a headless device
-often never clock-syncs after Control's /host/clear, and that this does not
-reproduce from an interactive terminal. The cause is unknown and upstream.
-This runner does not fix it and does not pretend to. What it contributes is
-that the failure is BOUNDED and NAMED rather than a hang.
+WHAT IT CANNOT FIX. docs/MM_TERRARIUM.md ('Not yet built / deferred')
+records that a device's clock-sync to Arco after Control has connected is
+unreliable. Its intermittent half was this repo's undrained Arco pty, fixed
+by draining the pty in every holding loop (harness/terrarium_boot.py), and
+never headless-specific. The remaining cause is upstream: pyarco's
+arco.initialize() sends /host/clear, and a client that synced before it
+keeps a valid time_get() on a dead socket. This runner does not fix that and
+does not pretend to. What it contributes is that the failure is BOUNDED and
+NAMED rather than a hang.
 """
 
 from __future__ import annotations
@@ -381,13 +385,14 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                 return RunResult(
                     False, "device-sync",
                     f"{tee.name} never clock-synced. This is the documented "
-                    f"headless clock-sync defect: pyarco's initialize() sends "
-                    f"/host/clear and a NEW o2lite client then hangs on "
-                    f"time_get() < 0. It does not reproduce from an "
-                    f"interactive terminal. Check o2debug.log -- 'dropping "
+                    f"upstream clock-sync defect: pyarco's initialize() "
+                    f"sends /host/clear, which can leave an o2lite client "
+                    f"on a dead socket. Check o2debug.log -- 'dropping "
                     f"message because service was not found' means Control "
                     f"was not up yet, and total silence means the socket is "
-                    f"dead. See docs/MM_TERRARIUM.md 'Not yet built'.", logs,
+                    f"dead. Restarting the Arco server before the run is "
+                    f"the workaround. See docs/MM_TERRARIUM.md 'Not yet "
+                    f"built / deferred'.", logs,
                     urls, room_urls)
             ok, failed = _wait_for_marker(tee, markers.DEVICE_ROLE_GRANTED,
                                           cfg.join_timeout, clock, sleep)
@@ -598,8 +603,10 @@ def _dead_child(children: dict[str, object], *,
     released ie1, ie1 exited 0, this function reported it, run() SIGTERMed
     a perfectly healthy Control mid-serve and Arco went down with it. A
     control exit of any code and a NON-zero device exit still count.
-    Devices that stay up across rounds are a later slice (device
-    reconnection); until then round 2+ under run_stack runs device-less.
+    Under the default --persist-shrooms a released device returns to the
+    lobby instead of exiting (harness/o2_shroom.py's lobby_round_over), so
+    this rule now matters only for --no-persist-shrooms, where round 2+
+    runs device-less.
     """
     for name, process in children.items():
         code = process.poll()
@@ -634,8 +641,8 @@ def parse_args(argv=None):
         epilog="Needs pyarco and o2litepy importable: found automatically "
                "when arco is a sibling checkout of this repo, otherwise set "
                "MM_ARCO_PATH (or PYTHONPATH) to the arco checkout. CI mode "
-               "is BEST-EFFORT: the headless clock-sync defect documented "
-               "in docs/MM_TERRARIUM.md is upstream and "
+               "is BEST-EFFORT: the device clock-sync defect documented "
+               "in docs/MM_TERRARIUM.md is upstream in pyarco/Arco and "
                "unfixed, and this runner bounds and names it rather than "
                "fixing it.")
     ap.add_argument("--ci", action="store_true",

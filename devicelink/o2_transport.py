@@ -180,7 +180,7 @@ def verify_service_ownership(o2lite, service: str, *, timeout: float = 2.0,
     indistinguishable from a lost service. Returns a bool and raises
     nothing: each caller decides what a failed check means. `clock` and
     `sleep` are injected so a test can exhaust the timeout without
-    spending real time, the same way control/boot.py's
+    spending real time, the same way control/terrarium.py's
     wait_for_room_binding already does.
 
     `resend_interval`, if set, resends the same fixed-nonce svcheck every

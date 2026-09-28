@@ -72,7 +72,7 @@ CONTROL_NO_ROOM_WAIT = "NO_ROOM: waiting for the Console to load a Room"
 # --- Device (harness/o2_shroom.py) -------------------------------------
 
 # o2lite.time_get() went non-negative. Until this, the device has no clock
-# and cannot stamp a gesture. This is the step the documented headless
+# and cannot stamp a gesture. This is the step the documented upstream
 # clock-sync defect stalls at, so it is the one the runner names when a CI
 # run fails.
 DEVICE_CLOCK_SYNCED = "clock synced at"

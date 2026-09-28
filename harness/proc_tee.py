@@ -70,7 +70,7 @@ class ProcTee:
 
         Polls rather than using Event.wait(timeout) so a test can inject a
         clock and spend no real time. Bounded by construction: this is the
-        function that turns the documented headless clock-sync defect from
+        function that turns the documented upstream clock-sync defect from
         a hang into a named failure.
         """
         deadline = clock() + timeout

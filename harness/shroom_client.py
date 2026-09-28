@@ -19,7 +19,9 @@ The process that runs this client is harness/o2_shroom.py.
 
 The wire, from devicelink/protocol.py and devicelink/agent.py:
 
-    up    /game/hello    s    [dev]
+    up    /game/hello    s    [dev]   (ssss [dev, "", "", instrument] when
+                                         the client declares an instrument)
+    up    /game/canvas   ss   [dev, url]
     up    /game/join     ss   [dev, node]
     up    /game/tilt     sf   [dev, gamma]
     up    /game/tap      sffi [dev, peak_g, duration_ms, count]
@@ -32,10 +34,11 @@ The wire, from devicelink/protocol.py and devicelink/agent.py:
     down  /<dev>/error   ss   [context, message]
     down  /<dev>/room    b    [blob]   (informational; ignored here)
 
-The gesture and play rows are implemented by the Flutter simulator today;
-this client sends tilt and tap and ignores /<dev>/play. Design Rule 2 requires
-both clients to send byte-identical messages, so the shapes are recorded
-here before this client grows into them.
+The Flutter simulator implements every gesture row. This client sends tilt
+and tap but not shake, and hands /<dev>/play to an optional on_play sink
+(recording it in last_play either way). Design Rule 2 requires both clients
+to send byte-identical messages, so the shake shape is recorded here before
+this client grows into it.
 """
 
 from __future__ import annotations
@@ -97,9 +100,10 @@ class ShroomClient:
         self.on_play = on_play
         # Frame width this client will accept, in channels. Defaults to the
         # Testshroom's 12 px x GRB shape, so every existing caller is
-        # unchanged. The Room simulator passes its RoomProfile.channel_count
-        # instead: a Room is not a Testshroom and does not have 36 channels.
-        # See control/room_profile.py.
+        # unchanged. harness/o2_shroom.py passes its surface's own width
+        # instead when it runs as a Room fixture (pixel_count times the
+        # color order's length): a fixture is not a Testshroom and need not
+        # have 36 channels. See control/room_profile.py's fixture_slices.
         self.expected_channels = expected_channels
         self.config: dict | None = None
         self.released = False

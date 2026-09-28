@@ -515,10 +515,12 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
     a device can join a scored role before run() closes the window.
     registration.join() refuses scored roles once RUNNING
-    (control/registration.py:41-42), and TestBit's `player` is scored, so
-    without this window harness/o2_shroom.py is denied every time.
-    setup_seconds <= 0 -- the default -- returns immediately, preserving the
-    existing load-straight-into-run behavior. Driven by
+    (control/registration.py's RegistrationState.join), and TestBit's
+    `player` is scored, so without this window harness/o2_shroom.py is
+    denied every time. setup_seconds <= 0 returns immediately (except for an
+    "admin" condition, below), preserving the load-straight-into-run
+    behavior; the value comes from --setup-seconds, else the Bit manifest's
+    launch.setup_seconds. Driven by
     `./smoke-test.sh --open --devices 1` (harness/run_stack.py), whose
     --setup-seconds forwards to this same knob.
 
@@ -1277,8 +1279,9 @@ def _recycle_room(terrarium, *, transport, pool=None, o2lite=None):
 
     Returns None on success, else the reason string (never raises). On
     failure the restarts are skipped: there is no hub to restart against,
-    and the caller (the serve-round loop) treats the reason like a
-    Console unload_room -- back to the NO_ROOM wait."""
+    and a caller should treat the reason like a Console unload_room --
+    back to the NO_ROOM wait. Unwired: only tests call this; a round
+    ending never recycles the Room (see Terrarium.recycle_room)."""
     transport.stop()
     if pool is not None:
         pool.quiesce()
@@ -1316,12 +1319,12 @@ def _restart_room_clients(*, transport, pool=None,
                           o2lite=None, pump=None) -> str | None:
     """The restart half of `_recycle_room` (pool.start() then
     transport.start(o2lite), process-launch order -- see `_recycle_room`'s
-    docstring), factored out so `_serve_roomless` can also call it after a
-    plain Console `load_room` that follows a FAILED recycle: that recycle
-    already stopped these same clients (client-before-hub) but had no hub
-    to restart them against, so a later successful load lands in
-    ROOM_READY with a live Arco but Control's own clients still down
-    unless something restarts them here.
+    docstring), factored out so `_serve_roomless` can also call it (via
+    `restart_clients`) after a plain Console `load_room` that follows
+    anything that stopped these clients without restarting them: a
+    Console unload or hard abort, a NO_ROOM boot, or (tests only) a FAILED
+    recycle. Otherwise a later successful load lands in ROOM_READY with a
+    live Arco but Control's own clients still down.
 
     Unlike Terrarium's own methods, `pool.start()`/`transport.start()`
     actually raise on failure, so this wraps them and stringifies the
