@@ -142,7 +142,7 @@ launched **after** Arco is already up (i.e. after Step 3, not before Step
 ## Diagrams
 
 `docs/diagrams/player-flow.seq` (rendered into `docs/MM_TERRARIUM.md` under
-*Lobby, join handshake, and admin start*) now shows this lobby handshake --
+*What it is, in one picture*) now shows this lobby handshake --
 invite, double-tap, ceremony, admin start -- instead of the older immediate
 `/game/join` flow it still showed before this pass. Regenerate after any
 further protocol change with `.venv/bin/python -m tools.render_diagrams`;
