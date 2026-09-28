@@ -234,6 +234,31 @@ def test_shutdown_frees_every_voice_and_shuts_the_pool():
     assert pool.shut is True
 
 
+def test_grants_after_shutdown_are_dropped_without_touching_the_pool():
+    # shutdown() is process-exit only, and it runs BEFORE the Room unwinds
+    # (clients before Arco, D6). terrarium_boot.shutdown()'s later
+    # unload_room(force=True) aborts the Bit, the engine goes IDLE, and the
+    # agent's _setup_room() re-grants every fixture -- against a pool whose
+    # arco.finish() has already run. ArcoSynthPool.acquire() raises then
+    # ("start() must run before acquire()"), so a shut bridge must drop the
+    # grant and any note rather than reach the pool at all.
+    class ShutPool(FakePool):
+        def acquire(self):
+            if self.shut:
+                raise RuntimeError(
+                    "ArcoSynthPool.start() must run before acquire()")
+            return super().acquire()
+
+    pool = ShutPool()
+    br = AudioBridge(pool)
+    br.shutdown()
+    br.on_grant("fx", _role(ugens=PLAYER_UGENS, welcome=WELCOME))
+    br.play_note(0, 60, 100, 1.0)
+    assert pool.acquired == []
+    br.start_drone("fx")                                # ungranted: no-op
+    br.feed_midi("fx", 0x90, 60, 100)                   # ungranted: no-op
+
+
 WELCOME = {"light": {"instrument": "glow", "params": {"hue": 0.33},
                      "duration": 1.5},
            "audio": {"instrument": "chime", "duration": 1.5}}

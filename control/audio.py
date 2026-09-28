@@ -149,6 +149,8 @@ class AudioBridge:
         # its own transient voice so it never disturbs the sustained drone, and
         # that voice is released the moment its declared duration expires.
         self._pending_offs: list[tuple[float, object, int]] = []
+        # Set by shutdown(), which is process-exit only: see on_grant().
+        self._shut = False
 
     @property
     def pool(self):
@@ -161,7 +163,15 @@ class AudioBridge:
     def on_grant(self, dev: str, role: Role) -> None:
         """Role adopted: acquire a voice, wire its lanes, sound the welcome.
         A role declaring no instruments is silent and must not consume a voice,
-        but it may still have a welcome cue."""
+        but it may still have a welcome cue.
+
+        A no-op once shutdown() has run. harness/terrarium_boot.shutdown()
+        shuts this bridge (and the pool's arco.finish()) BEFORE the Room
+        unwinds, and that unwind's forced Bit abort sends the engine IDLE,
+        which re-runs the agent's _setup_room() and re-grants every fixture.
+        Reaching the shut pool then raised on every teardown (2026-09-28)."""
+        if self._shut:
+            return
         instruments = role.ugen_manifest.get("instruments", [])
         if instruments:
             decl = instruments[0]        # v0: one instrument per role
@@ -193,7 +203,10 @@ class AudioBridge:
                   duration: float) -> None:
         """One note on its own transient voice, released `duration`
         seconds later by tick(). The welcome ceremony and the lobby bell
-        both ride this so neither disturbs a sustained drone."""
+        both ride this so neither disturbs a sustained drone. A no-op
+        after shutdown(), like on_grant()."""
+        if self._shut:
+            return
         voice = self._pool.acquire()
         voice.program_change(int(program))
         voice.note_on(int(key), int(vel))
@@ -301,7 +314,10 @@ class AudioBridge:
         reported to the caller, but the pool must still shut down -- that
         is where pyarco's arco.finish() runs, the flag that stops every
         Ugen.__del__ from writing to the dead socket at interpreter exit
-        (D6, 2026-09-11)."""
+        (D6, 2026-09-11).
+
+        Terminal: every later grant or note is dropped (see on_grant())."""
+        self._shut = True
         try:
             for _due, voice, key in self._pending_offs:
                 voice.note_off(key)
