@@ -14,6 +14,7 @@ from control.triggers import (
     EventTrigger, StreamTrigger, validate_event_trigger, validate_stream_trigger,
 )
 from control.cues import TARGET, PlayCue
+from control.model_layout import PixelLayout
 
 CAPABILITY_VOCABULARY: frozenset[str] = frozenset({
     "light.pixels",    # addressable pixels of any shape
@@ -75,6 +76,8 @@ class Instrument:
     event_triggers: tuple[EventTrigger, ...] = ()
     stream_triggers: tuple[StreamTrigger, ...] = ()
     solo: SoloConfig | None = None
+    model_sha256: str | None = None
+    layout: tuple[PixelLayout, ...] = ()
 
 
 @dataclass(frozen=True)

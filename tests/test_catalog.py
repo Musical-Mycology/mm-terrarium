@@ -324,3 +324,63 @@ def test_shipped_tuneshroom_declares_solo():
         "tap": "play_aurora", "double_tap": "win", "shake": "fireworks_player"}
     assert inst.solo.light_manifest["instruments"] == [
         {"instrument": "aurora", "target": "primary"}]
+
+
+from tests.glb_builder import GlbBuilder
+
+
+def _twelve_led_glb() -> bytes:
+    """A real, Blender-valid 12-LED document (8 ring, 4 stem) -- the
+    same shape as the shared fixture, built directly with GlbBuilder so
+    every test in this file that needs "an instrument with a model"
+    builds one consistent, genuinely loadable file rather than a
+    JSON-only stand-in."""
+    builder = GlbBuilder()
+    nodes = [
+        {"name": "LEDs", "children": [1, 2]},
+        {"name": "ring", "children": []},
+        {"name": "stem", "children": []},
+    ]
+    for idx in range(12):
+        mesh_idx = builder.add_box_mesh((0.0, 0.0, idx * 0.01), 0.002)
+        marker_idx = len(nodes)
+        nodes.append({"name": f"LED_{idx:03d}", "mesh": mesh_idx})
+        nodes[1 if idx < 8 else 2]["children"].append(marker_idx)
+    return builder.build(nodes)
+
+
+def test_published_instrument_with_a_model_gets_layout_and_sha256(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    cat = load_catalog(root)
+    inst = cat.published["glowcap"]
+    assert len(inst.layout) == 12
+    assert inst.model_sha256 == __import__("hashlib").sha256(glb_bytes).hexdigest()
+
+
+def test_published_instrument_with_missing_model_file_fails_to_load(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/nope.glb"\n')
+    with pytest.raises(TerrariumConfigError, match="nope.glb"):
+        load_catalog(root)
+
+
+def test_draft_instrument_with_invalid_model_records_the_error_not_raises(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "drafts" / "glowcap.toml").write_text(GOOD + '\nmodel = "models/nope.glb"\n')
+    cat = load_catalog(root)
+    entry = cat.get("draft", "glowcap")
+    assert entry.instrument is None
+    assert "nope.glb" in entry.error
+
+
+def test_instrument_without_a_model_has_no_layout_or_sha256(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "glowcap.toml").write_text(GOOD)
+    cat = load_catalog(root)
+    inst = cat.published["glowcap"]
+    assert inst.layout == ()
+    assert inst.model_sha256 is None

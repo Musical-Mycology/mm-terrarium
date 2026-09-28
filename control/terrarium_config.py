@@ -18,6 +18,7 @@ from control.instrument import (Instrument, InstrumentError, SoloConfig,
                                 validate_instrument,
                                 validate_instrument_manifests)
 from control.lobby import TERRARIUM_ADMIN
+from control.model_layout import ModelLayoutError, parse_model_layout
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
 from control.triggers import EventTrigger, StreamTrigger
@@ -464,6 +465,34 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
             source=source, key=key,
             message=f"instrument {iname!r}: pixels must be an int, got "
                     f"{pixels!r}")
+
+    model_sha256 = None
+    layout: tuple = ()
+    model_rel = iraw.get("model")
+    if model_rel is not None:
+        if not isinstance(model_rel, str) or not model_rel:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: 'model' must be a "
+                        f"non-empty string path")
+        model_path = Path(source).parent / model_rel
+        try:
+            model_bytes = model_path.read_bytes()
+        except OSError as exc:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: cannot read model "
+                        f"{model_rel!r} ({model_path}): {exc}") from exc
+        try:
+            result = parse_model_layout(
+                model_bytes, path=str(model_path), pixel_count=pixels)
+        except ModelLayoutError as exc:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: {exc}") from exc
+        model_sha256 = result.model_sha256
+        layout = result.pixels
+
     instrument = Instrument(
         name=iname,
         description=iraw.get("description", ""),
@@ -476,6 +505,8 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
         event_triggers=_parse_event_triggers(iname, iraw, source=source, key=key),
         stream_triggers=_parse_stream_triggers(iname, iraw, source=source, key=key),
         solo=solo,
+        model_sha256=model_sha256,
+        layout=layout,
     )
     try:
         validate_instrument(instrument)
