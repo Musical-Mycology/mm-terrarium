@@ -8,10 +8,16 @@
 #   ./terrarium.sh --room TEST
 #   ./terrarium.sh --room DEMO --console-port 9000
 #   ./terrarium.sh --web-build /path/to/mm-tuneshroom/build/web
+#   ./terrarium.sh --clean    # sweep past runs in every worktree, report
+#                             # anything still running, exit (no stack)
 # Same venv + arco resolution as smoke-test.sh (a bare python3
 # collects a misleading import error; see README.md).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+# --clean needs no Arco checkout, so it dispatches before the arco check.
+if [ "${1:-}" = "--clean" ]; then
+  exec .venv/bin/python -m harness.clean
+fi
 # pyarco/o2litepy come from an arco checkout. Resolve it, in order: an
 # explicit ARCO_ROOT; an already-set PYTHONPATH (left as is); else a
 # sibling `arco` checkout next to the main clone (a git worktree resolves

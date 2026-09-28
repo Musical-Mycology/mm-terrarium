@@ -3,7 +3,8 @@ import os
 
 import pytest
 
-from control.run_record import RunRecorder, SpawnRecord, sweep_stale
+from control.run_record import (
+    LiveRun, RunRecorder, SpawnRecord, live_supervisors, sweep_stale)
 
 
 def test_record_append_load_round_trip_through_wire_json(tmp_path):
@@ -198,3 +199,40 @@ def test_sweep_keeps_record_file_when_a_pid_is_not_handled(tmp_path):
     assert table.stopped == [105]
     assert acted == [SpawnRecord(pid=105, spawn_time=500.0, role="arco")]
     assert os.path.exists(path)
+
+
+def _live(runs_dir, table: _FakeProcessTable):
+    return live_supervisors(
+        runs_dir, process_spawn_time=table.spawn_time, is_alive=table.is_alive)
+
+
+def test_live_supervisors_reports_a_run_whose_supervisor_is_alive(tmp_path):
+    path = tmp_path / "run-1" / "procs.jsonl"
+    recorder = RunRecorder(str(path))
+    recorder.record(300, "supervisor", spawn_time=500.0)
+    recorder.record(301, "arco", spawn_time=500.0)
+    table = _FakeProcessTable({300: 500.0, 301: 500.0})
+
+    assert _live(str(tmp_path), table) == [LiveRun(
+        run_dir=str(tmp_path / "run-1"),
+        supervisor=SpawnRecord(pid=300, spawn_time=500.0, role="supervisor"),
+        records=[SpawnRecord(pid=301, spawn_time=500.0, role="arco")])]
+    assert table.stopped == []
+
+
+def test_live_supervisors_ignores_dead_reused_and_absent_supervisors(tmp_path):
+    RunRecorder(str(tmp_path / "dead" / "procs.jsonl")).record(
+        310, "supervisor", spawn_time=500.0)
+    RunRecorder(str(tmp_path / "reused" / "procs.jsonl")).record(
+        311, "supervisor", spawn_time=500.0)
+    RunRecorder(str(tmp_path / "none" / "procs.jsonl")).record(
+        312, "arco", spawn_time=500.0)
+    # 310 dead; 311's pid now names a different process; "none" has no
+    # supervisor record at all.
+    table = _FakeProcessTable({311: 999.0, 312: 500.0})
+
+    assert _live(str(tmp_path), table) == []
+
+
+def test_live_supervisors_on_a_missing_runs_dir_is_empty(tmp_path):
+    assert _live(str(tmp_path / "absent"), _FakeProcessTable({})) == []
