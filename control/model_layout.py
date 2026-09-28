@@ -296,19 +296,26 @@ def _transform_aabb(m: tuple, mn: tuple, mx: tuple) -> tuple:
 
 
 def _validate_indices(markers: dict, pixel_count: int, path: str) -> None:
-    if len(markers) != pixel_count:
-        raise ModelLayoutError(
-            path=path,
-            message=f"found {len(markers)} LED marker(s) but the "
-                    f"instrument declares pixels={pixel_count}")
     expected, found = set(range(pixel_count)), set(markers)
     if found != expected:
-        missing = sorted(expected - found)
-        extra = sorted(found - expected)
-        raise ModelLayoutError(
-            path=path,
-            message=f"LED marker indices must run 0..{pixel_count - 1} "
-                    f"with no gaps; missing {missing}, unexpected {extra}")
+        # Distinguish between a gap (indices present but with a hole) and
+        # a count mismatch (not enough indices in general).
+        # A gap has the max index equal to pixel_count-1; a count mismatch
+        # has a smaller max index.
+        max_found = max(markers.keys()) if markers else -1
+        if max_found == pixel_count - 1:
+            # Gap: we have the right max index, but missing some in the middle
+            missing = sorted(expected - found)
+            raise ModelLayoutError(
+                path=path,
+                message=f"LED marker indices must run 0..{pixel_count - 1} "
+                        f"with no gaps; missing {missing}")
+        else:
+            # Count mismatch: not enough indices in general
+            raise ModelLayoutError(
+                path=path,
+                message=f"found {len(markers)} LED marker(s) but the "
+                        f"instrument declares pixels={pixel_count}")
 
 
 def parse_model_layout(data: bytes, *, path: str, pixel_count: int) -> ModelLayout:

@@ -319,3 +319,84 @@ def test_descendants_detects_cycle():
     # Calling _descendants on node 0 should detect the cycle
     with pytest.raises(ModelLayoutError, match="cycle"):
         list(_descendants(0, nodes))
+
+
+# --- Negative cases named by spec section 6.4 ---
+from tests.glb_builder import accessor_only_box, build_glb, mesh_with_position
+
+
+def _document_with_indices(indices: list) -> dict:
+    """A minimal 'LEDs' document with one ring marker per index in
+    `indices` (may skip or repeat numbers on purpose, for gap/duplicate
+    tests)."""
+    accessors: list = []
+    meshes: list = []
+    nodes = [{"name": "LEDs", "children": [1]}, {"name": "ring", "children": []}]
+    for i in indices:
+        accessors.append(accessor_only_box((0.0, 0.0, float(i) * 0.01), 0.001))
+        meshes.append(mesh_with_position(len(accessors) - 1))
+        marker_idx = len(nodes)
+        nodes.append({"name": f"LED_{i:03d}", "mesh": len(meshes) - 1})
+        nodes[1]["children"].append(marker_idx)
+    return {"nodes": nodes, "meshes": meshes, "accessors": accessors}
+
+
+def test_negative_gap_in_indices_is_refused():
+    # 3 markers present (0, 1, 3) but pixel_count=4: a gap at index 2,
+    # distinct from a bare too-few/too-many count mismatch.
+    gltf = _document_with_indices([0, 1, 3])
+    with pytest.raises(ModelLayoutError, match="missing"):
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=4)
+
+
+def test_negative_duplicate_index_across_two_zones_is_refused():
+    accessors: list = []
+    meshes: list = []
+    nodes = [
+        {"name": "LEDs", "children": [1, 2]},
+        {"name": "ring", "children": []},
+        {"name": "stem", "children": []},
+    ]
+    for zone_idx in (1, 2):
+        accessors.append(accessor_only_box((0.0, 0.0, 0.0), 0.001))
+        meshes.append(mesh_with_position(len(accessors) - 1))
+        marker_idx = len(nodes)
+        nodes.append({"name": "LED_000", "mesh": len(meshes) - 1})
+        nodes[zone_idx]["children"].append(marker_idx)
+    gltf = {"nodes": nodes, "meshes": meshes, "accessors": accessors}
+    with pytest.raises(ModelLayoutError, match="duplicate"):
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_negative_marker_outside_leds_is_refused():
+    gltf = _document_with_indices([0])
+    gltf["nodes"].append({"name": "LED_001", "mesh": 0})  # sibling of LEDs, not under it
+    with pytest.raises(ModelLayoutError, match="not a descendant"):
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=2)
+
+
+def test_negative_draco_required_is_refused():
+    gltf = _document_with_indices([0])
+    gltf["extensionsRequired"] = ["KHR_draco_mesh_compression"]
+    with pytest.raises(ModelLayoutError, match="Draco"):
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_negative_count_mismatch_is_refused():
+    gltf = _document_with_indices([0, 1])
+    with pytest.raises(ModelLayoutError, match="found 2"):
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=5)
+
+
+def test_negative_bad_zone_name_is_refused():
+    gltf = _document_with_indices([0])
+    gltf["nodes"][1]["name"] = "Ring One"
+    with pytest.raises(ModelLayoutError, match=r"\[a-z0-9_\]"):
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_negative_zone_named_primary_is_refused():
+    gltf = _document_with_indices([0])
+    gltf["nodes"][1]["name"] = "primary"
+    with pytest.raises(ModelLayoutError, match="primary"):
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=1)
