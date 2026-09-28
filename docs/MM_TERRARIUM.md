@@ -2912,6 +2912,16 @@ from the Console -- not just once at process start. Design: [`.../
   seam: no o2lite-path call site currently has a natural way to detect
   another live claimant without new engine code, so it stays available for
   a caller to pass but nothing threads it through by default yet.
+  **`./terrarium.sh --clean` (2026-09-28)** runs the same sweep by hand
+  across *every* checkout (`harness/clean.py`, which walks `git worktree
+  list`), closing the gap that the load-time sweep only reads its own
+  checkout's `runs/`. It never kills a live stack: a run whose supervisor
+  is alive is reported with `kill -INT <supervisor pid>` (SIGINT to
+  `terrarium_boot` runs its ordered teardown, and `run_stack`'s hold ends
+  when that child exits). It also lists, never kills, unrecorded
+  `harness.run_stack`/`terrarium_boot`/`o2_shroom` processes not belonging
+  to a live stack. It exits 0 when nothing is left and 1 otherwise, and
+  needs no Arco checkout.
 - **`DevicePool` is cleared on every room cycle, not just once at process
   exit.** `unload_room()` calls `gs.clear_devices()` before returning to
   `NO_ROOM` -- every device's clock died with the Room's own Arco/hub, so
