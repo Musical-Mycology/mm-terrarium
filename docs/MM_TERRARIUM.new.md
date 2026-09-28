@@ -10,7 +10,10 @@ assignment, scoring, and adjudication). Arco is the only full-O2 process in
 the room; Control attaches over o2lite exactly like every device, so Arco
 relays anything travelling between two clients (`/arco` and `/actl` are 1
 hop, `/game/*` and `/ie<N>/*` are 2). A full-O2 Control would shorten none
-of them; see *Message Routing* in the design doc. This repo is
+of them; see *Message Routing* in the design doc. **Only Control writes to
+`/arco`**: `control/arco_process.py` is the sole caller of pyarco's
+`arco.initialize()`, so no other process in this repo opens that
+connection. This repo is
 `mm-terrarium`'s canonical service doc; the authoritative architecture is
 in-repo at
 [`docs/control-gameserver-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/control-gameserver-design.md),
@@ -300,6 +303,24 @@ expired. The harness's serve loops (`_serve_rounds`, `_wait_for_load`,
 `_wait_in_setup`, `_serve_until_done`) and the ownership probe all take a
 `pump` hook now and drain Arco's `poll()` on every iteration; any new
 holding loop needs the same treatment.
+
+**Backgrounding `./terrarium.sh` for a scripted or unattended run: use
+`set -m` first, or send SIGTERM.** bash runs an asynchronous command
+(`cmd &`) with SIGINT set to ignored whenever job control is off, and
+Python leaves that inherited ignore in place rather than installing its
+`KeyboardInterrupt` handler, so `kill -INT` on a plain-backgrounded run is
+a silent no-op. SIGTERM still works: `harness/signals.py` installs a
+handler (`sigterm_as_keyboard_interrupt`, called by both `run_stack.py`
+and `terrarium_boot.py`) that turns a bare `kill` into the same clean
+shutdown Ctrl-C gives interactively. Enable job control before
+backgrounding to get SIGINT too:
+
+```bash
+set -m
+./terrarium.sh --room TEST > run.log 2>&1 &
+PID=$!
+kill -INT "$PID"   # or: kill -TERM "$PID", works either way
+```
 
 ## Landed subsystems
 
