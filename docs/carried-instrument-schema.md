@@ -112,8 +112,9 @@ vocabulary:
                  "status": 176, "data1": 74, "data2": 127},
                 {"offset": 1.0, "kind": "light", "dev": "target",
                  "status": 176, "data1": 74, "data2": 0}]}
-    /* ... one entry per declared Function, function_view's wire shape; "model_sha256" (hex, optional) appears alongside "functions" when the instrument declares a model */
-  ]
+    /* ... one entry per declared Function, function_view's wire shape */
+  ],
+  "model_sha256": "…"  // only when a model is declared
 }
 ```
 

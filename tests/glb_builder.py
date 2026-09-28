@@ -1,5 +1,5 @@
 """Writes .glb files for control/model_layout.py's tests,
-tests/generate_model_fixture.py (the shared marker/bake fixture pair),
+tools/generate_model_fixture.py (the shared marker/bake fixture pair),
 and tools/export_models.py's tests.
 
 Two tiers, both stdlib-only (struct, json):

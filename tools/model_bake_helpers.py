@@ -4,7 +4,7 @@ sections 4.1 and 5.3), importable and unit-testable without `bpy`
 (Blender's bundled Python module, only importable from inside Blender).
 tools/bake_model.py (Task 14) stays a thin bpy script; every piece of its
 logic that does not need bpy lives here instead. This module also backs
-tests/generate_model_fixture.py's "mmbake" fixture (Task 7), which is a
+tools/generate_model_fixture.py's "mmbake" fixture (Task 7), which is a
 Blender-free stand-in for a real bake and therefore goes through the same
 `inject_bake` a real bake does (spec D13's "one parser" principle extends
 here: one bake-file writer, not two).
@@ -40,7 +40,7 @@ class InjectBakeError(Exception):
 def encode_png_rgba8(width: int, height: int, pixels: bytes) -> bytes:
     """A minimal, dependency-free 8-bit RGBA PNG encoder (stdlib `zlib` +
     `struct` only), used both by a real bake's normalised light maps and
-    by tests/generate_model_fixture.py's flat stand-in maps (spec section
+    by tools/generate_model_fixture.py's flat stand-in maps (spec section
     5.3 step 5: "stdlib is preferred so it's shared with the fixture
     path"). `pixels` is exactly `width * height * 4` raw bytes, row-major,
     top row first; this function applies PNG filter type 0 ("None") to
@@ -97,13 +97,16 @@ def _read_glb_full(data: bytes, *, path: str) -> tuple:
 
 
 def _refuse_missing_texcoord1(gltf: dict) -> None:
-    for mesh in gltf.get("meshes", []):
-        for prim in mesh.get("primitives", []):
+    for mesh_idx, mesh in enumerate(gltf.get("meshes", [])):
+        for prim_idx, prim in enumerate(mesh.get("primitives", [])):
             if "TEXCOORD_1" not in prim.get("attributes", {}):
+                mesh_name = mesh.get("name")
+                located = (f"mesh {mesh_idx} ({mesh_name!r})" if mesh_name
+                          else f"mesh {mesh_idx}")
                 raise InjectBakeError(
-                    "a mesh primitive has no TEXCOORD_1 accessor; the "
-                    "Blender exporter did not write the lightmap UV set; "
-                    "check export_texcoords")
+                    f"{located} primitive {prim_idx} has no TEXCOORD_1 "
+                    f"accessor; the Blender exporter did not write the "
+                    f"lightmap UV set; check export_texcoords")
 
 
 def _refuse_remaining_marker_meshes(gltf: dict) -> None:
@@ -154,9 +157,11 @@ def inject_bake(glb_bytes: bytes, pngs: list, mm_bake: dict) -> bytes:
     buffer_views = list(gltf.get("bufferViews", []))
     samplers = list(gltf.get("samplers", []))
 
-    sampler_idx = len(samplers)
-    samplers.append({"magFilter": 9729, "minFilter": 9729,
-                      "wrapS": 33071, "wrapT": 33071})  # LINEAR/LINEAR, CLAMP_TO_EDGE
+    sampler_idx = None
+    if pngs:
+        sampler_idx = len(samplers)
+        samplers.append({"magFilter": 9729, "minFilter": 9729,
+                         "wrapS": 33071, "wrapT": 33071})  # LINEAR/LINEAR, CLAMP_TO_EDGE
 
     new_texture_indices = []
     for png_bytes in pngs:

@@ -1,12 +1,15 @@
 """Generates mm-terrarium's shared marker-layout fixture pair -- the
 source-side .glb, the Blender-free "mmbake" stand-in for a real bake, and
-their common expected layout -- that both the Python parser
-(control/model_layout.py) and the Dart parser
-(mm-tuneshroom lib/render/model_layout.dart) are tested against, and that
-PR B's in-browser Three.js check renders (spec section 6.4).
+their common expected layout. The Python parser (control/model_layout.py)
+is tested against the source-side .glb; per D13's "one parser" principle
+the mm-tuneshroom app never re-parses a glTF scene graph at all -- it
+reads the already-computed layout straight out of
+marker_fixture.mmbake.glb's `extras.mm_bake.layout` -- so
 tools/export_models.py (Task 15) copies marker_fixture.mmbake.glb and
-expected_layout.json -- never the source fixture -- into the
-mm-tuneshroom checkout it targets.
+expected_layout.json (the fixture this generator's `layout` is checked
+against, and what PR B's in-browser Three.js check renders per spec
+section 6.4) -- never the source fixture -- into the mm-tuneshroom
+checkout it targets.
 
 12 LEDs: an 8-marker ring at z=100mm, radius 40mm (5mm-diameter boxes,
 "medium"), and a 4-marker stem along z from 20mm to 80mm at x=y=0
@@ -18,7 +21,6 @@ parser is exercised against a document that isn't 100% markers.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import math
 from pathlib import Path

@@ -53,6 +53,14 @@ def test_inject_bake_adds_images_textures_sampler_and_root_extras():
     assert "mm_bake" not in (gltf.get("scenes", [{}])[0] or {}).get("extras", {})
 
 
+def test_inject_bake_adds_no_sampler_when_there_are_no_pngs():
+    """Minor finding: inject_bake must not add a sampler nobody references
+    when `pngs` is empty."""
+    out = inject_bake(_bakeable_glb_bytes(), [], {"pixels": 0, "layout": []})
+    gltf = read_glb_json(out, path="out.glb")
+    assert gltf.get("samplers", []) == []
+
+
 def test_inject_bake_orders_maps_by_png_order():
     pngs = [_flat_png(2, 2, (i, i, i, 255)) for i in range(3)]
     out = inject_bake(_bakeable_glb_bytes(), pngs, {"pixels": 12, "layout": []})
@@ -67,6 +75,18 @@ def test_inject_bake_refuses_missing_texcoord1():
     glb_bytes = builder.build([{"name": "Body", "mesh": mesh_idx}])
     with pytest.raises(InjectBakeError, match="TEXCOORD_1"):
         inject_bake(glb_bytes, [], {"pixels": 0, "layout": []})
+
+
+def test_inject_bake_missing_texcoord1_names_the_mesh_and_primitive():
+    """Minor finding: the error must name the offending mesh/primitive, as
+    inject_bake's own docstring promises ("naming the offending mesh or
+    rule")."""
+    builder = GlbBuilder()
+    mesh_idx = builder.add_box_mesh((0.0, 0.0, 0.0), 0.06, texcoord0=True)
+    glb_bytes = builder.build([{"name": "Body", "mesh": mesh_idx}])
+    with pytest.raises(InjectBakeError, match=f"mesh {mesh_idx}") as exc:
+        inject_bake(glb_bytes, [], {"pixels": 0, "layout": []})
+    assert "primitive 0" in str(exc.value)
 
 
 def test_inject_bake_refuses_a_remaining_marker_mesh():
