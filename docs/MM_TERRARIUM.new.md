@@ -1324,8 +1324,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   mid-run unload never closes `pre_room_teardown` (`stop_clients` does).
 - **`stop_process`** (`control/process.py`): SIGTERM, poll 5 s, SIGKILL,
   poll 5 s, return the code or `None`; polling, not `Popen.wait(timeout=)`,
-  because `_PtyProcess.poll()` drains Arco's pty. Used by `ArcoProcess`,
-  `SimulatorProcess` (no readiness probe) and `run_stack`.
+  because `_PtyProcess.poll()` drains Arco's pty. Used by e.g.
+  `ArcoProcess`, `SimulatorProcess` (no readiness probe) and `run_stack`.
 - **`sigterm_as_keyboard_interrupt()`**: `finally` never runs on a bare
   SIGTERM, so `run_stack`, `terrarium_boot` and `o2_shroom` map it (and
   SIGHUP, unless already `SIG_IGN` as `nohup` sets) to `KeyboardInterrupt`.
@@ -1337,10 +1337,10 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   by `harness/proc_tee.py` to `<log-dir>/<name>.log` and marker-watched.
 - Control always gets `--arco-pty`, `--arco-log`, settle 5 s, ready 60 s,
   `--setup-seconds 90` (device cold start ~22 s), `--horizon`, `--hold`,
-  `--exit-with-parent`, and `--serve` explicitly (`--hold` defeats the
-  implied rule). Devices (`ie<N>`) get `--join-retry 2.0`, horizon,
-  samples, `--exit-with-parent`, `--persist` (`--no-persist-shrooms` opts
-  out), and `--handshake` for the first `--handshake-devices`.
+  `--exit-with-parent`; when serving, `--serve` explicitly (`--hold`
+  defeats terrarium_boot's implied rule). Devices (`ie<N>`) get
+  `--join-retry 2.0`, horizon, samples, `--exit-with-parent`, `--persist`
+  (`--no-persist-shrooms` opts out), `--handshake` (`--handshake-devices`).
 - Named stages: `room loaded:`, transport, `Holding in SETUP` (fewer under
   `--no-bit`), then per device `clock synced at`, `role granted after`;
   `_wait_for_marker` checks failure markers every poll. A failure prints
@@ -1362,8 +1362,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   next Arco and O2 silently refuses the new one (*Service refusal*), so
   each link watches its parent pid: `o2_shroom --exit-with-parent`
   (clock-sync wait, tick loop, `--identify-blocks`), `terrarium_boot
-  --exit-with-parent` (exits via `shutdown()`; its session-detached
-  children never see a SIGKILLed `run_stack`), and `run_stack`'s watch
+  --exit-with-parent` (in its own session, so a SIGKILLed `run_stack`
+  cannot signal it; exits via `shutdown()`), and `run_stack`'s watch
   (`run()` records `getppid()`, `_hold` polls it, stage `parent-gone`;
   `--detach` opts out). `parent_is_gone` compares that recorded pid: the
   parent may be dead before the child reads its argv.
@@ -1380,15 +1380,13 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
 - **Gestures wait for the role** (`_gestures_ready`): gestures go UDP and
   can overtake the join; earlier ones are discarded, counted. The tilt
   sweep (8 s triangle) runs only if `uses` allows `tilt`; `BeatTapper`
-  arms on `tap`. The deny marker prints before `lobby_round_over` decides a
-  one-shot exit, or `run_stack` misses it.
-- **`--persist`**: release means `reset_for_lobby()` and loop, a deny is
-  retryable; implies `--join-retry 2.0`.
+  arms on `tap`. `--persist`: release means `reset_for_lobby()` and loop, a
+  deny is retryable. The deny marker prints before `lobby_round_over`
+  decides a one-shot exit, or `run_stack` misses it.
 - **ABORT resilience** (ABORT stops the hub): hello/join sends swallow
   `AssertionError`/`OSError`; `reconnect_recheck` idles on a lost bridge id
-  (`HUB_AWAY_NOTE`), re-verifies a new one (10 s, resend 2 s), retries if
-  that send fails, exits 1 on a conflict; the loop idles on
-  `time_get() < 0`. Exit prints late frames, beat taps and latency.
+  (`HUB_AWAY_NOTE`), re-verifies a new one (10 s, resend 2 s, retry if the
+  send fails, exit 1 on a conflict); the loop idles on `time_get() < 0`.
 - **WebSim input**
   ([design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-20-websim-two-way-input-design.md)):
   luxaeterna's page sends JSON to `on_input` (bad or raising: dropped).
@@ -1398,14 +1396,15 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   on the websocket thread (drain-time stamps cost up to ~23 ms; `time_get`
   is a pure read). `drain_gestures` sends `/game/tap sffi`, `/game/tilt
   sf`, and `/game/hold sfi` (touch-down stamp) or `/game/swing sfi` only if
-  `uses` names the verb (else hold is a tap, swing dropped). A drag pauses
-  the sweep `SWEEP_RESUME_SECONDS` (5) while it keeps schedule: no burst.
+  `uses` names the verb, stricter than `wants_verb` as no pre-Rev 1 Bit
+  handles either (else hold is a tap, swing dropped). A drag pauses the
+  sweep `SWEEP_RESUME_SECONDS` (5) while it keeps schedule: no burst.
 - **`/<dev>/play`** plays `harness/sim_audio.py`'s in-memory sine WAVs via
   `afplay`, fire-and-forget (else `play: <name>`); a `chime` with
   `key=<midi>` (the join ceremony) plays `KeyedChimePlayer`'s
   fundamental-plus-fifth at that key. A process per play: never on a device.
-- `harness/websim_leds.py` feeds the canvas and `BeatTapper`; a wrong-width
-  frame is dropped, not truncated. `harness/device_bridge.py`'s
+- `harness/websim_leds.py` feeds the canvas and `BeatTapper`; `ShroomClient`
+  drops a wrong-width frame, never truncating. `harness/device_bridge.py`'s
   `DeviceBridge` is Control's per-device session (release: `clear()`).
 
 #### Tick pacing
@@ -1419,7 +1418,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   rate (`_render_room` skips a byte-identical frame).
 - `_wait_in_setup` and `_run_tick_loop` build it on their `sleep` but its
   own `time.monotonic`, not `clock=` (tests script that clock with fixed
-  iterators); `render_bench.measure()` uses it too. `gs.tick` keeps `1/44`.
+  iterators); `gs.tick` keeps `1/44`. `render_bench.measure()` passes its own
+  `clock=` and drives `_loop_once()`, so never times luxaeterna's own loop.
 - **Jitter is not fixed**: ~4 ms per macOS sleep fails `render_bench`'s p95
   <= 25 ms (27.07 ms), and the Dec 4 Terrarium is a Mac (sleep-then-spin is
   the follow-up). luxaeterna#23 paced its own output loops. Dev-box figures.
