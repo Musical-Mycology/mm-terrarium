@@ -1436,6 +1436,244 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   capture directory (`--csv`); thresholds are a ladder, not truth.
 - `harness/local_sample.py`: `last_latency_ms` is dispatch, not sound.
 
-<!-- FILL:T7 console, uplink, capture, bits, www and arcoserver -->
+### `console/`: the Terrarium Console
+
+A Bit-agnostic local admin panel, the inbound sibling of `uplink/` ([design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-21-terrarium-console-design.md)).
+Off unless `--console-port` (*Running it*). **Trusted LAN, no auth**, bound to
+`127.0.0.1` (`terrarium_boot --host 0.0.0.0` opts in); facing an untrusted
+network makes auth a prerequisite.
+
+#### Server, protocol and agent
+
+- **`ConsoleServer`** (`console/server.py`, the only socket code): one port,
+  `GET /` and assets over HTTP (`process_request`), websocket only at `/ws`.
+  Handler threads touch only locked queues; `GameServer` is touched on the
+  tick thread (`_pump` calls `ConsoleAgent.poll()`). A failed send drops the
+  client. Assets: `console/static/` files with an allowlisted extension
+  (`.html`, `.css`, `.js`, `.ttf`, readable in one line for an
+  unauthenticated server), read once, **keyed by basename**: a request path
+  is cut to its last segment, so traversal 404s and no two files may share
+  a basename (`fonts/` included).
+- **`console/protocol.py`**: pure builders re-exporting `uplink.protocol`'s
+  `parse_command` and shared events. Shared commands: `load_bit` (`name`,
+  `overrides`, `room`), `run`, `abort`, `restart`, `list_bits`, `load_room`,
+  `unload_room`. **Admin commands** (`parse_admin_command`, never from the
+  uplink): `arm_room`, `release_room`, `fire_function`, `get_design`/
+  `save_design`/`publish_design`/`clone_design` (with `kind` `instrument`
+  or `room`), `bench_start`/`stop`/`fire`/`lane`, `list_captures`,
+  `capture_stats`, `replay_trace`. Refusals go to the requester only.
+- A client gets `snapshot`, then `bits_listed`; the rest is change-driven
+  (`roles_changed` on LOADED and IDLE), including the bench's five:
+  `bench_started`, `bench_frame`, `captures_listed`, `capture_stats`,
+  `replay_result`.
+- **`ConsoleAgent`** (`console/agent.py`) observes `GameServer` and
+  `Terrarium`. Its kwargs (`registry`, `terrarium`, `room_controllers`,
+  `canvas_urls`, `catalog_root`, `rooms_root`, `bench_session_factory`,
+  `captures_root`, `join_info`, client hooks) are optional: `None` yields
+  an `error_event` or empty view. `terrarium_boot` wires all
+  (`captures_root=Path("captures")`, cwd-relative).
+- Room frames go out at ~10 Hz (`ROOM_FRAME_INTERVAL`), latest per fixture,
+  dropped, never queued (boundary rule 2); bench frames too
+  (`BENCH_FRAME_INTERVAL`, 0.1 s). Other views rebroadcast only on change.
+- The `room` payload (shown by addition, *Rooms and fixtures*): `fixtures[]`
+  (`dev`, `color_order`, `muted`, `artnet`), `controllers` (flat, first
+  fixture wins), `fixture_controllers` (no Console module reads it).
+  `surface_instruments` maps `@fixture:` tokens, bound devs (not a covered
+  fixture's stale one) and devices; `builtins` add carried instruments.
+- `run` is `request_start(None, TERRARIUM_ADMIN, "console")`; `restart` is
+  `abort()` plus `load_bit` of the same name and config (ABORT, Rooms:
+  *Terrarium lifecycle*). A failed load's `NO_ROOM` looks like an unload's,
+  so `_load_room` broadcasts `room_load_failed` itself (a failed client
+  restart does so before its forced unload).
+- `bit_completed` goes out at UNLOADING when `result()` is non-`None`,
+  aborts included (only the uplink's credits). `log` carries warnings,
+  start/prepare verdicts, lobby events, `round ended: <bit> (<reason>)`.
+- **Design commands** load via `_load_design_catalog`: an unparseable
+  published entry fails a whole catalog, so it becomes one unclickable
+  `catalog_error_row`, never a raise out of `poll()`. A mutation replies
+  `designs_changed` and broadcasts it (the sender gets two).
+- **Bench**: one `DesignBench` (*Design bench and gesture eval*) over
+  `harness/design_session.py`'s `LuxBenchSession`, which renders into a
+  default 512-channel `Universe` and returns the capability's slice; closed
+  when the last client leaves. `bench_start`/`replay_trace` are
+  instrument-only. `capture_stats`/`replay_trace` check session and label
+  against `CATALOG_NAME_RE` (path components) and name an unreadable trace.
+
+#### Front end (`console/static/`)
+
+- `index.html` loads `shell.js` (inits every panel; `VIEWS` Live, Room,
+  Design). `wire.js` is the only WebSocket (`on`, `send`, `flashRefusal`,
+  `connect`, `confirmTap`, `reserveConfirmWidth`); `dom.js` has the shared
+  `mk`/`clear`. `rail.js`: the rollup (Fixtures, Scored, Shared if
+  declared, Jam, Devices) and the event log.
+- **Bit panel** (`bit.js`): Run/Restart/Abort need `ROOM_READY`, Load a
+  settled Terrarium. The picker omits disabled Bits, dims `[console]
+  hidden` ones, takes `table.key` overrides and a loadable Room, disabling
+  any but the active one (naming `./terrarium.sh --room <name>`).
+- **Live view**: the Room card (`surface.js`: dot rows per block, zone bar,
+  Release/Arm, an `Art-Net` chip (no Arm) when covered, `Muted`, canvas
+  links `http(s)` only), Triggers (`functions.js`), Live values, status,
+  Join, log. `_decodePixels` decodes by `color_order`, W added onto RGB;
+  `design.js`'s bench paints GRB on purpose (a Shroom capability).
+- **Pickers**: All, each fixture as `@fixture:<name>` (`(unbound)`,
+  `(muted)`), then unbound devices; DEVICE pickers never offer a fixture
+  ("no device joined" disables Fire). A refill maps a device that just bound
+  to its fixture row, not to All (one Stop would mute everything). A failed
+  optimistic Arm rolls back (`pendingArm`).
+- **Join card** (`join.js`, from `control/join_info.py`, hidden when `null`):
+  guest URL, then per node a segno QR, URL and Tuneshroom command. With a
+  `[start] key`, a **Start (admin)** row adds the start URL and QR, the key,
+  the `/game/start "ss" <dev> <key>` line and the Prepare URL.
+- `rooms.js`: a card per Room (Unload shows `unload_blocked`). `busy.js`
+  overlays `ROOM_LOADING`/`ROOM_UNLOADING` from any tab (a failure stays up
+  with Dismiss) and shares `#overlayMount` with `bit.js`'s `closeOverlay()`:
+  safe only because `shell.js` inits `bit.js` first.
+- **Design view** (`design.js`): instrument and Room rows share one wire,
+  split by `kind`. Save on a published name writes its draft; Publish;
+  Clone. Bench and Calibrate are instrument-only. **`applyProposal`**
+  writes proposed thresholds into the textarea under `# calibrated from
+  <session> on <date>`, only on a draft; the operator reviews before Save.
+- **`design_forms.js`** is a second view over `#designText`, the single
+  source of truth: controls re-parse it, edits run `applyEdit(fn, opts)`,
+  raw typing rebuilds after 300 ms (`guard` stops the echo). Rebuilds
+  recreate controls; a `data-form-key` restores focus and caret, but
+  **destructive edits pass `{restoreFocus: false}`** (rows shift, so the key
+  names the next row). A Room design gets Fixtures: reorder, instrument pick.
+- **`toml_edit.js` is line-based and comment-preserving, not a serializer**
+  (a round trip would drop `# calibrated from` provenance): `splitBlocks`,
+  `getScalar`/`setScalar`, thresholds, script steps, ambient rows (matched
+  by header suffix), `listFixtures`, `moveFixture`, `setFixtureInstrument`;
+  `fixtureBlocks` moves unindented `[[fixtures.*]]` children with their
+  fixture. A missing target is a no-op. Raw TOML only: a new function, a
+  generator's lane, a new ambient block or fixture.
+
+#### Rendering discipline and front-end gotchas
+
+- **No frequent event may rebuild a subtree whose declaration did not
+  change**: `confirmTap` keeps its arm state on the button node. Panels
+  gate on signatures: `bit.js` (loaded Bit identity), `rooms.js`,
+  `functions.js` (pickers refill only on a fixture `(name, dev, muted)`
+  change: a refill closes an open `<select>`), `surface.js`
+  (`fixtureShapeMatches`, `bindStateKey`; Muted sits outside it).
+- `confirmTap` arms 4 s, flashing "not confirmed" on expiry; call
+  `reserveConfirmWidth` at creation, or arming reflows the row and the
+  second click misses. **An author `display` rule beats `hidden`**: keep
+  `terrarium.css`'s `[hidden] { display: none !important; }`.
+- One throwing `wire.on` listener stops the rest for that event, so
+  `functions.js` returns early with no `#functionsMount` (`NO_ROOM`) and
+  clears `fnSignature`. `tests/js/_dom_stub.js` auto-vivifies ids and reads
+  `hidden` as a property, so neither case shows offline.
+
+### `uplink/`: outbound remote control
+
+`UplinkAgent` (`uplink/link.py`) drives `GameServer` over an outbound
+websocket to a future mm-fairyring broker; nothing depends on it being up,
+and only lifecycle and registration counts cross it ([design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md),
+[MycoQuest handoff](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-13-mycoquest-handoff-terrarium-design.md)).
+
+- Built only with an `[uplink]` table: `tenant_slug`, `secret` (64
+  lowercase hex), `url` (empty: log-only, non-durable `LogTransport`). A
+  connect sends the identity frame (`event: "identity"`, `tenant_slug`,
+  `terrarium_name`, `secret`), the resync (`state_changed` with `lan_ip`,
+  `room_loaded`, `registration_changed`), then the journal. Backoff doubles
+  1 s to 30 s; a send failing just after connect is a failed attempt.
+- `load_bit` needs `ROOM_READY` and ignores `room` (unlike the Console);
+  `run` is `request_start` as the Terrarium; `abort` is Bit-only; `restart`
+  is the soft cycle. `load_room`/`unload_room` skip the Console's one-Arco
+  refusal. Errors become `error` events.
+- **`bit_completed` fires at COMPLETING only, never on `abort()`**: an
+  aborted round credits nobody. It carries `bit {name, version}`,
+  `room_name`, `terrarium_config_version`, `result` (`null` if absent or
+  raising) and `players [{dev, role, class}]` (`jam`/`scored`, the reserved
+  `terrarium` id filtered as a second guard).
+- **A replay journal, not a buffer**: each `bit_completed` is appended to
+  `<runs_dir>/uplink_journal.jsonl` before any send (cap 500, newest kept);
+  after the resync, over a durable transport only, it replays in order and
+  clears, and a mid-replay failure keeps it. `--no-run-records`: no journal.
+- **Deviations from MycoQuest spec 7.2** (its section 8; mm-renquest
+  mirrors them): no abort credit; `result` may be `null`; the identity
+  `event` field; `GET /prepare` may answer 503 (all but 202/409 mean
+  "cannot reach the room"); an unknown Bit is a silent 202; `lan_ip`.
+
+### `capture/`: labelled sensor telemetry
+
+Records a phone's accelerometer, gyroscope and mic in a labelled gesture,
+so thresholds come from data ([design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-07-sensor-telemetry-capture-design.md)).
+
+- Wire (*Message vocabulary*): `/game/capture "ssb"` (`open` declares the
+  label and device `t0` first; `close`; `abandon`) and `/game/telemetry
+  "sfb"` (~100 ms structure-of-arrays batches, optional 16 kHz PCM); a
+  `label` must match `[A-Za-z0-9_-]+`, as it becomes a path.
+- `capture/trace.py`'s pure `Trace` keeps a skipped `seq` as a gap and
+  refuses a stale or duplicate one. `capture/store.py`, the only file I/O,
+  writes once at close, expiry or truncation (never per batch):
+  `<session>/<label>/<series>.json`, a `.wav` sidecar, `index.jsonl`. An
+  open label/series is refused, no file overwritten, a failed write only
+  bumps `failures`; a capture past `window_ms` plus 5 s is truncated.
+- `docs/telemetry-trace-schema.md` is the cross-repo contract;
+  `tools/trace_stats.py` the offline CLI. No capture client exists yet.
+
+### `bits/`: the in-repo Bits
+
+`--list-bits` marks `enabled = false` packages `DISABLED` (kept out of the
+Console and launchers). **`__init__` must take `config` first**: `load_bit`
+calls `bit_cls(config)`, so an earlier parameter silently gets the
+`BitConfig` (it once crashed a stack; `tests/test_capture_bit.py` pins it).
+
+- **TestBit** (`bits/test/`, TEST/DEMO/VENUE, `[console] hidden`): the
+  regression fixture, done after 2 s. A scored `shared` `player`
+  (`TEST_PLAYER_NODE`, slot `light.pixels` + `gesture.tilt`) and unscored
+  jam `jammer` (`TEST_JAM_NODE`) test the RUNNING join rule. The player is
+  `aurora` (`cc:74` hue, `cc:11` level, so the breath), no note lane, with
+  welcome `glow` (`bloom` strobed and rendered a dark welcome); the jammer
+  glows dim green on its own `cc:1`/`cc:2`. The Room `rainbow` moves with
+  the `drift` generator and `tilt_hue`; three full tilts fire `play_aurora`.
+- **ChaseBit** (`bits/chase/`): TestBit plus `chase`, stepping
+  `@fixture:main` then `@fixture:accent`, so TEST only.
+- **CaptureBit** (`bits/capture/`): a tool Bit, unscored `recorder` on
+  `CAPTURE_NODE`, no light or audio, never completing; a capture silent 10 s
+  expires, unload truncates the rest; `status()` makes the Console a live
+  capture dashboard.
+- **MetronomeBit** (`bits/metronome/`, DEMO/VENUE, [design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-20-metronome-bit-design.md),
+  [on o2lite](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-08-metronome-bit-on-o2lite-design.md)):
+  8-beat call and response x4 over up to 2 `UNIQUE` players in turn; a
+  phrase needs all 4 answer taps within 50 ms and none off-grid (success:
+  fireworks; fail: red and bass; any success: a 10 s finale). `[rhythm]`
+  sets BPM (100; `profiles/dev-metronome.toml` 80), window, offset. Each
+  consequence is a Function fired at its beat's `at`, audio Room-side only;
+  the grid starts at the first `fires(at)` plus `LEAD_IN_S`, clearing the
+  1.5 s role-opening signature.
+  - **Taps grade at `at - cue_horizon - INPUT_OFFSET_S`**: the horizon
+    cancels for the Bit's cues, not for input (else a perfect tap is
+    +60 ms); so does the judgment deadline. `status()` shows the last 8.
+  - `player` sets `breath=False` (the breath overwrote the cc:11 pulse);
+    `metro_recovery` fires only for a failed dev, before the pulse.
+    `BeatTapper` locks on shown pulses; a device that misses beat 0 is dephased.
+- **Rev1Bit** (`bits/rev1/`, TEST/DEMO): the Rev 1 board bench check,
+  never completing. `REV1_PLAYER_NODE` gates on the five Rev 1 capabilities
+  (spelled here: venue code never imports `contract_kit/`;
+  `tests/test_rev1_bit.py` pins them); `REV1_SIM_NODE` (default) needs
+  pixels and tap. Tap: `tick`, hue step; hold: `hold`, white 1 s; swing:
+  red (negative g) or blue 0.5 s; each a DEVICE trigger the Console can fire.
+- **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a hold
+  starts 10 white `blink`s 2 s apart, a tap resets; a player who joined in
+  SETUP is kept. Hold needs a Rev 1 board or the sim's long press.
+
+### `www/` and `arcoserver/`
+
+- Arco runs with `arcoserver/` as cwd (prefs come from the cwd; no
+  `http_enable` key); `arcoserver/arco_server_prefs.json` sets `http_root`
+  `"www"`, port 8080. `arcoserver/www` symlinks `../www` because O2's HTTP
+  server rejects any path containing `..` (`o2/src/websock.cpp:905`), root
+  included. `o2debug.log` lands there. `www/` also holds `index.htm` (not
+  `index.html`), `o2wsclocksync.htm` and a gitignored `app/` guest build.
+- **`www/o2ws.js` carries three patches**, each marked `// mm-terrarium
+  patch` and listed in `www/README.md` to re-apply on refresh: the delay is
+  scaled to ms before rounding (upstream sent anything under 500 ms at
+  once); a deferred handler snapshots `o2ws_message_fields` before
+  `setTimeout` (the getters shift one global every message reassigns);
+  `onerror` calls `o2ws_on_error`, not the undefined `o2ws_error`. Only the
+  first is reported upstream; mm-tuneshroom's `web/o2ws.js` must stay
+  byte-identical below its header.
 
 <!-- FILL:T8 tail sections: Boundary rules, Host platform, Relationships, Not yet built, Design docs -->
