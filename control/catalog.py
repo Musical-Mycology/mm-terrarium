@@ -64,12 +64,17 @@ def _check_kind(kind: str, instruments=None, *, parses: bool = True) -> None:
                          "resolve fixture instrument names")
 
 
-def _parse_text(name: str, text: str, path: Path, kind: str, instruments):
+def _parse_text(name: str, text: str, path: Path, kind: str, instruments,
+                 model_root: Path | None = None):
     """Parse one entry's TOML text into its object for `kind`. Raises
-    tomllib.TOMLDecodeError or TerrariumConfigError."""
+    tomllib.TOMLDecodeError or TerrariumConfigError. `model_root` is the
+    catalog root a declared `model` key resolves against -- for both
+    published and draft instrument entries, this is `instruments/`, never
+    the `drafts/` subdirectory the draft's own .toml lives in (a draft's
+    model must resolve the same way its published copy will)."""
     raw = tomllib.loads(text)
     if kind == "instrument":
-        return _parse_instrument(name, raw, source=str(path))
+        return _parse_instrument(name, raw, source=str(path), model_root=model_root)
     return _parse_room(name, raw, source=str(path), instruments=instruments)
 
 
@@ -81,11 +86,12 @@ def _check_stem(path: Path, kind: str) -> str:
     return path.stem
 
 
-def _parse_entry(path: Path, state: str, kind: str, instruments) -> CatalogEntry:
+def _parse_entry(path: Path, state: str, kind: str, instruments,
+                  model_root: Path | None = None) -> CatalogEntry:
     name = _check_stem(path, kind)
     text = path.read_text(encoding="utf-8")
     try:
-        obj = _parse_text(name, text, path, kind, instruments)
+        obj = _parse_text(name, text, path, kind, instruments, model_root=model_root)
     except (tomllib.TOMLDecodeError, TerrariumConfigError) as exc:
         if state == "published":
             if isinstance(exc, TerrariumConfigError):
@@ -108,9 +114,10 @@ def _refuse_name(name: str, kind: str) -> str | None:
     return None
 
 
-def _draft_errors(name: str, text: str, path: Path, kind: str, instruments) -> list[str]:
+def _draft_errors(name: str, text: str, path: Path, kind: str, instruments,
+                   model_root: Path | None = None) -> list[str]:
     try:
-        _parse_text(name, text, path, kind, instruments)
+        _parse_text(name, text, path, kind, instruments, model_root=model_root)
     except tomllib.TOMLDecodeError as exc:
         return [f"not valid TOML: {exc}"]
     except TerrariumConfigError as exc:
@@ -124,11 +131,13 @@ def save_draft(root: Path, name: str, text: str, kind: str = "instrument",
     refusal = _refuse_name(name, kind)
     if refusal:
         return refusal, []
-    drafts = Path(root) / "drafts"
+    root = Path(root)
+    drafts = root / "drafts"
     drafts.mkdir(parents=True, exist_ok=True)
     path = drafts / f"{name}.toml"
     path.write_text(text, encoding="utf-8")
-    return None, _draft_errors(name, text, path, kind, instruments)
+    model_root = root if kind == "instrument" else None
+    return None, _draft_errors(name, text, path, kind, instruments, model_root=model_root)
 
 
 def clone_entry(root: Path, source_state: str, source_name: str,
@@ -159,7 +168,9 @@ def publish_entry(root: Path, name: str, kind: str = "instrument",
     src = root / "drafts" / f"{name}.toml"
     if not src.is_file():
         return f"no draft named {name!r}"
-    errors = _draft_errors(name, src.read_text(encoding="utf-8"), src, kind, instruments)
+    model_root = root if kind == "instrument" else None
+    errors = _draft_errors(name, src.read_text(encoding="utf-8"), src, kind,
+                           instruments, model_root=model_root)
     if errors:
         return "; ".join(errors)
     src.replace(root / f"{name}.toml")
@@ -169,14 +180,17 @@ def publish_entry(root: Path, name: str, kind: str = "instrument",
 def load_catalog(root: Path, kind: str = "instrument", instruments=None) -> Catalog:
     _check_kind(kind, instruments)
     root = Path(root)
+    model_root = root if kind == "instrument" else None
     entries: dict[str, CatalogEntry] = {}
     if root.is_dir():
         for path in sorted(root.glob("*.toml")):
-            entry = _parse_entry(path, "published", kind, instruments)
+            entry = _parse_entry(path, "published", kind, instruments,
+                                 model_root=model_root)
             entries[f"published:{entry.name}"] = entry
         drafts = root / "drafts"
         if drafts.is_dir():
             for path in sorted(drafts.glob("*.toml")):
-                entry = _parse_entry(path, "draft", kind, instruments)
+                entry = _parse_entry(path, "draft", kind, instruments,
+                                     model_root=model_root)
                 entries[f"draft:{entry.name}"] = entry
     return Catalog(root=root, kind=kind, entries=entries)

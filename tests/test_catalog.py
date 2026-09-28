@@ -384,3 +384,50 @@ def test_instrument_without_a_model_has_no_layout_or_sha256(tmp_path):
     inst = cat.published["glowcap"]
     assert inst.layout == ()
     assert inst.model_sha256 is None
+
+
+def test_published_instrument_with_absolute_model_path_is_refused(tmp_path):
+    root = make_catalog(tmp_path)
+    outside = tmp_path / "outside.glb"
+    outside.write_bytes(b"not a real glb but never read")
+    (root / "glowcap.toml").write_text(GOOD + f'\nmodel = "{outside}"\n')
+    with pytest.raises(TerrariumConfigError) as exc:
+        load_catalog(root)
+    message = str(exc.value)
+    assert "relative" in message or "inside" in message
+    assert "not a GLB" not in message  # confinement must be checked before any read
+
+
+def test_published_instrument_with_escaping_model_path_is_refused(tmp_path):
+    root = make_catalog(tmp_path)
+    outside = tmp_path / "outside.glb"
+    outside.write_bytes(b"not a real glb but never read")
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "../outside.glb"\n')
+    with pytest.raises(TerrariumConfigError) as exc:
+        load_catalog(root)
+    message = str(exc.value)
+    assert "relative" in message or "inside" in message
+    assert "not a GLB" not in message
+
+
+def test_draft_instrument_model_resolves_against_catalog_root_not_drafts(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    (root / "drafts" / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    cat = load_catalog(root)
+    entry = cat.get("draft", "glowcap")
+    assert entry.error is None
+    assert len(entry.instrument.layout) == 12
+
+
+def test_published_instrument_with_model_but_zero_pixels_fails(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    text = GOOD.replace("pixels = 12", "pixels = 0") + '\nmodel = "models/glowcap.glb"\n'
+    (root / "glowcap.toml").write_text(text)
+    with pytest.raises(TerrariumConfigError):
+        load_catalog(root)

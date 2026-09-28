@@ -431,7 +431,8 @@ def _parse_stream_triggers(iname: str, iraw: dict, *, source: str, key: str
                                                  "transform")))
 
 
-def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
+def _parse_instrument(iname: str, iraw: dict, *, source: str,
+                       model_root: Path | None = None) -> Instrument:
     key = f"instruments.{iname}"
     if "accepted_triggers" in iraw:  # legacy-vocabulary-ok
         raise TerrariumConfigError(
@@ -475,7 +476,20 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str) -> Instrument:
                 source=source, key=key,
                 message=f"instrument {iname!r}: 'model' must be a "
                         f"non-empty string path")
-        model_path = Path(source).parent / model_rel
+        model_rel_path = Path(model_rel)
+        if model_rel_path.is_absolute() or model_rel_path.drive:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: 'model' must be a path "
+                        f"relative to instruments/, got {model_rel!r}")
+        base = Path(model_root) if model_root is not None else Path(source).parent
+        model_path = base / model_rel_path
+        if not model_path.resolve().is_relative_to(base.resolve()):
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: 'model' {model_rel!r} must "
+                        f"resolve inside {base} (no escaping the "
+                        f"instruments/ root)")
         try:
             model_bytes = model_path.read_bytes()
         except OSError as exc:
