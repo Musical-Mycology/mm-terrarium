@@ -100,3 +100,81 @@ def test_world_matrix_of_a_root_node_is_its_own_local_matrix():
     nodes = [{"name": "root", "translation": [1.0, 2.0, 3.0]}]
     parent_map = _build_parent_map(nodes)
     assert _world_matrix(0, nodes, parent_map) == _node_local_matrix(nodes[0])
+
+
+from control.model_layout import _collect_markers, _find_leds_node, _zone_for
+
+
+def _nodes_with_leds(marker_specs):
+    """marker_specs: list of (name, zone_or_None). Builds a node list:
+    index 0 is 'LEDs', zone nodes as its children, marker nodes (each
+    given a 'mesh': 0 so _collect_markers treats it as a marker) as
+    children of their zone node or of LEDs directly."""
+    nodes = [{"name": "LEDs", "children": []}]
+    zone_idx = {}
+    for name, zone in marker_specs:
+        parent_idx = 0
+        if zone is not None:
+            if zone not in zone_idx:
+                nodes.append({"name": zone, "children": []})
+                zone_idx[zone] = len(nodes) - 1
+                nodes[0]["children"].append(zone_idx[zone])
+            parent_idx = zone_idx[zone]
+        nodes.append({"name": name, "mesh": 0})
+        nodes[parent_idx]["children"].append(len(nodes) - 1)
+    return nodes
+
+
+def test_find_leds_node_locates_the_one_node():
+    nodes = [{"name": "Body"}, {"name": "LEDs"}]
+    assert _find_leds_node(nodes, "t.glb") == 1
+
+
+def test_find_leds_node_refuses_when_missing():
+    with pytest.raises(ModelLayoutError, match="no node named"):
+        _find_leds_node([{"name": "Body"}], "t.glb")
+
+
+def test_find_leds_node_refuses_when_duplicated():
+    with pytest.raises(ModelLayoutError, match="more than one"):
+        _find_leds_node([{"name": "LEDs"}, {"name": "LEDs"}], "t.glb")
+
+
+def test_collect_markers_finds_markers_by_index():
+    nodes = _nodes_with_leds([("LED_000", "ring"), ("LED_001", "ring")])
+    parent_map = _build_parent_map(nodes)
+    markers = _collect_markers(nodes, 0, parent_map, "t.glb")
+    assert set(markers) == {0, 1}
+
+
+def test_collect_markers_refuses_marker_outside_leds():
+    nodes = [{"name": "LEDs", "children": []}, {"name": "LED_000", "mesh": 0}]
+    parent_map = _build_parent_map(nodes)
+    with pytest.raises(ModelLayoutError, match="not a descendant"):
+        _collect_markers(nodes, 0, parent_map, "t.glb")
+
+
+def test_collect_markers_refuses_duplicate_index():
+    nodes = _nodes_with_leds([("LED_000", "ring"), ("LED_000", "stem")])
+    parent_map = _build_parent_map(nodes)
+    with pytest.raises(ModelLayoutError, match="duplicate"):
+        _collect_markers(nodes, 0, parent_map, "t.glb")
+
+
+def test_collect_markers_ignores_a_led_named_node_without_a_mesh():
+    nodes = [{"name": "LEDs", "children": [1]}, {"name": "LED_000"}]
+    parent_map = _build_parent_map(nodes)
+    assert _collect_markers(nodes, 0, parent_map, "t.glb") == {}
+
+
+def test_zone_for_marker_directly_on_leds_is_none():
+    nodes = [{"name": "LEDs", "children": [1]}, {"name": "LED_000", "mesh": 0}]
+    parent_map = _build_parent_map(nodes)
+    assert _zone_for(1, 0, parent_map, nodes) is None
+
+
+def test_zone_for_marker_under_a_sublayer_is_that_layer_name():
+    nodes = _nodes_with_leds([("LED_000", "ring")])
+    parent_map = _build_parent_map(nodes)
+    marker_idx = next(i for i, n in enumerate(nodes) if n.get("name") == "LED_000")
+    assert _zone_for(marker_idx, 0, parent_map, nodes) == "ring"

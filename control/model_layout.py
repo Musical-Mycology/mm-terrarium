@@ -149,3 +149,59 @@ def _world_matrix(node_idx: int, nodes: list, parent_map: dict) -> tuple:
     for idx in chain:
         world = _mat_mul(world, _node_local_matrix(nodes[idx]))
     return world
+
+
+def _find_leds_node(nodes: list, path: str) -> int:
+    matches = [i for i, n in enumerate(nodes) if n.get("name") == "LEDs"]
+    if not matches:
+        raise ModelLayoutError(path=path, message="no node named 'LEDs' found")
+    if len(matches) > 1:
+        raise ModelLayoutError(path=path, message="more than one node named 'LEDs' found")
+    return matches[0]
+
+
+def _descendants(node_idx: int, nodes: list):
+    """Every descendant index of nodes[node_idx] (not including itself),
+    in no particular order."""
+    stack = list(nodes[node_idx].get("children", []))
+    while stack:
+        idx = stack.pop()
+        yield idx
+        stack.extend(nodes[idx].get("children", []))
+
+
+def _collect_markers(nodes: list, leds_idx: int, parent_map: dict, path: str) -> dict:
+    """{LED index: node index}. A node named LED_### with no 'mesh' key
+    is not a marker and is silently skipped (spec: "...and that has a
+    mesh is a marker"). A node named LED_### that DOES have a mesh but
+    sits outside the LEDs subtree is a located error, as is a duplicate
+    index."""
+    leds_descendants = set(_descendants(leds_idx, nodes))
+    markers: dict = {}
+    for i, node in enumerate(nodes):
+        name = node.get("name", "")
+        match = _LED_NAME_RE.match(name)
+        if not match or "mesh" not in node:
+            continue
+        if i not in leds_descendants:
+            raise ModelLayoutError(
+                path=path, marker=name,
+                message="named like an LED marker but is not a descendant "
+                        "of the 'LEDs' node")
+        idx = int(match.group(1))
+        if idx in markers:
+            raise ModelLayoutError(
+                path=path, marker=name, message=f"duplicate LED index {idx}")
+        markers[idx] = i
+    return markers
+
+
+def _zone_for(marker_node_idx: int, leds_idx: int, parent_map: dict, nodes: list):
+    """The marker's zone: the name of its immediate parent, unless that
+    parent IS the LEDs node itself (no named zone). A marker already
+    validated as a descendant of LEDs always has an immediate parent
+    that is either LEDs or a node on the path to LEDs."""
+    parent_idx = parent_map.get(marker_node_idx)
+    if parent_idx is None or parent_idx == leds_idx:
+        return None
+    return nodes[parent_idx].get("name")
