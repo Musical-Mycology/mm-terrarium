@@ -253,6 +253,9 @@ spawned Testshrooms. Closing its terminal tears the whole stack down (Arco
 included); pass `--detach` to keep it running without one. Without `--room`
 it boots to `NO_ROOM` and waits for the Console to load one; any
 `harness.run_stack` flag after it overrides the defaults.
+`./terrarium.sh --clean` instead sweeps leftovers of past runs from every
+worktree and reports what is still running (see *Terrarium lifecycle*, run
+records).
 
 **`./smoke-test.sh`** is the Bit-first launcher: a thin wrapper that
 forwards every argument to `harness.run_stack` verbatim (spawned
@@ -671,7 +674,12 @@ Instrument plus placement and binding. All pure stdlib.
   spawned pid and spawn time goes to `runs/<run_id>/procs.jsonl`, and the next
   `load_room`'s `sweep_stale` stops any still alive with a matching spawn time
   (never by name). A dir whose `"supervisor"` (the `Terrarium`'s pid) is alive
-  is skipped, so two stacks never reap each other.
+  is skipped, so two stacks never reap each other. That sweep reads only its
+  own checkout's `runs/`; `./terrarium.sh --clean` (`harness/clean.py`) runs
+  it across every checkout in `git worktree list`, lists (never kills) live
+  stacks with a `kill -INT <supervisor pid>` hint and unrecorded
+  `run_stack`/`terrarium_boot`/`o2_shroom` processes, needs no Arco
+  checkout, and exits 0 only when nothing is left running.
 - Unwired: `ownership_probe`, and `recycle_room()` with the harness's
   `_recycle_room` (tests only: a round ending must never churn Arco; their
   docstrings, and `AudioBridge.pool`'s, still describe that recycle).

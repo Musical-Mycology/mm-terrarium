@@ -25,3 +25,12 @@ def test_the_wrapper_runs_run_stack_bitless_in_serve_mode_on_8772():
     assert "PYTHONPATH=" in text
     assert "/Users/" not in text, "arco path must not be hardcoded; use ARCO_ROOT"
     assert "ARCO_ROOT" in text
+
+
+def test_clean_flag_runs_harness_clean_and_exits_before_run_stack():
+    text = SCRIPT.read_text()
+    assert '"${1:-}" = "--clean"' in text
+    assert "exec .venv/bin/python -m harness.clean" in text
+    assert (text.index("-m harness.clean")
+            < text.index("-m harness.run_stack")), \
+        "--clean must dispatch before the run_stack exec is reached"
