@@ -472,9 +472,10 @@ mutate) and `cue_horizon`, stamped at load for Bits grading input.
 - `[start] when`: `immediate` (at SETUP's deadline), `players` (the instant
   `scored >= min_scored`, so extra smoke-test devices are refused by
   design), `operator` or `admin` (no deadline), each with
-  `timeout_seconds`/`on_timeout`. `control/start_condition.py`
-  (harness-only) has the one `start_decision()`; `scored_count` skips a
-  role that left the table (a Room unloaded mid-SETUP once crashed boot).
+  `timeout_seconds`/`on_timeout`. `control/start_condition.py` holds the
+  harness's `start_decision()` and `scored_count` (also used by
+  `request_start`), which skips a role that left the table (a Room
+  unloaded mid-SETUP once crashed boot).
 - `admin` requires a `key` and defaults `min_scored` to 0; MetronomeBit
   ships `key = "metro-dev"`, `min_scored = 1`.
 - `control/run_profile.py`: a profile (`profiles/dev-metronome.toml`) has
@@ -503,10 +504,10 @@ mutate) and `cue_horizon`, stamped at load for Bits grading input.
   key is a silent 202 like an accept; IDLE loads it; SETUP with that Bit is
   a 202 no-op; anything else is 409 `busy`. It reads the parsed `[start]
   key` without importing; no drain reply within 3 s is 503.
-- Invites flash white twice every 5 s on hello'd, un-joined devices; a
-  double tap (count 2, or two taps in 1.5 s) joins the default role via
-  `GameServer.join`. A scored join's ceremony, 1 s apart: green x2, a bell
-  up the scale at +0.8 s, a device chime cue with `key=<midi>` at +1.8 s.
+- While WAITING, un-joined non-fixture devices get two white flashes every
+  5 s; a double tap (count 2, or two taps in 1.5 s) joins the default role.
+  A scored join's ceremony, 1 s apart: green x2, a bell up the scale at
+  +0.8 s, a device chime cue with `key=<midi>` at +1.8 s.
 - `ConsoleAgent` rebroadcasts roles as `roles_changed` on LOADED and IDLE,
   so a Console tab opened before a Bit loaded still classes scored/jam.
 
@@ -536,8 +537,9 @@ Acting side: **Function** (`control/functions.py`); sensing side:
   `StreamTrigger`: a server-side `"smooth"` EMA on gesture args in
   `data()`, seeded from the first sample, cleared when the dev leaves.
 - **Built-ins** (`control/builtins.py`) derive from capabilities so
-  diagnostics match everywhere: `flash` (light: white 0.9 for 5 s, chime
-  first with `audio.samples`), `stop` (one `MuteCue`), `ping` (`chime`, or a
+  diagnostics match everywhere: `flash` (`light.*`: white 0.9 for 5 s,
+  chime first with `audio.samples`), `stop` (light or audio: one
+  `MuteCue`), `ping` (`chime`, or a
   key-57 note pair on `audio.flsyn`). `RESERVED_NAMES` are refused on Bit
   and instrument tables, so a built-in is never shadowed.
 - **The fire ladder** (`fire_function`; the Bit's table counts only in
@@ -575,14 +577,13 @@ Acting side: **Function** (`control/functions.py`); sensing side:
 
 #### Wire JSON
 
-**Every outbound JSON payload goes through `control/wire_json.dumps()`,
-never bare `json.dumps`.** Python writes non-finite floats as `Infinity`/
-`NaN`, which `JSON.parse` and Dart reject; one `float("inf")` in a Bit's
-`status()` once blanked the Console. `dumps()` sends them as `null` (the
-wire's "unbounded"), warns once per path, and sets `allow_nan=False` so a
-miss raises. Only offline `tools/` scripts still call `json.dumps`. Never
-test wire output with bare `json.loads` (it accepts the extension), nor
-browser JS by grepping source; see `tests/test_wire_json.py`.
+**All outbound JSON goes through `control/wire_json.dumps()`** (only
+offline `tools/` scripts use `json.dumps`): Python writes non-finite floats
+as `Infinity`/`NaN`, which browsers and Dart reject, and one once blanked
+the Console. `dumps()` sends `null` (the wire's "unbounded"), warns once per
+path, and sets `allow_nan=False` so a miss raises. Test wire output on raw
+text or with a raising `parse_constant=`, never bare `json.loads` (it
+accepts the extension); never check browser JS by grepping source.
 
 #### Device pool and stale reaping
 
@@ -597,8 +598,8 @@ browser JS by grepping source; see `tests/test_wire_json.py`.
 - `on_devices_change` fires before `on_registration_change` so
   `terrarium_boot`'s logger prints both "released" and "timed out".
 - The heartbeat is `/game/hello` resent (`harness/o2_shroom.py
-  --heartbeat-interval`, default 5 s). A dev heard from during its closing
-  fade is marked revived, so that fade skips `transport.drop_dev`.
+  --heartbeat-interval`, default 5 s, 0 disables). A dev heard from in its
+  closing fade is marked revived, so that fade skips `transport.drop_dev`.
 
 #### API version
 
@@ -618,9 +619,8 @@ and discovery requires an exact match, else a `PackageError`.
   engine's ladder, EMA and generator suppression. With one surface and no
   audio it drops `PlayCue`, and any fire but `"stop"` un-latches mute. A
   `_dirty` flag reports a frame after any state change, even pixel-equal.
-- `harness/design_session.py`'s `LuxBenchSession` is the real session.
-  `console/static/design.js`'s `applyProposal` edits the raw TOML
-  client-side, so the operator reviews the diff before Save.
+- `harness/design_session.py`'s `LuxBenchSession` is the real session;
+  `console/static/design.js`'s `applyProposal` edits raw TOML client-side.
 
 <!-- FILL:T4 control part 2 (terrarium, rooms, instruments, catalog, light sessions, audio) -->
 
