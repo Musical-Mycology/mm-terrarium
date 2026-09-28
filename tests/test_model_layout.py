@@ -276,3 +276,61 @@ def test_parse_model_layout_refuses_count_mismatch():
     gltf = _one_marker_document((0.0, 0.0, 0.0), 0.001)
     with pytest.raises(ModelLayoutError, match="found 1"):
         parse_model_layout(_build_glb(gltf), path="t.glb", pixel_count=2)
+
+
+# Fix round 1: malformed model robustness
+
+def test_node_local_matrix_wrong_length_is_model_layout_error():
+    """Issue 1: _node_local_matrix must raise ModelLayoutError (not ValueError)
+    when an explicit matrix has wrong length, and it must locate the file path."""
+    from control.model_layout import _node_local_matrix
+    # This test uses _node_local_matrix directly with a path, but the current
+    # implementation doesn't take a path parameter. So the fix must thread path
+    # through, or we test via parse_model_layout. Testing via parse_model_layout:
+    gltf = _one_marker_document((0.0, 0.0, 0.0), 0.001)
+    gltf["nodes"][0]["matrix"] = [1.0, 0.0]  # Wrong length
+    with pytest.raises(ModelLayoutError, match="t.glb"):
+        parse_model_layout(_build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_parse_model_layout_bounds_check_mesh_index():
+    """Issue 2a: mesh index out of bounds must be ModelLayoutError naming file."""
+    gltf = _one_marker_document((0.0, 0.0, 0.0), 0.001)
+    gltf["nodes"][2]["mesh"] = 999  # Out of bounds
+    with pytest.raises(ModelLayoutError, match="t.glb"):
+        parse_model_layout(_build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_parse_model_layout_bounds_check_accessor_index():
+    """Issue 2b: POSITION accessor index out of bounds must be ModelLayoutError."""
+    gltf = _one_marker_document((0.0, 0.0, 0.0), 0.001)
+    gltf["meshes"][0]["primitives"][0]["attributes"]["POSITION"] = 999  # Out of bounds
+    with pytest.raises(ModelLayoutError, match="t.glb"):
+        parse_model_layout(_build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_world_matrix_detects_parent_map_cycle():
+    """Issue 3: _world_matrix must detect cycles in parent_map and raise ModelLayoutError."""
+    from control.model_layout import _build_parent_map, _world_matrix
+    nodes = [
+        {"name": "node0", "children": [1]},
+        {"name": "node1", "children": [2]},
+        {"name": "node2", "children": [0]},  # Cycle back to 0
+    ]
+    parent_map = _build_parent_map(nodes)
+    # Calling _world_matrix on any node in the cycle should detect it
+    with pytest.raises(ModelLayoutError, match="cycle"):
+        _world_matrix(0, nodes, parent_map)
+
+
+def test_descendants_detects_cycle():
+    """Issue 3: _descendants must detect cycles in children and raise ModelLayoutError."""
+    from control.model_layout import _descendants
+    nodes = [
+        {"name": "node0", "children": [1]},
+        {"name": "node1", "children": [2]},
+        {"name": "node2", "children": [0]},  # Cycle back to 0
+    ]
+    # Calling _descendants on node 0 should detect the cycle
+    with pytest.raises(ModelLayoutError, match="cycle"):
+        list(_descendants(0, nodes))

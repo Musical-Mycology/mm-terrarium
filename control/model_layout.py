@@ -90,14 +90,16 @@ def _mat_from_trs(translation, rotation, scale) -> tuple:
     )
 
 
-def _node_local_matrix(node: dict) -> tuple:
+def _node_local_matrix(node: dict, *, path: str = "") -> tuple:
     """A node's own local transform: its explicit `matrix` (16 floats,
     column-major, used verbatim) or its TRS fields, defaulting to
     identity when neither is present."""
     if "matrix" in node:
         m = node["matrix"]
         if len(m) != 16:
-            raise ValueError(f"node {node.get('name')!r} matrix must have 16 elements")
+            raise ModelLayoutError(
+                path=path,
+                message=f"node {node.get('name')!r} matrix must have 16 elements")
         return tuple(float(x) for x in m)
     return _mat_from_trs(node.get("translation"), node.get("rotation"), node.get("scale"))
 
@@ -134,20 +136,26 @@ def _build_parent_map(nodes: list) -> dict:
     return parent
 
 
-def _world_matrix(node_idx: int, nodes: list, parent_map: dict) -> tuple:
+def _world_matrix(node_idx: int, nodes: list, parent_map: dict, *, path: str = "") -> tuple:
     """The cumulative world transform of nodes[node_idx]: the product of
     every ancestor's local matrix, root-first, down to this node's own
     local matrix (identity ancestors for a Rhino export, but composed in
-    general per spec section 4 step 4)."""
+    general per spec section 4 step 4). Detects cycles in parent_map."""
     chain = [node_idx]
     cur = node_idx
+    visited = {node_idx}
     while cur in parent_map:
         cur = parent_map[cur]
+        if cur in visited:
+            raise ModelLayoutError(
+                path=path,
+                message=f"node hierarchy has a cycle at node {cur}")
         chain.append(cur)
+        visited.add(cur)
     chain.reverse()
     world = IDENTITY
     for idx in chain:
-        world = _mat_mul(world, _node_local_matrix(nodes[idx]))
+        world = _mat_mul(world, _node_local_matrix(nodes[idx], path=path))
     return world
 
 
@@ -160,12 +168,18 @@ def _find_leds_node(nodes: list, path: str) -> int:
     return matches[0]
 
 
-def _descendants(node_idx: int, nodes: list):
+def _descendants(node_idx: int, nodes: list, *, path: str = ""):
     """Every descendant index of nodes[node_idx] (not including itself),
-    in no particular order."""
+    in no particular order. Detects cycles in children hierarchy."""
     stack = list(nodes[node_idx].get("children", []))
+    visited = {node_idx}
     while stack:
         idx = stack.pop()
+        if idx in visited:
+            raise ModelLayoutError(
+                path=path,
+                message=f"node hierarchy has a cycle at node {idx}")
+        visited.add(idx)
         yield idx
         stack.extend(nodes[idx].get("children", []))
 
@@ -176,7 +190,7 @@ def _collect_markers(nodes: list, leds_idx: int, parent_map: dict, path: str) ->
     mesh is a marker"). A node named LED_### that DOES have a mesh but
     sits outside the LEDs subtree is a located error, as is a duplicate
     index."""
-    leds_descendants = set(_descendants(leds_idx, nodes))
+    leds_descendants = set(_descendants(leds_idx, nodes, path=path))
     markers: dict = {}
     for i, node in enumerate(nodes):
         name = node.get("name", "")
@@ -255,6 +269,10 @@ def _mesh_local_aabb(mesh: dict, accessors: list, path: str, marker_name: str) -
         if pos_idx is None:
             raise ModelLayoutError(path=path, marker=marker_name,
                                    message="marker mesh primitive has no POSITION attribute")
+        if pos_idx >= len(accessors) or pos_idx < 0:
+            raise ModelLayoutError(path=path, marker=marker_name,
+                                   message=f"POSITION accessor index {pos_idx} is out of bounds "
+                                           f"(have {len(accessors)} accessors)")
         accessor = accessors[pos_idx]
         a_min, a_max = accessor.get("min"), accessor.get("max")
         if a_min is None or a_max is None:
@@ -313,9 +331,14 @@ def parse_model_layout(data: bytes, *, path: str, pixel_count: int) -> ModelLayo
         node_idx = markers[idx]
         node = nodes[node_idx]
         name = node.get("name")
-        mesh = meshes[node["mesh"]]
+        mesh_idx = node["mesh"]
+        if mesh_idx >= len(meshes) or mesh_idx < 0:
+            raise ModelLayoutError(
+                path=path, marker=name,
+                message=f"mesh index {mesh_idx} is out of bounds (have {len(meshes)} meshes)")
+        mesh = meshes[mesh_idx]
         local_mn, local_mx = _mesh_local_aabb(mesh, accessors, path, name)
-        world = _world_matrix(node_idx, nodes, parent_map)
+        world = _world_matrix(node_idx, nodes, parent_map, path=path)
         tmn, tmx = _transform_aabb(world, local_mn, local_mx)
 
         cx = (tmn[0] + tmx[0]) / 2.0
