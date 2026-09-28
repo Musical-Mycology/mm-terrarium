@@ -115,6 +115,22 @@ def _refuse_remaining_marker_meshes(gltf: dict) -> None:
                 f"delete markers before export (spec section 5.3 step 1)")
 
 
+def _validate_buffers_structure(gltf: dict) -> None:
+    """Refuse if the GLB has more than one buffer, or if buffers[0] has a uri
+    (external buffer). A GLB's buffer 0 must be the embedded BIN chunk."""
+    buffers = gltf.get("buffers")
+    if buffers is None:
+        return
+    if len(buffers) > 1:
+        raise InjectBakeError(
+            "the GLB has multiple buffers; inject_bake only supports a single "
+            "embedded buffer (buffer 0)")
+    if buffers[0].get("uri"):
+        raise InjectBakeError(
+            "buffers[0] has a uri; inject_bake only supports embedded binary "
+            "buffers, not external ones")
+
+
 def inject_bake(glb_bytes: bytes, pngs: list, mm_bake: dict) -> bytes:
     """Appends each of `pngs` (raw PNG bytes, one per RGBA-packed
     texture, in the order LED-group 0, 1, 2, ...) to the GLB's binary
@@ -124,12 +140,14 @@ def inject_bake(glb_bytes: bytes, pngs: list, mm_bake: dict) -> bytes:
     textures' actual indices (spec section 4.1), and re-serialises the
     whole document. Raises InjectBakeError, naming the offending mesh or
     rule, if any mesh primitive lacks `TEXCOORD_1` or if any mesh is
-    still named like an LED marker (`LED_###`)."""
+    still named like an LED marker (`LED_###`), if the GLB has multiple
+    buffers, or if buffers[0] is external (has a uri)."""
     gltf, binary = _read_glb_full(glb_bytes, path="<inject_bake input>")
     binary = bytearray(binary)
 
     _refuse_remaining_marker_meshes(gltf)
     _refuse_missing_texcoord1(gltf)
+    _validate_buffers_structure(gltf)
 
     images = list(gltf.get("images", []))
     textures = list(gltf.get("textures", []))
@@ -157,7 +175,13 @@ def inject_bake(glb_bytes: bytes, pngs: list, mm_bake: dict) -> bytes:
     gltf["textures"] = textures
     gltf["bufferViews"] = buffer_views
     gltf["samplers"] = samplers
-    gltf["buffers"] = [{"byteLength": len(binary)}]
+
+    # Update buffers: preserve buffers[0]'s existing keys, only update byteLength.
+    # Only create a buffers entry if one exists or if we added pngs.
+    if gltf.get("buffers") is not None:
+        gltf["buffers"][0]["byteLength"] = len(binary)
+    elif pngs:
+        gltf["buffers"] = [{"byteLength": len(binary)}]
 
     extras = dict(mm_bake)
     extras["maps"] = new_texture_indices

@@ -88,3 +88,91 @@ def test_inject_bake_output_is_itself_a_valid_glb_with_a_larger_buffer():
     out = inject_bake(before, [png], {"pixels": 4, "layout": []})
     after_gltf = read_glb_json(out, path="out.glb")
     assert after_gltf["buffers"][0]["byteLength"] > before_gltf["buffers"][0]["byteLength"]
+
+
+def test_inject_bake_preserves_existing_keys_on_buffers_0():
+    """(a) An existing extra key on buffers[0] survives the update."""
+    from tools.model_bake_helpers import _write_glb, _read_glb_full
+    import json
+
+    # Build a GLB with an extra key on buffers[0]
+    builder = GlbBuilder()
+    mesh_idx = builder.add_box_mesh((0.0, 0.05, 0.0), 0.06,
+                                     texcoord0=True, texcoord1=True)
+    glb_bytes = builder.build([{"name": "Body", "mesh": mesh_idx}])
+
+    # Modify the GLB to add an extra key on buffers[0]
+    gltf, binary = _read_glb_full(glb_bytes, path="test.glb")
+    gltf["buffers"][0]["customKey"] = "customValue"
+    glb_with_custom = _write_glb(gltf, binary)
+
+    # Now inject a bake
+    png = _flat_png(2, 2, (1, 2, 3, 4))
+    out = inject_bake(glb_with_custom, [png], {"pixels": 1, "layout": []})
+
+    # Verify the custom key survived
+    result_gltf = read_glb_json(out, path="out.glb")
+    assert result_gltf["buffers"][0]["customKey"] == "customValue"
+
+
+def test_inject_bake_refuses_multiple_buffers():
+    """(b) Two buffers → InjectBakeError."""
+    from tools.model_bake_helpers import _write_glb, _read_glb_full
+
+    builder = GlbBuilder()
+    mesh_idx = builder.add_box_mesh((0.0, 0.05, 0.0), 0.06,
+                                     texcoord0=True, texcoord1=True)
+    glb_bytes = builder.build([{"name": "Body", "mesh": mesh_idx}])
+
+    # Modify to have two buffers
+    gltf, binary = _read_glb_full(glb_bytes, path="test.glb")
+    gltf["buffers"] = [
+        {"byteLength": len(binary)},
+        {"byteLength": 100}
+    ]
+    glb_with_two_buffers = _write_glb(gltf, binary)
+
+    # Should refuse
+    with pytest.raises(InjectBakeError, match="multiple.*buffer"):
+        inject_bake(glb_with_two_buffers, [], {"pixels": 1, "layout": []})
+
+
+def test_inject_bake_refuses_buffers_0_with_uri():
+    """(c) buffers[0] with a uri (external buffer) → InjectBakeError."""
+    from tools.model_bake_helpers import _write_glb, _read_glb_full
+
+    builder = GlbBuilder()
+    mesh_idx = builder.add_box_mesh((0.0, 0.05, 0.0), 0.06,
+                                     texcoord0=True, texcoord1=True)
+    glb_bytes = builder.build([{"name": "Body", "mesh": mesh_idx}])
+
+    # Modify buffers[0] to have a uri
+    gltf, binary = _read_glb_full(glb_bytes, path="test.glb")
+    gltf["buffers"][0]["uri"] = "external.bin"
+    glb_with_uri = _write_glb(gltf, binary)
+
+    # Should refuse
+    with pytest.raises(InjectBakeError, match="uri|external"):
+        inject_bake(glb_with_uri, [], {"pixels": 1, "layout": []})
+
+
+def test_inject_bake_empty_pngs_no_buffers_does_not_create_buffers_key():
+    """(d) empty pngs + no buffers → no `buffers` key added."""
+    from tools.model_bake_helpers import _write_glb, _read_glb_full
+
+    builder = GlbBuilder()
+    mesh_idx = builder.add_box_mesh((0.0, 0.05, 0.0), 0.06,
+                                     texcoord0=True, texcoord1=True)
+    glb_bytes = builder.build([{"name": "Body", "mesh": mesh_idx}])
+
+    # Remove buffers from this GLB (unusual but valid per glTF spec)
+    gltf, binary = _read_glb_full(glb_bytes, path="test.glb")
+    del gltf["buffers"]
+    glb_no_buffers = _write_glb(gltf, binary)
+
+    # Inject with empty pngs
+    out = inject_bake(glb_no_buffers, [], {"pixels": 1, "layout": []})
+
+    # Verify no buffers key was added
+    result_gltf = read_glb_json(out, path="out.glb")
+    assert "buffers" not in result_gltf
