@@ -1,3 +1,4 @@
+import hashlib
 import json
 import struct
 
@@ -178,3 +179,100 @@ def test_zone_for_marker_under_a_sublayer_is_that_layer_name():
     parent_map = _build_parent_map(nodes)
     marker_idx = next(i for i, n in enumerate(nodes) if n.get("name") == "LED_000")
     assert _zone_for(marker_idx, 0, parent_map, nodes) == "ring"
+
+
+from control.model_layout import ModelLayout, PixelLayout, parse_model_layout
+
+
+def _sphere_node(name: str, mesh_idx: int) -> dict:
+    return {"name": name, "mesh": mesh_idx}
+
+
+def _sphere_mesh_and_accessor(center_m, radius_m, accessors: list) -> tuple:
+    """Appends one accessor (with min/max for a sphere at center_m with
+    radius radius_m) to `accessors` and returns a mesh dict pointing at
+    it."""
+    mn = [c - radius_m for c in center_m]
+    mx = [c + radius_m for c in center_m]
+    accessors.append({"componentType": 5126, "count": 1, "type": "VEC3",
+                      "min": mn, "max": mx})
+    accessor_idx = len(accessors) - 1
+    return {"primitives": [{"attributes": {"POSITION": accessor_idx}}]}
+
+
+def _one_marker_document(center_m, radius_m, zone="ring"):
+    accessors: list = []
+    mesh = _sphere_mesh_and_accessor(center_m, radius_m, accessors)
+    nodes = [
+        {"name": "LEDs", "children": [1]},
+        {"name": zone, "children": [2]},
+        {"name": "LED_000", "mesh": 0},
+    ]
+    return {"nodes": nodes, "meshes": [mesh], "accessors": accessors}
+
+
+def test_parse_model_layout_converts_axes_and_rounds_to_mm():
+    gltf = _one_marker_document((0.010, 0.020, 0.030), 0.001)
+    data = _build_glb(gltf)
+    layout = parse_model_layout(data, path="t.glb", pixel_count=1)
+    px = layout.pixels[0]
+    # gltf (X, Y, Z) metres -> layout (X, -Z, Y) * 1000 mm
+    assert (px.x_mm, px.y_mm, px.z_mm) == (10, -30, 20)
+    assert px.zone == "ring"
+    assert px.index == 0
+
+
+def test_parse_model_layout_bands_diameter():
+    small = parse_model_layout(
+        _build_glb(_one_marker_document((0.0, 0.0, 0.0), 0.0015)),  # 3mm dia
+        path="t.glb", pixel_count=1)
+    medium = parse_model_layout(
+        _build_glb(_one_marker_document((0.0, 0.0, 0.0), 0.0025)),  # 5mm dia
+        path="t.glb", pixel_count=1)
+    large = parse_model_layout(
+        _build_glb(_one_marker_document((0.0, 0.0, 0.0), 0.005)),  # 10mm dia
+        path="t.glb", pixel_count=1)
+    assert small.pixels[0].size == "small"
+    assert medium.pixels[0].size == "medium"
+    assert large.pixels[0].size == "large"
+
+
+def test_parse_model_layout_marker_directly_on_leds_has_no_zone():
+    gltf = _one_marker_document((0.0, 0.0, 0.0), 0.001)
+    gltf["nodes"] = [
+        {"name": "LEDs", "children": [1]},
+        {"name": "LED_000", "mesh": 0},
+    ]
+    layout = parse_model_layout(_build_glb(gltf), path="t.glb", pixel_count=1)
+    assert layout.pixels[0].zone is None
+
+
+def test_parse_model_layout_returns_model_sha256_of_the_whole_file():
+    data = _build_glb(_one_marker_document((0.0, 0.0, 0.0), 0.001))
+    layout = parse_model_layout(data, path="t.glb", pixel_count=1)
+    assert layout.model_sha256 == hashlib.sha256(data).hexdigest()
+
+
+def test_parse_model_layout_refuses_draco():
+    gltf = _one_marker_document((0.0, 0.0, 0.0), 0.001)
+    gltf["extensionsRequired"] = ["KHR_draco_mesh_compression"]
+    with pytest.raises(ModelLayoutError, match="Draco"):
+        parse_model_layout(_build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_parse_model_layout_refuses_bad_zone_name():
+    gltf = _one_marker_document((0.0, 0.0, 0.0), 0.001, zone="Ring-1")
+    with pytest.raises(ModelLayoutError, match=r"\[a-z0-9_\]"):
+        parse_model_layout(_build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_parse_model_layout_refuses_zone_named_primary():
+    gltf = _one_marker_document((0.0, 0.0, 0.0), 0.001, zone="primary")
+    with pytest.raises(ModelLayoutError, match="primary"):
+        parse_model_layout(_build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_parse_model_layout_refuses_count_mismatch():
+    gltf = _one_marker_document((0.0, 0.0, 0.0), 0.001)
+    with pytest.raises(ModelLayoutError, match="found 1"):
+        parse_model_layout(_build_glb(gltf), path="t.glb", pixel_count=2)

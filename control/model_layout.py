@@ -205,3 +205,141 @@ def _zone_for(marker_node_idx: int, leds_idx: int, parent_map: dict, nodes: list
     if parent_idx is None or parent_idx == leds_idx:
         return None
     return nodes[parent_idx].get("name")
+
+
+@dataclass(frozen=True)
+class PixelLayout:
+    index: int
+    x_mm: int
+    y_mm: int
+    z_mm: int
+    size: str          # "small" | "medium" | "large"
+    zone: str | None   # None when the marker sits directly on 'LEDs'
+
+
+@dataclass(frozen=True)
+class ModelLayout:
+    pixels: tuple  # tuple[PixelLayout, ...], ordered by index
+    model_sha256: str
+
+
+def _refuse_draco(gltf: dict, path: str) -> None:
+    required = gltf.get("extensionsRequired", [])
+    if DRACO_EXTENSION in required:
+        raise ModelLayoutError(
+            path=path,
+            message=f"model requires {DRACO_EXTENSION}; in the exporter, "
+                    f"turn off 'Use Draco compression'")
+
+
+def _band_size(diameter_mm: float) -> str:
+    if diameter_mm < 4.0:
+        return "small"
+    if diameter_mm < 8.0:
+        return "medium"
+    return "large"
+
+
+def _mesh_local_aabb(mesh: dict, accessors: list, path: str, marker_name: str) -> tuple:
+    """The union bounding box, in local (node) space, of every primitive
+    in `mesh`, read straight from each POSITION accessor's required
+    min/max -- the binary chunk is never touched."""
+    prims = mesh.get("primitives", [])
+    if not prims:
+        raise ModelLayoutError(path=path, marker=marker_name,
+                               message="marker mesh has no primitives")
+    mn = [math.inf, math.inf, math.inf]
+    mx = [-math.inf, -math.inf, -math.inf]
+    for prim in prims:
+        pos_idx = prim.get("attributes", {}).get("POSITION")
+        if pos_idx is None:
+            raise ModelLayoutError(path=path, marker=marker_name,
+                                   message="marker mesh primitive has no POSITION attribute")
+        accessor = accessors[pos_idx]
+        a_min, a_max = accessor.get("min"), accessor.get("max")
+        if a_min is None or a_max is None:
+            raise ModelLayoutError(path=path, marker=marker_name,
+                                   message="POSITION accessor is missing min/max")
+        for i in range(3):
+            mn[i] = min(mn[i], a_min[i])
+            mx[i] = max(mx[i], a_max[i])
+    return tuple(mn), tuple(mx)
+
+
+def _transform_aabb(m: tuple, mn: tuple, mx: tuple) -> tuple:
+    """The axis-aligned bounding box of a local AABB's 8 corners after
+    each is transformed by world matrix `m` (handles any rotation on the
+    node chain, though a Rhino export carries none)."""
+    xs, ys, zs = (mn[0], mx[0]), (mn[1], mx[1]), (mn[2], mx[2])
+    pts = [_transform_point(m, (x, y, z)) for x in xs for y in ys for z in zs]
+    tmn = tuple(min(p[i] for p in pts) for i in range(3))
+    tmx = tuple(max(p[i] for p in pts) for i in range(3))
+    return tmn, tmx
+
+
+def _validate_indices(markers: dict, pixel_count: int, path: str) -> None:
+    if len(markers) != pixel_count:
+        raise ModelLayoutError(
+            path=path,
+            message=f"found {len(markers)} LED marker(s) but the "
+                    f"instrument declares pixels={pixel_count}")
+    expected, found = set(range(pixel_count)), set(markers)
+    if found != expected:
+        missing = sorted(expected - found)
+        extra = sorted(found - expected)
+        raise ModelLayoutError(
+            path=path,
+            message=f"LED marker indices must run 0..{pixel_count - 1} "
+                    f"with no gaps; missing {missing}, unexpected {extra}")
+
+
+def parse_model_layout(data: bytes, *, path: str, pixel_count: int) -> ModelLayout:
+    """Parse an artist-authored .glb into an ordered PixelLayout tuple
+    plus the source file's SHA-256, per spec section 4. Raises
+    ModelLayoutError, located to the file and (where applicable) the
+    offending marker, on any rule violation."""
+    gltf = read_glb_json(data, path=path)
+    _refuse_draco(gltf, path)
+    nodes = gltf.get("nodes", [])
+    leds_idx = _find_leds_node(nodes, path)
+    parent_map = _build_parent_map(nodes)
+    markers = _collect_markers(nodes, leds_idx, parent_map, path)
+    _validate_indices(markers, pixel_count, path)
+
+    meshes = gltf.get("meshes", [])
+    accessors = gltf.get("accessors", [])
+    pixels = []
+    for idx in range(pixel_count):
+        node_idx = markers[idx]
+        node = nodes[node_idx]
+        name = node.get("name")
+        mesh = meshes[node["mesh"]]
+        local_mn, local_mx = _mesh_local_aabb(mesh, accessors, path, name)
+        world = _world_matrix(node_idx, nodes, parent_map)
+        tmn, tmx = _transform_aabb(world, local_mn, local_mx)
+
+        cx = (tmn[0] + tmx[0]) / 2.0
+        cy = (tmn[1] + tmx[1]) / 2.0
+        cz = (tmn[2] + tmx[2]) / 2.0
+        x_mm = round(cx * 1000.0)
+        y_mm = round(-cz * 1000.0)
+        z_mm = round(cy * 1000.0)
+        diameter_mm = max(tmx[i] - tmn[i] for i in range(3)) * 1000.0
+        size = _band_size(diameter_mm)
+
+        zone = _zone_for(node_idx, leds_idx, parent_map, nodes)
+        if zone is not None:
+            if not _ZONE_NAME_RE.match(zone):
+                raise ModelLayoutError(
+                    path=path, marker=name,
+                    message=f"zone name {zone!r} must match [a-z0-9_]+")
+            if zone == "primary":
+                raise ModelLayoutError(
+                    path=path, marker=name,
+                    message="'primary' must not be used as a zone name")
+
+        pixels.append(PixelLayout(index=idx, x_mm=x_mm, y_mm=y_mm, z_mm=z_mm,
+                                  size=size, zone=zone))
+
+    model_sha256 = hashlib.sha256(data).hexdigest()
+    return ModelLayout(pixels=tuple(pixels), model_sha256=model_sha256)
