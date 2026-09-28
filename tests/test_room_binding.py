@@ -139,9 +139,11 @@ def test_save_does_not_persist_armed_state(tmp_path):
 
 def test_load_ignores_an_old_flat_format_file(tmp_path, caplog):
     """Pre-N-fixture files bound one dev id per room_type as a plain string.
-    That is dead data: nothing calls load() from boot() yet (see 'Not yet
-    built' in the deep-dive), and guessing which fixture a bare string names
-    would risk binding a stale dev to the wrong fixture."""
+    That is dead data: load() is never called in a live boot because
+    terrarium_boot's main() passes no binding_store_path (see
+    'RoomBindingRegistry save/load does not persist in live runs' under
+    'Not yet built' in the deep-dive), and guessing which fixture a bare
+    string names would risk binding a stale dev to the wrong fixture."""
     path = str(tmp_path / "old_format.json")
     with open(path, "w") as f:
         json.dump({"TEST": "sim-room"}, f)   # old shape: room_type -> dev string

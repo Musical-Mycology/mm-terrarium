@@ -152,6 +152,45 @@ class _PidHandle:
             self._reaped = True
 
 
+@dataclass(frozen=True)
+class LiveRun:
+    """A run dir whose supervisor is still alive: its checkout's stack is
+    running (or at least its supervisor is), so it is reported, never
+    swept."""
+    run_dir: str
+    supervisor: SpawnRecord
+    records: list[SpawnRecord]     # every non-supervisor record, in order
+
+
+def _live_supervisor(records, process_spawn_time, is_alive) -> SpawnRecord | None:
+    """The run's "supervisor" record if that pid is alive and still names
+    the process that wrote it (spawn-time match), else None. The one test
+    sweep_stale and live_supervisors share, so they cannot drift apart."""
+    supervisor = next((r for r in records if r.role == "supervisor"), None)
+    if supervisor is None or not is_alive(supervisor.pid):
+        return None
+    current = process_spawn_time(supervisor.pid)
+    if current is None or abs(current - supervisor.spawn_time) > _SPAWN_TIME_TOLERANCE:
+        return None
+    return supervisor
+
+
+def live_supervisors(runs_dir: str, *,
+                     process_spawn_time=_default_spawn_time,
+                     is_alive=_default_is_alive) -> list[LiveRun]:
+    """Every run dir under runs_dir that sweep_stale would skip because its
+    supervisor is alive. Read-only: signals nothing, deletes nothing."""
+    live: list[LiveRun] = []
+    for path in _record_files(runs_dir):
+        records = _read_records(path)
+        supervisor = _live_supervisor(records, process_spawn_time, is_alive)
+        if supervisor is not None:
+            live.append(LiveRun(
+                run_dir=os.path.dirname(path), supervisor=supervisor,
+                records=[r for r in records if r.role != "supervisor"]))
+    return live
+
+
 def sweep_stale(runs_dir: str, *, stop=_default_stop,
                 process_spawn_time=_default_spawn_time,
                 is_alive=_default_is_alive) -> list[SpawnRecord]:
@@ -182,12 +221,8 @@ def sweep_stale(runs_dir: str, *, stop=_default_stop,
     acted: list[SpawnRecord] = []
     for path in _record_files(runs_dir):
         records = _read_records(path)
-        supervisor = next((r for r in records if r.role == "supervisor"), None)
-        if supervisor is not None and is_alive(supervisor.pid):
-            current = process_spawn_time(supervisor.pid)
-            if (current is not None
-                    and abs(current - supervisor.spawn_time) <= _SPAWN_TIME_TOLERANCE):
-                continue          # another run's supervisor is still alive
+        if _live_supervisor(records, process_spawn_time, is_alive) is not None:
+            continue              # another run's supervisor is still alive
         all_handled = True
         for rec in records:
             if not is_alive(rec.pid):
