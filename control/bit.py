@@ -32,7 +32,8 @@ class Bit(ABC):
     # Which Room config names this Bit can run in. Every Bit supports at
     # least "TEST" (the universal baseline); a Bit declares more by
     # overriding this class attribute. Read off the class (not an instance)
-    # by control/boot.py's Bit-gating check, before the Bit is constructed.
+    # by harness/terrarium_boot.py build()'s Bit-gating check, before the Bit
+    # is constructed.
     # Treat as override-only -- do not mutate this set in place, since it is
     # shared across every instance of a Bit that doesn't override it.
     room_types: set[str] = {"TEST"}

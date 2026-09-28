@@ -154,10 +154,13 @@ class AudioBridge:
 
     @property
     def pool(self):
-        """The injected voice pool -- the room-recycle path
-        (harness/terrarium_boot.py's _recycle_room) needs to quiesce and
-        restart it across an Arco replacement, and reaching into _pool from
-        the harness would couple it to a private."""
+        """The injected voice pool, public so the harness can quiesce and
+        restart it across an Arco replacement without reaching into _pool:
+        harness/terrarium_boot.py's stop_clients/restart_clients do so when
+        a Console unload or hard abort takes the Room (and its Arco) down
+        and a later load_room brings a new one up. (_recycle_room also
+        uses it, but only tests call that: a round ending never recycles
+        the Room.)"""
         return self._pool
 
     def on_grant(self, dev: str, role: Role) -> None:

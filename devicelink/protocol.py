@@ -137,10 +137,12 @@ def deny_event(dev: str, reason: str | None, hint: str | None) -> dict:
 def leds_event(dev: str, channels, when: float = 0.0) -> dict:
     """channels: a flat sequence of ints, width-agnostic. This function does
     `list(channels)` with no length assertion, so any frame width rides the
-    same wire shape. Two real callers, two widths: a Tuneshroom sends 36
-    (12 pixels x GRB, harness/shroom_client.py's LED_CHANNELS), and a Room
-    sends its RoomProfile.channel_count, currently 180 (60 pixels x GRB,
-    control/room_profile.py).
+    same wire shape. A player device gets 36 (12 pixels x GRB,
+    devicelink/agent.py's _DEVICE_CHANNELS, matching harness/shroom_client.py's
+    LED_CHANNELS). A device bound as a Room fixture gets that fixture's own
+    slice of the rendered Room frame (control/room_profile.py's
+    fixture_slices: its pixel_count times 3 for RGB or 4 for RGBW), sent
+    through control/fixture_sink.py's DeviceLinkSink.
 
     `when` is an absolute O2 time at which the device should display this
     frame. 0.0 means no declared time: display on arrival, the pre-timing
@@ -171,9 +173,11 @@ def play_event(dev: str, name: str, params: str = "") -> dict:
     an ordered list in sync with Control -- an off-by-one there plays the
     wrong sound instead of failing.
 
-    Nothing schedules this yet: DeviceLink has no shared clock, so the
-    device plays on arrival. `timestamp` is carried anyway so that adding
-    scheduling later is a device-side change, not a wire change.
+    Nothing schedules this yet: unlike leds_event, this takes no `when`, so
+    the envelope's timestamp is 0.0 and the device plays on arrival, even
+    though devices are clock-synced over o2lite. The field is on the wire
+    already, so scheduling a sample later needs no wire change: Control
+    passes a `when` (as leds_event does) and the device honors it.
     """
     return _event(f"/{dev}/play", "ss", [name, params])
 

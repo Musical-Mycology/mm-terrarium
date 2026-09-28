@@ -193,9 +193,9 @@ def test_control_never_becoming_ready_fails_bounded(tmp_path):
 
 
 def test_a_device_that_never_syncs_fails_bounded_and_names_the_defect(tmp_path):
-    """The documented headless clock-sync defect. The runner cannot fix it;
-    it must not hang on it, and it must say which of the two documented
-    halves it hit.
+    """The documented upstream clock-sync defect. The runner cannot fix it;
+    it must not hang on it, and it must point at o2debug.log, which tells
+    the two documented symptoms apart.
 
     This test needs Control's stage to succeed for real (ProcTee's reader
     thread has to actually win a race against this test's busy-poll loop)

@@ -21,7 +21,7 @@ class Room:
     """Resolved once at boot. `name` is the config-name string this Room
     was loaded as (a key in TerrariumConfig.rooms, e.g. "TEST"/"DEMO").
     `bound` maps fixture name to the dev bound as that fixture's rendering
-    backend -- see control/room_binding.py and control/boot.py. A fixture
+    backend -- see control/room_binding.py and control/terrarium.py. A fixture
     absent from this dict is simply not bound yet; a Room with SOME but not
     all fixtures bound renders to the ones it has (see design spec
     section 6)."""

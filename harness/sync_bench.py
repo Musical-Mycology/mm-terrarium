@@ -4,12 +4,12 @@ Reports worst and p95 alongside the mean, for the same reason
 harness/render_bench.py does: a path that averages 2 ms while missing by
 200 ms once a second reads as healthy and is not.
 
-EVERY FIGURE THIS PRODUCES IS A DEV-BOX FIGURE. The venue target is
-bare-metal Linux on a Raspberry Pi 5 relaying every hop through the same
-process doing all room synthesis while feeding a 44 Hz render loop. No
-venue-box measurement exists; the box does not exist. Do not quote these
-numbers as venue latency, and do not derive BootConfig.cue_horizon for a
-venue from them.
+EVERY FIGURE THIS PRODUCES IS A DEV-BOX FIGURE. The show machine (a Mac
+for Dec 4; bare-metal Linux on a Raspberry Pi 5 is deferred past the show)
+relays every hop through the same process doing all room synthesis while
+feeding a 44 Hz render loop. No show-machine measurement exists yet. Do not
+quote these numbers as venue latency, and do not derive
+BootConfig.cue_horizon for a venue from them.
 
 summarise() takes no luxaeterna and no pyarco dependency, so it runs in the
 core offline suite.

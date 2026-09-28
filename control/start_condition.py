@@ -1,8 +1,9 @@
-"""Pure start-decision evaluator for the harness.
+"""Pure start-decision evaluator.
 
-Consumes the merged `StartCondition` (control/bit_config.py). This module is
-consumed by the HARNESS, not the engine -- keep it free of engine imports and
-side effects.
+Consumes the merged `StartCondition` (control/bit_config.py). The harness
+drives start decisions from it, and control/engine.py imports its
+`scored_count` -- so keep it free of engine imports (that would be a cycle)
+and side effects.
 """
 
 from __future__ import annotations

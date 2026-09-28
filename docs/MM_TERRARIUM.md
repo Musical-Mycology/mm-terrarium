@@ -280,10 +280,8 @@ Both scripts, and `harness.run_stack` itself, take the flags below (see
 - `--ci`: non-interactive: no terminal echo, a bounded run (default 45s),
   and a non-zero exit on any failure. A device that never clock-syncs
   fails as stage `device-sync` rather than hanging; the one remaining
-  cause is upstream (*Not yet built / deferred*). `run_stack`'s `--help`
-  epilog and that stage's message still call it a "headless" defect: its
-  intermittent half was the undrained Arco pty below (fixed, never
-  headless-specific).
+  cause is upstream (*Not yet built / deferred*). Its intermittent half
+  was the undrained Arco pty below (fixed, never headless-specific).
 - `--seconds SECONDS`: how long to hold the stack up. Default: forever
   (Ctrl-C), or 45s under `--ci`.
 - `--devices DEVICES`: how many simulated player devices to join.
@@ -679,8 +677,7 @@ Instrument plus placement and binding. All pure stdlib.
   `run_stack`/`terrarium_boot`/`o2_shroom` processes, needs no Arco
   checkout, and exits 0 only when nothing is left running.
 - Unwired: `ownership_probe`, and `recycle_room()` with the harness's
-  `_recycle_room` (tests only: a round ending must never churn Arco; their
-  docstrings, and `AudioBridge.pool`'s, still describe that recycle).
+  `_recycle_room` (tests only: a round ending must never churn Arco).
 - Arco has no message-based quit, so `ArcoProcess.shutdown()` sends SIGTERM
   (which `harness/signals.py` handles for our own processes). Its lazy pyarco
   import is the only one in `control/`: the rule is no luxaeterna, pyarco or
