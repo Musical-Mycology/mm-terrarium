@@ -431,3 +431,47 @@ def test_published_instrument_with_model_but_zero_pixels_fails(tmp_path):
     (root / "glowcap.toml").write_text(text)
     with pytest.raises(TerrariumConfigError):
         load_catalog(root)
+
+
+def test_stale_bake_warns_but_does_not_fail_load(tmp_path, caplog):
+    import logging
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    stale_gltf = {"nodes": [], "extras": {"mm_bake": {"source_sha256": "not-the-real-hash"}}}
+    from tests.glb_builder import build_glb
+    (root / "models" / "glowcap.baked.glb").write_bytes(build_glb(stale_gltf))
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    with caplog.at_level(logging.WARNING):
+        cat = load_catalog(root)
+    assert cat.published["glowcap"] is not None  # load still succeeds
+    assert any("stale" in r.message for r in caplog.records)
+
+
+def test_fresh_bake_does_not_warn(tmp_path, caplog):
+    import hashlib
+    import logging
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    fresh_gltf = {"nodes": [], "extras": {"mm_bake": {
+        "source_sha256": hashlib.sha256(glb_bytes).hexdigest()}}}
+    from tests.glb_builder import build_glb
+    (root / "models" / "glowcap.baked.glb").write_bytes(build_glb(fresh_gltf))
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    with caplog.at_level(logging.WARNING):
+        load_catalog(root)
+    assert not any("stale" in r.message for r in caplog.records)
+
+
+def test_no_bake_file_does_not_warn(tmp_path, caplog):
+    import logging
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    (root / "models" / "glowcap.glb").write_bytes(_twelve_led_glb())
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    with caplog.at_level(logging.WARNING):
+        load_catalog(root)
+    assert not any("stale" in r.message for r in caplog.records)

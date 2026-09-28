@@ -7,6 +7,7 @@ control/bit_config.py. See docs/superpowers/specs/
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import tomllib
 from dataclasses import dataclass, field, replace
@@ -18,10 +19,12 @@ from control.instrument import (Instrument, InstrumentError, SoloConfig,
                                 validate_instrument,
                                 validate_instrument_manifests)
 from control.lobby import TERRARIUM_ADMIN
-from control.model_layout import ModelLayoutError, parse_model_layout
+from control.model_layout import ModelLayoutError, parse_model_layout, read_glb_json
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone)
 from control.triggers import EventTrigger, StreamTrigger
+
+logger = logging.getLogger(__name__)
 
 KNOWN_BACKENDS = frozenset({"devicelink", "array"})
 
@@ -431,6 +434,27 @@ def _parse_stream_triggers(iname: str, iraw: dict, *, source: str, key: str
                                                  "transform")))
 
 
+def _warn_if_bake_stale(model_path: Path, source_sha256: str, iname: str) -> None:
+    """Spec section 5.3: "The catalog loader, when a <name>.baked.glb
+    exists, compares its source_sha256 with the source file and warns if
+    stale. It never fails: a stale bake is wrong only for the preview."
+    """
+    baked_path = model_path.parent / f"{model_path.stem}.baked.glb"
+    if not baked_path.is_file():
+        return
+    try:
+        baked_json = read_glb_json(baked_path.read_bytes(), path=str(baked_path))
+    except ModelLayoutError:
+        return  # an unreadable/corrupt bake is not this loader's problem
+    mm_bake = (baked_json.get("extras") or {}).get("mm_bake") or {}
+    baked_source = mm_bake.get("source_sha256")
+    if baked_source is not None and baked_source != source_sha256:
+        logger.warning(
+            "instrument %r: baked model %s is stale (bake source_sha256 "
+            "%s, current model %s); re-run tools/bake_model.py",
+            iname, baked_path, baked_source, source_sha256)
+
+
 def _parse_instrument(iname: str, iraw: dict, *, source: str,
                        model_root: Path | None = None) -> Instrument:
     key = f"instruments.{iname}"
@@ -506,6 +530,7 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str,
                 message=f"instrument {iname!r}: {exc}") from exc
         model_sha256 = result.model_sha256
         layout = result.pixels
+        _warn_if_bake_stale(model_path, model_sha256, iname)
 
     instrument = Instrument(
         name=iname,
