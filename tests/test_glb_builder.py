@@ -66,3 +66,31 @@ def test_accessor_only_box_has_no_backing_geometry():
     acc = accessor_only_box((0.0, 0.0, 0.0), 0.002)
     assert "bufferView" not in acc
     assert acc["min"] and acc["max"]
+
+
+def test_build_glb_emits_a_default_scene_with_root_nodes():
+    """GlbBuilder must emit a scenes array and scene index so three.js
+    GLTFLoader and Blender can instantiate a root. Root nodes are those
+    not listed in any node's children."""
+    import json
+    builder = GlbBuilder()
+    builder.add_box_mesh((0.0, 0.0, 0.0), 0.001)
+    nodes = [
+        {"name": "LEDs", "children": [1, 2]},
+        {"name": "ring", "children": [3]},
+        {"name": "LED_000", "mesh": 0},
+        {"name": "LED_001", "mesh": 0},
+        {"name": "body", "mesh": 0},  # separate root
+    ]
+    glb_bytes = builder.build(nodes)
+    # Extract and parse the JSON chunk
+    json_len = struct.unpack_from("<I", glb_bytes, 12)[0]
+    json_chunk_start = 20  # header (12) + chunk header (8)
+    json_text = glb_bytes[json_chunk_start:json_chunk_start + json_len].decode("utf-8")
+    gltf = json.loads(json_text)
+    # Verify scene is present and defaults to 0
+    assert gltf.get("scene") == 0
+    assert "scenes" in gltf
+    assert len(gltf["scenes"]) == 1
+    # Verify roots are exactly LEDs (0) and body (4), in index order
+    assert gltf["scenes"][0]["nodes"] == [0, 4]

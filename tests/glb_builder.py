@@ -181,7 +181,9 @@ class GlbBuilder:
     def build(self, nodes: list, *, extras: dict | None = None,
               extensions_required: list | None = None) -> bytes:
         """Assembles the full glTF JSON around every mesh added so far
-        and returns the finished GLB (JSON chunk + BIN chunk)."""
+        and returns the finished GLB (JSON chunk + BIN chunk). Computes
+        and emits a default scene with the root nodes (nodes not listed
+        in any node's children) so three.js and Blender can instantiate it."""
         gltf: dict = {"asset": {"version": "2.0"}, "nodes": nodes}
         if self.meshes:
             gltf["meshes"] = self.meshes
@@ -192,4 +194,14 @@ class GlbBuilder:
             gltf["extensionsRequired"] = extensions_required
         if extras is not None:
             gltf["extras"] = extras
+
+        # Compute root nodes: those not listed in any node's children
+        all_children = set()
+        for node in nodes:
+            if "children" in node:
+                all_children.update(node["children"])
+        roots = [i for i in range(len(nodes)) if i not in all_children]
+        gltf["scene"] = 0
+        gltf["scenes"] = [{"nodes": roots}]
+
         return build_glb(gltf, bytes(self._binary))
