@@ -169,12 +169,15 @@ def _arco_popen(args):
     return functools.partial(subprocess.Popen, cwd=ARCOSERVER_DIR)
 
 
-def _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir):
+def _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir, *,
+                  clients_live=None):
     """Spec 2026-09-13 section 6.5: an [uplink] table is the switch. No
     table, no agent. An empty url means LogTransport (frames logged, the
     journal grows, nothing trimmed). The journal lives directly under
     runs_dir so it outlives any single run; with run records off (runs_dir
-    None) there is no journal and the box keeps no state."""
+    None) there is no journal and the box keeps no state. clients_live is
+    main()'s closure, shared with the Console: a broker unload_room is
+    refused while Control's Arco clients are live (D7)."""
     cfg = terrarium_config.uplink
     if cfg is None:
         return None
@@ -190,7 +193,8 @@ def _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir):
             "uplink: run records are off, so bit_completed is not journaled")
     identity = UplinkIdentity(cfg.tenant_slug, terrarium_config.name, cfg.secret)
     return UplinkAgent(gs, transport, registry=registry, terrarium=terrarium,
-                       identity=identity, journal=journal, lan_ip=lan_ip)
+                       identity=identity, journal=journal, lan_ip=lan_ip,
+                       clients_live=clients_live)
 
 
 def _pump_uplink(uplink) -> None:
@@ -1954,7 +1958,8 @@ def main() -> None:
             agent.prepare_requests = www.prepare_requests
             from control.prepare import PrepareAuthority
             agent.prepare_authority = PrepareAuthority(gs, registry, terrarium)
-        uplink = _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir)
+        uplink = _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir,
+                               clients_live=clients_live)
         if uplink is not None:
             mode = terrarium_config.uplink.url or "log-only"
             print(f"{markers.UPLINK} {mode} tenant={terrarium_config.uplink.tenant_slug}",

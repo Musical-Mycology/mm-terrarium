@@ -447,6 +447,19 @@ are per
   had no branch, so a broker restart was silently dropped. Up-events
   `state_changed` / `registration_changed` / `bit_completed` / `error` are
   pushed reactively from the observer hooks.
+- **`unload_room` is refused while Control's Arco clients are live (D7,
+  2026-09-28)**, with the same `error` event text the Console sends
+  (`unloading the Room in a running Terrarium is not supported yet: ...
+  stop and run ./terrarium.sh`); `terrarium.unload_room` never runs.
+  Before this a broker unload went straight to `terrarium.unload_room`,
+  which stranded the process in NO_ROOM (see *One Arco per Control
+  process*). The check is shared, not copied:
+  `control.terrarium.unload_room_refusal(clients_live)` is called by both
+  `ConsoleAgent` and `UplinkAgent`, and `terrarium_boot` passes both the
+  same `clients_live` closure (`_build_uplink(..., clients_live=)`). It is
+  deliberately not inside `Terrarium.unload_room`, whose harness shutdown
+  callers must still take the Room down. `load_bit`'s `room` field is
+  ignored by the uplink: a broker load always uses the active Room.
 - Built by `harness/terrarium_boot.py` only when `terrarium.toml` carries an
   `[uplink]` table (`tenant_slug`, a 64-hex-character `secret`, an optional
   `url`; an empty or absent `url` gives a log-only transport, not a missing

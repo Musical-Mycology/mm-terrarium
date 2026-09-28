@@ -10,7 +10,7 @@ from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.lobby import TERRARIUM_ADMIN
 from control.rooms import non_room_counts
 from control.state import State
-from control.terrarium import TerrariumState
+from control.terrarium import TerrariumState, unload_room_refusal
 from uplink import protocol
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,8 @@ class UplinkAgent:
 
     def __init__(self, game_server: GameServer, transport, *,
                  time_source=time.monotonic, registry=None, terrarium=None,
-                 identity=None, lan_ip=None, journal=None):
+                 identity=None, lan_ip=None, journal=None,
+                 clients_live=None):
         self.game_server = game_server
         self.transport = transport
         self.registry = registry
@@ -48,6 +49,10 @@ class UplinkAgent:
         # any send and replayed after the resync over a durable transport
         # (spec 2026-09-13 section 6.4).
         self.journal = journal
+        # Same hook ConsoleAgent takes: a callable (None = no hook) that is
+        # True while Control's Arco clients are up. unload_room is refused
+        # while it holds (control.terrarium.unload_room_refusal, D7).
+        self._clients_live = clients_live
         game_server.add_observer(self)
         if terrarium is not None:
             terrarium.add_observer(self)
@@ -169,6 +174,10 @@ class UplinkAgent:
         if isinstance(command, protocol.UnloadRoomCommand):
             if self.terrarium is None:
                 self._send(protocol.error_event(command_name, "no terrarium"))
+                return
+            reason = unload_room_refusal(self._clients_live)
+            if reason is not None:
+                self._send(protocol.error_event(command_name, reason))
                 return
             reason = self.terrarium.unload_room(force=command.force)
             if reason is not None:

@@ -30,10 +30,12 @@ def identity_frame(identity: UplinkIdentity) -> dict:
 class LoadBitCommand:
     name: str
     overrides: dict | None = None
-    # Which Room to load the Bit into. None keeps the active Room (and is
-    # refused with "no room loaded" when there is none). A different name
-    # than the active Room makes the Console agent unload and reload the
-    # Room first (spec 2026-09-10 section 4).
+    # Which Room to load the Bit into; read only by ConsoleAgent. None keeps
+    # the active Room, and a NO_ROOM start loads the named Room first (spec
+    # 2026-09-10 section 4); a different name than the active Room is
+    # refused (D7: one Arco per Control process). UplinkAgent ignores it:
+    # a broker load_bit always uses the active Room and is refused with
+    # "no room loaded" when there is none.
     room: str | None = None
 
 
