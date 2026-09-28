@@ -25,14 +25,35 @@ developed with Roger Dannenberg.
 - Running today: the o2lite device path end to end (Tuneshrooms and the
   Chrome/Flutter guest app join, register, and play over a real Arco); Room
   audio and light (a Room fixture's drone and hue driven the same way a
-  device's are); the cue machinery (`Bit.cues(at)` and device-triggered
-  `LightCue`s reach both the calling device and the Room from one shared
-  computed time); and **MetronomeBit**, the first production game Bit.
+  device's are); the cue machinery (`Bit.fires(at)`, generators and
+  device-triggered `LightCue`s reach both the calling device and the Room
+  from one shared computed time); and **MetronomeBit**, the first
+  production game Bit.
 - Missing or deferred: see *Not yet built / deferred* below, most notably
   fairyring, a scoring framework beyond a Bit's own `result()` payload, and
   native iOS/Android/Radxa connectivity.
 
 Full pre-rewrite history: `git show 9dd35c3:docs/MM_TERRARIUM.md`.
+
+**Contents**
+
+- [What it is, in one picture](#what-it-is-in-one-picture)
+- [Running it](#running-it)
+- [Landed subsystems](#landed-subsystems):
+  [`control/` lifecycle and Bit runtime](#control-the-lifecycle-engine-and-bit-runtime),
+  [`control/` Terrarium, Rooms, instruments and audio](#control-terrarium-rooms-instruments-and-audio),
+  [`devicelink/`](#devicelink-the-device-facing-side-over-o2lite),
+  [`harness/`](#harness-boot-the-stack-runner-and-tooling),
+  [`console/`](#console-the-terrarium-console),
+  [`uplink/`](#uplink-outbound-remote-control),
+  [`capture/`](#capture-labelled-sensor-telemetry),
+  [`bits/`](#bits-the-in-repo-bits),
+  [`www/` and `arcoserver/`](#www-and-arcoserver)
+- [Boundary rules (the load-bearing invariants)](#boundary-rules-the-load-bearing-invariants)
+- [Host platform (gotcha)](#host-platform-gotcha)
+- [Relationships to other repos](#relationships-to-other-repos)
+- [Not yet built / deferred](#not-yet-built--deferred)
+- [Design docs (in-repo, authoritative)](#design-docs-in-repo-authoritative)
 
 ## What it is, in one picture
 
@@ -247,20 +268,23 @@ Both scripts, and `harness.run_stack` itself, take the flags below (see
   `--profile`, `--node`, or `--devices N>0`; it is what `./terrarium.sh`
   runs.
 - `--profile PATH`: a venue TOML (see `profiles/dev-metronome.toml`)
-  supplying launch defaults (bit, room type, devices, console port,
+  supplying launch defaults (Bit, Room type, devices, console port,
   seconds) and a `[bit.overrides]` table. Precedence is manifest < profile
   < explicit CLI flags.
 - `--serve`: hold until Ctrl-C or a child exit instead of a fixed
   duration; implied when a console is requested outside `--ci`.
 - `--ci`: non-interactive: no terminal echo, a bounded run (default 45s),
-  and a non-zero exit on any failure. CI mode is best-effort: the
-  headless clock-sync defect is an upstream o2lite/pyarco issue, bounded
-  and named here rather than fixed.
+  and a non-zero exit on any failure. A device that never clock-syncs
+  fails as stage `device-sync` rather than hanging; the one remaining
+  cause is upstream (*Not yet built / deferred*). `run_stack`'s `--help`
+  epilog and that stage's message still call it a "headless" defect: its
+  intermittent half was the undrained Arco pty below (fixed, never
+  headless-specific).
 - `--seconds SECONDS`: how long to hold the stack up. Default: forever
   (Ctrl-C), or 45s under `--ci`.
 - `--devices DEVICES`: how many simulated player devices to join.
 - `--list-bits`: print every discovered Bit package (name, version, kind,
-  room types, start condition, description) and any manifest errors, then
+  Room types, start condition, description) and any manifest errors, then
   exit.
 
 **Profiles** (`profiles/*.toml`) pin a venue's launch defaults so a
@@ -311,9 +335,8 @@ holding loop needs the same treatment.
 (`cmd &`) with SIGINT set to ignored whenever job control is off, and
 Python leaves that inherited ignore in place rather than installing its
 `KeyboardInterrupt` handler, so `kill -INT` on a plain-backgrounded run is
-a silent no-op. SIGTERM still works: `harness/signals.py` installs a
-handler (`sigterm_as_keyboard_interrupt`, called by both `run_stack.py`
-and `terrarium_boot.py`) that turns a bare `kill` into the same clean
+a silent no-op. SIGTERM still works: `sigterm_as_keyboard_interrupt`
+(*Boot and teardown order*) turns a bare `kill` into the same clean
 shutdown Ctrl-C gives interactively. Enable job control before
 backgrounding to get SIGINT too:
 
@@ -330,7 +353,7 @@ kill -INT "$PID"   # or: kill -TERM "$PID", works either way
 
 `control/engine.py`'s `GameServer` loads a Bit, opens registration, runs it
 and returns to `IDLE`. It is O2-agnostic: a transport drives it and
-receives output through sinks. Specs are listed under "Design docs".
+receives output through sinks. Specs: *Design docs (in-repo, authoritative)*.
 
 #### State machine
 
@@ -343,7 +366,7 @@ receives output through sinks. Specs are listed under "Design docs".
   runs `on_complete`/`on_unload` best-effort but skips COMPLETING (its one
   call site is `_complete()`). UNLOADING is reached even if a hook raises,
   so a Bit can never wedge Control loaded. The Console's ABORT does more
-  (see the Terrarium and Console sections).
+  (*Terrarium lifecycle*).
 
 <!-- diagram:lifecycle GENERATED by tools/render_diagrams.py -- do not hand-edit -->
 ```ascii
@@ -480,8 +503,8 @@ mutate) and `cue_horizon`, stamped at load for Bits grading input.
   ships `key = "metro-dev"`, `min_scored = 1`.
 - `control/run_profile.py`: a profile (`profiles/dev-metronome.toml`) has
   `[run]` defaults and `[bit.overrides.*]`; precedence is manifest <
-  profile < CLI, re-validated by `merge_overrides`. `run_stack` always
-  forwards its own `--setup-seconds` (90), overriding the manifest's.
+  profile < CLI, re-validated by `merge_overrides`. `run_stack`'s own
+  `--setup-seconds` overrides the manifest's (*`run_stack`*).
 
 #### Lobby and join handshake
 
@@ -508,8 +531,6 @@ mutate) and `cue_horizon`, stamped at load for Bits grading input.
   5 s; a double tap (count 2, or two taps in 1.5 s) joins the default role.
   A scored join's ceremony, 1 s apart: green x2, a bell up the scale at
   +0.8 s, a device chime cue with `key=<midi>` at +1.8 s.
-- `ConsoleAgent` rebroadcasts roles as `roles_changed` on LOADED and IDLE,
-  so a Console tab opened before a Bit loaded still classes scored/jam.
 
 #### Functions and builtins
 
@@ -588,8 +609,8 @@ accepts the extension); never check browser JS by grepping source.
 #### Device pool and stale reaping
 
 - `control/device_pool.py` survives Bits. `carried` defaults to
-  `DEFAULTSHROOM`, also the fallback (with a deduped warning) for an
-  unknown or pixel-less declared instrument; a bare re-hello keeps it.
+  `DEFAULTSHROOM` (fallbacks: *Carried wire* under *Instruments and the
+  catalog*).
 - Every inbound message calls `touch()`. `reap_stale()` runs each tick from
   `DeviceLinkAgent.poll()` (`stale_timeout` 15 s) and frees a reaped
   device's role before `on_release`, so the slot reopens at once.
@@ -653,8 +674,8 @@ Instrument plus placement and binding. All pure stdlib.
   docstrings, and `AudioBridge.pool`'s, still describe that recycle).
 - Arco has no message-based quit, so `ArcoProcess.shutdown()` sends SIGTERM
   (which `harness/signals.py` handles for our own processes). Its lazy pyarco
-  import is the only one in `control/`: the rule is no renderer or pyarco at
-  module level (`tests/test_room_profile.py`).
+  import is the only one in `control/`: the rule is no luxaeterna, pyarco or
+  o2litepy at module level (`tests/test_room_profile.py`).
 
 <!-- diagram:terrarium-state GENERATED by tools/render_diagrams.py -- do not hand-edit -->
 ```ascii
@@ -722,7 +743,7 @@ pending) and treated as the design. In `console/agent.py`:
   `bit_paths` are the Bit roots.
 - `CaptureBit` provenance is deferred (it accepts `provenance`; `load_bit`
   never passes one). The instruments spec's one: `requires="room"` passes at
-  join (Instruments, below).
+  join (*Instruments and the catalog*).
 
 #### `terrarium.toml`
 
@@ -773,7 +794,8 @@ pending) and treated as the design. In `console/agent.py`:
   `bars[.left|center|right]`, `fiber[.b1|b2|b3]` or `primary` (both); TestBit
   and MetronomeBit list it.
 - `[psus.<name>] amps` with `[[artnet]] psu`: outputs on one PSU sum `max_amps`
-  to at most 80 % of it, across every Room (one box, one supply).
+  to at most 80 % of it, across every Room (one box, one supply). An output
+  with no `psu` is unchecked.
 - **The engine synthesizes the ROOM role.** A non-empty `Bit.room_manifests()`
   makes `load_bit` merge a `room_role()` (role `room_<name>`, `RoleClass.ROOM`,
   capacity = fixture count). Light targets are `primary`, `<fixture>` or
@@ -781,7 +803,9 @@ pending) and treated as the design. In `console/agent.py`:
   any other, or a missing `@fixture:`, is a `BitLoadError` (why `bits/chase/`
   lists TEST only).
 - **Shown by addition.** The Room's node id, registration counts and role name
-  stay filtered from Console and uplink (`non_room_counts()`); its instruments,
+  stay filtered from Console and uplink (`non_room_counts()`): its
+  Registration Node grants control of the rendering backend, while its
+  instruments are not a credential. Its instruments,
   zones and controller values come through `control/room_view.py`'s separate
   `room` payload, so no filter was ever loosened: extend it that way. Light and
   audio instruments share one list keyed by `kind`: both read one MIDI stream.
@@ -791,7 +815,8 @@ pending) and treated as the design. In `console/agent.py`:
 - `control/room_binding.py`'s `RoomBindingRegistry` is Control-global, keyed by
   Room and fixture. `arm(room, fixture, seconds)` names the fixture the next
   Room-node join binds, one per Room at a time; an unarmed Room node answers
-  "no such node". `arm_room` refuses an `[[artnet]]`-covered fixture.
+  "no such node". The Console's `arm_room` handler (`console/agent.py`), not
+  the registry, refuses an `[[artnet]]`-covered fixture.
 - `load_room` skips an `[[artnet]]`-covered fixture; otherwise the harness's
   factory spawns a `sim-room-<fixture>` o2lite client on `room_stack`, or a
   recorded, connected device rebinds; the rest go to `wait_for_room_binding`
@@ -800,7 +825,9 @@ pending) and treated as the design. In `console/agent.py`:
 - **Save and load exist**: `save()` writes bound dev ids per fixture as JSON
   (never the armed window), `load()` restores them (missing file: no-op; old
   flat format: ignored). `load_room`/`unload_room` call them given a
-  `binding_store_path`; `terrarium_boot` passes none, so nothing persists.
+  `binding_store_path`; `build()` accepts one but `terrarium_boot`'s `main()`
+  passes none, so nothing persists and each restart needs an admin-armed
+  tap to rebind a physical Room device.
 
 #### Instruments and the catalog
 
@@ -988,13 +1015,14 @@ holds a `LightSession` per joined device and per fixture, ships
 - **A ROOM join builds no bridge and sends nothing**; the fixture's frames
   just start. `_drop_player_bridge` forgets a player-era bridge at once
   (no fade, `/release` or `drop_dev`), else the device gets two LED
-  streams. The Bit is not told its player left (there is no leave hook).
+  streams. The Bit is not told its player left (*Not yet built / deferred*).
 - **Overrides** (`SolidCue`, lobby flashes, mute blackout) are painted in
   the strip's channel order (`SolidCue` names R, G, B; W stays 0). A
   hello'd, unjoined device shows only its override, then one black frame.
   `_finish_release` and `unwire_room` drop overrides, since a blackout
-  never expires. A muted surface ignores `SolidCue` (Cues, above).
-- **Lobby** (see Lobby and join handshake): FULL still breathes the light;
+  never expires. A muted surface ignores `SolidCue` (*Cues (SolidCue,
+  SURFACE, mute)*).
+- **Lobby** (*Lobby and join handshake*): FULL still breathes the light;
   RUNNING restores the Bit's light and program.
 
 #### Timed cues and `cue_horizon`
@@ -1004,7 +1032,7 @@ holds a `LightSession` per joined device and per fixture, ships
   device frames). `when=None` is not a clamp; a past `when` is. A sequence
   number stops `sort()` comparing payloads. `lateness` holds signed
   samples (bounded, 20000); `purge()` serves mute, `next_due()` Art-Net.
-- **One gesture, one `at`** (Bit interface; `BootConfig.cue_horizon`,
+- **One gesture, one `at`** (*Bit interface*; `BootConfig.cue_horizon`,
   0.060 s). Light feeds the session now (held to `at - horizon` if further
   out, so it cannot leak into a breath frame); the frame is stamped `at`
   and Room audio waits on `_room_cues` until `at`. An uncued frame gets
@@ -1127,8 +1155,8 @@ and that is O2 working as designed** (Roger Dannenberg's ruling):
   unique per host only, and blind to the one collision seen, an orphaned
   run re-claiming its own name on reconnect. Namespacing cannot stop that
   (the orphan has the same namespace), so the guards target orphan
-  lifetime: `--exit-with-parent`, `TeardownStack` and the probe (harness
-  section).
+  lifetime: `--exit-with-parent`, `TeardownStack` and the probe (*The
+  orphan chain* under *`run_stack`*).
 
 #### Browser guests over o2ws
 
@@ -1146,7 +1174,7 @@ the hub with the string flavor. Design: [`2026-09-08-o2ws-browser-link-design.md
   `tool/sim build --base-href /app/`, or `run_stack.stage_web_build`
   rewrites `<base href="/">`.
 - Cross-origin o2ws (page 8788, Arco 8080) works; `www/o2ws.js` carries
-  three upstream fixes (`www/` section). Real-phone timing is unmeasured.
+  three patches (*`www/` and `arcoserver/`*). Real-phone timing is unmeasured.
   A refused name is not retried (the dev id is fixed before connect).
 
 #### Fixture sinks and Art-Net
@@ -1167,7 +1195,8 @@ Design: [`2026-09-23-artnet-fixture-sink-design.md`](https://github.com/Musical-
   required; `start_universe` 0, `port` 6454, `amps_per_pixel_full` 0.025,
   `lead_ms` 0, `keepalive_ms` 250, `psu`. Refused: a non-RGBW fixture, two
   outputs per fixture, overlapping universes per host:port, a universe
-  past 32767. Coverage and PSUs: Rooms and Room binding, above.
+  past 32767. Coverage and PSUs: *Rooms and fixtures (TEST, DEMO, VENUE)*
+  and *Room binding*.
 - `harness/artnet_listen.py` is a strict fake WLED: DEMO got ~34-40 fps,
   0 gaps (dev-box loopback). Spec section 9 gates real hardware.
 
@@ -1431,7 +1460,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
 - `harness/array_smoke.py`: 864 RGBW px, 7 Art-Net universes; 21.6 A at
   full white on a 12.5 A supply, so `TERRARIUM_MAX_AMPS` (10) is forced.
 - `harness/artnet_listen.py`: strict fake WLED (fps, gaps, `--websim`).
-- `harness/sync_bench.py`: p99 and worst of absolute deltas (*Timed cues*).
+- `harness/sync_bench.py`: p99 and worst of absolute deltas (*Timed cues
+  and `cue_horizon`*).
 - `tools/trace_stats.py`: gesture features per trace and label over a
   capture directory (`--csv`); thresholds are a ladder, not truth.
 - `harness/local_sample.py`: `last_latency_ms` is dispatch, not sound.
@@ -1463,7 +1493,8 @@ network makes auth a prerequisite.
   or `room`), `bench_start`/`stop`/`fire`/`lane`, `list_captures`,
   `capture_stats`, `replay_trace`. Refusals go to the requester only.
 - A client gets `snapshot`, then `bits_listed`; the rest is change-driven
-  (`roles_changed` on LOADED and IDLE), including the bench's five:
+  (`roles_changed` on LOADED and IDLE, so a tab opened before a Bit loaded
+  still classes scored/jam), including the bench's five:
   `bench_started`, `bench_frame`, `captures_listed`, `capture_stats`,
   `replay_result`.
 - **`ConsoleAgent`** (`console/agent.py`) observes `GameServer` and
@@ -1475,19 +1506,20 @@ network makes auth a prerequisite.
 - Room frames go out at ~10 Hz (`ROOM_FRAME_INTERVAL`), latest per fixture,
   dropped, never queued (boundary rule 2); bench frames too
   (`BENCH_FRAME_INTERVAL`, 0.1 s). Other views rebroadcast only on change.
-- The `room` payload (shown by addition, *Rooms and fixtures*): `fixtures[]`
+- The `room` payload (*Shown by addition*, *Rooms and fixtures*): `fixtures[]`
   (`dev`, `color_order`, `muted`, `artnet`), `controllers` (flat, first
   fixture wins), `fixture_controllers` (no Console module reads it).
   `surface_instruments` maps `@fixture:` tokens, bound devs (not a covered
   fixture's stale one) and devices; `builtins` add carried instruments.
 - `run` is `request_start(None, TERRARIUM_ADMIN, "console")`; `restart` is
-  `abort()` plus `load_bit` of the same name and config (ABORT, Rooms:
-  *Terrarium lifecycle*). A failed load's `NO_ROOM` looks like an unload's,
-  so `_load_room` broadcasts `room_load_failed` itself (a failed client
-  restart does so before its forced unload).
-- `bit_completed` goes out at UNLOADING when `result()` is non-`None`,
-  aborts included (only the uplink's credits). `log` carries warnings,
-  start/prepare verdicts, lobby events, `round ended: <bit> (<reason>)`.
+  `abort()` plus `load_bit` of the same name and config (ABORT, Unload,
+  `room_load_failed` and the other-Room refusal: *Terrarium lifecycle*). A
+  failed load's `NO_ROOM` looks like an unload's, so `_load_room`
+  broadcasts `room_load_failed` itself.
+- The Console's `bit_completed` goes out at UNLOADING when `result()` is
+  non-`None`, aborts included; the uplink sends its own at COMPLETING only
+  (*`uplink/`*). `log` carries warnings, start/prepare verdicts, lobby
+  events, `round ended: <bit> (<reason>)`.
 - **Design commands** load via `_load_design_catalog`: an unparseable
   published entry fails a whole catalog, so it becomes one unclickable
   `catalog_error_row`, never a raise out of `poll()`. A mutation replies
@@ -1509,7 +1541,7 @@ network makes auth a prerequisite.
 - **Bit panel** (`bit.js`): Run/Restart/Abort need `ROOM_READY`, Load a
   settled Terrarium. The picker omits disabled Bits, dims `[console]
   hidden` ones, takes `table.key` overrides and a loadable Room, disabling
-  any but the active one (naming `./terrarium.sh --room <name>`).
+  any but the active one (*Terrarium lifecycle*).
 - **Live view**: the Room card (`surface.js`: dot rows per block, zone bar,
   Release/Arm, an `Art-Net` chip (no Arm) when covered, `Muted`, canvas
   links `http(s)` only), Triggers (`functions.js`), Live values, status,
@@ -1518,8 +1550,10 @@ network makes auth a prerequisite.
 - **Pickers**: All, each fixture as `@fixture:<name>` (`(unbound)`,
   `(muted)`), then unbound devices; DEVICE pickers never offer a fixture
   ("no device joined" disables Fire). A refill maps a device that just bound
-  to its fixture row, not to All (one Stop would mute everything). A failed
-  optimistic Arm rolls back (`pendingArm`).
+  to its fixture row, not to All (one Stop would mute everything).
+  `functions.js` holds each row's picker by reference
+  (`currentDeviceTargets`), so a refill mutates the node the row owns. A
+  failed optimistic Arm rolls back (`pendingArm`).
 - **Join card** (`join.js`, from `control/join_info.py`, hidden when `null`):
   guest URL, then per node a segno QR, URL and Tuneshroom command. With a
   `[start] key`, a **Start (admin)** row adds the start URL and QR, the key,
@@ -1579,8 +1613,10 @@ and only lifecycle and registration counts cross it ([design](https://github.com
   1 s to 30 s; a send failing just after connect is a failed attempt.
 - `load_bit` needs `ROOM_READY` and ignores `room` (unlike the Console);
   `run` is `request_start` as the Terrarium; `abort` is Bit-only; `restart`
-  is the soft cycle. `load_room`/`unload_room` skip the Console's one-Arco
-  refusal. Errors become `error` events.
+  is the soft cycle. `unload_room` skips the Console's live-clients refusal,
+  so a broker unload with live Arco clients strands the process until
+  restart (`load_room` is still refused outside `NO_ROOM` by the
+  `Terrarium`). Errors become `error` events.
 - **`bit_completed` fires at COMPLETING only, never on `abort()`**: an
   aborted round credits nobody. It carries `bit {name, version}`,
   `room_name`, `terrarium_config_version`, `result` (`null` if absent or
@@ -1626,7 +1662,8 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   jam `jammer` (`TEST_JAM_NODE`) test the RUNNING join rule. The player is
   `aurora` (`cc:74` hue, `cc:11` level, so the breath), no note lane, with
   welcome `glow` (`bloom` strobed and rendered a dark welcome); the jammer
-  glows dim green on its own `cc:1`/`cc:2`. The Room `rainbow` moves with
+  glows dim green on its own `cc:1`/`cc:2` and has no `ugen_manifest`,
+  exercising the no-audio path. The Room `rainbow` moves with
   the `drift` generator and `tilt_hue`; three full tilts fire `play_aurora`.
 - **ChaseBit** (`bits/chase/`): TestBit plus `chase`, stepping
   `@fixture:main` then `@fixture:accent`, so TEST only.
@@ -1731,12 +1768,11 @@ appended, never inserted.
 - **Measure timing on the show machine**, which relays every hop through the
   process doing all synthesis while feeding the 44 Hz render loop. The
   M1a-era "round trip under 50 ms" had Control out of the path. Use
-  `harness/render_bench.py` (worst frame and p95 beside the mean; it drives
-  `_loop_once()` itself rather than trust a smoothed rate). No show-machine
+  `harness/render_bench.py` (*Benches and venue tools*). No show-machine
   figures are recorded yet.
-- **Pace to deadlines, never sleep after the work**: macOS oversleeps a
-  22.7 ms sleep by ~4 ms (44 Hz fell to ~37 Hz). New fixed-rate loops use
-  `TickPacer` (*Tick pacing*); it fixes the mean, not jitter (p95 ~27 ms).
+- **Pace to deadlines, never sleep after the work**: macOS oversleeps. New
+  fixed-rate loops use `TickPacer`; figures and the open jitter in *Tick
+  pacing*.
 - **Arco needs a controlling terminal.** Curses opens `/dev/tty`, so a plain
   `Popen` on a pipe fails (then reads as a readiness timeout); `script` does
   not help. `pty_popen` (`control/arco_process.py`, `--arco-pty`) forks onto
@@ -1821,7 +1857,8 @@ Kept explicit so the doc does not over-claim.
   mm-tuneshroom's `lib/link/envelope.dart` and the contract together: **an
   open decision, not a bug to quietly fix.**
 - **Contract kit:** mm-devshroom's native replay environment, the live bench
-  replay spike (spec section 8), and an executable Mushica capability-gate
+  replay spike (section 8 of the device contract kit spec, *The device
+  contract and `contract_kit/`*), and an executable Mushica capability-gate
   test (waits on the Mushica Bit).
 - **Check join-retrying firmware before hardware bring-up.** One-shot
   `o2_shroom` (no `--persist`) with `--join-retry` ends the round on an
@@ -1831,10 +1868,11 @@ Kept explicit so the doc does not over-claim.
   (liveness spec section 5).
 - **A device's clock-sync to Arco after Control has connected is unreliable**
   in one remaining, upstream case. The intermittent half was this repo's
-  undrained Arco pty (*Running it*), fixed, and never headless-specific. What remains: pyarco's `arco.initialize()` always
-  sends `/host/clear` via `reset()`, and a client that synced **before**
-  that keeps a valid `time_get()` on a dead socket (measured: 120 joins
-  over 240 s, none received). `verify_service_ownership` makes this loud
+  undrained Arco pty (*Running it*), fixed, and never headless-specific.
+  What remains: pyarco's `arco.initialize()` always sends `/host/clear`
+  via `reset()`, and a client that synced **before** that keeps a valid
+  `time_get()` on a dead socket (measured: 120 joins over 240 s, none
+  received). `verify_service_ownership` makes this loud
   (`FATAL: service ... is not routed back to this process`), not fixed.
   Arco's `(S)tart` key restores sync (`--arco-start-audio`, off by
   default: the toggle cannot be read, so it can stop running audio); same
@@ -1867,18 +1905,18 @@ Kept explicit so the doc does not over-claim.
   engine (N = 1 in `rooms/VENUE.toml` until supplied), fiber current, the
   PSU rating, and whether the fiber shares it. A per-bundle fiber ambient
   (one `aurora` per zone) is a follow-up.
-- **`RoomBindingRegistry` save/load does not persist in live runs.** Both
-  exist, and `Terrarium.load_room()`/`unload_room()` (`control/terrarium.py`)
-  call them given a `binding_store_path`, but `harness/terrarium_boot.py`'s
-  `main()` never passes one: each restart needs an admin-armed tap to rebind
-  a physical Room device.
+- **`RoomBindingRegistry` save/load does not persist in live runs**: no
+  `binding_store_path` is passed (*Room binding*).
 - **`deploy/`** (venue provisioning, networking) is planned in the README,
   not created. **Operator control beyond the Console** (physical controls,
   a Registration Node convention) is a later decision.
-- **mm-fairyring follow-ups here:** issue #100 (a `set_admin_devices`
-  down-command writing `[admin] devices` from a MycoQuest manifest, how the
-  admin site gets a GemID onto a box); issue #127 (a refused identity still
-  replays and clears the journal, then hot-loops the reconnect); two boxes
+- **mm-fairyring follow-ups here:** mm-terrarium
+  [#100](https://github.com/Musical-Mycology/mm-terrarium/issues/100)
+  (a `set_admin_devices` down-command writing `[admin] devices` from a
+  MycoQuest manifest, how the admin site gets a GemID onto a box);
+  [#127](https://github.com/Musical-Mycology/mm-terrarium/issues/127)
+  (a refused identity still replays and clears the journal, then
+  hot-loops the reconnect); two boxes
   sharing an identity displace each other forever (4409); and
   `bit_completed` needs a run id so a replay cannot credit a later quest.
 - **`GET /join.json`** on the LAN static server (mm-tuneshroom's
