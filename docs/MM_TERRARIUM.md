@@ -4496,6 +4496,22 @@ Design: `docs/superpowers/specs/2026-09-10-terrarium-standup-and-join-design.md`
   `arco.finished` still False; a SIGINT from NO_ROOM after an ABORT can
   still print these at exit. That path is already refused as a restart
   by D7, so it was left alone.
+- **`AudioBridge.shutdown()` is terminal (fixed 2026-09-28, PR #154).**
+  The D6 order above had a leftover: phase 1 of `terrarium_boot.shutdown()`
+  shuts the bridge and pool (`arco.finish()`), then phase 2's
+  `unload_room(force=True)` aborts the Bit, the engine goes IDLE, and
+  `DeviceLinkAgent.on_state_change` re-runs `_setup_room()`, re-granting
+  every Room fixture against the shut pool. `ArcoSynthPool.acquire()`
+  raised `start() must run before acquire()` and the engine's observer
+  wrapper logged one caught traceback into `control.log` on every
+  `smoke-test.sh` run (exit still 0). The drone was acquired normally at
+  boot; only this post-shutdown re-grant failed. Fix: `shutdown()` sets a
+  flag and later `on_grant()`/`play_note()` are no-ops. Safe because
+  `AudioBridge.shutdown()` is called only at process exit (the room
+  recycle uses the pool's own `quiesce()`/`start()`). Reordering to unload
+  the Bit before the clients was rejected: `unload_room` tears down the
+  Bit and Arco together, so it would break the clients-before-Arco rule.
+  Pinned by `test_shutdown_does_not_regrant_room_audio_after_the_pool_is_shut`.
 - **SIGINT does stop `./terrarium.sh`; the 20 s "hang" in the Task 14
   and 16 reports was the test harness.** Those runs were backgrounded
   from a non-interactive bash script (`cmd &` in a `bounded.sh`
