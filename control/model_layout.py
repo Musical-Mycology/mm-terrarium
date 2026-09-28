@@ -297,33 +297,43 @@ def _transform_aabb(m: tuple, mn: tuple, mx: tuple) -> tuple:
 
 def _validate_indices(markers: dict, pixel_count: int, path: str) -> None:
     expected, found = set(range(pixel_count)), set(markers)
-    if found != expected:
-        # Distinguish between a gap (indices present but with a hole) and
-        # a count mismatch (not enough indices in general).
-        # A gap has the max index equal to pixel_count-1; a count mismatch
-        # has a smaller max index.
-        max_found = max(markers.keys()) if markers else -1
-        if max_found == pixel_count - 1:
-            # Gap: we have the right max index, but missing some in the middle
-            missing = sorted(expected - found)
-            raise ModelLayoutError(
-                path=path,
-                message=f"LED marker indices must run 0..{pixel_count - 1} "
-                        f"with no gaps; missing {missing}")
-        else:
-            # Count mismatch: not enough indices in general
-            raise ModelLayoutError(
-                path=path,
-                message=f"found {len(markers)} LED marker(s) but the "
-                        f"instrument declares pixels={pixel_count}")
+    if found == expected:
+        return
+    # Spec section 4 step 7: name the file, the marker and the rule. Always
+    # compute both halves of the mismatch so the message is never
+    # self-contradictory (e.g. 1-based marker numbering against a correct
+    # pixel count looks like both a "missing" and an "unexpected" index,
+    # never a bare count mismatch that claims the wrong total).
+    missing = [f"LED_{i:03d}" for i in sorted(expected - found)]
+    extra = [f"LED_{i:03d}" for i in sorted(found - expected)]
+    raise ModelLayoutError(
+        path=path,
+        message=f"LED marker indices must be exactly 0..{pixel_count - 1} "
+                f"(pixels={pixel_count}); found {len(markers)} marker(s); "
+                f"missing {missing}; unexpected {extra}")
 
 
 def parse_model_layout(data: bytes, *, path: str, pixel_count: int) -> ModelLayout:
     """Parse an artist-authored .glb into an ordered PixelLayout tuple
     plus the source file's SHA-256, per spec section 4. Raises
     ModelLayoutError, located to the file and (where applicable) the
-    offending marker, on any rule violation."""
+    offending marker, on any rule violation -- including ordinary
+    malformed JSON (an out-of-range index, a non-dict node, a value of
+    the wrong type) that would otherwise escape as a raw, unlocated
+    IndexError/KeyError/TypeError/ValueError/AttributeError."""
     gltf = read_glb_json(data, path=path)
+    if not isinstance(gltf, dict):
+        raise ModelLayoutError(path=path, message="glTF root must be a JSON object")
+    try:
+        return _parse_model_layout_body(gltf, data, path=path, pixel_count=pixel_count)
+    except ModelLayoutError:
+        raise
+    except (IndexError, KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ModelLayoutError(path=path, message=f"malformed glTF: {exc}") from exc
+
+
+def _parse_model_layout_body(gltf: dict, data: bytes, *, path: str,
+                             pixel_count: int) -> ModelLayout:
     _refuse_draco(gltf, path)
     nodes = gltf.get("nodes", [])
     leds_idx = _find_leds_node(nodes, path)

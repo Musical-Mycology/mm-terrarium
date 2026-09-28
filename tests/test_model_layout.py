@@ -400,3 +400,87 @@ def test_negative_zone_named_primary_is_refused():
     gltf["nodes"][1]["name"] = "primary"
     with pytest.raises(ModelLayoutError, match="primary"):
         parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+# --- IMPORTANT 1: ordinary malformed JSON must be located, not raw ---
+
+def _malformed_doc() -> dict:
+    accessors = [accessor_only_box((0.0, 0.0, 0.0), 0.001)]
+    meshes = [mesh_with_position(0)]
+    return {"nodes": [{"name": "LEDs", "children": [1]},
+                      {"name": "ring", "children": [2]},
+                      {"name": "LED_000", "mesh": 0}],
+            "meshes": meshes, "accessors": accessors}
+
+
+def _child_idx_out_of_range():
+    d = _malformed_doc(); d["nodes"][1]["children"].append(99); return d
+
+
+def _accessor_min_len_2():
+    d = _malformed_doc(); d["accessors"][0]["min"] = [0, 0]; return d
+
+
+def _mesh_idx_string():
+    d = _malformed_doc(); d["nodes"][2]["mesh"] = "0"; return d
+
+
+def _matrix_non_numeric():
+    d = _malformed_doc(); d["nodes"][0]["matrix"] = ["a"] * 16; return d
+
+
+def _node_name_int():
+    d = _malformed_doc(); d["nodes"].append({"name": 5}); return d
+
+
+def _node_not_dict():
+    d = _malformed_doc(); d["nodes"].append("notadict"); return d
+
+
+def _accessor_idx_string():
+    d = _malformed_doc()
+    d["meshes"][0]["primitives"][0]["attributes"]["POSITION"] = "0"
+    return d
+
+
+@pytest.mark.parametrize("build_doc", [
+    _child_idx_out_of_range, _accessor_min_len_2, _mesh_idx_string,
+    _matrix_non_numeric, _node_name_int, _node_not_dict, _accessor_idx_string,
+], ids=["child-idx-oob", "accessor-min-len2", "mesh-idx-str",
+        "matrix-nonnumeric", "node-name-int", "node-not-dict", "accessor-idx-str"])
+def test_malformed_glb_is_always_a_located_model_layout_error(build_doc):
+    gltf = build_doc()
+    with pytest.raises(ModelLayoutError, match="t.glb"):
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=1)
+
+
+def test_json_root_list_is_a_located_model_layout_error():
+    with pytest.raises(ModelLayoutError, match="t.glb"):
+        parse_model_layout(build_glb([1, 2]), path="t.glb", pixel_count=1)
+
+
+# --- IMPORTANT 3: index-mismatch message must name missing and unexpected ---
+
+def test_one_based_numbering_names_missing_and_unexpected_markers():
+    gltf = _document_with_indices([1, 2, 3])
+    with pytest.raises(ModelLayoutError) as exc:
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=3)
+    message = str(exc.value)
+    assert "found 3" in message
+    assert "missing" in message
+    assert "LED_000" in message  # missing (never contradicts "found 3")
+    assert "LED_003" in message  # unexpected
+
+
+@pytest.mark.parametrize("indices,pixel_count", [
+    ([1, 2, 3], 3),
+    ([0, 1, 3], 3),
+    ([0, 2], 2),
+])
+def test_index_mismatch_message_is_never_self_contradictory(indices, pixel_count):
+    gltf = _document_with_indices(indices)
+    with pytest.raises(ModelLayoutError) as exc:
+        parse_model_layout(build_glb(gltf), path="t.glb", pixel_count=pixel_count)
+    message = str(exc.value)
+    assert f"found {len(indices)}" in message
+    assert "missing" in message
