@@ -1768,8 +1768,8 @@ appended, never inserted.
 - **Measure timing on the show machine**, which relays every hop through the
   process doing all synthesis while feeding the 44 Hz render loop. The
   M1a-era "round trip under 50 ms" had Control out of the path. Use
-  `harness/render_bench.py` (*Benches and venue tools*). No show-machine
-  figures are recorded yet.
+  `harness/render_bench.py` (*Benches and venue tools*; the `_loop_once()`
+  rationale is in *Tick pacing*). No show-machine figures are recorded yet.
 - **Pace to deadlines, never sleep after the work**: macOS oversleeps. New
   fixed-rate loops use `TickPacer`; figures and the open jitter in *Tick
   pacing*.
