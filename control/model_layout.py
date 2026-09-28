@@ -64,3 +64,88 @@ def read_glb_json(data: bytes, *, path: str) -> dict:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ModelLayoutError(
             path=path, message=f"JSON chunk is not valid JSON: {exc}") from exc
+
+
+IDENTITY: tuple = (1.0, 0.0, 0.0, 0.0,
+                   0.0, 1.0, 0.0, 0.0,
+                   0.0, 0.0, 1.0, 0.0,
+                   0.0, 0.0, 0.0, 1.0)
+
+
+def _mat_from_trs(translation, rotation, scale) -> tuple:
+    """A column-major 4x4 matrix (glTF's own storage convention) from
+    optional translation/rotation(quaternion x,y,z,w)/scale, composed as
+    glTF defines it: M = T * R * S."""
+    tx, ty, tz = translation if translation is not None else (0.0, 0.0, 0.0)
+    qx, qy, qz, qw = rotation if rotation is not None else (0.0, 0.0, 0.0, 1.0)
+    sx, sy, sz = scale if scale is not None else (1.0, 1.0, 1.0)
+    xx, yy, zz = qx * qx, qy * qy, qz * qz
+    xy, xz, yz = qx * qy, qx * qz, qy * qz
+    wx, wy, wz = qw * qx, qw * qy, qw * qz
+    return (
+        (1.0 - 2.0 * (yy + zz)) * sx, (2.0 * (xy + wz)) * sx, (2.0 * (xz - wy)) * sx, 0.0,
+        (2.0 * (xy - wz)) * sy, (1.0 - 2.0 * (xx + zz)) * sy, (2.0 * (yz + wx)) * sy, 0.0,
+        (2.0 * (xz + wy)) * sz, (2.0 * (yz - wx)) * sz, (1.0 - 2.0 * (xx + yy)) * sz, 0.0,
+        tx, ty, tz, 1.0,
+    )
+
+
+def _node_local_matrix(node: dict) -> tuple:
+    """A node's own local transform: its explicit `matrix` (16 floats,
+    column-major, used verbatim) or its TRS fields, defaulting to
+    identity when neither is present."""
+    if "matrix" in node:
+        m = node["matrix"]
+        if len(m) != 16:
+            raise ValueError(f"node {node.get('name')!r} matrix must have 16 elements")
+        return tuple(float(x) for x in m)
+    return _mat_from_trs(node.get("translation"), node.get("rotation"), node.get("scale"))
+
+
+def _mat_mul(a: tuple, b: tuple) -> tuple:
+    """a @ b, both column-major 16-tuples (glTF storage: element
+    col*4+row)."""
+    result = [0.0] * 16
+    for col in range(4):
+        for row in range(4):
+            s = 0.0
+            for k in range(4):
+                s += a[k * 4 + row] * b[col * 4 + k]
+            result[col * 4 + row] = s
+    return tuple(result)
+
+
+def _transform_point(m: tuple, p: tuple) -> tuple:
+    x, y, z = p
+    return (
+        m[0] * x + m[4] * y + m[8] * z + m[12],
+        m[1] * x + m[5] * y + m[9] * z + m[13],
+        m[2] * x + m[6] * y + m[10] * z + m[14],
+    )
+
+
+def _build_parent_map(nodes: list) -> dict:
+    """{child node index: parent node index}, from every node's
+    `children` list."""
+    parent: dict = {}
+    for i, node in enumerate(nodes):
+        for child in node.get("children", []):
+            parent[child] = i
+    return parent
+
+
+def _world_matrix(node_idx: int, nodes: list, parent_map: dict) -> tuple:
+    """The cumulative world transform of nodes[node_idx]: the product of
+    every ancestor's local matrix, root-first, down to this node's own
+    local matrix (identity ancestors for a Rhino export, but composed in
+    general per spec section 4 step 4)."""
+    chain = [node_idx]
+    cur = node_idx
+    while cur in parent_map:
+        cur = parent_map[cur]
+        chain.append(cur)
+    chain.reverse()
+    world = IDENTITY
+    for idx in chain:
+        world = _mat_mul(world, _node_local_matrix(nodes[idx]))
+    return world

@@ -45,3 +45,58 @@ def test_read_glb_json_refuses_non_json_first_chunk():
 def test_read_glb_json_error_names_the_path():
     with pytest.raises(ModelLayoutError, match="t.glb"):
         read_glb_json(b"short", path="t.glb")
+
+
+from control.model_layout import (
+    _build_parent_map, _node_local_matrix, _transform_point, _world_matrix,
+)
+
+IDENTITY = (1.0, 0.0, 0.0, 0.0,
+           0.0, 1.0, 0.0, 0.0,
+           0.0, 0.0, 1.0, 0.0,
+           0.0, 0.0, 0.0, 1.0)
+
+
+def test_node_local_matrix_defaults_to_identity():
+    assert _node_local_matrix({}) == IDENTITY
+
+
+def test_node_local_matrix_uses_matrix_key_verbatim():
+    m = tuple(float(i) for i in range(16))
+    assert _node_local_matrix({"matrix": list(m)}) == m
+
+
+def test_node_local_matrix_from_translation_only():
+    m = _node_local_matrix({"translation": [1.0, 2.0, 3.0]})
+    assert m[12:15] == (1.0, 2.0, 3.0)
+    assert m[0:3] == (1.0, 0.0, 0.0)
+
+
+def test_node_local_matrix_from_scale_only():
+    m = _node_local_matrix({"scale": [2.0, 3.0, 4.0]})
+    assert m[0] == 2.0 and m[5] == 3.0 and m[10] == 4.0
+
+
+def test_transform_point_identity_is_a_no_op():
+    assert _transform_point(IDENTITY, (1.0, 2.0, 3.0)) == (1.0, 2.0, 3.0)
+
+
+def test_transform_point_applies_translation():
+    m = _node_local_matrix({"translation": [10.0, 0.0, 0.0]})
+    assert _transform_point(m, (0.0, 0.0, 0.0)) == (10.0, 0.0, 0.0)
+
+
+def test_world_matrix_composes_parent_translation_with_child():
+    nodes = [
+        {"name": "root", "translation": [10.0, 0.0, 0.0], "children": [1]},
+        {"name": "child", "translation": [0.0, 5.0, 0.0]},
+    ]
+    parent_map = _build_parent_map(nodes)
+    world = _world_matrix(1, nodes, parent_map)
+    assert _transform_point(world, (0.0, 0.0, 0.0)) == (10.0, 5.0, 0.0)
+
+
+def test_world_matrix_of_a_root_node_is_its_own_local_matrix():
+    nodes = [{"name": "root", "translation": [1.0, 2.0, 3.0]}]
+    parent_map = _build_parent_map(nodes)
+    assert _world_matrix(0, nodes, parent_map) == _node_local_matrix(nodes[0])
