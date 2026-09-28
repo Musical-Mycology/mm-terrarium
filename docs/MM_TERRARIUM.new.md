@@ -11,9 +11,11 @@ the room; Control attaches over o2lite exactly like every device, so Arco
 relays anything travelling between two clients (`/arco` and `/actl` are 1
 hop, `/game/*` and `/ie<N>/*` are 2). A full-O2 Control would shorten none
 of them; see *Message Routing* in the design doc. **Only Control writes to
-`/arco`**: `control/arco_process.py` is the sole caller of pyarco's
-`arco.initialize()`, so no other process in this repo opens that
-connection. This repo is
+`/arco`**: interactive elements and browsers address only `/game/...` and
+receive `/ie<N>/...`/`/ui<X>/...` back; Control's own process is the only
+one that ever sends to `/arco` (`control/arco_process.py` and
+`harness/arco_synth.py` both call pyarco's `arco.initialize()`, both
+inside that process). This repo is
 `mm-terrarium`'s canonical service doc; the authoritative architecture is
 in-repo at
 [`docs/control-gameserver-design.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/control-gameserver-design.md),
