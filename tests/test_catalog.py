@@ -475,3 +475,60 @@ def test_no_bake_file_does_not_warn(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         load_catalog(root)
     assert not any("stale" in r.message for r in caplog.records)
+
+
+def test_bake_with_non_dict_extras_warns_but_does_not_fail_load(tmp_path, caplog):
+    import logging
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    garbled_gltf = {"nodes": [], "extras": "not-a-dict"}
+    from tests.glb_builder import build_glb
+    (root / "models" / "glowcap.baked.glb").write_bytes(build_glb(garbled_gltf))
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    with caplog.at_level(logging.WARNING):
+        cat = load_catalog(root)
+    assert cat.published["glowcap"] is not None  # load still succeeds
+    assert any("glowcap" in r.message for r in caplog.records)
+
+
+def test_bake_with_non_dict_mm_bake_warns_but_does_not_fail_load(tmp_path, caplog):
+    import logging
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    garbled_gltf = {"nodes": [], "extras": {"mm_bake": ["not", "a", "dict"]}}
+    from tests.glb_builder import build_glb
+    (root / "models" / "glowcap.baked.glb").write_bytes(build_glb(garbled_gltf))
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    with caplog.at_level(logging.WARNING):
+        cat = load_catalog(root)
+    assert cat.published["glowcap"] is not None  # load still succeeds
+    assert any("glowcap" in r.message for r in caplog.records)
+
+
+def test_unreadable_bake_warns_but_does_not_fail_load(tmp_path, caplog, monkeypatch):
+    import logging
+    from pathlib import Path as _Path
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    baked_path = root / "models" / "glowcap.baked.glb"
+    baked_path.write_bytes(b"irrelevant, read_bytes is patched to fail")
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+
+    real_read_bytes = _Path.read_bytes
+
+    def fake_read_bytes(self):
+        if self.name == "glowcap.baked.glb":
+            raise PermissionError(f"denied: {self}")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(_Path, "read_bytes", fake_read_bytes)
+    with caplog.at_level(logging.WARNING):
+        cat = load_catalog(root)
+    assert cat.published["glowcap"] is not None  # load still succeeds
+    assert any("glowcap" in r.message for r in caplog.records)

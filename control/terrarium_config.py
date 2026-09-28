@@ -443,10 +443,20 @@ def _warn_if_bake_stale(model_path: Path, source_sha256: str, iname: str) -> Non
     if not baked_path.is_file():
         return
     try:
-        baked_json = read_glb_json(baked_path.read_bytes(), path=str(baked_path))
-    except ModelLayoutError:
-        return  # an unreadable/corrupt bake is not this loader's problem
-    mm_bake = (baked_json.get("extras") or {}).get("mm_bake") or {}
+        baked_bytes = baked_path.read_bytes()
+        baked_json = read_glb_json(baked_bytes, path=str(baked_path))
+    except (ModelLayoutError, OSError) as exc:
+        logger.warning(
+            "instrument %r: baked model %s is unreadable (%s); treating "
+            "as no bake present", iname, baked_path, exc)
+        return
+    extras = baked_json.get("extras")
+    mm_bake = extras.get("mm_bake") if isinstance(extras, dict) else None
+    if not isinstance(mm_bake, dict):
+        logger.warning(
+            "instrument %r: baked model %s has a garbled mm_bake extras "
+            "block; treating as no bake present", iname, baked_path)
+        return
     baked_source = mm_bake.get("source_sha256")
     if baked_source is not None and baked_source != source_sha256:
         logger.warning(
