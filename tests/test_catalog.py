@@ -509,6 +509,96 @@ def test_bake_with_non_dict_mm_bake_warns_but_does_not_fail_load(tmp_path, caplo
     assert any("glowcap" in r.message for r in caplog.records)
 
 
+def test_stale_check_with_list_json_root_warns_but_does_not_fail_load(tmp_path, caplog):
+    """IMPORTANT 2: a .baked.glb whose JSON root is a list must not raise."""
+    import logging
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    from tests.glb_builder import build_glb
+    (root / "models" / "glowcap.baked.glb").write_bytes(build_glb([1, 2, 3]))
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    with caplog.at_level(logging.WARNING):
+        cat = load_catalog(root)
+    assert cat.published["glowcap"] is not None  # load still succeeds
+    assert any("glowcap" in r.message for r in caplog.records)
+
+
+def test_stale_check_warns_when_mm_bake_missing_source_sha256(tmp_path, caplog):
+    """IMPORTANT 2: mm_bake present as a dict but with no source_sha256 key
+    must warn, not silently pass and not raise."""
+    import logging
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    garbled_gltf = {"nodes": [], "extras": {"mm_bake": {"maps": []}}}
+    from tests.glb_builder import build_glb
+    (root / "models" / "glowcap.baked.glb").write_bytes(build_glb(garbled_gltf))
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    with caplog.at_level(logging.WARNING):
+        cat = load_catalog(root)
+    assert cat.published["glowcap"] is not None  # load still succeeds
+    assert any("glowcap" in r.message and "source_sha256" in r.message
+               for r in caplog.records)
+
+
+def test_draft_model_with_nul_byte_records_error_not_raises(tmp_path):
+    """CRITICAL 1a: draft text is untrusted; a `model` path containing a NUL
+    byte must never escape load_catalog as an uncaught ValueError."""
+    root = make_catalog(tmp_path)
+    text = GOOD + '\nmodel = "models/x\\u0000.glb"\n'
+    error, draft_errors = save_draft(root, "evil", text)
+    assert error is None
+    assert draft_errors  # refused, recorded as a draft error
+    cat = load_catalog(root)  # must not raise
+    entry = cat.get("draft", "evil")
+    assert entry.instrument is None
+    assert entry.error
+
+
+def test_draft_model_pointing_at_a_crafted_toml_disguised_glb_is_refused(tmp_path):
+    """CRITICAL 1b: a second draft can name any file under the catalog root
+    as its `model`, including another draft's .toml (which save_draft will
+    happily write as valid UTF-8 text, e.g. bytes of a crafted GLB). This
+    must be refused before parse_model_layout ever sees it, and must never
+    raise out of load_catalog."""
+    import struct
+    root = make_catalog(tmp_path)
+    body = __import__("json").dumps({"nodes": [{"name": "LEDs", "children": [9]}]}).encode()
+    body += b" " * (100 - len(body))
+    glb = (struct.pack("<III", 0x46546C67, 2, 120)
+           + struct.pack("<II", 100, 0x4E4F534A) + body)
+    text = glb.decode("utf-8")
+    error, _ = save_draft(root, "evil", text)
+    assert error is None
+    error, draft_errors = save_draft(root, "wip", GOOD + '\nmodel = "drafts/evil.toml"\n')
+    assert error is None
+    assert draft_errors  # refused as a draft error, not raised
+    cat = load_catalog(root)  # must not raise (IndexError from a crafted marker index)
+    entry = cat.get("draft", "wip")
+    assert entry.instrument is None
+    assert entry.error
+
+
+def test_published_model_without_glb_suffix_is_refused(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    (root / "models" / "glowcap.txt").write_bytes(b"not a glb")
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.txt"\n')
+    with pytest.raises(TerrariumConfigError, match=r"\.glb"):
+        load_catalog(root)
+
+
+def test_published_model_referencing_a_drafts_path_is_refused(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "drafts" / "sneaky.glb").write_bytes(_twelve_led_glb())
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "drafts/sneaky.glb"\n')
+    with pytest.raises(TerrariumConfigError, match="drafts"):
+        load_catalog(root)
+
+
 def test_unreadable_bake_warns_but_does_not_fail_load(tmp_path, caplog, monkeypatch):
     import logging
     from pathlib import Path as _Path

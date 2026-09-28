@@ -438,6 +438,10 @@ def _warn_if_bake_stale(model_path: Path, source_sha256: str, iname: str) -> Non
     """Spec section 5.3: "The catalog loader, when a <name>.baked.glb
     exists, compares its source_sha256 with the source file and warns if
     stale. It never fails: a stale bake is wrong only for the preview."
+    The whole check runs under a final `except Exception`, so nothing
+    about a garbled or unreadable bake (an unparseable GLB, a JSON root
+    that isn't an object, an `extras`/`mm_bake` of the wrong shape) can
+    ever escape as a raised exception -- it only ever warns.
     """
     baked_path = model_path.parent / f"{model_path.stem}.baked.glb"
     if not baked_path.is_file():
@@ -445,24 +449,32 @@ def _warn_if_bake_stale(model_path: Path, source_sha256: str, iname: str) -> Non
     try:
         baked_bytes = baked_path.read_bytes()
         baked_json = read_glb_json(baked_bytes, path=str(baked_path))
-    except (ModelLayoutError, OSError) as exc:
+        if not isinstance(baked_json, dict):
+            raise ValueError("baked glTF root is not a JSON object")
+        extras = baked_json.get("extras")
+        mm_bake = extras.get("mm_bake") if isinstance(extras, dict) else None
+        if not isinstance(mm_bake, dict):
+            logger.warning(
+                "instrument %r: baked model %s has a missing or malformed "
+                "mm_bake extras block; treating as no bake present",
+                iname, baked_path)
+            return
+        if "source_sha256" not in mm_bake:
+            logger.warning(
+                "instrument %r: baked model %s has no source_sha256 in "
+                "its mm_bake block; treating as no bake present",
+                iname, baked_path)
+            return
+        baked_source = mm_bake["source_sha256"]
+        if baked_source != source_sha256:
+            logger.warning(
+                "instrument %r: baked model %s is stale (bake source_sha256 "
+                "%s, current model %s); re-run tools/bake_model.py",
+                iname, baked_path, baked_source, source_sha256)
+    except Exception as exc:
         logger.warning(
-            "instrument %r: baked model %s is unreadable (%s); treating "
-            "as no bake present", iname, baked_path, exc)
-        return
-    extras = baked_json.get("extras")
-    mm_bake = extras.get("mm_bake") if isinstance(extras, dict) else None
-    if not isinstance(mm_bake, dict):
-        logger.warning(
-            "instrument %r: baked model %s has a garbled mm_bake extras "
-            "block; treating as no bake present", iname, baked_path)
-        return
-    baked_source = mm_bake.get("source_sha256")
-    if baked_source is not None and baked_source != source_sha256:
-        logger.warning(
-            "instrument %r: baked model %s is stale (bake source_sha256 "
-            "%s, current model %s); re-run tools/bake_model.py",
-            iname, baked_path, baked_source, source_sha256)
+            "instrument %r: baked model %s is missing or malformed (%s); "
+            "treating as no bake present", iname, baked_path, exc)
 
 
 def _parse_instrument(iname: str, iraw: dict, *, source: str,
@@ -510,23 +522,46 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str,
                 source=source, key=key,
                 message=f"instrument {iname!r}: 'model' must be a "
                         f"non-empty string path")
+        base = Path(model_root) if model_root is not None else Path(source).parent
+        if "\x00" in model_rel:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: 'model' must not contain a "
+                        f"NUL byte, got {model_rel!r}")
         model_rel_path = Path(model_rel)
         if model_rel_path.is_absolute() or model_rel_path.drive:
             raise TerrariumConfigError(
                 source=source, key=key,
                 message=f"instrument {iname!r}: 'model' must be a path "
-                        f"relative to instruments/, got {model_rel!r}")
-        base = Path(model_root) if model_root is not None else Path(source).parent
+                        f"relative to {base}, got {model_rel!r}")
+        if model_rel_path.suffix != ".glb":
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: 'model' must name a "
+                        f"models/<name>.glb file, got {model_rel!r}")
+        if "drafts" in model_rel_path.parts:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: 'model' {model_rel!r} must "
+                        f"not reference a drafts/ path")
         model_path = base / model_rel_path
-        if not model_path.resolve().is_relative_to(base.resolve()):
+        try:
+            resolved_model = model_path.resolve()
+            resolved_base = base.resolve()
+        except (OSError, ValueError) as exc:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"instrument {iname!r}: 'model' {model_rel!r} could "
+                        f"not be resolved: {exc}") from exc
+        if not resolved_model.is_relative_to(resolved_base):
             raise TerrariumConfigError(
                 source=source, key=key,
                 message=f"instrument {iname!r}: 'model' {model_rel!r} must "
                         f"resolve inside {base} (no escaping the "
-                        f"instruments/ root)")
+                        f"{base.name}/ root)")
         try:
             model_bytes = model_path.read_bytes()
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             raise TerrariumConfigError(
                 source=source, key=key,
                 message=f"instrument {iname!r}: cannot read model "
