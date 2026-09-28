@@ -3,7 +3,8 @@ direction: down
 gesture: "Device gesture"
 data: "GameServer.data(): at = origin + cue_horizon"
 handler: "Bit handler"
-selfcues: "Bit.cues(at)"
+generators: "GeneratorRunner.cues"
+fires: "Bit.fires(at)"
 dispatch: "GameServer._dispatch_cues"
 sink: "on_light_cue (transport-owned sink)"
 light: "Feed light session now"
@@ -16,7 +17,8 @@ dev_show: "Device holds the frame, displays it at at"
 gesture -> data: raw gesture stamp
 data -> handler: at, never the horizon itself
 handler -> dispatch
-selfcues -> dispatch
+generators -> dispatch
+fires -> dispatch
 dispatch -> sink: ROOM resolved to bound fixture devs
 sink -> light
 sink -> audio

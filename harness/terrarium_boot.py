@@ -475,12 +475,14 @@ def shutdown(teardown, terrarium=None, *, pre_room_teardown=None) -> None:
          load_room, or until this function finally stops it.
 
       2. `terrarium.room_stack`, via terrarium.unload_room(force=True) --
-         only if a Room is actually loaded (ROOM_READY). Its own sequence
-         tears down the Bit, then the Room bridge (which frees the Room's
-         Arco voice), then the Room simulator subprocess, then Arco.
-         force=True mirrors the old single-stack shutdown()'s behavior: a
-         still-RUNNING Bit is aborted on the way down rather than refusing
-         to tear down.
+         only if a Room is actually loaded (ROOM_READY). unload_room
+         aborts a non-IDLE Bit first (force=True mirrors the old
+         single-stack shutdown()'s behavior: a still-RUNNING Bit is aborted
+         on the way down rather than refusing to tear down), then closes
+         room_stack, which holds only the per-fixture simulator
+         subprocesses and Arco (simulators first, Arco last). The Room
+         bridge is not on the stack: _RoomWiring unwires the agent when
+         the Terrarium reaches NO_ROOM, after the stack has closed.
 
       3. The process-level `teardown` this module owns (the Console server
          and the www static server) -- neither has a hub dependency on the
