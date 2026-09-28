@@ -46,6 +46,27 @@ class RoomBindingTimeout(Exception):
     setup window."""
 
 
+def unload_room_refusal(clients_live) -> str | None:
+    """D7's unload case (2026-09-12): pyarco's arco.initialize() is a
+    no-op once o2lite has ever synced and finish() cannot prepare a
+    restart, so once Control's Arco clients have been live an unload
+    leaves a process that can never talk to another Arco: the next
+    load_room spawns a fresh Arco and restart_room_clients fails with
+    a broken pipe, stranding the Terrarium in NO_ROOM. Both operator
+    surfaces (ConsoleAgent and UplinkAgent) refuse up front with this
+    reason, naming the restart. Not enforced in Terrarium.unload_room
+    itself: the harness's shutdown paths must still take the Room down.
+
+    clients_live is a callable consulted at command time (a NO_ROOM boot
+    gains live clients on its first load), or None when no hook is
+    wired. Returns the reason, or None when the unload may proceed."""
+    if clients_live is None or not clients_live():
+        return None
+    return ("unloading the Room in a running Terrarium is not "
+            "supported yet: pyarco cannot reconnect to a new Arco in "
+            "one process; stop and run ./terrarium.sh")
+
+
 def _bind_room_fast_path(room: Room, room_binding: RoomBindingRegistry,
                          simulator_factory, known_device_connected,
                          teardown, *, skip=frozenset()) -> None:

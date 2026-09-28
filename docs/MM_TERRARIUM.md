@@ -730,8 +730,11 @@ process can talk to one Arco: upstream (reported to Roger Dannenberg, no fix
 pending) and treated as the design. In `console/agent.py`:
 
 - While `clients_live` (Control's o2lite transport and `ArcoSynthPool` have
-  started) holds, Unload is refused (`_unload_room_refusal`, "stop and run
-  ./terrarium.sh", shown as the Rooms row's `unload_blocked`).
+  started) holds, Unload is refused (`control/terrarium.py`'s
+  `unload_room_refusal`, shared with `UplinkAgent`; "stop and run
+  ./terrarium.sh", shown as the Rooms row's `unload_blocked`). It is not
+  enforced in `Terrarium.unload_room`, whose shutdown callers must still
+  take the Room down.
 - `load_bit` takes a `room`; `_ensure_room_for_bit` checks `room_types`,
   existence and `validate_rooms` before touching anything, so a refusal never
   strands `NO_ROOM`. From `NO_ROOM` it loads the Room and restarts the clients
@@ -1625,10 +1628,13 @@ and only lifecycle and registration counts cross it ([design](https://github.com
   1 s to 30 s; a send failing just after connect is a failed attempt.
 - `load_bit` needs `ROOM_READY` and ignores `room` (unlike the Console);
   `run` is `request_start` as the Terrarium; `abort` is Bit-only; `restart`
-  is the soft cycle. `unload_room` skips the Console's live-clients refusal,
-  so a broker unload with live Arco clients strands the process until
-  restart (`load_room` is still refused outside `NO_ROOM` by the
-  `Terrarium`). Errors become `error` events.
+  is the soft cycle. `unload_room` gets the Console's live-clients refusal
+  (the shared `unload_room_refusal`; `terrarium_boot` passes both agents the
+  same `clients_live`), so a broker unload with live Arco clients is an
+  `error` event and the Room stays up; before 2026-09-28 it went straight to
+  `terrarium.unload_room` and stranded the process until restart
+  (`load_room` is still refused outside `NO_ROOM` by the `Terrarium`).
+  Errors become `error` events.
 - **`bit_completed` fires at COMPLETING only, never on `abort()`**: an
   aborted round credits nobody. It carries `bit {name, version}`,
   `room_name`, `terrarium_config_version`, `result` (`null` if absent or

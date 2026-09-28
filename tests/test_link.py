@@ -513,6 +513,10 @@ from control.terrarium import TerrariumState
 from control.wire_json import dumps
 from tests.test_terrarium import make_terrarium
 
+UNLOAD_REFUSAL = ("unloading the Room in a running Terrarium is not "
+                  "supported yet: pyarco cannot reconnect to a new Arco in "
+                  "one process; stop and run ./terrarium.sh")
+
 
 def test_load_room_command_without_terrarium_sends_error():
     agent, server, transport = make_agent()
@@ -585,6 +589,52 @@ def test_unload_room_command_drives_terrarium_and_sends_room_unloaded():
     assert [m for m in transport.sent if m["event"] == "error"] == []
     unloaded = [m for m in transport.sent if m["event"] == "room_unloaded"]
     assert unloaded == [{"event": "room_unloaded", "name": "TEST"}]
+
+
+def test_unload_room_is_refused_while_arco_clients_are_live():
+    """D7's unload case, same guard as the Console's: pyarco cannot
+    reconnect to a new Arco in one process, so a broker unload with live
+    clients would strand the Terrarium in NO_ROOM. The refusal is an error
+    event and terrarium.unload_room never runs."""
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    calls = []
+    real_unload = terrarium.unload_room
+    terrarium.unload_room = lambda force=False: calls.append(force) or real_unload(force=force)
+    transport = FakeTransport()
+    agent = UplinkAgent(terrarium.gs, transport, terrarium=terrarium,
+                        clients_live=lambda: True)
+    transport.connect()
+    transport.push_incoming({"command": "unload_room", "force": True})
+
+    agent.poll()
+
+    errors = [m for m in transport.sent if m["event"] == "error"]
+    assert errors == [{"event": "error", "command": "unload_room",
+                       "message": UNLOAD_REFUSAL}]
+    assert calls == []
+    assert terrarium.state == TerrariumState.ROOM_READY
+    assert not [m for m in transport.sent if m["event"] == "room_unloaded"]
+
+
+def test_unload_room_refusal_consults_clients_live_at_command_time():
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    live = [False]
+    transport = FakeTransport()
+    agent = UplinkAgent(terrarium.gs, transport, terrarium=terrarium,
+                        clients_live=lambda: live[0])
+    transport.connect()
+    live[0] = True
+    transport.push_incoming({"command": "unload_room"})
+    agent.poll()
+    assert len([m for m in transport.sent if m["event"] == "error"]) == 1
+    assert terrarium.state == TerrariumState.ROOM_READY
+
+    live[0] = False
+    transport.push_incoming({"command": "unload_room"})
+    agent.poll()
+    assert terrarium.state == TerrariumState.NO_ROOM
 
 
 def test_load_bit_is_gated_while_room_not_ready():

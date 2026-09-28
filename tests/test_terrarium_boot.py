@@ -3214,6 +3214,19 @@ def test_build_uplink_has_no_journal_without_run_records():
     assert up.journal is None
 
 
+def test_build_uplink_passes_the_clients_live_hook_through():
+    """main() hands the uplink the same clients_live closure the Console
+    gets, so a broker unload_room is refused under live Arco clients (D7)."""
+    from harness.terrarium_boot import _build_uplink
+    gs = GameServer({"TestBit": TestBit})
+
+    def live():
+        return True
+    up = _build_uplink(_CfgWithUplink(_uplink_config()), gs, None, None, None,
+                       clients_live=live)
+    assert up._clients_live is live
+
+
 def test_pump_uplink_maintains_then_polls_and_tolerates_none():
     from harness.terrarium_boot import _pump_uplink
     calls = []

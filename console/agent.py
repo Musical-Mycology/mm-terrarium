@@ -17,7 +17,7 @@ from control.roles import RoleClass
 from control.room_view import room_view
 from control.rooms import non_room_counts, room_role_name
 from control.state import State
-from control.terrarium import TerrariumState
+from control.terrarium import TerrariumState, unload_room_refusal
 from control.terrarium_config import artnet_fixtures, validate_rooms
 from control.function_view import (
     function_fired_view, functions_view, instrument_functions_view)
@@ -287,20 +287,10 @@ class ConsoleAgent:
         return reason
 
     def _unload_room_refusal(self) -> str | None:
-        """D7's unload case (2026-09-12): pyarco's arco.initialize() is a
-        no-op once o2lite has ever synced and finish() cannot prepare a
-        restart, so once Control's Arco clients have been live an unload
-        leaves a process that can never talk to another Arco: the next
-        load_room spawns a fresh Arco and restart_room_clients fails with
-        a broken pipe, stranding the Terrarium in NO_ROOM. Refuse up front
-        and name the restart, matching _ensure_room_for_bit's switch
-        refusal. Returns the reason (None when the unload may proceed:
-        no hook wired, or the clients never started)."""
-        if self._clients_live is None or not self._clients_live():
-            return None
-        return ("unloading the Room in a running Terrarium is not "
-                "supported yet: pyarco cannot reconnect to a new Arco in "
-                "one process; stop and run ./terrarium.sh")
+        """D7's unload case, shared with UplinkAgent: see
+        control.terrarium.unload_room_refusal. Matches
+        _ensure_room_for_bit's switch refusal in naming the restart."""
+        return unload_room_refusal(self._clients_live)
 
     def _ensure_room_for_bit(self, command, cfg) -> str | None:
         """Spec 2026-09-10 section 4: bring the Terrarium to the Room a
