@@ -348,6 +348,52 @@ def test_shutdown_stops_the_synth_pool_after_the_transport_and_before_arco(
                      "arco"]
 
 
+def test_shutdown_does_not_regrant_room_audio_after_the_pool_is_shut(
+        caplog):
+    """Live, every smoke-test.sh run through 2026-09-28: the D6 order shuts
+    the pool (arco.finish()) in phase 1, then phase 2's
+    unload_room(force=True) aborts the Bit, the engine goes IDLE, and the
+    agent's on_state_change re-runs _setup_room(), re-granting every Room
+    fixture against the shut pool. ArcoSynthPool.acquire() raised
+    'start() must run before acquire()' and the engine's observer wrapper
+    logged the traceback into control.log. The shut bridge must drop it."""
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+    from harness.terrarium_boot import (_register_o2lite_transport,
+                                        _register_room_audio)
+
+    class ArcoLikePool(FakePool):
+        def acquire(self):
+            if self.shut:
+                raise RuntimeError(
+                    "ArcoSynthPool.start() must run before acquire()")
+            return super().acquire()
+
+    fake_o2 = FakeO2Lite()
+    fake_o2.set_services("actl")
+    transport = O2LiteTransport()
+    transport.start(fake_o2)
+    pool = ArcoLikePool()
+
+    config = BootConfig(room_name="TEST", bit_name="TestBit")
+    gs, server, agent, arco, teardown, terrarium = build(
+        config, {"TestBit": TestBit}, arco_command=["arco-server"],
+        room_binding=RoomBindingRegistry(), room_spec=TEST_SPEC,
+        clock=time.monotonic, arco_process_cls=_fake_arco,
+        simulator_popen=FakePopen(), room_audio=AudioBridge(pool),
+        transport=transport)
+    assert pool.acquired, "the Room's fixtures were granted at boot"
+
+    pre_room_teardown = TeardownStack()
+    _register_room_audio(pre_room_teardown, agent.room_audio)
+    _register_o2lite_transport(pre_room_teardown, transport)
+
+    with caplog.at_level(logging.ERROR):
+        shutdown(teardown, terrarium, pre_room_teardown=pre_room_teardown)
+
+    assert pool.shut is True
+    assert not [r for r in caplog.records if "raised" in r.getMessage()]
+
+
 def test_register_room_audio_tolerates_a_build_with_no_audio_bridge():
     """agent.room_audio is None when build() was handed room_audio=None
     and could not construct one -- registering nothing must be a no-op,
