@@ -71,17 +71,19 @@ COPY requirements.txt requirements-dev.txt /opt/mm/terrarium/
 RUN python3 -m venv /work/.venv \
     && /work/.venv/bin/python -m pip install --no-cache-dir -r /opt/mm/terrarium/requirements-dev.txt \
     && /work/.venv/bin/python -m pip install --no-cache-dir \
-         "luxaeterna[websim] @ git+${LUXAETERNA_REPO}@${LUXAETERNA_SHA}"
+         "luxaeterna[websim] @ git+${LUXAETERNA_REPO}@${LUXAETERNA_SHA}" \
+    && chmod -R a+rwX /work
 COPY . /opt/mm/terrarium/
 COPY docker/terrarium-dev /usr/local/bin/terrarium-dev
 COPY docker/entrypoint.sh docker/selfcheck.sh /usr/local/lib/terrarium-dev/
 COPY docker/asound.conf /etc/asound.conf
 WORKDIR /opt/mm/terrarium
-# The launcher runs as the host uid (--user), so the venv (pip installs on
-# requirements drift) and the snapshot (runs/, caches) are world-writable.
+# The launcher runs as the host uid (--user), so the venv (chmod'd in its own
+# layer above, to avoid duplicating it) and the snapshot are world-writable.
 RUN ln -s /work/.venv /opt/mm/terrarium/.venv \
     && mkdir -p /opt/mm/terrarium/runs \
     && /usr/local/lib/terrarium-dev/entrypoint.sh stamp-venv \
-    && chmod -R a+rwX /work /opt/mm/terrarium
+    && chmod a+rw /work/.venv/.td-req-hash \
+    && chmod -R a+rwX /opt/mm/terrarium
 ENTRYPOINT ["/usr/local/lib/terrarium-dev/entrypoint.sh"]
 CMD ["help"]

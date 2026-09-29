@@ -5,3 +5,16 @@ runs/
 **/.pytest_cache
 .claude/
 *.pyc
+venv/
+*.egg-info/
+.ruff_cache/
+build/
+dist/
+.DS_Store
+.idea/
+.vscode/
+captures/
+.superpowers/
+o2debug.log
+arcoserver/o2debug.log
+www/app/
