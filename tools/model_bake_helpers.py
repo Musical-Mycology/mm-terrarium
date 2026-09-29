@@ -163,7 +163,7 @@ def validate_mm_bake(mm_bake) -> None:
     if missing:
         raise BakeContractError(f"mm_bake is missing required key(s) {missing}")
     sha = mm_bake["source_sha256"]
-    if not isinstance(sha, str) or not _SHA256_RE.match(sha):
+    if not isinstance(sha, str) or not _SHA256_RE.fullmatch(sha):
         raise BakeContractError("mm_bake.source_sha256 must be 64 lowercase hex characters")
     pixels = mm_bake["pixels"]
     if not _is_int(pixels) or pixels < 1:
@@ -208,7 +208,7 @@ def validate_mm_bake(mm_bake) -> None:
                 f"got {entry['size']!r}")
         zone = entry["zone"]
         if zone is not None:
-            if not isinstance(zone, str) or not _ZONE_RE.match(zone):
+            if not isinstance(zone, str) or not _ZONE_RE.fullmatch(zone):
                 raise BakeContractError(
                     f"mm_bake.layout[{i}].zone {zone!r} must match [a-z0-9_]+")
             if zone == "primary":

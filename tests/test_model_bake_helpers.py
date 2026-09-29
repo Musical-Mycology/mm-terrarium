@@ -216,6 +216,7 @@ def test_validate_mm_bake_accepts_a_valid_block():
 @pytest.mark.parametrize("mutate, match", [
     (lambda b: b.pop("uv"), "missing required key"),
     (lambda b: b.update(source_sha256="AB" * 32), "source_sha256"),
+    (lambda b: b.update(source_sha256="a" * 64 + "\n"), "source_sha256"),
     (lambda b: b.update(pixels=0), "pixels"),
     (lambda b: b.update(pixels=True), "pixels"),
     (lambda b: b.update(map_scale=float("nan")), "map_scale"),
@@ -230,6 +231,7 @@ def test_validate_mm_bake_accepts_a_valid_block():
     (lambda b: b["layout"][0].update(x_mm=1.5), "x_mm"),
     (lambda b: b["layout"][0].update(size="huge"), "size"),
     (lambda b: b["layout"][0].update(zone="Ring"), "zone"),
+    (lambda b: b["layout"][0].update(zone="ring\n"), "zone"),
     (lambda b: b["layout"][0].update(zone="primary"), "primary"),
     (lambda b: b["layout"][0].pop("zone"), "zone"),
 ])
