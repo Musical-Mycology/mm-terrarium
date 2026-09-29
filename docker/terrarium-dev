@@ -79,12 +79,16 @@ ensure_venv_volume() {
   local vol="$1" want have
   want="$(image_id "$image")"
   if [ -z "$want" ]; then
-    docker pull "$image" >&2
+    docker pull "$image" >&2 || die "could not pull $image: check your network and the tag (terrarium-dev use TAG)"
     want="$(image_id "$image")"
+    [ -n "$want" ] || die "cannot read the image id of $image"
   fi
   have="$(docker volume inspect --format '{{index .Labels "mm.terrarium-dev.image"}}' "$vol" 2>/dev/null || true)"
   if [ "$have" != "$want" ]; then
     docker volume rm -f "$vol" >/dev/null 2>&1 || true
+    if docker volume inspect "$vol" >/dev/null 2>&1; then
+      die "venv volume $vol is still in use by a container (docker ps -a --filter volume=$vol); stop or remove it, then rerun."
+    fi
     docker volume create --label mm.terrarium-dev.venv=1 \
       --label "mm.terrarium-dev.image=$want" "$vol" >/dev/null
   fi
@@ -93,6 +97,7 @@ ensure_venv_volume() {
 prune_venv_volumes() {
   local want vol have
   want="$(image_id "$image")"
+  [ -n "$want" ] || die "cannot read the image id of $image"
   for vol in $(docker volume ls -q --filter label=mm.terrarium-dev.venv=1); do
     have="$(docker volume inspect --format '{{index .Labels "mm.terrarium-dev.image"}}' "$vol" 2>/dev/null || true)"
     if [ "$have" != "$want" ]; then

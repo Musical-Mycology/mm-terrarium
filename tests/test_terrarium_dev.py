@@ -42,6 +42,7 @@ def h(tmp_path):
         "TD_RUNS_DIR": str(tmp_path / "runs"),
         "TD_UNAME": "Linux",
         "FAKE_DOCKER_LOG": str(tmp_path / "docker.log"),
+        "FAKE_DOCKER_RM_LOG": str(tmp_path / "docker-rm.log"),
     }
     return SimpleNamespace(tmp=tmp_path, bin=bindir, avahi=avahi, wslg=wslg,
                            co=co.resolve(), elsewhere=elsewhere, env=env)
@@ -283,3 +284,33 @@ def test_update_pulls_then_prunes_volumes_from_other_images(h):
     assert ["pull", f"{IMAGE}:main"] in c
     rms = [x for x in c if x[:2] == ["volume", "rm"]]
     assert rms == [["volume", "rm", "terrarium-venv-1"]]
+
+
+def test_refuses_to_mount_in_use_venv_volume(h):
+    launch(h, "run")
+    vol = _vol_name(h)
+    Path(h.env["FAKE_DOCKER_LOG"]).unlink()
+    r = launch(h, "run", FAKE_DOCKER_VOLUMES=f"{vol}=sha256:old",
+               FAKE_DOCKER_RM_FAIL="1")
+    assert r.returncode != 0
+    assert "still in use" in r.stderr
+    assert "docker ps -a --filter volume=" in r.stderr
+    assert not [c for c in calls(h) if c[:2] == ["volume", "create"]]
+    assert not [c for c in calls(h) if c[:1] == ["run"]]
+
+
+def test_pull_failure_with_helpful_message(h):
+    Path(h.env["FAKE_DOCKER_LOG"]).unlink(missing_ok=True)
+    r = launch(h, "run", FAKE_DOCKER_IMAGE_ID="",
+               FAKE_DOCKER_PULL_FAIL="1")
+    assert r.returncode != 0
+    assert "could not pull" in r.stderr
+    assert "check your network" in r.stderr
+    assert "terrarium-dev use TAG" in r.stderr
+
+
+def test_empty_image_id_after_pull_raises_error(h):
+    Path(h.env["FAKE_DOCKER_LOG"]).unlink(missing_ok=True)
+    r = launch(h, "run", FAKE_DOCKER_IMAGE_ID="")
+    assert r.returncode != 0
+    assert "cannot read the image id" in r.stderr
