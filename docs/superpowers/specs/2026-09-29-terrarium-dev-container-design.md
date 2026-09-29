@@ -134,6 +134,7 @@ A single bash script, installed from the image or run from the repo.
 | `terrarium-dev update` | pull the selected tag; prune venv volumes stamped with other image digests |
 | `terrarium-dev clean` | `./terrarium.sh --clean` |
 | `terrarium-dev use <tag>` | save a default tag to `~/.config/terrarium-dev/tag` |
+| `terrarium-dev selfcheck` | hermetic image check: no mounts, bridge network, the image's own dbus and avahi-daemon, then the test suites and `./smoke-test.sh --ci` on the snapshot |
 | `terrarium-dev launcher` | (image entrypoint only) print the launcher |
 
 Flags, accepted before the command:
@@ -149,7 +150,10 @@ Flags, accepted before the command:
 
 - `--rm --init --network host`. `--init` forwards Ctrl-C and SIGTERM, which
   `harness/signals.py` already turns into a clean shutdown.
-- `--user $(id -u):$(id -g)`, so files under `runs/` belong to the user.
+- `--user $(id -u):$(id -g)`, so files under `runs/` belong to the user, and
+  `-e HOME=/tmp` (an arbitrary uid has no home in the image). The image's
+  venvs are made world-writable at build time so this uid can `pip install`
+  into the venv volume (section 4, requirements drift).
 - Label `mm.terrarium-dev=1` (for the one-stack check).
 - **Checkout mode:** the checkout at `/work` (working dir), and a named
   volume `terrarium-venv-<hash of checkout path>` over `/work/.venv`.
@@ -191,9 +195,22 @@ drift are not handled this way; they need a newer image.
 6. Host is macOS: warn that the image is amd64 only and that Docker Desktop's
    network is its own VM; a native setup is the better choice.
 
+**`selfcheck` needs no host setup.** In its own network namespace (Docker's
+default bridge) there is no host daemon to contend with on UDP 5353, so the
+image starts its own `dbus-daemon` and `avahi-daemon` as root and runs the
+self-check (section 7). This is what lets CI and a bare Docker host verify the
+image. The `base` stage therefore also installs `dbus` and `avahi-daemon`;
+normal runs never start them.
+
+**`clean` outside a git checkout.** `harness/clean.py` lists checkouts with
+`git worktree list`, which fails in snapshot mode (the snapshot has no `.git`)
+and in a mounted git worktree (its `.git` file points at a host path). It
+falls back to the current checkout alone when git fails.
+
 ### 5. Local builds (`docker/build.sh`)
 
-Reads `docker/pins.env`, runs the patch reverse-apply check, and builds
+Reads `docker/pins.env`, runs the patch reverse-apply check, and builds (a
+`.dockerignore` keeps `.git`, `.venv`, `runs/` and caches out of the snapshot)
 `ghcr.io/musical-mycology/terrarium-dev:local` from the current checkout (the
 snapshot is whatever is checked out). Phase 2's workflow calls the same
 script, so local and CI builds cannot diverge.
@@ -226,8 +243,11 @@ script, so local and CI builds cannot diverge.
   argv. Assert the mounts and flags for checkout mode, snapshot mode,
   `--headless`, `--tag` and saved tags, and each preflight refusal and
   warning. No new test framework; runs in the existing offline suite.
-- **Image self-check:** `terrarium-dev test` then `terrarium-dev smoke --ci
-  --headless`. This is also Phase 2's gate before any push.
+- **Image self-check:** `terrarium-dev selfcheck` (test suites plus
+  `./smoke-test.sh --ci` on the snapshot, hermetic). This is also Phase 2's
+  gate before any push. A local check on an Apple Silicon Mac runs amd64
+  under emulation; if emulation timing breaks the smoke run, the check moves
+  to a native amd64 host and that is reported, not papered over.
 - **Phase 1 acceptance**, by hand on a Windows 11 WSL2 box in mirrored mode:
   1. `terrarium-dev test` passes.
   2. `terrarium-dev run --room TEST --seconds 45` exits 0 with "room loaded:
