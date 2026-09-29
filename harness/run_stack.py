@@ -63,6 +63,7 @@ from control.teardown import TeardownStack
 from control.terrarium_config import load_terrarium_config, resolve_bit_roots
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
+from harness.host_preflight import run_preflight
 from harness.proc_tee import ProcTee
 from harness.signals import parent_is_gone, sigterm_as_keyboard_interrupt
 from harness.www_server import WWW_PORT
@@ -969,6 +970,11 @@ def main() -> None:
               f"present there? Otherwise re-run with PYTHONPATH pointing "
               f"at it.", file=sys.stderr)
         raise SystemExit(1)
+
+    # Before anything spawns (web-build staging, Control, Arco): a host
+    # without avahi-daemon only fails 60 s later as a nameless readiness
+    # timeout. Exports MM_HOST_PREFLIGHT_DONE so Control's child skips it.
+    run_preflight()
 
     if cfg.web_build:
         stage_web_build(cfg.web_build, os.path.join(REPO_ROOT, "www"))

@@ -1,0 +1,47 @@
+# CMake file to define local libraries -- Ubuntu 26.04 (incl. WSL2).
+# Machine-specific; gitignored. Uses Ubuntu's system -dev packages (shared
+# libs) rather than source-built static ones, plus a sibling o2 build
+# (../../../o2/Release, built with cmake -B Release).
+set(SYSLIB "/usr/lib/x86_64-linux-gnu")
+
+set(SNDFILE_INCL "/usr/include" CACHE PATH "libsndfile include" FORCE)
+set(SNDFILE_OPT_LIB "${SYSLIB}/libsndfile.so" CACHE FILEPATH "libsndfile" FORCE)
+set(SNDFILE_DBG_LIB "${SYSLIB}/libsndfile.so" CACHE FILEPATH "libsndfile" FORCE)
+
+set(PA_INCL "/usr/include" CACHE PATH "PortAudio include" FORCE)
+set(PA_OPT_LIB "${SYSLIB}/libportaudio.so" CACHE FILEPATH "PortAudio" FORCE)
+set(PA_DBG_LIB "${SYSLIB}/libportaudio.so" CACHE FILEPATH "PortAudio" FORCE)
+
+set(OGG_OPT_LIB "${SYSLIB}/libogg.so" CACHE FILEPATH "ogg" FORCE)
+set(OGG_DBG_LIB "${SYSLIB}/libogg.so" CACHE FILEPATH "ogg" FORCE)
+set(FLAC_OPT_LIB "${SYSLIB}/libFLAC.so" CACHE FILEPATH "FLAC" FORCE)
+set(FLAC_DBG_LIB "${SYSLIB}/libFLAC.so" CACHE FILEPATH "FLAC" FORCE)
+set(VORBIS_OPT_LIB "${SYSLIB}/libvorbis.so" CACHE FILEPATH "vorbis" FORCE)
+set(VORBIS_DBG_LIB "${SYSLIB}/libvorbis.so" CACHE FILEPATH "vorbis" FORCE)
+set(VORBISENC_OPT_LIB "${SYSLIB}/libvorbisenc.so" CACHE FILEPATH "vorbisenc" FORCE)
+set(VORBISENC_DBG_LIB "${SYSLIB}/libvorbisenc.so" CACHE FILEPATH "vorbisenc" FORCE)
+set(VORBISFILE_OPT_LIB "${SYSLIB}/libvorbisfile.so" CACHE FILEPATH "vorbisfile" FORCE)
+set(VORBISFILE_DBG_LIB "${SYSLIB}/libvorbisfile.so" CACHE FILEPATH "vorbisfile" FORCE)
+set(OPUS_OPT_LIB "${SYSLIB}/libopus.so" CACHE FILEPATH "opus" FORCE)
+set(OPUS_DBG_LIB "${SYSLIB}/libopus.so" CACHE FILEPATH "opus" FORCE)
+
+set(O2_INCL "${CMAKE_CURRENT_LIST_DIR}/../../../o2/src" CACHE PATH "O2 include" FORCE)
+set(O2_OPT_LIB "${CMAKE_CURRENT_LIST_DIR}/../../../o2/Release/libo2_static.a"
+    CACHE FILEPATH "O2 library" FORCE)
+set(O2_DBG_LIB "${CMAKE_CURRENT_LIST_DIR}/../../../o2/Release/libo2_static.a"
+    CACHE FILEPATH "O2 library" FORCE)
+
+set(PM_INCL "/usr/include" CACHE PATH "PortMidi include" FORCE)
+set(PM_OPT_LIB "${SYSLIB}/libportmidi.so" CACHE FILEPATH "PortMidi" FORCE)
+set(PM_DBG_LIB "${SYSLIB}/libportmidi.so" CACHE FILEPATH "PortMidi" FORCE)
+
+set(FLSYN_INCL "/usr/include" CACHE PATH "Fluid Synth include" FORCE)
+set(FLSYN_OPT_LIB "${SYSLIB}/libfluidsynth.so" CACHE PATH "Fluid Synth" FORCE)
+set(FLSYN_DBG_LIB "${SYSLIB}/libfluidsynth.so" CACHE PATH "Fluid Synth" FORCE)
+set(GLIB_OPT_LIB "${SYSLIB}/libglib-2.0.so" CACHE PATH "Glib 2.0" FORCE)
+set(GLIB_DBG_LIB "${SYSLIB}/libglib-2.0.so" CACHE PATH "Glib 2.0" FORCE)
+# glibc provides intl and iconv on Linux
+set(INTL_OPT_LIB "ignore" CACHE PATH "libintl" FORCE)
+set(INTL_DBG_LIB "ignore" CACHE PATH "libintl" FORCE)
+set(ICONV_OPT_LIB "ignore" CACHE PATH "libiconv" FORCE)
+set(ICONV_DBG_LIB "ignore" CACHE PATH "libiconv" FORCE)

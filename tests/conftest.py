@@ -7,6 +7,14 @@ _REAL_BITS_ROOT = Path(__file__).resolve().parent.parent / "bits"
 
 
 @pytest.fixture(autouse=True)
+def _host_preflight_off(monkeypatch):
+    """The entry points' Avahi/WSL preflight (harness/host_preflight.py)
+    inspects the real host; tests that drive main() offline must not depend
+    on it. tests/test_host_preflight.py and the wiring tests re-enable it."""
+    monkeypatch.setenv("MM_HOST_PREFLIGHT_DONE", "1")
+
+
+@pytest.fixture(autouse=True)
 def _reset_terrarium_boot_logging():
     """harness/terrarium_boot.py's configure_logging() installs one handler
     on the ROOT logger, tagged .terrarium_boot, and is idempotent -- once
