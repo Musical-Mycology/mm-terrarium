@@ -205,17 +205,29 @@ class _PtyProcess:
     """The four-method slice of subprocess.Popen that ArcoProcess actually
     uses (poll / send_signal / wait / close), over a pty.fork()ed child.
 
-    Drains the master fd on poll() and wait(): Arco is a curses app
-    redrawing continuously, so an undrained pty buffer fills and blocks the
-    server on its own screen writes. Draining is not optional bookkeeping
-    here -- it is what keeps the process alive.
+    A daemon thread drains the master fd for the whole life of the child.
+    Arco is a curses app (and on WSL spews ~40 KB of ALSA "cannot find card"
+    errors at startup), and the pty buffer holds only ~19.6 KB (measured),
+    so a child nobody reads blocks mid-write -- before it has even
+    advertised over mDNS. Draining only inside poll()/wait() left it
+    blocked through the boot's settle sleep and through every readiness
+    probe (pyarco's initialize() blocks for tens of seconds without ever
+    calling poll()). Draining is not optional bookkeeping: it is what keeps
+    the process alive. poll() therefore does not drain; close() stops and
+    joins the thread, then does one last inline drain so bytes written just
+    before exit are not lost.
     """
 
     def __init__(self, pid: int, fd: int, *, log_path: str | None = None) -> None:
+        import threading
         self.pid = pid
         self._fd = fd
         self.returncode = None
         self.output = bytearray()
+        # Guards output and _log: the drain thread, note() and close() all
+        # touch them. Writes to the master (write_console) need no lock.
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
         # Unbuffered binary append (buffering=0). Binary mode has no
         # line-buffering option at all -- 0 is the only way to make each
         # write() land on disk immediately instead of sitting in a
@@ -224,43 +236,63 @@ class _PtyProcess:
         # needs: a write still sitting in this process's buffer vanishes
         # along with a killed or crashed process and never reaches disk.
         self._log = open(log_path, "ab", buffering=0) if log_path else None
+        self._drain_thread = threading.Thread(
+            target=self._drain_loop, name=f"arco-pty-drain-{pid}",
+            daemon=True)
+        self._drain_thread.start()
+
+    def _record(self, data: bytes) -> None:
+        with self._lock:
+            if self._log is not None:
+                self._log.write(data)
+            self.output += data
+            if len(self.output) > _OUTPUT_TAIL_BYTES:
+                del self.output[:-_OUTPUT_TAIL_BYTES]
 
     def note(self, data: bytes) -> None:
         """Record bytes this process produced on the child's behalf (the
         exec-failure message) in the same two places its console output
         goes: the bounded in-memory tail and the log file."""
-        if self._log is not None:
-            self._log.write(data)
-        self.output += data
-        if len(self.output) > _OUTPUT_TAIL_BYTES:
-            del self.output[:-_OUTPUT_TAIL_BYTES]
+        self._record(data)
 
-    def _drain(self) -> None:
+    def _drain(self) -> bool:
+        """Read whatever is ready right now. False once the master is at
+        EOF/EIO (slave closed: child is gone; macOS reports EIO here)."""
         import os
         import select
-        if self._fd is None:
-            return
         while True:
             ready, _, _ = select.select([self._fd], [], [], 0)
             if not ready:
-                return
+                return True
             try:
                 chunk = os.read(self._fd, 65536)
-            except OSError:                  # slave closed: child is gone
+            except OSError:
+                return False
+            if not chunk:
+                return False
+            self._record(chunk)
+
+    def _drain_loop(self) -> None:
+        """Thread body. Short select timeout so close() never waits long;
+        the fd is only closed after this thread has been joined."""
+        import os
+        import select
+        while not self._stop.is_set():
+            try:
+                ready, _, _ = select.select([self._fd], [], [], 0.05)
+                if not ready:
+                    continue
+                chunk = os.read(self._fd, 65536)
+            except (OSError, ValueError):    # slave closed / fd gone
                 return
             if not chunk:
                 return
-            if self._log is not None:
-                self._log.write(chunk)
-            self.output += chunk
-            if len(self.output) > _OUTPUT_TAIL_BYTES:
-                del self.output[:-_OUTPUT_TAIL_BYTES]
+            self._record(chunk)
 
     def poll(self):
         import os
         if self.returncode is not None:
             return self.returncode
-        self._drain()
         pid, status = os.waitpid(self.pid, os.WNOHANG)
         if pid == 0:
             return None
@@ -293,7 +325,8 @@ class _PtyProcess:
             os.write(self._fd, keys.encode())
 
     def close(self) -> None:
-        """Close the pty master fd, and the log file if one was opened.
+        """Stop and join the drain thread, then close the pty master fd and
+        the log file if one was opened.
 
         Separate from wait() because control/process.py's stop_process owns
         the signal/escalate/reap cycle now and deliberately does not touch
@@ -303,17 +336,24 @@ class _PtyProcess:
         import os
         if self._fd is None:
             return
-        try:
-            os.close(self._fd)
-        except OSError:
-            pass
-        self._fd = None
-        if self._log is not None:
+        self._stop.set()
+        self._drain_thread.join(timeout=2.0)
+        if not self._drain_thread.is_alive():
+            self._drain()                    # final sweep, thread is done
             try:
-                self._log.close()
+                os.close(self._fd)
             except OSError:
                 pass
-            self._log = None
+        # else (unreachable in practice: select wakes every 50 ms): leak the
+        # fd rather than close one a live thread may still be reading.
+        self._fd = None
+        with self._lock:
+            if self._log is not None:
+                try:
+                    self._log.close()
+                except OSError:
+                    pass
+                self._log = None
 
     def wait(self, timeout: float = 5.0):
         """Bounded wait, then close. Kept for the Popen-compatible surface
