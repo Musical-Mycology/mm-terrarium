@@ -231,7 +231,10 @@ script, so local and CI builds cannot diverge.
 - **PulseAudio chain does not reach Arco.** PortAudio's ALSA backend through
   the pulse plugin is the expected path but is unverified with Arco; it is an
   acceptance item. If it fails, the fallback is building PortAudio's
-  PulseAudio host API into the image.
+  PulseAudio host API into the image. `/etc/asound.conf` sets the pulse PCM
+  with `fallback "sysdefault"`: without it Arco segfaults at startup when no
+  PulseAudio server is reachable (`--headless`, the hermetic `selfcheck`).
+  The fallback applies only when the pulse connection fails.
 - **D-Bus mount for Avahi.** The Avahi client library talks to the daemon
   over the system D-Bus; the socket mount is the expected path but is an
   acceptance item.
@@ -247,12 +250,18 @@ script, so local and CI builds cannot diverge.
   `./smoke-test.sh --ci` on the snapshot, hermetic). This is also Phase 2's
   gate before any push. A local check on an Apple Silicon Mac runs amd64
   under emulation; if emulation timing breaks the smoke run, the check moves
-  to a native amd64 host and that is reported, not papered over.
+  to a native amd64 host and that is reported, not papered over. Found in
+  practice: under emulation on Apple Silicon the smoke stage fails with
+  `[Errno 92] Protocol not available` from zeroconf's
+  `setsockopt(IP_MULTICAST_IF)`, so the authoritative selfcheck runs on a
+  native amd64 host.
 - **Phase 1 acceptance**, by hand on a Windows 11 WSL2 box in mirrored mode:
   1. `terrarium-dev test` passes.
   2. `terrarium-dev run --room TEST --seconds 45` exits 0 with "room loaded:
      TEST".
-  3. The Room drone is audible without `--headless`.
+  3. The Room drone is audible without `--headless`, and confirms the
+     `sysdefault` fallback in /etc/asound.conf does not take over when WSLg's
+     PulseAudio is reachable.
   4. A real ESP32 dev shroom discovers Arco over mDNS and joins.
   5. On a machine with no repo clone: the `launcher` install, then
      `terrarium-dev run --room TEST --seconds 45` in snapshot mode, works.

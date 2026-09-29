@@ -169,7 +169,9 @@ networking and are not affected.
 On by default. On WSL2 the launcher mounts WSLg (`/mnt/wslg`) and points
 `PULSE_SERVER` at its PulseAudio socket; on native Linux it mounts
 `$XDG_RUNTIME_DIR/pulse/native`. The image routes ALSA's default device to
-pulse (`/etc/asound.conf`). If no PulseAudio socket exists the launcher
+pulse (`/etc/asound.conf`) with a `sysdefault` fallback: without it Arco
+segfaults at startup when no PulseAudio server is reachable (`--headless`,
+`selfcheck`). The fallback applies only when the pulse connection fails. If no PulseAudio socket exists the launcher
 refuses rather than silently muting: fix the audio setup, or pass
 `--headless` to run silent (CI always does). The ALSA-to-pulse path is
 still a Phase 1 acceptance item: if the Room drone is silent without
