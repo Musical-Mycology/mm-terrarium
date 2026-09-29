@@ -58,7 +58,7 @@ class _RecordingPopen(FakePopen):
 
 def _fake_arco(command, popen=None, record=None):
     from control.arco_process import ArcoProcess
-    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda: True,
+    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda _r: True,
                        record=record)
 
 
@@ -1387,7 +1387,7 @@ def test_build_records_supervisor_and_spawns_when_runs_dir_given(tmp_path):
     def _fake_arco_with_pid(command, popen=None, record=None):
         from control.arco_process import ArcoProcess
         return ArcoProcess(command, popen=popen or _FakePopenWithPid(9001),
-                           probe=lambda: True, record=record)
+                           probe=lambda _r: True, record=record)
 
     config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown, terrarium = build(
@@ -2523,7 +2523,7 @@ def test_build_forwards_arco_ready_timeout_into_the_wait():
                 seen.append(timeout)
                 super().wait_ready(timeout)
 
-        return _Arco(command, popen=popen or FakePopen(), probe=lambda: True,
+        return _Arco(command, popen=popen or FakePopen(), probe=lambda _r: True,
                      record=record)
 
     config = BootConfig(room_name="TEST", bit_name="TestBit")

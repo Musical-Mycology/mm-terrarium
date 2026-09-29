@@ -46,17 +46,74 @@ class ArcoExited(ArcoReadyTimeout):
     or is not executable."""
 
 
-def _default_probe() -> bool:
-    """Real readiness probe: lazy pyarco import, mirroring
-    harness/arco_synth.py's ArcoSynthPool.start(). A bare connect attempt --
-    callers needing the full ensemble use ArcoSynthPool afterward, once this
-    has already confirmed a server is listening."""
-    from pyarco.arco_engine import arco  # noqa: PLC0415 (lazy by design)
+# Stages a probe can report on failure (a probe may return True, a falsy
+# value, or one of these strings; wait_ready names the last one in
+# ArcoReadyTimeout so the operator knows which half of pyarco's initialize()
+# stalled).
+STAGE_CONNECT = "connect"
+STAGE_RESET = "reset"
+_STAGE_HINTS = {
+    STAGE_CONNECT: "never connected (is Arco advertising over mDNS? on "
+                   "Linux check avahi-daemon)",
+    STAGE_RESET: "connected but its reset never completed",
+}
+
+
+def _probe_engine(arco, o2lite, remaining, *, clock=time.monotonic,
+                  sleep=time.sleep):
+    """One readiness probe against a pyarco engine, given `remaining`
+    seconds of the caller's deadline. Returns True when Arco is connected
+    AND its reset completed (arco.zero set), else the stage that failed
+    (STAGE_CONNECT / STAGE_RESET). `arco` and `o2lite` are injected so the
+    offline suite can drive this with fakes.
+
+    Deadline: the connect phase honors `remaining` (pyarco's timeout=).
+    pyarco's reset wait is hard-coded to 15 s and cannot be shortened
+    without changing pyarco, so worst-case overrun of the deadline is
+    ~15 s; the recovery path below IS bounded by `remaining`.
+
+    No false ready: pyarco's initialize() returns early whenever o2lite is
+    already synced, even if an earlier call timed out in the reset phase and
+    left arco.zero None. Ready therefore requires arco.zero, not merely a
+    clean return.
+    """
+    if o2lite.time_get() > 0 and arco.zero is None:
+        return _recover_reset(arco, o2lite, remaining, clock, sleep)
     try:
-        arco.initialize()
-        return True
+        arco.initialize(timeout=max(remaining, 1.0))
     except TimeoutError:
-        return False
+        return STAGE_RESET if o2lite.time_get() > 0 else STAGE_CONNECT
+    return True if arco.zero is not None else STAGE_RESET
+
+
+def _recover_reset(arco, o2lite, remaining, clock, sleep):
+    """Connected but not reset: an earlier probe timed out in pyarco's reset
+    phase. Re-issue the reset and poll for its reply, bounded by `remaining`.
+
+    reset() sends /host/clear, which this repo's deep-dive notes is
+    disruptive to connected devices / macOS audio. That is acceptable here
+    because this only runs inside wait_ready on a freshly spawned Arco,
+    before any device connects -- and it is the same message initialize()
+    itself just sent."""
+    arco.zero = None
+    arco.reset()
+    deadline = clock() + remaining
+    while True:
+        o2lite.poll()
+        if arco.zero is not None:
+            return True
+        if clock() >= deadline:
+            return STAGE_RESET
+        sleep(0.01)
+
+
+def _default_probe(remaining: float):
+    """Real readiness probe: lazy pyarco import, mirroring
+    harness/arco_synth.py's ArcoSynthPool.start(). The probe IS this
+    process's pyarco initialization; ArcoSynthPool's later initialize()
+    returns early. Delegates to _probe_engine."""
+    from pyarco import arco_engine  # noqa: PLC0415 (lazy by design)
+    return _probe_engine(arco_engine.arco, arco_engine.o2lite, remaining)
 
 
 class FakePopen:
@@ -394,15 +451,24 @@ class ArcoProcess:
                 self._record(pid)
 
     def wait_ready(self, timeout: float) -> None:
+        """Probe until ready or `timeout`. Each probe is handed the time
+        remaining (probe(remaining)) and no probe starts after the deadline.
+        A probe returns True (ready), a falsy value, or a STAGE_* string;
+        the last stage names where the timeout message says Arco stalled."""
         deadline = self._clock() + timeout
+        stage = None
         while self._clock() < deadline:
             self._raise_if_exited()
-            if self._probe():
+            result = self._probe(deadline - self._clock())
+            if isinstance(result, str):
+                stage = result
+            elif result:
                 return
             self._sleep(0.2)
         self._raise_if_exited()
+        detail = f": {_STAGE_HINTS[stage]}" if stage in _STAGE_HINTS else ""
         raise ArcoReadyTimeout(
-            f"Arco did not report ready within {timeout}s")
+            f"Arco did not report ready within {timeout}s{detail}")
 
     def _raise_if_exited(self) -> None:
         """A child that is already gone can never become ready; report it
