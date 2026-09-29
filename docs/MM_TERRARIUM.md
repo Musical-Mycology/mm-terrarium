@@ -904,9 +904,38 @@ or invalid model fails to load, exactly like invalid TOML; a draft records
 the error on its `CatalogEntry` instead. See
 `docs/superpowers/specs/2026-09-28-3d-tuneshroom-model-and-view-design.md`
 in the mm-tuneshroom repo, sections 3-5, for the full picture -- the
-consumer is mm-tuneshroom's 3D view (`docs/instrument-model-guide.md` and
-`tools/bake_model.py` / `tools/export_models.py` arrive in PR T2). Neither
+consumer is mm-tuneshroom's 3D view (`docs/instrument-model-guide.md` is the artist's brief). Neither
 the parser nor `Instrument.layout` is read by the server in this slice.
+
+**Bake and export.** `tools/bake_model.py` bakes per-LED light maps in
+headless Blender (Cycles Diffuse + Transmission per LED, summed, row-flipped,
+normalised by the brightest texel, packed 4 LEDs per RGBA PNG) and writes
+`<stem>.baked.glb` beside the source; `tools/model_bake_helpers.inject_bake`
+is the one writer of the baked-file contract (`extras.mm_bake`, spec
+section 4.1) and refuses anything `validate_baked_glb` rejects.
+`control.model_layout.layout_to_json` is the one layout serializer (bake,
+fixture generator, export). `.venv/bin/python -m tools.export_models
+<mm-tuneshroom checkout>` (stdlib, no Blender) copies every published
+instrument's fresh bake to `assets/models/<name>.<hash8>.baked.glb` with
+`models.json`, refuses a stale bake or one whose layout differs from the
+catalog's, and copies the shared fixture pair into `test/fixtures/models/`;
+it writes nothing unless every model exports. Before the first export that
+carries a real model, mm-tuneshroom's startup must stop awaiting every
+bundled model.
+
+**Bake host: Mycologist, Blender 4.5 LTS** (`PINNED_BLENDER = "4.5"`;
+Intel Mac, and Blender 5.x ships no Intel macOS build; CPU-only Cycles).
+Installed by the operator at `/Applications/Blender.app`. Claude bakes as
+`claude-ops` through the `portal` skill, with the operator's go-ahead per
+run: `git archive HEAD control tools <model dir> | portal ssh mycologist
+'... tar -x -C ~/mm-bake/src'`, then `nice -n 10
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup
+--python-exit-code 1 -P tools/bake_model.py -- <model.glb>` in
+`/Users/claude-ops/mm-bake/src` (disposable), then copy the bake back as
+base64 and compare sha256 on both ends. After a Blender upgrade, re-run
+`tools/blender_probe.py` there before moving the pin. The committed
+`tests/fixtures/models/marker_fixture.baked.glb` is the first real bake
+(256 px, the T2 gate).
 
 #### Per-fixture light sessions and sinks
 
