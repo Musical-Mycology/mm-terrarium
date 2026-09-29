@@ -31,8 +31,11 @@ def _op_props(op) -> dict:
             continue
         entry = {"type": prop.type}
         if prop.type == "ENUM":
-            entry["items"] = [item.identifier for item in prop.enum_items]
-            entry["flag"] = prop.is_enum_flag
+            try:
+                entry["items"] = [item.identifier for item in prop.enum_items]
+                entry["flag"] = prop.is_enum_flag
+            except Exception as exc:  # noqa: BLE001 -- record, keep going
+                entry["items_error"] = str(exc)
         out[prop.identifier] = entry
     return out
 
@@ -61,7 +64,8 @@ def _cube_with_two_uvs():
     return obj
 
 
-def _lightmap_pack_and_export() -> dict:
+def _packed_cube() -> tuple:
+    """Fresh two-UV cube with the lightmap set packed; returns (obj, uv_range)."""
     obj = _cube_with_two_uvs()
     uvs = obj.data.uv_layers
     uvs.active = uvs["lightmap"]
@@ -74,9 +78,15 @@ def _lightmap_pack_and_export() -> dict:
     uvs["lightmap"].data.foreach_get("uv", lightmap_uvs)
     uvs.active = uvs[0]
     uvs[0].active_render = True
-    mat = bpy.data.materials.new("probe_mat")
-    mat.use_nodes = True
-    obj.data.materials.append(mat)
+    return obj, [float(lightmap_uvs.min()), float(lightmap_uvs.max())]
+
+
+def _lightmap_pack() -> dict:
+    _obj, uv_range = _packed_cube()
+    return {"lightmap_uv_range": uv_range}
+
+
+def _export_report(obj) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "probe.glb"
         bpy.ops.export_scene.gltf(
@@ -85,12 +95,40 @@ def _lightmap_pack_and_export() -> dict:
             export_lights=False, export_cameras=False)
         gltf = read_glb_json(path.read_bytes(), path=str(path))
     return {
-        "lightmap_uv_range": [float(lightmap_uvs.min()), float(lightmap_uvs.max())],
         "primitive_attributes": [sorted(p["attributes"]) for m in gltf["meshes"]
                                  for p in m["primitives"]],
         "materials_exported": len(gltf.get("materials", [])),
         "images_exported": len(gltf.get("images", [])),
     }
+
+
+def _export_plain() -> dict:
+    """Task 6's real export condition: the bake image nodes are removed."""
+    obj, _ = _packed_cube()
+    mat = bpy.data.materials.new("probe_mat")
+    mat.use_nodes = True
+    obj.data.materials.append(mat)
+    return _export_report(obj)
+
+
+def _export_uv_referenced() -> dict:
+    """Two image nodes, each fed by a UV Map node naming one UV set."""
+    obj, _ = _packed_cube()
+    mat = bpy.data.materials.new("probe_mat_uv")
+    mat.use_nodes = True
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    bsdf = nodes["Principled BSDF"]
+    for i, uv_name in enumerate(("UVMap", "lightmap")):
+        img = bpy.data.images.new(f"probe_img_{i}", width=4, height=4)
+        tex = nodes.new("ShaderNodeTexImage")
+        tex.image = img
+        uvn = nodes.new("ShaderNodeUVMap")
+        uvn.uv_map = uv_name
+        links.new(uvn.outputs["UV"], tex.inputs["Vector"])
+        if i == 0:
+            links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    obj.data.materials.append(mat)
+    return _export_report(obj)
 
 
 def _mini_bake() -> dict:
@@ -144,7 +182,9 @@ def main() -> None:
     _section(report, "op_import_gltf", lambda: _op_props(bpy.ops.import_scene.gltf))
     _section(report, "op_make_single_user", lambda: _op_props(bpy.ops.object.make_single_user))
     _section(report, "principled_inputs", _principled_inputs)
-    _section(report, "export_round_trip", _lightmap_pack_and_export)
+    _section(report, "lightmap_pack", _lightmap_pack)
+    _section(report, "export_plain", _export_plain)
+    _section(report, "export_uv_referenced", _export_uv_referenced)
     _section(report, "mini_bake", _mini_bake)
     print("MM_PROBE_BEGIN")
     print(json.dumps(report, indent=1, sort_keys=True))
