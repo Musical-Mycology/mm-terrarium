@@ -123,3 +123,21 @@ def test_parse_ps_skips_malformed_lines():
     text = "  10     1 python -m harness.run_stack\nbogus\n  11 10 x\n"
     assert clean.parse_ps(text) == [
         (10, 1, "python -m harness.run_stack"), (11, 10, "x")]
+
+
+def test_list_checkouts_falls_back_to_cwd_when_git_fails():
+    def run(cmd, **kw):
+        raise subprocess.CalledProcessError(128, cmd, stderr="not a git repo")
+
+    got = clean.list_checkouts(run=run, isdir=lambda p: True,
+                               cwd=lambda: "/opt/mm/terrarium")
+    assert got == ["/opt/mm/terrarium"]
+
+
+def test_list_checkouts_falls_back_to_cwd_when_git_missing():
+    def run(cmd, **kw):
+        raise FileNotFoundError("git")
+
+    got = clean.list_checkouts(run=run, isdir=lambda p: True,
+                               cwd=lambda: "/work")
+    assert got == ["/work"]
