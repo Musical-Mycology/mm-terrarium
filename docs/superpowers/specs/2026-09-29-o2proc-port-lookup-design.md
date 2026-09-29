@@ -170,6 +170,10 @@ Arco (`@00000000:ac17f983:afb9:9f48` gives tcp 44985, udp 40776).
   already requires for 8788 (phones).
 - A stale name (Arco died between lookup and connect): connect fails and the
   retry cycle repeats.
+- The guest-page server is disabled (`WWW_PORT` `0`, *Ports* in the
+  deep-dive): there is no `/o2proc`, so the fallback cannot work. The HTTP
+  attempt fails like a wrong IP. This is documented next to
+  `O2_FALLBACK_HOST` in `config.example.h`.
 
 ## Testing
 
