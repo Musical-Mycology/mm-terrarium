@@ -2647,26 +2647,24 @@ def test_register_o2proc_seeds_and_observes_the_terrarium(monkeypatch):
 
     terrarium = FakeTerrarium()
     config = types.SimpleNamespace(o2_ensemble="arco")
-    holder = tb._register_o2proc(argparse.Namespace(www_port=8788), config,
-                                 terrarium)
+    holder = tb._o2proc_holder(argparse.Namespace(www_port=8788), config)
     assert holder.ensemble == "arco"
+    tb._register_o2proc(holder, config, terrarium)
     assert len(terrarium.observers) == 1
     assert done.wait(5)  # the seed spawns the lookup on a daemon thread
     assert lookups == ["arco"]
+    terrarium.observers[0].on_terrarium_state_change(
+        TerrariumState.ROOM_READY, TerrariumState.ROOM_UNLOADING)
+    assert holder.get() == (None, "arco not ready")
 
 
-def test_register_o2proc_is_off_when_the_www_server_is_off():
+def test_o2proc_holder_is_off_when_the_www_server_is_off():
     import argparse
 
     import harness.terrarium_boot as tb
 
-    class NoTerrarium:
-        def add_observer(self, obs):
-            raise AssertionError("no watcher without a www server")
-
-    assert tb._register_o2proc(argparse.Namespace(www_port=0),
-                               types.SimpleNamespace(o2_ensemble="arco"),
-                               NoTerrarium()) is None
+    assert tb._o2proc_holder(argparse.Namespace(www_port=0),
+                             types.SimpleNamespace(o2_ensemble="arco")) is None
 
 
 def test_start_www_server_is_off_when_the_port_is_zero(capsys):

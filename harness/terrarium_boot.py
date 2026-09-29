@@ -253,20 +253,25 @@ def _o2proc_lookup(ensemble):
     return find_local_arco(ensemble)
 
 
-def _register_o2proc(args, config, terrarium):
-    """Serve Arco's current O2 process name at GET /o2proc (for firmware on
-    a network that blocks mDNS). Returns the holder for the www server, or
-    None when the www server is off and nothing would serve it. The watcher
-    is seeded because --room loads the Room before any observer exists."""
+def _o2proc_holder(args, config):
+    """The holder GET /o2proc serves, or None when the www server is off and
+    nothing would serve it. Created before the server so it can be handed to
+    _start_www_server; the watcher is registered only once that bound."""
     if args.www_port == 0:
         return None
-    from harness.o2proc_lookup import O2ProcHolder, O2ProcWatcher
-    holder = O2ProcHolder(config.o2_ensemble)
+    from harness.o2proc_lookup import O2ProcHolder
+    return O2ProcHolder(config.o2_ensemble)
+
+
+def _register_o2proc(holder, config, terrarium):
+    """Fill `holder` from the Room's Arco (for firmware on a network that
+    blocks mDNS). The watcher is seeded because --room loads the Room before
+    any observer exists."""
+    from harness.o2proc_lookup import O2ProcWatcher
     watcher = O2ProcWatcher(
         holder, lookup=lambda: _o2proc_lookup(config.o2_ensemble))
     terrarium.add_observer(watcher)
     watcher.seed(terrarium.state)
-    return holder
 
 
 def make_arco_process_cls(arco_popen, settle: float):
@@ -1983,9 +1988,10 @@ def main() -> None:
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
-        www = _start_www_server(args, teardown,
-                                o2proc=_register_o2proc(args, config, terrarium))
+        o2proc = _o2proc_holder(args, config)
+        www = _start_www_server(args, teardown, o2proc=o2proc)
         if www is not None:
+            _register_o2proc(o2proc, config, terrarium)
             agent.start_requests = www.start_requests
             agent.prepare_requests = www.prepare_requests
             from control.prepare import PrepareAuthority
