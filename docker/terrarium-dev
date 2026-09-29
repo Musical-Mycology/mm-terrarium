@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# terrarium-dev: run the pre-built Terrarium dev image. Setup and usage:
+# docker/README.md. Spec:
+# docs/superpowers/specs/2026-09-29-terrarium-dev-container-design.md
+# Keep this Bash 3.2 compatible (macOS /bin/bash runs its tests).
+set -euo pipefail
+
+TD_IMAGE_REPO="${TD_IMAGE_REPO:-ghcr.io/musical-mycology/terrarium-dev}"
+TD_CONFIG_DIR="${TD_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/terrarium-dev}"
+TD_AVAHI_DIR="${TD_AVAHI_DIR:-/run/avahi-daemon}"
+TD_DBUS_SOCKET="${TD_DBUS_SOCKET:-/run/dbus/system_bus_socket}"
+TD_WSLG_DIR="${TD_WSLG_DIR:-/mnt/wslg}"
+TD_RUNS_DIR="${TD_RUNS_DIR:-$HOME/terrarium-runs}"
+TD_UNAME="${TD_UNAME:-$(uname -s)}"
+LABEL="mm.terrarium-dev=1"
+
+die()  { echo "terrarium-dev: $*" >&2; exit 1; }
+warn() { echo "terrarium-dev: WARNING: $*" >&2; }
+
+usage() {
+  cat <<'EOF'
+usage: terrarium-dev [--tag TAG] [--checkout PATH] [--headless] [COMMAND] [ARGS...]
+
+commands:
+  run [ARGS]    ./terrarium.sh [ARGS] (the default)
+  smoke [ARGS]  ./smoke-test.sh [ARGS]
+  test          pytest, then node --test
+  shell         an interactive bash in the container
+  clean         ./terrarium.sh --clean
+  update        pull the selected tag and prune stale venv volumes
+  use TAG       save TAG as the default (main, sha-<short>, v<date>, local)
+  selfcheck     hermetic image check; needs no host setup
+
+--checkout defaults to the current directory when it is an mm-terrarium
+checkout; otherwise the snapshot of main baked into the image runs.
+EOF
+}
+
+tag=""; checkout=""; headless=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tag)      [ $# -ge 2 ] || die "--tag needs a value"; tag="$2"; shift 2 ;;
+    --checkout) [ $# -ge 2 ] || die "--checkout needs a value"; checkout="$2"; shift 2 ;;
+    --headless) headless=1; shift ;;
+    -h|--help)  usage; exit 0 ;;
+    *) break ;;
+  esac
+done
+cmd="${1:-run}"
+if [ $# -gt 0 ]; then shift; fi
+
+resolve_tag() {
+  if [ -n "$tag" ]; then echo "$tag"
+  elif [ -f "$TD_CONFIG_DIR/tag" ]; then cat "$TD_CONFIG_DIR/tag"
+  else echo main
+  fi
+}
+
+is_checkout() { [ -f "$1/terrarium.sh" ] && [ -d "$1/control" ]; }
+
+# Absolute checkout path, or nothing for snapshot mode.
+resolve_checkout() {
+  if [ -n "$checkout" ]; then
+    is_checkout "$checkout" || die "--checkout $checkout is not an mm-terrarium checkout (needs terrarium.sh and control/)"
+    (cd "$checkout" && pwd -P)
+  elif is_checkout "$PWD"; then
+    pwd -P
+  fi
+}
+
+venv_volume() { echo "terrarium-venv-$(printf '%s' "$1" | cksum | awk '{print $1}')"; }
+
+check_macos() {
+  if [ "$TD_UNAME" = Darwin ]; then
+    warn "macOS: the image is linux/amd64 only and Docker Desktop's network is its own VM, so real devices cannot reach it. A native setup (docs/MM_TERRARIUM.md, Running it) is the better choice here."
+  fi
+}
+
+check_docker() {
+  docker info >/dev/null 2>&1 || die "Docker is not reachable. Install Docker Engine inside your WSL distro, not Docker Desktop (docker/README.md, Docker Engine in WSL2)."
+}
+
+check_avahi() {
+  [ -e "$TD_AVAHI_DIR/socket" ] || die "avahi-daemon is not running on this host, so Arco can't advertise over mDNS. Fix: sudo apt install avahi-daemon && sudo systemctl enable --now avahi-daemon (on WSL, systemd must be enabled in /etc/wsl.conf; see docker/README.md)."
+}
+
+# wslg | native | none
+audio_mode() {
+  if [ -e "$TD_WSLG_DIR/PulseServer" ]; then echo wslg
+  elif [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -e "$XDG_RUNTIME_DIR/pulse/native" ]; then echo native
+  else echo none
+  fi
+}
+
+check_wsl_nat() {
+  command -v wslinfo >/dev/null 2>&1 || return 0
+  if [ "$(wslinfo --networking-mode 2>/dev/null || true)" = nat ]; then
+    warn "WSL is in NAT networking mode. Simulated devices work, but real devices cannot reach Arco. Set networkingMode=mirrored (docker/README.md)."
+  fi
+}
+
+check_one_stack() {
+  [ -z "$(docker ps -q --filter "label=$LABEL")" ] || die "a terrarium-dev stack is already running (docker ps --filter label=$LABEL). Under host networking two stacks collide on ports 8080, 8788 and 8772; stop it first."
+}
+
+# Fills the global array `args` with everything between `docker` and the image.
+# $1: host (run/smoke/shell) or plain (test/clean); $2: checkout or ""; $3: audio mode.
+build_run_args() {
+  local mode="$1" co="$2" audio="$3"
+  args=(run --rm --init -i)
+  if [ -t 0 ] && [ -t 1 ]; then args+=(-t); fi
+  args+=(--user "$(id -u):$(id -g)" -e HOME=/tmp)
+  if [ "$mode" = host ]; then
+    args+=(--network host --label "$LABEL"
+           -v "$TD_DBUS_SOCKET:/run/dbus/system_bus_socket"
+           -v "$TD_AVAHI_DIR:/run/avahi-daemon")
+    case "$audio" in
+      wslg)   args+=(-v "$TD_WSLG_DIR:/mnt/wslg" -e PULSE_SERVER=unix:/mnt/wslg/PulseServer) ;;
+      native) args+=(-v "$XDG_RUNTIME_DIR/pulse/native:/run/pulse/native" -e PULSE_SERVER=unix:/run/pulse/native) ;;
+    esac
+  fi
+  if [ -n "$co" ]; then
+    args+=(-v "$co:/work" -v "$(venv_volume "$co"):/work/.venv" -w /work)
+  else
+    mkdir -p "$TD_RUNS_DIR"
+    args+=(-v "$TD_RUNS_DIR:/opt/mm/terrarium/runs" -w /opt/mm/terrarium)
+  fi
+}
+
+image="$TD_IMAGE_REPO:$(resolve_tag)"
+
+case "$cmd" in
+  use)
+    [ $# -eq 1 ] || die "usage: terrarium-dev use TAG"
+    mkdir -p "$TD_CONFIG_DIR"
+    printf '%s\n' "$1" > "$TD_CONFIG_DIR/tag"
+    echo "terrarium-dev: default tag is now $1"
+    ;;
+  update)
+    check_docker
+    docker pull "$image"
+    ;;
+  selfcheck)
+    check_docker
+    exec docker run --rm "$image" selfcheck
+    ;;
+  run|smoke|shell)
+    check_macos
+    check_docker
+    check_avahi
+    audio=none
+    if [ "$headless" -eq 0 ]; then
+      audio="$(audio_mode)"
+      [ "$audio" != none ] || die "no PulseAudio socket found ($TD_WSLG_DIR/PulseServer or \$XDG_RUNTIME_DIR/pulse/native). Pass --headless to run silent."
+    fi
+    check_wsl_nat
+    if [ "$cmd" != shell ]; then check_one_stack; fi
+    co="$(resolve_checkout)" || exit 1
+    build_run_args host "$co" "$audio"
+    exec docker "${args[@]}" "$image" "$cmd" "$@"
+    ;;
+  test|clean)
+    check_macos
+    check_docker
+    co="$(resolve_checkout)" || exit 1
+    build_run_args plain "$co" none
+    exec docker "${args[@]}" "$image" "$cmd" "$@"
+    ;;
+  help) usage ;;
+  *) usage >&2; die "unknown command: $cmd" ;;
+esac
