@@ -376,6 +376,7 @@ your own checkout (from its root) or the snapshot:
 
 ```bash
 docker run --rm ghcr.io/musical-mycology/terrarium-dev:main launcher > terrarium-dev && chmod +x terrarium-dev
+sudo mv terrarium-dev /usr/local/bin/    # once, so `terrarium-dev` is on PATH
 terrarium-dev run --room TEST --seconds 45
 terrarium-dev test
 ```

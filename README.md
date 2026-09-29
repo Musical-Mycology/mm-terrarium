@@ -66,7 +66,8 @@ Install Docker Engine inside WSL2 Ubuntu (not Docker Desktop; setup in
 
 ```
 docker run --rm ghcr.io/musical-mycology/terrarium-dev:main launcher > terrarium-dev && chmod +x terrarium-dev
-terrarium-dev run --room TEST    # Arco + the TEST Room; add --headless for no audio
+sudo mv terrarium-dev /usr/local/bin/    # once, so `terrarium-dev` is on PATH
+terrarium-dev --headless run --room TEST    # Arco + the TEST Room; drop --headless for audio
 terrarium-dev test               # pytest, then node --test
 ```
 

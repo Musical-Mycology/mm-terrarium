@@ -103,7 +103,7 @@ terrarium-dev test                            # pytest, then node --test
 | `terrarium-dev test` | `pytest`, then `node --test` |
 | `terrarium-dev shell` | an interactive bash in the container |
 | `terrarium-dev update` | pull the selected tag; prune venv volumes stamped with other image ids |
-| `terrarium-dev clean` | `./terrarium.sh --clean` |
+| `terrarium-dev clean` | `./terrarium.sh --clean` (only clears run records of stopped stacks; it refuses while a stack is running) |
 | `terrarium-dev use <tag>` | save a default tag (`main`, `sha-<short>`, `v<date>`, `local`) to `~/.config/terrarium-dev/tag` |
 | `terrarium-dev selfcheck` | hermetic image check (see *Self-check*) |
 
@@ -123,7 +123,8 @@ Flags go before the command:
   on the next run; runs and logs land in your checkout's `runs/`. A named
   volume `terrarium-venv-<hash of checkout path>` shadows `/work/.venv`, so
   the host's own `.venv` (a macOS or WSL venv) is never used inside the
-  container and never touched. The volume is stamped with the image id and
+  container. If the checkout has no `.venv`, the launcher creates an empty
+  one so Docker does not create a root-owned mountpoint there. The volume is stamped with the image id and
   recreated when the image changes. Before `run`, `smoke`, `test`, `shell`
   and `clean`, the container entrypoint hashes the checkout's
   `requirements.txt` and `requirements-dev.txt` and compares it with the
@@ -139,10 +140,21 @@ Flags go before the command:
   `runs/` so logs survive `--rm`.
 
 The launcher refuses, naming the fix, when: Docker is not reachable;
-`/run/avahi-daemon/socket` is missing; there is no PulseAudio socket and no
+`/run/avahi-daemon/socket` or the system D-Bus socket is missing; there is no PulseAudio socket and no
 `--headless`; another terrarium-dev stack is running; or a checkout's venv
 volume is still in use by a container (stop or remove it and rerun). A
 failed `docker pull` also stops with a message naming the tag to check.
+
+**Old venv volumes.** Volumes from moved or deleted checkouts are never
+pruned automatically. List them with `docker volume ls --filter
+label=mm.terrarium-dev.venv=1` and remove one with `docker volume rm <name>`.
+
+## Troubleshooting
+
+- Import errors from `luxaeterna` or `pyarco` after pulling a branch mean the
+  image is older than the checkout (Arco and luxaeterna come from the image,
+  not the venv). Run `terrarium-dev update`, or bump the pins and build with
+  `--tag local`.
 
 ## Networking
 
@@ -173,7 +185,8 @@ pulse (`/etc/asound.conf`) with a `sysdefault` fallback: without it Arco
 segfaults at startup when no PulseAudio server is reachable (`--headless`,
 `selfcheck`). The fallback applies only when the pulse connection fails. If no PulseAudio socket exists the launcher
 refuses rather than silently muting: fix the audio setup, or pass
-`--headless` to run silent (CI always does). The ALSA-to-pulse path is
+`--headless` before the command (`terrarium-dev --headless run ...`) to run
+silent (CI always does). The ALSA-to-pulse path is
 still a Phase 1 acceptance item: if the Room drone is silent without
 `--headless`, report it.
 
@@ -185,8 +198,10 @@ linux/amd64 from the current checkout (that checkout is the snapshot), using
 `--dry-run` prints the `docker buildx build` command only. Phase 2's CI will
 call the same script.
 
-`docker/pins.env` holds every external version: `BASE_IMAGE` (Ubuntu 26.04
-pinned by digest), and the repo and full SHA for Arco, o2 and luxaeterna. To
+`docker/pins.env` holds every source-built dependency (base image, arco, o2,
+luxaeterna): `BASE_IMAGE` (Ubuntu 26.04 pinned by digest), and the repo and
+full SHA for Arco, o2 and luxaeterna. Python requirements are ranges and apt
+packages float, so two builds of the same pins can differ in those. To
 bump one, change that one line in a PR; use full SHAs. Test a bump with
 `docker/build.sh` and `terrarium-dev --tag local selfcheck`.
 

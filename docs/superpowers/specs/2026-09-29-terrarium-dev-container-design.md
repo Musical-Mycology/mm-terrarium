@@ -226,8 +226,9 @@ script, so local and CI builds cannot diverge.
   matches on spawn time, never pid alone, so a reused pid in a later
   container is never killed.
 - **Image older than the checkout.** Python deps self-heal (section 4). For
-  Arco or luxaeterna API drift the launcher's failure hint says to run
-  `terrarium-dev update`, or bump pins and use `--tag local`.
+  Arco or luxaeterna API drift the docs (docker/README.md, Troubleshooting)
+  say to run `terrarium-dev update`, or bump pins and use `--tag local`; the
+  launcher execs docker and cannot see in-container failures.
 - **PulseAudio chain does not reach Arco.** PortAudio's ALSA backend through
   the pulse plugin is the expected path but is unverified with Arco; it is an
   acceptance item. If it fails, the fallback is building PortAudio's
