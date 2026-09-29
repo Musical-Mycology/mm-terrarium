@@ -265,3 +265,86 @@ def test_validate_baked_glb_refuses_a_map_naming_no_texture():
 def test_validate_baked_glb_refuses_a_file_without_mm_bake():
     with pytest.raises(BakeContractError, match="no root extras.mm_bake"):
         validate_baked_glb(_bakeable_glb_bytes(), path="plain.glb")
+
+
+from control.model_layout import PixelLayout
+from tools.model_bake_helpers import (
+    BakeError, bake_output_path, build_mm_bake_extras, check_blender_version,
+    flip_rows, group_leds_by_four, layout_to_blender_m, normalise_maps,
+    quantise_group_rgba8,
+)
+
+
+def test_check_blender_version_accepts_the_pinned_major_minor_and_returns_xyz():
+    assert check_blender_version((4, 5, 14), "4.5") == "4.5.14"
+
+
+def test_check_blender_version_refuses_another_major_minor():
+    with pytest.raises(BakeError, match=r"pinned to Blender 4\.5.*found 5\.2\.2"):
+        check_blender_version((5, 2, 2), "4.5")
+
+
+def test_group_leds_by_four():
+    assert group_leds_by_four(12) == [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]
+    assert group_leds_by_four(5) == [[0, 1, 2, 3], [4]]
+
+
+def test_layout_to_blender_m_is_layout_mm_over_1000_on_every_axis():
+    p = PixelLayout(index=0, x_mm=40, y_mm=-28, z_mm=100, size="medium", zone="ring")
+    assert layout_to_blender_m(p) == (0.04, -0.028, 0.1)
+
+
+def test_flip_rows_turns_blender_bottom_up_rows_into_top_down_rows():
+    # 2 wide x 3 tall; Blender row 0 is the BOTTOM row.
+    assert flip_rows([1, 2, 3, 4, 5, 6], 2, 3) == [5, 6, 3, 4, 1, 2]
+
+
+def test_flip_rows_refuses_the_wrong_length():
+    with pytest.raises(ValueError, match="width\\*height"):
+        flip_rows([1, 2, 3], 2, 2)
+
+
+def test_normalise_maps_scales_by_the_brightest_texel_across_all_leds():
+    normalised, scale = normalise_maps({0: [0.5, 1.0], 1: [2.0, 0.0]})
+    assert scale == 2.0
+    assert normalised == {0: [0.25, 0.5], 1: [1.0, 0.0]}
+
+
+def test_normalise_maps_clamps_negative_texels_to_zero():
+    normalised, scale = normalise_maps({0: [-0.5, 1.0]})
+    assert (normalised, scale) == ({0: [0.0, 1.0]}, 1.0)
+
+
+def test_normalise_maps_refuses_an_all_black_bake():
+    with pytest.raises(BakeError, match="black"):
+        normalise_maps({0: [0.0, 0.0], 1: [0.0, 0.0]})
+
+
+def test_quantise_group_rgba8_packs_leds_into_r_g_b_a_in_group_order():
+    normalised = {4: [1.0, 0.0], 5: [0.5, 0.0], 6: [0.0, 1.0]}
+    out = quantise_group_rgba8([4, 5, 6], normalised, texel_count=2)
+    # texel 0: R=LED4 255, G=LED5 128, B=LED6 0, A=unused 0
+    assert out == bytes([255, 128, 0, 0, 0, 0, 255, 0])
+
+
+def test_quantise_group_rgba8_refuses_a_map_of_the_wrong_length():
+    with pytest.raises(ValueError, match="LED 1"):
+        quantise_group_rgba8([0, 1], {0: [0.0, 0.0], 1: [0.0]}, texel_count=2)
+
+
+def test_build_mm_bake_extras_passes_the_contract_and_uses_the_one_serializer():
+    layout = tuple(PixelLayout(index=i, x_mm=i, y_mm=0, z_mm=10, size="small",
+                               zone=None) for i in range(5))
+    extras = build_mm_bake_extras(source_sha256="cd" * 32, layout_pixels=layout,
+                                  map_scale=0.87, resolution=256,
+                                  blender_version="4.5.14")
+    validate_mm_bake(extras)
+    assert extras["pixels"] == 5 and extras["maps"] == [0, 1]
+    assert extras["uv"] == "TEXCOORD_1" and extras["blender"] == "4.5.14"
+    assert extras["layout"][4] == {"index": 4, "x_mm": 4, "y_mm": 0, "z_mm": 10,
+                                   "size": "small", "zone": None}
+
+
+def test_bake_output_path_sits_beside_the_source():
+    assert bake_output_path(Path("instruments/models/cap.glb")) == Path(
+        "instruments/models/cap.baked.glb")

@@ -25,8 +25,9 @@ import math
 import re
 import struct
 import zlib
+from pathlib import Path
 
-from control.model_layout import ModelLayoutError, read_glb_json
+from control.model_layout import ModelLayoutError, layout_to_json, read_glb_json
 
 GLB_MAGIC = 0x46546C67
 JSON_CHUNK_TYPE = 0x4E4F534A
@@ -327,3 +328,111 @@ def _append_maps(gltf: dict, binary: bytearray, pngs: list, mm_bake: dict) -> by
     gltf["extras"] = root_extras
 
     return _write_glb(gltf, bytes(binary))
+
+
+class BakeError(Exception):
+    """tools/bake_model.py refused to run or to write a result."""
+
+
+def check_blender_version(actual: tuple, pinned: str) -> str:
+    """`actual` is bpy.app.version, a (major, minor, patch) tuple (never
+    parse bpy.app.version_string: it carries a suffix like " LTS").
+    Refuses any major.minor other than `pinned` ("X.Y"); returns the
+    full "X.Y.Z" recorded as mm_bake.blender."""
+    found = ".".join(str(n) for n in actual[:3])
+    want = tuple(int(part) for part in pinned.split(".")[:2])
+    if tuple(actual[:2]) != want:
+        raise BakeError(
+            f"tools/bake_model.py is pinned to Blender {pinned}.x, found {found}; "
+            f"bake on the host documented in docs/MM_TERRARIUM.md (LED layout "
+            f"models), or re-run tools/blender_probe.py and update PINNED_BLENDER")
+    return found
+
+
+def group_leds_by_four(pixel_count: int) -> list:
+    """LED index groups, one per RGBA texture: LEDs 4i..4i+3 go to
+    R, G, B, A of texture i (spec section 5.3 step 4)."""
+    return [list(range(i, min(i + 4, pixel_count))) for i in range(0, pixel_count, 4)]
+
+
+def layout_to_blender_m(pixel) -> tuple:
+    """A layout pixel's Blender scene position in metres. The layout is
+    Z-up millimetres (D12) and Blender's glTF importer converts the
+    source's Y-up to the same Z-up frame, so it is mm / 1000 per axis."""
+    return (pixel.x_mm / 1000.0, pixel.y_mm / 1000.0, pixel.z_mm / 1000.0)
+
+
+def flip_rows(values: list, width: int, height: int) -> list:
+    """Reverse the row order of a single-channel, row-major buffer.
+    Blender's Image.pixels is bottom row first; PNG rows and glTF
+    texture space (UV (0,0) = top-left) are top row first, and Blender's
+    glTF exporter writes v' = 1 - v, so an unflipped map would be upside
+    down on the model."""
+    if len(values) != width * height:
+        raise ValueError(f"values must be width*height ({width * height}), got {len(values)}")
+    rows = [values[r * width:(r + 1) * width] for r in range(height)]
+    return [v for row in reversed(rows) for v in row]
+
+
+def normalise_maps(raw_maps: dict) -> tuple:
+    """Divide every LED's texels by the brightest texel across all LEDs
+    (spec section 5.3 step 4); map_scale is that peak, so
+    texel * map_scale recovers the baked value. Negative texels (bake
+    noise) clamp to 0. An all-black bake is refused: it means no LED's
+    light reached any baked surface, which is a modelling or material
+    error, not a result."""
+    clamped = {led: [t if t > 0.0 else 0.0 for t in texels]
+               for led, texels in raw_maps.items()}
+    peak = max((max(texels) for texels in clamped.values() if texels), default=0.0)
+    if peak <= 0.0:
+        raise BakeError(
+            "every light map is black: no LED lit any baked surface; check the "
+            "markers sit where the surface can see them and the materials "
+            "are not fully opaque around them")
+    return {led: [t / peak for t in texels] for led, texels in clamped.items()}, peak
+
+
+def _to_byte(value: float) -> int:
+    if value <= 0.0:
+        return 0
+    if value >= 1.0:
+        return 255
+    return int(value * 255.0 + 0.5)
+
+
+def quantise_group_rgba8(group: list, normalised: dict, texel_count: int) -> bytes:
+    """One texture's raw RGBA8 bytes (encode_png_rgba8's input): the LEDs
+    of `group` in R, G, B, A order, unused channels of a short final
+    group 0."""
+    out = bytearray(texel_count * 4)
+    for channel, led in enumerate(group):
+        texels = normalised[led]
+        if len(texels) != texel_count:
+            raise ValueError(f"LED {led} map has {len(texels)} texels, expected {texel_count}")
+        out[channel::4] = bytes(_to_byte(t) for t in texels)
+    return bytes(out)
+
+
+def build_mm_bake_extras(*, source_sha256: str, layout_pixels: tuple, map_scale: float,
+                         resolution: int, blender_version: str) -> dict:
+    """extras.mm_bake for a real bake (spec section 4.1). "maps" is a
+    placeholder in the right shape; inject_bake rewrites it with the
+    actual texture indices. Validated before it is returned."""
+    extras = {
+        "source_sha256": source_sha256,
+        "pixels": len(layout_pixels),
+        "map_scale": map_scale,
+        "maps": list(range(len(group_leds_by_four(len(layout_pixels))))),
+        "uv": LIGHTMAP_TEXCOORD,
+        "resolution": resolution,
+        "blender": blender_version,
+        "layout": layout_to_json(layout_pixels),
+    }
+    validate_mm_bake(extras)
+    return extras
+
+
+def bake_output_path(model_path: Path) -> Path:
+    """<source dir>/<source stem>.baked.glb, the file the catalog's
+    stale-bake check (control/terrarium_config.py) looks for."""
+    return model_path.with_name(f"{model_path.stem}.baked.glb")
