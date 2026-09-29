@@ -59,6 +59,21 @@ front-end fixture every Bit reuses. It attaches to the same engine
 observer list as the uplink and runs entirely offline in tests. See
 `docs/superpowers/specs/2026-07-21-terrarium-console-design.md`.
 
+## Dev container (Linux / WSL2)
+
+Install Docker Engine inside WSL2 Ubuntu (not Docker Desktop; setup in
+[`docker/README.md`](docker/README.md)), then:
+
+```
+docker run --rm ghcr.io/musical-mycology/terrarium-dev:main launcher > terrarium-dev && chmod +x terrarium-dev
+terrarium-dev run --room TEST    # Arco + the TEST Room; add --headless for no audio
+terrarium-dev test               # pytest, then node --test
+```
+
+The image is not published yet (Phase 2); until then build it with
+`docker/build.sh` and add `--tag local`. See `docker/README.md` for
+networking, audio and pins.
+
 ## Quick start: a clean Terrarium
 
 ```
