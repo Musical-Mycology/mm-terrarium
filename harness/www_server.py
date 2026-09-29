@@ -21,7 +21,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from control.lobby import StartRequest, TERRARIUM_ADMIN
-from control.prepare import PrepareReply, PrepareRequest
+from control.prepare import REASON_LOADING, PrepareReply, PrepareRequest
 
 # The documented port a QR poster points at (spec section 4.1).
 WWW_PORT = 8788
@@ -88,10 +88,11 @@ class _QuietHandler(SimpleHTTPRequestHandler):
     own tick (spec section 3)."""
 
     def __init__(self, *args, start_requests=None, prepare_requests=None,
-                 o2proc=None, **kwargs):
+                 o2proc=None, room_loading=None, **kwargs):
         self._start_requests = start_requests
         self._prepare_requests = prepare_requests
         self._o2proc = o2proc
+        self._room_loading = room_loading
         super().__init__(*args, **kwargs)
 
     def log_message(self, format, *args):  # noqa: A002 (stdlib signature)
@@ -139,6 +140,13 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         key = params.get("key", [None])[0]
         bit = params.get("bit", [""])[0]
         dev, source = self._source(params.get("dev", [""])[0] or None)
+        # A Room load blocks the tick that drains the queue, so a queued
+        # request would only time out as a misleading 503. Answer now. Like
+        # "no room loaded" this reveals nothing the key protects, so it sits
+        # ahead of the key check; the key is never logged or echoed.
+        if self._room_loading is not None and self._room_loading():
+            self._plain(409, REASON_LOADING)
+            return
         reply = PrepareReply(threading.Event())
         try:
             self._prepare_requests.put_nowait(
@@ -180,12 +188,15 @@ class WwwServer:
         self.start_requests: queue.Queue = queue.Queue(maxsize=START_QUEUE_MAX)
         self.prepare_requests: queue.Queue = queue.Queue(maxsize=PREPARE_QUEUE_MAX)
         self.o2proc = None
+        # Zero-arg, thread-safe: True while a Room load blocks the tick.
+        self.room_loading = None
 
     def start(self) -> None:
         handler = functools.partial(_QuietHandler, directory=self._root,
                                     start_requests=self.start_requests,
                                     prepare_requests=self.prepare_requests,
-                                    o2proc=self.o2proc)
+                                    o2proc=self.o2proc,
+                                    room_loading=self.room_loading)
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._server.daemon_threads = True
         self._port = self._server.server_address[1]

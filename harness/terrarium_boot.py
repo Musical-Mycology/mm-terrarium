@@ -218,7 +218,7 @@ def _pump_uplink(uplink) -> None:
 
 
 def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip,
-                      o2proc=None):
+                      o2proc=None, room_loading=None):
     """Serve www/ to guest phones (spec section 4.1). Independent of Arco
     and the transport; constructed through `server_cls` so the wiring is
     testable without a socket. Returns the server, or None when
@@ -234,6 +234,7 @@ def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip,
     server = server_cls(os.path.join(REPO_ROOT, "www"), host="0.0.0.0",
                         port=args.www_port)
     server.o2proc = o2proc
+    server.room_loading = room_loading   # both read by start()
     try:
         server.start()
     except OSError as exc:
@@ -244,6 +245,14 @@ def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip,
     print(f"{markers.WWW_URL} {server.url(ip())} "
           f"(guest page; o2ws goes to Arco on {ARCO_HTTP_PORT})", flush=True)
     return server
+
+
+def _room_loading_probe(terrarium):
+    """The zero-arg callable GET /prepare polls from the www handler thread
+    to answer 409 while a Room load blocks the tick. It reads one attribute
+    (an atomic reference read under the GIL), never calls into the
+    Terrarium, so it is safe off the tick thread and needs no lock."""
+    return lambda: terrarium.state is TerrariumState.ROOM_LOADING
 
 
 def _o2proc_lookup(ensemble):
@@ -1995,7 +2004,8 @@ def main() -> None:
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
         o2proc = _o2proc_holder(args, config)
-        www = _start_www_server(args, teardown, o2proc=o2proc)
+        www = _start_www_server(args, teardown, o2proc=o2proc,
+                                room_loading=_room_loading_probe(terrarium))
         if www is not None:
             _register_o2proc(o2proc, config, terrarium)
             agent.start_requests = www.start_requests

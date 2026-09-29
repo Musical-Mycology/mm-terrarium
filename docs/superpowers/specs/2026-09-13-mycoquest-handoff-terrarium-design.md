@@ -130,6 +130,7 @@ Three rules carried over unchanged:
   |---|---|---|
   | accepted (load or no-op) | 202 | `prepare requested` |
   | refused, `visible` is true (busy, no room, load error) | 409 | the reason |
+  | a Room is mid-load (the tick is blocked; answered by the handler before queueing, key unread) | 409 | `room loading` (transient; retry) |
   | refused, `visible` is false (bad key, unknown Bit, wrong start condition) | 202 | `prepare requested` |
   | reply not set within the timeout | 503 | `prepare not drained` |
 

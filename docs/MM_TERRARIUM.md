@@ -643,8 +643,9 @@ mutate) and `cue_horizon`, stamped at load for Bits grading input.
 - **`GET /prepare?key=&bit=[&dev=]`** (`control/prepare.py`) loads a Bit
   for MycoQuest: no Room is a visible 409; unknown Bit, non-admin Bit or bad
   key is a silent 202 like an accept; IDLE loads it; SETUP with that Bit is
-  a 202 no-op; anything else is 409 `busy`. It reads the parsed `[start]
-  key` without importing; no drain reply within 3 s is 503.
+  a 202 no-op; anything else is 409 `busy`. While a Room loads it answers
+  409 `room loading` at once, unqueued (transient; retry). It reads the
+  parsed `[start] key` without importing; no drain reply within 3 s is 503.
 - While WAITING, un-joined non-fixture devices get two white flashes every
   5 s; a double tap (count 2, or two taps in 1.5 s) joins the default role.
   A scored join's ceremony, 1 s apart: green x2, a bell up the scale at
@@ -782,6 +783,10 @@ Instrument plus placement and binding. All pure stdlib.
   Room sets `gs.provenance` (`room_name`, `terrarium_config_version`), stamped
   into role blobs and `FunctionFired.room_name`. `loading_room` names the Room
   mid-load, so the harness spawns simulators for it rather than the boot Room.
+- A Room load runs on the tick thread and blocks it (~9 s, once per boot: a
+  Room change needs a restart). The Console shows elapsed seconds per stage
+  (`console/static/elapsed.js`, ticked client-side), and `GET /prepare`
+  answers 409 `room loading` instead of queueing behind the frozen tick.
 - **Run records** (`control/run_record.py`; `--no-run-records` opts out): each
   spawned pid and spawn time goes to `runs/<run_id>/procs.jsonl`, and the next
   `load_room`'s `sweep_stale` stops any still alive with a matching spawn time

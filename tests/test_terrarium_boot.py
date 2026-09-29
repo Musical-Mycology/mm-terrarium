@@ -2619,6 +2619,51 @@ def test_start_www_server_sets_o2proc_before_start():
     assert seen["o2proc_at_start"] is holder
 
 
+def test_start_www_server_sets_room_loading_before_start():
+    """The handler reads room_loading when start() builds it, so it must be
+    on the server first."""
+    import argparse
+
+    import harness.terrarium_boot as tb
+    from control.teardown import TeardownStack
+    seen = {}
+
+    class FakeWww:
+        def __init__(self, root, host, port):
+            self.room_loading = None
+
+        def start(self):
+            seen["at_start"] = self.room_loading
+
+        def stop(self):
+            pass
+
+        def url(self, host=None):
+            return "http://x/"
+
+    probe = lambda: False  # noqa: E731
+    tb._start_www_server(argparse.Namespace(www_port=8788), TeardownStack(),
+                         server_cls=FakeWww, ip=lambda: "127.0.0.1",
+                         room_loading=probe)
+    assert seen["at_start"] is probe
+
+
+def test_room_loading_probe_tracks_the_terrarium_state():
+    import harness.terrarium_boot as tb
+    from control.terrarium import TerrariumState
+
+    class T:
+        state = TerrariumState.NO_ROOM
+
+    t = T()
+    probe = tb._room_loading_probe(t)
+    assert probe() is False
+    t.state = TerrariumState.ROOM_LOADING
+    assert probe() is True
+    t.state = TerrariumState.ROOM_READY
+    assert probe() is False
+
+
 def test_register_o2proc_seeds_and_observes_the_terrarium(monkeypatch):
     """A Room already loaded (--room) is looked up by the seed; later
     transitions reach the watcher through the Terrarium observer list."""
