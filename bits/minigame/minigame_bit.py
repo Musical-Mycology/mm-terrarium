@@ -66,7 +66,7 @@ class MinigameBit(Bit):
             role_class=RoleClass.UNIQUE,   # exactly one device holds this role
             capacity=1,
             scored=False,
-            uses=["tap", "hold"],
+            uses=["tap", "hold", "swing"],
         )
         return RoleTable(roles={"player": player},
                          node_map={MINIGAME_PLAYER_NODE: ["player"]})
@@ -94,7 +94,8 @@ class MinigameBit(Bit):
         })
 
     def verb_handlers(self) -> dict:
-        return {"tap": self._on_tap, "hold": self._on_hold}
+        return {"tap": self._on_tap, "hold": self._on_hold,
+                "swing": self._on_swing}
 
     def on_setup_enter(self) -> None:
         pass
@@ -161,4 +162,12 @@ class MinigameBit(Bit):
         self._enter(Phase.PENDING)
         self._blink_t0 = None
         self._next_blink = 0
+        return []
+
+    def _on_swing(self, dev: str, args: list, at: float) -> list:
+        """Prints the swing's O2 clock time: the device's onset stamp, or
+        Control's O2 clock if the stamp was unusable. `at` is that plus
+        cue_horizon (the presentation time), so take the horizon back off."""
+        o2_time = at - self.cue_horizon
+        print(f"minigame: swing from {dev} at O2 {o2_time:.3f}", flush=True)
         return []
