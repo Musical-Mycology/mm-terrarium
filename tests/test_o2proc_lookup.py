@@ -138,3 +138,23 @@ def test_seed_when_no_room_does_nothing():
     O2ProcWatcher(holder, lookup=lambda: (REAL, ""), spawn=spawn).seed(
         TerrariumState.NO_ROOM)
     assert spawn.jobs == [] and holder.get() == (None, "arco not ready")
+
+
+def test_lookup_exception_is_caught_and_logged(caplog):
+    holder, spawn = O2ProcHolder("arco"), _Deferred()
+
+    def failing_lookup():
+        raise OSError("no interface")
+
+    w = O2ProcWatcher(holder, lookup=failing_lookup, spawn=spawn)
+    w.on_terrarium_state_change(None, TerrariumState.ROOM_READY)
+    assert holder.get() == (None, "lookup pending")
+
+    import logging
+    with caplog.at_level(logging.ERROR):
+        spawn.run()
+
+    name, reason = holder.get()
+    assert name is None
+    assert "lookup failed: no interface" in reason
+    assert "o2proc lookup failed" in caplog.text

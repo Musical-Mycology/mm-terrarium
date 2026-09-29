@@ -8,6 +8,7 @@ Pure parsing and selection here; the zeroconf browse is added in Task A2
 and imported lazily (no zeroconf at module level: boundary rules)."""
 from __future__ import annotations
 
+import logging
 import threading
 from typing import NamedTuple
 
@@ -183,7 +184,11 @@ class O2ProcWatcher:
             self._holder.set_unavailable(PENDING)
 
         def run():
-            name, reason = self._lookup()
+            try:
+                name, reason = self._lookup()
+            except Exception as exc:
+                logging.getLogger(__name__).exception("o2proc lookup failed")
+                name, reason = None, f"lookup failed: {exc}"
             with self._lock:
                 if gen != self._gen:
                     return
