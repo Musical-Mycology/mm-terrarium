@@ -2591,6 +2591,82 @@ def test_start_www_server_starts_pushes_teardown_and_prints_the_url(capsys):
     assert events[-1] == ("stop",)
 
 
+def test_start_www_server_sets_o2proc_before_start():
+    """The holder must be on the server before start(), which reads it."""
+    import argparse
+
+    import harness.terrarium_boot as tb
+    from control.teardown import TeardownStack
+    seen = {}
+
+    class FakeWww:
+        def __init__(self, root, host, port):
+            self.o2proc = None
+
+        def start(self):
+            seen["o2proc_at_start"] = self.o2proc
+
+        def stop(self):
+            pass
+
+        def url(self, host=None):
+            return "http://x/"
+
+    holder = object()
+    tb._start_www_server(argparse.Namespace(www_port=8788), TeardownStack(),
+                         server_cls=FakeWww, ip=lambda: "127.0.0.1",
+                         o2proc=holder)
+    assert seen["o2proc_at_start"] is holder
+
+
+def test_register_o2proc_seeds_and_observes_the_terrarium(monkeypatch):
+    """A Room already loaded (--room) is looked up by the seed; later
+    transitions reach the watcher through the Terrarium observer list."""
+    import argparse
+
+    import harness.terrarium_boot as tb
+    import threading
+    lookups = []
+    done = threading.Event()
+
+    def fake_lookup(ens):
+        lookups.append(ens)
+        done.set()
+        return "@name", None
+
+    monkeypatch.setattr(tb, "_o2proc_lookup", fake_lookup)
+
+    class FakeTerrarium:
+        state = TerrariumState.ROOM_READY
+
+        def __init__(self):
+            self.observers = []
+
+        def add_observer(self, obs):
+            self.observers.append(obs)
+
+    terrarium = FakeTerrarium()
+    config = types.SimpleNamespace(o2_ensemble="arco")
+    holder = tb._o2proc_holder(argparse.Namespace(www_port=8788), config)
+    assert holder.ensemble == "arco"
+    tb._register_o2proc(holder, config, terrarium)
+    assert len(terrarium.observers) == 1
+    assert done.wait(5)  # the seed spawns the lookup on a daemon thread
+    assert lookups == ["arco"]
+    terrarium.observers[0].on_terrarium_state_change(
+        TerrariumState.ROOM_READY, TerrariumState.ROOM_UNLOADING)
+    assert holder.get() == (None, "arco not ready")
+
+
+def test_o2proc_holder_is_off_when_the_www_server_is_off():
+    import argparse
+
+    import harness.terrarium_boot as tb
+
+    assert tb._o2proc_holder(argparse.Namespace(www_port=0),
+                             types.SimpleNamespace(o2_ensemble="arco")) is None
+
+
 def test_start_www_server_is_off_when_the_port_is_zero(capsys):
     import argparse
 

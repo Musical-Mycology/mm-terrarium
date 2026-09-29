@@ -26,12 +26,15 @@ from control.prepare import PrepareReply, PrepareRequest
 # The documented port a QR poster points at (spec section 4.1).
 WWW_PORT = 8788
 
-# The two dynamic routes this server answers; everything else is a static
+# The three dynamic routes this server answers; everything else is a static
 # file under `directory`. /prepare (spec 2026-09-13 section 4.1) is /start
 # with a reply slot: the handler waits for the tick thread's answer so the
 # app can learn busy.
 START_PATH = "/start"
 PREPARE_PATH = "/prepare"
+# Arco's current O2 process name, for firmware whose network blocks mDNS
+# (spec 2026-09-29-o2proc-port-lookup-design). Read-only; no key.
+O2PROC_PATH = "/o2proc"
 _LOOPBACK = ("127.0.0.1", "::1")
 START_QUEUE_MAX = 16
 PREPARE_QUEUE_MAX = 16
@@ -79,15 +82,16 @@ class _QuietHandler(SimpleHTTPRequestHandler):
     the mimetypes table. Only its per-request log line is silenced: the
     stack's stdout carries markers, not access logs.
 
-    Static files as before, plus the one dynamic route: GET /start.
-    The handler runs on the server thread and never touches the engine;
-    it only enqueues a StartRequest for DeviceLinkAgent to drain on its
+    Static files as before, plus three dynamic routes: GET /start, GET /prepare,
+    and GET /o2proc. The handler runs on the server thread and never touches the
+    engine; it only enqueues requests for DeviceLinkAgent to drain on its
     own tick (spec section 3)."""
 
     def __init__(self, *args, start_requests=None, prepare_requests=None,
-                 **kwargs):
+                 o2proc=None, **kwargs):
         self._start_requests = start_requests
         self._prepare_requests = prepare_requests
+        self._o2proc = o2proc
         super().__init__(*args, **kwargs)
 
     def log_message(self, format, *args):  # noqa: A002 (stdlib signature)
@@ -108,6 +112,8 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlsplit(self.path)
+        if parsed.path == O2PROC_PATH:
+            return self._do_o2proc(parsed)
         if parsed.path == PREPARE_PATH:
             return self._do_prepare(parsed)
         if parsed.path != START_PATH:
@@ -148,6 +154,20 @@ class _QuietHandler(SimpleHTTPRequestHandler):
             return
         self._plain(409, reply.reason or "refused")
 
+    def _do_o2proc(self, parsed):
+        if self._o2proc is None:
+            self.send_error(404, "o2proc is not wired on this server")
+            return
+        ensemble = parse_qs(parsed.query).get("ensemble", [None])[0]
+        if ensemble is not None and ensemble != self._o2proc.ensemble:
+            self._plain(404, "unknown ensemble")
+            return
+        name, reason = self._o2proc.get()
+        if name is None:
+            self._plain(503, reason)
+            return
+        self._plain(200, name)
+
 
 class WwwServer:
     def __init__(self, root: str, host: str = "0.0.0.0",
@@ -159,11 +179,13 @@ class WwwServer:
         self._thread: threading.Thread | None = None
         self.start_requests: queue.Queue = queue.Queue(maxsize=START_QUEUE_MAX)
         self.prepare_requests: queue.Queue = queue.Queue(maxsize=PREPARE_QUEUE_MAX)
+        self.o2proc = None
 
     def start(self) -> None:
         handler = functools.partial(_QuietHandler, directory=self._root,
                                     start_requests=self.start_requests,
-                                    prepare_requests=self.prepare_requests)
+                                    prepare_requests=self.prepare_requests,
+                                    o2proc=self.o2proc)
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._server.daemon_threads = True
         self._port = self._server.server_address[1]

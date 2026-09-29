@@ -216,7 +216,8 @@ def _pump_uplink(uplink) -> None:
             "uplink pump raised; leaving the venue box running")
 
 
-def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip):
+def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip,
+                      o2proc=None):
     """Serve www/ to guest phones (spec section 4.1). Independent of Arco
     and the transport; constructed through `server_cls` so the wiring is
     testable without a socket. Returns the server, or None when
@@ -231,6 +232,7 @@ def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip):
         return None
     server = server_cls(os.path.join(REPO_ROOT, "www"), host="0.0.0.0",
                         port=args.www_port)
+    server.o2proc = o2proc
     try:
         server.start()
     except OSError as exc:
@@ -241,6 +243,35 @@ def _start_www_server(args, teardown, *, server_cls=WwwServer, ip=lan_ip):
     print(f"{markers.WWW_URL} {server.url(ip())} "
           f"(guest page; o2ws goes to Arco on {ARCO_HTTP_PORT})", flush=True)
     return server
+
+
+def _o2proc_lookup(ensemble):
+    """Live zeroconf lookup of the local Arco's O2 process name. A module
+    seam so tests never browse the network; imported lazily because
+    zeroconf/netifaces are not needed unless a Room goes ready."""
+    from harness.o2proc_lookup import find_local_arco
+    return find_local_arco(ensemble)
+
+
+def _o2proc_holder(args, config):
+    """The holder GET /o2proc serves, or None when the www server is off and
+    nothing would serve it. Created before the server so it can be handed to
+    _start_www_server; the watcher is registered only once that bound."""
+    if args.www_port == 0:
+        return None
+    from harness.o2proc_lookup import O2ProcHolder
+    return O2ProcHolder(config.o2_ensemble)
+
+
+def _register_o2proc(holder, config, terrarium):
+    """Fill `holder` from the Room's Arco (for firmware on a network that
+    blocks mDNS). The watcher is seeded because --room loads the Room before
+    any observer exists."""
+    from harness.o2proc_lookup import O2ProcWatcher
+    watcher = O2ProcWatcher(
+        holder, lookup=lambda: _o2proc_lookup(config.o2_ensemble))
+    terrarium.add_observer(watcher)
+    watcher.seed(terrarium.state)
 
 
 def make_arco_process_cls(arco_popen, settle: float):
@@ -1957,8 +1988,10 @@ def main() -> None:
             agent._on_room_frame = console_agent.on_room_frame
             print(f"{markers.BROWSE_URL} Terrarium Console at "
                   f"http://{args.host}:{console_server.port}/", flush=True)
-        www = _start_www_server(args, teardown)
+        o2proc = _o2proc_holder(args, config)
+        www = _start_www_server(args, teardown, o2proc=o2proc)
         if www is not None:
+            _register_o2proc(o2proc, config, terrarium)
             agent.start_requests = www.start_requests
             agent.prepare_requests = www.prepare_requests
             from control.prepare import PrepareAuthority
