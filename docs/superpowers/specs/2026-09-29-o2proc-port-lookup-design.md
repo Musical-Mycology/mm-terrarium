@@ -72,7 +72,9 @@ when all of these hold:
   `run_stack --ensemble`);
 - the TXT `name` is a valid 28-char O2 process name;
 - its TCP port field equals the SRV port;
-- the resolved address is one of this host's own addresses.
+- the internal IP embedded in the name is one of this host's own IPv4
+  addresses (`netifaces`). O2 wrote that address itself, so this check
+  needs no mDNS address resolution.
 
 The last filter excludes another box's Arco on the same LAN. Exactly one
 match returns the name; zero or several matches return a reason. Parsing and
