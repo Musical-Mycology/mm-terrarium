@@ -20,11 +20,13 @@ clearer than adding a test->production import.
 """
 from __future__ import annotations
 
+import json
+import math
 import re
 import struct
 import zlib
 
-from control.model_layout import read_glb_json
+from control.model_layout import ModelLayoutError, read_glb_json
 
 GLB_MAGIC = 0x46546C67
 JSON_CHUNK_TYPE = 0x4E4F534A
@@ -33,8 +35,21 @@ BIN_CHUNK_TYPE = 0x004E4942
 _LED_NAME_RE = re.compile(r"^LED_(\d{3})$")
 
 
-class InjectBakeError(Exception):
-    pass
+class BakeContractError(Exception):
+    """A baked .glb (or an mm_bake block) breaks spec section 4.1."""
+
+
+class InjectBakeError(BakeContractError):
+    """inject_bake refused its input or its own output."""
+
+
+LIGHTMAP_TEXCOORD = "TEXCOORD_1"
+MM_BAKE_KEYS = ("source_sha256", "pixels", "map_scale", "maps", "uv",
+                "resolution", "blender", "layout")
+_LAYOUT_KEYS = ("index", "x_mm", "y_mm", "z_mm", "size", "zone")
+_SIZES = ("small", "medium", "large")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_ZONE_RE = re.compile(r"^[a-z0-9_]+$")
 
 
 def encode_png_rgba8(width: int, height: int, pixels: bytes) -> bytes:
@@ -69,8 +84,7 @@ def encode_png_rgba8(width: int, height: int, pixels: bytes) -> bytes:
 def _write_glb(gltf: dict, binary: bytes) -> bytes:
     """The production-side twin of tests/glb_builder.build_glb -- see
     this module's docstring for why it is not shared via import."""
-    import json
-    body = json.dumps(gltf).encode("utf-8")
+    body = json.dumps(gltf, allow_nan=False).encode("utf-8")
     body += b" " * ((-len(body)) % 4)
     chunks = struct.pack("<II", len(body), JSON_CHUNK_TYPE) + body
     if binary:
@@ -99,12 +113,12 @@ def _read_glb_full(data: bytes, *, path: str) -> tuple:
 def _refuse_missing_texcoord1(gltf: dict) -> None:
     for mesh_idx, mesh in enumerate(gltf.get("meshes", [])):
         for prim_idx, prim in enumerate(mesh.get("primitives", [])):
-            if "TEXCOORD_1" not in prim.get("attributes", {}):
+            if LIGHTMAP_TEXCOORD not in prim.get("attributes", {}):
                 mesh_name = mesh.get("name")
                 located = (f"mesh {mesh_idx} ({mesh_name!r})" if mesh_name
                           else f"mesh {mesh_idx}")
-                raise InjectBakeError(
-                    f"{located} primitive {prim_idx} has no TEXCOORD_1 "
+                raise BakeContractError(
+                    f"{located} primitive {prim_idx} has no {LIGHTMAP_TEXCOORD} "
                     f"accessor; the Blender exporter did not write the "
                     f"lightmap UV set; check export_texcoords")
 
@@ -113,7 +127,7 @@ def _refuse_remaining_marker_meshes(gltf: dict) -> None:
     for node in gltf.get("nodes", []):
         name = node.get("name", "")
         if _LED_NAME_RE.match(name) and "mesh" in node:
-            raise InjectBakeError(
+            raise BakeContractError(
                 f"node {name!r} is still an LED marker mesh; a bake must "
                 f"delete markers before export (spec section 5.3 step 1)")
 
@@ -125,13 +139,119 @@ def _validate_buffers_structure(gltf: dict) -> None:
     if buffers is None:
         return
     if len(buffers) > 1:
-        raise InjectBakeError(
+        raise BakeContractError(
             "the GLB has multiple buffers; inject_bake only supports a single "
             "embedded buffer (buffer 0)")
     if buffers[0].get("uri"):
-        raise InjectBakeError(
+        raise BakeContractError(
             "buffers[0] has a uri; inject_bake only supports embedded binary "
             "buffers, not external ones")
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def validate_mm_bake(mm_bake) -> None:
+    """Spec section 4.1's root extras.mm_bake, checked field by field with
+    the same rules mm-tuneshroom's lib/render/model_layout.dart applies
+    (plus uv/resolution/blender, which the spec lists and this writer
+    always sets). Raises BakeContractError naming the field and rule."""
+    if not isinstance(mm_bake, dict):
+        raise BakeContractError("mm_bake must be an object")
+    missing = [k for k in MM_BAKE_KEYS if k not in mm_bake]
+    if missing:
+        raise BakeContractError(f"mm_bake is missing required key(s) {missing}")
+    sha = mm_bake["source_sha256"]
+    if not isinstance(sha, str) or not _SHA256_RE.match(sha):
+        raise BakeContractError("mm_bake.source_sha256 must be 64 lowercase hex characters")
+    pixels = mm_bake["pixels"]
+    if not _is_int(pixels) or pixels < 1:
+        raise BakeContractError("mm_bake.pixels must be an integer >= 1")
+    scale = mm_bake["map_scale"]
+    if (not isinstance(scale, (int, float)) or isinstance(scale, bool)
+            or not math.isfinite(scale) or scale <= 0):
+        raise BakeContractError("mm_bake.map_scale must be a finite number > 0")
+    if mm_bake["uv"] != LIGHTMAP_TEXCOORD:
+        raise BakeContractError(f"mm_bake.uv must be {LIGHTMAP_TEXCOORD!r}")
+    if not _is_int(mm_bake["resolution"]) or mm_bake["resolution"] < 1:
+        raise BakeContractError("mm_bake.resolution must be an integer >= 1")
+    if not isinstance(mm_bake["blender"], str) or not mm_bake["blender"]:
+        raise BakeContractError("mm_bake.blender must be a non-empty string")
+    maps = mm_bake["maps"]
+    if not isinstance(maps, list) or not all(_is_int(m) and m >= 0 for m in maps):
+        raise BakeContractError("mm_bake.maps must be a list of non-negative integers")
+    expected_maps = (pixels + 3) // 4
+    if len(maps) != expected_maps:
+        raise BakeContractError(
+            f"mm_bake.maps has {len(maps)} entries, expected {expected_maps} "
+            f"(one per group of 4 pixels)")
+    layout = mm_bake["layout"]
+    if not isinstance(layout, list) or len(layout) != pixels:
+        raise BakeContractError(
+            f"mm_bake.layout must be a list of {pixels} entries (mm_bake.pixels)")
+    for i, entry in enumerate(layout):
+        if not isinstance(entry, dict):
+            raise BakeContractError(f"mm_bake.layout[{i}] must be an object")
+        absent = [k for k in _LAYOUT_KEYS if k not in entry]
+        if absent:
+            raise BakeContractError(f"mm_bake.layout[{i}] is missing key(s) {absent}")
+        if not _is_int(entry["index"]) or entry["index"] != i:
+            raise BakeContractError(
+                f"mm_bake.layout[{i}].index must be {i} (indices run 0 to "
+                f"{pixels - 1} in order), got {entry['index']!r}")
+        if not all(_is_int(entry[k]) for k in ("x_mm", "y_mm", "z_mm")):
+            raise BakeContractError(f"mm_bake.layout[{i}].x_mm/y_mm/z_mm must be integers")
+        if entry["size"] not in _SIZES:
+            raise BakeContractError(
+                f"mm_bake.layout[{i}].size must be one of small, medium, large, "
+                f"got {entry['size']!r}")
+        zone = entry["zone"]
+        if zone is not None:
+            if not isinstance(zone, str) or not _ZONE_RE.match(zone):
+                raise BakeContractError(
+                    f"mm_bake.layout[{i}].zone {zone!r} must match [a-z0-9_]+")
+            if zone == "primary":
+                raise BakeContractError(f"mm_bake.layout[{i}].zone 'primary' is reserved")
+
+
+def validate_baked_glb(data: bytes, *, path: str) -> dict:
+    """The whole spec section 4.1 contract on a baked file's bytes: no
+    LED marker meshes, TEXCOORD_1 on every primitive, a valid root
+    extras.mm_bake, and every maps entry naming a PNG texture. Returns
+    the mm_bake block. Used by inject_bake (on its own output),
+    tools/export_models.py, and the committed-bake test."""
+    try:
+        gltf = read_glb_json(data, path=path)
+    except ModelLayoutError as exc:
+        raise BakeContractError(str(exc)) from exc
+    try:
+        if not isinstance(gltf, dict):
+            raise BakeContractError("glTF root must be a JSON object")
+        _refuse_remaining_marker_meshes(gltf)
+        _refuse_missing_texcoord1(gltf)
+        extras = gltf.get("extras")
+        mm_bake = extras.get("mm_bake") if isinstance(extras, dict) else None
+        if mm_bake is None:
+            raise BakeContractError("no root extras.mm_bake; this is not a baked model")
+        validate_mm_bake(mm_bake)
+        textures = gltf.get("textures", [])
+        images = gltf.get("images", [])
+        for group, tex in enumerate(mm_bake["maps"]):
+            if tex >= len(textures):
+                raise BakeContractError(
+                    f"mm_bake.maps[{group}] = {tex} names no texture "
+                    f"(the file has {len(textures)})")
+            src = textures[tex].get("source")
+            if (not _is_int(src) or not 0 <= src < len(images)
+                    or images[src].get("mimeType") != "image/png"):
+                raise BakeContractError(
+                    f"mm_bake.maps[{group}]: texture {tex} is not a PNG image")
+    except BakeContractError as exc:
+        raise BakeContractError(f"{path}: {exc}") from exc
+    except (IndexError, KeyError, TypeError, AttributeError) as exc:
+        raise BakeContractError(f"{path}: malformed glTF: {exc}") from exc
+    return mm_bake
 
 
 def inject_bake(glb_bytes: bytes, pngs: list, mm_bake: dict) -> bytes:
@@ -144,14 +264,25 @@ def inject_bake(glb_bytes: bytes, pngs: list, mm_bake: dict) -> bytes:
     whole document. Raises InjectBakeError, naming the offending mesh or
     rule, if any mesh primitive lacks `TEXCOORD_1` or if any mesh is
     still named like an LED marker (`LED_###`), if the GLB has multiple
-    buffers, or if buffers[0] is external (has a uri)."""
-    gltf, binary = _read_glb_full(glb_bytes, path="<inject_bake input>")
-    binary = bytearray(binary)
+    buffers, or if buffers[0] is external (has a uri). The final mm_bake
+    (with "maps" rewritten) must pass validate_mm_bake, so len(pngs)
+    must equal ceil(pixels / 4), and the written file must pass
+    validate_baked_glb; any failure raises InjectBakeError."""
+    try:
+        gltf, binary = _read_glb_full(glb_bytes, path="<inject_bake input>")
+        _refuse_remaining_marker_meshes(gltf)
+        _refuse_missing_texcoord1(gltf)
+        _validate_buffers_structure(gltf)
+        out = _append_maps(gltf, bytearray(binary), pngs, mm_bake)
+        validate_baked_glb(out, path="<inject_bake output>")
+    except InjectBakeError:
+        raise
+    except (BakeContractError, ModelLayoutError) as exc:
+        raise InjectBakeError(str(exc)) from exc
+    return out
 
-    _refuse_remaining_marker_meshes(gltf)
-    _refuse_missing_texcoord1(gltf)
-    _validate_buffers_structure(gltf)
 
+def _append_maps(gltf: dict, binary: bytearray, pngs: list, mm_bake: dict) -> bytes:
     images = list(gltf.get("images", []))
     textures = list(gltf.get("textures", []))
     buffer_views = list(gltf.get("bufferViews", []))
@@ -190,6 +321,7 @@ def inject_bake(glb_bytes: bytes, pngs: list, mm_bake: dict) -> bytes:
 
     extras = dict(mm_bake)
     extras["maps"] = new_texture_indices
+    validate_mm_bake(extras)
     root_extras = dict(gltf.get("extras") or {})
     root_extras["mm_bake"] = extras
     gltf["extras"] = root_extras
