@@ -96,13 +96,78 @@ def test_room_ready_runs_lookup_and_fills_holder():
     assert holder.get() == (REAL, "")
 
 
+class _Sleeps:
+    """Injected sleep: records delays, then runs an optional hook (a test's
+    stand-in for what happens while the watcher waits)."""
+    def __init__(self, hook=None):
+        self.delays, self.hook = [], hook
+
+    def __call__(self, delay):
+        self.delays.append(delay)
+        if self.hook:
+            self.hook(len(self.delays))
+
+
+def _end_room(w):
+    """Bump the watcher's generation without touching the holder, so a retry
+    loop ends and the holder keeps the failure reason under test."""
+    def hook(n):
+        with w._lock:
+            w._gen += 1
+    return hook
+
+
 def test_lookup_failure_is_the_503_reason():
-    holder, spawn = O2ProcHolder("arco"), _Deferred()
+    holder, spawn, sleeps = O2ProcHolder("arco"), _Deferred(), _Sleeps()
     w = O2ProcWatcher(holder, lookup=lambda: (None, "no arco here"),
-                      spawn=spawn)
+                      spawn=spawn, sleep=sleeps)
+    sleeps.hook = _end_room(w)
     w.on_terrarium_state_change(None, TerrariumState.ROOM_READY)
     spawn.run()
     assert holder.get() == (None, "no arco here")
+    assert sleeps.delays == [5]
+
+
+def test_failed_lookup_is_retried_with_backoff_until_it_succeeds():
+    holder, spawn, sleeps = O2ProcHolder("arco"), _Deferred(), _Sleeps()
+    results = iter([(None, "no arco here"), (None, "no arco here"),
+                    (REAL, "")])
+    seen = []
+    w = O2ProcWatcher(holder, lookup=lambda: next(results), spawn=spawn,
+                      sleep=sleeps)
+    sleeps.hook = lambda n: seen.append(holder.get())
+    w.on_terrarium_state_change(None, TerrariumState.ROOM_READY)
+    spawn.run()
+    assert seen == [(None, "no arco here")] * 2
+    assert sleeps.delays == [5, 10]
+    assert holder.get() == (REAL, "")
+
+
+def test_room_change_during_backoff_stops_retrying():
+    holder, spawn, sleeps = O2ProcHolder("arco"), _Deferred(), _Sleeps()
+    calls = []
+
+    def lookup():
+        calls.append(1)
+        return None, "no arco here"
+
+    w = O2ProcWatcher(holder, lookup=lookup, spawn=spawn, sleep=sleeps)
+    sleeps.hook = lambda n: w.on_terrarium_state_change(
+        TerrariumState.ROOM_READY, TerrariumState.ROOM_UNLOADING)
+    w.on_terrarium_state_change(None, TerrariumState.ROOM_READY)
+    spawn.run()
+    assert len(calls) == 1
+    assert holder.get() == (None, "arco not ready")
+
+
+def test_backoff_caps_at_thirty_seconds():
+    holder, spawn, sleeps = O2ProcHolder("arco"), _Deferred(), _Sleeps()
+    w = O2ProcWatcher(holder, lookup=lambda: (None, "x"), spawn=spawn,
+                      sleep=sleeps)
+    sleeps.hook = lambda n: _end_room(w)(n) if n == 7 else None
+    w.on_terrarium_state_change(None, TerrariumState.ROOM_READY)
+    spawn.run()
+    assert sleeps.delays == [5, 10, 20, 30, 30, 30, 30]
 
 
 def test_unload_clears_the_name():
@@ -146,7 +211,9 @@ def test_lookup_exception_is_caught_and_logged(caplog):
     def failing_lookup():
         raise OSError("no interface")
 
-    w = O2ProcWatcher(holder, lookup=failing_lookup, spawn=spawn)
+    sleeps = _Sleeps()
+    w = O2ProcWatcher(holder, lookup=failing_lookup, spawn=spawn, sleep=sleeps)
+    sleeps.hook = _end_room(w)
     w.on_terrarium_state_change(None, TerrariumState.ROOM_READY)
     assert holder.get() == (None, "lookup pending")
 
