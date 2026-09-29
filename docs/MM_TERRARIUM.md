@@ -281,7 +281,8 @@ Both scripts, and `harness.run_stack` itself, take the flags below (see
   and a non-zero exit on any failure. A device that never clock-syncs
   fails as stage `device-sync` rather than hanging; the one remaining
   cause is upstream (*Not yet built / deferred*). Its intermittent half
-  was the undrained Arco pty below (fixed, never headless-specific).
+  was the undrained Arco pty below (fixed by the drain thread, never
+  headless-specific).
 - `--seconds SECONDS`: how long to hold the stack up. Default: forever
   (Ctrl-C), or 45s under `--ci`.
 - `--devices DEVICES`: how many simulated player devices to join.
@@ -320,17 +321,23 @@ shell level before invoking Python, using `ARCO_ROOT` (or an already-set
 error rather than let a missing `pyarco` import masquerade as something
 else.
 
-**The Arco pty gotcha: every loop that holds while Arco is alive must
-drain Arco's pty.** Arco is a curses app running on a pty; if nothing reads
-it, its output buffer fills, the write blocks, and Arco freezes mid-write
-with no clock sync served, no routing, and no audio, even though the
-process is alive. This bit `_wait_in_setup` once: a `--setup-seconds` hold
-did not drain the pty, and devices that looked like they were "taking
-60-100 s to clock-sync" were actually blocked, syncing the instant the hold
-expired. The harness's serve loops (`_serve_rounds`, `_wait_for_load`,
-`_wait_in_setup`, `_serve_until_done`) and the ownership probe all take a
-`pump` hook now and drain Arco's `poll()` on every iteration; any new
-holding loop needs the same treatment.
+**The Arco pty gotcha: Arco's pty must be read continuously.** Arco is a
+curses app running on a pty whose buffer holds only ~19.6 KB (measured); if
+nothing reads it, the write blocks and Arco freezes mid-write with no
+mDNS advertisement, clock sync, routing, or audio, even though the process is
+alive. On WSL Arco writes ~40 KB of harmless ALSA "cannot find card" errors
+at startup, so it froze before advertising whenever the master was unread:
+during the 5 s `--arco-settle-seconds` sleep and inside each readiness probe
+(pyarco's `arco.initialize()` blocks up to 30 s + 15 s and never calls
+`poll()`). That was the root cause of probe 1 always timing out (~32 s), every
+boot running ~35 s slow, and `room_load_failed` ("stuck spinning up arco") on
+a box with more startup output. `_PtyProcess` now owns a daemon thread that
+drains the master from spawn until `close()` (which joins it before closing
+the fd), feeding `arco.log` and the bounded `output` tail, so no holding loop
+has to drain. The serve loops' `pump` hooks (`_serve_rounds`,
+`_wait_for_load`, `_wait_in_setup`, `_serve_until_done`, the ownership probe)
+remain as redundant, harmless `poll()`s. Earlier, a `--setup-seconds` hold
+without draining looked like devices "taking 60-100 s to clock-sync".
 
 **Backgrounding `./terrarium.sh` for a scripted or unattended run: use
 `set -m` first, or send SIGTERM.** bash runs an asynchronous command
@@ -987,8 +994,8 @@ holds a `LightSession` per joined device and per fixture, ships
 - `start()` refuses an unsynced clock (`time_get() < 0`) or a missing
   `actl`, then `verify_service_ownership` round-trips a TCP probe on
   **both** services (resent every 2 s, 10 s timeout); either failing is
-  fatal (without `actl` the next ugen build hangs). Its `pump=` must drain
-  Arco's pty (see "The Arco pty gotcha" under Running it).
+  fatal (without `actl` the next ugen build hangs). Its `pump=` is now redundant
+  (the pty drains itself; see "The Arco pty gotcha" under Running it).
 - **o2lite facts**, each of which breaks the link if ignored:
   - handlers take `(address, types, info)`, **pull** args in typespec
     order (`pull_args`) and get the address without its leading `/`;
@@ -1315,7 +1322,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   `/host/clear`; a failed probe plus retry can leave `arco.output` `None`),
   `--arco-ready-timeout` (a cold first probe can take ~18 s),
   `--arco-start-audio` (presses (S)tart; off: a toggle Arco cannot report).
-  The readiness probe and `ArcoSynthPool.start()` hold undrained (never seen to freeze).
+  The settle sleep, the readiness probe and `ArcoSynthPool.start()` no
+  longer need draining: `_PtyProcess`'s thread reads the master throughout.
 - Loggers print device lifecycle and, per Bit load, `JOIN_URL:` (and
   `START_URL:`/`PREPARE_URL:`). `join denied:` stays lowercase, or it would
   match the device marker `JOIN DENIED:` inside Control's log.
@@ -1382,7 +1390,7 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   `room_stack` closes the last-declared fixture's simulator first.
 - **`stop_process`** (`control/process.py`): SIGTERM, poll 5 s, SIGKILL,
   poll 5 s, return the code or `None`; polling, not `Popen.wait(timeout=)`,
-  because `_PtyProcess.poll()` drains Arco's pty. Used by e.g.
+  because `_PtyProcess.poll()` is the reap path and must stay non-blocking. Used by e.g.
   `ArcoProcess`, `SimulatorProcess` (no readiness probe) and `run_stack`.
 - **`sigterm_as_keyboard_interrupt()`**: `finally` never runs on a bare
   SIGTERM, so `run_stack`, `terrarium_boot` and `o2_shroom` map it (and
@@ -1816,8 +1824,9 @@ appended, never inserted.
   `ArcoExecFailed` via a close-on-exec pipe (macOS reports EIO on the pty
   master once the slave closes, so pty text never reaches the log);
   `wait_ready` raises `ArcoExited` once the child dies. The pty master is
-  also Arco's only control surface (`_PtyProcess.write_console`). Drain it
-  (*Running it*).
+  also Arco's only control surface (`_PtyProcess.write_console`). `_PtyProcess`'s
+  own thread drains it continuously (*Running it*): the pty holds ~19.6 KB
+  and Arco writes ~40 KB on WSL at startup.
 
 ## Relationships to other repos
 
@@ -1903,7 +1912,7 @@ Kept explicit so the doc does not over-claim.
   (liveness spec section 5).
 - **A device's clock-sync to Arco after Control has connected is unreliable**
   in one remaining, upstream case. The intermittent half was this repo's
-  undrained Arco pty (*Running it*), fixed, and never headless-specific.
+  undrained Arco pty (*Running it*), fixed by the drain thread, and never headless-specific.
   What remains: pyarco's `arco.initialize()` always sends `/host/clear`
   via `reset()`, and a client that synced **before** that keeps a valid
   `time_get()` on a dead socket (measured: 120 joins over 240 s, none
