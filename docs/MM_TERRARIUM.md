@@ -38,7 +38,8 @@ Full pre-rewrite history: `git show 9dd35c3:docs/MM_TERRARIUM.md`.
 **Contents**
 
 - [What it is, in one picture](#what-it-is-in-one-picture)
-- [Running it](#running-it)
+- [Running it](#running-it):
+  [Linux / WSL host setup](#linux--wsl-host-setup)
 - [Landed subsystems](#landed-subsystems):
   [`control/` lifecycle and Bit runtime](#control-the-lifecycle-engine-and-bit-runtime),
   [`control/` Terrarium, Rooms, instruments and audio](#control-terrarium-rooms-instruments-and-audio),
@@ -229,7 +230,7 @@ not; that trap has already cost one debugging detour.
 **A fresh git worktree has no `.venv` at all**, so that trap is one step
 away every time one is created: the commands below fail outright, and the
 obvious recovery is to reach for `python3` and land in the paragraph above.
-Symlink it instead: `ln -s /Users/chris/projects/mm-terrarium/.venv .venv`
+Symlink it instead: `ln -s "$HOME/projects/mm-terrarium/.venv" .venv`
 from the worktree root. `.gitignore` matches `.venv` without a trailing
 slash specifically so the symlink is ignored (a directory-only pattern does
 not match a symlink).
@@ -362,6 +363,107 @@ set -m
 PID=$!
 kill -INT "$PID"   # or: kill -TERM "$PID", works either way
 ```
+
+### Linux / WSL host setup
+
+**WSL2 Ubuntu on a Windows box is the default dev host** for MM engineers
+(the Mac stays the Dec show machine). Everything below was verified on
+Windows 10 + WSL2 Ubuntu 26.04 except the real-device networking in step 9.
+The end state: `./terrarium.sh --room TEST --seconds 45` runs clean.
+
+1. **apt packages.** (`portaudio19-dev`, not `libportaudio19-dev`, which does
+   not exist.)
+
+   ```bash
+   sudo apt install cmake cmake-curses-gui portaudio19-dev libavahi-client-dev \
+     libsndfile1-dev libfluidsynth-dev libportmidi-dev fluid-soundfont-gm \
+     libncurses-dev libogg-dev libvorbis-dev libflac-dev libopus-dev \
+     libglib2.0-dev avahi-daemon
+   ```
+
+   **Enable systemd in WSL** (`/etc/wsl.conf`: `[boot]` then `systemd=true`,
+   then `wsl --shutdown` from Windows) so avahi-daemon starts on its own. On
+   Linux, O2 advertises `_o2proc._tcp` through the Avahi client API; with no
+   daemon Arco logs "Avahi failed to create client: Daemon not running",
+   never advertises, and the readiness probe dies 60 s later with "Arco did
+   not report ready". `harness/host_preflight.py` now checks for
+   `/run/avahi-daemon/socket` first (Linux only; `harness.run_stack` and
+   `harness.terrarium_boot` both call it before spawning anything) and
+   refuses with the fix. `./terrarium.sh --clean` skips it. The soundfont
+   lands at `/usr/share/sounds/sf2/FluidR3_GM.sf2`, which
+   `harness/arco_synth.py` already probes.
+2. **Sibling checkouts under `~/projects`**: `arco`
+   (`Musical-Mycology/arco`), `luxaeterna`, and `o2` from
+   `rbdannenberg/o2` (not in the Musical-Mycology org; arco's cmake finds it
+   as a sibling). `mm`'s clone-missing-repos sweep skips arco, luxaeterna
+   and mm-devshroom (no `mm-meta.yml`), so clone them by hand.
+3. **Build o2:**
+
+   ```bash
+   cd ~/projects/o2 && cmake -S . -B Release -DCMAKE_BUILD_TYPE=Release \
+     -DTESTS_BUILD=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+     && cmake --build Release -j"$(nproc)"     # -> Release/libo2_static.a
+   ```
+4. **`arco/apps/common/libraries.txt`** is machine-local and gitignored, and
+   Arco will not configure without it. Copy the working Ubuntu one:
+   `cp docs/upstream/arco-libraries-ubuntu.txt ~/projects/arco/apps/common/libraries.txt`
+   (system `-dev` shared libs plus the sibling o2 build).
+5. **Three Linux build fixes to Arco source** (Mac-only code: one-argument
+   `pthread_setname_np` in `arco/src/audioio.cpp` and `server/src/arco.cpp`,
+   a missing `<pthread.h>` in `audioio.cpp`, missing
+   `<cstring>/<algorithm>/<iterator>` in `server/src/termui/termui.cpp`).
+   Made against arco `c8092e2`: `git -C ~/projects/arco apply
+   "$PWD/docs/upstream/arco-linux-build.patch"`. **They are pending upstream
+   with Roger Dannenberg and must never be committed to the arco mirror**;
+   drop the patch once he lands them.
+6. **Build the server:**
+
+   ```bash
+   cd ~/projects/arco/apps/pytest
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+   cmake -S . -B build          # the SECOND configure is required
+   cmake --build build -j"$(nproc)"
+   ln -s pytestserver server    # the harness expects `server`
+   ```
+
+   `server/arcoserver.cmakeinclude` tests `if(USE_MIDI)` (adding
+   `midiservice.cpp`, ~line 58) before `option(USE_MIDI ...)` (~line 144)
+   defines it, so a first configure omits midiservice and the link fails on
+   undefined `midi_*` references. Faust is not needed (the committed reson
+   sources compile; its regeneration step errors harmlessly).
+7. **The venv**, from this repo's root:
+
+   ```bash
+   python3 -m venv .venv
+   .venv/bin/python -m pip install -r requirements-dev.txt
+   .venv/bin/python -m pip install -e "$HOME/projects/luxaeterna[websim]"
+   ```
+8. **Expected noise:** dozens of ALSA "cannot find card '0'" lines in
+   `arco.log` (WSL has no sound card) are harmless.
+9. **Networking for real devices.** WSL2
+   defaults to NAT, so Linux sits on its own subnet: LAN devices cannot
+   discover or reach Arco (ESP32 firmware connects to the internal IP in
+   the O2 mDNS TXT record). Simulated devices are unaffected; `./terrarium.sh`
+   prints a WARNING when `wslinfo --networking-mode` reports `nat`. To try
+   real devices, follow Microsoft's WSL networking docs
+   (<https://learn.microsoft.com/windows/wsl/networking>):
+   - **Windows 11 (22H2 or later):** `networkingMode=mirrored` under
+     `[wsl2]` in `%UserProfile%\.wslconfig`, then `wsl --shutdown`. That
+     page lists multicast support and direct LAN access to WSL for this
+     mode. Allow inbound traffic for the WSL VM in the Hyper-V firewall
+     (admin PowerShell, verbatim from that page):
+     `Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -DefaultInboundAction Allow`.
+     **Confirmed 2026-09-29 on a teammate's Windows 11 box:** mirrored mode
+     with avahi-daemon active, and an ESP32 dev shroom discovers Arco over
+     mDNS and connects. Avahi coexists with Windows' own mDNS responder on
+     UDP 5353.
+   - **Windows 10:** mirrored mode is unavailable. `networkingMode=bridged`
+     with a Hyper-V external switch (Pro only) is deprecated and not on that
+     page; unverified. The reliable fallback is a native host.
+10. **Smoke check:** `./terrarium.sh --room TEST --seconds 45` should exit 0
+    with "room loaded: TEST" and both `sim-room-*` device hellos. "device
+    timed out" lines printed AFTER `Arco_engine: finish called` are normal
+    teardown.
 
 ## Landed subsystems
 
@@ -1810,8 +1912,13 @@ appended, never inserted.
   section 4.5). The later venue target, bare-metal Linux on a Raspberry Pi 5
   with an I2S DAC HAT, is deferred past the show (design doc, *Host
   Platform*).
-- **No virtualized hosts.** O2 discovery and Art-Net to WLED are UDP on the
-  LAN; a NAT'd VM or **WSL2** host sits on its own subnet and gets neither.
+- **No NAT'd hosts for real devices.** O2 discovery and Art-Net to WLED are
+  UDP on the LAN; a NAT'd VM or **WSL2 in its default NAT mode** sits on its
+  own subnet and gets neither. WSL2 is still the default *dev* host
+  (simulated devices need no LAN); mirrored (Windows 11) or bridged
+  (Windows 10 Pro) networking may lift the restriction but is unverified
+  with a real dev shroom (*Linux / WSL host setup*, step 9). The show
+  machine stays a Mac.
 - **Develop without hardware** on luxaeterna's `WebSimBackend` (browser
   canvas; `serve=False` records frames headless); `harness/o2_shroom.py`'s
   `build()` is the worked example.
@@ -1872,7 +1979,13 @@ appended, never inserted.
   and simulator presets are unbuilt). The legacy M1a / Sensor-Check harness
   stays there as a reference; nothing was ported.
 - **mm-devshroom**: Rev 1 ESP32 Tuneshroom firmware, consuming the exported
-  device contract.
+  device contract. **Any device client must keep joining until granted:**
+  `GameServer.join` denies every join outside SETUP/RUNNING ("no Bit
+  accepting registrations"), which is the normal state after
+  `./terrarium.sh` boots, before the operator loads a Bit. A join sent once
+  on connect is usually lost. The firmware resends `/game/join` on each 5 s
+  hello until `/<dev>/role`, and again after `/<dev>/release`
+  (mm-devshroom PR #5).
 - **mm-fairyring**: the cloud broker, Terrarium `uplink/` to fairyring to
   MycoQuest. `uplink/` is written against a protocol fairyring implements;
   the broker is built in its own repo, not yet deployed. Its cross-repo

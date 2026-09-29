@@ -38,6 +38,7 @@ from control.terrarium_config import (TerrariumConfig, load_terrarium_config,
 from devicelink.agent import DeviceLinkAgent
 from harness import markers
 from harness.arco_paths import ARCO_PYTHONPATH
+from harness.host_preflight import run_preflight
 from harness.signals import parent_is_gone, sigterm_as_keyboard_interrupt
 from harness.tick_pacer import TickPacer
 from harness.www_server import WWW_PORT, WwwServer, lan_ip
@@ -1660,6 +1661,9 @@ def main() -> None:
     if args.list_bits:
         print_bit_list(registry)
         sys.exit(0)
+
+    # Direct runs only: under run_stack the check already ran (env marker).
+    run_preflight()
 
     if args.no_bit and (args.bit is not None or args.profile is not None):
         ap.error("--no-bit cannot be combined with --bit or --profile")
