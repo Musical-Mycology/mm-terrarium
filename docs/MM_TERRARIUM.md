@@ -434,11 +434,17 @@ The end state: `./terrarium.sh --room TEST --seconds 45` runs clean.
    prints a WARNING when `wslinfo --networking-mode` reports `nat`. To try
    real devices, follow Microsoft's WSL networking docs
    (<https://learn.microsoft.com/windows/wsl/networking>):
-   - **Windows 11:** `networkingMode=mirrored` under `[wsl2]` in
-     `%UserProfile%\.wslconfig`, `wsl --shutdown`, and allow inbound traffic
-     for the WSL VM in the Hyper-V firewall (see that page for the setting).
-   - **Windows 10 Pro:** `networkingMode=bridged` with a Hyper-V external
-     switch (see that page).
+   - **Windows 11 (22H2 or later):** `networkingMode=mirrored` under
+     `[wsl2]` in `%UserProfile%\.wslconfig`, then `wsl --shutdown`. That
+     page lists multicast support and direct LAN access to WSL for this
+     mode. Allow inbound traffic for the WSL VM in the Hyper-V firewall
+     (admin PowerShell, verbatim from that page):
+     `Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -DefaultInboundAction Allow`.
+     Open question: Windows' own mDNS responder also uses UDP 5353, and
+     whether Avahi in mirrored WSL coexists with it is untested.
+   - **Windows 10:** mirrored mode is unavailable. `networkingMode=bridged`
+     with a Hyper-V external switch (Pro only) is deprecated and not on that
+     page; untested. The reliable fallback is a native host.
 10. **Smoke check:** `./terrarium.sh --room TEST --seconds 45` should exit 0
     with "room loaded: TEST" and both `sim-room-*` device hellos. "device
     timed out" lines printed AFTER `Arco_engine: finish called` are normal
