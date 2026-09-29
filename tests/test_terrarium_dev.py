@@ -32,12 +32,14 @@ def h(tmp_path):
     (co / "terrarium.sh").touch()
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
+    dbus = tmp_path / "dbus.sock"
+    dbus.touch()
     env = {
         "PATH": f"{bindir}:/usr/bin:/bin",
         "HOME": str(tmp_path / "home"),
         "TD_CONFIG_DIR": str(tmp_path / "config"),
         "TD_AVAHI_DIR": str(avahi),
-        "TD_DBUS_SOCKET": "/fake/dbus.sock",
+        "TD_DBUS_SOCKET": str(dbus),
         "TD_WSLG_DIR": str(wslg),
         "TD_RUNS_DIR": str(tmp_path / "runs"),
         "TD_UNAME": "Linux",
@@ -45,7 +47,8 @@ def h(tmp_path):
         "FAKE_DOCKER_RM_LOG": str(tmp_path / "docker-rm.log"),
     }
     return SimpleNamespace(tmp=tmp_path, bin=bindir, avahi=avahi, wslg=wslg,
-                           co=co.resolve(), elsewhere=elsewhere, env=env)
+                           co=co.resolve(), elsewhere=elsewhere, dbus=dbus,
+                           env=env)
 
 
 def launch(h, *args, cwd=None, **extra_env):
@@ -102,7 +105,7 @@ def test_run_uses_host_network_label_user_and_host_avahi(h):
     assert len(pairs(argv, "--user")) == 1
     assert "HOME=/tmp" in pairs(argv, "-e")
     vols = pairs(argv, "-v")
-    assert "/fake/dbus.sock:/run/dbus/system_bus_socket" in vols
+    assert f"{h.dbus}:/run/dbus/system_bus_socket" in vols
     assert f"{h.avahi}:/run/avahi-daemon" in vols
 
 
@@ -128,7 +131,8 @@ def test_refuses_without_pulse_and_suggests_headless(h):
     (h.wslg / "PulseServer").unlink()
     r = launch(h, "run")
     assert r.returncode != 0
-    assert "--headless" in r.stderr
+    assert "pass --headless before the command" in r.stderr
+    assert "terrarium-dev --headless run" in r.stderr
     assert not [c for c in calls(h) if c[:1] == ["run"]]
 
 
@@ -314,3 +318,57 @@ def test_empty_image_id_after_pull_raises_error(h):
     r = launch(h, "run", FAKE_DOCKER_IMAGE_ID="")
     assert r.returncode != 0
     assert "cannot read the image id" in r.stderr
+
+
+def test_refuses_without_dbus_socket_and_names_the_fix(h):
+    h.dbus.unlink()
+    for cmd in ("run", "smoke", "shell"):
+        r = launch(h, cmd)
+        assert r.returncode != 0, cmd
+        assert "D-Bus socket" in r.stderr and "systemctl enable" in r.stderr
+    assert not [c for c in calls(h) if c[:1] == ["run"]]
+
+
+def test_precreates_missing_venv_dir_in_checkout(h):
+    assert not (h.co / ".venv").exists()
+    r = launch(h, "run")
+    assert r.returncode == 0, r.stderr
+    assert (h.co / ".venv").is_dir()
+
+
+def test_leaves_a_venv_symlink_untouched(h):
+    target = h.tmp / "real-venv"
+    target.mkdir()
+    (h.co / ".venv").symlink_to(target)
+    r = launch(h, "run")
+    assert r.returncode == 0, r.stderr
+    assert (h.co / ".venv").is_symlink()
+    assert list(target.iterdir()) == []
+
+
+def test_leaves_a_dangling_venv_symlink_untouched(h):
+    (h.co / ".venv").symlink_to(h.tmp / "nowhere")
+    r = launch(h, "run")
+    assert r.returncode == 0, r.stderr
+    assert (h.co / ".venv").is_symlink()
+
+
+def test_clean_refuses_while_a_stack_is_live(h):
+    r = launch(h, "clean", FAKE_DOCKER_PS="abc123 def456")
+    assert r.returncode != 0
+    assert "abc123" in r.stderr and "def456" in r.stderr
+    assert "docker stop" in r.stderr
+    assert not [c for c in calls(h) if c[:1] == ["run"]]
+
+
+def test_clean_runs_when_no_stack_is_live(h):
+    r = launch(h, "clean")
+    assert r.returncode == 0, r.stderr
+    assert run_call(h)[-1] == "clean"
+
+
+def test_update_pull_failure_names_the_fix(h):
+    r = launch(h, "update", FAKE_DOCKER_PULL_FAIL="1")
+    assert r.returncode != 0
+    assert "could not pull" in r.stderr
+    assert "terrarium-dev use TAG" in r.stderr

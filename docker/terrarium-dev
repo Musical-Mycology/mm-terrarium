@@ -120,6 +120,10 @@ check_avahi() {
   [ -e "$TD_AVAHI_DIR/socket" ] || die "avahi-daemon is not running on this host, so Arco can't advertise over mDNS. Fix: sudo apt install avahi-daemon && sudo systemctl enable --now avahi-daemon (on WSL, systemd must be enabled in /etc/wsl.conf; see docker/README.md)."
 }
 
+check_dbus() {
+  [ -S "$TD_DBUS_SOCKET" ] || [ -e "$TD_DBUS_SOCKET" ] || die "the system D-Bus socket $TD_DBUS_SOCKET is missing, so Avahi can't be reached from the container. Fix: sudo systemctl enable --now dbus (on WSL, systemd must be enabled in /etc/wsl.conf; see docker/README.md)."
+}
+
 # wslg | native | none
 audio_mode() {
   if [ -e "$TD_WSLG_DIR/PulseServer" ]; then echo wslg
@@ -156,6 +160,10 @@ build_run_args() {
     esac
   fi
   if [ -n "$co" ]; then
+    # Docker would create the /work/.venv mountpoint inside the bind mount as
+    # root; a plain empty dir made here keeps the host tree user-owned. A
+    # symlink (a worktree's .venv) is left alone.
+    if [ ! -e "$co/.venv" ] && [ ! -L "$co/.venv" ]; then mkdir "$co/.venv"; fi
     args+=(-v "$co:/work" -v "$(venv_volume "$co"):/work/.venv" -w /work)
   else
     mkdir -p "$TD_RUNS_DIR"
@@ -174,7 +182,7 @@ case "$cmd" in
     ;;
   update)
     check_docker
-    docker pull "$image"
+    docker pull "$image" || die "could not pull $image: check your network and the tag (terrarium-dev use TAG)"
     prune_venv_volumes
     ;;
   selfcheck)
@@ -185,10 +193,11 @@ case "$cmd" in
     check_macos
     check_docker
     check_avahi
+    check_dbus
     audio=none
     if [ "$headless" -eq 0 ]; then
       audio="$(audio_mode)"
-      [ "$audio" != none ] || die "no PulseAudio socket found ($TD_WSLG_DIR/PulseServer or \$XDG_RUNTIME_DIR/pulse/native). Pass --headless to run silent."
+      [ "$audio" != none ] || die "no PulseAudio socket found ($TD_WSLG_DIR/PulseServer or \$XDG_RUNTIME_DIR/pulse/native). To run silent, pass --headless before the command (terrarium-dev --headless run ...)."
     fi
     check_wsl_nat
     if [ "$cmd" != shell ]; then check_one_stack; fi
@@ -200,6 +209,12 @@ case "$cmd" in
   test|clean)
     check_macos
     check_docker
+    if [ "$cmd" = clean ]; then
+      # clean runs in its own PID namespace: it cannot see (or stop) a stack in
+      # another container, and would delete that stack's run records.
+      live="$(docker ps -q --filter "label=$LABEL" | tr '\n' ' ')"
+      [ -z "${live// /}" ] || die "a terrarium-dev stack is still running (container $live). clean cannot see it from a new container and would delete its run records. Fix: docker stop $live, then rerun terrarium-dev clean."
+    fi
     co="$(resolve_checkout)" || exit 1
     if [ -n "$co" ]; then ensure_venv_volume "$(venv_volume "$co")"; fi
     build_run_args plain "$co" none
