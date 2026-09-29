@@ -14,7 +14,9 @@ Linux or macOS kernel. Spec:
 **Image status:** the image is not yet published to GHCR (that is the Phase
 2 pipeline). Until Phase 2 publishes `ghcr.io/musical-mycology/terrarium-dev`,
 build it locally with `docker/build.sh` and pass `--tag local` (or run
-`terrarium-dev use local` once). The pull-based commands below are the
+`terrarium-dev use local` once; `terrarium-dev update` then tries to pull
+`:local` and fails, so switch back with `terrarium-dev use main` before
+updating). The pull-based commands below are the
 intended path once it is published.
 
 ## Host setup (Docker Engine in WSL2)
@@ -47,8 +49,8 @@ on the LAN; Docker Desktop's host network is its own VM.
 4. **Networking for real devices.** WSL2
    defaults to NAT, so Linux sits on its own subnet: LAN devices cannot
    discover or reach Arco (ESP32 firmware connects to the internal IP in
-   the O2 mDNS TXT record). Simulated devices are unaffected; `./terrarium.sh`
-   prints a WARNING when `wslinfo --networking-mode` reports `nat`. To try
+   the O2 mDNS TXT record). Simulated devices are unaffected; the launcher
+   warns when `wslinfo --networking-mode` reports `nat`. To try
    real devices, follow Microsoft's WSL networking docs
    (<https://learn.microsoft.com/windows/wsl/networking>):
    - **Windows 11 (22H2 or later):** `networkingMode=mirrored` under
@@ -122,9 +124,16 @@ Flags go before the command:
   volume `terrarium-venv-<hash of checkout path>` shadows `/work/.venv`, so
   the host's own `.venv` (a macOS or WSL venv) is never used inside the
   container and never touched. The volume is stamped with the image id and
-  recreated when the image changes. Arco and luxaeterna come from the image,
-  so a checkout that needs newer ones needs a newer image (`terrarium-dev
-  update`, or bump the pins and build with `--tag local`).
+  recreated when the image changes. Before `run`, `smoke`, `test`, `shell`
+  and `clean`, the container entrypoint hashes the checkout's
+  `requirements.txt` and `requirements-dev.txt` and compares it with the
+  hash stamped in the venv volume; on a mismatch it prints "requirements
+  changed; installing into the venv volume", runs `pip install -r
+  requirements-dev.txt` into the volume and restamps. A branch that adds a
+  Python dependency therefore needs no image rebuild. Arco and luxaeterna
+  come from the image, so a checkout that needs newer ones needs a newer
+  image (`terrarium-dev update`, or bump the pins and build with `--tag
+  local`).
 - *Snapshot mode:* no checkout; the copy of `main` baked into the image runs
   from `/opt/mm/terrarium`, and `~/terrarium-runs` is mounted over its
   `runs/` so logs survive `--rm`.
@@ -145,7 +154,10 @@ the host itself is on the LAN.
 | Native Linux | yes | yes |
 | WSL2, Windows 11, mirrored mode | yes | yes |
 | WSL2, NAT mode | no (the launcher warns) | yes |
-| macOS, Docker Desktop | no (its network is its own VM; the launcher warns) | yes |
+| macOS, Docker Desktop | no (its network is its own VM; the launcher warns) | `run`, `smoke` and `shell` refuse (no host Avahi socket); only `test`, `clean` and `selfcheck` work |
+
+On macOS use a native setup (`docs/MM_TERRARIUM.md`, *Running it*) to run the
+stack; the container is useful there only for the test suites.
 
 One stack per host: with host networking, two stacks collide on ports 8080,
 8788 and 8772, so the launcher refuses to start a

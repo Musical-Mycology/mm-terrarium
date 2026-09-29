@@ -386,7 +386,9 @@ audio, pins and the self-check are in
 The image is not published yet (Phase 2): build it with `docker/build.sh` and
 pass `--tag local` until it is. Networking limit: a container shares the
 host's network, so real devices need a host already on the LAN (native Linux
-or WSL2 in mirrored mode); simulated devices work everywhere. The native
+or WSL2 in mirrored mode); simulated devices need no LAN, but `run`,
+`smoke` and `shell` also need a host Avahi socket, so on macOS only `test`,
+`clean` and `selfcheck` work and a native setup runs the stack. The native
 steps below remain the reference for what the image does and for building
 without Docker.
 
