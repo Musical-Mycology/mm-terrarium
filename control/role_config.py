@@ -132,8 +132,11 @@ def carried_instrument_view(carried: Instrument) -> dict:
     """The `instrument` section of a /ie<N>/role blob for `carried`: the one
     wire shape a generic host (mm-tuneshroom) parses. Also what
     tools/export_solo.py bundles, so solo mode and a granted role read the
-    same definition."""
-    return {
+    same definition. `model_sha256` ships only for an instrument that
+    declares a model (spec 2026-09-28-3d-tuneshroom-model-and-view-design.md
+    section 5.2), so every instrument that declares none keeps a
+    byte-identical view."""
+    view = {
         "name": carried.name,
         "capabilities": sorted(carried.capabilities),
         "pixels": carried.pixels,
@@ -141,6 +144,9 @@ def carried_instrument_view(carried: Instrument) -> dict:
                     "ugen": deepcopy(carried.ugen_manifest)},
         "functions": [function_view(f) for f in carried.functions],
     }
+    if carried.model_sha256 is not None:
+        view["model_sha256"] = carried.model_sha256
+    return view
 
 
 def compose_role_config(bit_name: str, bit_version: str, role: Role, *,

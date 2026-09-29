@@ -1,0 +1,101 @@
+{
+  "model_sha256": "5532610c7de5830fa51ac3fc993cc182610bb9ef709fbba4d2760f8e43e1bab9",
+  "pixels": [
+    {
+      "index": 0,
+      "size": "medium",
+      "x_mm": 40,
+      "y_mm": 0,
+      "z_mm": 100,
+      "zone": "ring"
+    },
+    {
+      "index": 1,
+      "size": "medium",
+      "x_mm": 28,
+      "y_mm": 28,
+      "z_mm": 100,
+      "zone": "ring"
+    },
+    {
+      "index": 2,
+      "size": "medium",
+      "x_mm": 0,
+      "y_mm": 40,
+      "z_mm": 100,
+      "zone": "ring"
+    },
+    {
+      "index": 3,
+      "size": "medium",
+      "x_mm": -28,
+      "y_mm": 28,
+      "z_mm": 100,
+      "zone": "ring"
+    },
+    {
+      "index": 4,
+      "size": "medium",
+      "x_mm": -40,
+      "y_mm": 0,
+      "z_mm": 100,
+      "zone": "ring"
+    },
+    {
+      "index": 5,
+      "size": "medium",
+      "x_mm": -28,
+      "y_mm": -28,
+      "z_mm": 100,
+      "zone": "ring"
+    },
+    {
+      "index": 6,
+      "size": "medium",
+      "x_mm": 0,
+      "y_mm": -40,
+      "z_mm": 100,
+      "zone": "ring"
+    },
+    {
+      "index": 7,
+      "size": "medium",
+      "x_mm": 28,
+      "y_mm": -28,
+      "z_mm": 100,
+      "zone": "ring"
+    },
+    {
+      "index": 8,
+      "size": "small",
+      "x_mm": 0,
+      "y_mm": 0,
+      "z_mm": 20,
+      "zone": "stem"
+    },
+    {
+      "index": 9,
+      "size": "small",
+      "x_mm": 0,
+      "y_mm": 0,
+      "z_mm": 40,
+      "zone": "stem"
+    },
+    {
+      "index": 10,
+      "size": "small",
+      "x_mm": 0,
+      "y_mm": 0,
+      "z_mm": 60,
+      "zone": "stem"
+    },
+    {
+      "index": 11,
+      "size": "small",
+      "x_mm": 0,
+      "y_mm": 0,
+      "z_mm": 80,
+      "zone": "stem"
+    }
+  ]
+}
