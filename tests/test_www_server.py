@@ -243,3 +243,54 @@ def test_prepare_key_never_reaches_a_log_line(www, caplog):
         _get(www, "key=" + quote("hunter2") + "&bit=B")
     t.join(2.0)
     assert "hunter2" not in caplog.text
+
+
+from harness.o2proc_lookup import O2ProcHolder
+from harness.www_server import O2PROC_PATH
+
+REAL = "@00000000:ac17f983:afb9:9f48"
+
+
+@pytest.fixture
+def www_o2proc(tmp_path):
+    holder = O2ProcHolder("arco")
+    server = WwwServer(str(tmp_path), host="127.0.0.1", port=0)
+    server.o2proc = holder
+    server.start()
+    try:
+        yield server, holder
+    finally:
+        server.stop()
+
+
+def _get_o2proc(server, query=""):
+    url = f"http://127.0.0.1:{server.port}{O2PROC_PATH}{query}"
+    try:
+        resp = urlopen(url)
+        return resp.status, resp.read().decode(), resp.headers["Content-Type"]
+    except HTTPError as err:
+        return err.code, err.read().decode(), err.headers["Content-Type"]
+
+
+def test_o2proc_serves_the_cached_name(www_o2proc):
+    server, holder = www_o2proc
+    holder.set_name(REAL)
+    status, body, ctype = _get_o2proc(server, "?ensemble=arco")
+    assert (status, body) == (200, REAL + "\n")
+    assert ctype.startswith("text/plain")
+
+
+def test_o2proc_is_503_with_the_reason_until_ready(www_o2proc):
+    server, _ = www_o2proc
+    assert _get_o2proc(server)[:2] == (503, "arco not ready\n")
+
+
+def test_o2proc_is_404_for_another_ensemble(www_o2proc):
+    server, holder = www_o2proc
+    holder.set_name(REAL)
+    assert _get_o2proc(server, "?ensemble=other")[:2] == (404, "unknown ensemble\n")
+
+
+def test_o2proc_is_404_when_not_wired(www):
+    status, _, _ = _get_o2proc(www)
+    assert status == 404
