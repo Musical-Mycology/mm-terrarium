@@ -233,3 +233,53 @@ def test_unknown_command_fails(h):
     r = launch(h, "bogus")
     assert r.returncode != 0
     assert "unknown command: bogus" in r.stderr
+
+
+def _vol_name(h):
+    argv = run_call(h)
+    return next(v.split(":")[0] for v in pairs(argv, "-v")
+                if v.endswith(":/work/.venv"))
+
+
+def test_creates_labelled_venv_volume_when_missing(h):
+    r = launch(h, "run")
+    assert r.returncode == 0, r.stderr
+    vol = _vol_name(h)
+    creates = [c for c in calls(h) if c[:2] == ["volume", "create"]]
+    assert creates == [["volume", "create",
+                        "--label", "mm.terrarium-dev.venv=1",
+                        "--label", "mm.terrarium-dev.image=sha256:cur", vol]]
+
+
+def test_keeps_venv_volume_stamped_with_current_image(h):
+    launch(h, "run")                       # learn the volume name
+    vol = _vol_name(h)
+    Path(h.env["FAKE_DOCKER_LOG"]).unlink()
+    launch(h, "run", FAKE_DOCKER_VOLUMES=f"{vol}=sha256:cur")
+    assert not [c for c in calls(h) if c[:2] in (["volume", "create"],
+                                                 ["volume", "rm"])]
+
+
+def test_recreates_venv_volume_from_an_older_image(h):
+    launch(h, "run")
+    vol = _vol_name(h)
+    Path(h.env["FAKE_DOCKER_LOG"]).unlink()
+    launch(h, "run", FAKE_DOCKER_VOLUMES=f"{vol}=sha256:old")
+    ops = [c[:2] for c in calls(h) if c[:1] == ["volume"]]
+    assert ["volume", "rm"] in ops and ["volume", "create"] in ops
+    assert ops.index(["volume", "rm"]) < ops.index(["volume", "create"])
+
+
+def test_snapshot_mode_touches_no_volume(h):
+    launch(h, "run", cwd=h.elsewhere)
+    assert not [c for c in calls(h) if c[:1] == ["volume"]]
+
+
+def test_update_pulls_then_prunes_volumes_from_other_images(h):
+    r = launch(h, "update",
+               FAKE_DOCKER_VOLUMES="terrarium-venv-1=sha256:old,terrarium-venv-2=sha256:cur")
+    assert r.returncode == 0, r.stderr
+    c = calls(h)
+    assert ["pull", f"{IMAGE}:main"] in c
+    rms = [x for x in c if x[:2] == ["volume", "rm"]]
+    assert rms == [["volume", "rm", "terrarium-venv-1"]]

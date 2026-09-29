@@ -70,6 +70,37 @@ resolve_checkout() {
 
 venv_volume() { echo "terrarium-venv-$(printf '%s' "$1" | cksum | awk '{print $1}')"; }
 
+image_id() { docker image inspect --format '{{.Id}}' "$1" 2>/dev/null || true; }
+
+# The venv volume must match the image it was seeded from: an older image's
+# venv would carry stale luxaeterna and pins. Docker seeds an EMPTY named
+# volume from the image's /work/.venv on first mount, so recreating is enough.
+ensure_venv_volume() {
+  local vol="$1" want have
+  want="$(image_id "$image")"
+  if [ -z "$want" ]; then
+    docker pull "$image" >&2
+    want="$(image_id "$image")"
+  fi
+  have="$(docker volume inspect --format '{{index .Labels "mm.terrarium-dev.image"}}' "$vol" 2>/dev/null || true)"
+  if [ "$have" != "$want" ]; then
+    docker volume rm -f "$vol" >/dev/null 2>&1 || true
+    docker volume create --label mm.terrarium-dev.venv=1 \
+      --label "mm.terrarium-dev.image=$want" "$vol" >/dev/null
+  fi
+}
+
+prune_venv_volumes() {
+  local want vol have
+  want="$(image_id "$image")"
+  for vol in $(docker volume ls -q --filter label=mm.terrarium-dev.venv=1); do
+    have="$(docker volume inspect --format '{{index .Labels "mm.terrarium-dev.image"}}' "$vol" 2>/dev/null || true)"
+    if [ "$have" != "$want" ]; then
+      docker volume rm "$vol" >/dev/null 2>&1 || warn "venv volume $vol is in use; left in place"
+    fi
+  done
+}
+
 check_macos() {
   if [ "$TD_UNAME" = Darwin ]; then
     warn "macOS: the image is linux/amd64 only and Docker Desktop's network is its own VM, so real devices cannot reach it. A native setup (docs/MM_TERRARIUM.md, Running it) is the better choice here."
@@ -139,6 +170,7 @@ case "$cmd" in
   update)
     check_docker
     docker pull "$image"
+    prune_venv_volumes
     ;;
   selfcheck)
     check_docker
@@ -156,6 +188,7 @@ case "$cmd" in
     check_wsl_nat
     if [ "$cmd" != shell ]; then check_one_stack; fi
     co="$(resolve_checkout)" || exit 1
+    if [ -n "$co" ]; then ensure_venv_volume "$(venv_volume "$co")"; fi
     build_run_args host "$co" "$audio"
     exec docker "${args[@]}" "$image" "$cmd" "$@"
     ;;
@@ -163,6 +196,7 @@ case "$cmd" in
     check_macos
     check_docker
     co="$(resolve_checkout)" || exit 1
+    if [ -n "$co" ]; then ensure_venv_volume "$(venv_volume "$co")"; fi
     build_run_args plain "$co" none
     exec docker "${args[@]}" "$image" "$cmd" "$@"
     ;;
