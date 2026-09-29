@@ -125,8 +125,8 @@ def _export_uv_referenced() -> dict:
         uvn = nodes.new("ShaderNodeUVMap")
         uvn.uv_map = uv_name
         links.new(uvn.outputs["UV"], tex.inputs["Vector"])
-        if i == 0:
-            links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        target = "Base Color" if i == 0 else "Emission Color"
+        links.new(tex.outputs["Color"], bsdf.inputs[target])
     obj.data.materials.append(mat)
     return _export_report(obj)
 
