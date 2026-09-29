@@ -1,6 +1,7 @@
 """harness/o2proc_lookup.py: Arco's O2 process name for GET /o2proc
 (spec docs/superpowers/specs/2026-09-29-o2proc-port-lookup-design.md)."""
-from harness.o2proc_lookup import O2Record, ProcName, parse_proc_name, select_local
+from control.terrarium import TerrariumState
+from harness.o2proc_lookup import O2Record, O2ProcHolder, O2ProcWatcher, ProcName, find_local_arco, parse_proc_name, select_local
 
 REAL = "@00000000:ac17f983:afb9:9f48"  # measured from a live Arco, 2026-09-29
 
@@ -47,3 +48,93 @@ def test_select_refuses_two_local_matches():
     name, reason = select_local([_rec(), _rec(other, port=0x1F90)], "arco",
                                 {"172.23.249.131"})
     assert name is None and "2 local" in reason
+
+
+def test_find_local_arco_retries_then_succeeds():
+    calls = []
+
+    def fake_browse():
+        calls.append(1)
+        return [] if len(calls) < 2 else [O2Record("arco", 44985, REAL)]
+
+    name, reason = find_local_arco("arco", browse=fake_browse,
+                                   local_ips=lambda: {"172.23.249.131"})
+    assert (name, reason) == (REAL, "") and len(calls) == 2
+
+
+def test_find_local_arco_gives_up_with_reason():
+    name, reason = find_local_arco("arco", browse=lambda: [],
+                                   local_ips=lambda: set(), attempts=2)
+    assert name is None and reason
+
+
+def test_holder_starts_unavailable():
+    assert O2ProcHolder("arco").get() == (None, "arco not ready")
+
+
+class _Deferred:
+    """spawn() that holds the job until run() -- a thread we control."""
+    def __init__(self):
+        self.jobs = []
+
+    def __call__(self, fn):
+        self.jobs.append(fn)
+
+    def run(self):
+        jobs, self.jobs = self.jobs, []
+        for fn in jobs:
+            fn()
+
+
+def test_room_ready_runs_lookup_and_fills_holder():
+    holder, spawn = O2ProcHolder("arco"), _Deferred()
+    w = O2ProcWatcher(holder, lookup=lambda: (REAL, ""), spawn=spawn)
+    w.on_terrarium_state_change(TerrariumState.ROOM_LOADING,
+                                TerrariumState.ROOM_READY)
+    assert holder.get() == (None, "lookup pending")
+    spawn.run()
+    assert holder.get() == (REAL, "")
+
+
+def test_lookup_failure_is_the_503_reason():
+    holder, spawn = O2ProcHolder("arco"), _Deferred()
+    w = O2ProcWatcher(holder, lookup=lambda: (None, "no arco here"),
+                      spawn=spawn)
+    w.on_terrarium_state_change(None, TerrariumState.ROOM_READY)
+    spawn.run()
+    assert holder.get() == (None, "no arco here")
+
+
+def test_unload_clears_the_name():
+    holder, spawn = O2ProcHolder("arco"), _Deferred()
+    w = O2ProcWatcher(holder, lookup=lambda: (REAL, ""), spawn=spawn)
+    w.on_terrarium_state_change(None, TerrariumState.ROOM_READY)
+    spawn.run()
+    w.on_terrarium_state_change(TerrariumState.ROOM_READY,
+                                TerrariumState.ROOM_UNLOADING)
+    assert holder.get() == (None, "arco not ready")
+
+
+def test_result_after_unload_is_discarded():
+    holder, spawn = O2ProcHolder("arco"), _Deferred()
+    w = O2ProcWatcher(holder, lookup=lambda: (REAL, ""), spawn=spawn)
+    w.on_terrarium_state_change(None, TerrariumState.ROOM_READY)
+    w.on_terrarium_state_change(TerrariumState.ROOM_READY,
+                                TerrariumState.ROOM_UNLOADING)
+    spawn.run()  # the stale lookup finishes late
+    assert holder.get() == (None, "arco not ready")
+
+
+def test_seed_when_already_ready_starts_lookup():
+    holder, spawn = O2ProcHolder("arco"), _Deferred()
+    w = O2ProcWatcher(holder, lookup=lambda: (REAL, ""), spawn=spawn)
+    w.seed(TerrariumState.ROOM_READY)
+    spawn.run()
+    assert holder.get() == (REAL, "")
+
+
+def test_seed_when_no_room_does_nothing():
+    holder, spawn = O2ProcHolder("arco"), _Deferred()
+    O2ProcWatcher(holder, lookup=lambda: (REAL, ""), spawn=spawn).seed(
+        TerrariumState.NO_ROOM)
+    assert spawn.jobs == [] and holder.get() == (None, "arco not ready")
