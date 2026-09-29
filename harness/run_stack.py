@@ -96,7 +96,10 @@ class StackConfig:
     seconds: float | None = None      # None means hold until Ctrl-C
     horizon: float = 0.060
     echo: bool = True
-    ready_timeout: float = 90.0       # covers the ~18s first probe with room
+    # covers the ~18s first probe with room. (That figure predates the pty
+    # drain-thread fix, PR #164: the first probe is now ~2.6s on WSL, so the
+    # 18s was likely the pty stall.)
+    ready_timeout: float = 90.0
     join_timeout: float = 60.0
     settle_seconds: float = 5.0
     arco_ready_timeout: float = 60.0

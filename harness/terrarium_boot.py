@@ -1519,8 +1519,10 @@ def _build_arg_parser():
     ap.add_argument("--arco-ready-timeout", type=float, default=None,
                     help="Override the room's Arco ready timeout (the "
                          "RoomSpec's arco_ready_timeout, default 15 s). "
-                         "The FIRST readiness probe against a cold Arco can "
-                         "take ~18 s -- it connects, then pyarco's reset() "
+                         "The FIRST readiness probe against a cold Arco used "
+                         "to take ~18 s (that predates the pty drain-thread "
+                         "fix, PR #164; it is now ~2.6 s on WSL, so the 18 s "
+                         "was likely the pty stall) -- it connects, then pyarco's reset() "
                          "times out after 5 s ('Could not reset Arco server "
                          "within 5 seconds') -- while the second attempt "
                          "succeeds instantly. When that happens the 15 s "

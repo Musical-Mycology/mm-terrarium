@@ -1937,7 +1937,11 @@ appended, never inserted.
   pty needs a non-zero size (`TIOCSWINSZ`). An exec failure raises
   `ArcoExecFailed` via a close-on-exec pipe (macOS reports EIO on the pty
   master once the slave closes, so pty text never reaches the log);
-  `wait_ready` raises `ArcoExited` once the child dies. The pty master is
+  `wait_ready` raises `ArcoExited` once the child dies. The readiness probe passes
+  `wait_ready`'s remaining time to pyarco's connect phase (its 15 s reset wait is
+  hard-coded, so overrun is bounded at ~15 s), reports ready only once the reset
+  completed, and re-issues the reset on a connected-but-unreset Arco; the
+  timeout message names the stage (never connected / reset never completed). The pty master is
   also Arco's only control surface (`_PtyProcess.write_console`). `_PtyProcess`'s
   own thread drains it continuously (*Running it*): the pty holds ~19.6 KB
   and Arco writes ~40 KB on WSL at startup.

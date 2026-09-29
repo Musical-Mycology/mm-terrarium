@@ -302,7 +302,8 @@ def test_teardown_still_runs_when_a_stage_fails(tmp_path):
 def test_control_command_carries_the_flags_a_headless_run_needs(tmp_path):
     """--arco-pty because a piped-stdio Popen cannot open /dev/tty;
     --arco-settle-seconds and --arco-ready-timeout because the FIRST probe
-    against a cold Arco can take ~18s and a failed probe sends a SECOND
+    against a cold Arco once took ~18s (predates the PR #164 pty
+    drain thread; now ~2.6s on WSL, likely the pty stall) and a failed probe sends a SECOND
     /host/clear that can leave arco.output None."""
     command = control_command(_cfg(tmp_path), 99)
 
