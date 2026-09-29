@@ -1962,7 +1962,13 @@ appended, never inserted.
   and simulator presets are unbuilt). The legacy M1a / Sensor-Check harness
   stays there as a reference; nothing was ported.
 - **mm-devshroom**: Rev 1 ESP32 Tuneshroom firmware, consuming the exported
-  device contract.
+  device contract. **Any device client must keep joining until granted:**
+  `GameServer.join` denies every join outside SETUP/RUNNING ("no Bit
+  accepting registrations"), which is the normal state after
+  `./terrarium.sh` boots, before the operator loads a Bit. A join sent once
+  on connect is usually lost. The firmware resends `/game/join` on each 5 s
+  hello until `/<dev>/role`, and again after `/<dev>/release`
+  (mm-devshroom PR #5).
 - **mm-fairyring**: the cloud broker, Terrarium `uplink/` to fairyring to
   MycoQuest. `uplink/` is written against a protocol fairyring implements;
   the broker is built in its own repo, not yet deployed. Its cross-repo
