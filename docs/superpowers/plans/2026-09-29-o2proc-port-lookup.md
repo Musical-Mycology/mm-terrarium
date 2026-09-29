@@ -439,6 +439,8 @@ class O2ProcWatcher:
             gen = self._gen
             self._holder.set_unavailable(PENDING)
 
+        # NOTE: the shipped run() also catches lookup exceptions and retries
+        # with backoff (see spec Error handling); this snippet is the first cut.
         def run():
             name, reason = self._lookup()
             with self._lock:

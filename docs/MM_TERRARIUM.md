@@ -301,10 +301,11 @@ page (`www/`, what phones scan a QR to reach) serves on `8788` by default
 Console has no fixed default port: it is off unless `--console-port` is
 passed (`./terrarium.sh` fixes it at `8772`).
 The guest-page server also answers `GET /o2proc` with Arco's current O2
-process name (`@pub:internal:tcp:udp`, hex), 503 until a Room is ready:
+process name (`@pub:internal:tcp:udp`, hex), 503 until a Room is ready and Arco has been found (a failed lookup is
+retried in the background with backoff and its reason shown):
 Arco's O2 ports are ephemeral (the server build defines
 `O2_NO_O2DISCOVERY`), so firmware on a network that blocks mDNS learns them
-here (mm-devshroom `O2_FALLBACK_HOST`; spec
+here (mm-devshroom `O2_FALLBACK_HOST`, Part B, pending; spec
 `docs/superpowers/specs/2026-09-29-o2proc-port-lookup-design.md`).
 
 **`runs/<timestamp>/` logs and markers.** Every run writes per-process logs

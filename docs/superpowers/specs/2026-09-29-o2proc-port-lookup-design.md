@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-29
 **Repos:** mm-terrarium (lookup endpoint), mm-devshroom (firmware fallback)
-**Status:** design, awaiting review
+**Status:** implemented (Part A); Part B pending
 
 ## Problem
 
@@ -22,7 +22,7 @@ ports change on every Arco start.
 Context: WSL on Windows is the default dev host. On Windows 11, mirrored
 networking plus avahi-daemon has been confirmed to let a dev shroom discover
 and connect over mDNS (mm-terrarium `docs/MM_TERRARIUM.md`, *Linux / WSL host
-setup*). The fallback is therefore **not** required for WSL. It is for
+setup*; that section lands with mm-terrarium PR #163). The fallback is therefore **not** required for WSL. It is for
 networks that block mDNS.
 
 ## Goal
@@ -40,6 +40,9 @@ does today.
 - Hostname resolution. IPv4 literals only.
 - Changing how Arco picks ports, or anything in upstream arco, o2 or the
   vendored `lib/o2/`.
+- Firmware Room fixtures on mDNS-blocked networks. The fallback serves
+  Bit-role devices only: `/o2proc` is 503 until `ROOM_READY`, and
+  `ROOM_READY` waits for Room-fixture binding, which itself needs discovery.
 - Phones and browsers. They reach Arco over o2ws on port 8080 and need
   no discovery.
 
@@ -94,8 +97,9 @@ request:
 - It is triggered by a Terrarium observer on `on_terrarium_state_change`.
   On `ROOM_READY`, Arco has already passed `wait_ready`, so it is
   advertising.
-- It runs off the tick thread with a bounded browse (about 3 s), and caches
-  the result in a small thread-safe holder.
+- It runs off the tick thread and caches the result in a small
+  thread-safe holder. One lookup is up to 3 browse attempts of about 3 s
+  each; a failed lookup is then retried with backoff (see Error handling).
 - On `ROOM_UNLOADING` / `NO_ROOM` the holder is cleared, because the next
   Arco has new ports.
 - One Arco per Control process (*One Arco per Control process*), so there is
@@ -165,6 +169,10 @@ Arco (`@00000000:ac17f983:afb9:9f48` gives tcp 44985, udp 40776).
 
 - Terrarium up with no Room: 503, and the device retries every `RETRY_MS`.
   A Room loads, the next attempt gets 200.
+- A failed lookup (Arco not found, or the lookup raised) writes its reason to
+  the holder, so `/o2proc` shows why, and is retried in the watcher's thread
+  with backoff 5, 10, 20, 30 s (30 s cap) until it succeeds or the Room
+  state changes (a newer generation drops the retry).
 - Arco restarts (a Room reload): the link drops, the holder is cleared then
   refilled, and the device re-arms and relearns the new ports.
 - A wrong IP or firewall: the HTTP attempt times out, is logged once and
