@@ -426,8 +426,7 @@ The end state: `./terrarium.sh --room TEST --seconds 45` runs clean.
    ```
 8. **Expected noise:** dozens of ALSA "cannot find card '0'" lines in
    `arco.log` (WSL has no sound card) are harmless.
-9. **Networking for real devices (UNVERIFIED with a real dev shroom;
-   pending confirmation on a teammate's Windows 11 machine).** WSL2
+9. **Networking for real devices.** WSL2
    defaults to NAT, so Linux sits on its own subnet: LAN devices cannot
    discover or reach Arco (ESP32 firmware connects to the internal IP in
    the O2 mDNS TXT record). Simulated devices are unaffected; `./terrarium.sh`
@@ -440,11 +439,13 @@ The end state: `./terrarium.sh --room TEST --seconds 45` runs clean.
      mode. Allow inbound traffic for the WSL VM in the Hyper-V firewall
      (admin PowerShell, verbatim from that page):
      `Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -DefaultInboundAction Allow`.
-     Open question: Windows' own mDNS responder also uses UDP 5353, and
-     whether Avahi in mirrored WSL coexists with it is untested.
+     **Confirmed 2026-09-29 on a teammate's Windows 11 box:** mirrored mode
+     with avahi-daemon active, and an ESP32 dev shroom discovers Arco over
+     mDNS and connects. Avahi coexists with Windows' own mDNS responder on
+     UDP 5353.
    - **Windows 10:** mirrored mode is unavailable. `networkingMode=bridged`
      with a Hyper-V external switch (Pro only) is deprecated and not on that
-     page; untested. The reliable fallback is a native host.
+     page; unverified. The reliable fallback is a native host.
 10. **Smoke check:** `./terrarium.sh --room TEST --seconds 45` should exit 0
     with "room loaded: TEST" and both `sim-room-*` device hellos. "device
     timed out" lines printed AFTER `Arco_engine: finish called` are normal
