@@ -6,6 +6,7 @@
 // and a Dismiss button. Generic surface: begin/stage/fail/end.
 import * as wire from "./wire.js";
 import { mk } from "./dom.js";
+import { createStageTimer } from "./elapsed.js";
 
 let overlayEl = null;      // the .overlay node while shown, else null
 let stagesEl = null;       // .stages list inside it
@@ -13,6 +14,12 @@ let bodyEl = null;         // .busybody (stages or failure text)
 let failed = false;        // true after fail(): state settling must not close it
 let requestedRoom = null;  // room name this tab last asked to load
 let activeRoom = null;     // active room name from snapshot/room_loaded
+let currentLi = null;      // the "current" stage <li>, repainted by the ticker
+// Ticks client-side so the count keeps moving while the server (blocked in
+// the load) is silent. Reset per stage; stopped on end()/fail().
+const stageTimer = createStageTimer({
+  render: (text) => { if (currentLi) currentLi.textContent = text; },
+});
 const ROOM_COMMANDS = new Set(["load_room", "unload_room", "load_bit"]);
 
 export function _overlay() {
@@ -49,7 +56,9 @@ export function begin({ title }) {
 export function stage(text) {
   if (!overlayEl || failed) return;
   for (const li of stagesEl.children) li.className = "done";
-  stagesEl.appendChild(mk("li", "current", text));
+  currentLi = mk("li", "current", text);
+  stagesEl.appendChild(currentLi);
+  stageTimer.start(text);
 }
 
 export function fail(text, name) {
@@ -58,6 +67,8 @@ export function fail(text, name) {
     begin({ title: title ? `Loading Room ${title}`.trim() : "Failed" });
   }
   failed = true;
+  stageTimer.stop();
+  currentLi = null;
   bodyEl.textContent = "";
   bodyEl.appendChild(mk("p", "inline-err", text));
   const btn = mk("button", "btn outline small", "Dismiss");
@@ -66,6 +77,8 @@ export function fail(text, name) {
 }
 
 export function end() {
+  stageTimer.stop();
+  currentLi = null;
   if (overlayEl) overlayEl.remove();
   overlayEl = null;
   stagesEl = null;

@@ -11,6 +11,7 @@
 import * as wire from "./wire.js";
 import { instrumentTags } from "./surface.js";
 import { mk, clear } from "./dom.js";
+import { createStageTimer } from "./elapsed.js";
 
 let roomsSignature = null;   // JSON of the last-rendered declaration
 let terrariumState = null;   // last-seen terrarium_state
@@ -158,6 +159,7 @@ function buildCard(room, rooms) {
   const blocked = anyActive(rooms) || room.status != null;
   loadBtn.disabled = blocked;
   loadBtn.onclick = () => {
+    progressTimer.stop();
     loadingName = room.name;
     progressStage = null;
     wire.send("load_room", { name: room.name }, loadBtn);
@@ -231,13 +233,22 @@ function onRoomsChanged(rooms) {
   renderDetail();
 }
 
+// progressStage holds the rendered "stage · N s" text; the timer repaints it
+// every second so the count moves while the server is silent mid-load.
+const progressTimer = createStageTimer({
+  render: (text) => {
+    progressStage = text;
+    if (loadingName) updateStatusLine(loadingName, lastRooms);
+  },
+});
+
 function onProgress(stage) {
-  progressStage = stage;
-  if (!loadingName) return;
-  updateStatusLine(loadingName, lastRooms);
+  if (!loadingName) { progressStage = stage; return; }
+  progressTimer.start(stage);
 }
 
 function clearLoading() {
+  progressTimer.stop();
   loadingName = null;
   progressStage = null;
 }

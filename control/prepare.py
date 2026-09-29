@@ -29,6 +29,10 @@ ACTION_NONE = "none"
 REASON_NO_ROOM = "no room loaded"
 REASON_BAD_KEY = "bad key"
 REASON_BUSY = "busy"
+# A Room load blocks the tick thread for seconds, so nothing drains the
+# queue. The www handler answers this itself, without queueing
+# (harness/www_server.py); decide_prepare never sees it. Transient: retry.
+REASON_LOADING = "room loading"
 
 
 @dataclass
