@@ -39,6 +39,7 @@ Full pre-rewrite history: `git show 9dd35c3:docs/MM_TERRARIUM.md`.
 
 - [What it is, in one picture](#what-it-is-in-one-picture)
 - [Running it](#running-it):
+  [Running in the container](#running-in-the-container),
   [Linux / WSL host setup](#linux--wsl-host-setup)
 - [Landed subsystems](#landed-subsystems):
   [`control/` lifecycle and Bit runtime](#control-the-lifecycle-engine-and-bit-runtime),
@@ -363,6 +364,34 @@ set -m
 PID=$!
 kill -INT "$PID"   # or: kill -TERM "$PID", works either way
 ```
+
+### Running in the container
+
+The pre-built `terrarium-dev` image is the recommended Linux/WSL dev path: it
+bakes in o2, the patched Arco server, the venv and a snapshot of `main`, so
+none of the steps below are needed. Install the launcher, then run against
+your own checkout (from its root) or the snapshot:
+
+**RUN ON: WSL UBUNTU**
+
+```bash
+docker run --rm ghcr.io/musical-mycology/terrarium-dev:main launcher > terrarium-dev && chmod +x terrarium-dev
+sudo mv terrarium-dev /usr/local/bin/    # once, so `terrarium-dev` is on PATH
+terrarium-dev run --room TEST --seconds 45
+terrarium-dev test
+```
+
+Setup (Docker Engine in WSL2, avahi-daemon, mirrored networking), flags,
+audio, pins and the self-check are in
+[`docker/README.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docker/README.md).
+The image is not published yet (Phase 2): build it with `docker/build.sh` and
+pass `--tag local` until it is. Networking limit: a container shares the
+host's network, so real devices need a host already on the LAN (native Linux
+or WSL2 in mirrored mode); simulated devices need no LAN, but `run`,
+`smoke` and `shell` also need a host Avahi socket, so on macOS only `test`,
+`clean` and `selfcheck` work and a native setup runs the stack. The native
+steps below remain the reference for what the image does and for building
+without Docker.
 
 ### Linux / WSL host setup
 
