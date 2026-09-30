@@ -1,11 +1,15 @@
 import hashlib
 import json
 import struct
+from pathlib import Path
 
 import pytest
 
-from control.model_layout import ModelLayoutError, read_glb_json
-from tests.glb_builder import GLB_MAGIC, JSON_CHUNK_TYPE, build_glb as _build_glb
+from control.model_layout import (ModelLayoutError, layout_to_json, parse_model_layout,
+                                  parse_source_layout, read_glb_json)
+from tests.glb_builder import GLB_MAGIC, JSON_CHUNK_TYPE, GlbBuilder, build_glb as _build_glb
+
+_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "models"
 
 
 def test_read_glb_json_round_trips_a_minimal_document():
@@ -484,3 +488,51 @@ def test_index_mismatch_message_is_never_self_contradictory(indices, pixel_count
     message = str(exc.value)
     assert f"found {len(indices)}" in message
     assert "missing" in message
+
+
+def test_read_glb_json_refuses_a_container_version_other_than_2():
+    body = b'{"nodes": []}   '  # 13 bytes of JSON + 3 spaces = 16, 4-aligned
+    data = (struct.pack("<III", GLB_MAGIC, 1, 12 + 8 + len(body))
+            + struct.pack("<II", len(body), JSON_CHUNK_TYPE) + body)
+    with pytest.raises(ModelLayoutError, match="version 1"):
+        read_glb_json(data, path="t.glb")
+
+
+def test_layout_to_json_is_the_index_bearing_shape_in_key_order():
+    layout = parse_model_layout((_FIXTURES / "marker_fixture.glb").read_bytes(),
+                                path="marker_fixture.glb", pixel_count=12)
+    out = layout_to_json(layout.pixels)
+    assert [list(entry) for entry in out] == [
+        ["index", "x_mm", "y_mm", "z_mm", "size", "zone"]] * 12
+    assert out[0] == {"index": 0, "x_mm": 40, "y_mm": 0, "z_mm": 100,
+                      "size": "medium", "zone": "ring"}
+    assert [e["index"] for e in out] == list(range(12))
+
+
+def test_layout_to_json_matches_the_committed_expected_layout():
+    layout = parse_model_layout((_FIXTURES / "marker_fixture.glb").read_bytes(),
+                                path="marker_fixture.glb", pixel_count=12)
+    expected = json.loads((_FIXTURES / "expected_layout.json").read_text())
+    assert layout_to_json(layout.pixels) == expected["pixels"]
+
+
+def test_parse_source_layout_counts_the_files_own_markers():
+    data = (_FIXTURES / "marker_fixture.glb").read_bytes()
+    assert parse_source_layout(data, path="m.glb") == parse_model_layout(
+        data, path="m.glb", pixel_count=12)
+
+
+def test_parse_source_layout_refuses_a_file_with_no_markers():
+    data = GlbBuilder().build([{"name": "LEDs"}])
+    with pytest.raises(ModelLayoutError, match="no LED markers"):
+        parse_source_layout(data, path="empty.glb")
+
+
+def test_parse_source_layout_still_refuses_one_based_numbering():
+    builder = GlbBuilder()
+    nodes = [{"name": "LEDs", "children": [1, 2]}]
+    for i in (1, 2):
+        nodes.append({"name": f"LED_{i:03d}",
+                      "mesh": builder.add_box_mesh((0.0, 0.0, i / 100), 0.002)})
+    with pytest.raises(ModelLayoutError, match="missing"):
+        parse_source_layout(builder.build(nodes), path="one_based.glb")

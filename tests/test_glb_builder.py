@@ -94,3 +94,19 @@ def test_build_glb_emits_a_default_scene_with_root_nodes():
     assert len(gltf["scenes"]) == 1
     # Verify roots are exactly LEDs (0) and body (4), in index order
     assert gltf["scenes"][0]["nodes"] == [0, 4]
+
+
+def test_every_box_triangle_is_wound_outward():
+    from tests.glb_builder import _BOX_CORNERS, _BOX_FACES
+
+    def sub(p, q):
+        return tuple(p[i] - q[i] for i in range(3))
+
+    for face in _BOX_FACES:
+        a, b, c = (_BOX_CORNERS[i] for i in face)
+        u, v = sub(b, a), sub(c, a)
+        normal = (u[1] * v[2] - u[2] * v[1],
+                  u[2] * v[0] - u[0] * v[2],
+                  u[0] * v[1] - u[1] * v[0])
+        centroid = tuple((a[i] + b[i] + c[i]) / 3 for i in range(3))
+        assert sum(n * g for n, g in zip(normal, centroid)) > 0, face

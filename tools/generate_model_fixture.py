@@ -20,12 +20,11 @@ parser is exercised against a document that isn't 100% markers.
 """
 from __future__ import annotations
 
-import dataclasses
 import json
 import math
 from pathlib import Path
 
-from control.model_layout import parse_model_layout
+from control.model_layout import layout_to_json, parse_model_layout
 from tests.glb_builder import GlbBuilder
 from tools.model_bake_helpers import encode_png_rgba8, inject_bake
 
@@ -101,7 +100,7 @@ def build_mmbake_fixture(layout_pixels: tuple, source_sha256: str) -> bytes:
                                      texcoord0=True, texcoord1=True)
     body_only_glb = builder.build([{"name": "Body", "mesh": body_idx}])
 
-    layout = [dataclasses.asdict(p) for p in layout_pixels]
+    layout = layout_to_json(layout_pixels)
     mm_bake = {
         "source_sha256": source_sha256,
         "pixels": len(layout_pixels),
@@ -127,7 +126,7 @@ def build_fixture() -> tuple:
     mmbake_glb = build_mmbake_fixture(layout.pixels, layout.model_sha256)
     expected_layout = {
         "model_sha256": layout.model_sha256,
-        "pixels": [dataclasses.asdict(p) for p in layout.pixels],
+        "pixels": layout_to_json(layout.pixels),
     }
     return source_glb, mmbake_glb, expected_layout
 

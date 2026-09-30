@@ -439,7 +439,7 @@ def _warn_if_bake_stale(model_path: Path, source_sha256: str, iname: str) -> Non
     exists, compares its source_sha256 with the source file and warns if
     stale. It never fails: a stale bake is wrong only for the preview."
     The whole check runs under a final `except Exception`, so nothing
-    about a garbled or unreadable bake (an unparseable GLB, a JSON root
+    about a missing or malformed bake (an unparseable GLB, a JSON root
     that isn't an object, an `extras`/`mm_bake` of the wrong shape) can
     ever escape as a raised exception -- it only ever warns.
     """

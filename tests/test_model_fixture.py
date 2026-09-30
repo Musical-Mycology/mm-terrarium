@@ -47,3 +47,22 @@ def test_mmbake_fixture_layout_matches_the_source_fixtures_own_parse():
          "size": p.size, "zone": p.zone}
         for p in source_layout.pixels
     ]
+
+
+import hashlib
+
+from tools.model_bake_helpers import validate_baked_glb
+
+
+def test_committed_real_bake_is_a_contract_valid_bake_of_the_source_fixture():
+    """The PR T2 gate's evidence: a real headless-Blender bake of
+    marker_fixture.glb, made on the bake host with the pinned Blender
+    (docs/MM_TERRARIUM.md, LED layout models)."""
+    path = FIXTURE_DIR / "marker_fixture.baked.glb"
+    mm_bake = validate_baked_glb(path.read_bytes(), path=str(path))
+    source = (FIXTURE_DIR / "marker_fixture.glb").read_bytes()
+    expected = json.loads((FIXTURE_DIR / "expected_layout.json").read_text())
+    assert mm_bake["source_sha256"] == hashlib.sha256(source).hexdigest()
+    assert mm_bake["layout"] == expected["pixels"]
+    assert mm_bake["blender"].startswith("4.5.")
+    assert mm_bake["resolution"] == 256

@@ -44,9 +44,12 @@ def read_glb_json(data: bytes, *, path: str) -> dict:
     document. The binary chunk (if any) is never read."""
     if len(data) < 12:
         raise ModelLayoutError(path=path, message="file too small to be a GLB")
-    magic, _version, total_length = struct.unpack_from("<III", data, 0)
+    magic, version, total_length = struct.unpack_from("<III", data, 0)
     if magic != GLB_MAGIC:
         raise ModelLayoutError(path=path, message="not a GLB file (bad magic)")
+    if version != 2:
+        raise ModelLayoutError(
+            path=path, message=f"unsupported GLB container version {version} (must be 2)")
     if total_length > len(data):
         raise ModelLayoutError(path=path, message="header length exceeds file size")
     offset = 12
@@ -383,3 +386,38 @@ def _parse_model_layout_body(gltf: dict, data: bytes, *, path: str,
 
     model_sha256 = hashlib.sha256(data).hexdigest()
     return ModelLayout(pixels=tuple(pixels), model_sha256=model_sha256)
+
+
+def layout_to_json(pixels) -> list:
+    """The one serializer for a layout: PixelLayouts (ordered by index)
+    to the list of {index, x_mm, y_mm, z_mm, size, zone} dicts that
+    extras.mm_bake.layout carries (spec section 4.1) and that
+    mm-tuneshroom's reader requires, `index` included. Used by the bake,
+    the fixture generator and export_models' layout-vs-catalog check, so
+    the three can never disagree about the shape."""
+    return [{"index": p.index, "x_mm": p.x_mm, "y_mm": p.y_mm,
+             "z_mm": p.z_mm, "size": p.size, "zone": p.zone}
+            for p in pixels]
+
+
+def parse_source_layout(data: bytes, *, path: str) -> ModelLayout:
+    """parse_model_layout with the pixel count taken from the file's own
+    LED marker count. For tools/bake_model.py, which is handed a model
+    file, not an instrument (several instruments may share one file).
+    The catalog's `pixels` stays the authority: catalog load and
+    tools/export_models.py both compare against it. Index rules still
+    apply, so 1-based or gapped numbering is refused."""
+    gltf = read_glb_json(data, path=path)
+    if not isinstance(gltf, dict):
+        raise ModelLayoutError(path=path, message="glTF root must be a JSON object")
+    try:
+        nodes = gltf.get("nodes", [])
+        leds_idx = _find_leds_node(nodes, path)
+        markers = _collect_markers(nodes, leds_idx, _build_parent_map(nodes), path)
+    except ModelLayoutError:
+        raise
+    except (IndexError, KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ModelLayoutError(path=path, message=f"malformed glTF: {exc}") from exc
+    if not markers:
+        raise ModelLayoutError(path=path, message="no LED markers found under 'LEDs'")
+    return parse_model_layout(data, path=path, pixel_count=len(markers))

@@ -127,6 +127,11 @@ vocabulary:
 | `functions` | Every declared `Function`, kind-tagged, `function_view`'s existing wire shape (the same shape the Console's function cards already consume). |
 | `model_sha256` | Hex SHA-256 of the instrument's source `.glb`. Present **only** when the instrument declares a `model` key (`instruments/<name>.toml`); omitted entirely otherwise, so every instrument that declares no model keeps a byte-identical view. Lets a device (mm-tuneshroom) verify its bundled baked model matches the catalog's source before trusting it for the 3D view. See `docs/superpowers/specs/2026-09-28-3d-tuneshroom-model-and-view-design.md` in the mm-tuneshroom repo, sections 4-5. |
 
+The baked model a device bundles is produced from that source by
+`tools/bake_model.py` and handed over by `tools/export_models.py`; see
+`docs/instrument-model-guide.md` for the convention the source follows.
+Neither tool changes this wire blob.
+
 ### The published-only rule
 
 Only **published** catalog instruments (code constants, plus
