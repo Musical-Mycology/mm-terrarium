@@ -37,18 +37,19 @@ _BOX_CORNERS = [
     (-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
     (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1),
 ]
-# 12 triangles (36 indices), outward winding. The exact triangulation is
+# 12 triangles (36 indices), wound outward (counter-clockwise seen from
+# outside, glTF's front face; guarded by test_glb_builder.py). The exact triangulation is
 # not load-bearing for any consumer in this repo -- control/model_layout.py
 # reads only the POSITION accessor's min/max, never a vertex or a face --
 # it exists so the box is a closed, non-degenerate solid a real glTF
 # viewer (Blender, Three.js) can import and render without complaint.
 _BOX_FACES = [
-    (0, 1, 2), (0, 2, 3),   # -Z
-    (4, 6, 5), (4, 7, 6),   # +Z
-    (0, 4, 5), (0, 5, 1),   # -Y
-    (3, 2, 6), (3, 6, 7),   # +Y
-    (0, 3, 7), (0, 7, 4),   # -X
-    (1, 5, 6), (1, 6, 2),   # +X
+    (0, 2, 1), (0, 3, 2),   # -Z
+    (4, 5, 6), (4, 6, 7),   # +Z
+    (0, 5, 4), (0, 1, 5),   # -Y
+    (3, 6, 2), (3, 7, 6),   # +Y
+    (0, 7, 3), (0, 4, 7),   # -X
+    (1, 6, 5), (1, 2, 6),   # +X
 ]
 _BOX_UVS = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0),
             (0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
