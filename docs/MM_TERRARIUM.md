@@ -38,7 +38,9 @@ Full pre-rewrite history: `git show 9dd35c3:docs/MM_TERRARIUM.md`.
 **Contents**
 
 - [What it is, in one picture](#what-it-is-in-one-picture)
-- [Running it](#running-it)
+- [Running it](#running-it):
+  [Running in the container](#running-in-the-container),
+  [Linux / WSL host setup](#linux--wsl-host-setup)
 - [Landed subsystems](#landed-subsystems):
   [`control/` lifecycle and Bit runtime](#control-the-lifecycle-engine-and-bit-runtime),
   [`control/` Terrarium, Rooms, instruments and audio](#control-terrarium-rooms-instruments-and-audio),
@@ -229,7 +231,7 @@ not; that trap has already cost one debugging detour.
 **A fresh git worktree has no `.venv` at all**, so that trap is one step
 away every time one is created: the commands below fail outright, and the
 obvious recovery is to reach for `python3` and land in the paragraph above.
-Symlink it instead: `ln -s /Users/chris/projects/mm-terrarium/.venv .venv`
+Symlink it instead: `ln -s "$HOME/projects/mm-terrarium/.venv" .venv`
 from the worktree root. `.gitignore` matches `.venv` without a trailing
 slash specifically so the symlink is ignored (a directory-only pattern does
 not match a symlink).
@@ -281,7 +283,8 @@ Both scripts, and `harness.run_stack` itself, take the flags below (see
   and a non-zero exit on any failure. A device that never clock-syncs
   fails as stage `device-sync` rather than hanging; the one remaining
   cause is upstream (*Not yet built / deferred*). Its intermittent half
-  was the undrained Arco pty below (fixed, never headless-specific).
+  was the undrained Arco pty below (fixed by the drain thread, never
+  headless-specific).
 - `--seconds SECONDS`: how long to hold the stack up. Default: forever
   (Ctrl-C), or 45s under `--ci`.
 - `--devices DEVICES`: how many simulated player devices to join.
@@ -300,6 +303,13 @@ page (`www/`, what phones scan a QR to reach) serves on `8788` by default
 (`WWW_PORT`, `harness/www_server.py`); `0` disables it. The Terrarium
 Console has no fixed default port: it is off unless `--console-port` is
 passed (`./terrarium.sh` fixes it at `8772`).
+The guest-page server also answers `GET /o2proc` with Arco's current O2
+process name (`@pub:internal:tcp:udp`, hex), 503 until a Room is ready and Arco has been found (a failed lookup is
+retried in the background with backoff and its reason shown):
+Arco's O2 ports are ephemeral (the server build defines
+`O2_NO_O2DISCOVERY`), so firmware on a network that blocks mDNS learns them
+here (mm-devshroom `O2_FALLBACK_HOST`, Part B, pending; spec
+`docs/superpowers/specs/2026-09-29-o2proc-port-lookup-design.md`).
 
 **`runs/<timestamp>/` logs and markers.** Every run writes per-process logs
 under `--log-dir` (default `runs/<timestamp>/`): `arco.log`, per-Bit and
@@ -320,17 +330,23 @@ shell level before invoking Python, using `ARCO_ROOT` (or an already-set
 error rather than let a missing `pyarco` import masquerade as something
 else.
 
-**The Arco pty gotcha: every loop that holds while Arco is alive must
-drain Arco's pty.** Arco is a curses app running on a pty; if nothing reads
-it, its output buffer fills, the write blocks, and Arco freezes mid-write
-with no clock sync served, no routing, and no audio, even though the
-process is alive. This bit `_wait_in_setup` once: a `--setup-seconds` hold
-did not drain the pty, and devices that looked like they were "taking
-60-100 s to clock-sync" were actually blocked, syncing the instant the hold
-expired. The harness's serve loops (`_serve_rounds`, `_wait_for_load`,
-`_wait_in_setup`, `_serve_until_done`) and the ownership probe all take a
-`pump` hook now and drain Arco's `poll()` on every iteration; any new
-holding loop needs the same treatment.
+**The Arco pty gotcha: Arco's pty must be read continuously.** Arco is a
+curses app running on a pty whose buffer holds only ~19.6 KB (measured); if
+nothing reads it, the write blocks and Arco freezes mid-write with no
+mDNS advertisement, clock sync, routing, or audio, even though the process is
+alive. On WSL Arco writes ~40 KB of harmless ALSA "cannot find card" errors
+at startup, so it froze before advertising whenever the master was unread:
+during the 5 s `--arco-settle-seconds` sleep and inside each readiness probe
+(pyarco's `arco.initialize()` blocks up to 30 s + 15 s and never calls
+`poll()`). That was the root cause of probe 1 always timing out (~32 s), every
+boot running ~35 s slow, and `room_load_failed` ("stuck spinning up arco") on
+a box with more startup output. `_PtyProcess` now owns a daemon thread that
+drains the master from spawn until `close()` (which joins it before closing
+the fd), feeding `arco.log` and the bounded `output` tail, so no holding loop
+has to drain. The serve loops' `pump` hooks (`_serve_rounds`,
+`_wait_for_load`, `_wait_in_setup`, `_serve_until_done`, the ownership probe)
+remain as redundant, harmless `poll()`s. Earlier, a `--setup-seconds` hold
+without draining looked like devices "taking 60-100 s to clock-sync".
 
 **Backgrounding `./terrarium.sh` for a scripted or unattended run: use
 `set -m` first, or send SIGTERM.** bash runs an asynchronous command
@@ -348,6 +364,135 @@ set -m
 PID=$!
 kill -INT "$PID"   # or: kill -TERM "$PID", works either way
 ```
+
+### Running in the container
+
+The pre-built `terrarium-dev` image is the recommended Linux/WSL dev path: it
+bakes in o2, the patched Arco server, the venv and a snapshot of `main`, so
+none of the steps below are needed. Install the launcher, then run against
+your own checkout (from its root) or the snapshot:
+
+**RUN ON: WSL UBUNTU**
+
+```bash
+docker run --rm ghcr.io/musical-mycology/terrarium-dev:main launcher > terrarium-dev && chmod +x terrarium-dev
+sudo mv terrarium-dev /usr/local/bin/    # once, so `terrarium-dev` is on PATH
+terrarium-dev run --room TEST --seconds 45
+terrarium-dev test
+```
+
+Setup (Docker Engine in WSL2, avahi-daemon, mirrored networking), flags,
+audio, pins and the self-check are in
+[`docker/README.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docker/README.md).
+The image is not published yet (Phase 2): build it with `docker/build.sh` and
+pass `--tag local` until it is. Networking limit: a container shares the
+host's network, so real devices need a host already on the LAN (native Linux
+or WSL2 in mirrored mode); simulated devices need no LAN, but `run`,
+`smoke` and `shell` also need a host Avahi socket, so on macOS only `test`,
+`clean` and `selfcheck` work and a native setup runs the stack. The native
+steps below remain the reference for what the image does and for building
+without Docker.
+
+### Linux / WSL host setup
+
+**WSL2 Ubuntu on a Windows box is the default dev host** for MM engineers
+(the Mac stays the Dec show machine). Everything below was verified on
+Windows 10 + WSL2 Ubuntu 26.04 except the real-device networking in step 9.
+The end state: `./terrarium.sh --room TEST --seconds 45` runs clean.
+
+1. **apt packages.** (`portaudio19-dev`, not `libportaudio19-dev`, which does
+   not exist.)
+
+   ```bash
+   sudo apt install cmake cmake-curses-gui portaudio19-dev libavahi-client-dev \
+     libsndfile1-dev libfluidsynth-dev libportmidi-dev fluid-soundfont-gm \
+     libncurses-dev libogg-dev libvorbis-dev libflac-dev libopus-dev \
+     libglib2.0-dev avahi-daemon
+   ```
+
+   **Enable systemd in WSL** (`/etc/wsl.conf`: `[boot]` then `systemd=true`,
+   then `wsl --shutdown` from Windows) so avahi-daemon starts on its own. On
+   Linux, O2 advertises `_o2proc._tcp` through the Avahi client API; with no
+   daemon Arco logs "Avahi failed to create client: Daemon not running",
+   never advertises, and the readiness probe dies 60 s later with "Arco did
+   not report ready". `harness/host_preflight.py` now checks for
+   `/run/avahi-daemon/socket` first (Linux only; `harness.run_stack` and
+   `harness.terrarium_boot` both call it before spawning anything) and
+   refuses with the fix. `./terrarium.sh --clean` skips it. The soundfont
+   lands at `/usr/share/sounds/sf2/FluidR3_GM.sf2`, which
+   `harness/arco_synth.py` already probes.
+2. **Sibling checkouts under `~/projects`**: `arco`
+   (`Musical-Mycology/arco`), `luxaeterna`, and `o2` from
+   `rbdannenberg/o2` (not in the Musical-Mycology org; arco's cmake finds it
+   as a sibling). `mm`'s clone-missing-repos sweep skips arco, luxaeterna
+   and mm-devshroom (no `mm-meta.yml`), so clone them by hand.
+3. **Build o2:**
+
+   ```bash
+   cd ~/projects/o2 && cmake -S . -B Release -DCMAKE_BUILD_TYPE=Release \
+     -DTESTS_BUILD=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+     && cmake --build Release -j"$(nproc)"     # -> Release/libo2_static.a
+   ```
+4. **`arco/apps/common/libraries.txt`** is machine-local and gitignored, and
+   Arco will not configure without it. Copy the working Ubuntu one:
+   `cp docs/upstream/arco-libraries-ubuntu.txt ~/projects/arco/apps/common/libraries.txt`
+   (system `-dev` shared libs plus the sibling o2 build).
+5. **Three Linux build fixes to Arco source** (Mac-only code: one-argument
+   `pthread_setname_np` in `arco/src/audioio.cpp` and `server/src/arco.cpp`,
+   a missing `<pthread.h>` in `audioio.cpp`, missing
+   `<cstring>/<algorithm>/<iterator>` in `server/src/termui/termui.cpp`).
+   Made against arco `c8092e2`: `git -C ~/projects/arco apply
+   "$PWD/docs/upstream/arco-linux-build.patch"`. **They are pending upstream
+   with Roger Dannenberg and must never be committed to the arco mirror**;
+   drop the patch once he lands them.
+6. **Build the server:**
+
+   ```bash
+   cd ~/projects/arco/apps/pytest
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+   cmake -S . -B build          # the SECOND configure is required
+   cmake --build build -j"$(nproc)"
+   ln -s pytestserver server    # the harness expects `server`
+   ```
+
+   `server/arcoserver.cmakeinclude` tests `if(USE_MIDI)` (adding
+   `midiservice.cpp`, ~line 58) before `option(USE_MIDI ...)` (~line 144)
+   defines it, so a first configure omits midiservice and the link fails on
+   undefined `midi_*` references. Faust is not needed (the committed reson
+   sources compile; its regeneration step errors harmlessly).
+7. **The venv**, from this repo's root:
+
+   ```bash
+   python3 -m venv .venv
+   .venv/bin/python -m pip install -r requirements-dev.txt
+   .venv/bin/python -m pip install -e "$HOME/projects/luxaeterna[websim]"
+   ```
+8. **Expected noise:** dozens of ALSA "cannot find card '0'" lines in
+   `arco.log` (WSL has no sound card) are harmless.
+9. **Networking for real devices.** WSL2
+   defaults to NAT, so Linux sits on its own subnet: LAN devices cannot
+   discover or reach Arco (ESP32 firmware connects to the internal IP in
+   the O2 mDNS TXT record). Simulated devices are unaffected; `./terrarium.sh`
+   prints a WARNING when `wslinfo --networking-mode` reports `nat`. To try
+   real devices, follow Microsoft's WSL networking docs
+   (<https://learn.microsoft.com/windows/wsl/networking>):
+   - **Windows 11 (22H2 or later):** `networkingMode=mirrored` under
+     `[wsl2]` in `%UserProfile%\.wslconfig`, then `wsl --shutdown`. That
+     page lists multicast support and direct LAN access to WSL for this
+     mode. Allow inbound traffic for the WSL VM in the Hyper-V firewall
+     (admin PowerShell, verbatim from that page):
+     `Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -DefaultInboundAction Allow`.
+     **Confirmed 2026-09-29 on a teammate's Windows 11 box:** mirrored mode
+     with avahi-daemon active, and an ESP32 dev shroom discovers Arco over
+     mDNS and connects. Avahi coexists with Windows' own mDNS responder on
+     UDP 5353.
+   - **Windows 10:** mirrored mode is unavailable. `networkingMode=bridged`
+     with a Hyper-V external switch (Pro only) is deprecated and not on that
+     page; unverified. The reliable fallback is a native host.
+10. **Smoke check:** `./terrarium.sh --room TEST --seconds 45` should exit 0
+    with "room loaded: TEST" and both `sim-room-*` device hellos. "device
+    timed out" lines printed AFTER `Arco_engine: finish called` are normal
+    teardown.
 
 ## Landed subsystems
 
@@ -527,8 +672,9 @@ mutate) and `cue_horizon`, stamped at load for Bits grading input.
 - **`GET /prepare?key=&bit=[&dev=]`** (`control/prepare.py`) loads a Bit
   for MycoQuest: no Room is a visible 409; unknown Bit, non-admin Bit or bad
   key is a silent 202 like an accept; IDLE loads it; SETUP with that Bit is
-  a 202 no-op; anything else is 409 `busy`. It reads the parsed `[start]
-  key` without importing; no drain reply within 3 s is 503.
+  a 202 no-op; anything else is 409 `busy`. While a Room loads it answers
+  409 `room loading` at once, unqueued (transient; retry). It reads the
+  parsed `[start] key` without importing; no drain reply within 3 s is 503.
 - While WAITING, un-joined non-fixture devices get two white flashes every
   5 s; a double tap (count 2, or two taps in 1.5 s) joins the default role.
   A scored join's ceremony, 1 s apart: green x2, a bell up the scale at
@@ -666,6 +812,10 @@ Instrument plus placement and binding. All pure stdlib.
   Room sets `gs.provenance` (`room_name`, `terrarium_config_version`), stamped
   into role blobs and `FunctionFired.room_name`. `loading_room` names the Room
   mid-load, so the harness spawns simulators for it rather than the boot Room.
+- A Room load runs on the tick thread and blocks it (~9 s, once per boot: a
+  Room change needs a restart). The Console shows elapsed seconds per stage
+  (`console/static/elapsed.js`, ticked client-side), and `GET /prepare`
+  answers 409 `room loading` instead of queueing behind the frozen tick.
 - **Run records** (`control/run_record.py`; `--no-run-records` opts out): each
   spawned pid and spawn time goes to `runs/<run_id>/procs.jsonl`, and the next
   `load_room`'s `sweep_stale` stops any still alive with a matching spawn time
@@ -1016,8 +1166,8 @@ holds a `LightSession` per joined device and per fixture, ships
 - `start()` refuses an unsynced clock (`time_get() < 0`) or a missing
   `actl`, then `verify_service_ownership` round-trips a TCP probe on
   **both** services (resent every 2 s, 10 s timeout); either failing is
-  fatal (without `actl` the next ugen build hangs). Its `pump=` must drain
-  Arco's pty (see "The Arco pty gotcha" under Running it).
+  fatal (without `actl` the next ugen build hangs). Its `pump=` is now redundant
+  (the pty drains itself; see "The Arco pty gotcha" under Running it).
 - **o2lite facts**, each of which breaks the link if ignored:
   - handlers take `(address, types, info)`, **pull** args in typespec
     order (`pull_args`) and get the address without its leading `/`;
@@ -1344,7 +1494,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   `/host/clear`; a failed probe plus retry can leave `arco.output` `None`),
   `--arco-ready-timeout` (a cold first probe can take ~18 s),
   `--arco-start-audio` (presses (S)tart; off: a toggle Arco cannot report).
-  The readiness probe and `ArcoSynthPool.start()` hold undrained (never seen to freeze).
+  The settle sleep, the readiness probe and `ArcoSynthPool.start()` no
+  longer need draining: `_PtyProcess`'s thread reads the master throughout.
 - Loggers print device lifecycle and, per Bit load, `JOIN_URL:` (and
   `START_URL:`/`PREPARE_URL:`). `join denied:` stays lowercase, or it would
   match the device marker `JOIN DENIED:` inside Control's log.
@@ -1411,7 +1562,7 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   `room_stack` closes the last-declared fixture's simulator first.
 - **`stop_process`** (`control/process.py`): SIGTERM, poll 5 s, SIGKILL,
   poll 5 s, return the code or `None`; polling, not `Popen.wait(timeout=)`,
-  because `_PtyProcess.poll()` drains Arco's pty. Used by e.g.
+  because `_PtyProcess.poll()` is the reap path and must stay non-blocking. Used by e.g.
   `ArcoProcess`, `SimulatorProcess` (no readiness probe) and `run_stack`.
 - **`sigterm_as_keyboard_interrupt()`**: `finally` never runs on a bare
   SIGTERM, so `run_stack`, `terrarium_boot` and `o2_shroom` map it (and
@@ -1824,8 +1975,13 @@ appended, never inserted.
   section 4.5). The later venue target, bare-metal Linux on a Raspberry Pi 5
   with an I2S DAC HAT, is deferred past the show (design doc, *Host
   Platform*).
-- **No virtualized hosts.** O2 discovery and Art-Net to WLED are UDP on the
-  LAN; a NAT'd VM or **WSL2** host sits on its own subnet and gets neither.
+- **No NAT'd hosts for real devices.** O2 discovery and Art-Net to WLED are
+  UDP on the LAN; a NAT'd VM or **WSL2 in its default NAT mode** sits on its
+  own subnet and gets neither. WSL2 is still the default *dev* host
+  (simulated devices need no LAN); mirrored (Windows 11) or bridged
+  (Windows 10 Pro) networking may lift the restriction but is unverified
+  with a real dev shroom (*Linux / WSL host setup*, step 9). The show
+  machine stays a Mac.
 - **Develop without hardware** on luxaeterna's `WebSimBackend` (browser
   canvas; `serve=False` records frames headless); `harness/o2_shroom.py`'s
   `build()` is the worked example.
@@ -1844,9 +2000,14 @@ appended, never inserted.
   pty needs a non-zero size (`TIOCSWINSZ`). An exec failure raises
   `ArcoExecFailed` via a close-on-exec pipe (macOS reports EIO on the pty
   master once the slave closes, so pty text never reaches the log);
-  `wait_ready` raises `ArcoExited` once the child dies. The pty master is
-  also Arco's only control surface (`_PtyProcess.write_console`). Drain it
-  (*Running it*).
+  `wait_ready` raises `ArcoExited` once the child dies. The readiness probe passes
+  `wait_ready`'s remaining time to pyarco's connect phase (its 15 s reset wait is
+  hard-coded, so overrun is bounded at ~15 s), reports ready only once the reset
+  completed, and re-issues the reset on a connected-but-unreset Arco; the
+  timeout message names the stage (never connected / reset never completed). The pty master is
+  also Arco's only control surface (`_PtyProcess.write_console`). `_PtyProcess`'s
+  own thread drains it continuously (*Running it*): the pty holds ~19.6 KB
+  and Arco writes ~40 KB on WSL at startup.
 
 ## Relationships to other repos
 
@@ -1885,7 +2046,13 @@ appended, never inserted.
   and simulator presets are unbuilt). The legacy M1a / Sensor-Check harness
   stays there as a reference; nothing was ported.
 - **mm-devshroom**: Rev 1 ESP32 Tuneshroom firmware, consuming the exported
-  device contract.
+  device contract. **Any device client must keep joining until granted:**
+  `GameServer.join` denies every join outside SETUP/RUNNING ("no Bit
+  accepting registrations"), which is the normal state after
+  `./terrarium.sh` boots, before the operator loads a Bit. A join sent once
+  on connect is usually lost. The firmware resends `/game/join` on each 5 s
+  hello until `/<dev>/role`, and again after `/<dev>/release`
+  (mm-devshroom PR #5).
 - **mm-fairyring**: the cloud broker, Terrarium `uplink/` to fairyring to
   MycoQuest. `uplink/` is written against a protocol fairyring implements;
   the broker is built in its own repo, not yet deployed. Its cross-repo
@@ -1932,7 +2099,7 @@ Kept explicit so the doc does not over-claim.
   (liveness spec section 5).
 - **A device's clock-sync to Arco after Control has connected is unreliable**
   in one remaining, upstream case. The intermittent half was this repo's
-  undrained Arco pty (*Running it*), fixed, and never headless-specific.
+  undrained Arco pty (*Running it*), fixed by the drain thread, and never headless-specific.
   What remains: pyarco's `arco.initialize()` always sends `/host/clear`
   via `reset()`, and a client that synced **before** that keeps a valid
   `time_get()` on a dead socket (measured: 120 joins over 240 s, none

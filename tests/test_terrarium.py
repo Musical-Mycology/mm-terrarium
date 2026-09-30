@@ -49,7 +49,7 @@ def make_gs():
 
 
 def _ready_arco(command, popen=None):
-    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda: True)
+    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda _r: True)
 
 
 class FakeArco:

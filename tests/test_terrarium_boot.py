@@ -58,7 +58,7 @@ class _RecordingPopen(FakePopen):
 
 def _fake_arco(command, popen=None, record=None):
     from control.arco_process import ArcoProcess
-    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda: True,
+    return ArcoProcess(command, popen=popen or FakePopen(), probe=lambda _r: True,
                        record=record)
 
 
@@ -1387,7 +1387,7 @@ def test_build_records_supervisor_and_spawns_when_runs_dir_given(tmp_path):
     def _fake_arco_with_pid(command, popen=None, record=None):
         from control.arco_process import ArcoProcess
         return ArcoProcess(command, popen=popen or _FakePopenWithPid(9001),
-                           probe=lambda: True, record=record)
+                           probe=lambda _r: True, record=record)
 
     config = BootConfig(room_name="TEST", bit_name="TestBit")
     gs, server, agent, arco, teardown, terrarium = build(
@@ -2523,7 +2523,7 @@ def test_build_forwards_arco_ready_timeout_into_the_wait():
                 seen.append(timeout)
                 super().wait_ready(timeout)
 
-        return _Arco(command, popen=popen or FakePopen(), probe=lambda: True,
+        return _Arco(command, popen=popen or FakePopen(), probe=lambda _r: True,
                      record=record)
 
     config = BootConfig(room_name="TEST", bit_name="TestBit")
@@ -2589,6 +2589,127 @@ def test_start_www_server_starts_pushes_teardown_and_prints_the_url(capsys):
     assert f"{tb.markers.WWW_URL} http://10.0.0.5:8788/" in out
     teardown.close()
     assert events[-1] == ("stop",)
+
+
+def test_start_www_server_sets_o2proc_before_start():
+    """The holder must be on the server before start(), which reads it."""
+    import argparse
+
+    import harness.terrarium_boot as tb
+    from control.teardown import TeardownStack
+    seen = {}
+
+    class FakeWww:
+        def __init__(self, root, host, port):
+            self.o2proc = None
+
+        def start(self):
+            seen["o2proc_at_start"] = self.o2proc
+
+        def stop(self):
+            pass
+
+        def url(self, host=None):
+            return "http://x/"
+
+    holder = object()
+    tb._start_www_server(argparse.Namespace(www_port=8788), TeardownStack(),
+                         server_cls=FakeWww, ip=lambda: "127.0.0.1",
+                         o2proc=holder)
+    assert seen["o2proc_at_start"] is holder
+
+
+def test_start_www_server_sets_room_loading_before_start():
+    """The handler reads room_loading when start() builds it, so it must be
+    on the server first."""
+    import argparse
+
+    import harness.terrarium_boot as tb
+    from control.teardown import TeardownStack
+    seen = {}
+
+    class FakeWww:
+        def __init__(self, root, host, port):
+            self.room_loading = None
+
+        def start(self):
+            seen["at_start"] = self.room_loading
+
+        def stop(self):
+            pass
+
+        def url(self, host=None):
+            return "http://x/"
+
+    probe = lambda: False  # noqa: E731
+    tb._start_www_server(argparse.Namespace(www_port=8788), TeardownStack(),
+                         server_cls=FakeWww, ip=lambda: "127.0.0.1",
+                         room_loading=probe)
+    assert seen["at_start"] is probe
+
+
+def test_room_loading_probe_tracks_the_terrarium_state():
+    import harness.terrarium_boot as tb
+    from control.terrarium import TerrariumState
+
+    class T:
+        state = TerrariumState.NO_ROOM
+
+    t = T()
+    probe = tb._room_loading_probe(t)
+    assert probe() is False
+    t.state = TerrariumState.ROOM_LOADING
+    assert probe() is True
+    t.state = TerrariumState.ROOM_READY
+    assert probe() is False
+
+
+def test_register_o2proc_seeds_and_observes_the_terrarium(monkeypatch):
+    """A Room already loaded (--room) is looked up by the seed; later
+    transitions reach the watcher through the Terrarium observer list."""
+    import argparse
+
+    import harness.terrarium_boot as tb
+    import threading
+    lookups = []
+    done = threading.Event()
+
+    def fake_lookup(ens):
+        lookups.append(ens)
+        done.set()
+        return "@name", None
+
+    monkeypatch.setattr(tb, "_o2proc_lookup", fake_lookup)
+
+    class FakeTerrarium:
+        state = TerrariumState.ROOM_READY
+
+        def __init__(self):
+            self.observers = []
+
+        def add_observer(self, obs):
+            self.observers.append(obs)
+
+    terrarium = FakeTerrarium()
+    config = types.SimpleNamespace(o2_ensemble="arco")
+    holder = tb._o2proc_holder(argparse.Namespace(www_port=8788), config)
+    assert holder.ensemble == "arco"
+    tb._register_o2proc(holder, config, terrarium)
+    assert len(terrarium.observers) == 1
+    assert done.wait(5)  # the seed spawns the lookup on a daemon thread
+    assert lookups == ["arco"]
+    terrarium.observers[0].on_terrarium_state_change(
+        TerrariumState.ROOM_READY, TerrariumState.ROOM_UNLOADING)
+    assert holder.get() == (None, "arco not ready")
+
+
+def test_o2proc_holder_is_off_when_the_www_server_is_off():
+    import argparse
+
+    import harness.terrarium_boot as tb
+
+    assert tb._o2proc_holder(argparse.Namespace(www_port=0),
+                             types.SimpleNamespace(o2_ensemble="arco")) is None
 
 
 def test_start_www_server_is_off_when_the_port_is_zero(capsys):

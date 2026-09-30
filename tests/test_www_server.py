@@ -243,3 +243,114 @@ def test_prepare_key_never_reaches_a_log_line(www, caplog):
         _get(www, "key=" + quote("hunter2") + "&bit=B")
     t.join(2.0)
     assert "hunter2" not in caplog.text
+
+
+from harness.o2proc_lookup import O2ProcHolder
+from harness.www_server import O2PROC_PATH
+
+REAL = "@00000000:ac17f983:afb9:9f48"
+
+
+@pytest.fixture
+def www_o2proc(tmp_path):
+    holder = O2ProcHolder("arco")
+    server = WwwServer(str(tmp_path), host="127.0.0.1", port=0)
+    server.o2proc = holder
+    server.start()
+    try:
+        yield server, holder
+    finally:
+        server.stop()
+
+
+def _get_o2proc(server, query=""):
+    url = f"http://127.0.0.1:{server.port}{O2PROC_PATH}{query}"
+    try:
+        resp = urlopen(url)
+        return resp.status, resp.read().decode(), resp.headers["Content-Type"]
+    except HTTPError as err:
+        return err.code, err.read().decode(), err.headers["Content-Type"]
+
+
+def test_o2proc_serves_the_cached_name(www_o2proc):
+    server, holder = www_o2proc
+    holder.set_name(REAL)
+    status, body, ctype = _get_o2proc(server, "?ensemble=arco")
+    assert (status, body) == (200, REAL + "\n")
+    assert ctype.startswith("text/plain")
+
+
+def test_o2proc_is_503_with_the_reason_until_ready(www_o2proc):
+    server, _ = www_o2proc
+    assert _get_o2proc(server)[:2] == (503, "arco not ready\n")
+
+
+def test_o2proc_is_404_for_another_ensemble(www_o2proc):
+    server, holder = www_o2proc
+    holder.set_name(REAL)
+    assert _get_o2proc(server, "?ensemble=other")[:2] == (404, "unknown ensemble\n")
+
+
+def test_o2proc_is_404_when_not_wired(www):
+    status, _, _ = _get_o2proc(www)
+    assert status == 404
+
+
+# --- /prepare while a Room loads: answer at once, never queue -----------
+
+import time
+
+from control.prepare import REASON_LOADING
+
+
+@pytest.fixture
+def www_loading(tmp_path):
+    """A server whose room_loading callable is a flag the test flips."""
+    flag = {"loading": True}
+    server = WwwServer(str(tmp_path), host="127.0.0.1", port=0)
+    server.room_loading = lambda: flag["loading"]
+    server.start()
+    try:
+        yield server, flag
+    finally:
+        server.stop()
+
+
+def test_reason_loading_text():
+    assert REASON_LOADING == "room loading"
+
+
+def test_prepare_is_409_room_loading_at_once_and_nothing_is_queued(www_loading):
+    server, _ = www_loading
+    t0 = time.monotonic()
+    status, body = _get(server, "key=abc&bit=metronome")
+    elapsed = time.monotonic() - t0
+    assert (status, body.strip()) == (409, "room loading")
+    assert elapsed < 1.0   # far under PREPARE_REPLY_TIMEOUT_S (3 s)
+    assert server.prepare_requests.empty()
+
+
+def test_prepare_takes_the_normal_path_once_the_load_is_done(www_loading):
+    server, flag = www_loading
+    flag["loading"] = False
+    taken, t = _answer(server, accepted=True)
+    status, _ = _get(server, "key=abc&bit=metronome")
+    t.join(2.0)
+    assert status == 202
+    assert len(taken) == 1
+
+
+def test_prepare_room_loading_reply_never_logs_the_key(www_loading, caplog):
+    import logging
+    server, _ = www_loading
+    with caplog.at_level(logging.DEBUG):
+        _get(server, "key=" + quote("hunter2") + "&bit=B")
+    assert "hunter2" not in caplog.text
+
+
+def test_prepare_without_a_room_loading_callable_behaves_as_before(www):
+    assert www.room_loading is None
+    taken, t = _answer(www, accepted=True)
+    status, _ = _get(www, "key=abc&bit=B")
+    t.join(2.0)
+    assert status == 202

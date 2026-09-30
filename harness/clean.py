@@ -34,11 +34,18 @@ from control.run_record import live_supervisors, sweep_stale
 _HARNESS = re.compile(r"harness[./](run_stack|terrarium_boot|o2_shroom)\b")
 
 
-def list_checkouts(*, run=subprocess.run, isdir=os.path.isdir) -> list[str]:
+def list_checkouts(*, run=subprocess.run, isdir=os.path.isdir,
+                   cwd=os.getcwd) -> list[str]:
     """Every checkout of this repo (the main clone first), minus any whose
-    directory no longer exists (a prunable worktree)."""
-    result = run(["git", "worktree", "list", "--porcelain"],
-                 capture_output=True, text=True, check=True)
+    directory no longer exists (a prunable worktree). Where git cannot list
+    worktrees (the dev container's snapshot has no .git, and a mounted git
+    worktree's .git file points at a host path), only the current checkout
+    is swept."""
+    try:
+        result = run(["git", "worktree", "list", "--porcelain"],
+                     capture_output=True, text=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return [cwd()]
     paths = [line[len("worktree "):] for line in result.stdout.splitlines()
              if line.startswith("worktree ")]
     return [p for p in paths if isdir(p)]

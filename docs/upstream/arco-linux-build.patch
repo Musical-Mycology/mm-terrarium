@@ -1,0 +1,54 @@
+diff --git a/arco/src/audioio.cpp b/arco/src/audioio.cpp
+index 5dd808d..49a16ee 100644
+--- a/arco/src/audioio.cpp
++++ b/arco/src/audioio.cpp
+@@ -297,6 +297,7 @@ See doc/design.md
+ */
+ #ifndef WIN32
+ #include <unistd.h>
++#include <pthread.h>
+ #endif
+ #include <stdio.h>
+ #include <algorithm>  // min
+@@ -1111,7 +1112,11 @@ static int pa_callback(const void *input, void *output,
+             result = paComplete;
+         }
+     } else if (aud_state == FIRST) {
++        #ifdef __APPLE__
+         pthread_setname_np("arco-audio");
++#else
++        pthread_setname_np(pthread_self(), "arco-audio");
++#endif
+         switch_to_audio_time();
+         aud_state = RUNNING;
+         AD("aud_state = RUNNING;\n");
+diff --git a/server/src/arco.cpp b/server/src/arco.cpp
+index 736ae70..672ebd1 100644
+--- a/server/src/arco.cpp
++++ b/server/src/arco.cpp
+@@ -1328,7 +1328,11 @@ int main(int argc, char *argv[])
+     int shared_mem_active = true;
+     int poll_count = 0;
+     double start_timing = o2_local_time();
++    #ifdef __APPLE__
+     pthread_setname_np("arco-server-host");
++#else
++    pthread_setname_np(pthread_self(), "arco-server-host");
++#endif
+     while (server_aud_state != FINISHED) {
+         tu->poll(1000000 / prefs_polling_rate());  // 2 ms polling period
+ #if USE_MIDI
+diff --git a/server/src/termui/termui.cpp b/server/src/termui/termui.cpp
+index bf4f594..6cca079 100644
+--- a/server/src/termui/termui.cpp
++++ b/server/src/termui/termui.cpp
+@@ -39,6 +39,9 @@
+ #include <string>
+ #include <sstream>
+ #include <vector>
++#include <cstring>
++#include <algorithm>
++#include <iterator>
+ #include <ctype.h>
+ #include <assert.h>
+ #ifdef _WIN32
