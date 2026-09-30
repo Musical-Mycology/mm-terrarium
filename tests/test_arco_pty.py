@@ -128,7 +128,14 @@ def test_the_in_memory_buffer_is_bounded(monkeypatch):
 # of ALSA errors on WSL) while the boot is in a settle sleep or a blocking
 # pyarco probe, neither of which calls poll(). ---
 
-_WRITER = ("import sys; sys.stdout.write('x' * 65535 + '\\n'); "
+# No newline in the payload: the tty's ONLCR translation is not stable
+# across platforms. On macOS a newline that is the last byte of a 1024-byte
+# block of one write comes out as \r\r\n instead of \r\n (measured with a
+# plain blocking reader, no drain thread involved), and 65535 + '\n' is
+# exactly that case. A newline-free payload passes through the pty unchanged,
+# so a byte-exact check tests the drain and nothing else.
+_WRITER_BYTES = b"x" * 65535 + b"END"
+_WRITER = ("import sys; sys.stdout.write('x' * 65535 + 'END'); "
            "sys.stdout.flush()")
 
 
@@ -160,8 +167,7 @@ def test_every_byte_reaches_the_log_exactly_once(tmp_path):
         _wait_for_exit(proc)
     finally:
         proc.wait()
-    # pty output translation turns the newline into \r\n
-    assert log.read_bytes() == b"x" * 65535 + b"\r\n"
+    assert log.read_bytes() == _WRITER_BYTES
 
 
 def test_output_tail_stays_bounded_under_the_drain_thread(monkeypatch):
@@ -172,7 +178,7 @@ def test_output_tail_stays_bounded_under_the_drain_thread(monkeypatch):
     _wait_for_exit(proc)
     proc.wait()
     assert 0 < len(proc.output) <= 1024
-    assert bytes(proc.output).endswith(b"x\r\n")
+    assert bytes(proc.output) == _WRITER_BYTES[-len(proc.output):]
 
 
 def test_close_returns_promptly_and_joins_the_drain_thread():
