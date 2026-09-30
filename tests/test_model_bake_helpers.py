@@ -215,6 +215,7 @@ def test_validate_mm_bake_accepts_a_valid_block():
 
 @pytest.mark.parametrize("mutate, match", [
     (lambda b: b.pop("uv"), "missing required key"),
+    (lambda b: b.update(extra=1), "unexpected key"),
     (lambda b: b.update(source_sha256="AB" * 32), "source_sha256"),
     (lambda b: b.update(source_sha256="a" * 64 + "\n"), "source_sha256"),
     (lambda b: b.update(pixels=0), "pixels"),
@@ -348,3 +349,27 @@ def test_build_mm_bake_extras_passes_the_contract_and_uses_the_one_serializer():
 def test_bake_output_path_sits_beside_the_source():
     assert bake_output_path(Path("instruments/models/cap.glb")) == Path(
         "instruments/models/cap.baked.glb")
+
+
+def test_bake_output_path_matches_the_catalog_stale_bake_check(tmp_path, caplog):
+    """Two independently written naming rules must fail together."""
+    import hashlib
+    import logging
+
+    from control.terrarium_config import _warn_if_bake_stale
+    from tools.model_bake_helpers import bake_output_path
+
+    models = tmp_path / "models"
+    models.mkdir()
+    model_path = models / "cap.glb"
+    model_path.write_bytes(b"source")
+    source_sha = hashlib.sha256(b"source").hexdigest()
+    builder = GlbBuilder()
+    builder.add_box_mesh((0.0, 0.05, 0.0), 0.06)
+    data = builder.build([{"name": "Body", "mesh": 0}],
+                         extras={"mm_bake": {"source_sha256": "0" * 64}})
+    (models / "cap.baked.glb").write_bytes(data)
+    with caplog.at_level(logging.WARNING):
+        _warn_if_bake_stale(model_path, source_sha, "cap")
+    stale = [r.getMessage() for r in caplog.records if "stale" in r.getMessage()]
+    assert stale and str(bake_output_path(model_path)) in stale[0]

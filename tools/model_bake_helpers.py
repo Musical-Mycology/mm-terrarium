@@ -163,6 +163,9 @@ def validate_mm_bake(mm_bake) -> None:
     missing = [k for k in MM_BAKE_KEYS if k not in mm_bake]
     if missing:
         raise BakeContractError(f"mm_bake is missing required key(s) {missing}")
+    extra = [k for k in mm_bake if k not in MM_BAKE_KEYS]
+    if extra:
+        raise BakeContractError(f"mm_bake has unexpected key(s) {sorted(extra)}")
     sha = mm_bake["source_sha256"]
     if not isinstance(sha, str) or not _SHA256_RE.fullmatch(sha):
         raise BakeContractError("mm_bake.source_sha256 must be 64 lowercase hex characters")

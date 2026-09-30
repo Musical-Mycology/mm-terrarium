@@ -37,12 +37,11 @@ _BOX_CORNERS = [
     (-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
     (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1),
 ]
-# 12 triangles (36 indices), wound outward (counter-clockwise seen from
-# outside, glTF's front face; guarded by test_glb_builder.py). The exact triangulation is
-# not load-bearing for any consumer in this repo -- control/model_layout.py
-# reads only the POSITION accessor's min/max, never a vertex or a face --
-# it exists so the box is a closed, non-degenerate solid a real glTF
-# viewer (Blender, Three.js) can import and render without complaint.
+# 12 triangles (36 indices), wound outward: counter-clockwise seen from
+# outside, glTF's front face. control/model_layout.py reads only the
+# POSITION min/max, but the winding IS load-bearing: the box writes no
+# NORMAL, so Blender (tools/bake_model.py) and Three.js derive normals and
+# face culling from the winding. tests/test_glb_builder.py guards it.
 _BOX_FACES = [
     (0, 2, 1), (0, 3, 2),   # -Z
     (4, 5, 6), (4, 6, 7),   # +Z
