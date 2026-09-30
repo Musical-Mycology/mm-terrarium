@@ -45,9 +45,9 @@ def test_run_start_keeps_the_player_that_joined_in_setup():
     assert _joined_bit().status()["dev"] == "ie1"
 
 
-def test_hold_starts_the_round_and_fires_blinks_on_a_2s_grid():
+def test_tap_in_pending_starts_the_round_and_fires_blinks_on_a_2s_grid():
     bit = _joined_bit()
-    assert bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=10.0) == []
+    assert bit.verb_handlers()["tap"]("ie1", ["ie1", 0.0, 80.0, 1], at=10.0) == []
     assert bit.status()["phase"] == "INGAME"
     assert bit.fires(10.0) == [FireFunction("blink", dev="ie1", at=10.0)]
     assert bit.fires(11.9) == []
@@ -56,7 +56,7 @@ def test_hold_starts_the_round_and_fires_blinks_on_a_2s_grid():
 
 def test_tenth_blink_ends_the_round():
     bit = _joined_bit()
-    bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=0.0)
+    bit.verb_handlers()["tap"]("ie1", ["ie1", 0.0, 80.0, 1], at=0.0)
     fired = bit.fires(BLINK_INTERVAL_S * BLINK_COUNT)
     assert len(fired) == BLINK_COUNT
     assert bit.status() == {"phase": "END", "dev": "ie1",
@@ -64,26 +64,38 @@ def test_tenth_blink_ends_the_round():
     assert bit.fires(1000.0) == []
 
 
-def test_hold_outside_pending_does_not_restart_the_round():
-    bit = _joined_bit()
-    bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=0.0)
-    bit.fires(2.0)
-    bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=3.0)
-    assert bit.status()["blinks"] == 2
-
-
-def test_tap_resets_to_pending_from_any_phase():
+def test_tap_in_ingame_resets_rather_than_restarting_the_round():
     bit = _joined_bit()
     tap = bit.verb_handlers()["tap"]
-    bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=0.0)
+    tap("ie1", ["ie1", 0.0, 80.0, 1], at=0.0)
     bit.fires(4.0)
     assert tap("ie1", ["ie1", 0.0, 80.0, 1], at=5.0) == []
     assert bit.status() == {"phase": "PENDING", "dev": "ie1", "blinks": 0}
+    assert bit.fires(100.0) == []
+
+
+def test_tap_in_end_resets_and_the_next_tap_starts_a_new_round():
+    bit = _joined_bit()
+    tap = bit.verb_handlers()["tap"]
+    tap("ie1", ["ie1", 0.0, 80.0, 1], at=0.0)
+    bit.fires(BLINK_INTERVAL_S * BLINK_COUNT)
+    assert bit.status()["phase"] == "END"
+    tap("ie1", ["ie1", 0.0, 80.0, 1], at=50.0)
+    assert bit.status()["phase"] == "PENDING"
+    tap("ie1", ["ie1", 0.0, 80.0, 1], at=60.0)
+    assert bit.status()["phase"] == "INGAME"
+    assert bit.fires(60.0) == [FireFunction("blink", dev="ie1", at=60.0)]
+
+
+def test_hold_is_not_handled_or_used():
+    bit = _joined_bit()
+    assert "hold" not in bit.verb_handlers()
+    assert "hold" not in bit.role_table.roles["player"].uses
 
 
 def test_gestures_from_another_device_are_ignored():
     bit = _joined_bit()
-    bit.verb_handlers()["hold"]("ie2", ["ie2", 0.8, 1], at=0.0)
+    bit.verb_handlers()["tap"]("ie2", ["ie2", 0.0, 80.0, 1], at=0.0)
     assert bit.status()["phase"] == "PENDING"
 
 
@@ -106,7 +118,7 @@ def _server(now):
 
 
 def _play_a_round(gs, solid, now):
-    assert gs.data("ie1", "hold", ["ie1", 0.8, 1]) is None
+    assert gs.data("ie1", "tap", ["ie1", 0.0, 80.0, 1]) is None
     for _ in range(int((BLINK_COUNT * BLINK_INTERVAL_S + 1) / TICK)):
         now[0] += TICK
         gs.tick(TICK)

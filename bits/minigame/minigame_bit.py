@@ -1,12 +1,12 @@
 """MinigameBit: a single-Tuneshroom bench toy exercising a three-phase
 state machine (PENDING / INGAME / END).
 
-    PENDING --hold--> INGAME --10 blinks, 2s apart--> END
-       ^                 |
-       +-------tap-------+---------------tap----------+
+    PENDING --tap--> INGAME --10 blinks, 2s apart--> END
+       ^                |                            |
+       +------tap-------+-------------tap------------+
 
-A hold starts the round; a tap always resets straight back to PENDING,
-from any phase. In INGAME the LED blinks 10 times, 2 seconds apart, then
+A tap in PENDING starts the round; a tap in INGAME or END resets straight
+back to PENDING. In INGAME the LED blinks 10 times, 2 seconds apart, then
 the round ends on its own (END). No scoring, no instrument gating -- see
 Rev1Bit (bits/rev1/rev1_bit.py) for the pattern of gating a role on real
 Rev-1 hardware capabilities if this ever needs to run on the board rather
@@ -39,9 +39,9 @@ BLINK_LEVEL = 0.9
 
 
 class Phase(Enum):
-    PENDING = auto()   # waiting for a hold to start the round
+    PENDING = auto()   # waiting for a tap to start the round
     INGAME = auto()    # blinking; counts up to BLINK_COUNT
-    END = auto()       # round finished; only a tap does anything here
+    END = auto()       # round finished; a tap resets to PENDING
 
 
 class MinigameBit(Bit):
@@ -66,7 +66,7 @@ class MinigameBit(Bit):
             role_class=RoleClass.UNIQUE,   # exactly one device holds this role
             capacity=1,
             scored=False,
-            uses=["tap", "hold", "swing"],
+            uses=["tap", "swing"],
         )
         return RoleTable(roles={"player": player},
                          node_map={MINIGAME_PLAYER_NODE: ["player"]})
@@ -94,8 +94,7 @@ class MinigameBit(Bit):
         })
 
     def verb_handlers(self) -> dict:
-        return {"tap": self._on_tap, "hold": self._on_hold,
-                "swing": self._on_swing}
+        return {"tap": self._on_tap, "swing": self._on_swing}
 
     def on_setup_enter(self) -> None:
         pass
@@ -144,20 +143,16 @@ class MinigameBit(Bit):
     def on_unload(self) -> None:
         pass
 
-    def _on_hold(self, dev: str, args: list, at: float) -> list:
-        """Starts the round: PENDING -> INGAME. Ignored outside PENDING
-        (an in-progress or finished round is not restarted by a hold --
-        only a tap resets it, per spec)."""
-        if self._phase is not Phase.PENDING or dev != self._dev:
-            return []
-        self._enter(Phase.INGAME)
-        self._blink_t0 = at
-        self._next_blink = 0
-        return []
-
     def _on_tap(self, dev: str, args: list, at: float) -> list:
-        """Always resets to PENDING, from any phase."""
+        """PENDING -> INGAME: starts the round, first blink at `at`.
+        INGAME or END -> PENDING: resets, so a round in progress is never
+        restarted by a tap -- it takes a second tap to start again."""
         if dev != self._dev:
+            return []
+        if self._phase is Phase.PENDING:
+            self._enter(Phase.INGAME)
+            self._blink_t0 = at
+            self._next_blink = 0
             return []
         self._enter(Phase.PENDING)
         self._blink_t0 = None

@@ -1907,9 +1907,9 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   `tests/test_rev1_bit.py` pins them); `REV1_SIM_NODE` (default) needs
   pixels and tap. Tap: `tick`, hue step; hold: `hold`, white 1 s; swing:
   red (negative g) or blue 0.5 s; each a DEVICE trigger the Console can fire.
-- **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a hold
-  starts 10 white `blink`s 2 s apart, a tap resets; a player who joined in
-  SETUP is kept. Hold needs a Rev 1 board or the sim's long press.
+- **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a tap
+  starts 10 white `blink`s 2 s apart, a tap during or after the round resets;
+  a player who joined in SETUP is kept. Tap only, so any Tuneshroom plays it.
 
 ### `www/` and `arcoserver/`
 
