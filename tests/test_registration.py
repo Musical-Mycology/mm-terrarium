@@ -200,3 +200,42 @@ def test_release_all_returns_only_assigned():
     reg.assign("c", "J", t.roles["jammer"])
     assert reg.release_all() == ["c"]
     assert reg.validated == {} and ("player", 0, 2) in reg.counts()
+
+
+def _room_table(capacity=1):
+    t = _table()
+    t.roles["room_test"] = Role("room_test", RoleClass.ROOM, capacity, False)
+    t.node_map["R"] = ["room_test"]
+    return t
+
+
+def test_join_room_assigns_room_role():
+    reg = RegistrationState(_room_table())
+    r = reg.join_room("fx", "R")
+    assert r.granted and r.role == "room_test"
+    assert r.role_class is RoleClass.ROOM and r.scored is False
+    assert reg.assignments["fx"] == ("R", "room_test", RoleClass.ROOM)
+    assert ("room_test", 1, 1) in reg.counts()
+    assert reg.validated == {}
+
+
+def test_join_room_refuses_when_every_fixture_is_bound():
+    reg = RegistrationState(_room_table(capacity=1))
+    assert reg.join_room("fx1", "R").granted
+    r = reg.join_room("fx2", "R")
+    assert not r.granted and r.reason == "registration closed" and r.hint
+    assert "fx2" not in reg.assignments
+
+
+def test_join_room_ignores_non_room_nodes():
+    reg = RegistrationState(_room_table())
+    assert reg.join_room("a", "P").reason == "no such node"
+    assert reg.join_room("a", "NOPE").reason == "no such node"
+    assert reg.assignments == {} and reg.validated == {}
+
+
+def test_join_room_rebind_is_idempotent():
+    reg = RegistrationState(_room_table(capacity=2))
+    assert reg.join_room("fx", "R").granted
+    assert reg.join_room("fx", "R").granted
+    assert ("room_test", 1, 2) in reg.counts()

@@ -19,13 +19,13 @@ class JoinResult:
     reason: str | None = None
     hint: str | None = None
     # The instrument-requirement slot this join filled, and the carried
-    # instrument's name that filled it -- set by GameServer.join on a
+    # instrument's name that filled it -- set by GameServer._grant on a
     # granted, requires-bearing role. None for ROOM joins and roles with no
     # Role.requires (wire-friendly: name, not the Instrument object).
     slot: str | None = None
     instrument: str | None = None
     # Composed per-role config blob for /<dev>/role -- filled by
-    # GameServer.join on granted results (control/role_config.py);
+    # GameServer._grant at RUNNING (control/role_config.py);
     # RegistrationState itself never touches it.
     config: dict | None = None
 
@@ -94,6 +94,27 @@ class RegistrationState:
             return self._deny("scored full", _SCORED_FULL_HINT)
         return self._deny("no such node",
                           f"node {node!r} grants no scored role")
+
+    def join_room(self, dev: str, node: str) -> JoinResult:
+        """Bind `dev` to the ROOM-class role `node` grants (spec section
+        3.5). The caller (GameServer.handshake) has already checked the
+        operator's arming; this only walks node_map[node] for a ROOM role
+        with capacity left and assigns it. A dev already holding that role
+        is granted again without counting twice."""
+        for role_name in self.role_table.node_map.get(node, ()):
+            role = self.role_table.roles[role_name]
+            if role.role_class is not RoleClass.ROOM:
+                continue
+            current = self.assignments.get(dev)
+            held = current is not None and current[1] == role_name
+            if not held and role.capacity is not None and \
+                    self._counts[role_name] >= role.capacity:
+                return self._deny("registration closed",
+                                  "every fixture of this Room is bound")
+            self.assign(dev, node, role)
+            return self._granted(role)
+        return self._deny("no such node",
+                          f"node {node!r} is not a Room node")
 
     def assign(self, dev: str, node: str, role: Role) -> bool:
         current = self.assignments.get(dev)

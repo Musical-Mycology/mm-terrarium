@@ -291,3 +291,25 @@ def test_admin_start_refuses_a_non_string_key():
     with pytest.raises(ManifestError) as err:
         parse_manifest(MINIMAL + "[start]\nwhen='admin'\nkey=5\n", source="t")
     assert err.value.key == "start.key"
+
+
+def test_lobby_max_scored_parses_and_defaults_to_none():
+    assert parse_manifest(MINIMAL, source="t").lobby.max_scored is None
+    cfg = parse_manifest(MINIMAL + "[lobby]\nmax_scored=4\n", source="t")
+    assert cfg.lobby.max_scored == 4
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "2.5", "true", "'3'"])
+def test_lobby_max_scored_refuses_non_positive_int(value):
+    with pytest.raises(ManifestError) as err:
+        parse_manifest(MINIMAL + f"[lobby]\nmax_scored={value}\n", source="t")
+    assert err.value.key == "lobby.max_scored"
+
+
+def test_lobby_max_scored_rides_merge_overrides():
+    cfg = parse_manifest(MINIMAL + "[lobby]\nmax_scored=2\n", source="t")
+    merged = merge_overrides(cfg, {"lobby": {"invite_interval_s": 3}},
+                             source="p")
+    assert merged.lobby.max_scored == 2
+    merged = merge_overrides(cfg, {"lobby": {"max_scored": 5}}, source="p")
+    assert merged.lobby.max_scored == 5
