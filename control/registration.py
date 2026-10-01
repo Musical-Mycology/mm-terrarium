@@ -146,21 +146,22 @@ class RegistrationState:
         return out
 
     def release(self, dev: str) -> bool:
+        """Drop everything `dev` holds: its validation AND its assignment,
+        uncounting each. True if it held either."""
         held = self.validated.pop(dev, None)
         if held is not None:
             self._counts[held[1]] -= 1
-            return True
         prev = self.assignments.pop(dev, None)
-        if prev is None:
-            return False
-        _, role_name, _ = prev
-        self._counts[role_name] -= 1
-        return True
+        if prev is not None:
+            _, role_name, _ = prev
+            self._counts[role_name] -= 1
+        return held is not None or prev is not None
 
     def release_all(self) -> list[str]:
+        """Release every dev; returns the ones that held an assignment."""
+        devs = list(self.assignments)
         for dev in list(self.validated):
             self.release(dev)
-        devs = list(self.assignments)
         for dev in devs:
             self.release(dev)
         return devs

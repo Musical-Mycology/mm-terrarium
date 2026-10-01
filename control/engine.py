@@ -645,9 +645,14 @@ class GameServer:
             if not self._room_armed():
                 return JoinResult(granted=False, reason="no such node",
                                   hint="no Room fixture is armed")
+            was_validated = dev in self.registration.validated
             result = self.registration.join_room(dev, node)
             if result.granted:
                 self._bind_room(dev)
+                if was_validated and dev not in self.registration.validated:
+                    # The bind freed a scored reservation: the lobby's
+                    # counts and known set have changed.
+                    self._notify("on_registration_change")
             return result
         if self.room is not None and dev in self.room.bound.values():
             # A bound fixture never validates a scored slot: materialize
@@ -655,8 +660,8 @@ class GameServer:
             return JoinResult(granted=False, reason="registration closed",
                               hint="this device is bound to a Room fixture")
         if self.bit is None or self.state is not State.SETUP:
-            hint = ("scored slots open only in SETUP; you will get a jam "
-                    "role at start" if self.state is State.RUNNING
+            hint = ("scored slots open only in SETUP; you hold a jam role "
+                    "for this round" if self.state is State.RUNNING
                     else "no Bit loaded")
             return JoinResult(granted=False, reason="registration closed",
                               hint=hint)

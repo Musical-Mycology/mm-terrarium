@@ -545,3 +545,39 @@ def test_solo_fallthrough_does_not_displace_a_real_role():
     gs.request_start(None, "terrarium", "test")
     assert [(d, r.role) for d, r in grants] == [
         ("a", "solo:defaultshroom"), ("b", "miccer")]
+
+
+def test_running_deny_hint_says_the_device_holds_a_jam_role():
+    gs, _ = _gs()
+    gs.hello("a", "", "", None)
+    gs.request_start(None, "terrarium", "test")
+    gs.hello("z", "", "", None)          # a RUNNING walk-up: jam at once
+    r = gs.handshake("z", gs.round_id, "")
+    assert r.hint == ("scored slots open only in SETUP; you hold a jam role "
+                      "for this round")
+
+
+def test_validated_dev_binding_a_room_node_notifies_registration_change():
+    gs, binding, _ = _room_gs()
+    gs.hello("fx", "", "", "tuneshroom")
+    assert gs.handshake("fx", gs.round_id, "").granted
+    assert "fx" in gs.registration.validated
+    seen = []
+    gs.add_observer(type("O", (), {
+        "on_registration_change": lambda self: seen.append("reg"),
+        "on_devices_change": lambda self: seen.append("dev")})())
+    binding.arm("TEST", "main", window_seconds=10.0)
+    assert gs.handshake("fx", gs.round_id, "ROOM_TEST_NODE").granted
+    assert "fx" not in gs.registration.validated
+    assert "reg" in seen
+
+
+def test_unvalidated_room_bind_does_not_notify_registration_change():
+    gs, binding, _ = _room_gs()
+    gs.hello("fx", "", "", None)
+    seen = []
+    gs.add_observer(type("O", (), {
+        "on_registration_change": lambda self: seen.append("reg")})())
+    binding.arm("TEST", "main", window_seconds=10.0)
+    assert gs.handshake("fx", gs.round_id, "ROOM_TEST_NODE").granted
+    assert seen == []

@@ -239,3 +239,15 @@ def test_join_room_rebind_is_idempotent():
     assert reg.join_room("fx", "R").granted
     assert reg.join_room("fx", "R").granted
     assert ("room_test", 1, 2) in reg.counts()
+
+
+def test_release_pops_both_a_validation_and_an_assignment():
+    t = _room_table()
+    reg = RegistrationState(t)
+    assert reg.join_room("a", "R").granted
+    assert reg.validate("a", "P").granted
+    assert reg.release("a") is True
+    assert "a" not in reg.validated and "a" not in reg.assignments
+    assert ("room_test", 0, 1) in reg.counts()
+    assert ("player", 0, 2) in reg.counts()
+    assert reg.release("a") is False
