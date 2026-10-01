@@ -535,10 +535,9 @@ class O2LiteTransport:
                 f"(1..{MAX_DEV_LEN} characters)")
         self._devs[dev] = client
         # Only RECORD a flavor when one was actually announced. `hello`
-        # carries the protoversion; `join` (devicelink/agent.py's _on_join)
-        # re-binds the same dev with the 2-argument form and no
-        # protoversion, so an unconditional write here would erase a
-        # browser's known flavor and send the join grant's role out as a
+        # carries the protoversion; a later re-bind of the same dev without
+        # one (the bare hello, a handshake, a retired /game/join) must not
+        # erase a browser's known flavor, or its role would go out as a
         # blob a browser cannot read. A device's flavor is announced once,
         # at hello, and forgotten only by drop_dev.
         if protoversion:

@@ -90,7 +90,7 @@ class StackConfig:
     # clock sync), and devices are spawned only AFTER Control reports SETUP,
     # so the whole cold start burns this window. At 20s it closed first and
     # the device was refused: `player` is a scored role, and
-    # RegistrationState.join() refuses scored roles once RUNNING.
+    # GameServer.handshake() validates scored slots only in SETUP.
     setup_seconds: float = 90.0
     seconds: float | None = None      # None means hold until Ctrl-C
     horizon: float = 0.060

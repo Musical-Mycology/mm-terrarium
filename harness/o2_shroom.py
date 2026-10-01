@@ -483,11 +483,12 @@ def main() -> None:
                              "this path as JSON, for python -m "
                              "harness.sync_bench.")
     parser.add_argument("--no-join", action="store_true",
-                        help="Send /game/hello but never /game/join, and "
-                             "emit no gestures. This is what the Room "
-                             "simulator needs: Control has already recorded "
-                             "this dev as the bound Room before the process "
-                             "is spawned, so there is no node to tap.")
+                        help="Send /game/hello only: never a handshake "
+                             "ack (/game/handshake), and no gestures. This "
+                             "is what the Room simulator needs: Control has "
+                             "already recorded this dev as the bound Room "
+                             "before the process is spawned, so there is "
+                             "nothing to accept.")
     parser.add_argument("--room-type", default=None,
                         help="Render this Room's (a name in terrarium.toml) surface instead of a "
                              "Testshroom's. Only meaningful with --no-join, "

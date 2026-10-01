@@ -561,11 +561,11 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    game_server=None, announce_swaps: bool = False,
                    terrarium=None, uplink=None, pacer=None) -> str:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
-    a device can join a scored role before run() closes the window.
-    registration.join() refuses scored roles once RUNNING
-    (control/registration.py's RegistrationState.join), and TestBit's
-    `player` is scored, so without this window harness/o2_shroom.py is
-    denied every time. setup_seconds <= 0 returns immediately (except for an
+    a device can validate a scored slot before run() closes the window.
+    GameServer.handshake() validates scored slots only in SETUP (once
+    RUNNING it denies `registration closed` and the device holds a jam
+    role), and TestBit's `player` is scored, so without this window
+    harness/o2_shroom.py never ends scored. setup_seconds <= 0 returns immediately (except for an
     "admin" condition, below), preserving the load-straight-into-run
     behavior; the value comes from --setup-seconds, else the Bit manifest's
     launch.setup_seconds. Driven by
@@ -1042,10 +1042,16 @@ class _LifecycleLogger:
     shapes ConsoleAgent does (there is no per-call payload at all; both
     hooks are pure "something changed, go re-read gs" signals).
 
-    Denials never reach this seam: GameServer.join() returns a refused
-    JoinResult without ever touching registration state, so neither hook
-    fires for a deny. Those print via DeviceLinkAgent's own on_join_denied
-    sink instead -- see _print_join_denied below.
+    Denials never reach this seam: GameServer.handshake() returns a
+    refused JoinResult without ever touching registration state, so neither
+    hook fires for a deny. Those print via DeviceLinkAgent's own
+    on_join_denied sink instead -- see _print_join_denied below.
+
+    A validation fires on_registration_change without touching
+    assignments (it lands in gs.registration.validated), so it prints
+    nothing here; the "join granted" lines print at RUNNING, when run()
+    materializes validations and jam grants into assignments and notifies
+    on_registration_change once.
 
     Derivation:
       - "device hello: <dev>" -- a dev appearing in gs.devices.all() that
@@ -1063,9 +1069,9 @@ class _LifecycleLogger:
         accurate -- both things happened.
       - "join granted: <dev> -> <role> (<category>) via <node>" -- a dev
         whose (node, role, role_class) tuple in gs.registration.assignments
-        is new or changed since the last on_registration_change (a role
-        switch -- re-tapping a different node -- changes the tuple without
-        the dev ever leaving assignments, and must still print).
+        is new or changed since the last on_registration_change. In
+        practice that is RUNNING: the materialized scored and jam roles,
+        and a later RUNNING walk-up's jam role.
       - "device released: <dev>" -- a dev that HAD an assignments entry
         last time but has none now. control/engine.py's on_release is a
         single transport-owned sink (already claimed by DeviceLinkAgent for
@@ -1077,11 +1083,13 @@ class _LifecycleLogger:
         against the assignments snapshot on_registration_change last left
         behind.
 
-    A Room join (role_class ROOM) never reaches either hook's assignments
-    diff as a grant: GameServer.join() returns before notifying
-    on_registration_change for those (control/engine.py's _bind_room()
-    notifies on_devices_change only), the same exclusion
-    ConsoleAgent._non_room_counts() applies to the registration panel.
+    A Room bind (role_class ROOM) normally never reaches this
+    assignments diff as a grant: GameServer.handshake()'s Room-node branch
+    notifies on_devices_change only (control/engine.py's _bind_room()), the
+    same exclusion ConsoleAgent._non_room_counts() applies to the
+    registration panel. The one exception is a dev that held a validation:
+    binding it frees that reservation, so on_registration_change fires too
+    and its ROOM assignment prints as "join granted ... (room)".
     """
 
     def __init__(self, game_server) -> None:
