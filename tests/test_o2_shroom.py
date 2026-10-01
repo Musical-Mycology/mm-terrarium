@@ -1,5 +1,7 @@
 import pytest
 
+from devicelink import protocol
+
 from harness.o2_shroom import _gestures_ready, build, tilt_sweep
 
 
@@ -277,20 +279,6 @@ def test_recheck_survives_send_failure_during_verify():
 
     assert problem is None
     assert bridge_id == 7   # unchanged, so the next lap re-detects and retries
-
-
-# --- Unanswered-join hinting. The old message pointed at Control even
-# though Control was healthy; the real cause fifteen dropped Control
-# replies traced to was a lost service announcement on the HUB side. -----
-
-def test_join_stall_hint_names_the_devs_own_service_and_the_hub_log():
-    from harness.o2_shroom import join_stall_hint
-
-    hint = join_stall_hint("ie1")
-
-    assert "ie1" in hint
-    assert "service was not found" in hint
-    assert "o2debug.log" in hint
 
 
 # --- Dark-by-design notice. TestBit's jammer is deliberately light-less;
@@ -666,22 +654,32 @@ def test_lobby_round_over_release_persist_relobbies():
     assert lobby_round_over(client, persist=True) == "lobby"
 
 
-def test_lobby_round_over_deny_one_shot_exits():
+def test_lobby_round_over_deny_one_shot_keeps_looping():
+    """A deny is informational (spec 2026-10-01 section 5.7): the device
+    is jam at start, so a deny must not end a one-shot round."""
     from harness.o2_shroom import lobby_round_over
 
     client = make_client()
-    client.last_deny = ("closed", "hint")
-    assert lobby_round_over(client, persist=False) == "exit"
+    client.last_deny = ("scored full", "hint")
+    assert lobby_round_over(client, persist=False) is None
 
 
 def test_lobby_round_over_deny_persist_keeps_looping():
-    # under persist a deny is not terminal: the node may reopen next round,
-    # so the device stays in the lobby and keeps join-retrying.
     from harness.o2_shroom import lobby_round_over
 
     client = make_client()
-    client.last_deny = ("closed", "hint")
+    client.last_deny = ("scored full", "hint")
     assert lobby_round_over(client, persist=True) is None
+
+
+def test_a_deny_then_a_release_still_ends_the_round_on_the_release():
+    from harness.o2_shroom import lobby_round_over
+
+    client = make_client()
+    client.last_deny = ("scored full", "hint")
+    client.released = True
+    assert lobby_round_over(client, persist=False) == "exit"
+    assert lobby_round_over(client, persist=True) == "lobby"
 
 
 def test_lobby_round_over_quiet_keeps_looping():
@@ -690,72 +688,16 @@ def test_lobby_round_over_quiet_keeps_looping():
     assert lobby_round_over(make_client(), persist=False) is None
 
 
-def test_main_prints_deny_before_evaluating_round_outcome():
-    """Regression: a deny arriving on the same lap it is first observed
-    must get its DEVICE_JOIN_DENIED line printed before the loop can act
-    on lobby_round_over()'s outcome and exit. run_stack's _wait_for_marker
-    watches child stdout for exactly that marker (see
-    tests/test_run_stack.py::test_a_denied_join_fails_immediately); a
-    one-shot exit that races ahead of the print would starve that watch
-    and regress run_stack's fast-fail into waiting out the full timeout.
-
-    Source-inspection, same technique and reason as
-    test_main_has_exactly_one_backend_close: main() imports o2litepy,
-    absent from this offline suite by design. Finds the print(...) call
-    whose f-string embeds markers.DEVICE_JOIN_DENIED and the
-    `outcome = lobby_round_over(...)` assignment, and asserts the print's
-    line comes first.
-    """
-    import ast
+def test_main_still_prints_the_deny_marker():
+    """A deny is no longer terminal, so its line need not precede the
+    round-over decision, but the informational DEVICE_JOIN_DENIED print
+    must stay: run_stack --expect-scored runs and humans read it."""
     import inspect
 
     import harness.o2_shroom
 
-    source = inspect.getsource(harness.o2_shroom)
-    tree = ast.parse(source)
-    main = next(node for node in tree.body
-                if isinstance(node, ast.FunctionDef) and node.name == "main")
-
-    def _is_deny_print(node):
-        if not (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "print"
-                and node.args
-                and isinstance(node.args[0], ast.JoinedStr)):
-            return False
-        return any(
-            isinstance(value, ast.Attribute) and value.attr == "DEVICE_JOIN_DENIED"
-            for part in node.args[0].values
-            if isinstance(part, ast.FormattedValue)
-            for value in ast.walk(part.value))
-
-    def _is_lobby_round_over_assign(node):
-        return (isinstance(node, ast.Assign)
-                and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Name)
-                and node.value.func.id == "lobby_round_over"
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "outcome")
-
-    deny_print_linenos = [node.lineno for node in ast.walk(main)
-                          if _is_deny_print(node)]
-    outcome_assign_linenos = [node.lineno for node in ast.walk(main)
-                              if _is_lobby_round_over_assign(node)]
-
-    assert deny_print_linenos, (
-        "no print(...) call embedding markers.DEVICE_JOIN_DENIED found in "
-        "main() -- the deny notice appears to have been removed")
-    assert outcome_assign_linenos, (
-        "no `outcome = lobby_round_over(...)` assignment found in main() "
-        "-- the round-over decision appears to have been removed or "
-        "renamed")
-    assert max(deny_print_linenos) < max(outcome_assign_linenos), (
-        "main() evaluates lobby_round_over() (and can exit on its "
-        "outcome) before printing DEVICE_JOIN_DENIED for a deny observed "
-        "on the same lap -- move the outcome check to AFTER the deny "
-        "print block so run_stack's marker watch always sees the line "
-        "before a one-shot exit.")
+    assert "markers.DEVICE_JOIN_DENIED" in inspect.getsource(
+        harness.o2_shroom.main)
 
 
 def test_main_reinitializes_heartbeat_from_the_current_round(monkeypatch):
@@ -853,11 +795,80 @@ def test_main_hands_the_role_blob_to_the_gesture_drain():
     src = inspect.getsource(mod.main)
     assert "args.dev, now, client.config)" in src
 
-from harness.o2_shroom import invite_seen
+# --- contract v3: hello identity, handshake answer, retired join ----------
+
+def test_hello_args_match_the_client_hello_for_every_resend():
+    """The heartbeat hello and the first hello share one builder, so the
+    name and instrument are identical and the engine's name-change
+    notification does not fire every 5 s."""
+    from harness.o2_shroom import hello_args
+    from harness.shroom_client import ShroomClient
+
+    for instrument in (None, "testshroom"):
+        typespec, args = hello_args("ie1", instrument)
+        env = protocol.decode(ShroomClient(
+            "ie1", "N", instrument=instrument).hello())
+        assert (typespec, list(args)) == (env.typespec, env.args)
+        assert hello_args("ie1", instrument) == (typespec, args)
 
 
-def test_invite_seen_is_a_solid_white_frame():
-    assert invite_seen(bytes([255] * 36))
-    assert invite_seen(bytes([250, 255, 252] * 12))
-    assert not invite_seen(bytes([255, 0, 255] * 12))
-    assert not invite_seen(b"")
+def test_main_builds_every_hello_through_hello_args():
+    import inspect
+    import harness.o2_shroom as mod
+    src = inspect.getsource(mod.main)
+    assert "hello_args(args.dev" in src
+
+
+class _HsClient:
+    def __init__(self, round_id=None, config=None):
+        self.round_id = round_id
+        self.config = config
+
+
+def test_handshake_due_answers_each_round_id_once():
+    from harness.o2_shroom import handshake_due
+
+    sent, seen = set(), {}
+    c = _HsClient("r1")
+    assert handshake_due(c, True, sent, seen, 1.0, 0.0) == "r1"
+    sent.add("r1")
+    assert handshake_due(c, True, sent, seen, 2.0, 0.0) is None
+    c.round_id = "r2"
+    assert handshake_due(c, True, sent, seen, 3.0, 0.0) == "r2"
+
+
+def test_handshake_due_waits_out_the_delay_from_first_sight():
+    from harness.o2_shroom import handshake_due
+
+    sent, seen = set(), {}
+    c = _HsClient("r1")
+    assert handshake_due(c, True, sent, seen, 10.0, 2.0) is None
+    assert handshake_due(c, True, sent, seen, 11.9, 2.0) is None
+    assert handshake_due(c, True, sent, seen, 12.0, 2.0) == "r1"
+
+
+def test_handshake_due_is_silent_without_the_flag_an_invite_or_after_a_role():
+    from harness.o2_shroom import handshake_due
+
+    assert handshake_due(_HsClient("r1"), False, set(), {}, 1.0, 0.0) is None
+    assert handshake_due(_HsClient(None), True, set(), {}, 1.0, 0.0) is None
+    assert handshake_due(_HsClient("r1", config={"role": "p"}),
+                         True, set(), {}, 1.0, 0.0) is None
+
+
+def test_main_registers_the_handshake_and_validated_handlers():
+    import inspect
+    import harness.o2_shroom as mod
+    src = inspect.getsource(mod.main)
+    assert '"handshake", "validated"' in src
+
+
+def test_the_retired_join_path_is_gone_from_o2_shroom():
+    import inspect
+    import harness.o2_shroom as mod
+    src = inspect.getsource(mod)
+    for gone in ("--join-retry", "send_join", "invite_seen",
+                 "HANDSHAKE_RETAP_S", "join_stall_hint", "explicit_join",
+                 '"/game/join"'):
+        assert gone not in src, gone
+    assert "--handshake-delay" in src

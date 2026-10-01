@@ -24,10 +24,9 @@ WHY THE FLAGS ARE NOT OPTIONAL, all of these bought the hard way:
   --arco-ready-timeout: the FIRST probe against a cold Arco can take ~18s
     while the second succeeds instantly, so the 15s default expires inside
     probe #1 with Arco perfectly healthy.
-  --setup-seconds: `player` is a SCORED role and RegistrationState.join()
-    refuses scored roles once RUNNING, so a device must join during SETUP.
-  --join-retry: a join sent before Control is listening is dropped by Arco
-    with no queue behind it.
+  --setup-seconds: `player` is a SCORED role, validated only during SETUP
+    (contract v3). A device must answer Control's handshake invite inside
+    the window or it is a jam device at start.
   --exit-with-parent: an o2lite client that outlives its supervisor
     re-claims its dev name on the next hub, where O2 silently refuses the
     next run's own client.
@@ -119,7 +118,13 @@ class StackConfig:
     www_port: int = WWW_PORT          # forwarded to terrarium_boot; 0 disables
     web_build: str | None = None      # copied into www/app/ before run()
     start_after_grant: bool = False   # GET the admin START_URL once granted
-    handshake_devices: int = 0        # first N devices join via --handshake
+    handshake_devices: int = 0        # first N devices answer the invite
+    # Under --ci: fail unless exactly this many devices print
+    # "ROLE GRANTED: ... scored" and devices - K print "... jam".
+    expect_scored: int | None = None
+    # False for an admin-start Bit nobody will start (roles arrive only at
+    # RUNNING, so waiting for ROLE GRANTED would time out by design).
+    wait_for_roles: bool = True
     watch_parent: bool = True         # tear down when the launching shell exits
 
 
@@ -242,7 +247,6 @@ def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
         "--dev", dev,
         "--node", node,
         "--ensemble", cfg.ensemble,
-        "--join-retry", "2.0",
         "--control-horizon", str(cfg.horizon),
         "--samples-out", os.path.join(cfg.log_dir, f"{dev}-samples.json"),
         "--exit-with-parent", str(ppid),
@@ -398,16 +402,26 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                     f"the workaround. See docs/MM_TERRARIUM.md 'Not yet "
                     f"built / deferred'.", logs,
                     urls, room_urls)
-            ok, failed = _wait_for_marker(tee, markers.DEVICE_ROLE_GRANTED,
-                                          cfg.join_timeout, clock, sleep)
-            if failed is not None:
-                return RunResult(False, "device-join", failed, logs, urls, room_urls)
-            if not ok:
-                return RunResult(
-                    False, "device-join",
-                    f"{tee.name} synced but was never granted a role. Is "
-                    f"Control still in SETUP? `player` is a scored role "
-                    f"and is refused once RUNNING.", logs, urls, room_urls)
+
+        # Roles arrive at RUNNING, after the SETUP window, so a handshake
+        # device is first waited on for its validation (or a deny, which is
+        # informational), then the start is lifted, then every device is
+        # waited on for ROLE GRANTED.
+        if cfg.start_after_grant:
+            for tee in devices[:cfg.handshake_devices]:
+                ok, failed = _wait_for_any(
+                    tee, (markers.HANDSHAKE_VALIDATED,
+                          markers.DEVICE_JOIN_DENIED),
+                    cfg.join_timeout, clock, sleep)
+                if failed is not None:
+                    return RunResult(False, "device-join", failed, logs,
+                                     urls, room_urls)
+                if not ok:
+                    return RunResult(
+                        False, "device-join",
+                        f"{tee.name} synced but its handshake was neither "
+                        f"validated nor denied. Is Control still in SETUP "
+                        f"and sending invites?", logs, urls, room_urls)
 
         if cfg.start_after_grant:
             if not start_urls:
@@ -422,6 +436,31 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                 return RunResult(False, "start", f"start request failed: {exc}",
                                  logs, urls, room_urls)
             print(f"start requested via {url} -> HTTP {status}", flush=True)
+
+        if cfg.wait_for_roles:
+            # The role lands when the round starts: after the SETUP window
+            # for a timer or players start, right after the hit above for
+            # an admin start. Hence the window on top of join_timeout.
+            role_timeout = cfg.join_timeout + cfg.setup_seconds
+            for tee in devices:
+                ok, failed = _wait_for_marker(tee, markers.ROLE_GRANTED,
+                                              role_timeout, clock, sleep)
+                if failed is not None:
+                    return RunResult(False, "device-join", failed, logs,
+                                     urls, room_urls)
+                if not ok:
+                    return RunResult(
+                        False, "device-join",
+                        f"{tee.name} synced but was never sent a role. "
+                        f"Roles arrive when the round starts: did the "
+                        f"start condition fire, and is Control still "
+                        f"running?", logs, urls, room_urls)
+
+            if cfg.expect_scored is not None:
+                problem = _check_expected_scored(cfg, devices)
+                if problem is not None:
+                    return RunResult(False, "expect-scored", problem, logs,
+                                     urls, room_urls)
 
         dead = _hold(cfg, processes, clock, sleep, parent_gone=parent_gone)
         if dead is PARENT_GONE:
@@ -476,14 +515,16 @@ def _watch_list(prefix: str) -> list[str]:
     watch = [v for k, v in markers.READY_MARKERS.items()
              if k.startswith(prefix)]
     if prefix == "DEVICE_":
+        # The two v3 device markers are named for the wire event, not the
+        # process, so they carry no DEVICE_ prefix. INFO markers (a deny)
+        # are watched but never fail a run.
+        watch += [markers.HANDSHAKE_VALIDATED, markers.ROLE_GRANTED]
+        watch += list(markers.INFO_MARKERS.values())
         watch += list(markers.FAILURE_MARKERS.values())
     return watch
 
 
 _FAILURE_REMEDIES = {
-    "DEVICE_JOIN_DENIED": lambda tee: (
-        f"{tee.name}: Control refused the join. See "
-        f"{tee.name}.log for the reason and hint."),
     "DEVICE_SERVICE_CONFLICT": lambda tee: (
         f"{tee.name}: the hub refused this device's service "
         f"announcement because another process already offers that "
@@ -514,20 +555,63 @@ def _failed_marker(tee: ProcTee) -> str | None:
     return None
 
 
+_ROLE_LINE = re.compile(r"ROLE GRANTED: \S+ (scored|jam)\b")
+
+
+def _check_expected_scored(cfg: StackConfig, devices) -> str | None:
+    """None when exactly cfg.expect_scored devices were granted a scored
+    role and the rest a jam role, else a description of the mismatch. Read
+    from the devices' own ROLE GRANTED lines, the same evidence a human
+    reads, so an over-cap device that was denied and then made jam counts
+    as jam."""
+    scored = jam = 0
+    for tee in devices:
+        for line in tee.tail(1_000_000):
+            match = _ROLE_LINE.search(line)
+            if match is None:
+                continue
+            if match.group(1) == "scored":
+                scored += 1
+            else:
+                jam += 1
+    want_jam = len(devices) - cfg.expect_scored
+    if scored == cfg.expect_scored and jam == want_jam:
+        return None
+    return (f"expected {cfg.expect_scored} scored and {want_jam} jam "
+            f"ROLE GRANTED lines across {len(devices)} device(s), saw "
+            f"{scored} scored and {jam} jam. Check the ie* logs.")
+
+
+def _wait_for_any(tee: ProcTee, targets, timeout: float, clock,
+                  sleep) -> tuple[bool, str | None]:
+    """_wait_for_marker over several acceptable markers: True as soon as
+    any one of `targets` has been seen, with the same fail-fast on a
+    failure marker."""
+    deadline = clock() + timeout
+    while True:
+        if any(tee.seen(t) for t in targets):
+            return True, None
+        failed = _failed_marker(tee)
+        if failed is not None:
+            return False, failed
+        if clock() >= deadline:
+            return False, None
+        sleep(0.05)
+
+
 def _wait_for_marker(tee: ProcTee, target: str, timeout: float, clock,
                      sleep) -> tuple[bool, str | None]:
     """Poll for `target`, without going deaf to a failure marker for the
     whole timeout budget.
 
-    DEVICE_JOIN_DENIED and DEVICE_SERVICE_CONFLICT both arrive AFTER
-    DEVICE_CLOCK_SYNCED in the real join sequence -- a device syncs its
-    clock and only then finds out whether the join was accepted. A plain
-    ProcTee.wait_for(target, ...) call watches exactly one marker, so
-    calling it for DEVICE_ROLE_GRANTED while a denial lands moments later
-    would sit out the entire cfg.join_timeout on a join that had already
-    failed: the two per-call _failed_marker() checks that used to bracket
-    the wait_for calls only catch a failure that was ALREADY seen before
-    the wait started or after it timed out, not one that arrives mid-wait.
+    DEVICE_SERVICE_CONFLICT arrives AFTER DEVICE_CLOCK_SYNCED in the real
+    sequence -- a device syncs its clock and only then does the ownership
+    check fail. A plain ProcTee.wait_for(target, ...) call watches exactly
+    one marker, so calling it for ROLE_GRANTED while a conflict lands
+    moments later would sit out the entire timeout on a device that had
+    already failed: per-call _failed_marker() checks bracketing the wait
+    only catch a failure ALREADY seen before the wait started or after it
+    timed out, not one that arrives mid-wait.
     Same poll cadence as ProcTee.wait_for (0.05s); this just checks a
     second condition on every pass instead of finding out only at the
     edges.
@@ -766,8 +850,14 @@ def parse_args(argv=None):
                     help="Suppress the start-after-grant implied under --ci for "
                          "an admin-start Bit: the run holds in SETUP instead.")
     ap.add_argument("--handshake-devices", type=int, default=0,
-                    help="The first N spawned Testshrooms join via the lobby "
-                         "handshake (--handshake) instead of an explicit join.")
+                    help="The first N spawned Testshrooms answer Control's "
+                         "handshake invite (--handshake). The rest only "
+                         "hello and end up jam devices at start.")
+    ap.add_argument("--expect-scored", type=int, default=None, metavar="K",
+                    help="CI assertion: after every device has its role, "
+                         "fail unless exactly K devices printed 'ROLE "
+                         "GRANTED: ... scored' and devices - K printed "
+                         "'... jam'.")
     args = ap.parse_args(argv)
     if args.ci and args.open:
         ap.error("--open makes no sense under --ci: a headless CI run "
@@ -906,6 +996,9 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         www_port=args.www_port, web_build=args.web_build,
         start_after_grant=start_after_grant,
         handshake_devices=args.handshake_devices,
+        expect_scored=args.expect_scored,
+        wait_for_roles=not (bit_cfg.start.when == "admin"
+                            and not start_after_grant),
         watch_parent=not args.detach)
 
 

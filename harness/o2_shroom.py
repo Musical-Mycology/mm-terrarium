@@ -2,17 +2,19 @@
 
 The acceptance vehicle for docs/superpowers/specs/
 2026-08-12-control-o2lite-and-timed-cues-design.md: a clock-synced O2
-device that joins TEST_PLAYER_NODE, drives one gesture, and displays its
-frames at their declared time.
+device that hellos, optionally answers Control's handshake invite
+(--handshake), drives one gesture once its role arrives at RUNNING, and
+displays its frames at their declared time.
 
 It reuses harness/shroom_client.py's ShroomClient unmodified for the
 protocol surface -- that module's docstring already anticipated this, since
 its transport half lives in main() precisely because o2lite replaces it.
 
-Trap worth knowing: TestBit's `player` is a SCORED role, and
-RegistrationState.join() refuses a scored role once the Bit is RUNNING. The
-driver must hold in SETUP long enough for this client to join, exactly as
-harness/run_stack.py's --setup-seconds already does.
+Trap worth knowing: TestBit's `player` is a SCORED role, and a scored role
+is only validated during SETUP (contract v3, spec 2026-10-01). A device
+that never handshakes, or handshakes after SETUP, is a jam device at start.
+The driver must hold in SETUP long enough for this client to handshake,
+exactly as harness/run_stack.py's --setup-seconds already does.
 
 Usage (needs a running Arco and PYTHONPATH=/Users/chris/projects/arco):
     python3 -m harness.o2_shroom --dev ie1 --node TEST_PLAYER_NODE
@@ -65,7 +67,7 @@ def next_heartbeat_time(now: float, interval: float) -> float:
 
     interval <= 0 disables the heartbeat: returns float('inf') so a
     `now >= next_heartbeat_time(...)` check in main()'s tick loop never
-    fires again, mirroring --join-retry's own "0 keeps send-once" contract.
+    fires again ("0 disables the resend", like --heartbeat-interval).
     """
     if interval <= 0:
         return float("inf")
@@ -92,14 +94,42 @@ def wants_verb(config: dict | None, verb: str) -> bool:
 def lobby_round_over(client, persist: bool) -> str | None:
     """The per-tick round-over decision, factored pure so it is testable
     with no socket (this module's convention -- see next_heartbeat_time).
-    Release always ends the round; a deny ends it only in one-shot mode.
-    Under --persist a deny is not terminal: the node may reopen when the
-    Console loads the next Bit, and the join-retry cadence keeps asking."""
+    Only a release ends the round. A deny is informational (spec
+    2026-10-01 section 5.7): a device over the scored cap is denied and
+    becomes a jam device at start, so it must neither end a one-shot run
+    nor, under --persist, leave the lobby."""
     if client.released:
         return "lobby" if persist else "exit"
-    if client.last_deny is not None and not persist:
-        return "exit"
     return None
+
+
+def hello_args(dev: str, instrument: str | None) -> tuple[str, tuple]:
+    """(typespec, args) of this device's /game/hello. The ONE builder for
+    the initial hello and every heartbeat resend, so the name (and the
+    instrument) never differ between them: a changed name makes the engine
+    announce a rename, which would fire every heartbeat. Mirrors
+    ShroomClient.hello()'s declared/undeclared shape split."""
+    if instrument is None:
+        return "s", (dev,)
+    return "ssss", (dev, "", "", instrument)
+
+
+def handshake_due(client, enabled: bool, sent: set, seen_at: dict,
+                  now: float, delay: float) -> str | None:
+    """The round id this device should answer with /game/handshake now, or
+    None. Answers each round id once, `delay` seconds after the invite was
+    first seen, and only while this device has no role: once Control has
+    sent /role the round is over for handshaking. Pure so it is testable
+    with no socket; `seen_at` is the caller's round_id -> first-seen map."""
+    round_id = client.round_id
+    if not enabled or round_id is None or client.config is not None:
+        return None
+    if round_id in sent:
+        return None
+    first = seen_at.setdefault(round_id, now)
+    if now - first < delay:
+        return None
+    return round_id
 
 # Bound on browser gestures queued between ticks. Generous: the page
 # rate-bounds tilts to 20 Hz and the loop drains every ~5 ms.
@@ -313,49 +343,18 @@ def reconnect_recheck(o2lite, dev: str, previous_bridge_id, *, verify=None):
     return current, problem
 
 
-def join_stall_hint(dev: str) -> str:
-    """The tail of the message printed every 5 unanswered joins (the
-    caller prepends "N joins unanswered. ").
-
-    The old wording ("is Control up and in SETUP?") pointed at Control
-    even on a run where Control was perfectly healthy: the actual cause,
-    measured 2026-08-20, was this device's own service announcement
-    being lost, which the hub logs as "service was not found" and never
-    tells the device about. Naming that -- and where to look for it --
-    turns a guess into an instruction.
-    """
-    return (f"Either Control is not up yet, or this device's service "
-            f"announcement was lost (check o2debug.log on the hub for "
-            f'"/{dev}/... service was not found").')
-
-
-HANDSHAKE_RETAP_S = 2.0
-
-
-def invite_seen(frame: bytes) -> bool:
-    """A lobby invite is a solid white override on every pixel."""
-    return len(frame) >= 3 and all(b >= 200 for b in frame)
-
-
 def _gestures_ready(client) -> bool:
-    """True once Control's granted-role reply has actually reached this
-    client, i.e. once ShroomClient._on_role() has set client.config (see
-    harness/shroom_client.py) -- and therefore once the join it responds to
-    has been processed by GameServer.join().
+    """True once Control's /role reply has actually reached this client,
+    i.e. once ShroomClient._on_role() has set client.config (see
+    harness/shroom_client.py). The role arrives at RUNNING (contract v3),
+    and gating gestures on it, not on 'handshake sent', closes the race
+    where a UDP gesture overtakes the TCP handshake: there is nothing to
+    overtake once the reply has already arrived.
 
-    Why this matters: main() sends the join over TCP (o2lite.send_cmd) but
-    gestures over UDP (o2lite.send, the default), and UDP can overtake TCP.
-    Without gating, the first tilt can reach Control before the join has
-    been handled, and GameServer.data() correctly refuses it as "device not
-    registered" -- a spurious error on every run, not a real fault. Gating
-    gesture emission on this instead of on 'join sent' closes that race:
-    there is nothing to overtake once the reply has already arrived.
-
-    --no-join callers (the Room simulator) never send a join and so never
-    get a role -- this would return False for them forever. That is
-    correct, but it must not be the ONLY thing stopping their gestures:
-    main() also short-circuits on args.no_join first, exactly as it did
-    before this gate existed, so a --no-join run never even calls this."""
+    --no-join callers (the Room simulator) never get a role -- this would
+    return False for them forever. That is correct, but it must not be the
+    ONLY thing stopping their gestures: main() also short-circuits on
+    args.no_join first, so a --no-join run never even calls this."""
     return client.config is not None
 
 
@@ -454,18 +453,6 @@ def main() -> None:
                              "testshroom, the harness's own catalog "
                              "instrument). Pass an empty string to stay "
                              "undeclared, resolving to defaultshroom.")
-    parser.add_argument("--join-retry", type=float, default=0.0,
-                        help="Re-send /game/join every N seconds until a "
-                             "role, deny or error comes back. 0 (default) "
-                             "keeps the original send-once behavior. A join "
-                             "sent before Control is listening is simply "
-                             "lost -- there is no queue behind it -- so "
-                             "without this a device that powers on first "
-                             "sits silent forever. Also what lets a device "
-                             "sync its clock BEFORE Control resets Arco, "
-                             "which is the only reliable ordering while the "
-                             "upstream /host/clear defect stands (see "
-                             "terrarium_boot's --arco-start-audio).")
     parser.add_argument("--heartbeat-interval", type=float,
                         default=HELLO_INTERVAL_S,
                         help="Resend /game/hello every N seconds while "
@@ -519,23 +506,25 @@ def main() -> None:
                              "name from the next run.")
     parser.add_argument("--persist", action="store_true",
                         help="Lobby mode: on release, return to the "
-                             "hello+join-retry lobby instead of exiting, "
-                             "and treat a deny as retryable -- so this "
-                             "device joins whatever Bit the Console loads "
-                             "next, across room recycles (each Bit close "
-                             "replaces Arco; o2lite auto-reconnects and "
-                             "reconnect_recheck re-verifies the service). "
-                             "Implies --join-retry 2.0 when --join-retry "
-                             "is 0. Meaningless with --no-join.")
+                             "hello lobby instead of exiting, so this "
+                             "device takes part in whatever Bit the Console "
+                             "loads next, across room recycles (each Bit "
+                             "close replaces Arco; o2lite auto-reconnects "
+                             "and reconnect_recheck re-verifies the "
+                             "service). A deny never ends a round either "
+                             "way. Meaningless with --no-join.")
     parser.add_argument("--handshake", action="store_true",
-                        help="Hello without joining; double-tap on the "
-                             "first invite (a solid white frame) and let "
-                             "the lobby join this device (spec 5). Ignores "
-                             "--node.")
+                        help="Answer Control's /<dev>/handshake invite with "
+                             "/game/handshake <dev> <round_id> <node>, once "
+                             "per round id (spec 2026-10-01). Without it "
+                             "the device only says hello and ends up a jam "
+                             "device at start.")
+    parser.add_argument("--handshake-delay", type=float, default=0.0,
+                        metavar="SECONDS",
+                        help="Wait this long after first seeing an invite "
+                             "before answering it (default 0). Lets a run "
+                             "order several devices' handshakes.")
     args = parser.parse_args()
-    if args.persist and args.join_retry <= 0:
-        args.join_retry = 2.0
-    explicit_join = not args.no_join and not args.handshake
 
     # control/simulator_process.py shuts this process down with SIGTERM when
     # it is playing the Room simulator, and finally blocks do not run on a
@@ -581,12 +570,7 @@ def main() -> None:
     # the granted role's `uses` says `tap` (see the tick loop below).
     tapper = BeatTapper()
 
-    invite_flag = [False]
-    last_handshake_tap = [None]
-
     def _on_frame(frame: bytes, now) -> None:
-        if args.handshake and client.config is None and invite_seen(frame):
-            invite_flag[0] = True
         if not tapper.armed or now is None:
             return
         beat = tapper.observe(frame, now)
@@ -614,25 +598,16 @@ def main() -> None:
     def send_hello() -> None:
         # Re-sent on every heartbeat (see next_heartbeat_time below), so a
         # declared client's instrument survives GameServer.reap_stale's
-        # liveness re-hello exactly as the initial one did -- the
-        # heartbeat rule this comment refers to never has to fire for a
-        # well-behaved client. Mirrors ShroomClient.hello()'s own
-        # declared/undeclared shape split, kept in step here because this
-        # transport bypasses client.hello() for the real o2lite path.
-        hello_typespec, hello_args = (
-            ("s", (args.dev,)) if client.instrument is None
-            else ("ssss", (args.dev, "", "", client.instrument)))
+        # liveness re-hello exactly as the initial one did. Both go through
+        # hello_args, so the name and instrument are identical every time.
+        hello_typespec, hello_arguments = hello_args(args.dev,
+                                                     client.instrument)
         try:
-            o2lite.send_cmd("/game/hello", 0, hello_typespec, *hello_args)
+            o2lite.send_cmd("/game/hello", 0, hello_typespec,
+                            *hello_arguments)
             o2lite.send_cmd("/game/canvas", 0, "ss", args.dev, canvas_url)
         except (AssertionError, OSError):
-            pass   # hub away; the heartbeat/join retry loop resends later
-
-    def send_join() -> None:
-        try:
-            o2lite.send_cmd("/game/join", 0, "ss", args.dev, args.node)
-        except (AssertionError, OSError):
-            pass   # hub away; the heartbeat/join retry loop resends later
+            pass   # hub away; the heartbeat resend tries again
 
     # ONE cleanup path, covering everything after backend.open(). The guard
     # starts here and not at the tick loop because every step between is
@@ -695,7 +670,7 @@ def main() -> None:
                            "typespec": typespec or "", "args": values})
 
         for kind in ("role", "leds", "release", "deny", "error",
-                     "room", "play"):
+                     "room", "play", "handshake", "validated"):
             o2lite.method_new(f"/{args.dev}/{kind}", None, True, on_down, None)
 
         while o2lite.time_get() < 0:       # block until clock sync
@@ -720,13 +695,16 @@ def main() -> None:
             raise SystemExit(1)
 
         send_hello()
-        if explicit_join:
-            send_join()
 
         start = o2lite.time_get()
         interval = 1.0 / args.tilt_hz
         bridge_id = getattr(o2lite, "bridge_id", None)
 
+        # Round ids already answered, and when each invite was first seen
+        # (for --handshake-delay). Kept across rounds: a round id is
+        # answered once however many times its invite repeats.
+        handshaken: set = set()
+        first_invite_at: dict = {}
         round_num = 1
         while True:                     # rounds; one lap in one-shot mode
             round_start = o2lite.time_get()
@@ -739,20 +717,13 @@ def main() -> None:
             # instant the gate opens).
             next_tilt = None
             last_operator_tilt = None
-            # The join reply is asynchronous -- it only arrives once the
-            # loop below polls it in -- so noticing a deny/error has to
-            # happen inside the loop, not right after send_cmd. Printed
-            # once each: without this, a refused join looks identical to a
-            # working one that simply has no frames yet -- a blank browser
-            # and no explanation.
+            # A deny/error is asynchronous -- it only arrives once the
+            # loop below polls it in -- so noticing one has to happen
+            # inside the loop. Printed once each: without this, a refused
+            # handshake looks identical to a working device that simply has
+            # no frames yet -- a blank browser and no explanation.
             deny_printed = False
             error_printed = False
-            # Only ever set when --join-retry is on, so the default path
-            # still sends exactly one join.
-            next_join = (o2lite.time_get() + args.join_retry
-                         if args.join_retry > 0 and explicit_join else None)
-            joins_sent = 1
-
             outcome = None
             while outcome is None:
                 if parent_is_gone(args.exit_with_parent):
@@ -771,24 +742,6 @@ def main() -> None:
                     # below would misfire on -1.
                     time.sleep(0.05)
                     continue
-                if next_join is not None and now >= next_join:
-                    if client.config is not None or client.last_deny is not None \
-                            or client.last_error is not None:
-                        next_join = None   # Control answered; stop retrying
-                    else:
-                        # hello as well as join, every time. Both were sent
-                        # before Control existed and BOTH were dropped by
-                        # Arco ("service was not found"), and /game/hello is
-                        # what puts this device in the DevicePool -- a join
-                        # from a device Control has never heard of goes
-                        # nowhere. Retrying only the join reconnects nothing.
-                        send_hello()
-                        send_join()
-                        joins_sent += 1
-                        next_join = now + args.join_retry
-                        if joins_sent % 5 == 0:
-                            print(f"{joins_sent} joins unanswered. "
-                                  f"{join_stall_hint(args.dev)}")
                 if now >= next_heartbeat:
                     send_hello()
                     next_heartbeat = next_heartbeat_time(now, args.heartbeat_interval)
@@ -797,46 +750,42 @@ def main() -> None:
                     print(f"{markers.DEVICE_JOIN_DENIED} {reason} ({hint})",
                           flush=True)
                     deny_printed = True
-                    # A denied join never gets a role, so
-                    # _gestures_ready(client) can never become true. In
-                    # one-shot mode lobby_round_over() above already ended
-                    # the round on this same lap; under --persist the node
-                    # may still reopen, so this loop keeps polling and
-                    # join-retrying instead of stopping here.
+                    # Informational only: a denied device gets no scored
+                    # role, but it still becomes a jam device at start, so
+                    # the loop keeps polling for its /role.
                 if not error_printed and client.last_error is not None:
                     context, message = client.last_error
                     print(f"ERROR from Control: {context}: {message}")
                     error_printed = True
-                # Evaluated AFTER the deny/error prints above (not right
-                # after poll()): a deny that just arrived on this same lap
-                # must get its DEVICE_JOIN_DENIED line printed before a
-                # one-shot exit, or run_stack's marker watch never sees it.
                 outcome = lobby_round_over(client, args.persist)
                 if outcome is not None:
                     break
-                if (args.handshake and invite_flag[0] and client.config is None
-                        and (last_handshake_tap[0] is None
-                             or now - last_handshake_tap[0] >= HANDSHAKE_RETAP_S)):
-                    o2lite.send("/game/tap", now, "sffi", args.dev, 1.0, 50.0, 2)
-                    last_handshake_tap[0] = now
-                    print(f"handshake: invite seen, double-tap sent at {now:.3f}",
-                          flush=True)
-                invite_flag[0] = False
+                due = handshake_due(client, args.handshake and not args.no_join,
+                                    handshaken, first_invite_at, now,
+                                    args.handshake_delay)
+                if due is not None:
+                    try:
+                        o2lite.send_cmd("/game/handshake", 0, "sss",
+                                        args.dev, due, args.node or "")
+                    except (AssertionError, OSError):
+                        pass    # hub away; the invite repeats, so retry
+                    else:
+                        handshaken.add(due)
+                        print(f"handshake: answered round {due} at "
+                              f"{now:.3f}", flush=True)
                 if not args.no_join and not _gestures_ready(client):
                     discard_pre_role(
                         operator_input,
-                        "join denied; see the deny line above"
+                        "denied; this device is jam at start"
                         if client.last_deny is not None
-                        else f"waiting for a role on {args.node}")
+                        else "waiting for a role")
                 if not args.no_join and _gestures_ready(client):
                     if next_tilt is None:
                         next_tilt = now   # first tilt fires now the role is in
-                        # Say so explicitly. Until this line appears, a
-                        # silent browser is indistinguishable from a role
-                        # that never arrived, and the two want completely
-                        # different fixes.
-                        print(f"{markers.DEVICE_ROLE_GRANTED} {joins_sent} "
-                              f"join(s); gestures starting at {now:.3f}", flush=True)
+                        # The ROLE GRANTED line itself is printed by
+                        # ShroomClient when /role lands; say when gestures
+                        # begin.
+                        print(f"gestures starting at {now:.3f}", flush=True)
                         # The role decides which synthetic gestures run.
                         tapper.armed = wants_verb(client.config, "tap")
                         if tapper.armed:
@@ -871,9 +820,6 @@ def main() -> None:
             tapper.armed = False
             round_num += 1
             send_hello()
-            if explicit_join:
-                next_join = o2lite.time_get() + args.join_retry
-                send_join()
     except KeyboardInterrupt:
         pass
     finally:

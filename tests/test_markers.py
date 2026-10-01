@@ -36,13 +36,35 @@ def test_markers_are_non_empty_and_distinct():
     """A blank marker matches every line, and a marker that is a prefix of
     another would fire the wrong event."""
     all_markers = list(markers.READY_MARKERS.values()) + \
-        list(markers.FAILURE_MARKERS.values())
+        list(markers.FAILURE_MARKERS.values()) + \
+        list(markers.INFO_MARKERS.values())
     assert all(m.strip() for m in all_markers)
     assert len(set(all_markers)) == len(all_markers)
     for a in all_markers:
         for b in all_markers:
             if a is not b:
                 assert not a.startswith(b)
+
+
+def test_v3_markers_have_remedies_or_are_ready():
+    assert markers.HANDSHAKE_VALIDATED == "HANDSHAKE VALIDATED:"
+    assert markers.ROLE_GRANTED == "ROLE GRANTED:"
+    assert markers.HANDSHAKE_VALIDATED in markers.READY_MARKERS.values()
+    assert markers.ROLE_GRANTED in markers.READY_MARKERS.values()
+
+
+def test_a_deny_is_informational_not_a_failure():
+    """A device over the scored cap is denied and becomes jam at start, so
+    the deny marker stays printable but must never fail a run."""
+    assert markers.DEVICE_JOIN_DENIED == "JOIN DENIED:"
+    assert markers.DEVICE_JOIN_DENIED not in markers.FAILURE_MARKERS.values()
+    assert markers.DEVICE_JOIN_DENIED in markers.INFO_MARKERS.values()
+
+
+def test_the_deny_marker_is_still_emitted_by_o2_shroom():
+    import harness.o2_shroom
+    assert "markers.DEVICE_JOIN_DENIED" in inspect.getsource(
+        harness.o2_shroom)
 
 
 def test_browse_url_marker_is_emitted_by_every_browser_surface():
@@ -66,7 +88,8 @@ def test_browse_url_marker_is_emitted_by_every_browser_surface():
 
 def test_browse_url_marker_is_distinct_from_every_other_marker():
     others = list(markers.READY_MARKERS.values()) + \
-        list(markers.FAILURE_MARKERS.values())
+        list(markers.FAILURE_MARKERS.values()) + \
+        list(markers.INFO_MARKERS.values())
     assert markers.BROWSE_URL.strip()
     for other in others:
         assert not markers.BROWSE_URL.startswith(other)
@@ -89,7 +112,8 @@ def test_o2_shroom_emits_room_url_under_no_join_and_browse_url_otherwise():
 
 def test_room_url_marker_is_distinct_from_every_other_marker():
     others = list(markers.READY_MARKERS.values()) + \
-        list(markers.FAILURE_MARKERS.values()) + [markers.BROWSE_URL]
+        list(markers.FAILURE_MARKERS.values()) + \
+        list(markers.INFO_MARKERS.values()) + [markers.BROWSE_URL]
     assert markers.ROOM_URL.strip()
     for other in others:
         assert not markers.ROOM_URL.startswith(other)
@@ -105,9 +129,13 @@ def test_control_room_loaded_and_unloaded_marker_values():
 
 def _module_for(name: str):
     import harness.o2_shroom
+    import harness.shroom_client
     import harness.terrarium_boot
-    return (harness.terrarium_boot if name.startswith("CONTROL_")
-            else harness.o2_shroom)
+    if name.startswith("CONTROL_"):
+        return harness.terrarium_boot
+    if name in ("HANDSHAKE_VALIDATED", "ROLE_GRANTED"):
+        return harness.shroom_client
+    return harness.o2_shroom
 
 
 def test_arco_www_marker_value():

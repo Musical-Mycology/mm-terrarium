@@ -1,11 +1,10 @@
 """The stdout contract harness/run_stack.py supervises processes through.
 
-The runner has to know when Control is ready for devices to join, and when
-a device has actually been granted its role, because both are the
-difference between a working run and a silent one. Waiting a fixed number
-of seconds for either was tried and is not good enough: the SETUP window is
-short, and a device that joins outside it is refused
-(control/registration.py refuses a SCORED role once RUNNING).
+The runner has to know when Control is ready for devices to hello, and when
+a device has actually been sent its role, because both are the difference
+between a working run and a silent one. Waiting a fixed number of seconds
+for either was tried and is not good enough: roles are granted at RUNNING,
+and a device that handshakes after the SETUP window closes is a jam device.
 
 Promoting these strings from incidental print() calls to named constants
 matched on both sides is what makes stdout-watching honest. A reworded
@@ -77,10 +76,22 @@ CONTROL_NO_ROOM_WAIT = "NO_ROOM: waiting for the Console to load a Room"
 # run fails.
 DEVICE_CLOCK_SYNCED = "clock synced at"
 
-# Control answered the join with a role. Gestures start here.
-DEVICE_ROLE_GRANTED = "role granted after"
+# Control validated this device's handshake for the current round
+# (/<dev>/validated). Printed by harness/shroom_client.py as
+# "HANDSHAKE VALIDATED: <dev> <role>". A validation is not a role: the role
+# arrives at RUNNING. run_stack waits on this before an admin start so the
+# start does not race the lobby.
+HANDSHAKE_VALIDATED = "HANDSHAKE VALIDATED:"
 
-# Control refused the join. Never recovers; fail the run now.
+# Control sent this device its role (/<dev>/role, at RUNNING). Printed by
+# harness/shroom_client.py as "ROLE GRANTED: <dev> scored|jam <role>".
+# Gestures start here, and run_stack --expect-scored counts these lines.
+ROLE_GRANTED = "ROLE GRANTED:"
+
+# Control denied the handshake. Informational, not a failure: a device
+# over the scored cap is denied and becomes a jam device at start, and the
+# run goes on. Printable and watched by run_stack, but not in
+# FAILURE_MARKERS.
 DEVICE_JOIN_DENIED = "JOIN DENIED:"
 
 # The hub refused this device's service announcement because another
@@ -144,10 +155,15 @@ READY_MARKERS = {
     "CONTROL_ROOM_UNLOADED": CONTROL_ROOM_UNLOADED,
     "CONTROL_NO_ROOM_WAIT": CONTROL_NO_ROOM_WAIT,
     "DEVICE_CLOCK_SYNCED": DEVICE_CLOCK_SYNCED,
-    "DEVICE_ROLE_GRANTED": DEVICE_ROLE_GRANTED,
+    "HANDSHAKE_VALIDATED": HANDSHAKE_VALIDATED,
+    "ROLE_GRANTED": ROLE_GRANTED,
+}
+
+# Printed and watched, never fatal. A deny is expected in the over-cap case.
+INFO_MARKERS = {
+    "DEVICE_JOIN_DENIED": DEVICE_JOIN_DENIED,
 }
 
 FAILURE_MARKERS = {
-    "DEVICE_JOIN_DENIED": DEVICE_JOIN_DENIED,
     "DEVICE_SERVICE_CONFLICT": DEVICE_SERVICE_CONFLICT,
 }

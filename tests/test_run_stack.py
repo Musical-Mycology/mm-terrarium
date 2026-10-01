@@ -46,7 +46,7 @@ _CONTROL_OK = (f"{markers.CONTROL_ROOM_LOADED} TEST\n"
                f"{markers.CONTROL_TRANSPORT_READY} 'arco'\n"
                f"{markers.CONTROL_SETUP_HOLD} for 20s\n")
 _DEVICE_OK = (f"{markers.DEVICE_CLOCK_SYNCED} 12.345\n"
-              f"{markers.DEVICE_ROLE_GRANTED} 1 join(s)\n")
+              f"{markers.ROLE_GRANTED} ie1 scored player\n")
 
 
 def test_a_clean_run_reports_success(tmp_path):
@@ -226,15 +226,17 @@ def test_a_device_that_never_syncs_fails_bounded_and_names_the_defect(tmp_path):
     assert "o2debug.log" in result.detail
 
 
-def test_a_denied_join_fails_immediately(tmp_path):
-    """Never recovers, so waiting out the timeout is pure lost time."""
+def test_a_deny_is_informational_and_the_run_waits_for_the_jam_role(
+        tmp_path):
+    """An over-cap device is denied and becomes jam at start (spec
+    2026-10-01 section 5.7): the deny must not fail the run."""
     popen = ScriptedPopen([_CONTROL_OK,
                            f"{markers.DEVICE_CLOCK_SYNCED} 1.0\n"
-                           f"{markers.DEVICE_JOIN_DENIED} scored role closed\n"])
+                           f"{markers.DEVICE_JOIN_DENIED} scored full (hint)\n"
+                           f"{markers.ROLE_GRANTED} ie1 jam jammer\n"])
     result = run(_cfg(tmp_path), popen=popen, sleep=lambda _s: None)
 
-    assert result.ok is False
-    assert result.stage == "device-join"
+    assert result.ok is True
 
 
 def test_a_service_conflict_fails_immediately(tmp_path):
@@ -316,12 +318,11 @@ def test_control_command_carries_the_flags_a_headless_run_needs(tmp_path):
     assert "-u" in command
 
 
-def test_device_command_carries_join_retry_and_samples_out(tmp_path):
-    """--join-retry because a join sent before Control is listening is
-    dropped with no queue behind it."""
+def test_device_command_carries_samples_out_and_no_join_retry(tmp_path):
+    """--join-retry went with /game/join (retired in contract v3)."""
     command = device_command(_cfg(tmp_path, node="TEST_PLAYER_NODE"), 1, 99)
 
-    assert "--join-retry" in command
+    assert "--join-retry" not in command
     assert "--samples-out" in command
     assert "--control-horizon" in command
     assert "ie1" in command
@@ -808,7 +809,7 @@ _CONTROL_OK_WITH_URLS = (
 _DEVICE_OK_WITH_URL = (
     f"{markers.BROWSE_URL} Watch the Shroom at http://127.0.0.1:8903/\n"
     f"{markers.DEVICE_CLOCK_SYNCED} 12.345\n"
-    f"{markers.DEVICE_ROLE_GRANTED} 1 join(s)\n")
+    f"{markers.ROLE_GRANTED} ie1 scored player\n")
 
 
 def test_browse_urls_are_collected_from_every_child(tmp_path):
@@ -1323,6 +1324,126 @@ def test_handshake_devices_get_the_flag(tmp_path):
     cfg = _cfg(tmp_path, devices=2, handshake_devices=1)     # use the file's config helper
     assert "--handshake" in device_command(cfg, 1, 1)
     assert "--handshake" not in device_command(cfg, 2, 1)
+
+
+def _grants(*roles):
+    """Device stdout: synced, then one ROLE GRANTED line per entry."""
+    return (f"{markers.DEVICE_CLOCK_SYNCED} 1.0\n"
+            + "".join(f"{markers.ROLE_GRANTED} ie1 {r}\n" for r in roles))
+
+
+def test_expect_scored_passes_on_exactly_k_scored_and_the_rest_jam(tmp_path):
+    popen = ScriptedPopen([
+        _CONTROL_OK,
+        _grants("scored player"), _grants("scored player"),
+        _grants("jam jammer")])
+    result = run(_cfg(tmp_path, devices=3, expect_scored=2), popen=popen,
+                 sleep=lambda _s: None)
+    assert result.ok is True, result.detail
+
+
+def test_expect_scored_fails_when_too_many_devices_are_scored(tmp_path):
+    popen = ScriptedPopen([
+        _CONTROL_OK,
+        _grants("scored player"), _grants("scored player"),
+        _grants("scored player")])
+    result = run(_cfg(tmp_path, devices=3, expect_scored=2), popen=popen,
+                 sleep=lambda _s: None)
+    assert result.ok is False
+    assert result.stage == "expect-scored"
+    assert "expected 2 scored and 1 jam" in result.detail
+
+
+def test_expect_scored_fails_when_too_few_devices_are_scored(tmp_path):
+    popen = ScriptedPopen([
+        _CONTROL_OK, _grants("jam jammer"), _grants("jam jammer")])
+    result = run(_cfg(tmp_path, devices=2, expect_scored=1), popen=popen,
+                 sleep=lambda _s: None)
+    assert result.ok is False
+    assert result.stage == "expect-scored"
+
+
+def test_expect_scored_is_off_by_default(tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK, _grants("jam jammer")])
+    assert run(_cfg(tmp_path), popen=popen,
+               sleep=lambda _s: None).ok is True
+
+
+def test_expect_scored_flag_parses():
+    from harness.run_stack import parse_args
+    assert parse_args(["--ci", "--expect-scored", "2"]).expect_scored == 2
+    assert parse_args(["--ci"]).expect_scored is None
+
+
+def test_a_device_never_sent_a_role_fails_the_join_stage(tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK,
+                           f"{markers.DEVICE_CLOCK_SYNCED} 1.0\n"])
+    ticks = iter([0.0] * 50 + [1e9] * 200)
+    result = run(_cfg(tmp_path), popen=popen, clock=lambda: next(ticks),
+                 sleep=time.sleep)
+    assert result.ok is False
+    assert result.stage == "device-join"
+    assert "never sent a role" in result.detail
+
+
+def test_start_after_grant_waits_for_a_handshake_validation_then_starts(
+        tmp_path, monkeypatch):
+    """The admin start is lifted only after every handshake device was
+    validated (or denied), and roles are waited on AFTER the start: they
+    only exist once the round is RUNNING."""
+    events = []
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(url, timeout=None):
+        events.append(("start", url))
+        return _Resp()
+
+    monkeypatch.setattr("harness.run_stack.urllib.request.urlopen",
+                        fake_urlopen)
+    control = (_CONTROL_OK
+               + f"{markers.START_URL} start http://10.0.0.7:8788/start?key=k\n")
+    device = (f"{markers.DEVICE_CLOCK_SYNCED} 1.0\n"
+              f"{markers.HANDSHAKE_VALIDATED} ie1 player\n"
+              f"{markers.ROLE_GRANTED} ie1 scored player\n")
+    popen = ScriptedPopen([control, device])
+    result = run(_cfg(tmp_path, handshake_devices=1, start_after_grant=True),
+                 popen=popen, sleep=time.sleep)
+    assert result.ok is True, result.detail
+    assert events == [("start", "http://127.0.0.1:8788/start?key=k")]
+
+
+def test_a_handshake_device_that_is_never_validated_fails_before_the_start(
+        tmp_path):
+    control = (_CONTROL_OK
+               + f"{markers.START_URL} start http://10.0.0.7:8788/start\n")
+    popen = ScriptedPopen([control, f"{markers.DEVICE_CLOCK_SYNCED} 1.0\n"])
+    ticks = iter([0.0] * 50 + [1e9] * 200)
+    result = run(_cfg(tmp_path, handshake_devices=1, start_after_grant=True),
+                 popen=popen, clock=lambda: next(ticks), sleep=time.sleep)
+    assert result.ok is False
+    assert result.stage == "device-join"
+    assert "neither validated nor denied" in result.detail
+
+
+def test_an_admin_bit_nobody_starts_does_not_wait_for_roles(
+        metronome_enabled_registry):
+    from harness.run_stack import config_from_args, parse_args
+    cfg = config_from_args(
+        parse_args(["--bit", "MetronomeBit"]),
+        registry=metronome_enabled_registry)
+    assert cfg.wait_for_roles is False
+    cfg = config_from_args(
+        parse_args(["--ci", "--bit", "MetronomeBit"]),
+        registry=metronome_enabled_registry)
+    assert cfg.wait_for_roles is True
 
 
 def test_ci_implies_start_after_grant_for_an_admin_start_bit(
