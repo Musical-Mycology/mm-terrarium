@@ -263,3 +263,22 @@ def test_ceremony_survives_stop():
     clock.advance(2.0)
     rt.tick()
     assert sinks.plays == [("ie1", "chime", sinks.plays[0][2])]
+
+
+def test_forget_drops_only_that_devs_queued_invite_flashes():
+    """A device that validates mid-invite must see no white flash after
+    its /validated: forget purges its still-queued invite flashes, and
+    leaves another dev's invite flashes and the ceremony's green ones."""
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie3")
+    rt.consider_invite("ie4")
+    _run(rt, sinks, clock, 0.1)          # the first white flash of each
+    rt.forget("ie3")
+    rt.on_scored_join("ie3")
+    _run(rt, sinks, clock, 2.0)
+    ie3 = [o[2] for o in sinks.overrides if o[1] == "ie3"]
+    assert ie3 == [WHITE, GREEN, GREEN]  # no second white after forget
+    ie4 = [o[2] for o in sinks.overrides if o[1] == "ie4"]
+    assert ie4 == [WHITE, WHITE]
+    assert [p[:2] for p in sinks.plays] == [("ie3", "chime")]

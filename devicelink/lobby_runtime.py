@@ -187,11 +187,32 @@ class LobbyRuntime:
         now = self._clock()
         for i in range(2):
             t = now + i * (DEVICE_FLASH_ON_S + DEVICE_FLASH_GAP_S)
-            self._at(t, lambda d=dev: self._s.set_override(d, WHITE, 1.0,
-                                                           DEVICE_FLASH_ON_S))
+            self._at(t, _InviteFlash(dev, self._s))
 
     def is_invited(self, dev: str) -> bool:
         return self._invites.invited(dev)
 
     def forget(self, dev: str) -> None:
+        """Stop inviting `dev`, and drop its invite flashes still queued,
+        so a device that validates mid-invite sees no white flash after its
+        /validated (a white frame there reads as a second invite). Only
+        that dev's invite flashes go: other devs' flashes and every
+        ceremony cue stay queued."""
         self._invites.forget(dev)
+        self._queue.purge(
+            lambda thunk: isinstance(thunk, _InviteFlash) and thunk.dev == dev)
+
+
+class _InviteFlash:
+    """One queued white invite flash for `dev`: a named thunk rather than a
+    lambda, so LobbyRuntime.forget can purge exactly these from its
+    TimedQueue."""
+
+    __slots__ = ("dev", "_sinks")
+
+    def __init__(self, dev: str, sinks: LobbySinks) -> None:
+        self.dev = dev
+        self._sinks = sinks
+
+    def __call__(self) -> None:
+        self._sinks.set_override(self.dev, WHITE, 1.0, DEVICE_FLASH_ON_S)

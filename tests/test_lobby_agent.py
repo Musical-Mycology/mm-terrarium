@@ -425,3 +425,24 @@ def test_an_abort_during_the_ceremony_drops_its_queued_cues(monkeypatch):
     _poll(agent, clk, 2.0)
     assert audio.notes == []
     assert _sent(server, "/ie1/play") == []
+
+
+def test_validating_mid_invite_cancels_the_queued_second_white_flash(monkeypatch):
+    """The invite's second white flash is queued when the first goes out;
+    a device that validates between them must see no white override after
+    its /validated (it would read as a second invite), only the ceremony's
+    green flashes."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    assert agent._overrides["ie1"][0] == WHITE
+    _poll(agent, clk, 0.3)                                     # between flashes
+    _handshake(server, agent, gs, "c1", "ie1")
+    assert _sent(server, "/ie1/validated")
+    seen = []
+    for _ in range(int(2.0 * 44)):
+        clk.advance(1 / 44)
+        agent.poll()
+        if "ie1" in agent._overrides:
+            seen.append(agent._overrides["ie1"][0])
+    assert WHITE not in seen
+    assert GREEN in seen
