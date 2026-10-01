@@ -39,7 +39,7 @@ from contract_kit.scenarios import (ACCEPT_AFTER_MS, ACCEPT_POLICY,
                                     RIVAL_ACCEPT_T, ROLE_SETTLED_T,
                                     ROOM_ACCEPT_T, SIGNATURE_SETTLED_MS,
                                     STALE_ACCEPT_T, STALE_ROUND_ID, START_T,
-                                    WALK_UP_T)
+                                    VALIDATE_START_T, WALK_UP_T)
 from devicelink.contract import RETIRED_UP_VERBS, row_for, typespec_allowed
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -302,18 +302,29 @@ def test_handshake_validate_then_role_reserves_then_grants_at_start():
     validated = _sends(data, "/$DEV/validated")
     assert [(s["t"], s["control_sends"]["args"]) for s in validated] == [
         (ACCEPT_AFTER_MS, ["$ROUND", "player"])]
-    # Validated is a reservation: no role and no pixels until start.
-    role = _sends(data, "/$DEV/role")
-    assert [s["t"] for s in role] == [START_T]
-    assert _role_blob(role[0])["role"] == "player"
-    assert _role_blob(role[0])["scored"] is True
-    assert all(s["t"] >= START_T for s in _frames(data))
-    assert _frames(data), "a granted role must reach the pixels"
     # The validation raised the room's player count before start.
     counts = [(s["t"], _role_blob(s)["nodes"][0]["count"])
               for s in _sends(data, "/$DEV/room")]
     assert counts[:2] == [(0, 0), (ACCEPT_AFTER_MS, 1)]
-    assert _kind(data, "expect_frame")[0]["t"] == ROLE_SETTLED_T
+
+    # The lobby: a white invite flash before the accept, a green ceremony
+    # flash after it, and the chime with its key placeheld.
+    white, green = _kind(data, "expect_frame")[:2]
+    assert white["t"] < ACCEPT_AFTER_MS < green["t"]
+    assert set(white["expect_frame"]["grb"]) == {255}
+    assert green["expect_frame"]["grb"][:3] == [255, 0, 0]   # GRB green
+    chime = _kind(data, "expect_play")[0]
+    assert chime["expect_play"] == {"name": "chime", "params": "key=$KEY",
+                                    "within_ms": 50}
+    assert ACCEPT_AFTER_MS < chime["t"] < VALIDATE_START_T
+
+    # Validated is a reservation: the role only arrives at start.
+    role = _sends(data, "/$DEV/role")
+    assert [s["t"] for s in role] == [VALIDATE_START_T]
+    assert _role_blob(role[0])["role"] == "player"
+    assert _role_blob(role[0])["scored"] is True
+    assert _kind(data, "expect_frame")[-1]["t"] == (
+        VALIDATE_START_T + SIGNATURE_SETTLED_MS)
 
 
 def test_handshake_over_cap_deny_denies_then_grants_jam():

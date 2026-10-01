@@ -2,7 +2,7 @@
   "device": {
     "handshake": null
   },
-  "name": "boot_hello_heartbeat",
+  "name": "handshake_stale_round",
   "profiles": [
     "rev1"
   ],
@@ -23,18 +23,6 @@
         "stamp_t": null,
         "typespec": "ssss",
         "within_ms": 50
-      },
-      "t": 0
-    },
-    {
-      "expect_quiet": {
-        "addresses": [
-          "/game/handshake",
-          "/game/tap",
-          "/game/hold",
-          "/game/swing"
-        ],
-        "for_ms": 12000
       },
       "t": 0
     },
@@ -85,57 +73,93 @@
       "t": 0
     },
     {
-      "expect_out": {
-        "address": "/game/hello",
-        "args": [
-          "$DEV",
-          "*",
-          "*",
-          "*"
-        ],
-        "stamp_t": null,
-        "typespec": "ssss",
-        "within_ms": 50
+      "accept": {
+        "node": "",
+        "round_id": "stale"
       },
-      "t": 5000
-    },
-    {
-      "control_sends": {
-        "address": "/$DEV/handshake",
-        "args": [
-          "$ROUND"
-        ],
-        "at": null,
-        "typespec": "s"
-      },
-      "t": 5000
+      "t": 300
     },
     {
       "expect_out": {
-        "address": "/game/hello",
+        "address": "/game/handshake",
         "args": [
           "$DEV",
-          "*",
-          "*",
-          "*"
+          "stale",
+          ""
         ],
         "stamp_t": null,
-        "typespec": "ssss",
+        "typespec": "sss",
         "within_ms": 50
       },
-      "t": 10000
+      "t": 300
+    },
+    {
+      "accept": {
+        "node": ""
+      },
+      "t": 1000
+    },
+    {
+      "expect_out": {
+        "address": "/game/handshake",
+        "args": [
+          "$DEV",
+          "$ROUND",
+          ""
+        ],
+        "stamp_t": null,
+        "typespec": "sss",
+        "within_ms": 50
+      },
+      "t": 1000
     },
     {
       "control_sends": {
-        "address": "/$DEV/handshake",
+        "address": "/$DEV/room",
         "args": [
-          "$ROUND"
+          {
+            "bit": "ContractBit",
+            "nodes": [
+              {
+                "capacity": 1,
+                "count": 1,
+                "id": "CONTRACT_PLAYER_NODE",
+                "roles": [
+                  "player"
+                ],
+                "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
+              }
+            ],
+            "state": "SETUP",
+            "version": "0.1"
+          }
         ],
         "at": null,
-        "typespec": "s"
+        "typespec": "b"
       },
-      "t": 10000
+      "t": 1000
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/validated",
+        "args": [
+          "$ROUND",
+          "player"
+        ],
+        "at": null,
+        "typespec": "ss"
+      },
+      "t": 1000
     }
   ],
-  "summary": "Hello repeats every 5 s and declares an instrument; a device that never accepts sends nothing else"
+  "summary": "An accept with a stale round id gets no answer; an accept with the current one validates"
 }

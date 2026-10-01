@@ -1,6 +1,9 @@
 {
   "device": {
-    "join_node": null
+    "handshake": {
+      "ack_after_ms": 300,
+      "node": ""
+    }
   },
   "name": "gestures_after_role",
   "profiles": [
@@ -27,6 +30,17 @@
       "t": 0
     },
     {
+      "expect_quiet": {
+        "addresses": [
+          "/game/tap",
+          "/game/hold",
+          "/game/swing"
+        ],
+        "for_ms": 1000
+      },
+      "t": 0
+    },
+    {
       "control_sends": {
         "address": "/$DEV/room",
         "args": [
@@ -34,13 +48,22 @@
             "bit": "ContractBit",
             "nodes": [
               {
-                "capacity": null,
+                "capacity": 1,
                 "count": 0,
                 "id": "CONTRACT_PLAYER_NODE",
                 "roles": [
                   "player"
                 ],
                 "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
               }
             ],
             "state": "SETUP",
@@ -53,68 +76,15 @@
       "t": 0
     },
     {
-      "gesture": {
-        "duration_ms": 80.0,
-        "kind": "tap",
-        "onset_t": 500
-      },
-      "t": 500
-    },
-    {
-      "expect_out": {
-        "address": "/game/tap",
-        "args": [
-          "$DEV",
-          0.0,
-          80.0,
-          1
-        ],
-        "stamp_t": 500,
-        "typespec": "sffi",
-        "within_ms": 50
-      },
-      "t": 500
-    },
-    {
-      "expect_quiet": {
-        "addresses": [
-          "/game/hold",
-          "/game/swing"
-        ],
-        "for_ms": 500
-      },
-      "t": 500
-    },
-    {
       "control_sends": {
-        "address": "/$DEV/error",
+        "address": "/$DEV/handshake",
         "args": [
-          "tap",
-          "device not registered"
+          "$ROUND"
         ],
         "at": null,
-        "typespec": "ss"
+        "typespec": "s"
       },
-      "t": 500
-    },
-    {
-      "join": {
-        "node": "CONTRACT_PLAYER_NODE"
-      },
-      "t": 1000
-    },
-    {
-      "expect_out": {
-        "address": "/game/join",
-        "args": [
-          "$DEV",
-          "CONTRACT_PLAYER_NODE"
-        ],
-        "stamp_t": null,
-        "typespec": "ss",
-        "within_ms": 50
-      },
-      "t": 1000
+      "t": 0
     },
     {
       "control_sends": {
@@ -124,16 +94,72 @@
             "bit": "ContractBit",
             "nodes": [
               {
-                "capacity": null,
+                "capacity": 1,
                 "count": 1,
                 "id": "CONTRACT_PLAYER_NODE",
                 "roles": [
                   "player"
                 ],
                 "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
               }
             ],
             "state": "SETUP",
+            "version": "0.1"
+          }
+        ],
+        "at": null,
+        "typespec": "b"
+      },
+      "t": 300
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/validated",
+        "args": [
+          "$ROUND",
+          "player"
+        ],
+        "at": null,
+        "typespec": "ss"
+      },
+      "t": 300
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/room",
+        "args": [
+          {
+            "bit": "ContractBit",
+            "nodes": [
+              {
+                "capacity": 1,
+                "count": 1,
+                "id": "CONTRACT_PLAYER_NODE",
+                "roles": [
+                  "player"
+                ],
+                "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
+              }
+            ],
+            "state": "RUNNING",
             "version": "0.1"
           }
         ],
@@ -147,7 +173,7 @@
         "address": "/$DEV/role",
         "args": [
           {
-            "class": "SHARED",
+            "class": "UNIQUE",
             "instrument": {
               "ambient": {
                 "light": {},
@@ -208,6 +234,41 @@
               "hold",
               "swing"
             ]
+          }
+        ],
+        "at": null,
+        "typespec": "b"
+      },
+      "t": 1000
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/room",
+        "args": [
+          {
+            "bit": "ContractBit",
+            "nodes": [
+              {
+                "capacity": 1,
+                "count": 1,
+                "id": "CONTRACT_PLAYER_NODE",
+                "roles": [
+                  "player"
+                ],
+                "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
+              }
+            ],
+            "state": "RUNNING",
+            "version": "0.1"
           }
         ],
         "at": null,
@@ -3523,5 +3584,5 @@
       "t": 2500
     }
   ],
-  "summary": "Tap may go out before a role, hold and swing wait for one; all three stamp at onset"
+  "summary": "No gesture goes out before a role; tap, hold and swing all stamp at onset after it"
 }

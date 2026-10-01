@@ -88,7 +88,7 @@ def _recorded_placeholder_usage() -> dict[str, set]:
     (top-level field name, not a deep path) where a placeholder string
     actually appears in a committed recording."""
     usage: dict[str, set] = defaultdict(set)
-    placeholders = ("$DEV", "$KEY", "*")
+    placeholders = ("$DEV", "$KEY", "$ROUND", "*")
     for step in _every_recorded_step():
         for kind, payload in step.items():
             if not isinstance(payload, dict):
@@ -206,7 +206,7 @@ def test_link_semantics_state_the_heartbeat_and_no_resume_rules():
         assert arg in semantics
     assert "hello_interval_s" in semantics
     assert "stale_timeout_s" in semantics
-    assert "join again" in semantics or "must join" in semantics
+    assert "start over" in semantics and "accept again" in semantics
     assert "nothing" in semantics  # link-down: sends/receives nothing
 
 
@@ -223,25 +223,40 @@ def test_replay_notes_state_the_undocumented_replay_rules():
     assert "docstring" not in lowered
     assert "scenarios.py" not in lowered
     # The timed_frames_hold_last facts are inlined, not just referenced.
+    from contract_kit.scenarios import (AUTHORED_NEWER_AT, AUTHORED_OLDER_AT,
+                                        AUTHORED_PAIR_T)
     assert "timed_frames_hold_last" in joined
-    assert "6200" in joined and "6100" in joined
-    assert "6000" in joined
+    assert str(AUTHORED_NEWER_AT) in joined and str(AUTHORED_OLDER_AT) in joined
+    assert str(AUTHORED_PAIR_T) in joined
     assert "0, 0, 255" in joined and "255, 0, 0" in joined
-    # A join step is an input a runner delivers, not something to infer
-    # from its own expect_out.
-    assert "join" in lowered and "infer" in lowered
+    # An accept step is an input a runner delivers, not something to infer
+    # from its own expect_out; a runner never sends the retired join.
+    assert "accept" in lowered and "infer" in lowered
+    assert "join_retired_error" in joined
+    assert "$ROUND" in joined
     # link_loss_keeps_display's outage expect_frame is hand-authored too,
     # named explicitly rather than left implicit.
     assert "link_loss_keeps_display" in joined
-    assert "8000" in joined
+    assert "9000" in joined
+    # The down transports are stated.
+    assert "TCP" in joined and "UDP" in joined
 
 
-def test_join_schema_describes_an_input_not_an_inferred_expectation():
+def test_accept_schema_describes_an_input_not_an_inferred_expectation():
     data = export_contract(commit="abc123")
-    join_kind = data["step_schema"]["kinds"]["join"]
-    assert "input" in join_kind["role"]
-    assert set(join_kind["fields"]) == {"node"}
-    assert "str" in join_kind["fields"]["node"]
+    kinds = data["step_schema"]["kinds"]
+    assert "join" not in kinds
+    accept = kinds["accept"]
+    assert "input" in accept["role"] and "infer" in accept["role"]
+    assert set(accept["fields"]) == {"node", "round_id"}
+    assert "str" in accept["fields"]["node"]
+
+
+def test_scenario_device_field_documents_the_handshake_policy():
+    data = export_contract(commit="abc123")
+    device = data["step_schema"]["scenario_fields"]["device"]
+    assert "handshake" in device and "ack_after_ms" in device
+    assert "join_node" not in device
 
 
 def test_step_schema_matches_the_recordings_exactly():
@@ -400,18 +415,16 @@ def test_instrument_triggers_match_the_toml():
 
 def test_contract_version_and_provenance():
     data = export_contract(commit="abc123")
-    # This fix wave's "join" step kind and link_loss_keeps_display scenario
-    # are both observable by a device, so contract_version bumps from the
-    # published 1 to 2 (mm-tuneshroom's own guard and runner catch up in a
-    # follow-up there, not here).
-    assert data["contract_version"] == 2
+    # Contract v3 (spec 2026-10-01 section 6): the handshake replaces
+    # /game/join, observable by every device.
+    assert data["contract_version"] == 3
     assert data["_provenance"] == {"commit": "abc123", "tool": "export_contract/1"}
 
 
 def test_main_writes_contract_and_scenario_files(tmp_path):
     main([str(tmp_path)])
     contract = json.loads((tmp_path / "contract.json").read_text())
-    assert contract["contract_version"] == 2
+    assert contract["contract_version"] == 3
     scenario_files = sorted(p.name for p in (tmp_path / "scenarios").glob("*.json"))
     assert scenario_files == sorted(f"{fn.__name__}.json" for fn in ALL_SCENARIOS)
 

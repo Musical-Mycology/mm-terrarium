@@ -121,6 +121,16 @@ def test_start_grants_a_device_that_never_accepted_the_jam_role():
     assert roles[0]["control_sends"]["args"][0]["role"] == "jammer"
 
 
+def test_a_jammers_hold_is_refused_with_an_error():
+    rec = Recorder(name="t", summary="s", handshake=None)
+    rec.link_up(0)
+    rec.start(START)
+    rec.hold(START + 100, held_s=0.65)
+    errors = _sends(rec.finish(), "/$DEV/error")
+    assert [s["control_sends"]["args"] for s in errors] == [
+        ["hold", JAMMER_REFUSAL]]
+
+
 def test_solo_contract_bit_falls_back_to_a_solo_role():
     rec = Recorder(name="t", summary="s", handshake=None,
                    bit="SoloContractBit")
@@ -162,7 +172,8 @@ def test_a_stale_round_id_is_recorded_literally_and_draws_nothing():
     outs = [s["expect_out"]["args"] for s in data["steps"]
             if s.get("expect_out", {}).get("address") == "/game/handshake"]
     assert outs == [["$DEV", "stale", ""]]
-    assert [s for s in _sends(data) if s["t"] >= 300] == []
+    assert [s for s in data["steps"]
+            if "control_sends" in s and s["t"] >= 300] == []
 
 
 def test_accept_raises_with_no_invite_held():

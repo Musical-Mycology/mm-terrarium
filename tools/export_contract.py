@@ -38,7 +38,10 @@ from control.catalog import load_catalog
 from control.lobby import TERRARIUM_ADMIN
 from control.role_config import carried_instrument_view
 from contract_kit.recorder import CUE_HORIZON_S
-from contract_kit.scenarios import ALL_SCENARIOS
+from contract_kit.scenarios import (ALL_SCENARIOS, AUTHORED_CHECK_T,
+                                    AUTHORED_NEWER_AT, AUTHORED_OLDER_AT,
+                                    AUTHORED_PAIR_T, HOLD_CHECK_T,
+                                    LINK_BACK_T, ROLE_SETTLED_T)
 from devicelink.contract import HELLO_INTERVAL_S, VERB_TABLE, row_for
 from devicelink.o2_transport import MAX_DEV_LEN
 from devicelink.protocol import O2_MAX_MSG_LEN
@@ -55,8 +58,12 @@ TOOL_VERSION = "export_contract/1"
 # it at test/contract/ and found two gaps replaying it -- mm-tuneshroom
 # PR #29), so this fix wave's new "join" step kind and
 # link_loss_keeps_display scenario bump it from 1 to 2; mm-tuneshroom
-# updates its own guard and runner in a follow-up, not here.
-CONTRACT_VERSION = 2
+# updates its own guard and runner in a follow-up, not here. Contract v3
+# (spec 2026-10-01-instrument-handshake-protocol section 6) replaces
+# /game/join with the handshake: device.join_node becomes
+# device.handshake, the join step kind becomes accept, and the control
+# verbs move to TCP, so it bumps again to 3.
+CONTRACT_VERSION = 3
 
 # The live bench replay's timing tolerances (spec section 4.2, "the
 # tolerances the live bench replay uses"; section 8). No single constant
@@ -87,13 +94,15 @@ def _hello_semantics_sentence() -> str:
             f"the device sends nothing and receives nothing. There is "
             f"no session resume: after `lifecycle.stale_timeout_s` "
             f"seconds of silence, Control has dropped the device, which "
-            f"must join again (spec section 4.3, rule 7).")
+            f"must start over from hello and be invited and accept again "
+            f"(spec section 4.3, rule 7). A device forgets its role and "
+            f"its round id when the link goes down.")
 
 
 # What every step kind in every committed recording looks like: every
 # field, its type, its unit, and what a placeholder value means. Verified
 # against contract_kit/recorder.py's step-producing methods and against a
-# scan of all eleven contract_kit/recordings/*.json files -- see
+# scan of every contract_kit/recordings/*.json file -- see
 # tests/test_export_contract.py's
 # test_step_schema_matches_the_recordings_exactly, which checks both
 # directions: no recorded kind/field is undescribed, and no described
@@ -119,8 +128,8 @@ STEP_SCHEMA = {
         "captured control_sends step keeps its real relative order "
         "among other captured control_sends steps; a runner should "
         "otherwise use the file order across kinds -- an input step "
-        "(gesture, join) always precedes its own expect_out at the same "
-        "t, the same way a gesture does."
+        "(gesture, accept) always precedes its own expect_out at the same "
+        "t."
     ),
     "tolerance": (
         "In-process replay runs on a fake clock and allows an "
@@ -146,13 +155,24 @@ STEP_SCHEMA = {
         },
         "$KEY": {
             "meaning": (
-                "a join chime's key number, substituted because the "
+                "a validation chime's key number, substituted because the "
                 "contract does not pin the number. Always embedded in "
                 "a larger string as \"key=$KEY\" (for example replacing "
                 "\"key=60\"). A runner matches the shape key=<integer> "
                 "and does not compare the integer itself."
             ),
             "appears_in": ["control_sends.args", "expect_play.params"],
+        },
+        "$ROUND": {
+            "meaning": (
+                "the round id the replaying device most recently received "
+                "in a /$DEV/handshake, substituted because Control mints "
+                "it with a random token. In control_sends.args the runner "
+                "substitutes any fixed string of its choosing, the same "
+                "one throughout a scenario; in expect_out.args the device "
+                "must echo exactly that string."
+            ),
+            "appears_in": ["control_sends.args", "expect_out.args"],
         },
         "*": {
             "meaning": "matches any value.",
@@ -167,9 +187,16 @@ STEP_SCHEMA = {
             "in (\"rev1\" and/or \"any\")."
         ),
         "device": (
-            "object, {\"join_node\": str or null}. When join_node is "
-            "non-null, the device sends /game/join [\"$DEV\", "
-            "join_node] right after its first hello on every link-up."
+            "object, {\"handshake\": null or {\"node\": str, "
+            "\"ack_after_ms\": int}}: the device's own accept policy, "
+            "an input. null means the device never accepts on its own "
+            "(an accept step may still make it accept). Non-null means "
+            "that on every link-up the device answers the FIRST "
+            "/$DEV/handshake it receives, ack_after_ms after receiving "
+            "it, with /game/handshake [\"$DEV\", <that round id>, node] "
+            "(node \"\" asks for the Bit's default scored role). The "
+            "policy accepts once per link-up, and its accept carries no "
+            "accept step of its own."
         ),
         "steps": "list of step objects (see \"kinds\" below).",
     },
@@ -232,20 +259,28 @@ STEP_SCHEMA = {
                 ),
             },
         },
-        "join": {
+        "accept": {
             "role": (
-                "input: the device deciding to join \"node\", LATER than "
-                "its link coming up (a join AT link-up is instead the "
-                "scenario's own device.join_node field -- see "
-                "step_schema.scenario_fields -- delivered when the link "
-                "comes up). A runner delivers this as an input at t and "
-                "must not infer a join from the expect_out that follows "
-                "it -- an expect_out checks what the device under test "
-                "sends, and cannot also be the runner's own cue to send "
-                "it."
+                "input: the person accepts the invite at t, so the device "
+                "sends /game/handshake. A runner delivers this as an input "
+                "and must not infer an accept from the expect_out that "
+                "follows it: an expect_out checks what the device under "
+                "test sends, and cannot also be the runner's own cue to "
+                "send it. (An accept the device.handshake policy makes on "
+                "its own is not a step; see "
+                "step_schema.scenario_fields.device.)"
             ),
             "fields": {
-                "node": "str; the node name this join names.",
+                "node": (
+                    "str; the node the accept names: \"\" for the Bit's "
+                    "default scored role, else a Registration Node or Room "
+                    "node id."
+                ),
+                "round_id": (
+                    "str; present only when the device must send this "
+                    "literal round id instead of the latest one it "
+                    "received (a deliberately stale accept)."
+                ),
             },
         },
         "expect_out": {
@@ -329,7 +364,7 @@ LIFECYCLE_NOTES = {
     ),
     "stale_timeout_s": (
         "Seconds of silence after which Control has dropped a device, "
-        "which must join again on its next hello (see "
+        "which starts over on its next hello (see "
         "`step_schema.kinds.link.semantics`)."
     ),
     "cue_horizon_s": (
@@ -358,28 +393,43 @@ REPLAY_NOTES = [
     "sent, and a device with its link down receives none of them.",
     "A control_sends step flagged \"malformed\": true is delivered to "
     "the device and must be dropped without changing state.",
-    "In timed_frames_hold_last, the two /$DEV/leds control_sends steps "
-    "at t=6000 are hand-authored rather than captured from Control: the "
-    "one with at=6200 (pure blue, GRB [0, 0, 255] repeated 12 times) is "
-    "sent first, and the one with at=6100 (pure red, GRB [255, 0, 0] "
-    "repeated 12 times) is sent second, so a runner that shows whichever "
-    "arrived last would show the wrong one. Both are due by t=6500; the "
-    "expect_frame steps at t=6500 and t=12000 both expect the newer one "
-    "(at=6200, blue), because a device must select the frame with the "
-    "newest presentation time, not the one that arrived most recently.",
-    "A join step is the device deciding to join, later than link-up; a "
-    "runner delivers it as an input to the device under test and must "
-    "not instead infer a join from the expect_out that follows it -- see "
-    "`step_schema.kinds.join`.",
-    "In link_loss_keeps_display, the expect_frame step at t=8000 (inside "
-    "the link-down window that runs from t=2000 to t=17000) is "
-    "hand-authored, like the pair in timed_frames_hold_last: it repeats "
-    "the same pixels as the expect_frame at t=2000, the moment just "
-    "before the link fell, because during a link loss the device hears "
-    "none of whatever Control goes on sending (see "
-    "`step_schema.link_down_delivery`) and a runner must not compute "
-    "this one from a later control_sends step the way an ordinary "
-    "expect_frame would.",
+    f"In timed_frames_hold_last, the two /$DEV/leds control_sends steps "
+    f"at t={AUTHORED_PAIR_T} are hand-authored rather than captured from "
+    f"Control: the one with at={AUTHORED_NEWER_AT} (pure blue, GRB "
+    f"[0, 0, 255] repeated 12 times) is sent first, and the one with "
+    f"at={AUTHORED_OLDER_AT} (pure red, GRB [255, 0, 0] repeated 12 "
+    f"times) is sent second, so a runner that shows whichever arrived "
+    f"last would show the wrong one. Both are due by t={AUTHORED_CHECK_T}; "
+    f"the expect_frame steps at t={AUTHORED_CHECK_T} and t={HOLD_CHECK_T} "
+    f"both expect the newer one (at={AUTHORED_NEWER_AT}, blue), because a "
+    f"device must select the frame with the newest presentation time, "
+    f"not the one that arrived most recently.",
+    "An accept step is the person accepting the invite; a runner "
+    "delivers it as an input to the device under test and must not "
+    "instead infer an accept from the expect_out that follows it -- see "
+    "`step_schema.kinds.accept`. A runner must likewise never make the "
+    "device send /game/join: that verb is retired, and "
+    "join_retired_error records only Control's /$DEV/error answer to a "
+    "contract v2 device's join, with no step for the join itself.",
+    "Every round id in the files is the $ROUND placeholder (see "
+    "`step_schema.placeholders`): substitute one fixed string for it in "
+    "the control_sends steps a runner delivers, and expect the device to "
+    "echo that same string in its /game/handshake.",
+    f"In link_loss_keeps_display, the expect_frame step at t=9000 (inside "
+    f"the link-down window that runs from t={ROLE_SETTLED_T} to "
+    f"t={LINK_BACK_T}) is hand-authored, like the pair in "
+    f"timed_frames_hold_last: it repeats the same pixels as the "
+    f"expect_frame at t={ROLE_SETTLED_T}, the moment just before the "
+    f"link fell, because during a link loss the device hears none of "
+    f"whatever Control goes on sending (see "
+    f"`step_schema.link_down_delivery`) and a runner must not compute "
+    f"this one from a later control_sends step the way an ordinary "
+    f"expect_frame would.",
+    "Control sends role, deny, release, room, error, handshake and "
+    "validated over TCP and leds and play over UDP (each verb's "
+    "`transport` in `verbs`). The recordings do not mark the channel per "
+    "step; a bench replay that delivers over a real link should route "
+    "each verb the way its row says.",
 ]
 
 
