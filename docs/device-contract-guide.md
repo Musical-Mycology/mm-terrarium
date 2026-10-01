@@ -3,7 +3,7 @@
 **Audience:** whoever builds an embedded device that speaks to Control. Today
 that is Victor, who owns the Rev 1 ESP32-P4 firmware in **mm-devshroom**
 (checked out at `/Users/chris/projects/mm-devshroom` on Chris's machines).
-**Covers:** `contract_version` **3**, with **seventeen** recorded scenarios
+**Covers:** `contract_version` **3**, with **eighteen** recorded scenarios
 (`len(contract_kit.scenarios.ALL_SCENARIOS)`). Contract v3 replaces
 `/game/join` with the instrument handshake (hello, handshake, received
 handshake, validated, then one role per device at start) and moves every
@@ -13,7 +13,9 @@ scenarios) and the merged Dart runner in mm-tuneshroom
 ([PR #29](https://github.com/Musical-Mycology/mm-tuneshroom/pull/29)); a fix
 wave the same day added a `join` step kind and `link_loss_keeps_display`
 (`contract_version` 2). Rewritten 2026-10-01 for v3, which retires both the
-`join` step kind and `device.join_node`.
+`join` step kind and `device.join_node`; the same day's final fix wave
+made a lost link keep the role and round id (rule 9) and added
+`link_blip_keeps_role`.
 
 **Binding specs:** `docs/superpowers/specs/2026-10-01-instrument-handshake-protocol-design.md`
 (sections 3, 6 and 8: the protocol, the v3 kit, and the firmware checklist)
@@ -29,7 +31,7 @@ The contract is one checked description of the device wire: the verb table
 (every `/game/<verb>` a device may send and every `/<dev>/<verb>` Control may
 send, with typespecs, argument names, transport and whether it is allowed
 before a role), the Rev 1 instrument and its gesture thresholds, the lifecycle
-numbers, and seventeen recorded scenarios that pin what a device must do. It
+numbers, and eighteen recorded scenarios that pin what a device must do. It
 is owned by mm-terrarium, which implements it as Control. A device repo
 (mm-tuneshroom for the Flutter app, mm-devshroom for the board) commits an
 **export** of it and replays the scenarios against its own session code. The
@@ -220,7 +222,7 @@ unchanged; Rev 1 sends none of them.
 | 6 | `/release` ends the role; frames already queued still show and the last holds | `release_keeps_display` | a dim non-black frame at t=4000 and again at t=9000 after release at t=3621; tap, hold and swing quiet for 5 s; hello continues at t=5000 | release arrives untimed in the same millisecond as the fade's last frame, which is stamped 60 ms later (and on a real link they travel on different channels, TCP and UDP). Do not clear the queue or the pixels on release (spec D5); do keep the heartbeat |
 | 7 | `count` is the taps in one gesture and Rev 1 sends 1; stamps mark onset | `gestures_after_role`, `play_known_and_unknown`, `error_no_state_change`, `timed_frames_hold_last` | `expect_out` with `stamp_t` equal to the gesture's `onset_t`, within 1 ms; tap args `["$DEV", 0.0, <duration_ms>, 1]`, hold `["$DEV", <held_s>, 1]`, swing `["$DEV", <signed_g>, 1]` | `peak_g` is 0.0 for a touch tap. The O2 timestamp on the message is the onset time, so a hold released after 650 ms is stamped at touch-down. The accept double tap is the firmware's own business: it becomes `/game/handshake`, never two `/game/tap`s before a role |
 | 8 | An unknown sample is ignored; a malformed or unknown message is dropped; an `/error` changes nothing | `malformed_dropped`, `play_known_and_unknown`, `error_no_state_change`, `join_retired_error` | the three flagged steps at t=1200 are delivered, then a tap still sends, `tick` still plays and the role's frame still shows at t=3000; after a jammer's refused hold (`/error ["hold", "jammer role uses tap only"]`) a later tap still plays | validate the blob before touching state: a player device drops a `/leds` blob that is not exactly its own pixel count x 3 (36 bytes for Rev 1), never truncating (A2 already does this); a `/role` that does not decode to a JSON object with a `role` string is dropped |
-| 9 | No session resume: a lost link ends the role and the round id; after 15 s of silence Control has dropped the device, which starts over | `link_loss_rejoin` (in SETUP: hello, a fresh `/handshake`, accept, `/validated` again at t=17000 and 17300), `link_loss_keeps_display` (while RUNNING: hello at t=18000 and a fresh jam `/role`) | the `expect_out` hello after each `link: up`, and in `link_loss_rejoin` the second `/game/handshake` | `linkDown` drops the role and the round id. A device that wrongly kept its round id would answer nothing new; one that kept its role would send gestures with no role Control knows. A rev1 device keeps its last frame lit through the outage (section 8) |
+| 9 | A lost link keeps the role and the round id; a later message supersedes them: a new `/role` replaces the held role, a `/handshake` while a role is held ends that role (its round is over) and is a fresh invite, and `/release` ends the role (rule 6). After 15 s of silence Control has dropped the device, so its next hello is answered as a new device's | `link_blip_keeps_role` (back inside 15 s while RUNNING: hello at t=8000 and 13000, nothing re-sent, a tap at t=9000 still sends and plays `tick`), `link_loss_rejoin` (in SETUP: hello, a fresh `/handshake`, accept, `/validated` again at t=17000 and 17300), `link_loss_keeps_display` (while RUNNING: hello at t=18000 and a fresh jam `/role`) | the `expect_out` hello after each `link: up`; in `link_blip_keeps_role` the tap's `expect_out` and `expect_play`; in `link_loss_rejoin` the second `/game/handshake` | `linkDown` keeps the role, the round id and any validation, and stops the heartbeat. A device that dropped its role on a short blip would hold its gestures back (rule 2) and, since Control believes the role is still held, would never be sent another this round. A rev1 device keeps its last frame lit through the outage (section 8) |
 
 Two Control behaviors the recordings also show and a session must tolerate: a
 newly granted role opens with a signature of about 1.5 s that ignores light
@@ -257,8 +259,13 @@ fail without it.
    `late_hello_gets_jam`, `jam_solo_fallback`.)
 6. **On `/<dev>/release`:** keep the last frame, drop the role, stop
    gestures. (`release_keeps_display`.)
-7. **On link loss:** drop the role and the round id; start over on link-up.
-   (`link_loss_rejoin`, `link_loss_keeps_display`.)
+7. **On link loss:** keep the role and the round id (and any validation);
+   hello again on link-up. A later message supersedes them: a new
+   `/<dev>/role` replaces the held role; a `/<dev>/handshake` while a role
+   is held means that role's round is over, so drop the role (and the
+   validation) and treat the handshake as a fresh invite; `/<dev>/release`
+   ends the role as in item 6. (`link_blip_keeps_role`,
+   `link_loss_rejoin`, `link_loss_keeps_display`.)
 8. **Never send `/game/join`.** (`join_retired_error` shows the answer a v2
    device gets; no scenario ever asks a device to send it.)
 
@@ -380,14 +387,17 @@ of them wrong fails a replay.
 
 **Pinned only by its consequence:**
 
-- **"A lost link ends the role and the round id."** A device's internal state
-  never crosses the wire, so no exported step can name it. What the
-  scenarios check is what follows: in `link_loss_rejoin` the device accepts
-  the fresh invite after reconnecting (a device that kept a stale round id
-  would echo it and be dropped silently), and in `link_loss_keeps_display`
-  the device hellos from scratch and is granted a fresh jam role as a
-  running-round walk-up, not the scored role it held before (a scored slot is
-  won only in SETUP).
+- **"A lost link keeps the role and the round id."** A device's internal
+  state never crosses the wire, so no exported step can name it. What the
+  scenarios check is what follows: in `link_blip_keeps_role` a tap after a
+  reconnect inside 15 s still goes out and plays (a device that dropped its
+  role would hold it back); in `link_loss_rejoin` the device accepts the
+  fresh invite after a reap, with the round id that invite carried; and in
+  `link_loss_keeps_display` the fresh jam role Control grants the reaped
+  device as a running-round walk-up replaces the scored role it still held
+  (a scored slot is won only in SETUP). The `/handshake`-ends-a-held-role
+  half is not pinned by any scenario: Control only invites in SETUP, and no
+  recording reloads a Bit while a device holds a role.
 - **"Rev 1 keeps its display through a link loss."** `link_loss_keeps_display`
   holds a role across a link drop with a later `expect_frame` at t=9000
   (hand-authored, per `replay_notes`: this recorder cannot observe a device's

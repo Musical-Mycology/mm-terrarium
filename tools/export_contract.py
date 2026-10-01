@@ -91,12 +91,15 @@ def _hello_semantics_sentence() -> str:
             f"the bare \"{bare}\" form, but a device declares its "
             f"instrument in the fourth argument (\"{hello.args[-1]}\"), "
             f"and Rev 1 devices always send \"{longest}\". On \"down\", "
-            f"the device sends nothing and receives nothing. There is "
-            f"no session resume: after `lifecycle.stale_timeout_s` "
-            f"seconds of silence, Control has dropped the device, which "
-            f"must start over from hello and be invited and accept again "
-            f"(spec section 4.3, rule 7). A device forgets its role and "
-            f"its round id when the link goes down.")
+            f"the device sends nothing and receives nothing. A device "
+            f"keeps its role and its round id across a link loss and "
+            f"hellos again on \"up\"; a later message supersedes them: "
+            f"a new /$DEV/role replaces the held role, a /$DEV/handshake "
+            f"while a role is held ends that role and is a fresh invite, "
+            f"and /$DEV/release ends the role. After "
+            f"`lifecycle.stale_timeout_s` seconds of silence Control has "
+            f"dropped the device, so its next hello is answered as a new "
+            f"device's: an invite in SETUP, a jam role while RUNNING.")
 
 
 # What every step kind in every committed recording looks like: every
@@ -371,8 +374,8 @@ LIFECYCLE_NOTES = {
         "stays up (see `step_schema.kinds.link.semantics`)."
     ),
     "stale_timeout_s": (
-        "Seconds of silence after which Control has dropped a device, "
-        "which starts over on its next hello (see "
+        "Seconds of silence after which Control has dropped a device; "
+        "its next hello is answered as a new device's (see "
         "`step_schema.kinds.link.semantics`)."
     ),
     "cue_horizon_s": (

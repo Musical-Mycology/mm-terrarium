@@ -31,6 +31,7 @@ from contract_kit.contract_bit import (JAMMER_REFUSAL, KNOWN_SAMPLE,
 from contract_kit.recorder import CUE_HORIZON_S, ROOM_NODE_ID, Recorder
 from contract_kit.scenarios import (ACCEPT_AFTER_MS, ACCEPT_POLICY,
                                     ALL_SCENARIOS, AUTHORED_CHECK_T,
+                                    BLIP_BACK_T, BLIP_TAP_T,
                                     AUTHORED_NEWER_AT, AUTHORED_NEWER_GRB,
                                     AUTHORED_OLDER_AT, AUTHORED_OLDER_GRB,
                                     AUTHORED_PAIR_T, GOOD_ACCEPT_T,
@@ -664,6 +665,35 @@ def test_link_loss_keeps_display_holds_the_frame_and_starts_over():
     assert set(quiet["expect_quiet"]["addresses"]) == {
         "/game/hello", "/game/tap", "/game/hold", "/game/swing"}
     assert quiet["t"] + quiet["expect_quiet"]["for_ms"] == LINK_BACK_T
+
+
+def test_link_blip_keeps_role_sends_nothing_new_and_the_role_still_plays():
+    """Checklist item 7: a reconnect inside the 15 s stale timeout while
+    RUNNING. Control was never told anything happened, so it sends no
+    fresh /role, no /handshake and no /release; the device must still hold
+    the role it had, which the tap after the blip proves."""
+    data = _load("link_blip_keeps_role")
+    links = [(s["t"], s["link"]) for s in _kind(data, "link")]
+    assert links == [(0, "up"), (ROLE_SETTLED_T, "down"), (BLIP_BACK_T, "up")]
+    assert BLIP_BACK_T - ACCEPT_AFTER_MS < 15000
+    # The heartbeat halts with the link and resumes on its own grid.
+    assert [s["t"] for s in _outs(data, "/game/hello")] == [
+        0, BLIP_BACK_T, BLIP_BACK_T + 5000]
+    # One role, at start; nothing re-sent after the blip.
+    assert [s["t"] for s in _sends(data, "/$DEV/role")] == [START_T]
+    assert _role_blob(_sends(data, "/$DEV/role")[0])["role"] == "player"
+    for verb in ("/$DEV/handshake", "/$DEV/release", "/$DEV/room"):
+        assert [s for s in _sends(data, verb) if s["t"] >= ROLE_SETTLED_T] \
+            == [], verb
+    # A gesture after the blip goes out and plays: the role was kept.
+    tap = _outs(data, "/game/tap")
+    assert [s["t"] for s in tap] == [BLIP_TAP_T]
+    play = _kind(data, "expect_play")
+    assert [(s["t"], s["expect_play"]["name"]) for s in play] == [
+        (BLIP_TAP_T, KNOWN_SAMPLE)]
+    quiet = _kind(data, "expect_quiet")[0]
+    assert quiet["t"] == ROLE_SETTLED_T
+    assert quiet["t"] + quiet["expect_quiet"]["for_ms"] == BLIP_BACK_T
 
 
 @pytest.mark.parametrize("scenario_fn", ALL_SCENARIOS, ids=lambda f: f.__name__)

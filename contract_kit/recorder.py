@@ -365,7 +365,6 @@ class Recorder:
         self.advance_to(t_ms)
         self.steps.append({"t": t_ms, "link": "up"})
         self._linked_up = True
-        self._round_seen = None
         self._awaiting_invite = self.handshake is not None
         self._accept_due_ms = None
         self._next_hello_ms = t_ms + HELLO_INTERVAL_MS
@@ -374,13 +373,13 @@ class Recorder:
         self._run_due_device_sends()
 
     def link_down(self, t_ms: int) -> None:
-        """The device's link drops at `t_ms`: the heartbeat stops, and the
-        device forgets its round id and any pending accept (rule 7)."""
+        """The device's link drops at `t_ms`: the heartbeat stops and any
+        pending policy accept is dropped. The device keeps its round id
+        (guide rule 9): only a later /$DEV/handshake replaces it."""
         self.advance_to(t_ms)
         self.steps.append({"t": t_ms, "link": "down"})
         self._linked_up = False
         self._next_hello_ms = None
-        self._round_seen = None
         self._awaiting_invite = False
         self._accept_due_ms = None
 

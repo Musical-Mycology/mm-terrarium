@@ -1,7 +1,7 @@
 """The device contract kit scenarios, contract v3 (docs/superpowers/specs/
 2026-09-16-device-contract-kit-design.md sections 4.3 and 5.4, as amended by
 2026-10-01-instrument-handshake-protocol-design.md section 6). There are
-len(ALL_SCENARIOS) of them: seventeen.
+len(ALL_SCENARIOS) of them: eighteen.
 
 Each function takes no arguments, builds its own Recorder, and returns an
 EXPORT FORMAT v1 scenario dict recorded from the REAL Control engine.
@@ -37,7 +37,8 @@ recording:
    records Control's answer to one without any step for the join itself.
 
 One rule for replay runners, which applies to every scenario and bites in
-`link_loss_rejoin` and `link_loss_keeps_display`: a runner must not deliver
+`link_loss_rejoin`, `link_loss_keeps_display` and `link_blip_keeps_role`:
+a runner must not deliver
 any `control_sends` step while the scenario's link is down. Those steps
 record what Control really sends, and a device with its link down receives
 none of them.
@@ -93,6 +94,11 @@ ROOM_ACCEPT_T = 1000
 LEGACY_JOIN_T = 200
 # link_loss_keeps_display: the link is back past the 15 s stale timeout.
 LINK_BACK_T = 18000
+# link_blip_keeps_role: the link drops at ROLE_SETTLED_T and is back well
+# inside the 15 s stale timeout (the device last spoke at ACCEPT_AFTER_MS),
+# then a tap proves the role was kept.
+BLIP_BACK_T = 8000
+BLIP_TAP_T = 9000
 
 # timed_frames_hold_last. The look's glide (taps at ROLE_SETTLED_T) has
 # stopped sending frames by LOOK_SETTLED_T. Then the hand-authored pair:
@@ -546,13 +552,17 @@ def play_known_and_unknown() -> dict:
 
 
 def link_loss_rejoin() -> dict:
-    """Rule 7: there is no session resume. The link drops, the heartbeat
-    stops with it, and 15 s after the device last spoke Control reaps it.
-    When the link comes back the device hellos from scratch, is invited
-    again with a fresh `/$DEV/handshake`, accepts again, and is validated
-    again. The round stays in SETUP throughout, so this is the
-    validation half of rule 7; `link_loss_keeps_display` is the half with
-    a role held.
+    """Guide rule 9 (checklist item 7), in SETUP: the link drops, the
+    heartbeat stops with it, and 15 s after the device last spoke Control
+    reaps it. The device itself keeps its round id and its validation
+    across the loss; it has no way to know it was reaped. When the link
+    comes back it hellos, and Control, which no longer knows it, invites
+    it again with `/$DEV/handshake`. That invite supersedes whatever the
+    device held: it takes the invite's round id (the same `$ROUND`, since
+    the Bit was never reloaded), accepts again, and is validated again.
+    The round stays in SETUP throughout, so this is the validation half;
+    `link_loss_keeps_display` and `link_blip_keeps_role` are the halves
+    with a role held.
 
     The reaped device held a validation but no role, so the reap sends
     nothing to it at all (no fade, no `/release`): there was nothing to
@@ -643,19 +653,21 @@ def malformed_dropped() -> dict:
 
 
 def link_loss_keeps_display() -> dict:
-    """Rule 8's two device-side halves: a lost link ends the device's
-    held role, in every profile, and a rev1 device (the board, and the
-    app's rev1 profile) keeps its last frame lit through the loss until a
-    fresh role's own frames replace it. The heartbeat halts while the
-    link is down (rule 1's own "while the link stays up").
+    """Guide rule 9 (checklist item 7) past the 15 s stale timeout while
+    RUNNING: the device KEEPS its held role and round id across the loss,
+    in every profile, and a rev1 device (the board, and the app's rev1
+    profile) keeps its last frame lit through the loss. The heartbeat
+    halts while the link is down (rule 1's own "while the link stays up").
 
-    "Role ends" is not itself something a device sends over the wire, so
-    nothing here checks it directly. What IS wire-observable is the fresh
-    start once the link is back: the device hellos (t=LINK_BACK_T), and
-    because the round is RUNNING by then and Control reaped it during the
-    outage, that hello is a RUNNING walk-up and is answered with a fresh
-    `/$DEV/role`, the JAM role this time, not the scored role it held
-    before (a scored slot is only ever won in SETUP).
+    Control reaps the silent device during the outage, so the fade and
+    `/$DEV/release` it sends then are never heard. Once the link is back
+    the device hellos (t=LINK_BACK_T); Control no longer knows it, so that
+    hello is a RUNNING walk-up and is answered with a fresh `/$DEV/role`,
+    the JAM role this time, not the scored role the device still holds (a
+    scored slot is only ever won in SETUP). The new `/role` supersedes the
+    held one, and its frames replace the held look. A device that dropped
+    its role on the loss passes this file too; `link_blip_keeps_role` is
+    the scenario that tells the two apart.
 
     The outage-window `expect_frame` is HAND-AUTHORED
     (`Recorder.expect_frame_held`), like the pair in
@@ -674,10 +686,10 @@ def link_loss_keeps_display() -> dict:
     section 7) before mm-devshroom's replay tests adopt this scenario.
     """
     rec = Recorder(name="link_loss_keeps_display",
-                   summary="A lost link ends the role and halts the "
-                           "heartbeat; a rev1 device keeps its last frame "
-                           "lit through the outage and starts over once "
-                           "the link is back",
+                   summary="A lost link halts the heartbeat; a rev1 device "
+                           "keeps its last frame lit through the outage, "
+                           "and once the link is back past the 15 s "
+                           "timeout a fresh jam role replaces the held one",
                    handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
@@ -699,6 +711,43 @@ def link_loss_keeps_display() -> dict:
     return rec.finish()
 
 
+
+def link_blip_keeps_role() -> dict:
+    """Guide rule 9 (checklist item 7) inside the 15 s stale timeout while
+    RUNNING: the link drops at t=ROLE_SETTLED_T and is back at
+    t=BLIP_BACK_T, before Control has noticed anything. Control sends
+    nothing new: no `/$DEV/role`, no `/$DEV/handshake`, no `/$DEV/release`,
+    no `/$DEV/room`. The device must therefore still hold the scored role
+    it had: it hellos on link-up and every 5 s from there, and a tap at
+    t=BLIP_TAP_T goes out and plays the role's `tick`. A device that
+    dropped its role on the loss would hold back that tap (rule 2) and
+    fail, and nothing would ever give it a role again this round.
+    """
+    rec = Recorder(name="link_blip_keeps_role",
+                   summary="A link that drops and returns inside 15 s while "
+                           "RUNNING changes nothing: no role is re-sent and "
+                           "the held role still plays",
+                   handshake=ACCEPT_POLICY)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)                # the settled role look
+    rec.link_down(ROLE_SETTLED_T)
+    rec.expect_quiet(ROLE_SETTLED_T,
+                     ["/game/hello", "/game/tap", *POST_ROLE_GESTURES],
+                     BLIP_BACK_T - ROLE_SETTLED_T)
+    rec.link_up(BLIP_BACK_T)
+    rec.expect_hello(BLIP_BACK_T)
+    rec.tap(BLIP_TAP_T, duration_ms=80.0)
+    rec.expect_play(BLIP_TAP_T, "tick")
+    rec.advance_to(BLIP_BACK_T + 5000)
+    rec.expect_hello(BLIP_BACK_T + 5000)
+    rec.advance_to(BLIP_BACK_T + 5500)
+    return rec.finish()
+
 ALL_SCENARIOS: tuple[Callable[[], dict], ...] = (
     boot_hello_heartbeat,
     handshake_validate_then_role,
@@ -717,4 +766,5 @@ ALL_SCENARIOS: tuple[Callable[[], dict], ...] = (
     error_no_state_change,
     malformed_dropped,
     link_loss_keeps_display,
+    link_blip_keeps_role,
 )

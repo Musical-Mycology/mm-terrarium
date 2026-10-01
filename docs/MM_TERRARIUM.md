@@ -1623,7 +1623,7 @@ firmware guide: `docs/device-contract-guide.md`.
 - **`contract_kit/`**: a test-only `ContractBit` (never under `bits/`) and
   a `Recorder` driving the real engine and agent over `FakeO2Lite`,
   deterministically, at `CUE_HORIZON_S` (read off `BootConfig`).
-  Seventeen scenarios sit in `contract_kit/recordings/`; `.venv/bin/python -m
+  Eighteen scenarios sit in `contract_kit/recordings/`; `.venv/bin/python -m
   tools.record_scenarios` re-records; `tests/test_contract_scenarios.py`
   fails on any diff.
 - **Export**: `.venv/bin/python -m tools.export_contract <out-dir>` writes
@@ -1642,7 +1642,9 @@ firmware guide: `docs/device-contract-guide.md`.
   (replacing `explicit_join_role` and `lobby_tap_join`),
   `handshake_over_cap_deny`, `handshake_stale_round`,
   `late_hello_gets_jam`, `jam_solo_fallback`, `room_node_handshake_binds`,
-  `join_retired_error`. `ContractBit` declares a bounded scored role and a
+  `join_retired_error`, `link_blip_keeps_role` (a device keeps its role
+  and round id across a link loss until a later `/role`, `/handshake` or
+  `/release` supersedes them). `ContractBit` declares a bounded scored role and a
   jam role; `SoloContractBit` (no jam role) backs `jam_solo_fallback`. The firmware-side rules and the v3 checklist are in
   `docs/device-contract-guide.md`.
 - **The change flow is one-way**: change the table (and Control) here,

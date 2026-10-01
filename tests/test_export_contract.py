@@ -195,7 +195,7 @@ def test_lifecycle_notes_cover_every_lifecycle_key_with_units():
     assert "millisecond" in notes["bench_tolerance_ms"].lower()
 
 
-def test_link_semantics_state_the_heartbeat_and_no_resume_rules():
+def test_link_semantics_state_the_heartbeat_and_keep_role_rules():
     data = export_contract(commit="abc123")
     semantics = data["step_schema"]["kinds"]["link"]["semantics"]
     hello = row_for("up", "hello")
@@ -206,7 +206,13 @@ def test_link_semantics_state_the_heartbeat_and_no_resume_rules():
         assert arg in semantics
     assert "hello_interval_s" in semantics
     assert "stale_timeout_s" in semantics
-    assert "start over" in semantics and "accept again" in semantics
+    # Guide rule 9: the role and round id survive a link loss until a
+    # later /role, /handshake or /release supersedes them.
+    assert "keeps its role and its round id" in semantics
+    assert "supersedes" in semantics
+    for verb in ("/$DEV/role", "/$DEV/handshake", "/$DEV/release"):
+        assert verb in semantics
+    assert "start over" not in semantics
     assert "nothing" in semantics  # link-down: sends/receives nothing
 
 
