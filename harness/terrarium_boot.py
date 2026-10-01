@@ -29,6 +29,7 @@ from control.join_info import build_join_info
 from control.room_binding import RoomBindingRegistry
 from control.run_profile import RunProfile, deep_merge_overrides, parse_profile
 from control.simulator_process import SimulatorProcess
+from control.lobby import TERRARIUM_ADMIN
 from control.start_condition import scored_count, timer_decision
 from control.state import State
 from control.teardown import TeardownStack
@@ -576,7 +577,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     predicate rather than a second one. A SIGKILLed or OOM-killed
     run_stack cannot signal this process, so the only way to notice is to
     keep asking. Returns "parent-gone" if that fired, so main() can skip
-    straight to shutdown() instead of calling gs.run() into a stack whose
+    straight to shutdown() instead of starting a round in a stack whose
     supervisor is already gone.
 
     console_agent, when given, is polled once per iteration too -- a device
@@ -619,7 +620,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     one-shot mode must announce nothing -- same gating as the other two
     CONTROL_ROUND_LOADED emit sites). The "state-changed" return itself
     always fires either way regardless of the flag, so the caller's
-    handoff handling (gs.run() or hand off) is unaffected by it.
+    handoff handling (a timer start through gs.request_start, or hand off) is unaffected by it.
 
     Returns "expired", "parent-gone", "state-changed", "players-met",
     "timeout-start", or "timeout-abort".
@@ -860,7 +861,8 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
          state-change escape.
       4. "timeout-abort" -- the operator (or nobody) never met the start
          condition: `gs.abort()` and go straight to the next round rather
-         than running an unmet Bit. Otherwise `gs.run()`, but ONLY if the
+         than running an unmet Bit. Otherwise a timer start through
+         `gs.request_start(None, TERRARIUM_ADMIN, "timer")`, but ONLY if the
          engine is still in SETUP -- the same operator-handoff guard
          main() applies to round 1, since the Console is a second driver
          that can move the engine on its own during the hold.
@@ -916,7 +918,7 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
             _end_round(bit_name, f"timeout-abort ({scored} scored joined)")
             continue
         if gs.state is State.SETUP:
-            gs.run()
+            gs.request_start(None, TERRARIUM_ADMIN, "timer")
         # else: the operator already drove the engine from the Console
         # during the hold -- a handoff, not an error (same guard main()
         # applies to round 1).
@@ -2087,7 +2089,7 @@ def main() -> None:
                         stop_clients=stop_clients, uplink=uplink))
             else:
                 if gs.state is State.SETUP:
-                    gs.run()
+                    gs.request_start(None, TERRARIUM_ADMIN, "timer")
                 else:
                     # The operator drove the engine from the Console during
                     # the hold. That is a handoff, not an error: run() from
