@@ -165,6 +165,14 @@ Device repos never change a verb or a scenario themselves. The wire changes only
 
 **Rules the scenarios pin:**
 
+> **Amended by contract v3 (2026-10-01).** Rules 2, 7 and 8 below are superseded by
+> `docs/superpowers/specs/2026-10-01-instrument-handshake-protocol-design.md`
+> section 8 item 7 and `docs/device-contract-guide.md` rule 9: there is no
+> `/game/join` (devices accept a `/handshake` instead), and a lost link no
+> longer ends the held role. A device keeps its role and round id across a
+> link loss; a later `/role` replaces it and a `/handshake` arriving while a
+> role is held ends it. The guide is current; the text below is the v2 record.
+
 1. Hello goes out only once the link is up, then repeats every 5 s over TCP.
 2. Before a role, a device sends only `hello`, `join`, `start` and `tap`. Simulators may also send `canvas`.
 3. A frame shows at its presentation time. When several are due, only the newest shows. The last frame holds through silence.
