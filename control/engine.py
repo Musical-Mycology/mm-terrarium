@@ -300,8 +300,10 @@ class GameServer:
         before_carried = before.carried if before is not None else None
         info = self.devices.hello(dev, name, protoversion, self._clock(),
                                   carried=carried)
-        if before is None or info.carried is not before_carried:
-            # First contact or a changed instrument only: a heartbeat
+        if before is None or info.carried is not before_carried \
+                or info.name != before.name:
+            # First contact, a changed instrument or a changed name (the
+            # Console shows it) only: a heartbeat
             # re-hello (every HELLO_INTERVAL_S) is proof of life, not news.
             self._notify("on_devices_change")
         if self.state is State.RUNNING and self.registration is not None \
@@ -550,7 +552,8 @@ class GameServer:
         if not self.lobby_config().enabled:
             return None
         cap = self.registration.scored_cap()
-        if cap is not None and len(self.registration.validated) >= cap:
+        # cap 0 (no scored roles) waits: there is nothing to fill.
+        if cap and len(self.registration.validated) >= cap:
             return LobbyState.FULL.name
         return LobbyState.WAITING.name
 
@@ -632,6 +635,9 @@ class GameServer:
         non-ROOM result is a VALIDATION only: `config` is None and no role
         exists until run() materializes it. A stale round_id returns a
         non-granted result with reason None: dropped, not denied."""
+        if self.devices.get(dev) is None:
+            return JoinResult(granted=False, reason="not connected",
+                              hint="send /game/hello first")
         if self.registration is None:
             return JoinResult(granted=False, reason="registration closed",
                               hint="no Bit loaded")
@@ -643,9 +649,11 @@ class GameServer:
             if result.granted:
                 self._bind_room(dev)
             return result
-        if self.devices.get(dev) is None:
-            return JoinResult(granted=False, reason="not connected",
-                              hint="send /game/hello first")
+        if self.room is not None and dev in self.room.bound.values():
+            # A bound fixture never validates a scored slot: materialize
+            # would overwrite its ROOM assignment and leak that count.
+            return JoinResult(granted=False, reason="registration closed",
+                              hint="this device is bound to a Room fixture")
         if self.bit is None or self.state is not State.SETUP:
             hint = ("scored slots open only in SETUP; you will get a jam "
                     "role at start" if self.state is State.RUNNING
@@ -677,7 +685,8 @@ class GameServer:
             if reason is not None:
                 self.registration.release(dev)
                 return JoinResult(granted=False, reason=reason,
-                                  hint=f"this role needs slot {role.requires!r}")
+                                  hint="this role needs: "
+                                  + ", ".join(sorted(req.capabilities)))
         self._notify("on_registration_change")
         return result
 
@@ -935,7 +944,10 @@ class GameServer:
         if fn is None:
             return None
         at = self._origin(gesture_time) + self._horizon
-        self.fire_function(fn, fired_by=FIRED_BY_GESTURE_VERB, dev=dev, at=at)
+        reason = self.fire_function(fn, fired_by=FIRED_BY_GESTURE_VERB,
+                                    dev=dev, at=at)
+        if reason is not None:
+            logger.info("solo binding %r for %s refused: %s", fn, dev, reason)
         return None
 
     def _fixture_target(self, name: str) -> str:

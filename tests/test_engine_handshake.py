@@ -8,6 +8,7 @@ from control.bit import Bit
 from control.bit_config import (BitConfig, BitIdentity, ConsoleBlock,
                                 LaunchConfig, StartCondition)
 from control.engine import BitLoadError, GameServer
+from control.instrument import InstrumentRequirement
 from control.lobby import LobbyConfig
 from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
@@ -98,6 +99,56 @@ def test_handshake_validates_default_node_without_role_send():
     assert r.config is None
     assert grants == [] and gs.bit.joined == []
     assert "a" in gs.registration.validated
+
+
+def test_hello_name_change_fires_devices_change():
+    gs, _ = _gs()
+    seen = []
+    gs.add_observer(type("O", (), {"on_devices_change":
+                    lambda self: seen.append(1)})())
+    gs.hello("a", "One", "", None)
+    gs.hello("a", "One", "", None)
+    assert seen == [1]
+    gs.hello("a", "Renamed", "", None)
+    assert seen == [1, 1]
+
+
+class _MicBit(_Bit):
+    """The scored role requires a slot demanding audio.mic, which
+    defaultshroom lacks and tuneshroom has."""
+
+    @property
+    def role_table(self):
+        t = super().role_table
+        t.roles["player"] = Role("player", RoleClass.UNIQUE, self._cap, True,
+                                 requires="hand")
+        return t
+
+    def instrument_requirements(self):
+        return (InstrumentRequirement(
+            slot="hand", capabilities=frozenset({"audio.mic",
+                                                 "light.pixels"})),)
+
+
+def test_requires_miss_denies_with_slot_contract_hint():
+    gs, _ = _gs(_MicBit)
+    gs.hello("a", "", "", None)                 # defaultshroom
+    r = gs.handshake("a", gs.round_id, "")
+    assert not r.granted and "lacks capability" in r.reason
+    assert r.hint == "this role needs: audio.mic, light.pixels"
+    assert gs.registration.validated == {}
+    gs.hello("b", "", "", "tuneshroom")
+    assert gs.handshake("b", gs.round_id, "").granted
+
+
+def test_solo_refusal_is_logged(caplog, monkeypatch):
+    gs, _ = _gs(_NoJamBit)
+    gs.hello("c", "", "", "tuneshroom")
+    gs.request_start(None, "terrarium", "test")
+    monkeypatch.setattr(gs, "fire_function", lambda *a, **k: "nope")
+    with caplog.at_level("INFO", logger="control.engine"):
+        assert gs.data("c", "tap", ["c", 1.0, 50.0, 1]) is None
+    assert any("refused: nope" in rec.getMessage() for rec in caplog.records)
 
 
 def test_handshake_names_unknown_node():
@@ -334,8 +385,30 @@ def _room_gs():
 
 def test_room_node_handshake_denied_while_unarmed():
     gs, _, _ = _room_gs()
+    gs.hello("fx", "", "", None)
     r = gs.handshake("fx", "any-round", "ROOM_TEST_NODE")
     assert r.reason == "no such node"
+
+
+def test_room_node_handshake_without_hello_is_not_connected():
+    # Spec 3.4 step 1 precedes the Room-node branch, armed or not.
+    gs, binding, _ = _room_gs()
+    binding.arm("TEST", "main", window_seconds=10.0)
+    r = gs.handshake("fx", "any-round", "ROOM_TEST_NODE")
+    assert r.reason == "not connected"
+    assert gs.room.bound == {}
+
+
+def test_bound_fixture_cannot_validate_a_scored_slot():
+    gs, binding, grants = _room_gs()
+    binding.arm("TEST", "main", window_seconds=10.0)
+    gs.hello("fx", "", "", None)
+    assert gs.handshake("fx", gs.round_id, "ROOM_TEST_NODE").granted
+    r = gs.handshake("fx", gs.round_id, "")
+    assert r.reason == "registration closed"
+    assert r.hint == "this device is bound to a Room fixture"
+    assert gs.registration.validated == {}
+    assert gs.registration.assignments["fx"][2] is RoleClass.ROOM
 
 
 def test_room_node_handshake_binds_and_skips_jam_sweep():
@@ -367,9 +440,9 @@ def test_lobby_uncapped_scored_role_never_fills():
     assert gs.lobby_state() == "WAITING"
 
 
-def test_lobby_without_scored_roles_is_full():
-    # Cap 0: no scored slot to offer, so no invites (spec 3.4: the lobby
-    # is FULL when the cap is reached); everyone gets a jam role at start.
+def test_lobby_without_scored_roles_waits():
+    # Cap 0: nothing to fill, so the lobby waits; everyone gets a jam role
+    # at start.
     class _JamOnly(Bit):
         @property
         def role_table(self):
@@ -378,4 +451,4 @@ def test_lobby_without_scored_roles_is_full():
                 node_map={"J": ["jammer"]})
     gs = GameServer({"J": _JamOnly})
     gs.load_bit("J")
-    assert gs.lobby_state() == "FULL"
+    assert gs.lobby_state() == "WAITING"
