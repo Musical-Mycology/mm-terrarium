@@ -27,3 +27,11 @@ def test_second_device_gets_solo():
     gs.hello("b", "", "", "tuneshroom")
     gs.request_start(None, "terrarium", "test")
     assert grants == [("a", "player"), ("b", "solo:tuneshroom")]
+
+
+def test_update_completes_after_twenty_seconds_running():
+    from bits.solotest.bit import SoloTestBit
+    bit = SoloTestBit()
+    bit.on_run_start()
+    assert bit.update(19.9) is False
+    assert bit.update(0.1) is True

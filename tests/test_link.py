@@ -278,7 +278,9 @@ def test_the_reserved_terrarium_id_never_appears_in_players():
     server.tick(3.0)
     completed = [m for m in transport.sent if m["event"] == "bit_completed"]
     # The reserved id is excluded from players however it was validated.
-    assert [p["dev"] for p in completed[0]["players"]] == ["ie1"]
+    # "terrarium" took the scored slot, so ie1 is the jammer.
+    assert completed[0]["players"] == [
+        {"dev": "ie1", "role": "jammer", "class": "jam"}]
 
 
 class FlakyTransport(FakeTransport):

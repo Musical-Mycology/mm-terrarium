@@ -153,8 +153,8 @@ class _RaisingBit:
 def test_list_view_carries_a_role_summary_for_testbit():
     registry = BitRegistry.discover()
     row = next(r for r in registry.list_view() if r["name"] == "TestBit")
-    # TestBit: scored UNIQUE 'player' (capacity 1, not shared) + unscored JAM 'jammer' (+ hidden ROOM roles, which
-    # must NOT be counted).
+    # TestBit: scored UNIQUE 'player' (capacity 1, not shared) + unscored
+    # JAM 'jammer' (+ hidden ROOM roles, which must NOT be counted).
     assert row["roles"] == {"scored": 1, "shared_open": False, "jam_open": True}
 
 
