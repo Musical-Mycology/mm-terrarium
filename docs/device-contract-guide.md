@@ -107,7 +107,7 @@ Inside `step_schema`:
   `malformed`), `gesture` (`kind`, `onset_t`, then `duration_ms` for tap,
   `held_s` for hold, `signed_g` for swing) and `accept` (`node`, optional
   `round_id`). Four are expectations: `expect_out` (`address`, `typespec`,
-  `args`, `stamp_t`, `within_ms`), `expect_frame` (`grb`, 36 ints),
+  `args`, `stamp_t`, `within_ms`), `expect_frame` (`grb`, 36 ints; see the `/leds` row for Room-bound frames),
   `expect_play` (`name`, `params`, `within_ms`) and `expect_quiet`
   (`addresses`, `for_ms`).
 - `control_sends.at` is the presentation time on the `t` timeline. Only
@@ -197,7 +197,7 @@ must accept (down) the verb before it holds a role.
 | `/<dev>/release` | down | (none) | TCP | no | Ends the role; does not clear the display |
 | `/<dev>/room` | down | `b` blob | TCP | yes | Informational; hardware may ignore it |
 | `/<dev>/error` | down | `ss` context, message | TCP | yes | A refusal that changes no state |
-| `/<dev>/leds` | down | `b` 36-byte GRB frame | UDP | yes | High rate; loss tolerated. Also carries the lobby's white invite and green ceremony flashes when a Room is loaded |
+| `/<dev>/leds` | down | `b` GRB frame: a player device's own pixel count x 3 (36 bytes for the 12 px Rev 1); a Room-bound device's frames are its fixture's channel count (the TEST fixture is 180), which a device that only ever plays need not support | UDP | yes | High rate; loss tolerated. Also carries the lobby's white invite and green ceremony flashes when a Room is loaded |
 | `/<dev>/play` | down | `ss` name, params | UDP | no | A device-local sample by name |
 | `/game/start` | up | `ss` dev, key | TCP | yes | A keyed admin start; Rev 1 does not send it |
 | `/game/tap` | up | `sffi` dev, peak_g, duration_ms, count | UDP | no | Gameplay only; Control never reads a tap as a join |
@@ -219,7 +219,7 @@ unchanged; Rev 1 sends none of them.
 | 5 | A frame shows at its presentation time; when several are due only the newest shows; the last holds through silence | `timed_frames_hold_last` | pixels at t=3000, 6500, 7500 and 13000 | **newest by presentation time, not by arrival.** The two `/leds` steps at t=7000 are hand-authored: blue with `at` 7200 is sent first, red with `at` 7100 second. Both expect_frames at 7500 and 13000 want blue. Plan Task A3's `FrameQueue::due` picks the most recently pushed due frame and drops the rest, so it shows red and fails here. Select by greatest `at`, ties to the later arrival; drop an older timed arrival than the frame on screen |
 | 6 | `/release` ends the role; frames already queued still show and the last holds | `release_keeps_display` | a dim non-black frame at t=4000 and again at t=9000 after release at t=3621; tap, hold and swing quiet for 5 s; hello continues at t=5000 | release arrives untimed in the same millisecond as the fade's last frame, which is stamped 60 ms later (and on a real link they travel on different channels, TCP and UDP). Do not clear the queue or the pixels on release (spec D5); do keep the heartbeat |
 | 7 | `count` is the taps in one gesture and Rev 1 sends 1; stamps mark onset | `gestures_after_role`, `play_known_and_unknown`, `error_no_state_change`, `timed_frames_hold_last` | `expect_out` with `stamp_t` equal to the gesture's `onset_t`, within 1 ms; tap args `["$DEV", 0.0, <duration_ms>, 1]`, hold `["$DEV", <held_s>, 1]`, swing `["$DEV", <signed_g>, 1]` | `peak_g` is 0.0 for a touch tap. The O2 timestamp on the message is the onset time, so a hold released after 650 ms is stamped at touch-down. The accept double tap is the firmware's own business: it becomes `/game/handshake`, never two `/game/tap`s before a role |
-| 8 | An unknown sample is ignored; a malformed or unknown message is dropped; an `/error` changes nothing | `malformed_dropped`, `play_known_and_unknown`, `error_no_state_change`, `join_retired_error` | the three flagged steps at t=1200 are delivered, then a tap still sends, `tick` still plays and the role's frame still shows at t=3000; after a jammer's refused hold (`/error ["hold", "jammer role uses tap only"]`) a later tap still plays | validate the blob before touching state: a `/leds` blob that is not exactly 36 bytes is dropped, never truncated (A2 already does this); a `/role` that does not decode to a JSON object with a `role` string is dropped |
+| 8 | An unknown sample is ignored; a malformed or unknown message is dropped; an `/error` changes nothing | `malformed_dropped`, `play_known_and_unknown`, `error_no_state_change`, `join_retired_error` | the three flagged steps at t=1200 are delivered, then a tap still sends, `tick` still plays and the role's frame still shows at t=3000; after a jammer's refused hold (`/error ["hold", "jammer role uses tap only"]`) a later tap still plays | validate the blob before touching state: a player device drops a `/leds` blob that is not exactly its own pixel count x 3 (36 bytes for Rev 1), never truncating (A2 already does this); a `/role` that does not decode to a JSON object with a `role` string is dropped |
 | 9 | No session resume: a lost link ends the role and the round id; after 15 s of silence Control has dropped the device, which starts over | `link_loss_rejoin` (in SETUP: hello, a fresh `/handshake`, accept, `/validated` again at t=17000 and 17300), `link_loss_keeps_display` (while RUNNING: hello at t=18000 and a fresh jam `/role`) | the `expect_out` hello after each `link: up`, and in `link_loss_rejoin` the second `/game/handshake` | `linkDown` drops the role and the round id. A device that wrongly kept its round id would answer nothing new; one that kept its role would send gestures with no role Control knows. A rev1 device keeps its last frame lit through the outage (section 8) |
 
 Two Control behaviors the recordings also show and a session must tolerate: a
@@ -318,7 +318,7 @@ mm-tuneshroom), restated for a C or C++ test build and updated for v3.
    | `expect_out` | address and typespec equal; args element-wise with `$DEV`, `$ROUND` (the fixed string from rule 3), `*` and numbers within 1e-3; send time in `[t, t + within_ms]` inclusive; when `stamp_t` is non-null the message's stamp within 1 ms of it. Consume the matched send so two identical expectations need two sends (the two taps at t=3000 in `timed_frames_hold_last`) |
    | `expect_play` | name equal; params equal after turning `key=$KEY` into `key=<integer>`; time in `[t, t + within_ms]`; consumed |
    | `expect_quiet` | no send of a listed address with time in `[t, t + for_ms)`, half-open |
-   | `expect_frame` | all 36 values equal at `t`, or else all 36 equal at `t + 23` |
+   | `expect_frame` | all 36 values equal at `t`, or else all 36 equal at `t + 23`. Never applied to a Room-bound scenario: `room_node_handshake_binds` has no `expect_frame` after the bind, because its frames are the fixture's width (180 for the TEST fixture), not 36 |
    | malformed `control_sends` | state equal, frame equal, no effects |
 
 8. **Loud on drift.** An unknown step kind (including the retired `join`), an

@@ -407,8 +407,10 @@ def test_room_node_handshake_binds_with_no_validated_and_no_role():
     assert _sends(data, "/$DEV/deny") == []
     fixture_frames = [s for s in _frames(data) if s["t"] >= ROOM_ACCEPT_T]
     assert fixture_frames and fixture_frames[0]["t"] == ROOM_ACCEPT_T
-    last = _kind(data, "expect_frame")[-1]
-    assert last["t"] > ROOM_ACCEPT_T and set(last["expect_frame"]["grb"]) != {255}
+    # Room-bound frames are the fixture's width (180 for the TEST fixture),
+    # not 36: no display expectation may follow the bind.
+    assert all(s["t"] < ROOM_ACCEPT_T for s in _kind(data, "expect_frame"))
+    assert len(fixture_frames[0]["control_sends"]["args"][0]) == 180
 
 
 def test_join_retired_error_answers_and_changes_nothing():

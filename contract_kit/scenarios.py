@@ -300,6 +300,16 @@ def room_node_handshake_binds() -> dict:
     accept (the frames at t=0 and t=414), alongside the `/$DEV/handshake`
     invite itself. The node id is Control's own; the device learns it from
     an NFC tag or QR code, never from this wire.
+
+    There is deliberately no `expect_frame` after the accept. Once bound,
+    Control sends the device its FIXTURE's slice (the TEST fixture is 60 px
+    GRB, 180 values), not a 12 px, 36-value player frame, so no 12-pixel
+    device could pass a display check there. That the fixture's `/$DEV/leds`
+    frames begin arriving at the accept is pinned by the recorded
+    `control_sends` themselves (inputs a runner delivers); the only
+    expectation a device can fail here is the `/game/handshake` it sends.
+    The one `expect_frame` at t=150 is the pre-bind invite flash, a normal
+    36-value frame.
     """
     rec = Recorder(name="room_node_handshake_binds",
                    summary="Accepting with the Room node binds an armed "
@@ -313,7 +323,6 @@ def room_node_handshake_binds() -> dict:
     rec.arm_fixture(ARM_T)
     rec.accept(ROOM_ACCEPT_T, node=ROOM_NODE_ID)
     rec.advance_to(ROOM_ACCEPT_T + 500)
-    rec.expect_frame(ROOM_ACCEPT_T + 500)
     return rec.finish()
 
 

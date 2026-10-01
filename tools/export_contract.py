@@ -217,8 +217,13 @@ STEP_SCHEMA = {
                 "typespec": "str; the O2 typespec the message was sent with.",
                 "args": (
                     "list; decoded arguments -- role and room args[0] "
-                    "is a JSON object, leds args[0] is a list of 36 "
-                    "ints (0-255), GRB, 3 per pixel, 12 pixels. A "
+                    "is a JSON object, leds args[0] is a list of ints "
+                    "(0-255), GRB, 3 per pixel: 36 ints (12 pixels) "
+                    "for a player device, but a Room-bound device's "
+                    "frames (after an accept naming the Room node, as "
+                    "in room_node_handshake_binds) are its fixture's "
+                    "channel count, which a device that only ever "
+                    "plays need not support. A "
                     "string argument may carry the $KEY placeholder "
                     "(see placeholders)."
                 ),
@@ -315,7 +320,10 @@ STEP_SCHEMA = {
             "fields": {
                 "grb": (
                     "list of 36 ints, 0-255: 12 pixels x 3 channels, "
-                    "green-red-blue order."
+                    "green-red-blue order. A player device's own "
+                    "frame width; no scenario asserts a Room-bound "
+                    "frame, so a runner must not apply the 36-value "
+                    "check to one."
                 ),
             },
         },
