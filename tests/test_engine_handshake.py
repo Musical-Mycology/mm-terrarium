@@ -509,3 +509,28 @@ def test_jam_class_preferred_over_earlier_unscored_role():
     gs.hello("a", "", "", None)
     gs.request_start(None, "terrarium", "test")
     assert [(d, r.role) for d, r in grants] == [("a", "jammer")]
+
+
+def test_solo_roles_are_per_instrument_not_sticky():
+    gs, grants = _unscored_gs()
+    gs.hello("a", "", "", "tuneshroom")
+    gs.hello("b", "", "", None)
+    gs.request_start(None, "terrarium", "test")
+    assert [(d, r.role) for d, r in grants] == [
+        ("a", "solo:tuneshroom"), ("b", "solo:defaultshroom")]
+
+
+def test_solo_fallthrough_does_not_displace_a_real_role():
+    class _B(_UnscoredBit):
+        roles_spec = (Role("miccer", RoleClass.SHARED, None, False,
+                           requires="hand"),)
+
+        def instrument_requirements(self):
+            return (InstrumentRequirement(
+                slot="hand", capabilities=frozenset({"audio.mic"})),)
+    gs, grants = _gs(_B)
+    gs.hello("a", "", "", None)             # refused, falls to solo
+    gs.hello("b", "", "", "tuneshroom")
+    gs.request_start(None, "terrarium", "test")
+    assert [(d, r.role) for d, r in grants] == [
+        ("a", "solo:defaultshroom"), ("b", "miccer")]

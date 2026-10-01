@@ -43,3 +43,10 @@ def test_solo_event():
     assert solo_event("tap", ["d", 1.0, 50.0, 1]) == "tap"
     assert solo_event("shake", ["d", 1.0, 1.0, 1.0]) == "shake"
     assert is_solo_role("solo:tuneshroom") and not is_solo_role("jammer")
+
+
+def test_unscored_roles_never_returns_a_solo_role():
+    shared = Role("recorder", RoleClass.SHARED, None, False)
+    t = RoleTable(roles={"recorder": shared}, node_map={})
+    t.roles["solo:tuneshroom"] = solo_role(TUNESHROOM)
+    assert unscored_roles(t) == [shared]

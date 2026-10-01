@@ -1,8 +1,8 @@
 """The jam role a device gets at RUNNING when it did not validate (spec
 2026-10-01-instrument-handshake-protocol section 3.7): the Bit's first
 fitting unscored role (JAM class first), else a role synthesized per
-carried instrument from its [solo] table, so an undeclared jam follows the instrument's Solo
-behaviour. Pure stdlib."""
+carried instrument from its [solo] table, so an undeclared jam follows
+the instrument's Solo behaviour. Pure stdlib."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -16,8 +16,11 @@ _EVENT_VERB = {"tap": "tap", "double_tap": "tap", "shake": "shake"}
 def unscored_roles(role_table) -> list[Role]:
     """Candidate jam roles: every non-ROOM unscored role, JAM-class first,
     then the rest, each group in declaration order."""
+    # assign() inserts synthesized solo roles into the table; they are a
+    # fallback, never a candidate.
     cands = [r for r in role_table.roles.values()
-             if r.scored is False and r.role_class is not RoleClass.ROOM]
+             if r.scored is False and r.role_class is not RoleClass.ROOM
+             and not is_solo_role(r.name)]
     return ([r for r in cands if r.role_class is RoleClass.JAM]
             + [r for r in cands if r.role_class is not RoleClass.JAM])
 
