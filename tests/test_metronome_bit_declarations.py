@@ -1,13 +1,15 @@
 """tests/test_metronome_bit_declarations.py"""
 from bits.metronome.metronome_bit import MetronomeBit
 from control.engine import GameServer
+from control.lobby import TERRARIUM_ADMIN
+from tests.helpers_admit import admit
 
 
 def _running_gs(n_players=0):
     gs = GameServer({"MetronomeBit": MetronomeBit})
     gs.load_bit("MetronomeBit")   # load_bit already lands in SETUP
     for i in range(n_players):
-        assert gs.join(f"ie{i+1}", "METRO_PLAYER_NODE").granted
+        assert admit(gs, f"ie{i+1}", "METRO_PLAYER_NODE").granted
     return gs
 
 
@@ -22,11 +24,14 @@ def test_demo_only():
 
 def test_third_player_is_denied_by_capacity():
     gs = _running_gs(n_players=2)
-    assert not gs.join("ie3", "METRO_PLAYER_NODE").granted
+    denied = admit(gs, "ie3", "METRO_PLAYER_NODE")
+    assert not denied.granted and denied.reason == "scored full"
 
 
 def test_on_join_records_rotation_in_join_order():
     gs = _running_gs(n_players=2)
+    assert gs.bit._players == []     # spec 3.5: on_join fires at start, not handshake
+    gs.request_start(None, TERRARIUM_ADMIN, "test")
     assert gs.bit._players == ["ie1", "ie2"]
 
 

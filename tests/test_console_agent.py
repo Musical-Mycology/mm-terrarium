@@ -12,6 +12,7 @@ from control.room_binding import RoomBindingRegistry
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.terrarium import TerrariumState
 from tests.fakes import FakeClock
+from tests.helpers_admit import admit, admit_running
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room, room_role_name
 from harness.terrarium_boot import _RoomWiring
@@ -144,7 +145,7 @@ def test_snapshot_reflects_loaded_bit_and_registration():
     gs, srv, agent = _server_with_agent()
     gs.hello("ie1", "Shroom One", "1")
     gs.load_bit("TestBit")
-    gs.join("ie1", "TEST_PLAYER_NODE")
+    admit_running(gs, "ie1", "TEST_PLAYER_NODE")   # roles exist from start (spec 3.6)
     srv.connect("c1")
     agent.poll()
     snap = srv.sent[-1][1]
@@ -168,7 +169,7 @@ def test_registration_change_is_broadcast():
     gs, srv, agent = _server_with_agent()
     gs.load_bit("TestBit")
     srv.broadcasts.clear()
-    gs.join("ie9", "TEST_PLAYER_NODE")
+    admit(gs, "ie9", "TEST_PLAYER_NODE")
     assert any(m.get("event") == "registration_changed" for m in srv.broadcasts)
     assert any(m.get("event") == "devices_changed" for m in srv.broadcasts)
 
@@ -332,7 +333,7 @@ def test_devices_view_hides_the_room_assignment():
     gs.load_bit("RoomCapableBit")
     gs.hello("ie9", "Shroom Nine", "1")
     binding.arm("TEST", "main", window_seconds=10.0)
-    gs.join("ie9", "ROOM_TEST_NODE")
+    admit(gs, "ie9", "ROOM_TEST_NODE")
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv)
 
@@ -888,7 +889,7 @@ def test_bit_completed_event_carries_joined_players():
     ConsoleAgent(gs, srv)
     gs.hello("ie1", "Testshroom 1", "1.0")
     gs.load_bit("scoring_bit")
-    gs.join("ie1", "TEST_PLAYER_NODE")
+    admit(gs, "ie1", "TEST_PLAYER_NODE")
     gs.run()
     gs.tick(3.0)
 
@@ -1003,7 +1004,7 @@ def test_unload_room_refusal_is_error_event():
     terrarium.load_room("TEST")
     terrarium.gs.load_bit("RoomCapableBit")
     terrarium.gs.hello("ie9", "Shroom Nine", "1")
-    terrarium.gs.join("ie9", room_role_name("TEST"))
+    admit(terrarium.gs, "ie9", room_role_name("TEST"))
     terrarium.gs.run()   # not IDLE -- unload without force should refuse
     srv = FakeConsoleServer()
     agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
@@ -1108,7 +1109,7 @@ def test_abort_unloads_the_room_when_terrarium_wired():
     terrarium.load_room("TEST")
     terrarium.gs.load_bit("RoomCapableBit")
     terrarium.gs.hello("ie9", "Shroom Nine", "1")
-    terrarium.gs.join("ie9", room_role_name("TEST"))
+    admit(terrarium.gs, "ie9", room_role_name("TEST"))
     terrarium.gs.run()
     srv = FakeConsoleServer()
     agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
@@ -1138,7 +1139,7 @@ def test_abort_keeps_the_room_when_arco_clients_are_live():
     terrarium.load_room("TEST")
     gs.load_bit("RoomCapableBit")
     gs.hello("ie9", "Shroom Nine", "1")
-    gs.join("ie9", room_role_name("TEST"))
+    admit(gs, "ie9", room_role_name("TEST"))
     gs.run()
     srv = FakeConsoleServer()
     agent = ConsoleAgent(gs, srv, terrarium=terrarium,
@@ -1184,7 +1185,7 @@ def test_abort_reports_unload_refusal():
     terrarium.load_room("TEST")
     terrarium.gs.load_bit("RoomCapableBit")
     terrarium.gs.hello("ie9", "Shroom Nine", "1")
-    terrarium.gs.join("ie9", room_role_name("TEST"))
+    admit(terrarium.gs, "ie9", room_role_name("TEST"))
     terrarium.gs.run()
     srv = FakeConsoleServer()
     agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)
@@ -1200,7 +1201,7 @@ def test_restart_reloads_the_same_bit_with_its_config():
     terrarium.load_room("TEST")
     terrarium.gs.load_bit("RoomCapableBit")
     terrarium.gs.hello("ie9", "Shroom Nine", "1")
-    terrarium.gs.join("ie9", room_role_name("TEST"))
+    admit(terrarium.gs, "ie9", room_role_name("TEST"))
     terrarium.gs.run()
     srv = FakeConsoleServer()
     agent = ConsoleAgent(terrarium.gs, srv, terrarium=terrarium)

@@ -1,0 +1,17 @@
+title: Role assignment at RUNNING (contract v3, 2026-10-01)
+
+participants: Control, Bit, Agent, Device
+
+note: request_start accepts: run() sets RUNNING (lobby down), then materialize
+# Scored first, in validation order.
+note: per validated dev: its reserved scored role
+Control -> Bit: on_join(dev, scored role)
+Control -> Agent: on_grant(dev, role blob)
+Agent -> Device: /<dev>/role scored (TCP)
+# Then every other pooled dev: not a fixture, not an admin id.
+note: per other dev: first fitting unscored role, else solo:<instrument>
+Control -> Bit: on_join(dev, jam role)
+Control -> Agent: on_grant(dev, role blob)
+Agent -> Device: /<dev>/role jam (TCP)
+Control -> Bit: on_run_start()
+note: RUNNING walk-up: a first hello gets the jam steps at once

@@ -142,7 +142,13 @@ def _stack(now):
     server.arrive("c1")
     server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
     agent.poll()
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    # Contract v3 (spec 2026-10-01 section 3.4): validate in SETUP, the
+    # role and its session arrive at start.
+    server.deliver("c1", "/game/handshake", "sss",
+                   ["ie1", gs.round_id, "TEST_PLAYER_NODE"])
+    agent.poll()
+    gs.run()
+    assert gs.registration.assignments["ie1"][1] == "player"
     agent.poll()
     for _ in range(200):
         if (agent.bridges["ie1"].session.state == "running"
@@ -152,7 +158,6 @@ def _stack(now):
         agent.poll()
     else:
         pytest.fail("a session never reached RUNNING")
-    gs.run()
     server.sent.clear()
     light.fed.clear()
     audio.fed.clear()

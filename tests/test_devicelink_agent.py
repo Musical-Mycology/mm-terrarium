@@ -50,7 +50,7 @@ class FakeServer:
 
     def bind_dev(self, dev, client, *, protoversion=""):
         # Keyword-only, mirroring O2LiteTransport.bind_dev, and it records a
-        # protoversion only when one was given: agent's _on_join re-binds
+        # protoversion only when one was given: agent's _on_handshake re-binds
         # with the 2-argument form, and the real transport must not lose a
         # browser's wire flavor there.
         self._devs[dev] = client
@@ -213,6 +213,30 @@ def _hello(server, agent, client="c1", dev="ie1"):
     agent.poll()
 
 
+def _handshake(server, agent, gs, client="c1", dev="ie1",
+               node="TEST_PLAYER_NODE"):
+    """Answer this round's invite: /game/handshake (spec 2026-10-01
+    section 3.4). In SETUP a scored node is validated, not granted."""
+    server.deliver(client, "/game/handshake", "sss",
+                   [dev, gs.round_id or "", node])
+    agent.poll()
+
+
+def _start(agent, gs):
+    """Admin start: materializes every validated dev's scored role and a
+    jam role for every other pooled dev, each sent as /<dev>/role."""
+    from control.lobby import TERRARIUM_ADMIN
+    assert gs.request_start(None, TERRARIUM_ADMIN, "test") is None
+    agent.poll()
+
+
+def _join(server, agent, gs, client="c1", dev="ie1", node="TEST_PLAYER_NODE"):
+    """The contract v3 path to a held scored role: handshake in SETUP,
+    the role at start."""
+    _handshake(server, agent, gs, client=client, dev=dev, node=node)
+    _start(agent, gs)
+
+
 class _Clock:
     """A hand-advanced clock. The breath only changes value every ~47 ms of
     7-bit quantization, so a test has to move time deliberately to see a new
@@ -254,8 +278,7 @@ def _agent_with_joined_device(dev="ie1"):
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
     _hello(server, agent, client="c1", dev=dev)
-    server.deliver("c1", "/game/join", "ss", [dev, "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs, dev=dev)
     return gs, server, agent, dev, clk
 
 
@@ -329,20 +352,19 @@ def test_granted_join_carries_the_declared_instrument_in_the_blob(rig):
     server.deliver("c1", "/game/hello", "ssss",
                    ["ie1", "sim", "1", "tuneshroom"])
     agent.poll()
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    _handshake(server, agent, gs)
+    server.arrive("c2")
+    server.deliver("c2", "/game/hello", "sss", ["ie2", "sim", "1"])
     agent.poll()
+    _handshake(server, agent, gs, client="c2", dev="ie2")
+    # Roles are sent at start (spec 2026-10-01 section 3.4).
+    _start(agent, gs)
 
     roles = server.addressed("/ie1/role")
     assert len(roles) == 1
     blob = roles[0]["args"][0]
     assert blob["instrument"]["name"] == "tuneshroom"
     assert blob["instrument"]["pixels"] == 12
-
-    server.arrive("c2")
-    server.deliver("c2", "/game/hello", "sss", ["ie2", "sim", "1"])
-    agent.poll()
-    server.deliver("c2", "/game/join", "ss", ["ie2", "TEST_PLAYER_NODE"])
-    agent.poll()
 
     roles2 = server.addressed("/ie2/role")
     assert len(roles2) == 1
@@ -354,8 +376,7 @@ def test_granted_join_sends_role_blob_byte_identical(rig):
     gs, server, agent = rig
     gs.load_bit("test_bit")
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs)
 
     roles = server.addressed("/ie1/role")
     assert len(roles) == 1
@@ -369,8 +390,12 @@ def test_granted_join_builds_a_light_session(rig):
     gs, server, agent = rig
     gs.load_bit("test_bit")
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _handshake(server, agent, gs)
+    # A validation alone builds nothing: the bridge comes with the role.
+    assert "ie1" not in agent.bridges
+    assert server.addressed("/ie1/validated")[0]["args"] == [gs.round_id,
+                                                             "player"]
+    _start(agent, gs)
     assert agent.bridges["ie1"].session is not None
 
 
@@ -378,8 +403,7 @@ def test_denied_join_sends_deny_with_engine_reason(rig):
     gs, server, agent = rig
     gs.load_bit("test_bit")
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "NO_SUCH_NODE"])
-    agent.poll()
+    _handshake(server, agent, gs, node="NO_SUCH_NODE")
 
     denies = server.addressed("/ie1/deny")
     assert denies[0]["args"][0] == "no such node"
@@ -395,8 +419,7 @@ def test_denied_join_calls_the_on_join_denied_sink():
                                 (dev, node, reason)), clock=time.monotonic)
     gs.load_bit("test_bit")
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "NO_SUCH_NODE"])
-    agent.poll()
+    _handshake(server, agent, gs, node="NO_SUCH_NODE")
 
     assert calls == [("ie1", "NO_SUCH_NODE", "no such node")]
 
@@ -413,28 +436,28 @@ def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply():
     agent = DeviceLinkAgent(gs, server, on_join_denied=boom, clock=time.monotonic)
     gs.load_bit("test_bit")
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "NO_SUCH_NODE"])
-    agent.poll()          # must not raise
+    _handshake(server, agent, gs, node="NO_SUCH_NODE")   # must not raise
 
     denies = server.addressed("/ie1/deny")
     assert denies[0]["args"][0] == "no such node"
 
 
-def test_join_with_no_bit_loaded_is_denied(rig):
+def test_handshake_with_no_bit_loaded_is_denied(rig):
     gs, server, agent = rig
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
-    assert server.addressed("/ie1/deny")[0]["args"][0] == \
-        "no Bit accepting registrations"
+    _handshake(server, agent, gs)
+    # Spec 2026-10-01 section 3.4: the v3 reason for "no Bit" is
+    # "registration closed".
+    assert server.addressed("/ie1/deny")[0]["args"] == [
+        "registration closed", "no Bit loaded"]
 
 
 def test_verb_refusal_becomes_an_error_event(rig):
     gs, server, agent = rig
     gs.load_bit("test_bit")
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_JAM_NODE"])
-    agent.poll()
+    _start(agent, gs)              # ie1 holds the jam role from start
+    assert gs.registration.assignments["ie1"][1] == "jammer"
     server.deliver("c1", "/game/wiggle", "s", ["ie1"])
     agent.poll()
     assert server.addressed("/ie1/error")[0]["args"] == \
@@ -464,9 +487,7 @@ def test_release_sends_release_and_clears_the_bridge():
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("test_bit")
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
-    gs.run()
+    _join(server, agent, gs)
     gs.abort()
     _drain_releases(agent, ["ie1"])
     assert server.addressed("/ie1/release")
@@ -553,9 +574,8 @@ def test_release_clears_the_canvas_url():
     _hello(server, agent)
     server.deliver("c1", "/game/canvas", "ss", ["ie1", "http://h:1/"])
     agent.poll()
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
-    gs.run()
+    _join(server, agent, gs)
+    assert "ie1" in agent.bridges
     gs.abort()
     _drain_releases(agent, ["ie1"])
     assert agent.canvas_urls() == {}
@@ -565,9 +585,7 @@ def test_light_cue_reaches_the_devices_session(rig):
     gs, server, agent = rig
     gs.load_bit("test_bit")
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
-    gs.run()
+    _join(server, agent, gs)
     session = agent.bridges["ie1"].session
     gs.on_light_cue("ie1", 0xB0, 74, 100)     # must not raise
     assert session is agent.bridges["ie1"].session
@@ -591,16 +609,12 @@ def test_a_raising_transport_does_not_strand_any_device_on_release():
     gs.load_bit("test_bit")
 
     _hello(server, agent, client="c1", dev="ie1")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
-
+    _handshake(server, agent, gs)
     _hello(server, agent, client="c2", dev="ie2")
-    server.deliver("c2", "/game/join", "ss", ["ie2", "TEST_JAM_NODE"])
-    agent.poll()
+    _start(agent, gs)        # ie1 scored, ie2 jam
 
     assert set(agent.bridges) == {"ie1", "ie2"}
 
-    gs.run()
     gs.abort()          # must not raise, must not wedge
 
     assert gs.state == State.IDLE
@@ -621,8 +635,7 @@ def test_failing_on_grant_sends_error_not_role_and_omits_the_bridge(rig, monkeyp
 
     monkeypatch.setattr("devicelink.agent.DeviceBridge", ExplodingBridge)
     _hello(server, agent)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs)
 
     assert server.addressed("/ie1/role") == []
     assert server.addressed("/ie1/error")[0]["args"] == \
@@ -676,8 +689,7 @@ def _agent_with_a_breathless_device(dev="ie1"):
     name = gs.registration.role_table.node_map["TEST_PLAYER_NODE"][0]
     table[name] = replace(table[name], breath=False)
     _hello(server, agent, client="c1", dev=dev)
-    server.deliver("c1", "/game/join", "ss", [dev, "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs, dev=dev)
     return gs, server, agent, dev, clk
 
 
@@ -700,15 +712,17 @@ def test_a_role_that_opts_out_of_the_breath_is_never_fed_cc11():
 
 def test_a_breathless_dev_breathes_again_when_it_rejoins_a_breathing_role():
     """The flag is a property of the role a dev currently holds, not of the
-    dev. Put the breathing role back and rejoin: without the discard in
-    _on_join the device would stay breathless for the rest of the process."""
+    dev. A role never switches mid-round in contract v3 (spec 2026-10-01
+    section 3.3), so the rejoin is the next round's: abort, reload the
+    Bit (whose player breathes), handshake, start. The device must breathe
+    again rather than stay breathless for the rest of the process."""
     gs, server, agent, dev, clk = _agent_with_a_breathless_device()
     assert dev in agent._breathless
-    table = gs.registration.role_table.roles
-    name = gs.registration.role_table.node_map["TEST_PLAYER_NODE"][0]
-    table[name] = replace(table[name], breath=True)
-    server.deliver("c1", "/game/join", "ss", [dev, "TEST_PLAYER_NODE"])
-    agent.poll()
+    gs.abort()
+    _drain_releases(agent, [dev])
+    gs.load_bit("test_bit")
+    _join(server, agent, gs, dev=dev)
+    assert agent.bridges[dev].session is not None
     assert dev not in agent._breathless
     seen = []
     agent.bridges[dev].session.feed_midi = lambda s, a, b: seen.append((s, a, b))
@@ -733,7 +747,7 @@ def test_a_closing_device_is_not_fed_the_breath():
 
 
 def test_play_cue_is_sent_to_the_device():
-    """A Bit's PlayCue reaches the joined device as /ie<N>/play."""
+    """A Bit's PlayCue reaches the joined device as /<dev>/play."""
     from control.cues import PlayCue
 
     gs = GameServer({"test_bit": TestBit})
@@ -747,14 +761,13 @@ def test_play_cue_is_sent_to_the_device():
         "timestamp": 0.0, "address": "/game/hello",
         "typespec": "sss", "args": ["ie1", "fake", "1"]}))
     server.inbound.append((client, {
-        "timestamp": 0.0, "address": "/game/join",
-        "typespec": "ss", "args": ["ie1", "TEST_PLAYER_NODE"]}))
+        "timestamp": 0.0, "address": "/game/handshake",
+        "typespec": "sss", "args": ["ie1", gs.round_id, "TEST_PLAYER_NODE"]}))
     agent.poll()
-    # TEST_PLAYER_NODE maps to the scored "player" role, which
-    # RegistrationState.join() closes to new joins once RUNNING (see
-    # control/registration.py) -- run() must come after the join, same
-    # ordering as test_light_cue_reaches_the_devices_session above.
+    # The scored "player" role is validated in SETUP and granted at
+    # start (spec 2026-10-01 section 3.4).
     gs.run()
+    assert gs.registration.assignments["ie1"][1] == "player"
 
     gs.bit.verb_handlers = lambda: {
         "boop": lambda d, args, at: [PlayCue(d, "click", "hard")]}
@@ -2071,12 +2084,13 @@ def test_load_bit_broadcasts_setup_with_tappable_nodes_only(rig):
         assert jam["count"] == 0
 
 
-def test_join_broadcasts_updated_count(rig):
+def test_validation_broadcasts_updated_count(rig):
+    # A validated reservation counts against the scored role (spec
+    # 2026-10-01 section 3.4), so the broadcast follows the handshake.
     gs, server, agent = rig
     _hello(server, agent)
     gs.load_bit("test_bit")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _handshake(server, agent, gs)
     blob = _room_msgs(server)[-1]["args"][0]
     player = next(n for n in blob["nodes"] if n["id"] == "TEST_PLAYER_NODE")
     assert player["count"] == 1
@@ -2121,8 +2135,7 @@ def test_poll_reaps_a_device_silent_past_stale_timeout():
     agent = DeviceLinkAgent(gs, server, clock=clk, stale_timeout=10.0)
     gs.load_bit("test_bit")
     _hello(server, agent, client="c1", dev="ie1")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs)
     assert "ie1" in agent.bridges
 
     clk.advance(11.0)
@@ -2157,8 +2170,7 @@ def test_a_fresh_heartbeat_prevents_reaping():
     agent = DeviceLinkAgent(gs, server, clock=clk, stale_timeout=10.0)
     gs.load_bit("test_bit")
     _hello(server, agent, client="c1", dev="ie1")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs)
 
     clk.advance(8.0)
     server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
@@ -2188,7 +2200,7 @@ def test_a_hello_mid_fade_survives_finish_release():
     resend behaves) while a PRIOR release's closing fade is still in
     flight must not have that FRESH connection severed once the STALE
     fade finishes. _on_hello rebinds server._devs[dev] to the new client
-    but never touches self._closing (unlike _on_join, which already pops
+    but never touches self._closing (unlike _on_grant, which already pops
     self._closing on a rejoin); left unguarded, _finish_release's
     unconditional drop_dev(dev) would drop the connection that just
     proved dev is alive, not the stale one."""
@@ -2221,7 +2233,7 @@ def test_a_hello_mid_fade_survives_finish_release():
     assert server._devs[dev] == new_client
 
 
-def test_on_release_with_no_bridge_calls_drop_dev():
+def test_on_release_with_no_bridge_calls_drop_dev(monkeypatch):
     """Mirrors test_failing_on_grant_sends_error_not_role... -- a device
     whose on_grant failed never got a bridge, so _on_release takes the
     early-return branch, not the fade. That branch must still forget the
@@ -2233,10 +2245,20 @@ def test_on_release_with_no_bridge_calls_drop_dev():
     _hello(server, agent, client="c1", dev="ie1")
     assert "ie1" in server._devs
 
-    # Simulate a grant with no bridge ever created, exactly what
-    # devicelink/agent.py's _on_join does on a failing on_grant: the
-    # engine-level assignment exists, but self.bridges never got an entry.
-    gs.join("ie1", "TEST_PLAYER_NODE")
+    # A grant with no bridge ever created, exactly what devicelink/
+    # agent.py's _on_grant does on a failing on_grant: the engine-level
+    # assignment exists, but self.bridges never got an entry.
+    class ExplodingBridge:
+        def __init__(self, capability=None, clock=None):
+            pass
+
+        def on_grant(self, result):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("devicelink.agent.DeviceBridge", ExplodingBridge)
+    _join(server, agent, gs)
+    assert "ie1" in gs.registration.assignments
+    assert "ie1" not in agent.bridges
     # A canvas url can land for this dev before its release ever runs (the
     # protocol makes no ordering guarantee here); the no-bridge branch must
     # clear it just like _finish_release does for the faded path, or it
@@ -2423,19 +2445,19 @@ def test_hello_without_a_protoversion_binds_with_an_empty_one(rig):
     assert server.protoversions.get("ie1", "") == ""
 
 
-def test_a_join_after_hello_keeps_the_browsers_wire_flavor(rig):
-    """_on_join re-binds the same dev with no protoversion, and the role
-    blob in the join grant goes out right after it. If that re-bind cleared
-    the flavor the browser announced at hello, its role would be sent as a
-    blob it cannot read."""
+def test_a_handshake_after_hello_keeps_the_browsers_wire_flavor(rig):
+    """_on_handshake re-binds the same dev with no protoversion, and the
+    role blob goes out at start. If that re-bind cleared the flavor the
+    browser announced at hello, its role would be sent as a blob it cannot
+    read."""
     gs, server, agent = rig
     gs.load_bit("test_bit")
     server.arrive("c1")
     server.deliver("c1", "/game/hello", "ssss",
                    ["ie-abc123", "flutter-sim", "o2ws/1", "tuneshroom"])
     agent.poll()
-    server.deliver("c1", "/game/join", "ss", ["ie-abc123", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs, dev="ie-abc123")
+    assert server.addressed("/ie-abc123/role")
     assert server.protoversions["ie-abc123"] == "o2ws/1"
 
 
@@ -2590,10 +2612,11 @@ def test_a_mute_latched_as_a_player_survives_a_bind_then_unload(monkeypatch):
 # --- mute-key-bind-migration) -----------------------------------------------
 
 def _player_then_room(monkeypatch, *, mute_as_player):
-    """ie1 joins TEST_PLAYER_NODE (so it holds a player bridge), is
-    optionally muted as that player, then taps in through the REAL join
-    path as the armed `main` fixture (GameServer.join -> _bind_room). The
-    ROOM join drops the player bridge (spec 2026-09-25
+    """ie1 holds TEST_PLAYER_NODE's role from start (so it holds a player
+    bridge), is optionally muted as that player, then handshakes in
+    through the REAL path as the armed `main` fixture (GameServer.handshake
+    -> _bind_room; a Room node binds in any state, spec 2026-10-01 section
+    3.4). The ROOM grant drops the player bridge (spec 2026-09-25
     lobby-flash-mute-and-room-bridge section 3.2), so ie1 gets only the
     fixture's frames."""
     _fake_sessions(monkeypatch)
@@ -2605,22 +2628,20 @@ def _player_then_room(monkeypatch, *, mute_as_player):
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("TestBit")
     _hello(server, agent, client="c1", dev="ie1")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs)
     assert "ie1" in agent.bridges
     if mute_as_player:
         gs._dispatch_cues([MuteCue("ie1")], at=clk())
         assert gs.muted == {"ie1"} and agent._muted == {"ie1"}
     binding.arm("TEST", "main", window_seconds=10.0)
-    server.deliver("c1", "/game/join", "ss", ["ie1", "ROOM_TEST_NODE"])
-    agent.poll()
+    _handshake(server, agent, gs, node="ROOM_TEST_NODE")
     assert gs.room.bound["main"] == "ie1"
     assert "ie1" not in agent.bridges
     return gs, agent, clk, server
 
 
 def _player_bound_directly(monkeypatch):
-    """ie1 joins TEST_PLAYER_NODE, then `main` is bound to it by writing
+    """ie1 holds TEST_PLAYER_NODE's role from start, then `main` is bound to it by writing
     room.bound directly (the fast-path shape, no ROOM join), so ie1 still
     holds its player bridge. Covers the _fixture_key mute reads in
     _feed_breath and _render_frames for any bridge-holding bound dev."""
@@ -2632,8 +2653,7 @@ def _player_bound_directly(monkeypatch):
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("TestBit")
     _hello(server, agent, client="c1", dev="ie1")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs)
     gs.room.bound["main"] = "ie1"
     assert "ie1" in agent.bridges
     return gs, agent, clk, server
@@ -2761,13 +2781,12 @@ def test_a_room_join_after_a_player_join_sends_no_error_and_no_role(monkeypatch)
     agent = DeviceLinkAgent(gs, server, clock=clk)
     gs.load_bit("TestBit")
     _hello(server, agent, client="c1", dev="ie1")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _join(server, agent, gs)
     roles_before = len(server.addressed("/ie1/role"))
+    assert roles_before == 1
     binding.arm("TEST", "main", window_seconds=10.0)
 
-    server.deliver("c1", "/game/join", "ss", ["ie1", "ROOM_TEST_NODE"])
-    agent.poll()
+    _handshake(server, agent, gs, node="ROOM_TEST_NODE")
 
     assert gs.room.bound["main"] == "ie1"
     assert server.addressed("/ie1/error") == []
@@ -2788,8 +2807,7 @@ def test_a_never_a_player_room_join_sends_no_error(monkeypatch, caplog):
     _hello(server, agent, client="c2", dev="ie2")
     binding.arm("TEST", "main", window_seconds=10.0)
 
-    server.deliver("c2", "/game/join", "ss", ["ie2", "ROOM_TEST_NODE"])
-    agent.poll()
+    _handshake(server, agent, gs, client="c2", dev="ie2", node="ROOM_TEST_NODE")
 
     assert gs.room.bound["main"] == "ie2"
     assert server.addressed("/ie2/error") == []
@@ -2919,11 +2937,13 @@ def test_a_non_mute_fire_still_unlatches_and_applies_its_solid(monkeypatch):
 
 
 def test_a_queued_join_flash_cannot_unblack_a_carried_over_mute(monkeypatch):
-    """The end-to-end case: ie1 joins as a scored player (the lobby queues
-    its green join flash), is muted, then binds to `main`. The queued flash
-    resolves to @fixture:main and used to un-black it for good."""
+    """The end-to-end case: ie1 validates as a scored player (the lobby
+    queues its green join flash), starts, is muted, then binds to `main`.
+    The queued flash resolves to @fixture:main and used to un-black it for
+    good. The lobby stopped at start, but its queued ceremony drains on
+    (spec 2026-10-01 section 5.5), so the flash is still pending here."""
     gs, agent, clk, server = _player_then_room(monkeypatch, mute_as_player=True)
-    assert agent._lobby is not None
+    assert agent._draining_lobby is not None
     for _ in range(int(3.0 / (1 / 44))):
         clk.advance(1 / 44)
         agent.poll()
@@ -3029,3 +3049,236 @@ def test_a_raising_outputs_factory_never_breaks_the_room(monkeypatch):
 
     agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0, outputs_for=boom)
     agent._render_room()                       # must not raise
+
+
+# --- contract v3 handshake (spec 2026-10-01) over the real transport -------
+# These run the agent over O2LiteTransport + FakeO2Lite, so the down
+# transport (tcp vs udp) of each reply is observable (boundary rule 5).
+
+from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+
+
+@pytest.fixture
+def agent_with_room(monkeypatch):
+    """The Room-loaded lobby rig of tests/test_lobby_agent.py (TestBit in
+    SETUP, lobby enabled, admin start), over the o2lite transport."""
+    from tests.test_lobby_agent import _admin_cfg, _rig
+    fake = FakeO2Lite(now=100.0)
+    fake.set_services("actl")
+    transport = O2LiteTransport()
+    transport.start(fake)
+    gs, _server, agent, _audio, _sessions, _clk = _rig(
+        monkeypatch, _admin_cfg(), server=transport, clk=fake.time_get)
+    return agent, fake, gs
+
+
+def deliver_hello(fake, dev):
+    fake.deliver("/game/hello", "sss", (dev, "sim", "1"))
+
+
+def addrs(fake, address):
+    """Every message sent to `address`, as its argument tuple."""
+    return [s[3] for s in fake.sent if s[0] == address]
+
+
+def test_invite_sends_handshake_over_tcp(agent_with_room):
+    agent, fake, gs = agent_with_room          # SETUP, lobby enabled
+    deliver_hello(fake, "ie1")
+    agent.poll()
+    sent = [(s[0], s[3], c) for s, c in zip(fake.sent, fake.channels)
+            if s[0] == "/ie1/handshake"]
+    assert sent and sent[0][1] == (gs.round_id,) and sent[0][2] == "tcp"
+
+
+def test_ack_validates_then_role_at_start(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.deliver("/game/handshake", "sss", ("ie1", gs.round_id, ""))
+    agent.poll()
+    assert addrs(fake, "/ie1/validated") and not addrs(fake, "/ie1/role")
+    gs.request_start(None, "terrarium", "test"); agent.poll()
+    assert addrs(fake, "/ie1/role")
+
+
+def test_join_is_retired(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.deliver("/game/join", "ss", ("ie1", "TEST_PLAYER_NODE"))
+    agent.poll()
+    err = [s[3] for s in fake.sent if s[0] == "/ie1/error"]
+    assert ("join", "retired in contract v3: use /game/handshake") in err
+
+
+def test_tap_is_never_a_handshake(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.deliver("/game/tap", "sffi", ("ie1", 1.0, 50.0, 2)); agent.poll()
+    assert "ie1" not in gs.registration.validated
+
+
+def test_room_only_on_first_contact(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    n = len(addrs(fake, "/ie1/room"))
+    deliver_hello(fake, "ie1"); agent.poll()
+    assert len(addrs(fake, "/ie1/room")) == n
+
+
+def test_reaped_unjoined_device_leaves_no_transport_state(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1")
+    fake.deliver("/game/canvas", "ss", ("ie1", "http://h:1/"))
+    agent.poll()
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+    assert agent._lobby.is_invited("ie1")
+    fake.set_time(fake.time_get() + 30); agent.poll()
+    assert "ie1" not in agent.transport._devs
+    assert "ie1" not in agent.canvas_urls()
+    assert not agent._lobby.is_invited("ie1")
+
+
+def test_a_running_walk_up_gets_room_then_its_jam_role(agent_with_room):
+    """A RUNNING hello is a walk-up (spec 2026-10-01 section 3.6): the
+    jam role arrives at once, over TCP, after the first-contact /room."""
+    agent, fake, gs = agent_with_room
+    gs.request_start(None, "terrarium", "test"); agent.poll()
+    deliver_hello(fake, "ie7"); agent.poll()
+    order = [(s[0], c) for s, c in zip(fake.sent, fake.channels)
+             if s[0] in ("/ie7/room", "/ie7/role")]
+    assert order[0] == ("/ie7/room", "tcp")
+    assert ("/ie7/role", "tcp") in order
+    assert gs.registration.assignments["ie7"][1] == "jammer"
+    assert "ie7" in agent.bridges
+
+
+def test_a_stale_round_handshake_is_dropped_silently(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.deliver("/game/handshake", "sss", ("ie1", "old-round", ""))
+    agent.poll()
+    assert "ie1" not in gs.registration.validated
+    assert not addrs(fake, "/ie1/validated")
+    assert not addrs(fake, "/ie1/deny")
+
+
+def test_a_running_handshake_is_denied_with_the_jam_hint(agent_with_room):
+    agent, fake, gs = agent_with_room
+    gs.request_start(None, "terrarium", "test"); agent.poll()
+    deliver_hello(fake, "ie7"); agent.poll()
+    fake.deliver("/game/handshake", "sss", ("ie7", gs.round_id or "", ""))
+    agent.poll()
+    denies = addrs(fake, "/ie7/deny")
+    assert denies and denies[0][0] == "registration closed"
+    assert gs.registration.assignments["ie7"][1] == "jammer"   # unchanged
+
+
+def test_validated_and_deny_go_over_tcp(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); deliver_hello(fake, "ie2"); agent.poll()
+    fake.deliver("/game/handshake", "sss", ("ie1", gs.round_id, ""))
+    fake.deliver("/game/handshake", "sss", ("ie2", gs.round_id, "NO_SUCH_NODE"))
+    agent.poll()
+    chans = {s[0]: c for s, c in zip(fake.sent, fake.channels)
+             if s[0] in ("/ie1/validated", "/ie2/deny")}
+    assert chans == {"/ie1/validated": "tcp", "/ie2/deny": "tcp"}
+
+
+def test_join_from_a_never_hellod_sender_still_hears_the_retirement(agent_with_room):
+    agent, fake, gs = agent_with_room
+    fake.deliver("/game/join", "ss", ("ie5", "TEST_PLAYER_NODE"))
+    agent.poll()
+    assert ("join", "retired in contract v3: use /game/handshake") in addrs(
+        fake, "/ie5/error")
+
+
+# --- /<dev>/handshake does not need a lobby (spec 2026-10-01 3.1, 3.3) ------
+
+def _bare_o2_agent(config=None, room=False, monkeypatch=None):
+    """TestBit in SETUP over O2LiteTransport + FakeO2Lite, no Room unless
+    asked for (then via the lobby rig with `config`)."""
+    fake = FakeO2Lite(now=100.0)
+    fake.set_services("actl")
+    transport = O2LiteTransport()
+    transport.start(fake)
+    if room:
+        from tests.test_lobby_agent import _rig
+        gs, _s, agent, _a, _ss, _c = _rig(monkeypatch, config, server=transport,
+                                          clk=fake.time_get)
+    else:
+        gs = GameServer({"test_bit": TestBit}, clock=fake.time_get)
+        agent = DeviceLinkAgent(gs, transport, clock=fake.time_get)
+        gs.load_bit("test_bit")
+    return agent, fake, gs
+
+
+def _handshake_sends(fake, dev="ie1"):
+    return [(s[3], c) for s, c in zip(fake.sent, fake.channels)
+            if s[0] == f"/{dev}/handshake"]
+
+
+def _poll_for(agent, fake, seconds, dt=0.1):
+    for _ in range(int(round(seconds / dt))):
+        fake.set_time(fake.time_get() + dt)
+        agent.poll()
+
+
+def test_handshake_without_a_room_on_first_hello_and_each_cycle():
+    agent, fake, gs = _bare_o2_agent()
+    assert gs.room is None and agent._lobby is None
+    deliver_hello(fake, "ie1"); agent.poll()
+    assert _handshake_sends(fake) == [((gs.round_id,), "tcp")]
+    _poll_for(agent, fake, 4.5)
+    assert len(_handshake_sends(fake)) == 1
+    _poll_for(agent, fake, 0.7)
+    assert _handshake_sends(fake) == [((gs.round_id,), "tcp")] * 2
+
+
+def test_handshake_with_the_lobby_disabled(monkeypatch):
+    cfg = _no_lobby_config()
+    agent, fake, gs = _bare_o2_agent(cfg, room=True, monkeypatch=monkeypatch)
+    assert agent._lobby is None
+    deliver_hello(fake, "ie1"); agent.poll()
+    assert _handshake_sends(fake) == [((gs.round_id,), "tcp")]
+    fake.deliver("/game/handshake", "sss", ("ie1", gs.round_id, ""))
+    agent.poll()
+    assert addrs(fake, "/ie1/validated")
+    _poll_for(agent, fake, 6.0)
+    assert len(_handshake_sends(fake)) == 1        # validated: no more invites
+
+
+def test_full_stops_the_handshake():
+    agent, fake, gs = _bare_o2_agent()
+    gs.registration.role_table.roles["player"].capacity = 1
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.deliver("/game/handshake", "sss", ("ie1", gs.round_id, ""))
+    agent.poll()
+    assert gs.lobby_state() == "FULL"
+    deliver_hello(fake, "ie2"); agent.poll()
+    _poll_for(agent, fake, 6.0)
+    assert _handshake_sends(fake, "ie2") == []
+
+
+def test_no_scored_node_means_no_handshake():
+    agent, fake, gs = _bare_o2_agent()
+    roles = gs.registration.role_table.roles
+    roles["player"] = replace(roles["player"], scored=False)
+    assert gs.default_scored_node() is None
+    deliver_hello(fake, "ie1"); agent.poll()
+    _poll_for(agent, fake, 6.0)
+    assert _handshake_sends(fake) == []
+
+
+def test_exactly_one_handshake_per_cycle_with_a_lobby(agent_with_room):
+    agent, fake, gs = agent_with_room
+    assert agent._lobby is not None
+    deliver_hello(fake, "ie1"); agent.poll()
+    _poll_for(agent, fake, 5.2)
+    assert len(_handshake_sends(fake)) == 2
+
+
+def test_no_handshake_once_setup_ends(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    gs.request_start(None, "terrarium", "test"); agent.poll()
+    _poll_for(agent, fake, 6.0)
+    assert len(_handshake_sends(fake)) == 1

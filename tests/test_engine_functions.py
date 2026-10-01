@@ -15,6 +15,7 @@ from control.roles import Role, RoleClass, RoleTable
 from control.room_binding import RoomBindingRegistry
 from control.state import State
 from control.terrarium_config import load_terrarium_config
+from tests.helpers_admit import admit, admit_running
 from control.functions import (
     Condition,
     ConditionSource,
@@ -213,8 +214,7 @@ def _running(bit_cls=ScriptBit, bound=None, clock=None):
     gs.on_light_cue = lambda *a: light.append(a)
     gs.on_play_cue = lambda *a: play.append(a)
     gs.load_bit("bit")
-    gs.join("ie1", "NODE")
-    gs.run()
+    admit_running(gs, "ie1", "NODE")
     return gs, light, play
 
 
@@ -960,7 +960,7 @@ def _joined(bit_cls=TiltRecorderBit, carried=None, run=True):
     gs.load_bit("bit")
     info = gs.devices.hello("ie1", "Dev1", "1.0")
     info.carried = carried if carried is not None else SMOOTHING_WIDGET
-    gs.join("ie1", "NODE")
+    admit(gs, "ie1", "NODE")
     if run:
         gs.run()
     return gs
@@ -987,7 +987,7 @@ def test_stream_trigger_state_is_per_device():
     for dev in ("ie1", "ie2"):
         info = gs.devices.hello(dev, dev, "1.0")
         info.carried = SMOOTHING_WIDGET
-        gs.join(dev, "NODE")
+        admit(gs, dev, "NODE")
     gs.run()
     gs.data("ie1", "tilt", [0.0])
     gs.data("ie2", "tilt", [10.0])
@@ -997,21 +997,33 @@ def test_stream_trigger_state_is_per_device():
     assert gs.bit.received[-1] == [15.0]    # ie2: 0.5*20.0 + 0.5*10.0
 
 
+class _UnscoredTiltBit(TiltRecorderBit):
+    """Same recorder, but its player role is unscored, so a device holds it
+    from hello + start and a RUNNING walk-up gets it again (spec 3.7)."""
+
+    @property
+    def role_table(self) -> RoleTable:
+        return RoleTable(
+            roles={"player": Role(name="player", role_class=RoleClass.SHARED,
+                                  capacity=None, scored=False)},
+            node_map={"NODE": ["player"]})
+
+
 def test_stream_trigger_state_resets_after_release():
     """reap_stale is the one engine-level path a device's registration ends
-    through today (control/engine.py); release there must clear this dev's
-    EMA state so a rejoin starts from a clean first sample."""
-    gs = _joined(run=False)     # role is scored: stays in SETUP so it can
-                                # accept the rejoin below (scored roles
-                                # close once RUNNING, control/registration.py)
+    through today; release there must clear this dev's EMA state, so the
+    device's next walk-up grant starts from a clean first sample."""
+    from tests.instrument_fixtures import SMOOTHING_WIDGET
+    gs = _server(_UnscoredTiltBit,
+                 carried_instruments={SMOOTHING_WIDGET.name: SMOOTHING_WIDGET})
+    gs.load_bit("bit")
+    gs.hello("ie1", "Dev1", "1.0", instrument=SMOOTHING_WIDGET.name)
+    gs.run()
     gs.data("ie1", "tilt", [0.0])
     gs.data("ie1", "tilt", [1.0])
     assert gs.bit.received[-1] == [0.5]
     gs.reap_stale(timeout=-1.0)     # every hello'd dev is "stale"
-    from tests.instrument_fixtures import SMOOTHING_WIDGET
-    info = gs.devices.hello("ie1", "Dev1", "1.0")
-    info.carried = SMOOTHING_WIDGET
-    gs.join("ie1", "NODE")
+    gs.hello("ie1", "Dev1", "1.0", instrument=SMOOTHING_WIDGET.name)  # walk-up
     gs.data("ie1", "tilt", [1.0])
     assert gs.bit.received[-1] == [1.0]     # first sample again: passthrough
 

@@ -60,7 +60,9 @@ class LobbyConfig:
     enabled: bool = True
     invite_interval_s: float = 5.0
     ceremony_gap_s: float = 1.0
-    double_tap_window_s: float = 1.5
+    # Optional cap on validated (scored) devices below the scored roles'
+    # capacity sum (spec 2026-10-01 section 3.4). None means no extra cap.
+    max_scored: int | None = None
 
 
 DEFAULT_LOBBY = LobbyConfig()
@@ -69,23 +71,6 @@ DEFAULT_LOBBY = LobbyConfig()
 class LobbyState(Enum):
     WAITING = auto()
     FULL = auto()
-
-
-def lobby_state(counts, role_table) -> LobbyState:
-    """FULL when every scored role with a finite capacity is at capacity
-    and at least one such role exists; an uncapped scored role means the
-    lobby can never fill. `counts` is RegistrationState.counts()."""
-    capped = False
-    for name, count, capacity in counts:
-        role = role_table.roles.get(name)
-        if role is None or not role.scored:
-            continue
-        if capacity is None:
-            return LobbyState.WAITING
-        capped = True
-        if count < capacity:
-            return LobbyState.WAITING
-    return LobbyState.FULL if capped else LobbyState.WAITING
 
 
 def scale_note(join_index: int) -> int:
@@ -116,39 +101,6 @@ def lobby_light_manifest() -> dict:
 
 
 @dataclass(frozen=True)
-class StartDecision:
-    accepted: bool
-    reason: str | None
-    feedback: str
-
-
-def decide_start(*, bit_loaded: bool, in_setup: bool, when: str | None,
-                 expected_key: str | None, key: str | None, admin: bool,
-                 scored: int, min_scored: int) -> StartDecision:
-    """The start rule (spec section 2). `key is None` means an unkeyed
-    operator surface (Console, uplink); a keyed source is judged against
-    the Bit's key before anything else so a stranger with an old poster
-    gets no room reaction at all."""
-    if not bit_loaded:
-        return StartDecision(False, "no Bit loaded", FEEDBACK_NONE)
-    keyed = key is not None
-    if keyed:
-        if when != "admin":
-            return StartDecision(False, "Bit does not take an admin start",
-                                 FEEDBACK_NONE)
-        if not expected_key or key != expected_key:
-            return StartDecision(False, "bad key", FEEDBACK_NONE)
-    if not in_setup:
-        return StartDecision(False, "not in SETUP",
-                             FEEDBACK_REFUSED if keyed else FEEDBACK_NONE)
-    if admin:
-        return StartDecision(True, None, FEEDBACK_ACCEPT)
-    if min_scored > 0 and scored < min_scored:
-        return StartDecision(False, "minimum not met", FEEDBACK_MINIMUM)
-    return StartDecision(True, None, FEEDBACK_ACCEPT)
-
-
-@dataclass(frozen=True)
 class StartRequested:
     """The engine observer record for every start attempt."""
     source: str
@@ -164,32 +116,6 @@ class StartRequest:
     key: str
     dev: str | None
     source: str
-
-
-class DoubleTapDetector:
-    """Two taps from one device within the window, or one tap carrying
-    count >= 2, is a double tap."""
-
-    def __init__(self, window_s: float) -> None:
-        self._window = window_s
-        self._last: dict[str, float] = {}
-
-    def observe(self, dev: str, count: int, stamp: float) -> bool:
-        if count >= 2:
-            self._last.pop(dev, None)
-            return True
-        prev = self._last.get(dev)
-        self._last[dev] = stamp
-        if prev is not None and 0.0 <= stamp - prev <= self._window:
-            self._last.pop(dev, None)
-            return True
-        return False
-
-    def forget(self, dev: str) -> None:
-        self._last.pop(dev, None)
-
-    def clear(self) -> None:
-        self._last.clear()
 
 
 class InviteSchedule:

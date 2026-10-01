@@ -27,15 +27,20 @@ def _admin_cfg(**start):
     return replace(cfg, start=replace(cfg.start, **fields))
 
 
-def _rig(monkeypatch, config=None, admin_devices=()):
-    clk = _Clock(100.0)
+def _rig(monkeypatch, config=None, admin_devices=(), *, server=None,
+         clk=None):
+    """A Room-loaded TestBit in SETUP with both fixtures bound. `server`
+    and `clk` default to a FakeServer and a hand-advanced clock; the
+    transport tests in tests/test_devicelink_agent.py pass an
+    O2LiteTransport over FakeO2Lite and that fake's own clock."""
+    clk = clk if clk is not None else _Clock(100.0)
     gs = GameServer({"TestBit": TestBit}, clock=clk, admin_devices=admin_devices)
     gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
     gs.room.bound["main"] = "sim-main"
     gs.room.bound["accent"] = "sim-accent"
     audio = _FakeAudioBridge()
     sessions = _fake_sessions(monkeypatch)
-    server = FakeServer()
+    server = server if server is not None else FakeServer()
     agent = DeviceLinkAgent(gs, server, room_audio=audio, clock=clk)
     gs.load_bit("TestBit", config=config)
     return gs, server, agent, audio, sessions, clk
@@ -51,6 +56,17 @@ def _hello(server, agent, client, dev):
     server.arrive(client)
     server.deliver(client, "/game/hello", "sss", [dev, "sim", "1"])
     agent.poll()
+
+
+def _handshake(server, agent, gs, client, dev, node=""):
+    """The device's answer to /<dev>/handshake (spec 2026-10-01 section
+    3.4). An empty node validates against the Bit's default scored node."""
+    server.deliver(client, "/game/handshake", "sss", [dev, gs.round_id, node])
+    agent.poll()
+
+
+def _sent(server, address):
+    return [m for (_d, m) in server.sent if m["address"] == address]
 
 
 def test_setup_swaps_fixtures_to_the_lobby_manifest_and_sounds_the_pad(monkeypatch):
@@ -90,7 +106,10 @@ def test_running_swaps_back_to_the_bits_room_declaration(monkeypatch):
     assert agent._overrides[fixture_dev("accent")][0] == GREEN
 
 
-def test_hello_invites_with_two_white_flashes_and_double_tap_joins(monkeypatch):
+def test_hello_invites_with_two_white_flashes_and_the_handshake_validates(monkeypatch):
+    # The double tap is retired (spec 2026-10-01 section 5.5): the invite
+    # carries /<dev>/handshake, the device's /game/handshake answers it, a
+    # tap is plain gameplay, and the role itself arrives at start.
     gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
     events = []
     class Obs:
@@ -100,19 +119,69 @@ def test_hello_invites_with_two_white_flashes_and_double_tap_joins(monkeypatch):
     _hello(server, agent, "c1", "ie1")
     assert agent._overrides["ie1"][0] == WHITE
     assert events == [("invite", "ie1")]
+    assert [m["args"] for m in _sent(server, "/ie1/handshake")] == [[gs.round_id]]
     _poll(agent, clk, 0.3)
     assert "ie1" not in agent._overrides                       # first flash over
     _poll(agent, clk, 0.15)
     assert agent._overrides["ie1"][0] == WHITE                 # second flash
-    server.deliver("c1", "/game/tap", "sffi", ["ie1", 1.0, 50.0, 1], timestamp=clk.t)
+    server.deliver("c1", "/game/tap", "sffi", ["ie1", 1.0, 50.0, 2], timestamp=clk.t)
     agent.poll()
+    assert "ie1" not in gs.registration.validated
     assert "ie1" not in gs.registration.assignments
-    clk.advance(0.5)
-    server.deliver("c1", "/game/tap", "sffi", ["ie1", 1.0, 50.0, 1], timestamp=clk.t)
+    _handshake(server, agent, gs, "c1", "ie1")
+    assert gs.registration.validated["ie1"] == ("TEST_PLAYER_NODE", "player")
+    assert ("handshake", "ie1") in events
+    assert [m["args"] for m in _sent(server, "/ie1/validated")] == [
+        [gs.round_id, "player"]]
+    assert _sent(server, "/ie1/role") == []
+    gs.request_start(None, TERRARIUM_ADMIN, "console")
     agent.poll()
     assert gs.registration.assignments["ie1"][1] == "player"
-    assert ("handshake", "ie1") in events
-    assert any(m["address"] == "/ie1/role" for (_d, m) in server.sent)
+    assert _sent(server, "/ie1/role")
+
+
+def test_invites_repeat_the_handshake_until_validated(monkeypatch):
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    _poll(agent, clk, 5.2)
+    assert len(_sent(server, "/ie1/handshake")) == 2
+    _handshake(server, agent, gs, "c1", "ie1")
+    _poll(agent, clk, 6.0)
+    assert len(_sent(server, "/ie1/handshake")) == 2           # no more invites
+
+
+def test_no_invite_and_no_handshake_when_the_bit_has_no_scored_node(monkeypatch):
+    """Nothing to validate means nothing to accept: neither the white
+    invite nor /<dev>/handshake goes out (controller ruling, Task 6)."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    roles = gs.registration.role_table.roles
+    roles["player"] = replace(roles["player"], scored=False)
+    assert gs.default_scored_node() is None
+    events = []
+    class Obs:
+        def on_lobby_event(self, event, dev):
+            events.append((event, dev))
+    gs.add_observer(Obs())
+    _hello(server, agent, "c1", "ie1")
+    _poll(agent, clk, 6.0)
+    assert _sent(server, "/ie1/handshake") == []
+    assert "ie1" not in agent._overrides
+    assert events == []
+
+
+def test_a_ceremony_validated_just_before_start_still_plays_out(monkeypatch):
+    """Spec 2026-10-01 section 5.5: start tears the lobby down, but the
+    queued bell and chime of a validation that just landed still play."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    _handshake(server, agent, gs, "c1", "ie1")
+    gs.request_start(None, TERRARIUM_ADMIN, "console")
+    assert gs.state is State.RUNNING and agent._lobby is None
+    _poll(agent, clk, 2.0)
+    assert audio.notes == [(14, 69, 100, 1.0)]
+    plays = _sent(server, "/ie1/play")
+    assert plays[-1]["args"] == ["chime", "key=69"]
+    assert agent._draining_lobby is None                       # drained, dropped
 
 
 def test_invite_frames_reach_an_unjoined_device_in_grb_then_go_black(monkeypatch):
@@ -130,21 +199,25 @@ def test_invite_frames_reach_an_unjoined_device_in_grb_then_go_black(monkeypatch
     assert leds[-1][:3] == bytes([255, 0, 0])
 
 
-def test_tap_from_an_uninvited_unjoined_device_is_still_refused(monkeypatch):
+def test_tap_from_an_invited_unjoined_device_is_gameplay_and_refused(monkeypatch):
+    # Was "an uninvited device in RUNNING": a RUNNING hello now gets a jam
+    # role at once (spec 2026-10-01 section 3.6), so the role-less tapper
+    # is the invited SETUP device, and its tap is gameplay (section 5.5).
     gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
-    gs.request_start(None, TERRARIUM_ADMIN, "console")         # RUNNING: no lobby
     _hello(server, agent, "c1", "ie1")
+    assert agent._lobby.is_invited("ie1")
     server.deliver("c1", "/game/tap", "sffi", ["ie1", 1.0, 50.0, 2])
     agent.poll()
     assert "ie1" not in gs.registration.assignments
+    assert "ie1" not in gs.registration.validated
     assert any(m["address"] == "/ie1/error" for (_d, m) in server.sent)
 
 
-def test_scored_join_runs_the_ceremony(monkeypatch):
+def test_validation_runs_the_ceremony(monkeypatch):
+    # The ceremony celebrates a validation (spec 2026-10-01 section 3.4).
     gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
     _hello(server, agent, "c1", "ie1")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _handshake(server, agent, gs, "c1", "ie1", "TEST_PLAYER_NODE")
     assert agent._overrides["ie1"][0] == GREEN
     _poll(agent, clk, 1.0)
     assert audio.notes == [(14, 69, 100, 1.0)]
@@ -159,13 +232,13 @@ def test_full_lobby_pins_green_and_stops_the_drone(monkeypatch):
     # cap TestBit's player at 1 for this test
     gs.registration.role_table.roles["player"].capacity = 1
     _hello(server, agent, "c1", "ie1")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
+    _handshake(server, agent, gs, "c1", "ie1", "TEST_PLAYER_NODE")
     assert gs.lobby_state() == "FULL"
     assert ("main", 0x80, LOBBY_DRONE_KEY, 0) in audio.fed
     assert (0xB0, HUE_CC, 42) in sessions[f"{TEST_PROFILE.surface_id}_main"].fed
     _hello(server, agent, "c2", "ie2")
     assert "ie2" not in agent._overrides                       # no invite while FULL
+    assert _sent(server, "/ie2/handshake") == []
 
 
 def test_start_verb_from_a_device_routes_to_request_start(monkeypatch):
@@ -238,9 +311,8 @@ def test_handshake_ignores_a_default_join_role_that_is_not_scored(monkeypatch):
     cfg = replace(cfg, launch=replace(cfg.launch, default_join_role="jammer"))
     gs, server, agent, audio, sessions, clk = _rig(monkeypatch, cfg)
     _hello(server, agent, "c1", "ie1")
-    server.deliver("c1", "/game/tap", "sffi", ["ie1", 1.0, 50.0, 2], timestamp=clk.t)
-    agent.poll()
-    assert gs.registration.assignments["ie1"][0] == "TEST_PLAYER_NODE"
+    _handshake(server, agent, gs, "c1", "ie1")                 # no node named
+    assert gs.registration.validated["ie1"][0] == "TEST_PLAYER_NODE"
 
 
 def test_accept_flash_is_gated_on_the_lobby_being_enabled(monkeypatch):
@@ -337,3 +409,40 @@ def test_start_feedback_flash_leaves_a_muted_fixture_dark(monkeypatch):
                  if d == "sim-main" and m["address"] == "/sim-main/leds"]
     assert main_leds
     assert all(bytes(f) == bytes(len(f)) for f in main_leds)
+
+
+def test_an_abort_during_the_ceremony_drops_its_queued_cues(monkeypatch):
+    """A ceremony draining across start belongs to that Bit: an abort
+    inside the ceremony span must not play its bell or chime afterwards."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    _handshake(server, agent, gs, "c1", "ie1")
+    gs.request_start(None, TERRARIUM_ADMIN, "console")
+    assert agent._draining_lobby is not None
+    _poll(agent, clk, 0.5)
+    gs.abort()
+    assert agent._draining_lobby is None
+    _poll(agent, clk, 2.0)
+    assert audio.notes == []
+    assert _sent(server, "/ie1/play") == []
+
+
+def test_validating_mid_invite_cancels_the_queued_second_white_flash(monkeypatch):
+    """The invite's second white flash is queued when the first goes out;
+    a device that validates between them must see no white override after
+    its /validated (it would read as a second invite), only the ceremony's
+    green flashes."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    assert agent._overrides["ie1"][0] == WHITE
+    _poll(agent, clk, 0.3)                                     # between flashes
+    _handshake(server, agent, gs, "c1", "ie1")
+    assert _sent(server, "/ie1/validated")
+    seen = []
+    for _ in range(int(2.0 * 44)):
+        clk.advance(1 / 44)
+        agent.poll()
+        if "ie1" in agent._overrides:
+            seen.append(agent._overrides["ie1"][0])
+    assert WHITE not in seen
+    assert GREEN in seen

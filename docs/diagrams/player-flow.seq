@@ -1,41 +1,46 @@
-title: Player flow, hello to complete (lobby handshake, 2026-09-11)
+title: Player flow, hello to role (contract v3, 2026-10-01)
 
 participants: Tuneshroom, Arco, Control
 
-# Registration. Control offers "game" on Arco's hub as an o2lite guest.
-Tuneshroom -> Arco: /game/hello
+# Connect. Control offers "game" on Arco's hub as an o2lite guest.
+Tuneshroom -> Arco: /game/hello dev name proto instrument
 Arco -> Control: /game/hello
-Control -> Arco: /ie1/room pushed on hello and on state change
+Control -> Arco: /ie1/room (first contact only)
 Arco -> Tuneshroom: /ie1/room
-note: SETUP holds registration open; --setup-seconds widens the window
+note: heartbeat: the identical hello every 5 s; no /room per beat
 
-# Lobby invite. WAITING and un-joined: white/black flash, repeats every 5s.
-Control -> Arco: /ie1/leds invite flash
+# Invite. SETUP, round set, lobby not FULL: repeats every 5 s until validated.
+Control -> Arco: /ie1/handshake round (TCP)
+Arco -> Tuneshroom: /ie1/handshake
+Control -> Arco: /ie1/leds white invite flash x2
 Arco -> Tuneshroom: /ie1/leds
-note: a double tap, or two taps within 1.5s, joins with no node needed
-Tuneshroom -> Arco: /game/tap count >= 2
-Arco -> Control: /game/tap
-Control -> Arco: /ie1/role composed config blob
-Arco -> Tuneshroom: /ie1/role
+note: user double-taps (accept)
+Tuneshroom -> Arco: /game/handshake dev round node
+Arco -> Control: /game/handshake
+Control -> Arco: /ie1/validated round role (TCP)
+Arco -> Tuneshroom: /ie1/validated
+note: over cap: /ie1/deny "scored full" then jam role at start
+note: stale round: dropped
 
-# Join ceremony. One reserved slot per join, spaced 1s apart.
+# Ceremony. One reserved slot per validation, spaced 1s apart.
 Control -> Arco: /ie1/leds green flash x2
 Arco -> Tuneshroom: /ie1/leds
 note: a Room fixture bell climbs the A major scale on Control's own Arco voice
 Control -> Arco: /ie1/play chime key=<midi>
 Arco -> Tuneshroom: /ie1/play
 
-# Admin start. One authority: web URL (QR/NFC), this verb, Console, or uplink.
-Tuneshroom -> Arco: /game/start dev, key
-Arco -> Control: /game/start
-note: request_start accepts; SETUP -> RUNNING; Room fixtures flash green x1
+# Start. One decider; the ceremony's queued cues survive a fast start.
+note: start (timer, operator, admin, /game/start)
+Control -> Arco: /ie1/role scored (TCP)
+Arco -> Tuneshroom: /ie1/role
+note: every other pooled device gets /<dev>/role jam here
 
 # Play. Gesture in, timed frames out.
-Tuneshroom -> Arco: /game/tilt
-Arco -> Control: /game/tilt
+Tuneshroom -> Arco: /game/tap
+Arco -> Control: /game/tap
 Control -> Arco: /ie1/leds at = origin + cue_horizon
 Arco -> Tuneshroom: /ie1/leds
 
 # Completion. Release arrives after the closing fade, not at Bit end.
-Control -> Arco: /ie1/release
+Control -> Arco: /ie1/release (TCP)
 Arco -> Tuneshroom: /ie1/release

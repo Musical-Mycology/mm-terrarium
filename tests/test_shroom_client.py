@@ -413,3 +413,66 @@ def test_shroom_client_has_no_websocket_entry_point():
     assert not hasattr(shroom_client, "main")
     assert not hasattr(shroom_client, "pump_tick")
     assert "websockets" not in shroom_client.__doc__
+
+
+# --- contract v3: handshake invite, validation, role marker ---
+
+def test_client_tracks_handshake_and_validated(capsys):
+    c = client()
+    assert c.handle(protocol.handshake_event(DEV, "r1")) == f"/{DEV}/handshake"
+    assert c.round_id == "r1"
+    c.handle(protocol.validated_event(DEV, "r1", "player"))
+    assert c.validated_role == "player"
+    assert f"HANDSHAKE VALIDATED: {DEV} player" in capsys.readouterr().out
+
+
+def test_a_new_round_id_clears_the_old_validation():
+    c = client()
+    c.handle(protocol.handshake_event(DEV, "r1"))
+    c.handle(protocol.validated_event(DEV, "r1", "player"))
+    c.handle(protocol.handshake_event(DEV, "r1"))
+    assert c.validated_role == "player"      # same round: still validated
+    c.handle(protocol.handshake_event(DEV, "r2"))
+    assert c.validated_role is None
+
+
+def test_malformed_handshake_and_validated_are_dropped():
+    c = client()
+    assert c.handle(_down("handshake", "i", [3])) == ""
+    assert c.handle(_down("validated", "s", ["r1"])) == ""
+    assert c.round_id is None and c.validated_role is None
+
+
+def test_handshake_answer_matches_the_wire():
+    env = protocol.decode(client().handshake("r1"))
+    assert env.address == "/game/handshake"
+    assert env.typespec == "sss"
+    assert env.args == [DEV, "r1", NODE]
+
+
+def _role_blob(role, scored):
+    return {"role": role, "scored": scored}
+
+
+def test_role_prints_the_granted_marker_scored_and_jam(capsys):
+    c = client()
+    c.handle(protocol.role_event(DEV, _role_blob("player", True)))
+    c.handle(protocol.role_event(DEV, _role_blob("jammer", False)))
+    out = capsys.readouterr().out
+    assert f"ROLE GRANTED: {DEV} scored player\n" in out
+    assert f"ROLE GRANTED: {DEV} jam jammer\n" in out
+
+
+def test_a_deny_is_recorded_and_informational():
+    c = client()
+    c.handle(protocol.deny_event(DEV, "scored full", "jam at start"))
+    assert c.last_deny == ("scored full", "jam at start")
+    assert c.config is None and c.released is False
+
+
+def test_reset_for_lobby_clears_the_handshake_state():
+    c = client()
+    c.handle(protocol.handshake_event(DEV, "r1"))
+    c.handle(protocol.validated_event(DEV, "r1", "player"))
+    c.reset_for_lobby()
+    assert c.round_id is None and c.validated_role is None

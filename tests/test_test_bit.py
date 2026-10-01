@@ -14,13 +14,14 @@ from control.generator_runner import GeneratorRunner
 from control.instrument import InstrumentRequirement
 from control.roles import RoleClass
 from control.functions import FunctionKind, FunctionTarget, validate_function_table
+from tests.helpers_admit import admit_running
 
 
 def test_role_table_has_one_scored_and_one_jam_role():
     bit = TestBit()
     table = bit.role_table
     assert table.roles["player"].scored is True
-    assert table.roles["player"].role_class == RoleClass.SHARED
+    assert table.roles["player"].role_class == RoleClass.UNIQUE
     assert table.roles["jammer"].scored is False
     assert table.roles["jammer"].role_class == RoleClass.JAM
 
@@ -480,8 +481,8 @@ def _pin_server() -> GameServer:
     gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
     gs.room.bound = {"main": "room-dev"}
     gs.load_bit("TestBit")
-    gs.devices.hello("dev-1", "device-one", "1.0")
-    result = gs.join("dev-1", "TEST_PLAYER_NODE")
+    gs.hello("dev-1", "device-one", "1.0")
+    result = admit_running(gs, "dev-1", "TEST_PLAYER_NODE")
     assert result.granted, result.reason
     return gs
 
@@ -512,3 +513,8 @@ def test_pin_shake_cues_match_old_handler_math_per_lane(sweep):
     assert reason is None
     got = {cue[:4] for cue in seen}
     assert got == _old_shake_cue_set("dev-1", sweep)
+
+
+def test_player_is_unique_capacity_one():
+    role = TestBit().role_table.roles["player"]
+    assert role.role_class.name == "UNIQUE" and role.capacity == 1

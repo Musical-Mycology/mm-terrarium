@@ -30,6 +30,8 @@ from pathlib import Path
 from control.boot_config import BootConfig
 from control.catalog import load_catalog
 from control.engine import GameServer
+from control.lobby import TERRARIUM_ADMIN
+from control.room_binding import RoomBindingRegistry
 from control.rooms import Room
 from control.terrarium_config import load_terrarium_config
 from devicelink.agent import DeviceLinkAgent
@@ -37,6 +39,7 @@ from devicelink.contract import HELLO_INTERVAL_S
 from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, from_o2_arg
 
 from contract_kit.contract_bit import ContractBit
+from contract_kit.solo_contract_bit import SoloContractBit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,6 +65,14 @@ CUE_HORIZON_S = _production_cue_horizon()
 # The scripted device's real dev id. Replaced by "$DEV" everywhere in the
 # recorded output, so no scenario file ever names it.
 DEV = "ct1"
+
+# A second, uncaptured device for scenarios that need one to fill the
+# scored slot first (handshake_over_cap_deny). Nothing addressed to it is
+# captured, and its id never appears in any recorded blob.
+RIVAL_DEV = "ct2"
+
+# How long arm_fixture opens a Room's registration window for.
+ARM_WINDOW_S = 10.0
 
 # The instrument the scripted device declares at hello. Not "testshroom":
 # that fixture advertises no gesture.hold/gesture.swing and ContractBit's
@@ -101,6 +112,18 @@ DEFAULT_WITHIN_MS = 50
 # presentation time of 0 distinct from "no declared time".
 PRESENTATION_TIME_VERBS = frozenset({"leds"})
 
+# The Bits a recorder can load, by name (Recorder(bit=...)).
+BITS = {"ContractBit": ContractBit, "SoloContractBit": SoloContractBit}
+
+# What a recorded round id is rewritten to. GameServer.load_bit mints it
+# with a random token (spec 2026-10-01 section 3.2), so the real string can
+# never be committed; a device echoes whatever /$DEV/handshake last carried.
+ROUND_PLACEHOLDER = "$ROUND"
+# What a round id from an EARLIER Bit load is rewritten to, so an echo of a
+# superseded round never records as a correct "$ROUND" echo. No committed
+# recording reloads a Bit, so this never appears in the export today.
+PREV_ROUND_PLACEHOLDER = "$ROUND_PREV"
+
 _KEY_RE = re.compile(r"key=\d+")
 
 
@@ -130,7 +153,8 @@ class Recorder:
       float ever reaches the JSON as a time.
     - Absolute O2 times. The clock starts at exactly 0.0, so an absolute
       O2 time IS an offset from the scenario's start.
-    - Dev ids and the lobby's chime key. Rewritten to "$DEV" and "$KEY".
+    - Dev ids, the lobby's chime key and the round id. Rewritten to
+      "$DEV", "$KEY" and "$ROUND" (the round id carries a random token).
     - Set iteration order. Scenarios are single-device by design (spec
       section 5.4): DeviceLinkAgent's one set-ordered send loop
       (`set(self._overrides) | self._override_only` in _render_frames)
@@ -154,12 +178,22 @@ class Recorder:
 
     def __init__(self, *, name: str, summary: str,
                  profiles: tuple[str, ...] = ("rev1",),
-                 join_node: str | None = None, with_room: bool = False,
-                 dev: str = DEV) -> None:
+                 handshake: dict | None = None, with_room: bool = False,
+                 dev: str = DEV, bit: str = "ContractBit") -> None:
+        """`handshake` is the scripted device's accept policy, exported as
+        the scenario's `device.handshake`: None means it never accepts on
+        its own; {"node": str, "ack_after_ms": int} means that on every
+        link-up it answers the FIRST /$DEV/handshake it receives with
+        /game/handshake [dev, round_id, node], ack_after_ms later."""
+        if handshake is not None and set(handshake) != {"node",
+                                                          "ack_after_ms"}:
+            raise ValueError(
+                f"handshake must be None or {{node, ack_after_ms}}, got "
+                f"{handshake!r}")
         self.name = name
         self.summary = summary
         self.profiles = list(profiles)
-        self.join_node = join_node
+        self.handshake = dict(handshake) if handshake is not None else None
         self.dev = dev
         # The presentation lead every recorded `at` was computed with.
         # Public so Task 8's export can publish it alongside the scenarios.
@@ -175,6 +209,14 @@ class Recorder:
         self._now_ms = 0
         self._linked_up = False
         self._next_hello_ms: int | None = None
+        # The latest round id a /$DEV/handshake carried while the link was
+        # up (what a real device would hold), every round id this rig has
+        # seen (for the $ROUND rewrite), and the device.handshake policy's
+        # pending auto-accept.
+        self._round_seen: str | None = None
+        self._round_ids: set[str] = set()
+        self._awaiting_invite = False
+        self._accept_due_ms: int | None = None
 
         self._fake = FakeO2Lite(now=0.0)
         # O2LiteTransport.start refuses a connection that has not seen
@@ -196,14 +238,27 @@ class Recorder:
         # The wrapper filters anything not addressed to our own dev anyway,
         # which covers a later probe (a reconnect re-checks ownership) and
         # every Room fixture's own frames.
+        # Both channels: FakeO2Lite.send_cmd (tcp) no longer calls send, so
+        # a send-only wrapper would miss every tcp-routed down message.
         self._orig_send = self._fake.send
-        self._fake.send = self._wrapped_send
+        self._orig_send_cmd = self._fake.send_cmd
+        self._fake.send = (
+            lambda addr, ts, *a: self._wrapped_send(
+                self._orig_send, addr, ts, *a))
+        self._fake.send_cmd = (
+            lambda addr, ts, *a: self._wrapped_send(
+                self._orig_send_cmd, addr, ts, *a))
 
         catalog = load_catalog(REPO_ROOT / "instruments").published
-        self._gs = GameServer({"ContractBit": ContractBit},
+        # A Room needs a binding registry for arm_fixture to open a
+        # registration window on, driven by the same fake clock.
+        self._room_binding = (RoomBindingRegistry(clock=self._fake.time_get)
+                              if with_room else None)
+        self._gs = GameServer(dict(BITS),
                               cue_horizon=self.cue_horizon,
                               clock=self._fake.time_get,
-                              carried_instruments=catalog)
+                              carried_instruments=catalog,
+                              room_binding=self._room_binding)
         if with_room:
             profile = load_terrarium_config(
                 str(REPO_ROOT / "terrarium.toml")).rooms[ROOM_NAME].profile
@@ -214,7 +269,8 @@ class Recorder:
         self._agent = DeviceLinkAgent(self._gs, self._transport,
                                       horizon=self.cue_horizon,
                                       clock=self._fake.time_get)
-        self._gs.load_bit("ContractBit")
+        self._gs.load_bit(bit)
+        self._round_ids.add(self._gs.round_id)
 
     def _fake_sleep(self, seconds: float) -> None:
         """Advance the fake clock instead of the wall clock, so the
@@ -223,20 +279,35 @@ class Recorder:
 
     # --- capture -----------------------------------------------------------
 
-    def _wrapped_send(self, addr: str, timestamp: float, *raw_args) -> None:
-        """Every outbound o2lite message passes through here.
+    def _wrapped_send(self, orig, addr: str, timestamp: float,
+                      *raw_args) -> None:
+        """Every outbound o2lite message, udp or tcp, passes through here;
+        `orig` is the fake's own send or send_cmd, called through.
 
         Wrapping the FAKE's send rather than O2LiteTransport.send is what
         lets this see Blob-wrapped arguments exactly as the wire carries
         them, which is why from_o2_arg is the right decoder for them.
         """
-        self._orig_send(addr, timestamp, *raw_args)
+        orig(addr, timestamp, *raw_args)
         if not addr.startswith(f"/{self.dev}/"):
             return                      # a _svcheck probe, or a Room fixture
         typespec = raw_args[0] if raw_args else ""
         values = [from_o2_arg(v) if t == "b" else v
                   for t, v in zip(typespec, raw_args[1:])]
-        self._sent.append((self._now_ms, addr, timestamp, typespec, values))
+        if addr == f"/{self.dev}/handshake":
+            self._round_ids.add(values[0])
+        # Round ids are labelled NOW, against the round that is current at
+        # send time, not at finish(): a later reload must not turn this
+        # round's id into "$ROUND_PREV" or an old one into "$ROUND".
+        self._sent.append((self._now_ms, addr, timestamp, typespec,
+                           [self._round_label(v) for v in values]))
+        if addr == f"/{self.dev}/handshake" and self._linked_up:
+            # What a real device does on an invite: hold the round id.
+            self._round_seen = values[0]
+            if self._awaiting_invite and self.handshake is not None:
+                self._awaiting_invite = False
+                self._accept_due_ms = (self._now_ms
+                                       + int(self.handshake["ack_after_ms"]))
 
     # --- clock / link ------------------------------------------------------
 
@@ -261,36 +332,56 @@ class Recorder:
                 f"timeline)")
         while self._now_ms < target_ms:
             step_ms = min(TICK_MS, target_ms - self._now_ms)
-            if (self._linked_up and self._next_hello_ms is not None
-                    and self._next_hello_ms < self._now_ms + step_ms):
-                # Land exactly on the heartbeat rather than stepping past
-                # it, so a hello is stamped at 5000 and not at 5014.
-                step_ms = self._next_hello_ms - self._now_ms
+            for due in (self._next_hello_ms, self._accept_due_ms):
+                if (self._linked_up and due is not None
+                        and due < self._now_ms + step_ms):
+                    # Land exactly on a device send rather than stepping
+                    # past it, so a hello is stamped at 5000 and not 5014.
+                    step_ms = min(step_ms, due - self._now_ms)
             self._set_now(self._now_ms + step_ms)
             self._agent.poll()
-            if (self._linked_up and self._next_hello_ms is not None
-                    and self._now_ms >= self._next_hello_ms):
-                self._send_hello(self._now_ms)
-                self._next_hello_ms += HELLO_INTERVAL_MS
+            self._run_due_device_sends()
+
+    def _run_due_device_sends(self) -> None:
+        """The scripted device's own timed sends that are due now: the
+        hello heartbeat, then the device.handshake policy's auto-accept."""
+        if not self._linked_up:
+            return
+        if (self._next_hello_ms is not None
+                and self._now_ms >= self._next_hello_ms):
+            self._send_hello(self._now_ms)
+            self._next_hello_ms += HELLO_INTERVAL_MS
+        if (self._accept_due_ms is not None
+                and self._now_ms >= self._accept_due_ms):
+            self._accept_due_ms = None
+            self._send_handshake(self._now_ms, self._round_seen,
+                                 self.handshake["node"])
 
     def link_up(self, t_ms: int = 0) -> None:
         """The device's link comes up at `t_ms`: it hellos immediately, and
         every HELLO_INTERVAL_MS after that until link_down. A recorder
-        built with a join_node also sends that join right away."""
+        built with a `handshake` policy then accepts the first
+        /$DEV/handshake this link-up receives, ack_after_ms after it."""
         self.advance_to(t_ms)
         self.steps.append({"t": t_ms, "link": "up"})
         self._linked_up = True
-        self._send_hello(t_ms)
+        self._awaiting_invite = self.handshake is not None
+        self._accept_due_ms = None
         self._next_hello_ms = t_ms + HELLO_INTERVAL_MS
-        if self.join_node is not None:
-            self._send_join(t_ms, self.join_node)
+        self._send_hello(t_ms)
+        # An invite answered with ack_after_ms 0 is due right now.
+        self._run_due_device_sends()
 
     def link_down(self, t_ms: int) -> None:
-        """The device's link drops at `t_ms`: the heartbeat stops."""
+        """The device's link drops at `t_ms`: the heartbeat stops and any
+        pending policy accept is dropped. The device keeps its round id
+        (guide rule 9): only a later /$DEV/handshake replaces it."""
         self.advance_to(t_ms)
         self.steps.append({"t": t_ms, "link": "down"})
         self._linked_up = False
         self._next_hello_ms = None
+        self._awaiting_invite = False
+        self._accept_due_ms = None
 
     def _send_hello(self, t_ms: int) -> None:
         self._scripted.append((t_ms, "/game/hello", INSTRUMENT))
@@ -299,8 +390,27 @@ class Recorder:
                            timestamp=t_ms / 1000.0)
         self._agent.poll()
 
-    def _send_join(self, t_ms: int, node: str) -> None:
-        self._scripted.append((t_ms, "/game/join", node))
+    def _send_handshake(self, t_ms: int, round_id: str | None,
+                        node: str) -> None:
+        if round_id is None:
+            raise AssertionError(
+                f"the device has no round id to accept with at t={t_ms}ms: "
+                f"no /$DEV/handshake has reached it since its link came up")
+        self._scripted.append((t_ms, "/game/handshake",
+                               (self._round_label(round_id), node)))
+        self._fake.deliver("/game/handshake", "sss",
+                           (self.dev, round_id, node),
+                           timestamp=t_ms / 1000.0)
+        self._agent.poll()
+
+    def legacy_join(self, t_ms: int, node: str) -> None:
+        """A contract v2 device's /game/join, which a v3 Control answers
+        with /$DEV/error and otherwise ignores. Recorded as NO step at all:
+        a v3 device never sends it (firmware checklist item 8), so there is
+        neither an input a runner could deliver nor an expect_out a
+        compliant device could pass. Only Control's captured answer lands
+        in the scenario, as an ordinary control_sends step."""
+        self.advance_to(t_ms)
         self._fake.deliver("/game/join", "ss", (self.dev, node),
                            timestamp=t_ms / 1000.0)
         self._agent.poll()
@@ -316,29 +426,70 @@ class Recorder:
         return (f"no {address} scripted at t={t_ms}ms; this rig scripted "
                 f"{scripted}")
 
-    def join_now(self, t_ms: int, node: str) -> None:
-        """An explicit join sent LATER than link_up, for a scenario whose
-        device hellos with join_node=None and only decides to join partway
-        through.
+    def accept(self, t_ms: int, node: str = "",
+               round_id: str | None = None) -> None:
+        """The person accepts at `t_ms`: the device sends /game/handshake
+        [dev, round_id, node], where round_id is the latest one a
+        /$DEV/handshake carried to it (or the literal `round_id` given,
+        for a scenario that pins a stale echo).
 
-        Records a `join` INPUT step (spec section 4.3's step kinds; this
-        kit's step_schema.kinds.join) naming the node, so a replaying
-        runner has something to DELIVER at `t_ms` -- a join is a decision
-        the device under test makes, and an expect_out alone cannot tell a
-        runner when to make it. The join is then sent through the same
-        path every other scripted device message takes, and its own
-        expect_out is recorded after, so finish() reports exactly what
-        this rig did. `device.join_node` stays None on purpose: a
-        replaying device must not join at link-up just because it joins
-        later.
+        Records an `accept` INPUT step (step_schema.kinds.accept) before
+        the device's own expect_out, the same way a gesture does: the
+        accept is a decision the person makes, so a replaying runner has
+        to be told when to make it and must never infer it from the
+        expect_out. An accept the device.handshake policy makes on its own
+        is not an input step; see expect_handshake_out for that one.
 
         Records the expectation itself, so a caller does NOT also call
-        expect_join for the same join.
+        expect_handshake_out for the same accept.
         """
         self.advance_to(t_ms)
-        self.steps.append({"t": t_ms, "join": {"node": node}})
-        self._send_join(t_ms, node)
-        self.expect_join(t_ms, node)
+        detail: dict = {"node": node}
+        if round_id is not None:
+            # Labelled like every other round id, so a real minted id
+            # never reaches the output ("stale" stays literal).
+            detail["round_id"] = self._round_label(round_id)
+        self.steps.append({"t": t_ms, "accept": detail})
+        self._send_handshake(t_ms, round_id if round_id is not None
+                             else self._round_seen, node)
+        self.expect_handshake_out(t_ms)
+
+    def rival_accept(self, t_ms: int) -> None:
+        """A second device (RIVAL_DEV) hellos and accepts the current round
+        at `t_ms`, taking a scored slot. It is never captured and records
+        no step: to the scripted device it is simply someone else in the
+        room, visible only through Control's answers (a full lobby)."""
+        self.advance_to(t_ms)
+        self._fake.deliver("/game/hello", "ssss",
+                           (RIVAL_DEV, "contract-kit-rival", "1", INSTRUMENT),
+                           timestamp=t_ms / 1000.0)
+        self._agent.poll()
+        self._fake.deliver("/game/handshake", "sss",
+                           (RIVAL_DEV, self._gs.round_id, ""),
+                           timestamp=t_ms / 1000.0)
+        self._agent.poll()
+
+    def arm_fixture(self, t_ms: int, fixture: str = "main") -> None:
+        """The operator arms `fixture` of the loaded Room at `t_ms`, so the
+        next Room-node handshake binds it (spec 2026-10-01 section 3.5).
+        Operator input, not device input: records no step."""
+        if self._room_binding is None:
+            raise AssertionError("arm_fixture needs a Recorder(with_room=True)")
+        self.advance_to(t_ms)
+        self._room_binding.arm(ROOM_NAME, fixture, ARM_WINDOW_S)
+        self._agent.poll()
+
+    def start(self, t_ms: int) -> None:
+        """The operator starts the round at `t_ms`, through the single
+        start authority as the Terrarium's own admin identity (spec
+        2026-10-01 section 5.4). Records no step: it is not a device
+        input, and everything a device sees of it (every /$DEV/role) is
+        captured as control_sends."""
+        self.advance_to(t_ms)
+        reason = self._gs.request_start(None, TERRARIUM_ADMIN, "recorder")
+        if reason is not None:
+            raise AssertionError(f"start refused at t={t_ms}ms: {reason}")
+        self._agent.poll()
 
     # --- gestures ----------------------------------------------------------
 
@@ -397,22 +548,22 @@ class Recorder:
             "args": ["$DEV", "*", "*", "*"], "stamp_t": None,
             "within_ms": DEFAULT_WITHIN_MS}})
 
-    def expect_join(self, t_ms: int, node: str) -> None:
-        """The device must join `node` at `t_ms`.
+    def expect_handshake_out(self, t_ms: int) -> None:
+        """The device must send /game/handshake at `t_ms`. Its round id is
+        recorded as "$ROUND" when it was the CURRENT round's id at send
+        time, as "$ROUND_PREV" when it was an earlier load's, and literally
+        when Control never minted it (e.g. "stale").
 
-        Raises unless this rig really did script that join, to that node,
-        at `t_ms`.
+        Raises unless this rig really did script a handshake at `t_ms`.
         """
-        nodes = self._scripted_at(t_ms, "/game/join")
-        if node not in nodes:
-            if not nodes:
-                raise AssertionError(self._no_send_scripted(t_ms, "/game/join"))
+        sent = self._scripted_at(t_ms, "/game/handshake")
+        if not sent:
             raise AssertionError(
-                f"the join scripted at t={t_ms}ms was for {nodes!r}, "
-                f"not {node!r}")
+                self._no_send_scripted(t_ms, "/game/handshake"))
+        echoed, node = sent[-1]
         self.steps.append({"t": t_ms, "expect_out": {
-            "address": "/game/join", "typespec": "ss",
-            "args": ["$DEV", node], "stamp_t": None,
+            "address": "/game/handshake", "typespec": "sss",
+            "args": ["$DEV", echoed, node], "stamp_t": None,
             "within_ms": DEFAULT_WITHIN_MS}})
 
     def expect_quiet(self, t_ms: int, addresses: list[str], for_ms: int) -> None:
@@ -531,10 +682,23 @@ class Recorder:
                 f"no /play {name!r} sent to {self.dev} by t={t_ms}ms")
         t, values = matches[-1]
         self.steps.append({"t": t, "expect_play": {
-            "name": values[0], "params": _normalize_key(values[1]),
+            "name": values[0], "params": self._normalize(values[1]),
             "within_ms": within_ms}})
 
     # --- lifecycle / hand-authored input -----------------------------------
+
+    def control_round_id(self) -> str | None:
+        """The live round id, for a test that needs the real string."""
+        return self._gs.round_id
+
+    def load_bit(self, t_ms: int, bit: str = "ContractBit") -> None:
+        """Load `bit` at `t_ms` (after unload_bit), minting a NEW round id;
+        the previous round's id is from then on recorded as "$ROUND_PREV".
+        Operator input: records no step."""
+        self.advance_to(t_ms)
+        self._gs.load_bit(bit)
+        self._round_ids.add(self._gs.round_id)
+        self._agent.poll()
 
     def unload_bit(self) -> None:
         """Unload the Bit, which releases every joined device."""
@@ -564,6 +728,23 @@ class Recorder:
 
     # --- output ------------------------------------------------------------
 
+    def _round_label(self, value: object) -> object:
+        """A round id as recorded: "$ROUND" for the round current right
+        now, "$ROUND_PREV" for one from an earlier Bit load, anything else
+        unchanged."""
+        if not isinstance(value, str):
+            return value
+        if value == self._gs.round_id:
+            return ROUND_PLACEHOLDER
+        if value in self._round_ids:
+            return PREV_ROUND_PLACEHOLDER
+        return value
+
+    def _normalize(self, value: object) -> object:
+        """A captured argument with its chime key placeheld ("key=$KEY").
+        Round ids were already labelled at capture (_round_label)."""
+        return _normalize_key(value)
+
     def finish(self) -> dict:
         """The EXPORT FORMAT v1 scenario dict, steps sorted by `t`."""
         control_steps = []
@@ -571,7 +752,7 @@ class Recorder:
             control_steps.append({"t": t, "control_sends": {
                 "address": addr.replace(f"/{self.dev}/", "/$DEV/"),
                 "typespec": typespec,
-                "args": [_normalize_key(v) for v in values],
+                "args": [self._normalize(v) for v in values],
                 "at": self._presentation_ms(addr, timestamp)}})
         # Stable: sorted() is stable, so Control's captured sends keep their
         # real order among themselves within one millisecond, and the
@@ -581,6 +762,8 @@ class Recorder:
             "name": self.name,
             "summary": self.summary,
             "profiles": self.profiles,
-            "device": {"join_node": self.join_node},
+            "device": {"handshake": (dict(self.handshake)
+                                     if self.handshake is not None
+                                     else None)},
             "steps": all_steps,
         }

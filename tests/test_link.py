@@ -5,6 +5,7 @@ from control.bit_config import ManifestError
 from control.engine import GameServer
 from control.room_binding import RoomBindingRegistry
 from tests.fakes import FakeClock
+from tests.helpers_admit import admit
 from tests.test_engine import RoomCapableBit, make_room
 from uplink.journal import Journal
 from uplink.link import UplinkAgent
@@ -154,7 +155,7 @@ def test_registration_changes_are_sent_as_events():
     server.load_bit("test_bit")
     transport.sent.clear()
 
-    server.join("ie1", "TEST_PLAYER_NODE")
+    admit(server, "ie1", "TEST_PLAYER_NODE")
 
     reg_events = [m for m in transport.sent if m["event"] == "registration_changed"]
     assert len(reg_events) == 1
@@ -195,7 +196,7 @@ def test_exploding_result_does_not_wedge_state_machine():
 
     server.hello("ie1", "Testshroom 1", "1.0")
     server.load_bit("exploding_result_bit")
-    server.join("ie1", "TEST_PLAYER_NODE")
+    admit(server, "ie1", "TEST_PLAYER_NODE")
     server.run()
     server.tick(3.0)  # crosses TestBit's default 2.0s completion threshold
 
@@ -235,8 +236,8 @@ def test_bit_completed_carries_players_captured_before_release():
     server.hello("ie1", "Testshroom 1", "1.0")
     server.hello("ie2", "Testshroom 2", "1.0")
     server.load_bit("test_bit")
-    server.join("ie1", "TEST_PLAYER_NODE")
-    server.join("ie2", "TEST_JAM_NODE")
+    admit(server, "ie1", "TEST_PLAYER_NODE")
+    admit(server, "ie2", "TEST_JAM_NODE")
     server.run()
     server.tick(3.0)
     completed = [m for m in transport.sent if m["event"] == "bit_completed"]
@@ -270,14 +271,16 @@ def test_the_reserved_terrarium_id_never_appears_in_players():
     agent, server, transport = make_agent()
     server.hello("terrarium", "Box", "1.0")
     server.load_bit("test_bit")
-    server.join("terrarium", "TEST_PLAYER_NODE")  # engine grants it; wire refusal is elsewhere
+    admit(server, "terrarium", "TEST_PLAYER_NODE")  # engine validates it; wire refusal is elsewhere
     server.hello("ie1", "Testshroom 1", "1.0")
-    server.join("ie1", "TEST_PLAYER_NODE")
+    admit(server, "ie1", "TEST_PLAYER_NODE")
     server.run()
     server.tick(3.0)
     completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    # The reserved id is excluded from players however it was validated.
+    # "terrarium" took the scored slot, so ie1 is the jammer.
     assert completed[0]["players"] == [
-        {"dev": "ie1", "role": "player", "class": "scored"}]
+        {"dev": "ie1", "role": "jammer", "class": "jam"}]
 
 
 class FlakyTransport(FakeTransport):
@@ -312,7 +315,7 @@ def test_maintain_connection_is_a_noop_when_already_connected():
 def test_reconnect_sends_resync_snapshot():
     agent, server, transport = make_agent()
     server.load_bit("test_bit")
-    server.join("ie1", "TEST_PLAYER_NODE")
+    admit(server, "ie1", "TEST_PLAYER_NODE")
     transport.disconnect()
     transport.sent.clear()
 
@@ -352,7 +355,7 @@ def test_resync_never_sends_the_room_role():
     server.load_bit("room_bit")
     server.hello("ie9", "Shroom Nine", "1")
     server.room_binding.arm("TEST", "main", window_seconds=10.0)
-    server.join("ie9", "ROOM_TEST_NODE")
+    admit(server, "ie9", "ROOM_TEST_NODE")
 
     transport.disconnect()
     transport.sent.clear()
@@ -378,13 +381,13 @@ def test_on_registration_change_never_sends_the_room_role():
     server.load_bit("room_bit")
     server.hello("ie9", "Shroom Nine", "1")
     server.room_binding.arm("TEST", "main", window_seconds=10.0)
-    server.join("ie9", "ROOM_TEST_NODE")  # a Room join alone doesn't fire
-                                           # on_registration_change
+    admit(server, "ie9", "ROOM_TEST_NODE")  # a Room bind alone doesn't fire
+                                            # on_registration_change
 
     transport.sent.clear()
 
     server.hello("ie1", "Shroom One", "1")
-    server.join("ie1", "TEST_PLAYER_NODE")  # an ordinary join does
+    admit(server, "ie1", "TEST_PLAYER_NODE")  # a scored validation does
 
     reg_events = [m for m in transport.sent if m["event"] == "registration_changed"]
     assert len(reg_events) == 1

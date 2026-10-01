@@ -11,10 +11,9 @@ This table is read by:
   typespec must be one this table allows for its address)
 - tools/export_contract.py (the exported contract.json "verbs" list)
 
-Down-row transport is "udp-ok" for every row: O2LiteTransport.send calls
-o2lite's send() with no tcp= keyword, and o2litepy's send() defaults to
-UDP (send_cmd is the one that passes tcp=True) -- verified against
-o2litepy/src/o2litepy/o2lite.py, not assumed. Nothing here changes that.
+Down-row transport is per row (spec 2026-10-01-instrument-handshake-protocol
+section 3.3): control verbs go tcp through o2litepy's send_cmd, leds and
+play stay udp-ok.
 """
 from __future__ import annotations
 
@@ -52,14 +51,19 @@ VERB_TABLE: tuple[VerbRow, ...] = (
             "The 'ssss' form declares the carried instrument (2026-08-31 "
             "carried-instrument-wire); the bare 's' form declares nothing "
             "and resolves to defaultshroom."),
-    VerbRow("join", "up", ("ss",), ("dev", "node"), "tcp", True, ""),
     VerbRow("start", "up", ("ss",), ("dev", "key"), "tcp", True,
             "key is '' for an unkeyed (Console/uplink) start."),
+    VerbRow("handshake", "up", ("sss",), ("dev", "round_id", "node"),
+            "tcp", True,
+            "Received Handshake: sent when the user accepts. round_id "
+            "echoes the latest /<dev>/handshake; node '' asks for the "
+            "Bit's default scored role, else a Registration Node id. A "
+            "Room node binds an armed fixture and ignores round_id."),
     VerbRow("tap", "up", ("sffi",),
-            ("dev", "peak_g", "duration_ms", "count"), "udp-ok", True,
-            "peak_g is 0 for a touch tap (Rev 1); count is always 1 on "
-            "Rev 1 -- Control pairs double taps itself. Stamped at onset. "
-            "Allowed before a role for the lobby's tap-to-join handshake."),
+            ("dev", "peak_g", "duration_ms", "count"), "udp-ok", False,
+            "peak_g is 0 for a touch tap (Rev 1); count is the device's "
+            "own pairing (Rev 1 sends 1). Stamped at onset. Gameplay "
+            "only: Control no longer reads taps as a lobby handshake."),
     VerbRow("tilt", "up", ("sf",), ("dev", "gamma"), "udp-ok", False, ""),
     VerbRow("shake", "up", ("sfff",),
             ("dev", "peak_g", "duration_ms", "sweep_deg"), "udp-ok", False, ""),
@@ -85,11 +89,18 @@ VERB_TABLE: tuple[VerbRow, ...] = (
             "(recommended) tcp, for the same reason as capture: a dropped "
             "chunk shows up as a gap in the trace (capture/store.py)."),
     # --- down: Control -> device (/<dev>/<verb>) ---
-    VerbRow("role", "down", ("b",), ("config",), "udp-ok", False,
-            "Sent once a join is granted."),
-    VerbRow("deny", "down", ("ss",), ("reason", "hint"), "udp-ok", True,
-            "Sent in reply to a join Control refuses; the device holds no "
-            "role before or after."),
+    VerbRow("role", "down", ("b",), ("config",), "tcp", False,
+            "Sent once per round at RUNNING (or at a RUNNING walk-up's "
+            "first hello)."),
+    VerbRow("deny", "down", ("ss",), ("reason", "hint"), "tcp", True,
+            "Reply to a refused /game/handshake; reason and hint are both "
+            "set."),
+    VerbRow("handshake", "down", ("s",), ("round_id",), "tcp", True,
+            "Invite for this round: sent on first hello in SETUP and every "
+            "invite cycle until validated, FULL, or SETUP ends."),
+    VerbRow("validated", "down", ("ss",), ("round_id", "role"), "tcp", True,
+            "The handshake was accepted and a scored slot is reserved; the "
+            "role itself arrives at RUNNING."),
     VerbRow("leds", "down", ("b",), ("frame",), "udp-ok", True,
             "Rule 3: a frame shows at its presentation time; when several "
             "are due, only the newest shows; the last frame holds. Also "
@@ -98,18 +109,26 @@ VERB_TABLE: tuple[VerbRow, ...] = (
     VerbRow("play", "down", ("ss",), ("name", "params"), "udp-ok", False,
             "Fires a device-local sample by name; an unknown name is the "
             "device's own business."),
-    VerbRow("release", "down", ("",), (), "udp-ok", False,
+    VerbRow("release", "down", ("",), (), "tcp", False,
             "Ends the role but does not clear the display."),
-    VerbRow("error", "down", ("ss",), ("context", "message"), "udp-ok", True,
+    VerbRow("error", "down", ("ss",), ("context", "message"), "tcp", True,
             "A handler-declared or engine-level refusal; changes no "
             "state."),
-    VerbRow("room", "down", ("b",), ("blob",), "udp-ok", True,
-            "Informational room snapshot, sent after every hello whether "
-            "or not the device has joined; hardware ignores it."),
+    VerbRow("room", "down", ("b",), ("blob",), "tcp", True,
+            "Sent on first contact and on every state or registration "
+            "change; hardware may ignore it."),
 )
 
 GAME_VERBS: tuple[str, ...] = tuple(
     row.verb for row in VERB_TABLE if row.direction == "up")
+
+# Up verbs a v3 Control no longer accepts but still ANSWERS (spec
+# 2026-10-01 section 3.3: /game/join gets /<dev>/error ["join", "retired
+# in contract v3: use /game/handshake"]). Registered on the o2lite
+# connection beside GAME_VERBS so the old message reaches the agent rather
+# than being dropped unhandled; deliberately not a VERB_TABLE row, so the
+# exported contract never lists it.
+RETIRED_UP_VERBS: tuple[str, ...] = ("join",)
 
 
 def row_for(direction: str, verb: str) -> VerbRow:
@@ -121,3 +140,7 @@ def row_for(direction: str, verb: str) -> VerbRow:
 
 def typespec_allowed(direction: str, verb: str, typespec: str) -> bool:
     return typespec in row_for(direction, verb).typespecs
+
+
+def down_transport(verb: str) -> str:
+    return row_for("down", verb).transport

@@ -23,9 +23,9 @@ from control.lobby import (BELL_DURATION_S, BELL_OFFSET_S, BELL_PROGRAM,
                            FEEDBACK_REFUSED, FIXTURE_FLASH_GAP_S,
                            FIXTURE_FLASH_ON_S, GREEN, GREEN_HUE_CC, HUE_CC,
                            LOBBY_DRONE_KEY, LOBBY_DRONE_VEL, LOBBY_PROGRAM,
-                           RED, WHITE, CeremonySlots, DoubleTapDetector,
-                           InviteSchedule, LobbyConfig, LobbyState,
-                           hue_drift_cc, scale_note)
+                           RED, WHITE, CeremonySlots, InviteSchedule,
+                           LobbyConfig, LobbyState, hue_drift_cc,
+                           scale_note)
 from control.timed_queue import TimedQueue
 
 
@@ -39,7 +39,6 @@ class LobbySinks:
     play_note: Callable[[int, int, int, float], None]
     set_override: Callable[[str, tuple, float, float], None]
     send_play: Callable[[str, str, str], None]
-    request_join: Callable[[str, object], None]
     announce: Callable[[str, str], None]
 
 
@@ -56,7 +55,6 @@ class LobbyRuntime:
         self._queue = TimedQueue()
         self._slots = CeremonySlots(CEREMONY_SPAN_S, config.ceremony_gap_s)
         self._invites = InviteSchedule(config.invite_interval_s)
-        self._taps = DoubleTapDetector(config.double_tap_window_s)
         self._last_light: dict[tuple[str, int], int] = {}
         self._last_audio: dict[str, int] = {}
         self._joins = 0
@@ -81,14 +79,22 @@ class LobbyRuntime:
         if self._room_program is not None:
             for name in self._s.fixture_names():
                 self._s.feed_audio(name, 0xC0, int(self._room_program), 0)
-        self._queue = TimedQueue()
+        # The queue is KEPT (spec 2026-10-01 section 5.5): a ceremony
+        # whose validation landed just before start still plays its bell
+        # and chime. tick() drains due thunks before its _running check,
+        # and the agent keeps ticking a stopped runtime while draining().
+        # New invites stop: the schedule is cleared and the agent no
+        # longer calls consider_invite.
         self._invites.clear()
-        self._taps.clear()
         # The de-dupe caches are what a restarted lobby would otherwise
         # measure its first frame against, silencing the opening breath
         # and hue feeds.
         self._last_light.clear()
         self._last_audio.clear()
+
+    def draining(self) -> bool:
+        """Stopped, but queued ceremony or feedback thunks remain."""
+        return not self._running and self._queue.pending() > 0
 
     def set_state(self, state: LobbyState) -> None:
         if state is self._state:
@@ -166,9 +172,12 @@ class LobbyRuntime:
                 self._at(t, lambda d=dev: self._s.set_override(
                     d, rgb, 1.0, FIXTURE_FLASH_ON_S))
 
-    # --- handshake (spec 5) --------------------------------------------
+    # --- invite flash (spec 5) -----------------------------------------
     def consider_invite(self, dev: str) -> None:
-        if self._state is not LobbyState.WAITING:
+        """The white invite flash only. /<dev>/handshake itself is the
+        agent's (DeviceLinkAgent._tick_handshakes), so it goes out in SETUP
+        whether or not a lobby runtime exists (spec 2026-10-01 3.1, 3.3)."""
+        if not self._running or self._state is not LobbyState.WAITING:
             return
         first = not self._invites.invited(dev)
         if not self._invites.due(dev, self._clock()):
@@ -178,21 +187,32 @@ class LobbyRuntime:
         now = self._clock()
         for i in range(2):
             t = now + i * (DEVICE_FLASH_ON_S + DEVICE_FLASH_GAP_S)
-            self._at(t, lambda d=dev: self._s.set_override(d, WHITE, 1.0,
-                                                           DEVICE_FLASH_ON_S))
+            self._at(t, _InviteFlash(dev, self._s))
 
     def is_invited(self, dev: str) -> bool:
         return self._invites.invited(dev)
 
     def forget(self, dev: str) -> None:
+        """Stop inviting `dev`, and drop its invite flashes still queued,
+        so a device that validates mid-invite sees no white flash after its
+        /validated (a white frame there reads as a second invite). Only
+        that dev's invite flashes go: other devs' flashes and every
+        ceremony cue stay queued."""
         self._invites.forget(dev)
-        self._taps.forget(dev)
+        self._queue.purge(
+            lambda thunk: isinstance(thunk, _InviteFlash) and thunk.dev == dev)
 
-    def observe_tap(self, dev: str, count: int, stamp: float, client) -> bool:
-        if not self._invites.invited(dev):
-            return False
-        if not self._taps.observe(dev, count, stamp):
-            return False
-        self._s.announce("handshake", dev)
-        self._s.request_join(dev, client)
-        return True
+
+class _InviteFlash:
+    """One queued white invite flash for `dev`: a named thunk rather than a
+    lambda, so LobbyRuntime.forget can purge exactly these from its
+    TimedQueue."""
+
+    __slots__ = ("dev", "_sinks")
+
+    def __init__(self, dev: str, sinks: LobbySinks) -> None:
+        self.dev = dev
+        self._sinks = sinks
+
+    def __call__(self) -> None:
+        self._sinks.set_override(self.dev, WHITE, 1.0, DEVICE_FLASH_ON_S)

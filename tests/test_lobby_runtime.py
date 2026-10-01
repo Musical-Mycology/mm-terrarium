@@ -28,7 +28,6 @@ class _Sinks:
         self.notes = []      # (program, key, vel, duration)
         self.overrides = []  # (t, dev, rgb, level, duration)
         self.plays = []      # (dev, name, params)
-        self.joins = []      # (dev, client)
         self.events = []     # (event, dev)
         self.t = 0.0
 
@@ -43,7 +42,6 @@ class _Sinks:
             set_override=lambda dev, rgb, lvl, dur: self.overrides.append(
                 (self.t, dev, rgb, lvl, dur)),
             send_play=lambda dev, n, p: self.plays.append((dev, n, p)),
-            request_join=lambda dev, client: self.joins.append((dev, client)),
             announce=lambda ev, dev: self.events.append((ev, dev)),
         )
 
@@ -209,22 +207,35 @@ def test_no_invites_while_full():
     assert not rt.is_invited("ie3")
 
 
-def test_double_tap_from_an_invited_device_requests_the_join():
+def test_invites_are_announced_once_and_forgotten_on_request():
+    # /<dev>/handshake is the agent's, not the runtime's (spec 2026-10-01
+    # sections 3.1, 3.3): the runtime owns only the flash and the announce.
     rt, sinks, clock = _rt()
     rt.start()
     rt.consider_invite("ie3")
-    assert rt.observe_tap("ie3", 1, 50.0, "c3") is False
-    assert rt.observe_tap("ie3", 1, 51.0, "c3") is True
-    assert sinks.joins == [("ie3", "c3")]
-    assert ("handshake", "ie3") in sinks.events
-    assert rt.observe_tap("ie9", 2, 60.0, "c9") is False     # never invited
+    _run(rt, sinks, clock, DEFAULT_LOBBY.invite_interval_s + 0.1)
+    rt.consider_invite("ie3")
+    assert sinks.events.count(("invite", "ie3")) == 1
     rt.forget("ie3")
     assert not rt.is_invited("ie3")
 
 
+def test_stop_ends_invites_but_drains_queued_thunks():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.on_scored_join("ie1")
+    rt.stop()
+    assert rt.draining()
+    rt.consider_invite("ie3")       # a stopped runtime invites no one
+    assert not rt.is_invited("ie3")
+    assert not [o for o in sinks.overrides if o[1] == "ie3"]
+    _run(rt, sinks, clock, 2.0)
+    assert not rt.draining()
+    assert [p[0] for p in sinks.plays] == ["ie1"]
+
+
 def test_stop_then_start_feeds_the_first_breath_and_hue_again():
-    """stop() has to reset the de-dupe caches and the tap detector, not
-    just the queue: a restarted lobby whose opening frame repeats the
+    """stop() has to reset the de-dupe caches: a restarted lobby whose opening frame repeats the
     values the old one last sent would come up silent and dark, because
     the caches still hold them."""
     rt, sinks, clock = _rt()
@@ -240,3 +251,34 @@ def test_stop_then_start_feeds_the_first_breath_and_hue_again():
         assert (name, 0xB0, HUE_CC, hue_drift_cc(0.0)) in fresh_light
         assert (name, 0xB0, BREATH_CC, breath_cc(0.0)) in fresh_light
         assert (name, BREATH_CC, breath_cc(0.0)) in fresh_ctrl
+
+
+def test_ceremony_survives_stop():
+    """stop() keeps the queued ceremony thunks (spec 2026-10-01): the
+    chime of a validation that landed just before start still plays."""
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.on_scored_join("ie1")
+    rt.stop()
+    clock.advance(2.0)
+    rt.tick()
+    assert sinks.plays == [("ie1", "chime", sinks.plays[0][2])]
+
+
+def test_forget_drops_only_that_devs_queued_invite_flashes():
+    """A device that validates mid-invite must see no white flash after
+    its /validated: forget purges its still-queued invite flashes, and
+    leaves another dev's invite flashes and the ceremony's green ones."""
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie3")
+    rt.consider_invite("ie4")
+    _run(rt, sinks, clock, 0.1)          # the first white flash of each
+    rt.forget("ie3")
+    rt.on_scored_join("ie3")
+    _run(rt, sinks, clock, 2.0)
+    ie3 = [o[2] for o in sinks.overrides if o[1] == "ie3"]
+    assert ie3 == [WHITE, GREEN, GREEN]  # no second white after forget
+    ie4 = [o[2] for o in sinks.overrides if o[1] == "ie4"]
+    assert ie4 == [WHITE, WHITE]
+    assert [p[:2] for p in sinks.plays] == [("ie3", "chime")]

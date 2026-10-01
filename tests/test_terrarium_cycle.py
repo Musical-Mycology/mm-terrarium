@@ -321,23 +321,31 @@ def test_full_offline_cycle_two_rooms_console_driven(monkeypatch):
     gs.tick(0.05)   # run_elapsed=1.20, at=9.0 -- past the window, drift resumes
     assert cc74() == GeneratorRunner.value(drift_spec, 1.20)
 
-    # --- a joined device's blob carries `triggers`: TUNESHROOM (the default
-    # carried instrument gs.join() grants when none is declared) ships its
+    # --- a joined device's blob carries `triggers`: DEFAULTSHROOM (the default
+    # carried instrument a walk-up hello gets when none is declared) ships its
     # own event-trigger thresholds in the composed config (control/
     # role_config.py's compose_role_config, Task 8/spec section 5). The
     # jammer role is requires-less and unscored (registration for the
     # scored "player" role is already closed mid-run) -- exactly the case
     # the docstring calls out: thresholds ship for every granted non-ROOM
     # join, slot requirement or not. ---
-    join_result = gs.join("jammer_dev", "TEST_JAM_NODE")
+    # Spec 3.6: a RUNNING first hello is granted the jam role at once, and
+    # the grant (with its composed config) reaches the on_grant sink.
+    grants = []
+    gs.on_grant = lambda dev, result: grants.append((dev, result))
+    gs.hello("jammer_dev", "", "", None)
+    assert [d for d, _ in grants] == ["jammer_dev"]
+    join_result = grants[0][1]
     assert join_result.granted
+    assert join_result.role == "jammer"
     assert join_result.config["triggers"] == {
         "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
         "shake": {"peak_g": 2.0, "window_ms": 200},
     }
     # ...and the instrument section (Task 3) ships the same carried
     # instrument's full definition under config["instrument"].
-    assert join_result.config["instrument"]["name"] == "tuneshroom"
+    # The default carried instrument is DEFAULTSHROOM (same triggers).
+    assert join_result.config["instrument"]["name"] == "defaultshroom"
 
     gs.tick(3.0)   # TestBit's run duration elapses -> COMPLETING -> IDLE
     assert gs.state.name == "IDLE"

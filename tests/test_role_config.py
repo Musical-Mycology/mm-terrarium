@@ -70,11 +70,12 @@ def test_compose_triggers_do_not_alias_the_instrument_declaration():
     assert TAP.thresholds["peak_g"] == 2.0
 
 
-def test_compose_role_config_stamps_slot_and_instrument_when_given():
-    config = compose_role_config("Bit", "0.1", make_role(),
-                                 slot="player", instrument="tuneshroom")
+def test_compose_role_config_stamps_slot_when_given():
+    # The flat instrument-name stamp is gone (spec 2026-10-01 cleanup):
+    # the name rides only in the carried view's config["instrument"].
+    config = compose_role_config("Bit", "0.1", make_role(), slot="player")
     assert config["slot"] == "player"
-    assert config["instrument"] == "tuneshroom"
+    assert "instrument" not in config
 
 
 def test_compose_ships_instrument_section_when_carried():

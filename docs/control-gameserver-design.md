@@ -186,6 +186,15 @@ A Bit's role table declares each role with:
 
 ## Player Flow, Mapped to Messages
 
+> **Superseded (2026-10-01):** registration below (steps 2 and 3, the
+> explicit `/game/join`, the node-walk grant at join time and the mid-session
+> role switch) is replaced by the instrument handshake (contract v3): hello,
+> `/<dev>/handshake`, `/game/handshake`, `/<dev>/validated`, then exactly one
+> role per device at RUNNING, scored if it validated, else jam. `/game/join`
+> is retired. See
+> [`docs/superpowers/specs/2026-10-01-instrument-handshake-protocol-design.md`](superpowers/specs/2026-10-01-instrument-handshake-protocol-design.md)
+> and *Lobby and the handshake* in `docs/MM_TERRARIUM.md`.
+
 1. **Enter the room.** A Tuneshroom powers up, joins WiFi, discovers the ensemble,
    and connects to the Arco server via o2lite. A phone taps NFC (or scans a QR
    code) and gets a URL pointing at the Terrarium's own HTTP server, which the

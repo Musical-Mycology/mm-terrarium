@@ -12,6 +12,17 @@ from devicelink.agent import DeviceLinkAgent
 from tests.test_devicelink_agent import FakeServer
 
 
+def _handshake_and_run(server, agent, gs, dev="ie1", client="c1"):
+    """Contract v3 (spec 2026-10-01 section 3.4): the scored role is
+    validated by /game/handshake in SETUP and granted, bridge and /role
+    included, when the round starts."""
+    server.deliver(client, "/game/handshake", "sss",
+                   [dev, gs.round_id, "TEST_PLAYER_NODE"])
+    agent.poll()
+    gs.run()
+    assert gs.registration.assignments[dev][1] == "player"
+
+
 # Real wall-clock time (the DeviceLinkAgent/DeviceBridge default) can't
 # advance the welcome signature or the LOADING->RUNNING transition within a
 # synchronous poll() loop -- TestBit's welcome duration is a real 1.5s and a
@@ -55,7 +66,7 @@ def _make_rig_running(clk):
     server.arrive("c1")
     server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
     agent.poll()
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    _handshake_and_run(server, agent, gs)
     agent.poll()
     for _ in range(200):
         if agent.bridges["ie1"].session.state == "running":
@@ -63,7 +74,6 @@ def _make_rig_running(clk):
         agent.poll()
     else:
         pytest.fail("session never reached RUNNING")
-    gs.run()
     server.sent.clear()
     return gs, server, agent
 
@@ -83,9 +93,7 @@ def _make_rig():
     server.arrive("c1")
     server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
     agent.poll()
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
-    agent.poll()
-    gs.run()
+    _handshake_and_run(server, agent, gs)
     server.sent.clear()
     return gs, server, agent
 
@@ -249,7 +257,7 @@ def test_rejoin_mid_fade_does_not_destroy_the_new_session():
     """Regression for the _on_join staleness bug: if the same dev rejoins
     while its previous session is still in its closing fade (self._closing
     still has an entry for it, left over from the release that started the
-    fade), _on_join must clear that entry when it installs the new bridge.
+    fade), _on_grant must clear that entry when it installs the new bridge.
     Otherwise the very next poll()'s _check_closing_done sees the *new*
     session (state "loading", not CLOSING), wrongly concludes the old fade
     is done, and _finish_release() tears down the brand-new bridge/universe
@@ -264,7 +272,7 @@ def test_rejoin_mid_fade_does_not_destroy_the_new_session():
         "setup precondition: the old session must still be mid-fade")
 
     gs.load_bit("test_bit")
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    _handshake_and_run(server, agent, gs)
     agent.poll()
 
     assert "ie1" in agent.bridges, (
@@ -323,7 +331,7 @@ def _make_timed_rig(now, horizon):
     server.arrive("c1")
     server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
     agent.poll()
-    server.deliver("c1", "/game/join", "ss", ["ie1", "TEST_PLAYER_NODE"])
+    _handshake_and_run(server, agent, gs)
     agent.poll()
     for _ in range(200):
         if agent.bridges["ie1"].session.state == "running":
@@ -332,7 +340,6 @@ def _make_timed_rig(now, horizon):
         agent.poll()
     else:
         pytest.fail("session never reached RUNNING")
-    gs.run()
     server.sent.clear()
     agent._pending_at.clear()
     return gs, server, agent

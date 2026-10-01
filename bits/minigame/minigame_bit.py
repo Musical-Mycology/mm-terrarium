@@ -101,9 +101,10 @@ class MinigameBit(Bit):
         pass
 
     def on_run_start(self) -> None:
-        # Joins land in SETUP, before this runs, so the player is kept:
-        # clearing _dev here orphaned the lobby's device (MetronomeBit
-        # keeps its _players across run start for the same reason).
+        # on_join fires inside run(), when validations materialize into
+        # roles, before this runs, so the player is kept: clearing _dev
+        # here orphaned the lobby's device (MetronomeBit keeps its _players
+        # across run start for the same reason).
         self._enter(Phase.PENDING)
         self._blink_t0 = None
         self._next_blink = 0

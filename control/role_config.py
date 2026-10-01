@@ -153,7 +153,6 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
                         room_name: str | None = None,
                         terrarium_config_version: str | None = None,
                         slot: str | None = None,
-                        instrument: str | None = None,
                         event_triggers: tuple = (),
                         carried: Instrument | None = None) -> dict:
     """The per-role config blob shipped in /ie<N>/role at adoption time
@@ -168,10 +167,10 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
     entirely so a pre-Room blob stays byte-identical to what always shipped
     -- never present as null.
 
-    slot and instrument stamp the requirement slot a granted join filled
-    and the carried instrument's name that filled it (GameServer.join,
-    Task 6); both are omitted for ROOM joins and requires-less roles, same
-    never-null discipline as the provenance stamps.
+    slot stamps the requirement slot a granted role filled
+    (GameServer._grant); omitted for requires-less roles, same never-null
+    discipline as the provenance stamps. The carried instrument's name
+    rides in config["instrument"]["name"] (see carried below).
 
     event_triggers is the carried instrument's Task 8 EventTrigger tuple;
     when non-empty it ships as config["triggers"] = {name: thresholds},
@@ -185,10 +184,8 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
     (light/ugen manifests), functions (function_view's wire shape)},
     deep-copied so a generic host's rendering can never alias the
     Instrument. Omitted entirely when carried is None -- same never-null
-    discipline as every other stamp here. This supersedes the instrument
-    keyword's flat-string stamp for any caller that also passes carried:
-    every granted non-ROOM join does today (GameServer.join), so the
-    section's own "name" field is the sole surviving form of that stamp."""
+    discipline as every other stamp here. Every granted non-ROOM role
+    passes it (GameServer._grant)."""
     light = deepcopy(role.light_manifest)
     light["bit_name"] = bit_name
     light["bit_version"] = bit_version
@@ -209,8 +206,6 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
         config["terrarium_config_version"] = terrarium_config_version
     if slot is not None:
         config["slot"] = slot
-    if instrument is not None:
-        config["instrument"] = instrument
     if event_triggers:
         config["triggers"] = {t.name: dict(t.thresholds)
                               for t in event_triggers}

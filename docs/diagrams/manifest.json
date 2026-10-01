@@ -23,6 +23,17 @@
       "source": "cue-path.d2",
       "source_sha256": "c344ac20a647422fcf3743246e355158685b1da470b3c482629dadade090abc2"
     },
+    "device-lifecycle": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "device-lifecycle",
+      "outputs": {
+        "out/device-lifecycle.svg": "9869e5a2b31472f1bdc8969dbc705380f1f1ab8f058690a211014ea2d913516c",
+        "out/device-lifecycle.txt": "3ade0579a522c9eb1557bec78400867048e3abb1ddcb582ef8006d82ad8ed044"
+      },
+      "renderer": "d2",
+      "source": "device-lifecycle.d2",
+      "source_sha256": "c4c0a162c2e7933827b6f9ea727da16ea6bbb9f0c960746a5dc878201e77474a"
+    },
     "lifecycle": {
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "lifecycle",
@@ -49,11 +60,21 @@
       "inject_into": "docs/MM_TERRARIUM.md",
       "marker": "player-flow",
       "outputs": {
-        "out/player-flow.txt": "41e3c82915c021903b29b7c8705a60f90226500d009f21832fb25623f5167144"
+        "out/player-flow.txt": "747bbfcf6073ef78ab5acd239af8d3d70e20cfb27d369ca7e7db51ad1c91c31a"
       },
       "renderer": "seq",
       "source": "player-flow.seq",
-      "source_sha256": "192ad8db0307535ab83b6791233bfc189c7c2e52d5a244e7e6ec756c70f2f021"
+      "source_sha256": "314373c110160dafeff33bf9bca43e7a912727576afd0d2b3800538b5f410b49"
+    },
+    "role-assignment": {
+      "inject_into": "docs/MM_TERRARIUM.md",
+      "marker": "role-assignment",
+      "outputs": {
+        "out/role-assignment.txt": "cb267abebf509b40b03d6db4ab68e9beca095cd6dd1a9f06694f1464c8d7100f"
+      },
+      "renderer": "seq",
+      "source": "role-assignment.seq",
+      "source_sha256": "3fa97a67ee37b279f42ce7dcde3961297cc6cf64ce03effdaa4636939e7a6cc2"
     },
     "terrarium-state": {
       "inject_into": "docs/MM_TERRARIUM.md",

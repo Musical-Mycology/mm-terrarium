@@ -22,6 +22,7 @@ from control.catalog import load_catalog
 from control.cues import FireFunction, PlayCue, SolidCue
 from control.functions import ConditionSource, FunctionTarget
 from control.engine import GameServer
+from control.lobby import TERRARIUM_ADMIN
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -136,22 +137,29 @@ def _server():
     return gs, light, play, solid
 
 
+def _held_role(gs, dev):
+    return gs.registration.assignments[dev][1]
+
+
 def test_only_a_rev1_carrier_is_granted_the_player_role():
     gs, *_ = _server()
-    gs.hello("ie1", "rev1-board", "1", instrument="tuneshroom_rev1")
-    granted = gs.join("ie1", REV1_PLAYER_NODE)
-    assert granted.granted and granted.role == "player"
-
-    for dev, instrument in (("ie2", "tuneshroom"), ("ie3", "testshroom")):
+    # Every Rev1Bit role is unscored: devices hold roles from hello + start,
+    # and the `rev1` gate decides which unscored role each one gets.
+    for dev, instrument in (("ie1", "tuneshroom_rev1"), ("ie2", "tuneshroom"),
+                            ("ie3", "testshroom")):
         gs.hello(dev, f"{instrument}-dev", "1", instrument=instrument)
-        assert not gs.join(dev, REV1_PLAYER_NODE).granted, instrument
+    gs.request_start(None, TERRARIUM_ADMIN, "test")
+
+    assert _held_role(gs, "ie1") == "player"
+    for dev in ("ie2", "ie3"):
+        assert _held_role(gs, dev) != "player", dev   # next fitting: sim
 
 
 def test_every_gesture_reaches_the_board_through_the_engine():
     gs, light, play, solid = _server()
     gs.hello("ie1", "rev1-board", "1", instrument="tuneshroom_rev1")
-    assert gs.join("ie1", REV1_PLAYER_NODE).granted
-    gs.run()
+    gs.request_start(None, TERRARIUM_ADMIN, "test")
+    assert _held_role(gs, "ie1") == "player"
 
     assert gs.data("ie1", "tap", ["ie1", 0.0, 80.0, 1]) is None
     assert gs.data("ie1", "hold", ["ie1", 0.65, 1]) is None
@@ -168,12 +176,13 @@ def test_every_gesture_reaches_the_board_through_the_engine():
 
 @pytest.mark.parametrize("instrument",
                          ["testshroom", "tuneshroom", "tuneshroom_rev1"])
-def test_any_tap_capable_shroom_joins_the_sim_node_and_its_tap_lands(instrument):
+def test_any_tap_capable_shroom_holds_a_role_at_start_and_its_tap_lands(instrument):
     gs, light, play, _ = _server()
     gs.hello("ie1", f"{instrument}-dev", "1", instrument=instrument)
-    granted = gs.join("ie1", REV1_SIM_NODE)
-    assert granted.granted and granted.role == "sim"
-    gs.run()
+    gs.request_start(None, TERRARIUM_ADMIN, "test")
+    # A rev1 carrier fits the gated player role first; the others get sim.
+    expected = "player" if instrument == "tuneshroom_rev1" else "sim"
+    assert _held_role(gs, "ie1") == expected
 
     assert gs.data("ie1", "tap", ["ie1", 1.0, 50.0, 1]) is None
     assert play == [("ie1", "tick", "")]
@@ -222,8 +231,8 @@ def test_a_manual_fire_reaches_the_board_but_does_not_count():
     from control.functions import FIRED_BY_ADMIN_MANUAL
     gs, _, play, solid = _server()
     gs.hello("ie1", "rev1-board", "1", instrument="tuneshroom_rev1")
-    assert gs.join("ie1", REV1_PLAYER_NODE).granted
-    gs.run()
+    gs.request_start(None, TERRARIUM_ADMIN, "test")
+    assert _held_role(gs, "ie1") == "player"
 
     assert gs.fire_function("hold_flash", fired_by=FIRED_BY_ADMIN_MANUAL,
                             dev="ie1") is None

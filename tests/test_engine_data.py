@@ -18,6 +18,7 @@ from control.functions import (
 )
 from control.roles import Role, RoleClass, RoleTable
 from control.bit import Bit
+from tests.helpers_admit import admit_running
 
 
 def _is_recent_monotonic(t: float) -> bool:
@@ -41,7 +42,7 @@ class VerbBit(Bit):
     @property
     def role_table(self) -> RoleTable:
         player = Role(name="player", role_class=RoleClass.SHARED,
-                      capacity=None, scored=False)
+                      capacity=None, scored=True)
         return RoleTable(roles={"player": player},
                          node_map={"NODE_A": ["player"]})
 
@@ -78,7 +79,7 @@ class NoVerbBit(Bit):
     @property
     def role_table(self) -> RoleTable:
         player = Role(name="player", role_class=RoleClass.SHARED,
-                      capacity=None, scored=False)
+                      capacity=None, scored=True)
         return RoleTable(roles={"player": player},
                          node_map={"NODE_A": ["player"]})
 
@@ -97,7 +98,7 @@ def test_plain_tuple_cue_carries_no_time():
     when=None, "apply on arrival"; it now means "apply at the computed at",
     so the sink sees a real timestamp rather than None."""
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
 
@@ -111,7 +112,7 @@ def test_light_cue_carries_its_time():
     """A Bit opting into timing returns LightCue, and `when` reaches the
     sink unchanged."""
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
     gs.bit.next_cue = LightCue("ie1", 0xB0, 74, 99, when=1234.5)
@@ -125,7 +126,7 @@ def test_a_malformed_cue_does_not_escape_data():
     Control. A 3-element cue is a Bit bug, and it must be contained the
     same way a raising sink already is."""
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
     gs.bit.next_cue = ("ie1", 0xB0, 74)        # 3 elements, not 4
@@ -138,7 +139,7 @@ def test_one_malformed_cue_does_not_stop_the_others():
     """Containment is per-cue, not per-batch: a later good cue in the same
     list must still reach its sink."""
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
     gs.bit.next_cues = [("ie1", 0xB0, 74), ("ie1", 0xB0, 74, 99)]
@@ -151,7 +152,7 @@ def test_one_malformed_cue_does_not_stop_the_others():
 
 def test_data_routes_to_handler_and_emits_cue():
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
 
@@ -169,7 +170,7 @@ def test_unregistered_device_is_refused():
 
 def test_unknown_verb_is_refused():
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     assert gs.data("ie1", "wiggle", ["ie1"]) == "unknown verb 'wiggle'"
 
 
@@ -180,35 +181,28 @@ def test_no_bit_loaded_is_refused():
 
 def test_raising_handler_is_contained():
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     gs.bit.raise_next = True
     assert gs.data("ie1", "tilt", ["ie1", 0.0]) == "handler error"
-    assert gs.state.name == "SETUP"   # engine unharmed
+    assert gs.state.name == "RUNNING"   # engine unharmed (admit_running started it)
 
 
 def test_bit_declaring_no_verbs_is_unaffected():
     gs = GameServer({"no_verb_bit": NoVerbBit})
     gs.load_bit("no_verb_bit")
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     assert gs.data("ie1", "tilt", ["ie1", 0.0]) == "unknown verb 'tilt'"
 
 
 @pytest.fixture
 def running_server():
-    # NOTE: joins before run(), not after as in the task brief's literal
-    # listing. TestBit's "player" role is scored (bits/test_bit.py), and
-    # RegistrationState.join() refuses scored roles once state == RUNNING
-    # (control/registration.py) -- joining after run() left `dev` unregistered
-    # and every cue-partition test below failed with "device not registered"
-    # instead of exercising data(). Joining during SETUP, then calling run(),
-    # satisfies the fixture's documented intent (RUNNING with one registered
-    # device) using the same dev/node names the brief specifies.
+    # TestBit's "player" role is scored, so it is held only by a handshake
+    # in SETUP followed by start (spec 3.6); admit_running does both.
     gs = GameServer({"test_bit": TestBit})
     gs.load_bit("test_bit")
     dev = "ie1"
     gs.hello(dev, "fake", "1")
-    gs.join(dev, "TEST_PLAYER_NODE")
-    gs.run()
+    admit_running(gs, dev, "TEST_PLAYER_NODE")
     return gs, dev
 
 
@@ -286,7 +280,7 @@ def test_raising_play_sink_does_not_propagate(running_server):
 
 def test_handler_returning_a_string_is_a_refusal():
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
     gs.bit.refuse_next = "no open capture for 'shake-021'"
@@ -294,21 +288,21 @@ def test_handler_returning_a_string_is_a_refusal():
     assert gs.data("ie1", "tilt", ["ie1", 0.0]) == "no open capture for 'shake-021'"
     # The refusal must NOT be walked character by character as cues.
     assert cues == []
-    assert gs.state.name == "SETUP"
+    assert gs.state.name == "RUNNING"
 
 
 def test_an_empty_refusal_still_carries_a_reason():
     """A device must never receive /<dev>/error with a blank reason: an
     empty string is a Bit bug, and a blank error frame hides it."""
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     gs.bit.refuse_next = ""
     assert gs.data("ie1", "tilt", ["ie1", 0.0]) == "handler refused"
 
 
 def test_returning_cues_still_works():
     gs = _loaded_server()
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     cues = []
     gs.on_light_cue = lambda *c: cues.append(c)
     assert gs.data("ie1", "tilt", ["ie1", 30.0]) is None
@@ -320,7 +314,7 @@ def test_returning_cues_still_works():
 def _joined(bit, cue_horizon=0.06, clock=lambda: 1000.0):
     gs = GameServer({"vb": lambda: bit}, cue_horizon=cue_horizon, clock=clock)
     gs.load_bit("vb")
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     return gs
 
 
@@ -384,7 +378,7 @@ def _room_bound(bit, cue_horizon=0.06, clock=lambda: 1000.0, bound="sim-room"):
     gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
     gs.room.bound = {"main": bound}
     gs.load_bit("vb")
-    gs.join("ie1", "NODE_A")
+    admit_running(gs, "ie1", "NODE_A")
     return gs
 
 
@@ -450,7 +444,7 @@ class StreamBit(Bit):
     @property
     def role_table(self) -> RoleTable:
         player = Role(name="player", role_class=RoleClass.SHARED,
-                      capacity=None, scored=False)
+                      capacity=None, scored=True)
         return RoleTable(roles={"player": player},
                          node_map={"NODE_A": ["player"]})
 

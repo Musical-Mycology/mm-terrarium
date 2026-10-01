@@ -7,6 +7,7 @@ from control.engine import GameServer
 from control.lobby import (FEEDBACK_ACCEPT, FEEDBACK_MINIMUM, FEEDBACK_NONE,
                            FEEDBACK_REFUSED, TERRARIUM_ADMIN)
 from control.state import State
+from tests.helpers_admit import admit
 from pathlib import Path
 
 
@@ -81,7 +82,7 @@ def test_minimum_not_met_then_met():
     assert gs.request_start("k", "ie1", "device:ie1") == "minimum not met"
     assert obs.starts[-1].feedback == FEEDBACK_MINIMUM
     gs.hello("ie1", "sim", "1")
-    assert gs.join("ie1", "TEST_PLAYER_NODE").granted
+    assert admit(gs, "ie1", "TEST_PLAYER_NODE").granted
     assert gs.request_start("k", "ie1", "device:ie1") is None
     assert gs.state is State.RUNNING
 

@@ -5,7 +5,6 @@ spec section 4 and the join-resolution rules in section 3 (SETUP vs RUNNING).
 from dataclasses import dataclass
 
 from control.roles import Role, RoleClass, RoleTable
-from control.state import State
 
 
 @dataclass
@@ -20,65 +19,149 @@ class JoinResult:
     reason: str | None = None
     hint: str | None = None
     # The instrument-requirement slot this join filled, and the carried
-    # instrument's name that filled it -- set by GameServer.join on a
+    # instrument's name that filled it -- set by GameServer._grant on a
     # granted, requires-bearing role. None for ROOM joins and roles with no
     # Role.requires (wire-friendly: name, not the Instrument object).
     slot: str | None = None
     instrument: str | None = None
-    # Composed per-role config blob for /ie<N>/role -- filled by
-    # GameServer.join on granted results (control/role_config.py);
+    # Composed per-role config blob for /<dev>/role -- filled by
+    # GameServer._grant at RUNNING (control/role_config.py);
     # RegistrationState itself never touches it.
     config: dict | None = None
 
 
-class RegistrationState:
-    """Created when a Bit loads, discarded when it unloads."""
+_SCORED_FULL_HINT = ("the Bit's scored slots are taken; you will get a jam "
+                     "role at start")
 
-    def __init__(self, role_table: RoleTable):
+
+class RegistrationState:
+    """Created when a Bit loads, discarded when it unloads. In SETUP a
+    handshake only RESERVES a scored slot (`validated`); run() turns the
+    reservations, plus a jam role for everyone else, into `assignments`
+    (spec 2026-10-01-instrument-handshake-protocol section 3.6)."""
+
+    def __init__(self, role_table: RoleTable, max_scored: int | None = None):
         self.role_table = role_table
+        self.max_scored = max_scored
         self.assignments: dict[str, tuple[str, str, RoleClass]] = {}
+        self.validated: dict[str, tuple[str, str]] = {}
         self._counts: dict[str, int] = {name: 0 for name in role_table.roles}
 
-    def join(self, dev: str, node: str, state: State) -> JoinResult:
+    def scored_cap(self) -> int | None:
+        total = 0
+        for role in self.role_table.roles.values():
+            if not role.scored or role.role_class is RoleClass.ROOM:
+                continue
+            if role.capacity is None:
+                return self.max_scored
+            total += role.capacity
+        if self.max_scored is not None:
+            return min(total, self.max_scored)
+        return total
+
+    def _deny(self, reason: str, hint: str) -> JoinResult:
+        return JoinResult(granted=False, reason=reason, hint=hint)
+
+    def _granted(self, role: Role) -> JoinResult:
+        return JoinResult(granted=True, role=role.name,
+                          role_class=role.role_class, scored=role.scored,
+                          breath=role.breath)
+
+    def validate(self, dev: str, node: str) -> JoinResult:
+        held = self.validated.get(dev)
+        if held is not None:
+            return self._granted(self.role_table.roles[held[1]])
         candidates = self.role_table.node_map.get(node)
         if not candidates:
-            return JoinResult(granted=False, reason="no such node")
-
-        last_full_role = None
+            return self._deny("no such node",
+                              f"this Bit declares no node {node!r}")
+        cap = self.scored_cap()
+        if cap is not None and len(self.validated) >= cap:
+            return self._deny("scored full", _SCORED_FULL_HINT)
+        saw_scored = False
         for role_name in candidates:
             role = self.role_table.roles[role_name]
-            if role.scored and state == State.RUNNING:
-                continue  # scored roles closed once running; try the next fallback
-            if role.capacity is not None and self._counts[role_name] >= role.capacity:
-                last_full_role = role_name
+            if not role.scored or role.role_class is RoleClass.ROOM:
                 continue
-            self._assign(dev, node, role)
-            return JoinResult(granted=True, role=role.name,
-                               role_class=role.role_class, scored=role.scored,
-                               breath=role.breath)
+            saw_scored = True
+            if role.capacity is not None and \
+                    self._counts[role_name] >= role.capacity:
+                continue
+            self.validated[dev] = (node, role_name)
+            self._counts[role_name] += 1
+            return self._granted(role)
+        if saw_scored:
+            return self._deny("scored full", _SCORED_FULL_HINT)
+        return self._deny("no such node",
+                          f"node {node!r} grants no scored role")
 
-        if last_full_role is not None:
-            return JoinResult(granted=False, reason=f"{last_full_role} at capacity")
-        # Every candidate was scored and we're RUNNING -- capacity was never
-        # the blocker.
-        return JoinResult(granted=False,
-                           reason="registration closed for scored roles")
+    def join_room(self, dev: str, node: str) -> JoinResult:
+        """Bind `dev` to the ROOM-class role `node` grants (spec section
+        3.5). The caller (GameServer.handshake) has already checked the
+        operator's arming; this only walks node_map[node] for a ROOM role
+        with capacity left and assigns it. A dev already holding that role
+        is granted again without counting twice."""
+        for role_name in self.role_table.node_map.get(node, ()):
+            role = self.role_table.roles[role_name]
+            if role.role_class is not RoleClass.ROOM:
+                continue
+            current = self.assignments.get(dev)
+            held = current is not None and current[1] == role_name
+            if not held and role.capacity is not None and \
+                    self._counts[role_name] >= role.capacity:
+                return self._deny("registration closed",
+                                  "every fixture of this Room is bound")
+            self.assign(dev, node, role)
+            return self._granted(role)
+        return self._deny("no such node",
+                          f"node {node!r} is not a Room node")
 
-    def _assign(self, dev: str, node: str, role: Role) -> None:
-        self.release(dev)  # re-tapping a different node is a role switch
+    def assign(self, dev: str, node: str, role: Role) -> bool:
+        current = self.assignments.get(dev)
+        if current is not None and current[1] == role.name:
+            return False
+        self.release(dev)
+        if role.name not in self.role_table.roles:
+            self.role_table.roles[role.name] = role
+        self._counts.setdefault(role.name, 0)
         self.assignments[dev] = (node, role.name, role.role_class)
         self._counts[role.name] += 1
-
-    def release(self, dev: str) -> bool:
-        prev = self.assignments.pop(dev, None)
-        if prev is None:
-            return False
-        _, role_name, _ = prev
-        self._counts[role_name] -= 1
         return True
 
+    def materialize(self, jam_devs, jam_for) -> list:
+        out = []
+        reserved, self.validated = self.validated, {}
+        for dev, (node, role_name) in reserved.items():
+            role = self.role_table.roles[role_name]
+            # The reservation already counted this slot; move it, do not
+            # count it twice.
+            self.assignments[dev] = (node, role_name, role.role_class)
+            out.append((dev, role))
+        for dev in jam_devs:
+            if dev in self.assignments:
+                continue
+            role = jam_for(dev)
+            if self.assign(dev, "", role):
+                out.append((dev, role))
+        return out
+
+    def release(self, dev: str) -> bool:
+        """Drop everything `dev` holds: its validation AND its assignment,
+        uncounting each. True if it held either."""
+        held = self.validated.pop(dev, None)
+        if held is not None:
+            self._counts[held[1]] -= 1
+        prev = self.assignments.pop(dev, None)
+        if prev is not None:
+            _, role_name, _ = prev
+            self._counts[role_name] -= 1
+        return held is not None or prev is not None
+
     def release_all(self) -> list[str]:
+        """Release every dev; returns the ones that held an assignment."""
         devs = list(self.assignments)
+        for dev in list(self.validated):
+            self.release(dev)
         for dev in devs:
             self.release(dev)
         return devs

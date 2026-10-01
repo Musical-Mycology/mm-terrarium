@@ -1,0 +1,20 @@
+# Per-device states, Control-side, per Bit round (spec
+# 2026-10-01-instrument-handshake-protocol section 3.1). Room fixtures never
+# enter this machine. "start" is SETUP -> RUNNING via request_start.
+direction: down
+
+connected: CONNECTED
+invited: INVITED
+validated: VALIDATED
+scored: SCORED
+jam: JAM
+
+connected -> invited: "SETUP, not FULL: /handshake"
+invited -> invited: "deny"
+invited -> validated: "/game/handshake accepted"
+validated -> connected: "reaped: slot frees"
+validated -> scored: "start: /role scored"
+invited -> jam: "start: /role jam"
+connected -> jam: "start, or hello in RUNNING"
+scored -> connected: "round ends (fade, release)"
+jam -> connected: "round ends"

@@ -22,12 +22,17 @@ The wire, from devicelink/protocol.py and devicelink/agent.py:
     up    /game/hello    s    [dev]   (ssss [dev, "", "", instrument] when
                                          the client declares an instrument)
     up    /game/canvas   ss   [dev, url]
-    up    /game/join     ss   [dev, node]
+    up    /game/handshake sss [dev, round_id, node]
+    up    /game/join     ss   [dev, node]   (retired in contract v3: Control
+                                         answers it with /<dev>/error)
     up    /game/tilt     sf   [dev, gamma]
     up    /game/tap      sffi [dev, peak_g, duration_ms, count]
     up    /game/shake    sfff [dev, peak_g, duration_ms, sweep_deg]
-    down  /<dev>/role    b    [config]
-    down  /<dev>/deny    ss   [reason, hint]
+    down  /<dev>/handshake s  [round_id]   (invite; answer with /game/handshake)
+    down  /<dev>/validated ss [round_id, role]
+    down  /<dev>/role    b    [config]       (sent at RUNNING)
+    down  /<dev>/deny    ss   [reason, hint] (informational; the device is
+                                         jam at start)
     down  /<dev>/leds    b    [[36 ints]]
     down  /<dev>/play    ss   [name, params]
     down  /<dev>/release ""   []
@@ -49,6 +54,7 @@ from typing import Callable
 
 from control.timed_queue import TimedQueue
 from devicelink import protocol
+from harness import markers
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +112,11 @@ class ShroomClient:
         # have 36 channels. See control/room_profile.py's fixture_slices.
         self.expected_channels = expected_channels
         self.config: dict | None = None
+        # The latest /<dev>/handshake invite's round id, and the role the
+        # latest /<dev>/validated named. A validation is not a role: the
+        # role (self.config) only arrives at RUNNING.
+        self.round_id: str | None = None
+        self.validated_role: str | None = None
         self.released = False
         self.last_deny: tuple[str, str] | None = None
         self.last_error: tuple[str, str] | None = None
@@ -156,6 +167,12 @@ class ShroomClient:
         right after hello. Devices with no canvas simply never send it."""
         return self._up("canvas", "ss", [self.dev, url])
 
+    def handshake(self, round_id: str) -> dict:
+        """/game/handshake: the answer to a /<dev>/handshake invite. The
+        node is this client's own (empty means "Control picks the default
+        scored node")."""
+        return self._up("handshake", "sss", [self.dev, round_id, self.node])
+
     def join(self) -> dict:
         self.released = False
         return self._up("join", "ss", [self.dev, self.node])
@@ -191,6 +208,10 @@ class ShroomClient:
             return self._on_role(env)
         if kind == "leds":
             return self._on_leds(env)
+        if kind == "handshake":
+            return self._on_handshake(env)
+        if kind == "validated":
+            return self._on_validated(env)
         if kind == "release":
             return self._on_release(env)
         if kind == "deny":
@@ -223,11 +244,33 @@ class ShroomClient:
                 logger.exception("on_play sink raised; sample dropped")
         return env.address
 
+    def _on_handshake(self, env) -> str:
+        if len(env.args) != 1 or not isinstance(env.args[0], str):
+            logger.debug("dropping /handshake with a malformed payload")
+            return ""
+        if env.args[0] != self.round_id:
+            self.validated_role = None    # a validation belongs to its round
+        self.round_id = env.args[0]
+        return env.address
+
+    def _on_validated(self, env) -> str:
+        if (len(env.args) != 2
+                or not all(isinstance(a, str) for a in env.args)):
+            logger.debug("dropping /validated with a malformed payload")
+            return ""
+        self.validated_role = env.args[1]
+        print(f"{markers.HANDSHAKE_VALIDATED} {self.dev} {self.validated_role}",
+              flush=True)
+        return env.address
+
     def _on_role(self, env) -> str:
         if not env.args or not isinstance(env.args[0], dict):
             logger.debug("dropping /role with a non-dict payload")
             return ""
         self.config = env.args[0]
+        print(f"{markers.ROLE_GRANTED} {self.dev} "
+              f"{'scored' if self.config.get('scored') else 'jam'} "
+              f"{self.config.get('role')}", flush=True)
         if self.on_role is not None:
             self.on_role(self.config)
         return env.address
@@ -278,6 +321,8 @@ class ShroomClient:
         internals. Cumulative diagnostics (clamped, latency samples) are
         deliberately kept: the exit report spans the whole process."""
         self.config = None
+        self.round_id = None
+        self.validated_role = None
         self.released = False
         self.last_deny = None
         self.last_error = None

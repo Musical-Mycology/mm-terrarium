@@ -48,7 +48,8 @@ TICK = 1.0 / 44.0
 
 
 def _rig():
-    """A running MetronomeBit with ie1 and ie2 joined as players, on one
+    """A MetronomeBit in SETUP with ie1 and ie2 validated as players (the
+    caller's gs.run() grants the roles), on one
     hand-advanced clock shared by the engine and the agent (see
     tests/test_devicelink_agent.py's _agent_with_joined_device for why the
     two clocks may never diverge)."""
@@ -66,8 +67,12 @@ def _rig():
         server.arrive(client)
         server.deliver(client, "/game/hello", "sss", [dev, "sim", "1"])
         agent.poll()
-        server.deliver(client, "/game/join", "ss", [dev, "METRO_PLAYER_NODE"])
+        # Validated here; the player role arrives at gs.run() (spec
+        # 2026-10-01 section 3.4).
+        server.deliver(client, "/game/handshake", "sss",
+                       [dev, gs.round_id, "METRO_PLAYER_NODE"])
         agent.poll()
+        assert gs.registration.validated[dev][0] == "METRO_PLAYER_NODE"
     return gs, server, agent, clk
 
 

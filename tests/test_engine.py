@@ -12,7 +12,9 @@ from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.roles import Role, RoleClass, RoleTable
 from control.rooms import Room
+from control.lobby import TERRARIUM_ADMIN
 from control.state import State
+from tests.helpers_admit import admit, admit_running
 
 ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
     RoomFixture(name="main", color_order="GRB",
@@ -62,7 +64,7 @@ def test_observer_exception_does_not_break_engine_or_peers():
     assert len(seen) >= 3                  # peer still notified
 
 
-def test_on_devices_change_fires_on_hello_join_and_unload():
+def test_on_devices_change_fires_on_hello_start_and_unload():
     from types import SimpleNamespace
     from bits.test.test_bit import TestBit
     from control.engine import GameServer
@@ -72,7 +74,7 @@ def test_on_devices_change_fires_on_hello_join_and_unload():
         on_devices_change=lambda: calls.append("devices")))
     server.hello("ie1", "Shroom One", "1")        # +1
     server.load_bit("TestBit")
-    server.join("ie1", "TEST_PLAYER_NODE")        # +1 (granted)
+    admit_running(server, "ie1", "TEST_PLAYER_NODE")   # +1 (role assigned at start)
     n_before_abort = len(calls)
     server.abort()                                 # +1 (unload releases devices)
     assert len(calls) == n_before_abort + 1
@@ -143,6 +145,21 @@ REGISTRY = {
 }
 
 
+def _grant_at_start(server, dev, node):
+    """Handshake in SETUP only validates; the composed grant (config blob,
+    slot, instrument) reaches the on_grant sink at start (spec 3.6). A
+    node of None means the device never handshakes (a jammer)."""
+    grants = []
+    server.on_grant = lambda d, result: grants.append((d, result))
+    if node is None:
+        if server.devices.get(dev) is None:
+            server.hello(dev, "", "", None)
+        server.request_start(None, TERRARIUM_ADMIN, "test")
+    else:
+        admit_running(server, dev, node)
+    return dict(grants)[dev]
+
+
 def make_server() -> GameServer:
     return GameServer(bit_registry=REGISTRY)
 
@@ -175,18 +192,20 @@ def test_run_requires_setup():
         server.run()
 
 
-def test_join_denied_when_no_bit_loaded():
+def test_handshake_denied_when_no_bit_loaded():
     server = make_server()
-    result = server.join("ie1", "TEST_PLAYER_NODE")
+    server.hello("ie1", "Testshroom 1", "1.0")
+    result = server.handshake("ie1", "", "TEST_PLAYER_NODE")
     assert result.granted is False
-    assert result.reason == "no Bit accepting registrations"
+    # Spec 3.4: with no Bit loaded the registration is closed.
+    assert result.reason == "registration closed"
 
 
-def test_join_granted_blob_carries_default_carried_instruments_event_triggers():
+def test_granted_blob_carries_default_carried_instruments_event_triggers():
     server = make_server()
     server.hello("ie1", "Testshroom 1", "1.0")
     server.load_bit("test_bit")
-    result = server.join("ie1", "TEST_PLAYER_NODE")
+    result = _grant_at_start(server, "ie1", "TEST_PLAYER_NODE")
     assert result.granted
     assert result.config["triggers"] == {
         "tap": {"peak_g": 2.0, "window_ms": 200, "double_ms": 400},
@@ -194,7 +213,7 @@ def test_join_granted_blob_carries_default_carried_instruments_event_triggers():
     }
 
 
-def test_join_granted_blob_omits_triggers_for_carried_instrument_without_any():
+def test_granted_blob_omits_triggers_for_carried_instrument_without_any():
     from control.instrument import Instrument
     server = make_server()
     server.hello("ie1", "Testshroom 1", "1.0")
@@ -204,12 +223,12 @@ def test_join_granted_blob_omits_triggers_for_carried_instrument_without_any():
         capabilities=frozenset({"light.pixels", "gesture.tilt"}),
         accepted_cues=("midi",))
     server.devices.get("ie1").carried = no_event_triggers
-    result = server.join("ie1", "TEST_PLAYER_NODE")
+    result = _grant_at_start(server, "ie1", "TEST_PLAYER_NODE")
     assert result.granted
     assert "triggers" not in result.config
 
 
-def test_requires_less_role_join_blob_still_carries_event_triggers():
+def test_requires_less_role_blob_still_carries_event_triggers():
     """Fix round 1: event-trigger thresholds are a property of the carried
     instrument's server-owned detection contract, independent of slot
     gating -- TestBit's jammer role has no Role.requires at all, but a
@@ -217,8 +236,9 @@ def test_requires_less_role_join_blob_still_carries_event_triggers():
     server = make_server()
     server.hello("ie1", "Testshroom 1", "1.0")
     server.load_bit("test_bit")
-    result = server.join("ie1", "TEST_JAM_NODE")
-    assert result.granted
+    # Spec 3.6: a device that never handshakes gets the Bit's jam role at start.
+    result = _grant_at_start(server, "ie1", None)
+    assert result.granted and result.role == "jammer"
     assert result.slot is None
     assert result.instrument is None
     assert result.config["triggers"] == {
@@ -227,14 +247,15 @@ def test_requires_less_role_join_blob_still_carries_event_triggers():
     }
 
 
-def test_room_join_blob_carries_no_triggers():
+def test_room_handshake_blob_carries_no_triggers():
     binding = RoomBindingRegistry()
     server = GameServer(bit_registry={"RoomCapableBit": RoomCapableBit},
                         room_binding=binding)
     server.room = make_room()
     server.load_bit("RoomCapableBit")
     binding.arm("TEST", "main", window_seconds=10.0)
-    result = server.join("sim-room", "ROOM_TEST_NODE")
+    server.hello("sim-room", "Sim Room", "1")
+    result = server.handshake("sim-room", "", "ROOM_TEST_NODE")
     assert result.granted
     assert result.config is None
 
@@ -248,7 +269,7 @@ def test_full_lifecycle_reaches_idle_and_releases_devices():
     server.load_bit("test_bit")
     assert server.state == State.SETUP
 
-    join_result = server.join("ie1", "TEST_PLAYER_NODE")
+    join_result = admit(server, "ie1", "TEST_PLAYER_NODE")
     assert join_result.granted is True
 
     server.run()
@@ -264,14 +285,15 @@ def test_full_lifecycle_reaches_idle_and_releases_devices():
     assert server.devices.known("ie1") is True  # pool survives unload
 
 
-def test_scored_join_denied_once_running_jam_still_allowed():
+def test_scored_handshake_denied_once_running_walk_up_gets_jam():
     server = make_server()
     server.load_bit("test_bit")
     server.run()
-    scored = server.join("ie1", "TEST_PLAYER_NODE")
-    jam = server.join("ie2", "TEST_JAM_NODE")
+    server.hello("ie1", "Shroom One", "1")      # spec 3.6: jam at the first hello
+    scored = server.handshake("ie1", server.round_id, "TEST_PLAYER_NODE")
     assert scored.granted is False
-    assert jam.granted is True
+    assert scored.reason == "registration closed"
+    assert server.registration.assignments["ie1"][1] == "jammer"
 
 
 def test_on_complete_exception_still_reaches_idle():
@@ -327,18 +349,19 @@ def test_on_state_change_fires_on_failed_load_bit():
     ]
 
 
-def test_on_registration_change_fires_only_on_granted_join():
+def test_on_registration_change_fires_only_on_granted_handshake():
     server = make_server()
     server.load_bit("test_bit")
     calls = []
     server.add_observer(SimpleNamespace(
         on_registration_change=lambda: calls.append(server.registration.counts())))
 
-    denied = server.join("ie1", "NO_SUCH_NODE")
+    server.hello("ie1", "Shroom One", "1")
+    denied = server.handshake("ie1", server.round_id, "NO_SUCH_NODE")
     assert denied.granted is False
     assert calls == []
 
-    granted = server.join("ie1", "TEST_PLAYER_NODE")
+    granted = server.handshake("ie1", server.round_id, "TEST_PLAYER_NODE")
     assert granted.granted is True
     assert len(calls) == 1
     counts = {name: count for name, count, _capacity in calls[0]}
@@ -357,13 +380,16 @@ def test_abort_from_setup_unloads_and_releases_devices():
     server.on_release = released.append
     server.hello("ie1", "Testshroom 1", "1.0")
     server.load_bit("test_bit")
-    server.join("ie1", "TEST_PLAYER_NODE")
+    admit(server, "ie1", "TEST_PLAYER_NODE")
 
     server.abort()
 
     assert server.state == State.IDLE
     assert server.bit is None
-    assert released == ["ie1"]
+    # Spec 3.6: a SETUP handshake only reserved a slot; no role was ever
+    # sent, so there is nothing to release on the wire.
+    assert released == []
+    assert server.registration is None
 
 
 def test_a_raising_on_release_does_not_strand_later_devices_or_wedge_unload():
@@ -382,8 +408,8 @@ def test_a_raising_on_release_does_not_strand_later_devices_or_wedge_unload():
     server.hello("ie1", "Testshroom 1", "1.0")
     server.hello("ie2", "Testshroom 2", "1.0")
     server.load_bit("test_bit")
-    server.join("ie1", "TEST_PLAYER_NODE")
-    server.join("ie2", "TEST_JAM_NODE")
+    # Roles (and so releases) exist from start: ie1 scored, ie2 jam (spec 3.6).
+    admit_running(server, "ie1", "TEST_PLAYER_NODE")
 
     server.abort()  # must not raise, must not wedge in UNLOADING
 
@@ -451,10 +477,11 @@ def test_load_bit_invalid_manifest_fails_cleanly_to_idle():
     assert server.registration is None
 
 
-def test_granted_join_carries_composed_config_blob():
+def test_granted_scored_role_carries_composed_config_blob():
     server = make_server()
     server.load_bit("welcome_bit")
-    result = server.join("ie1", "NODE_GREET")
+    server.hello("ie1", "Shroom One", "1", instrument="tuneshroom")
+    result = _grant_at_start(server, "ie1", "NODE_GREET")
     assert result.granted is True
     assert result.config == {
         "role": "greeter",
@@ -484,20 +511,23 @@ def test_granted_join_carries_composed_config_blob():
     }
 
 
-def test_denied_join_carries_no_config():
+def test_denied_handshake_carries_no_config():
     server = make_server()
     server.load_bit("welcome_bit")
-    server.join("ie1", "NODE_GREET")
-    denied = server.join("ie2", "NODE_GREET")  # capacity 1
+    admit(server, "ie1", "NODE_GREET")
+    denied = admit(server, "ie2", "NODE_GREET")  # capacity 1
+    assert denied.reason == "scored full"
     assert denied.granted is False
     assert denied.config is None
 
 
-def test_role_switch_composes_the_new_roles_config():
+def test_jam_role_composes_its_config_at_start():
+    # Replaces test_role_switch_composes_the_new_roles_config: re-tapping
+    # another node no longer switches roles (spec 3.3 retires /game/join);
+    # the jam role's own blob is what a non-validating device now gets.
     server = make_server()
     server.load_bit("welcome_bit")
-    server.join("ie1", "NODE_GREET")
-    switch = server.join("ie1", "NODE_JAM")
+    switch = _grant_at_start(server, "ie1", None)
     assert switch.granted is True
     assert switch.config["role"] == "jammer"
     assert switch.config["scored"] is False
@@ -506,31 +536,31 @@ def test_role_switch_composes_the_new_roles_config():
         "bit_name": "welcome_bit", "bit_version": "0.9", "role": "jammer"}
 
 
-def test_join_with_no_bit_loaded_carries_no_config():
+def test_handshake_with_no_bit_loaded_carries_no_config():
     server = make_server()
-    result = server.join("ie1", "NODE_GREET")
+    result = admit(server, "ie1", "NODE_GREET")
     assert result.granted is False
     assert result.config is None
 
 
-def test_room_node_join_denied_while_unarmed():
+def test_room_node_handshake_denied_while_unarmed():
     server = GameServer({"RoomCapableBit": RoomCapableBit},
                         room_binding=RoomBindingRegistry())
     server.room = make_room()
     server.load_bit("RoomCapableBit")
-    result = server.join("ie9", "ROOM_TEST_NODE")
+    result = admit(server, "ie9", "ROOM_TEST_NODE")
     assert result.granted is False
     assert result.reason == "no such node"
 
 
-def test_room_node_join_binds_device_once_armed():
+def test_room_node_handshake_binds_device_once_armed():
     binding = RoomBindingRegistry()
     server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
     server.room = make_room()
     server.load_bit("RoomCapableBit")
     binding.arm("TEST", "main", window_seconds=10.0)
 
-    result = server.join("ie9", "ROOM_TEST_NODE")
+    result = admit(server, "ie9", "ROOM_TEST_NODE")
 
     assert result.granted is True
     assert result.role_class == RoleClass.ROOM
@@ -539,25 +569,25 @@ def test_room_node_join_binds_device_once_armed():
     assert binding.bound_device("TEST", "main") == "ie9"
 
 
-def test_room_join_does_not_disturb_player_joins():
+def test_room_handshake_does_not_disturb_player_handshakes():
     binding = RoomBindingRegistry()
     server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
     server.room = make_room()
     server.load_bit("RoomCapableBit")
 
-    result = server.join("ie1", "TEST_PLAYER_NODE")
+    result = _grant_at_start(server, "ie1", "TEST_PLAYER_NODE")
 
     assert result.granted is True
-    assert result.role_class == RoleClass.SHARED
+    assert result.role_class == RoleClass.UNIQUE
     assert result.config is not None    # normal player composition, unchanged
 
 
-def test_join_without_room_configured_ignores_room_gating():
+def test_handshake_without_room_configured_ignores_room_gating():
     # A GameServer with no room_binding/room set (the pre-Room-concept
     # construction path) must keep working exactly as before.
     server = GameServer({"TestBit": TestBit})
     server.load_bit("TestBit")
-    result = server.join("ie1", "TEST_PLAYER_NODE")
+    result = admit(server, "ie1", "TEST_PLAYER_NODE")
     assert result.granted is True
 
 
@@ -695,7 +725,7 @@ def test_reap_stale_frees_a_scored_roles_slot_immediately():
     gs = GameServer({"test_bit": TestBit}, clock=lambda: clk.t)
     gs.load_bit("test_bit")
     gs.hello("ie1", "sim", "1")
-    gs.join("ie1", "TEST_PLAYER_NODE")
+    admit(gs, "ie1", "TEST_PLAYER_NODE")
     released = []
     gs.on_release = released.append
     counts_before = dict((n, c) for n, c, _ in gs.registration.counts())
@@ -707,7 +737,9 @@ def test_reap_stale_frees_a_scored_roles_slot_immediately():
     assert reaped == ["ie1"]
     counts_after = dict((n, c) for n, c, _ in gs.registration.counts())
     assert counts_after["player"] == 0
-    assert released == ["ie1"]
+    # Spec 3.6: a validated-only device never had a role on the wire, so the
+    # reap frees the slot without an on_release.
+    assert released == []
     assert gs.devices.known("ie1") is False
 
 
@@ -718,7 +750,7 @@ def test_reap_stale_batches_observer_notifications_once():
     gs.load_bit("test_bit")
     for dev in ("ie1", "ie2"):
         gs.hello(dev, "sim", "1")
-        gs.join(dev, "TEST_PLAYER_NODE")
+    admit_running(gs, "ie1", "TEST_PLAYER_NODE")   # ie1 scored, ie2 jam
     calls = []
     gs.add_observer(SimpleNamespace(
         on_devices_change=lambda: calls.append("devices"),
@@ -743,7 +775,7 @@ def test_reap_stale_never_reaps_a_room_bound_device():
     gs.load_bit("RoomCapableBit")
     gs.hello("sim-room", "room", "1")
     binding.arm("TEST", "main", window_seconds=10.0)
-    gs.join("sim-room", "ROOM_TEST_NODE")
+    admit(gs, "sim-room", "ROOM_TEST_NODE")
     assert gs.room.bound == {"main": "sim-room"}
 
     clk.t = 100.0
@@ -762,7 +794,7 @@ def test_reap_stale_on_release_exception_does_not_stop_the_rest():
     gs.load_bit("test_bit")
     for dev in ("ie1", "ie2"):
         gs.hello(dev, "sim", "1")
-        gs.join(dev, "TEST_PLAYER_NODE")
+    admit_running(gs, "ie1", "TEST_PLAYER_NODE")   # ie1 scored, ie2 jam
 
     def boom(dev):
         raise RuntimeError("transport exploded")

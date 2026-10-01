@@ -1003,6 +1003,9 @@ def test_serve_rounds_cycles_idle_load_run_idle(monkeypatch, capsys):
             if self.state is State.RUNNING and self._tick_count >= 2:
                 self.state = State.IDLE
 
+        def request_start(self, key, source_dev, source):
+            self.run()
+
         def run(self):
             self.run_calls += 1
             self.state = State.RUNNING
@@ -1056,6 +1059,85 @@ def test_serve_rounds_cycles_idle_load_run_idle(monkeypatch, capsys):
                       f"{markers.CONTROL_ROUND_LOADED} Round2Bit"]
 
 
+def test_timer_start_goes_through_request_start(monkeypatch):
+    """The timer's start (here an immediate 0-second window) is a
+    gs.request_start(None, "terrarium", "timer") and never a direct
+    gs.run() (spec 2026-10-01 section 5.7)."""
+    from harness.terrarium_boot import _serve_rounds
+
+    class FakeGS:
+        def __init__(self):
+            self.state = State.IDLE
+            self.bit = None
+            self.bit_name = None
+            self.start_calls = []
+            self.run_calls = 0
+            self._tick_count = 0
+
+        def tick(self, dt):
+            self._tick_count += 1
+            if self.state is State.RUNNING and self._tick_count >= 2:
+                self.state = State.IDLE
+
+        def request_start(self, key, source_dev, source):
+            self.start_calls.append((key, source_dev, source))
+            self.state = State.RUNNING
+            self._tick_count = 0
+
+        def run(self):
+            self.run_calls += 1
+            raise AssertionError("the timer must start via request_start")
+
+        def abort(self):
+            self.state = State.IDLE
+
+    gs = FakeGS()
+
+    def load_round1():
+        gs.bit = _FakeBit(_FakeBitConfig(0.0))
+        gs.bit_name = "Round1Bit"
+        gs.state = State.SETUP
+
+    console_agent = _FakeConsoleAgent(gs, [(State.IDLE, load_round1)])
+    seen = {"started": False}
+
+    def fake_parent_is_gone(pid):
+        seen["started"] = seen["started"] or bool(gs.start_calls)
+        return seen["started"] and gs.state is State.IDLE
+
+    monkeypatch.setattr("harness.terrarium_boot.parent_is_gone",
+                        fake_parent_is_gone)
+
+    reason = _serve_rounds(gs, FakeAgent(), FakeArco(),
+                           console_agent=console_agent)
+
+    assert reason == "parent-gone"
+    assert gs.start_calls == [(None, "terrarium", "timer")]
+    assert gs.run_calls == 0
+
+
+def test_main_round_one_timer_start_goes_through_request_start():
+    """main() cannot run to its start site offline (live Arco, o2litepy),
+    so this is an AST check on the real function: it calls
+    gs.request_start(None, TERRARIUM_ADMIN, "timer") and never gs.run()."""
+    import ast
+    import inspect
+
+    import harness.terrarium_boot as tb
+
+    calls = [n for n in ast.walk(ast.parse(inspect.getsource(tb.main)))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and isinstance(n.func.value, ast.Name)
+             and n.func.value.id == "gs"]
+    starts = [c for c in calls if c.func.attr == "request_start"]
+    assert len(starts) == 1
+    a = starts[0].args
+    assert (isinstance(a[0], ast.Constant) and a[0].value is None
+            and isinstance(a[1], ast.Name) and a[1].id == "TERRARIUM_ADMIN"
+            and isinstance(a[2], ast.Constant) and a[2].value == "timer")
+    assert not [c for c in calls if c.func.attr == "run"]
+
+
 def test_serve_rounds_honors_players_condition_per_round(monkeypatch):
     """Round 2's Bit config asks for a `players` start condition -- the
     round must start via "players-met" the instant enough scored devices
@@ -1089,6 +1171,9 @@ def test_serve_rounds_honors_players_condition_per_round(monkeypatch):
             self._tick_count += 1
             if self.state is State.RUNNING and self._tick_count >= 2:
                 self.state = State.IDLE
+
+        def request_start(self, key, source_dev, source):
+            self.run()
 
         def run(self):
             self.run_calls += 1
@@ -1158,6 +1243,9 @@ def test_serve_rounds_does_not_reannounce_a_bit_already_loaded_on_entry(
             if self.state is State.RUNNING and self._tick_count >= 2:
                 self.state = State.IDLE
 
+        def request_start(self, key, source_dev, source):
+            self.run()
+
         def run(self):
             self.run_calls += 1
             self.state = State.RUNNING
@@ -1204,6 +1292,9 @@ class _RecycleGS:
         self._tick_count += 1
         if self.state is State.RUNNING and self._tick_count >= 2:
             self.state = State.IDLE
+
+    def request_start(self, key, source_dev, source):
+        self.run()
 
     def run(self):
         self.run_calls += 1
@@ -1624,8 +1715,11 @@ def _deliver_hello(server, agent, dev="ie1", client="c1"):
     agent.poll()
 
 
-def _deliver_join(server, agent, dev, node, client="c1"):
-    server.deliver(client, "/game/join", "ss", [dev, node])
+def _deliver_handshake(server, agent, gs, dev, node, client="c1"):
+    """The v3 entry: a handshake naming gs's current round id. A scored
+    grant is a validation only; the role materializes at gs.run()."""
+    server.deliver(client, "/game/handshake", "sss",
+                   [dev, gs.round_id, node])
     agent.poll()
 
 
@@ -1642,7 +1736,8 @@ def test_join_granted_line(capsys):
     gs.load_bit("test_bit")
     _deliver_hello(server, agent, dev="ie1")
     capsys.readouterr()   # discard the hello line
-    _deliver_join(server, agent, "ie1", "TEST_PLAYER_NODE")
+    _deliver_handshake(server, agent, gs, "ie1", "TEST_PLAYER_NODE")
+    gs.run()
 
     out = capsys.readouterr().out
     assert "join granted: ie1 -> player (scored) via TEST_PLAYER_NODE\n" in out
@@ -1653,10 +1748,11 @@ def test_join_granted_line_for_a_jam_role(capsys):
     gs.load_bit("test_bit")
     _deliver_hello(server, agent, dev="ie1")
     capsys.readouterr()
-    _deliver_join(server, agent, "ie1", "TEST_JAM_NODE")
+    gs.run()
+    agent.poll()
 
     out = capsys.readouterr().out
-    assert "join granted: ie1 -> jammer (jam) via TEST_JAM_NODE\n" in out
+    assert "join granted: ie1 -> jammer (jam)" in out
 
 
 def test_join_denied_line(capsys):
@@ -1664,7 +1760,7 @@ def test_join_denied_line(capsys):
     gs.load_bit("test_bit")
     _deliver_hello(server, agent, dev="ie1")
     capsys.readouterr()
-    _deliver_join(server, agent, "ie1", "NO_SUCH_NODE")
+    _deliver_handshake(server, agent, gs, "ie1", "NO_SUCH_NODE")
 
     out = capsys.readouterr().out
     assert "join denied: ie1 -> NO_SUCH_NODE (no such node)\n" in out
@@ -1674,7 +1770,8 @@ def test_device_released_line(capsys):
     gs, server, agent = _lifecycle_rig()
     gs.load_bit("test_bit")
     _deliver_hello(server, agent, dev="ie1")
-    _deliver_join(server, agent, "ie1", "TEST_PLAYER_NODE")
+    _deliver_handshake(server, agent, gs, "ie1", "TEST_PLAYER_NODE")
+    gs.run()
     capsys.readouterr()   # discard hello/granted lines
 
     gs.abort()
@@ -1687,7 +1784,7 @@ def test_build_wires_on_join_denied_to_the_agent_constructor():
     """The production path: build() threads on_join_denied straight into
     DeviceLinkAgent's constructor (the whole-branch review's Important
     finding was main() poking agent._on_join_denied after construction
-    instead) -- exercised end to end through a denied /game/join on the
+    instead) -- exercised end to end through a denied /game/handshake on the
     FakeServer the agent test fixtures already use, not just an attribute
     check on the built agent."""
     calls = []
@@ -1706,8 +1803,10 @@ def test_build_wires_on_join_denied_to_the_agent_constructor():
         # (see test_build_wires_devicelink_fixture_sessions_and_simulator
         # above), so a nonexistent node -- not "no Bit loaded" -- is the reliable
         # deny here. Drives the real, built agent's own inbound dispatch
-        # (_on_join -> _notify_join_denied), not a substitute server.
-        agent._on_join("fake-client", "ie1", ["ie1", "NO_SUCH_NODE"])
+        # (_on_handshake -> _notify_join_denied), not a substitute server.
+        gs.hello("ie1", "sim", "1")
+        agent._on_handshake("fake-client", "ie1",
+                            ["ie1", gs.round_id, "NO_SUCH_NODE"])
 
         assert calls == [("ie1", "NO_SUCH_NODE", "no such node")]
     finally:
@@ -1732,7 +1831,7 @@ def test_a_raising_on_join_denied_sink_does_not_stop_the_deny_reply(capsys):
                             clock=time.monotonic)
     gs.load_bit("test_bit")
     _deliver_hello(server, agent, dev="ie1")
-    _deliver_join(server, agent, "ie1", "NO_SUCH_NODE")   # must not raise
+    _deliver_handshake(server, agent, gs, "ie1", "NO_SUCH_NODE")  # must not raise
 
     denies = server.addressed("/ie1/deny")
     assert denies[0]["args"][0] == "no such node"
@@ -1792,7 +1891,8 @@ def test_timed_out_role_holder_prints_both_released_and_timed_out_lines(capsys):
     gs.add_observer(_LifecycleLogger(gs))
     gs.load_bit("test_bit")
     _deliver_hello(server, agent, dev="ie1")
-    _deliver_join(server, agent, "ie1", "TEST_PLAYER_NODE")
+    _deliver_handshake(server, agent, gs, "ie1", "TEST_PLAYER_NODE")
+    gs.run()
     capsys.readouterr()   # discard the hello/join-granted lines
 
     clk.advance(11.0)
