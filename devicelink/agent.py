@@ -1278,11 +1278,16 @@ class DeviceLinkAgent:
         self.transport.bind_dev(dev, client, protoversion=protoversion)
         # /room on first contact only (spec 2026-10-01 section 5.5): a
         # heartbeat re-hello is proof of life, and every state or
-        # registration change already broadcasts a fresh /room.
-        new = self.game_server.devices.get(dev) is None
+        # registration change already broadcasts a fresh /room. Sent
+        # before GameServer.hello so a RUNNING walk-up's /role (granted
+        # inside hello) follows the device's first /room, not precedes it.
+        if self.game_server.devices.get(dev) is None:
+            try:
+                self._send(dev, protocol.room_event(dev, self._room_blob()))
+            except Exception:
+                # A failing send must not cost the device its hello.
+                logger.exception("room snapshot for %s failed", dev)
         self.game_server.hello(dev, name, protoversion, instrument)
-        if new:
-            self._send(dev, protocol.room_event(dev, self._room_blob()))
 
     def _on_handshake(self, client, dev: str, args: list) -> None:
         """Received Handshake (spec 2026-10-01 section 3.4). A scored
@@ -1677,6 +1682,8 @@ class DeviceLinkAgent:
         validated = gs.registration.validated if gs.registration else {}
         for dev in set(validated) - self._lobby_known:
             lobby.forget(dev)
+            # The Console's lobby log, once per new validation.
+            gs.notify_lobby("handshake", dev)
             lobby.on_scored_join(dev)
         self._lobby_known = set(validated)
         self._sync_lobby_state()
