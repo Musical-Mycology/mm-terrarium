@@ -572,3 +572,13 @@ def test_link_loss_keeps_display_holds_the_frame_and_rejoins():
     assert set(quiet["expect_quiet"]["addresses"]) == {
         "/game/hello", "/game/hold", "/game/swing"}
     assert quiet["t"] + quiet["expect_quiet"]["for_ms"] == 17000
+
+
+def test_v3_scenario_set():
+    from contract_kit.scenarios import ALL_SCENARIOS
+    names = {f.__name__ for f in ALL_SCENARIOS}
+    assert {"handshake_validate_then_role", "handshake_over_cap_deny",
+            "handshake_stale_round", "late_hello_gets_jam",
+            "jam_solo_fallback", "room_node_handshake_binds",
+            "join_retired_error"} <= names
+    assert not names & {"explicit_join_role", "lobby_tap_join"}

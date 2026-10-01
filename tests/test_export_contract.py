@@ -477,3 +477,8 @@ def test_export_fails_loudly_when_a_recording_has_no_scenario(tmp_path, monkeypa
         export_contract_module.main([str(out_dir)])
     assert not (out_dir / "contract.json").exists()
     assert not out_dir.exists() or not any(out_dir.iterdir())
+
+
+def test_contract_version_is_3():
+    from tools.export_contract import CONTRACT_VERSION
+    assert CONTRACT_VERSION == 3

@@ -437,7 +437,10 @@ def run(cfg: StackConfig, *, popen=subprocess.Popen, clock=time.monotonic,
                                  logs, urls, room_urls)
             print(f"start requested via {url} -> HTTP {status}", flush=True)
 
-        if cfg.wait_for_roles:
+        if cfg.wait_for_roles or cfg.expect_scored is not None:
+            # An --expect-scored assertion can never be skipped: with no
+            # start possible the role wait times out and fails the run
+            # instead of passing vacuously.
             # The role lands when the round starts: after the SETUP window
             # for a timer or players start, right after the hit above for
             # an admin start. Hence the window on top of join_timeout.
@@ -997,8 +1000,9 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         start_after_grant=start_after_grant,
         handshake_devices=args.handshake_devices,
         expect_scored=args.expect_scored,
-        wait_for_roles=not (bit_cfg.start.when == "admin"
-                            and not start_after_grant),
+        wait_for_roles=(args.expect_scored is not None
+                        or not (bit_cfg.start.when == "admin"
+                                and not start_after_grant)),
         watch_parent=not args.detach)
 
 

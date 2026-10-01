@@ -1116,6 +1116,28 @@ def test_timer_start_goes_through_request_start(monkeypatch):
     assert gs.run_calls == 0
 
 
+def test_main_round_one_timer_start_goes_through_request_start():
+    """main() cannot run to its start site offline (live Arco, o2litepy),
+    so this is an AST check on the real function: it calls
+    gs.request_start(None, TERRARIUM_ADMIN, "timer") and never gs.run()."""
+    import ast
+    import inspect
+
+    import harness.terrarium_boot as tb
+
+    calls = [n for n in ast.walk(ast.parse(inspect.getsource(tb.main)))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and isinstance(n.func.value, ast.Name)
+             and n.func.value.id == "gs"]
+    starts = [c for c in calls if c.func.attr == "request_start"]
+    assert len(starts) == 1
+    a = starts[0].args
+    assert (isinstance(a[0], ast.Constant) and a[0].value is None
+            and isinstance(a[1], ast.Name) and a[1].id == "TERRARIUM_ADMIN"
+            and isinstance(a[2], ast.Constant) and a[2].value == "timer")
+    assert not [c for c in calls if c.func.attr == "run"]
+
+
 def test_serve_rounds_honors_players_condition_per_round(monkeypatch):
     """Round 2's Bit config asks for a `players` start condition -- the
     round must start via "players-met" the instant enough scored devices

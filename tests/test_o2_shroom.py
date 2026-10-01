@@ -692,12 +692,19 @@ def test_main_still_prints_the_deny_marker():
     """A deny is no longer terminal, so its line need not precede the
     round-over decision, but the informational DEVICE_JOIN_DENIED print
     must stay: run_stack --expect-scored runs and humans read it."""
+    import ast
     import inspect
 
     import harness.o2_shroom
 
-    assert "markers.DEVICE_JOIN_DENIED" in inspect.getsource(
-        harness.o2_shroom.main)
+    tree = ast.parse(inspect.getsource(harness.o2_shroom.main))
+    printed = [n for n in ast.walk(tree)
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+               and n.func.id == "print"
+               and any(isinstance(a, ast.Attribute)
+                       and a.attr == "DEVICE_JOIN_DENIED"
+                       for arg in n.args for a in ast.walk(arg))]
+    assert printed, "no print(...) embedding markers.DEVICE_JOIN_DENIED"
 
 
 def test_main_reinitializes_heartbeat_from_the_current_round(monkeypatch):
@@ -812,11 +819,17 @@ def test_hello_args_match_the_client_hello_for_every_resend():
         assert hello_args("ie1", instrument) == (typespec, args)
 
 
-def test_main_builds_every_hello_through_hello_args():
-    import inspect
-    import harness.o2_shroom as mod
-    src = inspect.getsource(mod.main)
-    assert "hello_args(args.dev" in src
+def test_send_handshake_ack_goes_out_over_tcp_with_the_wire_shape():
+    from devicelink.o2_transport import FakeO2Lite
+    from harness.o2_shroom import send_handshake_ack
+
+    o2 = FakeO2Lite()
+    send_handshake_ack(o2, "ie1", "r1", "TEST_PLAYER_NODE")
+    send_handshake_ack(o2, "ie2", "r1", None)
+    assert [(a, ts, args) for a, _t, ts, args in o2.sent] == [
+        ("/game/handshake", "sss", ("ie1", "r1", "TEST_PLAYER_NODE")),
+        ("/game/handshake", "sss", ("ie2", "r1", ""))]
+    assert o2.channels == ["tcp", "tcp"]
 
 
 class _HsClient:
@@ -856,11 +869,28 @@ def test_handshake_due_is_silent_without_the_flag_an_invite_or_after_a_role():
                          True, set(), {}, 1.0, 0.0) is None
 
 
-def test_main_registers_the_handshake_and_validated_handlers():
+def test_main_registers_a_handler_for_every_down_kind_the_client_handles():
+    """AST check: the kinds tuple main() registers with method_new covers
+    every address ShroomClient.handle dispatches, so a new down kind
+    cannot be handled in the client yet never delivered by o2lite."""
+    import ast
     import inspect
+    import re
+
     import harness.o2_shroom as mod
-    src = inspect.getsource(mod.main)
-    assert '"handshake", "validated"' in src
+    import harness.shroom_client as sc
+
+    handled = set(re.findall(r'kind == "(\w+)"',
+                             inspect.getsource(sc.ShroomClient.handle)))
+    registered = set()
+    for node in ast.walk(ast.parse(inspect.getsource(mod.main))):
+        if (isinstance(node, ast.Tuple) and node.elts
+                and all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+                        for e in node.elts)
+                and {"role", "leds"} <= {e.value for e in node.elts}):
+            registered = {e.value for e in node.elts}
+    assert {"handshake", "validated"} <= handled
+    assert handled <= registered, handled - registered
 
 
 def test_the_retired_join_path_is_gone_from_o2_shroom():

@@ -620,7 +620,8 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     one-shot mode must announce nothing -- same gating as the other two
     CONTROL_ROUND_LOADED emit sites). The "state-changed" return itself
     always fires either way regardless of the flag, so the caller's
-    handoff handling (a timer start through gs.request_start, or hand off) is unaffected by it.
+    handoff handling (a timer start through gs.request_start, or hand
+    off) is unaffected by it.
 
     Returns "expired", "parent-gone", "state-changed", "players-met",
     "timeout-start", or "timeout-abort".

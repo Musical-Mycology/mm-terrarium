@@ -1446,6 +1446,27 @@ def test_an_admin_bit_nobody_starts_does_not_wait_for_roles(
     assert cfg.wait_for_roles is True
 
 
+def test_expect_scored_forces_the_role_wait_so_it_cannot_pass_vacuously(
+        metronome_enabled_registry):
+    from harness.run_stack import config_from_args, parse_args
+    cfg = config_from_args(
+        parse_args(["--ci", "--bit", "MetronomeBit", "--no-start-after-grant",
+                    "--expect-scored", "1"]),
+        registry=metronome_enabled_registry)
+    assert cfg.wait_for_roles is True and cfg.expect_scored == 1
+
+
+def test_expect_scored_fails_when_no_role_ever_arrives_even_if_waiting_is_off(
+        tmp_path):
+    popen = ScriptedPopen([_CONTROL_OK,
+                           f"{markers.DEVICE_CLOCK_SYNCED} 1.0\n"])
+    ticks = iter([0.0] * 50 + [1e9] * 200)
+    result = run(_cfg(tmp_path, wait_for_roles=False, expect_scored=1),
+                 popen=popen, clock=lambda: next(ticks), sleep=time.sleep)
+    assert result.ok is False
+    assert result.stage == "device-join"
+
+
 def test_ci_implies_start_after_grant_for_an_admin_start_bit(
         metronome_enabled_registry):
     """MetronomeBit starts on an admin hit and never leaves SETUP on its

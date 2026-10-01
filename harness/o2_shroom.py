@@ -114,6 +114,13 @@ def hello_args(dev: str, instrument: str | None) -> tuple[str, tuple]:
     return "ssss", (dev, "", "", instrument)
 
 
+def send_handshake_ack(o2lite, dev: str, round_id: str, node: str | None):
+    """Answer an invite: /game/handshake <dev> <round_id> <node>, over TCP
+    (send_cmd) so it cannot be overtaken by UDP gestures. An empty node
+    asks Control for its default scored node."""
+    o2lite.send_cmd("/game/handshake", 0, "sss", dev, round_id, node or "")
+
+
 def handshake_due(client, enabled: bool, sent: set, seen_at: dict,
                   now: float, delay: float) -> str | None:
     """The round id this device should answer with /game/handshake now, or
@@ -765,8 +772,7 @@ def main() -> None:
                                     args.handshake_delay)
                 if due is not None:
                     try:
-                        o2lite.send_cmd("/game/handshake", 0, "sss",
-                                        args.dev, due, args.node or "")
+                        send_handshake_ack(o2lite, args.dev, due, args.node)
                     except (AssertionError, OSError):
                         pass    # hub away; the invite repeats, so retry
                     else:

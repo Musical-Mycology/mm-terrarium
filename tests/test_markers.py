@@ -62,9 +62,13 @@ def test_a_deny_is_informational_not_a_failure():
 
 
 def test_the_deny_marker_is_still_emitted_by_o2_shroom():
+    import ast
+
     import harness.o2_shroom
-    assert "markers.DEVICE_JOIN_DENIED" in inspect.getsource(
-        harness.o2_shroom)
+    tree = ast.parse(inspect.getsource(harness.o2_shroom))
+    assert any(isinstance(n, ast.Attribute) and n.attr == "DEVICE_JOIN_DENIED"
+               and isinstance(n.value, ast.Name) and n.value.id == "markers"
+               for n in ast.walk(tree))
 
 
 def test_browse_url_marker_is_emitted_by_every_browser_surface():
