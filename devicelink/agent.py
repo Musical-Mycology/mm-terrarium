@@ -30,8 +30,9 @@ from control.fixture_sink import ConsoleFrameSink, DeviceLinkSink
 from control.functions import FunctionKind
 from control.generator_runner import GeneratorRunner
 from control.instrument import fixture_ambient
-from control.lobby import (FIXTURE_FLASH_GAP_S, FIXTURE_FLASH_ON_S, GREEN,
-                           TERRARIUM_ADMIN, LobbyState, StartRequest,
+from control.lobby import (DEFAULT_LOBBY, FIXTURE_FLASH_GAP_S,
+                           FIXTURE_FLASH_ON_S, GREEN, TERRARIUM_ADMIN,
+                           InviteSchedule, LobbyState, StartRequest,
                            lobby_light_manifest)
 from control.prepare import PrepareRequest
 from control.role_config import compose_role_config, slice_light_manifest
@@ -160,11 +161,12 @@ class DeviceLinkAgent:
         # applies -- since their entry in self._closing was created. Only
         # ever populated for a dev currently mid-fade (set in _handle()
         # below) and always cleared by _finish_release, so it can never
-        # outlive the fade it was recorded for. Exists because _on_hello has
-        # no equivalent of _on_grant's `self._closing.pop(dev, None)`: a
-        # rejoin already rebuilds self.bridges[dev] from scratch, so a
-        # stale fade's later _finish_release finds no matching entry in
-        # self._closing to act on and is a no-op for that dev, but a
+        # outlive the fade it was recorded for. Exists because only a new
+        # grant pops self._closing (_on_grant, reached from run() or from a
+        # RUNNING walk-up inside hello): such a grant rebuilds
+        # self.bridges[dev] from scratch, so a stale fade's later
+        # _finish_release finds no matching entry in self._closing to act
+        # on and is a no-op for that dev, but a
         # hello-only reconnect (a bare heartbeat resend, or a genuine
         # reconnect that never rejoins -- exactly how the Room simulator
         # behaves) only rebinds the transport connection and leaves the
@@ -240,6 +242,12 @@ class DeviceLinkAgent:
         # The validated set as of the last registration change: the
         # ceremony celebrates each dev that newly appears in it.
         self._lobby_known: set[str] = set()
+        # When each pooled dev last got /<dev>/handshake (spec 2026-10-01
+        # sections 3.1, 3.3): first hello in SETUP, then every invite
+        # cycle until validated, FULL or SETUP ends. Owned here, not by
+        # LobbyRuntime, so it runs with the lobby disabled or no Room at
+        # all. Rebuilt with the Bit's invite_interval_s at SETUP entry.
+        self._handshakes = InviteSchedule(DEFAULT_LOBBY.invite_interval_s)
         # dev ids already refused by _handle's reserved-identity guard, so a
         # device sending on a loop is logged once rather than once a tick.
         self._refused_ids: set[str] = set()
@@ -433,6 +441,10 @@ class DeviceLinkAgent:
         wrong on an unload, where _setup_room rebuilds the sessions anyway
         and the Bit whose declaration this would restore is going away."""
         lobby, self._lobby = self._lobby, None
+        if not restore_light:
+            # Abort, completion or unwire: a ceremony still draining from
+            # the last SETUP belongs to a Bit that is going away.
+            self._draining_lobby = None
         if lobby is None:
             return
         lobby.stop()
@@ -488,19 +500,12 @@ class DeviceLinkAgent:
             if self._fixture_key(dev) not in self._muted:
                 self._send(dev, protocol.play_event(dev, name, params))
 
-        def send_handshake(dev):
-            # No round, nothing to validate against: an invite without a
-            # handshake is only the white flash.
-            if gs.round_id is not None:
-                self._send(dev, protocol.handshake_event(dev, gs.round_id))
-
         return LobbySinks(
             fixture_names=lambda: list(self._fixtures),
             bound_dev=lambda name: fixture_dev(name) if name in self._fixtures else None,
             feed_light=feed_light, feed_audio=feed_audio,
             set_audio_control=set_audio_control, play_note=play_note,
             set_override=set_override, send_play=send_play,
-            send_handshake=send_handshake,
             announce=gs.notify_lobby)
 
     def _flash_fixtures_now(self, rgb, count: int) -> None:
@@ -558,6 +563,36 @@ class DeviceLinkAgent:
                         False, "prepare failed", True)
             reply.done.set()
 
+    def _handshake_candidates(self) -> list[str]:
+        """Pooled devs still owed an invite: not validated, not
+        assigned, not a bound Room fixture, not mid-fade."""
+        gs = self.game_server
+        reg = gs.registration
+        joined = (set(reg.assignments) | set(reg.validated)) if reg else set()
+        fixture_devs = set(gs.room.bound.values()) if gs.room is not None else set()
+        return [info.dev for info in gs.devices.all()
+                if info.dev not in joined and info.dev not in fixture_devs
+                and info.dev not in self._closing]
+
+    def _tick_handshakes(self) -> None:
+        """Send /<dev>/handshake on first hello in SETUP and every invite
+        cycle after, while there is a round, the lobby is not FULL and the
+        Bit has a scored node to validate against."""
+        gs = self.game_server
+        if (gs.state is not State.SETUP or gs.round_id is None
+                or gs.registration is None
+                or gs.lobby_state() == LobbyState.FULL.name
+                or gs.default_scored_node() is None):
+            return
+        now = self._clock()
+        for dev in self._handshake_candidates():
+            if not self._handshakes.due(dev, now):
+                continue
+            try:
+                self._send(dev, protocol.handshake_event(dev, gs.round_id))
+            except Exception:
+                logger.exception("handshake invite for %s failed", dev)
+
     def _tick_lobby(self) -> None:
         draining = self._draining_lobby
         if draining is not None:
@@ -569,17 +604,10 @@ class DeviceLinkAgent:
         lobby = self._lobby
         if lobby is None:
             return
-        gs = self.game_server
-        reg = gs.registration
-        joined = (set(reg.assignments) | set(reg.validated)) if reg else set()
-        fixture_devs = set(gs.room.bound.values()) if gs.room is not None else set()
-        # A Bit with no scored node has nothing to validate: no handshake
-        # and no white invite, which could never be accepted.
-        if gs.default_scored_node() is not None:
-            for info in gs.devices.all():
-                dev = info.dev
-                if dev in joined or dev in fixture_devs or dev in self._closing:
-                    continue
+        # A Bit with no scored node has nothing to validate: no white
+        # invite, which could never be accepted.
+        if self.game_server.default_scored_node() is not None:
+            for dev in self._handshake_candidates():
                 lobby.consider_invite(dev)
         lobby.tick()
 
@@ -825,6 +853,7 @@ class DeviceLinkAgent:
         self._feed_breath()
         self._drain_start_requests()
         self._drain_prepare_requests()
+        self._tick_handshakes()
         self._tick_lobby()
         self._feed_ambient_generators()
         # Before both renders: a feed released this tick must be reflected in
@@ -841,6 +870,7 @@ class DeviceLinkAgent:
         gets no on_release, so nothing else forgets its transport binding,
         canvas URL or lobby invite (spec 2026-10-01 section 5.5). A dev
         with a bridge is released through on_release and its fade."""
+        self._handshakes.forget(dev)
         if dev in self.bridges or dev in self._closing:
             return
         self.transport.drop_dev(dev)
@@ -1243,6 +1273,8 @@ class DeviceLinkAgent:
         elif verb == "handshake":
             self._on_handshake(client, dev, env.args)
         elif verb == "join":
+            # Bound first, so a sender that never hello'd still hears it.
+            self.transport.bind_dev(dev, client)
             self._send(dev, protocol.error_event(
                 dev, "join", "retired in contract v3: use /game/handshake"))
         elif verb == "canvas":
@@ -1311,6 +1343,7 @@ class DeviceLinkAgent:
             # that role's bridge too, or dev gets two LED streams (spec
             # 2026-09-25 lobby-flash-mute-and-room-bridge section 3.2).
             self._drop_player_bridge(dev)
+            self._handshakes.forget(dev)
             if self._lobby is not None:
                 self._lobby.forget(dev)
             return
@@ -1346,10 +1379,11 @@ class DeviceLinkAgent:
         self._breathless.discard(dev)
         if result.breath is False:
             self._breathless.add(dev)
-        # This rejoin is itself the "proof of life" that made _handle() add
-        # dev to _closing_revived a moment ago (dev was still in _closing
-        # when that check ran, just above the pop() this same rejoin just
-        # did). Nothing will ever pop it now that _closing no longer has
+        # A grant arrives from run() or from a RUNNING walk-up inside hello.
+        # In the walk-up case that hello is itself the "proof of life" that
+        # made _handle() add dev to _closing_revived a moment ago (dev was
+        # still in _closing when that check ran, just above the pop() this
+        # grant just did). Nothing will ever pop it now that _closing no longer has
         # this dev -- _render_frames only calls _finish_release for a dev
         # in _closing -- so drop it explicitly rather than leave a stale
         # entry sitting around for a dev that may never be released again.
@@ -1452,11 +1486,15 @@ class DeviceLinkAgent:
         if new_state in (State.LOADED, State.IDLE):
             self._setup_room()
         if new_state == State.SETUP:
+            self._handshakes = InviteSchedule(
+                gs.lobby_config().invite_interval_s)
             self._enter_lobby()
         elif new_state == State.RUNNING:
             self._exit_lobby(restore_light=True)
         elif new_state in (State.UNLOADING, State.IDLE, State.LOADED):
             self._exit_lobby(restore_light=False)
+        if new_state != State.SETUP:
+            self._handshakes.clear()
         if new_state == State.UNLOADING:
             self._room_cues = TimedQueue()
             self._light_cues = TimedQueue()
@@ -1513,8 +1551,9 @@ class DeviceLinkAgent:
         (see self._closing_revived, set in _handle()) since THIS fade
         began: a hello-only reconnect -- a bare heartbeat resend, or a
         genuine reconnect that never rejoins -- can land while a prior
-        release's fade is still draining, and _on_hello has no equivalent
-        of _on_grant's `self._closing.pop(dev, None)` rejoin guard. Left
+        release's fade is still draining, and a hello that brings no new
+        grant never reaches _on_grant's `self._closing.pop(dev, None)`
+        guard (only run() or a RUNNING walk-up inside hello does). Left
         unconditional, this call would drop the FRESH connection _on_hello
         just rebound, not the stale one the fade actually belongs to.
         Everything else here still runs unconditionally, including the
@@ -1675,11 +1714,13 @@ class DeviceLinkAgent:
         registration changed, not which way. The one site that forgets a
         validated dev's invite."""
         self._broadcast_room()
+        gs = self.game_server
+        validated = gs.registration.validated if gs.registration else {}
+        for dev in validated:
+            self._handshakes.forget(dev)
         lobby = self._lobby
         if lobby is None:
             return
-        gs = self.game_server
-        validated = gs.registration.validated if gs.registration else {}
         for dev in set(validated) - self._lobby_known:
             lobby.forget(dev)
             # The Console's lobby log, once per new validation.

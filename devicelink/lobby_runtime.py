@@ -23,8 +23,9 @@ from control.lobby import (BELL_DURATION_S, BELL_OFFSET_S, BELL_PROGRAM,
                            FEEDBACK_REFUSED, FIXTURE_FLASH_GAP_S,
                            FIXTURE_FLASH_ON_S, GREEN, GREEN_HUE_CC, HUE_CC,
                            LOBBY_DRONE_KEY, LOBBY_DRONE_VEL, LOBBY_PROGRAM,
-                           RED, WHITE, CeremonySlots, InviteSchedule, LobbyConfig, LobbyState,
-                           hue_drift_cc, scale_note)
+                           RED, WHITE, CeremonySlots, InviteSchedule,
+                           LobbyConfig, LobbyState, hue_drift_cc,
+                           scale_note)
 from control.timed_queue import TimedQueue
 
 
@@ -38,7 +39,6 @@ class LobbySinks:
     play_note: Callable[[int, int, int, float], None]
     set_override: Callable[[str, tuple, float, float], None]
     send_play: Callable[[str, str, str], None]
-    send_handshake: Callable[[str], None]
     announce: Callable[[str, str], None]
 
 
@@ -172,8 +172,11 @@ class LobbyRuntime:
                 self._at(t, lambda d=dev: self._s.set_override(
                     d, rgb, 1.0, FIXTURE_FLASH_ON_S))
 
-    # --- handshake (spec 5) --------------------------------------------
+    # --- invite flash (spec 5) -----------------------------------------
     def consider_invite(self, dev: str) -> None:
+        """The white invite flash only. /<dev>/handshake itself is the
+        agent's (DeviceLinkAgent._tick_handshakes), so it goes out in SETUP
+        whether or not a lobby runtime exists (spec 2026-10-01 3.1, 3.3)."""
         if not self._running or self._state is not LobbyState.WAITING:
             return
         first = not self._invites.invited(dev)
@@ -186,9 +189,6 @@ class LobbyRuntime:
             t = now + i * (DEVICE_FLASH_ON_S + DEVICE_FLASH_GAP_S)
             self._at(t, lambda d=dev: self._s.set_override(d, WHITE, 1.0,
                                                            DEVICE_FLASH_ON_S))
-        # Every invite cycle, the first included: the device answers with
-        # /game/handshake once its player accepts (spec section 3.2).
-        self._s.send_handshake(dev)
 
     def is_invited(self, dev: str) -> bool:
         return self._invites.invited(dev)

@@ -28,7 +28,6 @@ class _Sinks:
         self.notes = []      # (program, key, vel, duration)
         self.overrides = []  # (t, dev, rgb, level, duration)
         self.plays = []      # (dev, name, params)
-        self.handshakes = []  # dev, one per /<dev>/handshake invite
         self.events = []     # (event, dev)
         self.t = 0.0
 
@@ -43,7 +42,6 @@ class _Sinks:
             set_override=lambda dev, rgb, lvl, dur: self.overrides.append(
                 (self.t, dev, rgb, lvl, dur)),
             send_play=lambda dev, n, p: self.plays.append((dev, n, p)),
-            send_handshake=lambda dev: self.handshakes.append(dev),
             announce=lambda ev, dev: self.events.append((ev, dev)),
         )
 
@@ -209,30 +207,17 @@ def test_no_invites_while_full():
     assert not rt.is_invited("ie3")
 
 
-def test_every_invite_cycle_sends_the_handshake():
-    # The double tap is retired (spec 2026-10-01 section 5.5): each invite
-    # cycle, the first included, sends /<dev>/handshake beside the flash.
+def test_invites_are_announced_once_and_forgotten_on_request():
+    # /<dev>/handshake is the agent's, not the runtime's (spec 2026-10-01
+    # sections 3.1, 3.3): the runtime owns only the flash and the announce.
     rt, sinks, clock = _rt()
     rt.start()
     rt.consider_invite("ie3")
-    assert sinks.handshakes == ["ie3"]
-    assert ("invite", "ie3") in sinks.events
-    rt.consider_invite("ie3")                    # not yet due
-    assert sinks.handshakes == ["ie3"]
     _run(rt, sinks, clock, DEFAULT_LOBBY.invite_interval_s + 0.1)
     rt.consider_invite("ie3")
-    assert sinks.handshakes == ["ie3", "ie3"]
-    assert sinks.events.count(("invite", "ie3")) == 1     # announced once
+    assert sinks.events.count(("invite", "ie3")) == 1
     rt.forget("ie3")
     assert not rt.is_invited("ie3")
-
-
-def test_no_handshake_while_full():
-    rt, sinks, clock = _rt()
-    rt.start()
-    rt.set_state(LobbyState.FULL)
-    rt.consider_invite("ie3")
-    assert sinks.handshakes == []
 
 
 def test_stop_ends_invites_but_drains_queued_thunks():
@@ -242,7 +227,8 @@ def test_stop_ends_invites_but_drains_queued_thunks():
     rt.stop()
     assert rt.draining()
     rt.consider_invite("ie3")       # a stopped runtime invites no one
-    assert sinks.handshakes == [] and not rt.is_invited("ie3")
+    assert not rt.is_invited("ie3")
+    assert not [o for o in sinks.overrides if o[1] == "ie3"]
     _run(rt, sinks, clock, 2.0)
     assert not rt.draining()
     assert [p[0] for p in sinks.plays] == ["ie1"]

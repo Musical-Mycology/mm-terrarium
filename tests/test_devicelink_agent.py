@@ -3126,10 +3126,15 @@ def test_room_only_on_first_contact(agent_with_room):
 
 def test_reaped_unjoined_device_leaves_no_transport_state(agent_with_room):
     agent, fake, gs = agent_with_room
-    deliver_hello(fake, "ie1"); agent.poll()
+    deliver_hello(fake, "ie1")
+    fake.deliver("/game/canvas", "ss", ("ie1", "http://h:1/"))
+    agent.poll()
+    assert agent.canvas_urls() == {"ie1": "http://h:1/"}
+    assert agent._lobby.is_invited("ie1")
     fake.set_time(fake.time_get() + 30); agent.poll()
     assert "ie1" not in agent.transport._devs
     assert "ie1" not in agent.canvas_urls()
+    assert not agent._lobby.is_invited("ie1")
 
 
 def test_a_running_walk_up_gets_room_then_its_jam_role(agent_with_room):
@@ -3176,3 +3181,104 @@ def test_validated_and_deny_go_over_tcp(agent_with_room):
     chans = {s[0]: c for s, c in zip(fake.sent, fake.channels)
              if s[0] in ("/ie1/validated", "/ie2/deny")}
     assert chans == {"/ie1/validated": "tcp", "/ie2/deny": "tcp"}
+
+
+def test_join_from_a_never_hellod_sender_still_hears_the_retirement(agent_with_room):
+    agent, fake, gs = agent_with_room
+    fake.deliver("/game/join", "ss", ("ie5", "TEST_PLAYER_NODE"))
+    agent.poll()
+    assert ("join", "retired in contract v3: use /game/handshake") in addrs(
+        fake, "/ie5/error")
+
+
+# --- /<dev>/handshake does not need a lobby (spec 2026-10-01 3.1, 3.3) ------
+
+def _bare_o2_agent(config=None, room=False, monkeypatch=None):
+    """TestBit in SETUP over O2LiteTransport + FakeO2Lite, no Room unless
+    asked for (then via the lobby rig with `config`)."""
+    fake = FakeO2Lite(now=100.0)
+    fake.set_services("actl")
+    transport = O2LiteTransport()
+    transport.start(fake)
+    if room:
+        from tests.test_lobby_agent import _rig
+        gs, _s, agent, _a, _ss, _c = _rig(monkeypatch, config, server=transport,
+                                          clk=fake.time_get)
+    else:
+        gs = GameServer({"test_bit": TestBit}, clock=fake.time_get)
+        agent = DeviceLinkAgent(gs, transport, clock=fake.time_get)
+        gs.load_bit("test_bit")
+    return agent, fake, gs
+
+
+def _handshake_sends(fake, dev="ie1"):
+    return [(s[3], c) for s, c in zip(fake.sent, fake.channels)
+            if s[0] == f"/{dev}/handshake"]
+
+
+def _poll_for(agent, fake, seconds, dt=0.1):
+    for _ in range(int(round(seconds / dt))):
+        fake.set_time(fake.time_get() + dt)
+        agent.poll()
+
+
+def test_handshake_without_a_room_on_first_hello_and_each_cycle():
+    agent, fake, gs = _bare_o2_agent()
+    assert gs.room is None and agent._lobby is None
+    deliver_hello(fake, "ie1"); agent.poll()
+    assert _handshake_sends(fake) == [((gs.round_id,), "tcp")]
+    _poll_for(agent, fake, 4.5)
+    assert len(_handshake_sends(fake)) == 1
+    _poll_for(agent, fake, 0.7)
+    assert _handshake_sends(fake) == [((gs.round_id,), "tcp")] * 2
+
+
+def test_handshake_with_the_lobby_disabled(monkeypatch):
+    cfg = _no_lobby_config()
+    agent, fake, gs = _bare_o2_agent(cfg, room=True, monkeypatch=monkeypatch)
+    assert agent._lobby is None
+    deliver_hello(fake, "ie1"); agent.poll()
+    assert _handshake_sends(fake) == [((gs.round_id,), "tcp")]
+    fake.deliver("/game/handshake", "sss", ("ie1", gs.round_id, ""))
+    agent.poll()
+    assert addrs(fake, "/ie1/validated")
+    _poll_for(agent, fake, 6.0)
+    assert len(_handshake_sends(fake)) == 1        # validated: no more invites
+
+
+def test_full_stops_the_handshake():
+    agent, fake, gs = _bare_o2_agent()
+    gs.registration.role_table.roles["player"].capacity = 1
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.deliver("/game/handshake", "sss", ("ie1", gs.round_id, ""))
+    agent.poll()
+    assert gs.lobby_state() == "FULL"
+    deliver_hello(fake, "ie2"); agent.poll()
+    _poll_for(agent, fake, 6.0)
+    assert _handshake_sends(fake, "ie2") == []
+
+
+def test_no_scored_node_means_no_handshake():
+    agent, fake, gs = _bare_o2_agent()
+    roles = gs.registration.role_table.roles
+    roles["player"] = replace(roles["player"], scored=False)
+    assert gs.default_scored_node() is None
+    deliver_hello(fake, "ie1"); agent.poll()
+    _poll_for(agent, fake, 6.0)
+    assert _handshake_sends(fake) == []
+
+
+def test_exactly_one_handshake_per_cycle_with_a_lobby(agent_with_room):
+    agent, fake, gs = agent_with_room
+    assert agent._lobby is not None
+    deliver_hello(fake, "ie1"); agent.poll()
+    _poll_for(agent, fake, 5.2)
+    assert len(_handshake_sends(fake)) == 2
+
+
+def test_no_handshake_once_setup_ends(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    gs.request_start(None, "terrarium", "test"); agent.poll()
+    _poll_for(agent, fake, 6.0)
+    assert len(_handshake_sends(fake)) == 1

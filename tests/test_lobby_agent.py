@@ -409,3 +409,19 @@ def test_start_feedback_flash_leaves_a_muted_fixture_dark(monkeypatch):
                  if d == "sim-main" and m["address"] == "/sim-main/leds"]
     assert main_leds
     assert all(bytes(f) == bytes(len(f)) for f in main_leds)
+
+
+def test_an_abort_during_the_ceremony_drops_its_queued_cues(monkeypatch):
+    """A ceremony draining across start belongs to that Bit: an abort
+    inside the ceremony span must not play its bell or chime afterwards."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    _handshake(server, agent, gs, "c1", "ie1")
+    gs.request_start(None, TERRARIUM_ADMIN, "console")
+    assert agent._draining_lobby is not None
+    _poll(agent, clk, 0.5)
+    gs.abort()
+    assert agent._draining_lobby is None
+    _poll(agent, clk, 2.0)
+    assert audio.notes == []
+    assert _sent(server, "/ie1/play") == []
