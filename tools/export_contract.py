@@ -411,8 +411,10 @@ REPLAY_NOTES = [
     "device send /game/join: that verb is retired, and "
     "join_retired_error records only Control's /$DEV/error answer to a "
     "contract v2 device's join, with no step for the join itself.",
-    "Every round id in the files is the $ROUND placeholder (see "
-    "`step_schema.placeholders`): substitute one fixed string for it in "
+    "Every round id Control sent is the $ROUND placeholder (see "
+    "`step_schema.placeholders`); the one literal round id in the files "
+    "is the deliberately stale \"stale\" in handshake_stale_round. "
+    "Substitute one fixed string for $ROUND in "
     "the control_sends steps a runner delivers, and expect the device to "
     "echo that same string in its /game/handshake.",
     f"In link_loss_keeps_display, the expect_frame step at t=9000 (inside "

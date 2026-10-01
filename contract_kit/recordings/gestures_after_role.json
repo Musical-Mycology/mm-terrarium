@@ -87,6 +87,20 @@
       "t": 0
     },
     {
+      "expect_out": {
+        "address": "/game/handshake",
+        "args": [
+          "$DEV",
+          "$ROUND",
+          ""
+        ],
+        "stamp_t": null,
+        "typespec": "sss",
+        "within_ms": 50
+      },
+      "t": 300
+    },
+    {
       "control_sends": {
         "address": "/$DEV/room",
         "args": [

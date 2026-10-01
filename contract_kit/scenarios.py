@@ -154,14 +154,19 @@ def handshake_validate_then_role() -> dict:
     Bit's default scored role), and Control answers `/$DEV/validated
     ["$ROUND", "player"]` plus a fresh `/$DEV/room` whose player count is
     now 1. The validation ceremony follows: green flashes, then `/play
-    ["chime", "key=$KEY"]` about 1.8 s later. The invite's second white
-    flash, already queued, still shows once between the two green ones
-    (at t=415); a device must not read it as a second invite (only
-    `/$DEV/handshake` is one).
+    ["chime", "key=$KEY"]` about 1.8 s later. Validation cancels the
+    invite's second white flash, which was already queued, so nothing
+    white follows `/validated` (and only `/$DEV/handshake` is ever an
+    invite in any case).
 
     Validated is a reservation, not a role: `/$DEV/role` (scored, `class`
     "UNIQUE") arrives only when the operator starts the round at
     VALIDATE_START_T, followed by the role's opening signature.
+
+    The start is at VALIDATE_START_T (3000 ms), not the kit brief's
+    1000 ms: the ceremony's chime lands about 2117 ms in, and a start
+    before it would record the round going RUNNING mid-ceremony instead of
+    the whole player flow (recording difference).
 
     The chime's key is recorded as `key=$KEY`. It is the validation index
     into a note scale, so a replaying device must reproduce the
@@ -380,6 +385,8 @@ def timed_frames_hold_last() -> dict:
                    handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
     rec.start(START_T)
     rec.advance_to(ROLE_SETTLED_T)
     rec.expect_frame(ROLE_SETTLED_T)         # the settled role look
@@ -423,6 +430,8 @@ def gestures_after_role() -> dict:
                    handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
     rec.expect_quiet(0, ["/game/tap", *POST_ROLE_GESTURES], START_T)
     rec.start(START_T)
     rec.tap(START_T + 500, duration_ms=80.0)
@@ -484,6 +493,8 @@ def release_keeps_display() -> dict:
                    handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
     rec.start(START_T)
     rec.advance_to(ROLE_SETTLED_T)
     rec.expect_frame(ROLE_SETTLED_T)         # the settled role look
@@ -514,6 +525,8 @@ def play_known_and_unknown() -> dict:
                    handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
     rec.start(START_T)
     rec.tap(START_T + 200, duration_ms=80.0)
     rec.expect_play(START_T + 200, "tick")
@@ -604,6 +617,8 @@ def malformed_dropped() -> dict:
                    handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
     rec.start(START_T)
     rec.advance_to(START_T + 200)
     rec.control_send_now("/$DEV/bogus", "s", ["hello"], malformed=True)
@@ -657,6 +672,8 @@ def link_loss_keeps_display() -> dict:
                    handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
     rec.start(START_T)
     rec.advance_to(ROLE_SETTLED_T)
     rec.expect_frame(ROLE_SETTLED_T)                # the settled role look

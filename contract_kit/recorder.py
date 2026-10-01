@@ -119,6 +119,10 @@ BITS = {"ContractBit": ContractBit, "SoloContractBit": SoloContractBit}
 # with a random token (spec 2026-10-01 section 3.2), so the real string can
 # never be committed; a device echoes whatever /$DEV/handshake last carried.
 ROUND_PLACEHOLDER = "$ROUND"
+# What a round id from an EARLIER Bit load is rewritten to, so an echo of a
+# superseded round never records as a correct "$ROUND" echo. No committed
+# recording reloads a Bit, so this never appears in the export today.
+PREV_ROUND_PLACEHOLDER = "$ROUND_PREV"
 
 _KEY_RE = re.compile(r"key=\d+")
 
@@ -290,11 +294,16 @@ class Recorder:
         typespec = raw_args[0] if raw_args else ""
         values = [from_o2_arg(v) if t == "b" else v
                   for t, v in zip(typespec, raw_args[1:])]
-        self._sent.append((self._now_ms, addr, timestamp, typespec, values))
+        if addr == f"/{self.dev}/handshake":
+            self._round_ids.add(values[0])
+        # Round ids are labelled NOW, against the round that is current at
+        # send time, not at finish(): a later reload must not turn this
+        # round's id into "$ROUND_PREV" or an old one into "$ROUND".
+        self._sent.append((self._now_ms, addr, timestamp, typespec,
+                           [self._round_label(v) for v in values]))
         if addr == f"/{self.dev}/handshake" and self._linked_up:
             # What a real device does on an invite: hold the round id.
             self._round_seen = values[0]
-            self._round_ids.add(values[0])
             if self._awaiting_invite and self.handshake is not None:
                 self._awaiting_invite = False
                 self._accept_due_ms = (self._now_ms
@@ -388,7 +397,8 @@ class Recorder:
             raise AssertionError(
                 f"the device has no round id to accept with at t={t_ms}ms: "
                 f"no /$DEV/handshake has reached it since its link came up")
-        self._scripted.append((t_ms, "/game/handshake", (round_id, node)))
+        self._scripted.append((t_ms, "/game/handshake",
+                               (self._round_label(round_id), node)))
         self._fake.deliver("/game/handshake", "sss",
                            (self.dev, round_id, node),
                            timestamp=t_ms / 1000.0)
@@ -437,7 +447,9 @@ class Recorder:
         self.advance_to(t_ms)
         detail: dict = {"node": node}
         if round_id is not None:
-            detail["round_id"] = round_id
+            # Labelled like every other round id, so a real minted id
+            # never reaches the output ("stale" stays literal).
+            detail["round_id"] = self._round_label(round_id)
         self.steps.append({"t": t_ms, "accept": detail})
         self._send_handshake(t_ms, round_id if round_id is not None
                              else self._round_seen, node)
@@ -539,9 +551,9 @@ class Recorder:
 
     def expect_handshake_out(self, t_ms: int) -> None:
         """The device must send /game/handshake at `t_ms`. Its round id is
-        recorded as "$ROUND" (the latest one the device received) unless
-        the scripted round id was one Control never sent, which is then
-        recorded literally.
+        recorded as "$ROUND" when it was the CURRENT round's id at send
+        time, as "$ROUND_PREV" when it was an earlier load's, and literally
+        when Control never minted it (e.g. "stale").
 
         Raises unless this rig really did script a handshake at `t_ms`.
         """
@@ -549,9 +561,7 @@ class Recorder:
         if not sent:
             raise AssertionError(
                 self._no_send_scripted(t_ms, "/game/handshake"))
-        round_id, node = sent[-1]
-        echoed = (ROUND_PLACEHOLDER if round_id in self._round_ids
-                  else round_id)
+        echoed, node = sent[-1]
         self.steps.append({"t": t_ms, "expect_out": {
             "address": "/game/handshake", "typespec": "sss",
             "args": ["$DEV", echoed, node], "stamp_t": None,
@@ -682,6 +692,15 @@ class Recorder:
         """The live round id, for a test that needs the real string."""
         return self._gs.round_id
 
+    def load_bit(self, t_ms: int, bit: str = "ContractBit") -> None:
+        """Load `bit` at `t_ms` (after unload_bit), minting a NEW round id;
+        the previous round's id is from then on recorded as "$ROUND_PREV".
+        Operator input: records no step."""
+        self.advance_to(t_ms)
+        self._gs.load_bit(bit)
+        self._round_ids.add(self._gs.round_id)
+        self._agent.poll()
+
     def unload_bit(self) -> None:
         """Unload the Bit, which releases every joined device."""
         self._gs.abort()
@@ -710,11 +729,21 @@ class Recorder:
 
     # --- output ------------------------------------------------------------
 
-    def _normalize(self, value: object) -> object:
-        """A captured argument with its non-wire numbers placeheld: a
-        round id becomes "$ROUND", a chime key "key=$KEY"."""
-        if isinstance(value, str) and value in self._round_ids:
+    def _round_label(self, value: object) -> object:
+        """A round id as recorded: "$ROUND" for the round current right
+        now, "$ROUND_PREV" for one from an earlier Bit load, anything else
+        unchanged."""
+        if not isinstance(value, str):
+            return value
+        if value == self._gs.round_id:
             return ROUND_PLACEHOLDER
+        if value in self._round_ids:
+            return PREV_ROUND_PLACEHOLDER
+        return value
+
+    def _normalize(self, value: object) -> object:
+        """A captured argument with its chime key placeheld ("key=$KEY").
+        Round ids were already labelled at capture (_round_label)."""
         return _normalize_key(value)
 
     def finish(self) -> dict:

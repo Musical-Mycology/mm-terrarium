@@ -709,3 +709,34 @@ def test_a_recording_does_not_depend_on_the_hash_seed():
     first = digest("0")
     assert len(first) == 64
     assert digest("99999") == first
+
+
+def test_an_echo_of_a_previous_rounds_id_is_not_recorded_as_round():
+    """Only the CURRENT round id becomes $ROUND. After an unload and a
+    reload, an echo of the first round's id must stay distinguishable from
+    a correct echo, or a scenario could hide a real stale id."""
+    rec = Recorder(name="t", summary="s", handshake=None)
+    rec.link_up(0)
+    first = rec.control_round_id()
+    rec.unload_bit()
+    rec.load_bit(1000)
+    second = rec.control_round_id()
+    assert second != first
+    rec.advance_to(5000)                 # the new round's invite arrives
+    rec.accept(5100, round_id=first)     # the device echoes the OLD id
+    rec.accept(5200)                     # then the current one
+    data = rec.finish()
+
+    outs = [s["expect_out"]["args"] for s in data["steps"]
+            if s.get("expect_out", {}).get("address") == "/game/handshake"]
+    assert outs == [["$DEV", "$ROUND_PREV", ""], ["$DEV", "$ROUND", ""]]
+    assert {"t": 5100, "accept": {"node": "", "round_id": "$ROUND_PREV"}} \
+        in data["steps"]
+    invites = [(s["t"], s["control_sends"]["args"])
+               for s in _sends(data, "/$DEV/handshake")]
+    # Each invite was labelled against the round current when it was sent.
+    assert invites[0] == (0, ["$ROUND"])
+    assert invites[-1][1] == ["$ROUND"] and invites[-1][0] >= 1000
+    assert first not in str(data) and second not in str(data)
+    # The old echo is dropped; the current one validates.
+    assert [s["t"] for s in _sends(data, "/$DEV/validated")] == [5200]

@@ -318,6 +318,11 @@ def test_handshake_validate_then_role_reserves_then_grants_at_start():
                                     "within_ms": 50}
     assert ACCEPT_AFTER_MS < chime["t"] < VALIDATE_START_T
 
+    # Validation cancels the invite's queued second white flash: nothing
+    # white follows /validated.
+    assert not [s for s in _frames(data) if s["t"] >= ACCEPT_AFTER_MS
+                and set(s["control_sends"]["args"][0]) == {255}]
+
     # Validated is a reservation: the role only arrives at start.
     role = _sends(data, "/$DEV/role")
     assert [s["t"] for s in role] == [VALIDATE_START_T]
@@ -657,3 +662,17 @@ def test_link_loss_keeps_display_holds_the_frame_and_starts_over():
     assert set(quiet["expect_quiet"]["addresses"]) == {
         "/game/hello", "/game/tap", "/game/hold", "/game/swing"}
     assert quiet["t"] + quiet["expect_quiet"]["for_ms"] == LINK_BACK_T
+
+
+@pytest.mark.parametrize("scenario_fn", ALL_SCENARIOS, ids=lambda f: f.__name__)
+def test_a_policy_accept_is_always_checked_as_an_expect_out(scenario_fn):
+    """A device that never sends its policy's /game/handshake must fail
+    every scenario whose device.handshake is set, not just the ones about
+    the handshake."""
+    data = _load(scenario_fn.__name__)
+    policy = data["device"]["handshake"]
+    if policy is None:
+        return
+    first_invite = _first_t(data, "/$DEV/handshake")
+    outs = [s["t"] for s in _outs(data, "/game/handshake")]
+    assert first_invite + policy["ack_after_ms"] in outs

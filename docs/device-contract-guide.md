@@ -226,10 +226,10 @@ Two Control behaviors the recordings also show and a session must tolerate: a
 newly granted role opens with a signature of about 1.5 s that ignores light
 cues (the last signature frame is sent about 1518 ms after the role), and with
 a Room loaded the validation ceremony is two green flashes and then
-`/play ["chime", "key=$KEY"]` about 1.8 s after the accept, with the invite's
-already-queued second white flash still showing once in between (t=415 in
-`handshake_validate_then_role`). Only `/<dev>/handshake` is an invite; a white
-frame never is.
+`/play ["chime", "key=$KEY"]` about 1.8 s after the accept. Validation
+cancels any invite flash still queued for the device, so no white frame
+follows `/validated`. Only `/<dev>/handshake` is an invite; a white frame
+never is.
 
 ### 5.3 Firmware checklist (spec section 8)
 
@@ -315,7 +315,7 @@ mm-tuneshroom), restated for a C or C++ test build and updated for v3.
 
    | Expectation | Match |
    |---|---|
-   | `expect_out` | address and typespec equal; args element-wise with `$DEV`, `$ROUND` (the fixed string from rule 3), `*` and numbers within 1e-3; send time in `[t, t + within_ms]` inclusive; when `stamp_t` is non-null the message's stamp within 1 ms of it. Consume the matched send so two identical expectations need two sends (the double tap at t=3000 in `timed_frames_hold_last`) |
+   | `expect_out` | address and typespec equal; args element-wise with `$DEV`, `$ROUND` (the fixed string from rule 3), `*` and numbers within 1e-3; send time in `[t, t + within_ms]` inclusive; when `stamp_t` is non-null the message's stamp within 1 ms of it. Consume the matched send so two identical expectations need two sends (the two taps at t=3000 in `timed_frames_hold_last`) |
    | `expect_play` | name equal; params equal after turning `key=$KEY` into `key=<integer>`; time in `[t, t + within_ms]`; consumed |
    | `expect_quiet` | no send of a listed address with time in `[t, t + for_ms)`, half-open |
    | `expect_frame` | all 36 values equal at `t`, or else all 36 equal at `t + 23` |
