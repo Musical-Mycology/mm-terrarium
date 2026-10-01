@@ -12,7 +12,8 @@ Three kinds of test live here:
    devicelink/contract.py declares, with an allowed typespec, the right
    direction and argument types, and everything a device sends before it
    holds a role is a verb the table marks `pre_role`. The malformed-input
-   scenario's own flagged steps are required to FAIL that same check.
+   scenario's own flagged steps are required to FAIL that same check. No
+   recording asks a device to send a retired verb (contract v3: /game/join).
 3. One test per scenario, asserting the recording still demonstrates what
    the spec's scenario table says it covers. A recording that is
    byte-stable but no longer contains its own point is a failed scenario,
@@ -25,14 +26,21 @@ import pytest
 
 pytest.importorskip("luxaeterna")
 
-from contract_kit.contract_bit import (CONTRACT_PLAYER_NODE, KNOWN_SAMPLE,
+from contract_kit.contract_bit import (JAMMER_REFUSAL, KNOWN_SAMPLE,
                                        UNKNOWN_SAMPLE)
-from contract_kit.recorder import CUE_HORIZON_S, Recorder
-from contract_kit.scenarios import (ALL_SCENARIOS, AUTHORED_NEWER_AT,
-                                    AUTHORED_NEWER_GRB, AUTHORED_OLDER_AT,
-                                    AUTHORED_OLDER_GRB, AUTHORED_PAIR_T,
-                                    NO_SUCH_NODE, SIGNATURE_SETTLED_MS)
-from devicelink.contract import row_for, typespec_allowed
+from contract_kit.recorder import CUE_HORIZON_S, ROOM_NODE_ID, Recorder
+from contract_kit.scenarios import (ACCEPT_AFTER_MS, ACCEPT_POLICY,
+                                    ALL_SCENARIOS, AUTHORED_CHECK_T,
+                                    AUTHORED_NEWER_AT, AUTHORED_NEWER_GRB,
+                                    AUTHORED_OLDER_AT, AUTHORED_OLDER_GRB,
+                                    AUTHORED_PAIR_T, GOOD_ACCEPT_T,
+                                    HOLD_CHECK_T, LEGACY_JOIN_T, LINK_BACK_T,
+                                    LOOK_SETTLED_T, NO_SUCH_NODE,
+                                    RIVAL_ACCEPT_T, ROLE_SETTLED_T,
+                                    ROOM_ACCEPT_T, SIGNATURE_SETTLED_MS,
+                                    STALE_ACCEPT_T, STALE_ROUND_ID, START_T,
+                                    WALK_UP_T)
+from devicelink.contract import RETIRED_UP_VERBS, row_for, typespec_allowed
 
 ROOT = Path(__file__).resolve().parents[1]
 RECORDINGS = ROOT / "contract_kit" / "recordings"
@@ -200,6 +208,38 @@ def test_every_quiet_window_names_real_verbs(scenario_fn):
 
 
 @pytest.mark.parametrize("scenario_fn", ALL_SCENARIOS, ids=lambda f: f.__name__)
+def test_no_device_ever_sends_a_retired_verb(scenario_fn):
+    """Firmware checklist item 8: a v3 device never sends /game/join, so
+    no recording may ask it to, as an expectation or an input."""
+    data = _load(scenario_fn.__name__)
+    retired = {f"/game/{verb}" for verb in RETIRED_UP_VERBS}
+    assert not [s for s in _outs(data)
+                if s["expect_out"]["address"] in retired]
+    assert not _kind(data, "join")
+
+
+@pytest.mark.parametrize("scenario_fn", ALL_SCENARIOS, ids=lambda f: f.__name__)
+def test_the_device_field_is_the_v3_handshake_policy(scenario_fn):
+    data = _load(scenario_fn.__name__)
+    assert set(data["device"]) == {"handshake"}
+    policy = data["device"]["handshake"]
+    assert policy is None or set(policy) == {"node", "ack_after_ms"}
+
+
+@pytest.mark.parametrize("scenario_fn", ALL_SCENARIOS, ids=lambda f: f.__name__)
+def test_control_verbs_are_tcp_rows_and_only_leds_and_play_are_udp(scenario_fn):
+    """Every down verb a recording carries routes by its row's transport
+    (spec 2026-10-01 section 3.3)."""
+    data = _load(scenario_fn.__name__)
+    for step in _sends(data):
+        if step["control_sends"].get("malformed"):
+            continue
+        _direction, verb = _direction_and_verb(step["control_sends"]["address"])
+        expected = "udp-ok" if verb in ("leds", "play") else "tcp"
+        assert row_for("down", verb).transport == expected
+
+
+@pytest.mark.parametrize("scenario_fn", ALL_SCENARIOS, ids=lambda f: f.__name__)
 def test_the_timeline_runs_forward_and_carries_no_dev_id(scenario_fn):
     data = _load(scenario_fn.__name__)
     times = [s["t"] for s in data["steps"]]
@@ -210,75 +250,163 @@ def test_the_timeline_runs_forward_and_carries_no_dev_id(scenario_fn):
 
 # --- 3: one test per scenario ----------------------------------------------
 
+def test_v3_scenario_set():
+    from contract_kit.scenarios import ALL_SCENARIOS
+    names = {f.__name__ for f in ALL_SCENARIOS}
+    assert {"handshake_validate_then_role", "handshake_over_cap_deny",
+            "handshake_stale_round", "late_hello_gets_jam",
+            "jam_solo_fallback", "room_node_handshake_binds",
+            "join_retired_error"} <= names
+    assert not names & {"explicit_join_role", "lobby_tap_join"}
+
+
+def _role_blob(step):
+    return step["control_sends"]["args"][0]
+
+
 def test_boot_hello_heartbeat_hellos_every_5s_and_says_nothing_else():
-    """Rule 1, and the hello's instrument declaration."""
+    """Rule 1, the hello's instrument declaration, and v3's /room on first
+    contact only."""
     data = _load("boot_hello_heartbeat")
     hellos = _outs(data, "/game/hello")
     assert [s["t"] for s in hellos] == [0, 5000, 10000]
     for step in hellos:
-        # The four-argument form; args[3] is where a device declares its
-        # carried instrument. The name itself is the `*` placeholder,
-        # because which instrument a device carries is its own business.
         assert step["expect_out"]["typespec"] == "ssss"
         assert len(step["expect_out"]["args"]) == 4
         assert step["expect_out"]["args"][0] == "$DEV"
-    # Nothing but hello goes out before a join, asserted twice: the device
-    # sends nothing else at all, and the quiet window names the four verbs
-    # a device replaying this must hold back.
+    # A device that never accepts sends nothing but hello, asserted twice.
     assert _outs(data) == hellos
     quiet = _kind(data, "expect_quiet")[0]["expect_quiet"]
-    assert set(quiet["addresses"]) == {"/game/join", "/game/tap",
+    assert set(quiet["addresses"]) == {"/game/handshake", "/game/tap",
                                        "/game/hold", "/game/swing"}
     assert quiet["for_ms"] == 12000
+    assert data["device"] == {"handshake": None}
+    # /room once, on first contact, not per heartbeat; the invite repeats.
+    assert [s["t"] for s in _sends(data, "/$DEV/room")] == [0]
+    invites = _sends(data, "/$DEV/handshake")
+    assert [s["t"] for s in invites] == [0, 5000, 10000]
+    assert all(s["control_sends"]["args"] == ["$ROUND"] for s in invites)
     assert _sends(data, "/$DEV/role") == []
     assert _frames(data) == []
 
 
-def test_explicit_join_role_is_granted_and_rendered():
-    data = _load("explicit_join_role")
-    join = _outs(data, "/game/join")[0]
-    assert join["t"] == 0
-    assert join["expect_out"]["args"] == ["$DEV", CONTRACT_PLAYER_NODE]
+def test_handshake_validate_then_role_reserves_then_grants_at_start():
+    data = _load("handshake_validate_then_role")
+    assert data["device"] == {"handshake": ACCEPT_POLICY}
+    assert [s["t"] for s in _sends(data, "/$DEV/handshake")] == [0]
+    accept = _outs(data, "/game/handshake")
+    assert [(s["t"], s["expect_out"]["args"]) for s in accept] == [
+        (ACCEPT_AFTER_MS, ["$DEV", "$ROUND", ""])]
+    # The policy's own accept is not an input step: device.handshake is.
+    assert _kind(data, "accept") == []
+    validated = _sends(data, "/$DEV/validated")
+    assert [(s["t"], s["control_sends"]["args"]) for s in validated] == [
+        (ACCEPT_AFTER_MS, ["$ROUND", "player"])]
+    # Validated is a reservation: no role and no pixels until start.
     role = _sends(data, "/$DEV/role")
-    assert len(role) == 1 and role[0]["t"] == 0
-    assert role[0]["control_sends"]["args"][0]["role"] == "player"
-    # Control answers the join with a fresh room snapshot whose node count
-    # has gone up, and then renders the granted role.
-    counts = [s["control_sends"]["args"][0]["nodes"][0]["count"]
-              for s in _sends(data, "/$DEV/room")]
-    assert counts[:2] == [0, 1]
+    assert [s["t"] for s in role] == [START_T]
+    assert _role_blob(role[0])["role"] == "player"
+    assert _role_blob(role[0])["scored"] is True
+    assert all(s["t"] >= START_T for s in _frames(data))
     assert _frames(data), "a granted role must reach the pixels"
-    assert _kind(data, "expect_frame")[0]["t"] == SIGNATURE_SETTLED_MS
+    # The validation raised the room's player count before start.
+    counts = [(s["t"], _role_blob(s)["nodes"][0]["count"])
+              for s in _sends(data, "/$DEV/room")]
+    assert counts[:2] == [(0, 0), (ACCEPT_AFTER_MS, 1)]
+    assert _kind(data, "expect_frame")[0]["t"] == ROLE_SETTLED_T
 
 
-def test_lobby_tap_join_shows_invites_then_two_taps_then_role_and_chime():
-    data = _load("lobby_tap_join")
-    role_t = _first_t(data, "/$DEV/role")
-    assert role_t is not None
+def test_handshake_over_cap_deny_denies_then_grants_jam():
+    data = _load("handshake_over_cap_deny")
+    rooms = _sends(data, "/$DEV/room")
+    assert (RIVAL_ACCEPT_T, 1) in [(s["t"], _role_blob(s)["nodes"][0]["count"])
+                                   for s in rooms]
+    deny = _sends(data, "/$DEV/deny")
+    assert [s["t"] for s in deny] == [ACCEPT_AFTER_MS]
+    reason, hint = deny[0]["control_sends"]["args"]
+    assert reason == "scored full" and "jam" in hint
+    assert _sends(data, "/$DEV/validated") == []
+    role = _sends(data, "/$DEV/role")
+    assert [s["t"] for s in role] == [START_T]
+    assert _role_blob(role[0])["role"] == "jammer"
+    assert _role_blob(role[0])["class"] == "JAM"
+    assert _role_blob(role[0])["scored"] is False
 
-    # Invite frames show BEFORE the role, and the first one is white.
-    invites = [s for s in _frames(data) if s["t"] < role_t]
-    assert len(invites) >= 2
-    first_invite = _kind(data, "expect_frame")[0]
-    assert first_invite["t"] < role_t
-    assert set(first_invite["expect_frame"]["grb"]) == {255}
 
-    # Two count-1 taps inside the 1.5 s double-tap window are what join it.
-    taps = _outs(data, "/game/tap")
-    assert [s["t"] for s in taps] == [1000, 1600]
-    for step in taps:
-        assert step["expect_out"]["typespec"] == "sffi"
-        assert step["expect_out"]["args"][3] == 1        # count is 1 on Rev 1
-    assert taps[1]["t"] - taps[0]["t"] < 1500
-    assert role_t == taps[1]["t"]
-    # No /error: with a Room loaded the lobby receives these pre-role taps.
-    assert _sends(data, "/$DEV/error") == []
+def test_handshake_stale_round_is_dropped_then_a_good_accept_validates():
+    data = _load("handshake_stale_round")
+    accepts = _kind(data, "accept")
+    assert [(s["t"], s["accept"]) for s in accepts] == [
+        (STALE_ACCEPT_T, {"node": "", "round_id": STALE_ROUND_ID}),
+        (GOOD_ACCEPT_T, {"node": ""})]
+    outs = _outs(data, "/game/handshake")
+    assert [s["expect_out"]["args"] for s in outs] == [
+        ["$DEV", STALE_ROUND_ID, ""], ["$DEV", "$ROUND", ""]]
+    # Each input precedes its own expect_out at the same t.
+    for accept, out in zip(accepts, outs):
+        assert data["steps"].index(accept) < data["steps"].index(out)
+    # Nothing at all answers the stale one.
+    assert [s for s in _sends(data)
+            if STALE_ACCEPT_T <= s["t"] < GOOD_ACCEPT_T] == []
+    assert [s["t"] for s in _sends(data, "/$DEV/validated")] == [GOOD_ACCEPT_T]
+    assert _sends(data, "/$DEV/deny") == []
 
-    # The join ceremony's chime, with its key parameter placeheld.
-    chime = _kind(data, "expect_play")[0]
-    assert chime["expect_play"]["name"] == "chime"
-    assert chime["expect_play"]["params"] == "key=$KEY"
-    assert chime["t"] > role_t
+
+def test_late_hello_gets_jam_at_once():
+    data = _load("late_hello_gets_jam")
+    assert [s["t"] for s in _outs(data, "/game/hello")] == [WALK_UP_T]
+    role = _sends(data, "/$DEV/role")
+    assert [s["t"] for s in role] == [WALK_UP_T]
+    assert _role_blob(role[0])["class"] == "JAM"
+    # The first-contact /room (already RUNNING) comes before the role.
+    ordered = _sends(data)
+    assert ordered[0]["control_sends"]["address"] == "/$DEV/room"
+    assert _role_blob(ordered[0])["state"] == "RUNNING"
+    assert _sends(data, "/$DEV/handshake") == []
+    assert _frames(data)
+
+
+def test_jam_solo_fallback_synthesizes_a_solo_role():
+    data = _load("jam_solo_fallback")
+    nodes = [n["id"] for n in _role_blob(_sends(data, "/$DEV/room")[0])["nodes"]]
+    assert nodes == ["CONTRACT_PLAYER_NODE"]          # no jam node at all
+    role = _sends(data, "/$DEV/role")
+    assert [s["t"] for s in role] == [START_T]
+    blob = _role_blob(role[0])
+    assert blob["role"] == "solo:tuneshroom_rev1"
+    assert blob["class"] == "JAM" and blob["scored"] is False
+
+
+def test_room_node_handshake_binds_with_no_validated_and_no_role():
+    data = _load("room_node_handshake_binds")
+    # The lobby's white invite flash shows before the accept.
+    first = _kind(data, "expect_frame")[0]
+    assert first["t"] < ROOM_ACCEPT_T
+    assert set(first["expect_frame"]["grb"]) == {255}
+    accept = _kind(data, "accept")
+    assert [(s["t"], s["accept"]) for s in accept] == [
+        (ROOM_ACCEPT_T, {"node": ROOM_NODE_ID})]
+    assert _sends(data, "/$DEV/validated") == []
+    assert _sends(data, "/$DEV/role") == []
+    assert _sends(data, "/$DEV/deny") == []
+    fixture_frames = [s for s in _frames(data) if s["t"] >= ROOM_ACCEPT_T]
+    assert fixture_frames and fixture_frames[0]["t"] == ROOM_ACCEPT_T
+    last = _kind(data, "expect_frame")[-1]
+    assert last["t"] > ROOM_ACCEPT_T and set(last["expect_frame"]["grb"]) != {255}
+
+
+def test_join_retired_error_answers_and_changes_nothing():
+    data = _load("join_retired_error")
+    errors = _sends(data, "/$DEV/error")
+    assert [(s["t"], s["control_sends"]["args"]) for s in errors] == [
+        (LEGACY_JOIN_T, ["join",
+                         "retired in contract v3: use /game/handshake"])]
+    # Nothing else answers the join, and the device still gets jam at start.
+    assert [s for s in _sends(data) if s["t"] == LEGACY_JOIN_T] == errors
+    role = _sends(data, "/$DEV/role")
+    assert [s["t"] for s in role] == [START_T]
+    assert _role_blob(role[0])["role"] == "jammer"
+    assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000]
 
 
 def test_timed_frames_show_at_their_stamp_then_hold():
@@ -287,50 +415,42 @@ def test_timed_frames_show_at_their_stamp_then_hold():
     frames = _frames(data)
 
     # Clause 1: the look's frame is stamped at the CUE's presentation time,
-    # not at the tick it was sent on, so it is the one frame in the file
-    # whose `at` is earlier than its own send time plus the cue horizon.
+    # not at the tick it was sent on.
     early = [s for s in frames
              if s["control_sends"]["at"] < s["t"] + HORIZON_MS]
     assert len(early) == 1
     look = early[0]
-    # Onset + ContractBit's half-second lead + the cue horizon.
-    assert look["control_sends"]["at"] == SIGNATURE_SETTLED_MS + 500 + HORIZON_MS
+    assert look["control_sends"]["at"] == ROLE_SETTLED_T + 500 + HORIZON_MS
 
-    # Clause 2, device side: the hand-authored pair. Two frames on ONE send
-    # time with two presentation times, both already past by the check that
-    # follows, and the NEWER one sent first, so a device that shows whatever
-    # arrived last records the wrong answer.
+    # Clause 2, device side: the hand-authored pair, newer one first.
     checks = _kind(data, "expect_frame")
-    assert [s["t"] for s in checks] == [SIGNATURE_SETTLED_MS, 5500, 6500,
-                                        12000]
+    assert [s["t"] for s in checks] == [ROLE_SETTLED_T, LOOK_SETTLED_T,
+                                        AUTHORED_CHECK_T, HOLD_CHECK_T]
     pair = [s for s in frames if s["t"] == AUTHORED_PAIR_T]
     assert len(pair) == 2
     assert [s["control_sends"]["at"] for s in pair] == [AUTHORED_NEWER_AT,
                                                         AUTHORED_OLDER_AT]
-    assert pair[0]["control_sends"]["at"] > pair[1]["control_sends"]["at"]
     assert pair[0]["control_sends"]["args"][0] == AUTHORED_NEWER_GRB
     assert pair[1]["control_sends"]["args"][0] == AUTHORED_OLDER_GRB
     newest_check = checks[2]
     assert newest_check["t"] > AUTHORED_NEWER_AT > AUTHORED_OLDER_AT
     assert newest_check["expect_frame"]["grb"] == AUTHORED_NEWER_GRB
-    # Nothing real intervenes: Control had gone quiet well before the pair.
+    # Nothing real intervenes: Control had gone quiet before the settled
+    # check, let alone the pair.
     real_frames = [s for s in frames if s["t"] != AUTHORED_PAIR_T]
-    assert real_frames[-1]["t"] < AUTHORED_PAIR_T
+    assert real_frames[-1]["t"] + HORIZON_MS < LOOK_SETTLED_T
 
-    # Clause 2, Control side: the two cues that fell due together (both taps
-    # share one onset) were collapsed into that single early-stamped frame,
-    # and it carries the NEWER cue's value. The comparison run taps once at
-    # the same moment, so the second cue is the only difference between them.
+    # Clause 2, Control side: the two cues due together were collapsed into
+    # that single early-stamped frame, carrying the NEWER cue's value.
     onsets = [s["t"] for s in _outs(data, "/game/tap")]
-    assert onsets == [SIGNATURE_SETTLED_MS, SIGNATURE_SETTLED_MS]
+    assert onsets == [ROLE_SETTLED_T, ROLE_SETTLED_T]
     assert len([s for s in frames
                 if s["control_sends"]["at"] == look["control_sends"]["at"]]) == 1
     assert real_frames[-1]["control_sends"]["args"][0] != _one_tap_control(), (
         "the second cue due at that moment made no difference, so this "
         "scenario no longer shows that the newest of several wins")
 
-    # Clause 3: the frames stop, and the last one is still what shows almost
-    # six seconds later.
+    # Clause 3: the last frame still shows almost six seconds later.
     assert checks[-1]["expect_frame"]["grb"] == AUTHORED_NEWER_GRB
     assert checks[-1]["t"] - AUTHORED_NEWER_AT > 5000
 
@@ -340,73 +460,60 @@ def _one_tap_control():
     onset. Not a recording: a live control run, so the scenario's claim
     about the second cue is checked against the real engine."""
     rec = Recorder(name="one_tap_control", summary="control run",
-                   join_node=CONTRACT_PLAYER_NODE)
+                   handshake=ACCEPT_POLICY)
     rec.link_up(0)
-    rec.advance_to(SIGNATURE_SETTLED_MS)
-    rec.tap(SIGNATURE_SETTLED_MS, duration_ms=80.0)
-    rec.advance_to(10000)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.tap(ROLE_SETTLED_T, duration_ms=80.0)
+    rec.advance_to(LOOK_SETTLED_T + 2000)
     return _frames(rec.finish())[-1]["control_sends"]["args"][0]
 
 
 def test_gestures_after_role_shows_all_three_shapes_and_the_pre_role_rule():
     data = _load("gestures_after_role")
     role_t = _first_t(data, "/$DEV/role")
-    assert role_t == 1000
+    assert role_t == START_T
 
     shapes = {s["expect_out"]["address"]: s for s in _outs(data)
-              if s["expect_out"]["address"] != "/game/hello"}
+              if s["expect_out"]["address"].endswith(("tap", "hold", "swing"))}
     assert shapes["/game/tap"]["expect_out"]["typespec"] == "sffi"
     assert shapes["/game/hold"]["expect_out"]["typespec"] == "sfi"
     assert shapes["/game/swing"]["expect_out"]["typespec"] == "sfi"
-    # Rule 5: every gesture is stamped at its own onset, and carries count 1.
-    gestures = [s for s in _outs(data)
-                if s["expect_out"]["address"] in ("/game/tap", "/game/hold",
-                                                  "/game/swing")]
-    assert len(gestures) == 4
+    gestures = list(shapes.values())
+    assert len(gestures) == 3
     for step in gestures:
+        assert step["t"] > role_t
         assert step["expect_out"]["stamp_t"] == step["t"]
         assert step["expect_out"]["args"][-1] == 1          # count
         assert step["expect_out"]["args"][0] == "$DEV"
     assert shapes["/game/hold"]["expect_out"]["args"][1] == 0.65
     assert shapes["/game/swing"]["expect_out"]["args"][1] == -2.1
 
-    # Tap is the one gesture allowed before a role, and it goes out there.
-    taps = [s["t"] for s in _outs(data, "/game/tap")]
-    assert taps == [500, 1500]
-    # Hold and swing wait, under a quiet window that covers the pre-role gap.
+    # No gesture, tap included, goes out before the role.
     quiet = _kind(data, "expect_quiet")[0]
-    assert quiet["t"] == 500
-    assert set(quiet["expect_quiet"]["addresses"]) == {"/game/hold",
-                                                       "/game/swing"}
-    assert quiet["t"] + quiet["expect_quiet"]["for_ms"] <= role_t
-    assert min(_outs(data, "/game/hold")[0]["t"],
-               _outs(data, "/game/swing")[0]["t"]) > role_t
-
-    # The pre-role tap is answered with an /error, not acted on: there is no
-    # Room here, so no lobby receives it.
-    errors = _sends(data, "/$DEV/error")
-    assert [s["t"] for s in errors] == [500]
-    assert errors[0]["control_sends"]["args"] == ["tap",
-                                                  "device not registered"]
-
-    # The join at role_t is a `join` INPUT step, not just its expect_out.
-    join_inputs = _kind(data, "join")
-    assert len(join_inputs) == 1
-    assert join_inputs[0]["t"] == role_t
-    assert join_inputs[0]["join"] == {"node": CONTRACT_PLAYER_NODE}
+    assert quiet["t"] == 0
+    assert set(quiet["expect_quiet"]["addresses"]) == {
+        "/game/tap", "/game/hold", "/game/swing"}
+    assert quiet["t"] + quiet["expect_quiet"]["for_ms"] == role_t
+    assert _sends(data, "/$DEV/error") == []
 
 
 def test_deny_leaves_the_device_hellod_with_its_heartbeat_running():
     data = _load("deny_stays_hellod")
+    assert data["device"]["handshake"]["node"] == NO_SUCH_NODE
     deny = _sends(data, "/$DEV/deny")
-    assert len(deny) == 1 and deny[0]["t"] == 0
-    assert deny[0]["control_sends"]["args"] == ["no such node", ""]
-    assert _outs(data, "/game/join")[0]["expect_out"]["args"][1] == NO_SUCH_NODE
-    # Denied means denied: no role, no pixels.
+    assert [s["t"] for s in deny] == [ACCEPT_AFTER_MS]
+    reason, hint = deny[0]["control_sends"]["args"]
+    assert reason == "no such node" and hint
+    assert _outs(data, "/game/handshake")[0]["expect_out"]["args"] == [
+        "$DEV", "$ROUND", NO_SUCH_NODE]
+    # Denied means denied: no validation, no role, no pixels.
+    assert _sends(data, "/$DEV/validated") == []
     assert _sends(data, "/$DEV/role") == []
     assert _frames(data) == []
-    # And the heartbeat carries on across the deny.
+    # The heartbeat carries on, and the policy accepts only once.
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000, 10000]
+    assert len(_outs(data, "/game/handshake")) == 1
 
 
 def test_release_follows_the_fade_on_the_wire_but_lands_before_it_shows():
@@ -417,25 +524,18 @@ def test_release_follows_the_fade_on_the_wire_but_lands_before_it_shows():
     frames = _frames(data)
     last_frame = frames[-1]
 
-    # By send time: the release is the very next message after the fade's
-    # last frame, in the same millisecond.
     ordered = _sends(data)
     assert ordered[ordered.index(last_frame) + 1] is release[0]
     assert release[0]["t"] == last_frame["t"]
-    # By presentation time: the release declares none, so a device acts on
-    # it at once, one cue horizon BEFORE that last frame is due to show.
     assert release[0]["control_sends"]["at"] is None
     assert last_frame["control_sends"]["at"] == last_frame["t"] + HORIZON_MS
     assert last_frame["control_sends"]["at"] > release[0]["t"]
 
-    # The display is not cleared: the last frame is not black, and it is
-    # still what shows five seconds later.
     assert any(last_frame["control_sends"]["args"][0])
     held = _kind(data, "expect_frame")[-1]
     assert held["t"] - last_frame["t"] > 5000
     assert held["expect_frame"]["grb"] == last_frame["control_sends"]["args"][0]
 
-    # The heartbeat continues after the release, and the room says IDLE.
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000]
     idle = _sends(data, "/$DEV/room")[-1]["control_sends"]["args"][0]
     assert idle["state"] == "IDLE" and idle["bit"] is None
@@ -445,62 +545,52 @@ def test_play_known_and_unknown_both_reach_the_device():
     data = _load("play_known_and_unknown")
     plays = [(s["t"], s["control_sends"]["args"][0])
              for s in _sends(data, "/$DEV/play")]
-    assert plays == [(200, KNOWN_SAMPLE), (700, UNKNOWN_SAMPLE)]
+    assert plays == [(START_T + 200, KNOWN_SAMPLE),
+                     (START_T + 700, UNKNOWN_SAMPLE)]
     assert UNKNOWN_SAMPLE not in _sends(data, "/$DEV/role")[0][
         "control_sends"]["args"][0]["samples"]
     expect = _kind(data, "expect_play")[0]
     assert expect["expect_play"]["name"] == KNOWN_SAMPLE
-    # The unknown name carries no expectation of its own: the device is
-    # free to ignore it, and the hello afterwards is the proof it carried on.
     assert len(_kind(data, "expect_play")) == 1
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000]
 
 
-def test_link_loss_drops_the_device_and_a_fresh_join_is_granted():
+def test_link_loss_drops_the_device_and_it_validates_again():
     """Rule 7: no session resume."""
     data = _load("link_loss_rejoin")
     links = [(s["t"], s["link"]) for s in _kind(data, "link")]
     assert links == [(0, "up"), (2000, "down"), (17000, "up")]
-
-    # The heartbeat stops with the link, and 15 s after the last hello
-    # Control reaps the device.
-    hellos = [s["t"] for s in _outs(data, "/game/hello")]
-    assert hellos == [0, 17000]
-    release = _sends(data, "/$DEV/release")
-    assert len(release) == 1
-    assert 15000 <= release[0]["t"] < 17000
-
-    # The device joins again from scratch, and is granted again.
-    roles = [s["t"] for s in _sends(data, "/$DEV/role")]
-    assert roles == [0, 17000]
-    rejoin = _outs(data, "/game/join")[-1]
-    assert rejoin["t"] == 17000
-    assert rejoin["expect_out"]["args"] == ["$DEV", CONTRACT_PLAYER_NODE]
+    assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 17000]
+    # Invited, accepted and validated once per link-up, from scratch.
+    assert [s["t"] for s in _sends(data, "/$DEV/handshake")] == [0, 17000]
+    assert [s["t"] for s in _outs(data, "/game/handshake")] == [
+        ACCEPT_AFTER_MS, 17000 + ACCEPT_AFTER_MS]
+    assert [s["t"] for s in _sends(data, "/$DEV/validated")] == [
+        ACCEPT_AFTER_MS, 17000 + ACCEPT_AFTER_MS]
+    # The round never left SETUP: no role ever.
+    assert _sends(data, "/$DEV/role") == []
+    # The reap left the room's count back at 0 before the rejoin.
+    rejoin_room = [s for s in _sends(data, "/$DEV/room") if s["t"] == 17000]
+    assert _role_blob(rejoin_room[0])["nodes"][0]["count"] == 0
 
 
 def test_an_error_changes_nothing():
     data = _load("error_no_state_change")
     errors = _sends(data, "/$DEV/error")
-    assert len(errors) == 1 and errors[0]["t"] == 200
-    assert errors[0]["control_sends"]["args"] == ["tap",
-                                                  "device not registered"]
-
-    # The room snapshot either side of the error is identical.
-    rooms = _sends(data, "/$DEV/room")
-    before = [s for s in rooms if s["t"] < errors[0]["t"]][-1]
-    after = [s for s in rooms if s["t"] > errors[0]["t"]][0]
-    assert before["control_sends"]["args"] == after["control_sends"]["args"]
-    # The device held no role before the error and is still free to take one.
+    assert len(errors) == 1
+    assert errors[0]["control_sends"]["args"] == ["hold", JAMMER_REFUSAL]
+    error_t = errors[0]["t"]
     role = _sends(data, "/$DEV/role")
-    assert len(role) == 1 and role[0]["t"] > errors[0]["t"]
-    assert _outs(data, "/game/join")[0]["t"] == role[0]["t"]
+    assert len(role) == 1 and role[0]["t"] < error_t
+    assert _role_blob(role[0])["role"] == "jammer"
+    # Nothing but frames follows the error: no room, no role, no release.
+    after = [s["control_sends"]["address"] for s in _sends(data)
+             if s["t"] > error_t]
+    assert set(after) <= {"/$DEV/leds", "/$DEV/play"}
+    # The device carries on: heartbeat, and a later tap still plays.
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000]
-    # The late join is a `join` INPUT a runner delivers, not just an
-    # expect_out it has to infer the timing of on its own.
-    join_inputs = _kind(data, "join")
-    assert len(join_inputs) == 1
-    assert join_inputs[0]["t"] == role[0]["t"]
-    assert join_inputs[0]["join"] == {"node": CONTRACT_PLAYER_NODE}
+    play = _kind(data, "expect_play")[0]
+    assert play["t"] > error_t and play["expect_play"]["name"] == KNOWN_SAMPLE
 
 
 def test_malformed_input_is_dropped_and_the_device_carries_on():
@@ -510,20 +600,13 @@ def test_malformed_input_is_dropped_and_the_device_carries_on():
     assert len(bad) == 3
     assert [s["control_sends"]["address"] for s in bad] == [
         "/$DEV/bogus", "/$DEV/role", "/$DEV/leds"]
-    # Each is broken in its own way, and none of them is a legal message
-    # (test_every_recorded_message_is_a_contract_message proves the second
-    # half of that for every scenario).
     reasons = [_contract_violation(s["control_sends"]["address"],
                                    s["control_sends"]["typespec"],
                                    s["control_sends"]["args"]) for s in bad]
     assert all(reasons) and len(set(reasons)) == 3
 
     bad_t = bad[0]["t"]
-    # Nothing here asserts that Control's own state survived them: these
-    # three messages are authored, never sent, and never reach Control, so
-    # such an assertion could not fail. What the scenario really pins is the
-    # DEVICE side, below: after dropping all three it still round-trips a
-    # valid gesture and still shows a valid frame.
+    assert bad_t > _first_t(data, "/$DEV/role")
     play = _kind(data, "expect_play")[0]
     assert play["t"] > bad_t and play["expect_play"]["name"] == KNOWN_SAMPLE
     frame = _kind(data, "expect_frame")[0]
@@ -534,51 +617,32 @@ def test_malformed_input_is_dropped_and_the_device_carries_on():
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000]
 
 
-def test_link_loss_keeps_display_holds_the_frame_and_rejoins():
+def test_link_loss_keeps_display_holds_the_frame_and_starts_over():
     """Rule 8's two device-side halves. "Role ends" leaves no message of
-    its own, so what this actually checks is its wire-observable
-    consequence: a device that cleared its role on link loss re-joins
-    from scratch once the link is back, the same way link_loss_rejoin
-    already pins for Control's own 15 s reap."""
+    its own; what this checks is its wire-observable consequence: back on
+    the link the device hellos from scratch and, the round being RUNNING,
+    is granted a fresh role as a walk-up."""
     data = _load("link_loss_keeps_display")
     links = [(s["t"], s["link"]) for s in _kind(data, "link")]
-    assert links == [(0, "up"), (2000, "down"), (17000, "up")]
+    assert links == [(0, "up"), (ROLE_SETTLED_T, "down"), (LINK_BACK_T, "up")]
+    assert [s["t"] for s in _outs(data, "/game/hello")] == [0, LINK_BACK_T]
 
-    # The heartbeat halts across the whole outage and resumes on
-    # reconnection.
-    assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 17000]
+    roles = _sends(data, "/$DEV/role")
+    assert [s["t"] for s in roles] == [START_T, LINK_BACK_T]
+    assert _role_blob(roles[0])["role"] == "player"
+    assert _role_blob(roles[1])["role"] == "jammer"
+    # Control reaped the device during the outage (unheard release).
+    release = _sends(data, "/$DEV/release")
+    assert len(release) == 1 and ROLE_SETTLED_T < release[0]["t"] < LINK_BACK_T
 
-    # A fresh join at reconnection: the device did not go on believing it
-    # still held a role through the outage.
-    joins = _outs(data, "/game/join")
-    assert [s["t"] for s in joins] == [0, 17000]
-    for step in joins:
-        assert step["expect_out"]["args"] == ["$DEV", CONTRACT_PLAYER_NODE]
-    roles = [s["t"] for s in _sends(data, "/$DEV/role")]
-    assert roles == [0, 17000]
-
-    # The outage-window frame is HAND-AUTHORED (Recorder.expect_frame_held):
-    # it repeats the pre-outage look rather than anything read off
-    # Control's own reap fade, which the device never hears.
     checks = _kind(data, "expect_frame")
-    assert [s["t"] for s in checks] == [2000, 8000, 19000]
+    assert [s["t"] for s in checks] == [ROLE_SETTLED_T, 9000,
+                                        LINK_BACK_T + SIGNATURE_SETTLED_MS]
     assert checks[1]["expect_frame"]["grb"] == checks[0]["expect_frame"]["grb"]
-    # The fresh role really does reach the pixels again after reconnect.
-    assert [s for s in _frames(data) if s["t"] >= 17000]
+    assert [s for s in _frames(data) if s["t"] >= LINK_BACK_T]
 
-    # hello, hold and swing are all held quiet for the whole outage.
     quiet = _kind(data, "expect_quiet")[0]
-    assert quiet["t"] == 2000
+    assert quiet["t"] == ROLE_SETTLED_T
     assert set(quiet["expect_quiet"]["addresses"]) == {
-        "/game/hello", "/game/hold", "/game/swing"}
-    assert quiet["t"] + quiet["expect_quiet"]["for_ms"] == 17000
-
-
-def test_v3_scenario_set():
-    from contract_kit.scenarios import ALL_SCENARIOS
-    names = {f.__name__ for f in ALL_SCENARIOS}
-    assert {"handshake_validate_then_role", "handshake_over_cap_deny",
-            "handshake_stale_round", "late_hello_gets_jam",
-            "jam_solo_fallback", "room_node_handshake_binds",
-            "join_retired_error"} <= names
-    assert not names & {"explicit_join_role", "lobby_tap_join"}
+        "/game/hello", "/game/tap", "/game/hold", "/game/swing"}
+    assert quiet["t"] + quiet["expect_quiet"]["for_ms"] == LINK_BACK_T

@@ -71,7 +71,7 @@ class TestBit(Bit):
     @property
     def role_table(self) -> RoleTable:
         player = Role(
-            name="player", role_class=RoleClass.SHARED, capacity=None,
+            name="player", role_class=RoleClass.UNIQUE, capacity=1,
             scored=True,
             # Gates join on the "player" slot this Bit declares in
             # instrument_requirements() below -- the reference exemplar for

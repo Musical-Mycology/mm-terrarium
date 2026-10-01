@@ -1,6 +1,8 @@
 """GameServer's contract v3 entry path (spec 2026-10-01-instrument-
 handshake-protocol sections 3.4-3.7): round id, handshake validation,
 materialize at run, jam and solo grants, RUNNING walk-ups."""
+from dataclasses import replace
+
 import pytest
 
 from bits.test.test_bit import TestBit
@@ -434,7 +436,16 @@ def test_admit_helpers():
 
 
 def test_lobby_uncapped_scored_role_never_fills():
-    gs = GameServer({"T": TestBit})      # TestBit's player is uncapped
+    class UncappedBit(TestBit):
+        @property
+        def role_table(self):
+            table = super().role_table
+            table.roles["player"] = replace(
+                table.roles["player"],
+                role_class=RoleClass.SHARED, capacity=None)
+            return table
+
+    gs = GameServer({"T": UncappedBit})  # an uncapped scored player
     gs.load_bit("T")
     admit(gs, "a")
     assert gs.lobby_state() == "WAITING"

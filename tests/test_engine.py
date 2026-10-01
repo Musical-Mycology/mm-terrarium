@@ -578,7 +578,7 @@ def test_room_handshake_does_not_disturb_player_handshakes():
     result = _grant_at_start(server, "ie1", "TEST_PLAYER_NODE")
 
     assert result.granted is True
-    assert result.role_class == RoleClass.SHARED
+    assert result.role_class == RoleClass.UNIQUE
     assert result.config is not None    # normal player composition, unchanged
 
 

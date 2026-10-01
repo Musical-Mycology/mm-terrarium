@@ -1,0 +1,26 @@
+[bit]
+name = "SoloTestBit"
+version = "1.0.0"
+description = "Handshake fixture: one scored player, no jam role, so extra devices get solo:<instrument>"
+entry = "bit:SoloTestBit"
+kind = "tool"
+requires_terrarium_api = 1
+
+[launch]
+room_types = ["TEST"]
+default_room_type = "TEST"
+default_devices = 1
+default_join_role = "player"
+
+[launch.nodes]
+player = "SOLOTEST_PLAYER_NODE"
+
+[start]
+when = "immediate"
+
+[console]
+display_name = "Solo Test Bit"
+hidden = true
+
+[defaults]
+run_duration_seconds = 20.0
