@@ -4,7 +4,7 @@
 **Repos:** mm-terrarium (Control, harness, contract kit, docs), mm-tuneshroom
 (device session, simulator, contract replay; paired PR in this pass),
 mm-devshroom (firmware checklist, handed to Victor)
-**Status:** implemented in mm-terrarium (branch claude/instrument-handshake-protocol-833d7c); mm-tuneshroom pending. Task 1 (2026-10-01): hub forwards tcp-flagged messages to o2lite clients over TCP (o2/src/bridge.cpp:411-414).
+**Status:** implemented in mm-terrarium and mm-tuneshroom (branches claude/instrument-handshake-protocol-833d7c, claude/instrument-handshake-v3); Task 1 TCP relay confirmed (o2 commit f21499e, src/bridge.cpp:411-414).
 **Supersedes:** the registration flow in `docs/control-gameserver-design.md`
 and the lobby double-tap join of
 `2026-09-11-metronome-lobby-and-admin-start-design.md` (the lobby's visuals,
@@ -100,8 +100,9 @@ device may send only `hello`, `handshake`, `start`; `canvas` stays allowed
 for simulators.
 
 **Why TCP for control verbs.** They are low rate, and a TCP send is
-reliable while the o2lite link is up; a link loss already means "no session
-resume, start over" (contract rule 7). This needs no ack verb and no
+reliable while the o2lite link is up; across a link loss the device keeps
+its role and round id until a later `/role`, `/handshake` or `/release`
+supersedes them (section 8, item 7). This needs no ack verb and no
 firmware change to *receive*. `O2LiteTransport.send` routes by the
 `VerbRow`'s down transport: `tcp` rows through o2litepy's `send_cmd`, `udp`
 rows through `send`. **Assumption to verify first (plan task 1):** Arco
@@ -120,7 +121,7 @@ In order, the first failure answers `/<dev>/deny`:
    denied `registration closed`, hint `this device is bound to a Room
    fixture` (materialize would otherwise overwrite its ROOM assignment).
 3. No Bit, or state is not SETUP: deny `registration closed`, hint `scored
-   slots open only in SETUP; you will get a jam role at start` (RUNNING) or
+   slots open only in SETUP; you hold a jam role for this round` (RUNNING) or
    `no Bit loaded` (other states).
 4. `round_id` does not match: dropped silently and logged
    (`handshake: stale round <id> from <dev>`); the next `/handshake` carries
@@ -321,10 +322,13 @@ strict as o2litepy (boundary rule 5): a test can assert `/role` went TCP.
   `--join-retry` and the explicit-join path are removed. Gestures gate on
   a received `/role` (unchanged `_gestures_ready`).
 - `harness/shroom_client.py`: handles `/validated` and `/handshake`.
-- `harness/run_stack.py`: stage markers `HANDSHAKE_VALIDATED <dev>` and
-  `ROLE_GRANTED <dev> scored|jam` (in `harness/markers.py`, each failure
-  marker with a remedy); `--handshake-devices N` keeps its meaning (the
-  first N devices accept), the rest only hello and must end jam.
+- `harness/run_stack.py`: stage markers `HANDSHAKE VALIDATED: <dev> <role>`
+  and `ROLE GRANTED: <dev> scored|jam <role>` (constants
+  `HANDSHAKE_VALIDATED` and `ROLE_GRANTED` in `harness/markers.py`, each
+  failure marker with a remedy); `DEVICE_JOIN_DENIED` (`JOIN DENIED:`) is
+  informational, not a failure: an over-cap device is denied and ends jam.
+  `--handshake-devices N` keeps its meaning (the first N devices accept),
+  the rest only hello and must end jam.
 
 ## 6. Contract kit (v3)
 
@@ -337,7 +341,8 @@ strict as o2litepy (boundary rule 5): a test can assert `/role` went TCP.
     `handshake_validate_then_role`;
   - new: `handshake_over_cap_deny`, `handshake_stale_round`,
     `late_hello_gets_jam`, `jam_solo_fallback`, `room_node_handshake_binds`,
-    `join_retired_error`;
+    `join_retired_error`, `link_blip_keeps_role` (a reconnect inside 15 s
+    while RUNNING: nothing re-sent, the held role still plays);
   - `boot_hello_heartbeat` (no `/room` per beat), `deny_stays_hellod`,
     `link_loss_rejoin`, `gestures_after_role` updated to handshake
     semantics; the rest re-recorded unchanged in intent.
@@ -373,10 +378,11 @@ Section 6; `tests/test_contract_scenarios.py` fails on any diff.
   `UNIQUE` role, capacity 1, **no** jam role, so jammers get the solo
   fallback.
 - Recipe, each under `--ci`:
-  `./smoke-test.sh --bit TestBit --devices 3 --handshake-devices 2` and the
-  same with `--bit SoloTestBit`. Expected: exactly one `ROLE_GRANTED ...
-  scored`; one over-cap deny then `ROLE_GRANTED ... jam`; one never-accepted
-  device `ROLE_GRANTED ... jam`. `run_stack` asserts these counts.
+  `./smoke-test.sh --bit TestBit --devices 3 --handshake-devices 2
+  --expect-scored 1` and the same with `--bit SoloTestBit`. Expected:
+  exactly one `ROLE GRANTED: ... scored`; one over-cap `JOIN DENIED:` then
+  `ROLE GRANTED: ... jam`; one never-accepted device `ROLE GRANTED: ...
+  jam`. `run_stack --expect-scored 1` asserts these counts.
 - MetronomeBit and Rev1Bit run under `--ci` in the same pass; MinigameBit
   and CaptureBit are checked to load and still make sense (CaptureBit's
   unscored `recorder` becomes everyone's jam role, which is its intent).
@@ -421,7 +427,12 @@ Filed as an mm-devshroom issue and mirrored in the contract guide:
 5. On `/<dev>/role`: parse the blob; gestures are sent only after a role
    is **received** (not after a send).
 6. On `/<dev>/release`: keep the last frame, drop the role, stop gestures.
-7. On link loss: drop role and round id; start over on link-up.
+7. On link loss: keep the role and the round id (and any validation);
+   hello again on link-up. A later message supersedes them: a new
+   `/<dev>/role` replaces the held role; a `/<dev>/handshake` while a role
+   is held means that role's round is over, so drop the role (and the
+   validation) and treat the handshake as a fresh invite; `/<dev>/release`
+   ends the role as in item 6.
 8. Never send `/game/join`.
 
 ## 9. Cleanups folded in

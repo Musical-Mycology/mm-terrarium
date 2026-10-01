@@ -9,9 +9,9 @@ Draft for Victor. Not filed. Paste the title and body below into an mm-devshroom
 ### Context
 
 mm-terrarium moved the instrument-to-Terrarium contract from v2 to v3. The change
-is in the branch `claude/instrument-handshake-protocol-833d7c`; spec:
-`docs/superpowers/specs/2026-10-01-instrument-handshake-protocol-design.md` in
-mm-terrarium.
+is in the mm-terrarium PR implementing
+`docs/superpowers/specs/2026-10-01-instrument-handshake-protocol-design.md` (link
+to be added when filed).
 
 What changed on the wire:
 
@@ -45,7 +45,12 @@ player and it ignores the invite.
 5. On `/<dev>/role`: parse the blob; gestures are sent only after a role
    is **received** (not after a send).
 6. On `/<dev>/release`: keep the last frame, drop the role, stop gestures.
-7. On link loss: drop role and round id; start over on link-up.
+7. On link loss: keep the role and the round id (and any validation);
+   hello again on link-up. A later message supersedes them: a new
+   `/<dev>/role` replaces the held role; a `/<dev>/handshake` while a role
+   is held means that role's round is over, so drop the role (and the
+   validation) and treat the handshake as a fresh invite; `/<dev>/release`
+   ends the role as in item 6.
 8. Never send `/game/join`.
 
 ### Scenarios to replay
@@ -62,7 +67,7 @@ must-fail cases a replay runner needs. Scenarios per item:
 | 4 | `handshake_over_cap_deny`, `deny_stays_hellod` |
 | 5 | `gestures_after_role`, `late_hello_gets_jam`, `jam_solo_fallback` |
 | 6 | `release_keeps_display` |
-| 7 | `link_loss_rejoin`, `link_loss_keeps_display` |
+| 7 | `link_blip_keeps_role`, `link_loss_rejoin`, `link_loss_keeps_display` |
 | 8 | `join_retired_error` (shows the answer a v2 device gets) |
 
 Also read guide section 4 (the session interface a device exposes), 5.1 (the v3
@@ -70,11 +75,12 @@ wire) and 5.2 (device rules and what the recordings check).
 
 ### Re-exporting the contract
 
-Run from an mm-terrarium checkout, as a module, through the project venv (the
-script form fails with `No module named 'control'`):
+From the root of an mm-terrarium checkout, run it as a module through the
+project venv (the script form fails with `No module named 'control'`), pointing
+it at your mm-devshroom checkout:
 
 ```bash
-cd /Users/chris/projects/mm-terrarium && .venv/bin/python -m tools.export_contract /Users/chris/projects/mm-devshroom/test/contract
+.venv/bin/python -m tools.export_contract <path-to-mm-devshroom>/test/contract
 ```
 
 The tool does not delete stale files. Delete
