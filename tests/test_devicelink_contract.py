@@ -18,9 +18,8 @@ def test_game_verbs_is_derived_from_the_up_rows():
     assert GAME_VERBS == tuple(r.verb for r in VERB_TABLE if r.direction == "up")
 
 
-# The verbs devicelink/o2_transport.py's GAME_VERBS carried before this task
-# (recorded from the pre-change source), plus exactly the two Rev 1
-# additions. A set, not a tuple: o2_transport.py only ever loops GAME_VERBS
+# The up verbs devicelink/o2_transport.py's GAME_VERBS carries under contract
+# v3: the pre-v3 set with `join` replaced by `handshake`. A set, not a tuple: o2_transport.py only ever loops GAME_VERBS
 # to register a handler per verb, so no caller depends on its order, and
 # deriving it from VERB_TABLE is free to produce a different one.
 EXPECTED_GAME_VERBS = frozenset({

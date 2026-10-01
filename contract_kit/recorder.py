@@ -196,8 +196,16 @@ class Recorder:
         # The wrapper filters anything not addressed to our own dev anyway,
         # which covers a later probe (a reconnect re-checks ownership) and
         # every Room fixture's own frames.
+        # Both channels: FakeO2Lite.send_cmd (tcp) no longer calls send, so
+        # a send-only wrapper would miss every tcp-routed down message.
         self._orig_send = self._fake.send
-        self._fake.send = self._wrapped_send
+        self._orig_send_cmd = self._fake.send_cmd
+        self._fake.send = (
+            lambda addr, ts, *a: self._wrapped_send(
+                self._orig_send, addr, ts, *a))
+        self._fake.send_cmd = (
+            lambda addr, ts, *a: self._wrapped_send(
+                self._orig_send_cmd, addr, ts, *a))
 
         catalog = load_catalog(REPO_ROOT / "instruments").published
         self._gs = GameServer({"ContractBit": ContractBit},
@@ -223,14 +231,16 @@ class Recorder:
 
     # --- capture -----------------------------------------------------------
 
-    def _wrapped_send(self, addr: str, timestamp: float, *raw_args) -> None:
-        """Every outbound o2lite message passes through here.
+    def _wrapped_send(self, orig, addr: str, timestamp: float,
+                      *raw_args) -> None:
+        """Every outbound o2lite message, udp or tcp, passes through here;
+        `orig` is the fake's own send or send_cmd, called through.
 
         Wrapping the FAKE's send rather than O2LiteTransport.send is what
         lets this see Blob-wrapped arguments exactly as the wire carries
         them, which is why from_o2_arg is the right decoder for them.
         """
-        self._orig_send(addr, timestamp, *raw_args)
+        orig(addr, timestamp, *raw_args)
         if not addr.startswith(f"/{self.dev}/"):
             return                      # a _svcheck probe, or a Room fixture
         typespec = raw_args[0] if raw_args else ""

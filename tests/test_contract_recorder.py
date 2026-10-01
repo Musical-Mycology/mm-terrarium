@@ -439,6 +439,17 @@ def test_a_hand_authored_step_can_declare_itself_malformed():
     assert "malformed" not in _sends(data, "/$DEV/play")[0]["control_sends"]
 
 
+def test_a_tcp_routed_down_message_is_captured():
+    """/$DEV/room is a tcp row, so it reaches the fake through send_cmd.
+    The recorder must capture that channel as well as send."""
+    rec = Recorder(name="t", summary="s", join_node=None)
+    rec.link_up(0)
+    assert "tcp" in rec._fake.channels
+    assert [a for (_t, a, _ts, _spec, _v) in rec._sent
+            if a.endswith("/room")]
+    assert all(a.startswith(f"/{rec.dev}/") for (_t, a, *_r) in rec._sent)
+
+
 def test_only_this_devices_traffic_is_captured():
     """The capture wrapper drops everything that is not addressed to the
     scripted device: the real ownership probe (driven here through the

@@ -167,7 +167,6 @@ def test_validated_event_shape():
 
 
 def test_parse_handshake_args():
-    import pytest
     assert protocol.parse_handshake_args(["ie1", "r1", ""]) == ("ie1", "r1", "")
     with pytest.raises(ValueError):
         protocol.parse_handshake_args(["ie1", "r1"])
