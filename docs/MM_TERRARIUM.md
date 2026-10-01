@@ -643,7 +643,7 @@ mutate) and `cue_horizon`, stamped at load for Bits grading input.
   `scored >= min_scored`, so extra smoke-test devices are refused by
   design), `operator` or `admin` (no deadline), each with
   `timeout_seconds`/`on_timeout`. `control/start_condition.py` holds the
-  harness's `start_decision()` and `scored_count` (also used by
+  harness's `timer_decision()` and `scored_count` (also used by
   `request_start`), which skips a role that left the table (a Room
   unloaded mid-SETUP once crashed boot).
 - `admin` requires a `key` and defaults `min_scored` to 0; MetronomeBit
@@ -657,7 +657,7 @@ mutate) and `cue_horizon`, stamped at load for Bits grading input.
 
 - Every Bit gets an admin-started SETUP lobby unless `[lobby] enabled =
   false`. `control/lobby.py` is pure (WAITING/FULL, `NOTE_SCALE`,
-  `decide_start`, schedulers); `devicelink/lobby_runtime.py` renders an
+  schedulers; `decide_start` now lives in `control/start_condition.py`); `devicelink/lobby_runtime.py` renders an
   aurora with pad and drone, green and silent when FULL.
 - `TERRARIUM_ADMIN = "terrarium"` is always admin and refused as a device id
   before any dispatch; `[admin] devices` in `terrarium.toml` adds more.

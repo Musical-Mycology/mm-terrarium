@@ -2,9 +2,10 @@
 from control.lobby import (
     CeremonySlots, DEFAULT_LOBBY, DoubleTapDetector, FEEDBACK_ACCEPT,
     FEEDBACK_MINIMUM, FEEDBACK_NONE, FEEDBACK_REFUSED, InviteSchedule,
-    LobbyConfig, LobbyState, NOTE_SCALE, TERRARIUM_ADMIN, decide_start,
+    LobbyConfig, LobbyState, NOTE_SCALE, TERRARIUM_ADMIN,
     hue_drift_cc, lobby_light_manifest, lobby_state, scale_note)
 from control.roles import Role, RoleClass, RoleTable
+from control.start_condition import decide_start
 
 
 def _table(**roles):

@@ -19,14 +19,14 @@ from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
                                  InstrumentRequirement, cue_kind, satisfies)
 from control.lobby import (DEFAULT_LOBBY, FEEDBACK_REFUSED, StartRequested,
-                           TERRARIUM_ADMIN, decide_start,
+                           TERRARIUM_ADMIN,
                            lobby_state as _lobby_state)
 from control.registration import JoinResult, RegistrationState
 from control.role_config import (compose_role_config, manifest_fixture_targets,
                                  validate_role_declarations)
 from control.roles import RoleClass
 from control.rooms import room_role
-from control.start_condition import scored_count
+from control.start_condition import decide_start, scored_count
 from control.state import State
 from control.builtins import RESERVED_NAMES, builtin_functions
 from control.functions import (

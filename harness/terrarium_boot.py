@@ -29,7 +29,7 @@ from control.join_info import build_join_info
 from control.room_binding import RoomBindingRegistry
 from control.run_profile import RunProfile, deep_merge_overrides, parse_profile
 from control.simulator_process import SimulatorProcess
-from control.start_condition import scored_count, start_decision
+from control.start_condition import scored_count, timer_decision
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium import Terrarium, TerrariumState
@@ -600,11 +600,11 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     RUNNING engine.
 
     condition, when given together with game_server, is consulted once per
-    iteration via control.start_condition.start_decision (scored count read
+    iteration via control.start_condition.timer_decision (scored count read
     off game_server via scored_count). "players" conditions distinguish a
     genuinely-met threshold ("players-met") from a timeout resolution
     ("timeout-start"/"timeout-abort") by checking the same scored>=min_scored
-    test start_decision itself prioritizes -- see control/start_condition.py.
+    test timer_decision itself prioritizes -- see control/start_condition.py.
     An "immediate" condition's own elapsed>=setup_seconds threshold is the
     same instant as this function's own deadline, so "expired" always wins
     that race; a "players"/"operator" condition never produces "expired".
@@ -629,7 +629,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     short-circuits this into an immediate "expired") and the countdown
     print says so instead of counting down, since there is nothing to
     count down to -- the hold only ends on a state change or the
-    condition's own timeout_seconds via start_decision.
+    condition's own timeout_seconds via timer_decision.
 
     pacer, when given, replaces the default TickPacer(1/44) built on this
     function's own `sleep` (tests inject one); see harness/tick_pacer.py.
@@ -680,7 +680,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
             return "state-changed"
         if condition is not None and game_server is not None:
             scored = scored_count(game_server)
-            decision = start_decision(condition, scored=scored,
+            decision = timer_decision(condition, scored=scored,
                                       elapsed=now - start,
                                       setup_seconds=setup_seconds)
             if decision is not None:

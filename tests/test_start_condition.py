@@ -3,29 +3,29 @@ from types import SimpleNamespace
 from control.bit_config import StartCondition
 from control.registration import RegistrationState
 from control.roles import Role, RoleClass, RoleTable
-from control.start_condition import scored_count, start_decision
+from control.start_condition import scored_count, timer_decision
 
 
 def test_immediate_matches_todays_hold():
     c = StartCondition(when="immediate")
-    assert start_decision(c, scored=0, elapsed=1.0, setup_seconds=5.0) is None
-    assert start_decision(c, scored=0, elapsed=5.0, setup_seconds=5.0) == "start"
+    assert timer_decision(c, scored=0, elapsed=1.0, setup_seconds=5.0) is None
+    assert timer_decision(c, scored=0, elapsed=5.0, setup_seconds=5.0) == "start"
 
 
 def test_players_threshold_then_timeout_start_and_abort():
     c = StartCondition(when="players", min_scored=2, timeout_seconds=10,
                        on_timeout="start")
-    assert start_decision(c, scored=1, elapsed=9, setup_seconds=0) is None
-    assert start_decision(c, scored=2, elapsed=1, setup_seconds=0) == "start"
-    assert start_decision(c, scored=1, elapsed=10, setup_seconds=0) == "start"
+    assert timer_decision(c, scored=1, elapsed=9, setup_seconds=0) is None
+    assert timer_decision(c, scored=2, elapsed=1, setup_seconds=0) == "start"
+    assert timer_decision(c, scored=1, elapsed=10, setup_seconds=0) == "start"
     a = StartCondition(when="players", min_scored=2, timeout_seconds=10,
                        on_timeout="abort")
-    assert start_decision(a, scored=0, elapsed=10, setup_seconds=0) == "abort"
+    assert timer_decision(a, scored=0, elapsed=10, setup_seconds=0) == "abort"
 
 
 def test_operator_never_self_starts():
     c = StartCondition(when="operator")
-    assert start_decision(c, scored=9, elapsed=999, setup_seconds=0) is None
+    assert timer_decision(c, scored=9, elapsed=999, setup_seconds=0) is None
 
 
 def _role_table():
@@ -80,11 +80,19 @@ def test_scored_count_zero_when_registration_none():
 
 def test_admin_never_self_starts_without_a_timeout():
     cond = StartCondition(when="admin", min_scored=0, key="k")
-    assert start_decision(cond, scored=5, elapsed=9999.0, setup_seconds=0.0) is None
+    assert timer_decision(cond, scored=5, elapsed=9999.0, setup_seconds=0.0) is None
 
 
 def test_admin_timeout_applies_on_timeout():
     cond = StartCondition(when="admin", min_scored=0, key="k",
                           timeout_seconds=30.0, on_timeout="abort")
-    assert start_decision(cond, scored=0, elapsed=29.0, setup_seconds=0.0) is None
-    assert start_decision(cond, scored=0, elapsed=30.0, setup_seconds=0.0) == "abort"
+    assert timer_decision(cond, scored=0, elapsed=29.0, setup_seconds=0.0) is None
+    assert timer_decision(cond, scored=0, elapsed=30.0, setup_seconds=0.0) == "abort"
+
+
+def test_single_module_owns_both_deciders():
+    import control.lobby as lobby
+    import control.start_condition as sc
+    assert hasattr(sc, "decide_start") and hasattr(sc, "timer_decision")
+    assert not hasattr(lobby, "decide_start")
+    assert not hasattr(sc, "start_decision")
