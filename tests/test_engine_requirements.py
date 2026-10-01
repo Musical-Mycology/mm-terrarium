@@ -198,8 +198,8 @@ class UnsatisfiableSlotBit(Bit):
 
 
 class RequiresLessBit(Bit):
-    """One non-ROOM role with no Role.requires at all -- join must behave
-    exactly as before this slice: no slot/instrument gating or stamping."""
+    """One non-ROOM role with no Role.requires at all -- no slot or
+    instrument gating, and no slot/instrument stamping on the grant."""
 
     @property
     def role_table(self):
@@ -219,7 +219,7 @@ def _grant_at_start(gs, dev, node):
     return dict(grants)[dev]
 
 
-def test_join_granted_when_carried_instrument_satisfies_slot():
+def test_handshake_granted_when_carried_instrument_satisfies_slot():
     # DEFAULTSHROOM (the DeviceInfo.carried default -- 2026-08-31 carried-
     # instrument-wire) satisfies gesture.tap same as TUNESHROOM did.
     gs = GameServer({"PlayerSlotBit": PlayerSlotBit})
@@ -236,7 +236,7 @@ def test_join_granted_when_carried_instrument_satisfies_slot():
     assert result.config["instrument"]["name"] == "defaultshroom"
 
 
-def test_join_refused_with_reason_when_contract_unsatisfied():
+def test_handshake_refused_with_reason_when_contract_unsatisfied():
     gs = GameServer({"UnsatisfiableSlotBit": UnsatisfiableSlotBit})
     gs.load_bit("UnsatisfiableSlotBit")
     result = admit(gs, "dev1", "node1")
@@ -275,7 +275,7 @@ GESTURELESS_INSTRUMENT = Instrument(
 )
 
 
-def test_testbit_player_join_is_granted_with_defaultshroom_carrier():
+def test_testbit_player_handshake_is_granted_with_defaultshroom_carrier():
     # DEFAULTSHROOM (the DeviceInfo.carried default -- 2026-08-31 carried-
     # instrument-wire) satisfies light.pixels + gesture.tilt same as
     # TUNESHROOM did.
@@ -303,7 +303,7 @@ def test_testbit_jammer_join_ships_the_instrument_section():
     assert result.config["instrument"]["name"] == "defaultshroom"
 
 
-def test_testbit_player_join_refused_when_carrier_lacks_gesture_tilt():
+def test_testbit_player_handshake_refused_when_carrier_lacks_gesture_tilt():
     gs = GameServer({"TestBit": TestBit})
     gs.load_bit("TestBit")
     gs.hello("dev1", "device-one", "1.0")

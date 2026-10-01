@@ -118,21 +118,25 @@ def _play_a_round(gs, solid, now):
     assert gs.bit.status()["phase"] == "PENDING"
 
 
-def test_join_in_setup_then_start_plays_a_round():
+def test_hello_in_setup_then_start_plays_a_round():
     """The lobby order: the regression that shipped in 1ced5e9."""
     now = [100.0]
     gs, solid = _server(now)
-    assert admit(gs, "ie1", MINIGAME_PLAYER_NODE).granted
+    # The player role is unscored: no handshake validates it. A hello'd
+    # device gets it at start as the Bit's first fitting unscored role.
     assert gs.request_start(None, "ie1", "device") is None
+    assert gs.registration.assignments["ie1"][1] == "player"
     assert gs.bit.status()["dev"] == "ie1"
     _play_a_round(gs, solid, now)
 
 
-def test_a_running_handshake_is_closed_and_the_walk_up_holds_a_jam_role():
+def test_a_running_handshake_is_closed_and_the_walk_up_holds_the_player_role():
     now = [100.0]
     gs, solid = _server(now)
     gs.run()
     # Spec 3.6: a RUNNING handshake is refused; the device, hello'd before
-    # start, holds a jam (solo) role instead of the Bit's player role.
+    # start, holds the Bit's first fitting unscored role, player.
     assert admit(gs, "ie1", MINIGAME_PLAYER_NODE).reason == "registration closed"
-    assert gs.registration.assignments["ie1"][1].startswith("solo:")
+    assert gs.registration.assignments["ie1"][1] == "player"
+    assert gs.bit.status()["dev"] == "ie1"
+    _play_a_round(gs, solid, now)

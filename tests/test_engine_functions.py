@@ -997,19 +997,35 @@ def test_stream_trigger_state_is_per_device():
     assert gs.bit.received[-1] == [15.0]    # ie2: 0.5*20.0 + 0.5*10.0
 
 
+class _UnscoredTiltBit(TiltRecorderBit):
+    """Same recorder, but its player role is unscored, so a device holds it
+    from hello + start and a RUNNING walk-up gets it again (spec 3.7)."""
+
+    @property
+    def role_table(self) -> RoleTable:
+        return RoleTable(
+            roles={"player": Role(name="player", role_class=RoleClass.SHARED,
+                                  capacity=None, scored=False)},
+            node_map={"NODE": ["player"]})
+
+
 def test_stream_trigger_state_resets_after_release():
     """reap_stale is the one engine-level path a device's registration ends
-    through today (control/engine.py); release there must clear this dev's
-    EMA state. The old test re-joined the scored role to see a fresh first
-    sample; spec 3.6 closes scored registration once RUNNING and a role
-    exists only after start, so the reset is asserted on the state itself."""
-    gs = _joined()
+    through today; release there must clear this dev's EMA state, so the
+    device's next walk-up grant starts from a clean first sample."""
+    from tests.instrument_fixtures import SMOOTHING_WIDGET
+    gs = _server(_UnscoredTiltBit,
+                 carried_instruments={SMOOTHING_WIDGET.name: SMOOTHING_WIDGET})
+    gs.load_bit("bit")
+    gs.hello("ie1", "Dev1", "1.0", instrument=SMOOTHING_WIDGET.name)
+    gs.run()
     gs.data("ie1", "tilt", [0.0])
     gs.data("ie1", "tilt", [1.0])
     assert gs.bit.received[-1] == [0.5]
-    assert any(key[0] == "ie1" for key in gs._stream_trigger_state)
     gs.reap_stale(timeout=-1.0)     # every hello'd dev is "stale"
-    assert not any(key[0] == "ie1" for key in gs._stream_trigger_state)
+    gs.hello("ie1", "Dev1", "1.0", instrument=SMOOTHING_WIDGET.name)  # walk-up
+    gs.data("ie1", "tilt", [1.0])
+    assert gs.bit.received[-1] == [1.0]     # first sample again: passthrough
 
 
 def test_unmatched_verb_is_untouched_by_stream_triggers():

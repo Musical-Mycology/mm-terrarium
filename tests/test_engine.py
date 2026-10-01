@@ -228,7 +228,7 @@ def test_granted_blob_omits_triggers_for_carried_instrument_without_any():
     assert "triggers" not in result.config
 
 
-def test_requires_less_role_join_blob_still_carries_event_triggers():
+def test_requires_less_role_blob_still_carries_event_triggers():
     """Fix round 1: event-trigger thresholds are a property of the carried
     instrument's server-owned detection contract, independent of slot
     gating -- TestBit's jammer role has no Role.requires at all, but a
@@ -247,7 +247,7 @@ def test_requires_less_role_join_blob_still_carries_event_triggers():
     }
 
 
-def test_room_join_blob_carries_no_triggers():
+def test_room_handshake_blob_carries_no_triggers():
     binding = RoomBindingRegistry()
     server = GameServer(bit_registry={"RoomCapableBit": RoomCapableBit},
                         room_binding=binding)
@@ -543,7 +543,7 @@ def test_handshake_with_no_bit_loaded_carries_no_config():
     assert result.config is None
 
 
-def test_room_node_join_denied_while_unarmed():
+def test_room_node_handshake_denied_while_unarmed():
     server = GameServer({"RoomCapableBit": RoomCapableBit},
                         room_binding=RoomBindingRegistry())
     server.room = make_room()
@@ -553,7 +553,7 @@ def test_room_node_join_denied_while_unarmed():
     assert result.reason == "no such node"
 
 
-def test_room_node_join_binds_device_once_armed():
+def test_room_node_handshake_binds_device_once_armed():
     binding = RoomBindingRegistry()
     server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
     server.room = make_room()
@@ -569,7 +569,7 @@ def test_room_node_join_binds_device_once_armed():
     assert binding.bound_device("TEST", "main") == "ie9"
 
 
-def test_room_join_does_not_disturb_player_joins():
+def test_room_handshake_does_not_disturb_player_handshakes():
     binding = RoomBindingRegistry()
     server = GameServer({"RoomCapableBit": RoomCapableBit}, room_binding=binding)
     server.room = make_room()
@@ -582,7 +582,7 @@ def test_room_join_does_not_disturb_player_joins():
     assert result.config is not None    # normal player composition, unchanged
 
 
-def test_join_without_room_configured_ignores_room_gating():
+def test_handshake_without_room_configured_ignores_room_gating():
     # A GameServer with no room_binding/room set (the pre-Room-concept
     # construction path) must keep working exactly as before.
     server = GameServer({"TestBit": TestBit})
