@@ -12,6 +12,7 @@ from control.catalog import load_catalog
 from control.cues import LightCue, PlayCue
 from control.engine import GameServer
 from control.instrument import DEFAULTSHROOM, satisfies
+from tests.helpers_admit import admit
 from contract_kit.contract_bit import (
     CONTRACT_PLAYER_NODE,
     REV1_CAPABILITIES,
@@ -97,14 +98,15 @@ def test_gameserver_grants_player_role_to_tuneshroom_rev1_and_refuses_others():
     gs.load_bit("ContractBit")
 
     gs.hello("dev_rev1", "rev1-dev", "1", instrument="tuneshroom_rev1")
-    granted = gs.join("dev_rev1", CONTRACT_PLAYER_NODE)
+    # Handshake validates in SETUP (spec 3.2); the role is bound at start.
+    granted = admit(gs, "dev_rev1", CONTRACT_PLAYER_NODE)
     assert granted.granted
     assert granted.role == "player"
 
     gs.hello("dev_tune", "tune-dev", "1", instrument="tuneshroom")
-    refused_tune = gs.join("dev_tune", CONTRACT_PLAYER_NODE)
+    refused_tune = admit(gs, "dev_tune", CONTRACT_PLAYER_NODE)
     assert not refused_tune.granted
 
     gs.hello("dev_test", "test-dev", "1", instrument="testshroom")
-    refused_test = gs.join("dev_test", CONTRACT_PLAYER_NODE)
+    refused_test = admit(gs, "dev_test", CONTRACT_PLAYER_NODE)
     assert not refused_test.granted

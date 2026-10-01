@@ -14,6 +14,7 @@ from control.generator_runner import GeneratorRunner
 from control.instrument import InstrumentRequirement
 from control.roles import RoleClass
 from control.functions import FunctionKind, FunctionTarget, validate_function_table
+from tests.helpers_admit import admit_running
 
 
 def test_role_table_has_one_scored_and_one_jam_role():
@@ -480,8 +481,8 @@ def _pin_server() -> GameServer:
     gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
     gs.room.bound = {"main": "room-dev"}
     gs.load_bit("TestBit")
-    gs.devices.hello("dev-1", "device-one", "1.0")
-    result = gs.join("dev-1", "TEST_PLAYER_NODE")
+    gs.hello("dev-1", "device-one", "1.0")
+    result = admit_running(gs, "dev-1", "TEST_PLAYER_NODE")
     assert result.granted, result.reason
     return gs
 

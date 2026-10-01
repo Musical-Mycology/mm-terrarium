@@ -14,6 +14,7 @@ from control.bit_registry import BitRegistry
 from control.catalog import load_catalog
 from control.cues import FireFunction
 from control.engine import GameServer
+from tests.helpers_admit import admit
 
 ROOT = Path(__file__).resolve().parents[1]
 TICK = 1 / 44
@@ -121,15 +122,17 @@ def test_join_in_setup_then_start_plays_a_round():
     """The lobby order: the regression that shipped in 1ced5e9."""
     now = [100.0]
     gs, solid = _server(now)
-    assert gs.join("ie1", MINIGAME_PLAYER_NODE).granted
+    assert admit(gs, "ie1", MINIGAME_PLAYER_NODE).granted
     assert gs.request_start(None, "ie1", "device") is None
     assert gs.bit.status()["dev"] == "ie1"
     _play_a_round(gs, solid, now)
 
 
-def test_start_then_join_plays_a_round():
+def test_a_running_handshake_is_closed_and_the_walk_up_holds_a_jam_role():
     now = [100.0]
     gs, solid = _server(now)
     gs.run()
-    assert gs.join("ie1", MINIGAME_PLAYER_NODE).granted
-    _play_a_round(gs, solid, now)
+    # Spec 3.6: a RUNNING handshake is refused; the device, hello'd before
+    # start, holds a jam (solo) role instead of the Bit's player role.
+    assert admit(gs, "ie1", MINIGAME_PLAYER_NODE).reason == "registration closed"
+    assert gs.registration.assignments["ie1"][1].startswith("solo:")

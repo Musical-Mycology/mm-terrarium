@@ -12,6 +12,7 @@ from control.bit_registry import BitRegistry
 from control.engine import GameServer
 from control.roles import RoleClass
 from tests.fakes import FakeClock
+from control.lobby import TERRARIUM_ADMIN
 
 SOURCE = {"client": "mm-tuneshroom-capture", "app_version": "1.0.0+1",
           "platform": "ios 18.5", "device_model": "iPhone 15",
@@ -83,7 +84,13 @@ def test_loads_cleanly_through_the_engine(tmp_path):
     bit, _ = make_bit(tmp_path)
     gs = GameServer({"capture": lambda: bit})
     gs.load_bit("capture")
-    assert gs.join("ie1", CAPTURE_NODE).granted is True
+    gs.hello("ie1", "", "", None)
+    grants = []
+    gs.on_grant = lambda dev, result: grants.append((dev, result))
+    gs.request_start(None, TERRARIUM_ADMIN, "test")
+    # Spec 7.3: the unscored `recorder` role is everyone's jam role, so a
+    # hello'd device holds it at start with no handshake.
+    assert [(d, r.granted, r.role) for d, r in grants] == [("ie1", True, "recorder")]
 
 
 def test_loads_through_the_real_registry_with_a_resolved_bit_config():
@@ -114,7 +121,8 @@ def test_a_full_capture_round_trip_writes_a_trace(tmp_path):
     bit, _ = make_bit(tmp_path)
     gs = GameServer({"capture": lambda: bit})
     gs.load_bit("capture")
-    gs.join("ie1", CAPTURE_NODE)
+    gs.hello("ie1", "", "", None)
+    gs.request_start(None, TERRARIUM_ADMIN, "test")  # spec 7.3: recorder is the jam role
 
     assert gs.data("ie1", "capture", open_args()) is None
     assert gs.data("ie1", "telemetry", telemetry_args(seq=0)) is None
@@ -168,7 +176,8 @@ def test_a_refusal_reaches_the_device_as_an_error_reason(tmp_path):
     bit, _ = make_bit(tmp_path)
     gs = GameServer({"capture": lambda: bit})
     gs.load_bit("capture")
-    gs.join("ie1", CAPTURE_NODE)
+    gs.hello("ie1", "", "", None)
+    gs.request_start(None, TERRARIUM_ADMIN, "test")  # spec 7.3: recorder is the jam role
     reason = gs.data("ie1", "telemetry", telemetry_args())
     assert "no open capture" in reason
 

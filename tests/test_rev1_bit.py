@@ -22,6 +22,7 @@ from control.catalog import load_catalog
 from control.cues import FireFunction, PlayCue, SolidCue
 from control.functions import ConditionSource, FunctionTarget
 from control.engine import GameServer
+from tests.helpers_admit import admit
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -139,18 +140,18 @@ def _server():
 def test_only_a_rev1_carrier_is_granted_the_player_role():
     gs, *_ = _server()
     gs.hello("ie1", "rev1-board", "1", instrument="tuneshroom_rev1")
-    granted = gs.join("ie1", REV1_PLAYER_NODE)
+    granted = admit(gs, "ie1", REV1_PLAYER_NODE)
     assert granted.granted and granted.role == "player"
 
     for dev, instrument in (("ie2", "tuneshroom"), ("ie3", "testshroom")):
         gs.hello(dev, f"{instrument}-dev", "1", instrument=instrument)
-        assert not gs.join(dev, REV1_PLAYER_NODE).granted, instrument
+        assert not admit(gs, dev, REV1_PLAYER_NODE).granted, instrument
 
 
 def test_every_gesture_reaches_the_board_through_the_engine():
     gs, light, play, solid = _server()
     gs.hello("ie1", "rev1-board", "1", instrument="tuneshroom_rev1")
-    assert gs.join("ie1", REV1_PLAYER_NODE).granted
+    assert admit(gs, "ie1", REV1_PLAYER_NODE).granted
     gs.run()
 
     assert gs.data("ie1", "tap", ["ie1", 0.0, 80.0, 1]) is None
@@ -171,7 +172,7 @@ def test_every_gesture_reaches_the_board_through_the_engine():
 def test_any_tap_capable_shroom_joins_the_sim_node_and_its_tap_lands(instrument):
     gs, light, play, _ = _server()
     gs.hello("ie1", f"{instrument}-dev", "1", instrument=instrument)
-    granted = gs.join("ie1", REV1_SIM_NODE)
+    granted = admit(gs, "ie1", REV1_SIM_NODE)
     assert granted.granted and granted.role == "sim"
     gs.run()
 
@@ -222,7 +223,7 @@ def test_a_manual_fire_reaches_the_board_but_does_not_count():
     from control.functions import FIRED_BY_ADMIN_MANUAL
     gs, _, play, solid = _server()
     gs.hello("ie1", "rev1-board", "1", instrument="tuneshroom_rev1")
-    assert gs.join("ie1", REV1_PLAYER_NODE).granted
+    assert admit(gs, "ie1", REV1_PLAYER_NODE).granted
     gs.run()
 
     assert gs.fire_function("hold_flash", fired_by=FIRED_BY_ADMIN_MANUAL,
