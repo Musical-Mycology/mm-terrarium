@@ -1,7 +1,8 @@
 """GameServer: the Control+GameServer's lifecycle orchestrator. Owns the
 state machine described in design spec section 3. O2-agnostic by design --
-callers (a future O2lite transport layer) drive it through hello/load_bit/
-run/join/tick and observe device releases via on_release. Also observable
+callers (the O2lite transport layer) drive it through hello/load_bit/
+handshake/request_start/tick and observe grants via on_grant and device
+releases via on_release. Also observable
 by any number of add_observer() observers (the Terrarium uplink
 and the Terrarium Console both attach) via on_state_change/
 on_registration_change/on_devices_change, and remotely abortable via
@@ -9,6 +10,7 @@ abort() -- GameServer stays agnostic to who's watching or calling either.
 """
 
 import logging
+import secrets
 import time
 
 from control.bit import Bit
@@ -18,9 +20,10 @@ from control.device_pool import DevicePool
 from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
                                  InstrumentRequirement, cue_kind, satisfies)
-from control.lobby import (DEFAULT_LOBBY, FEEDBACK_REFUSED, StartRequested,
-                           TERRARIUM_ADMIN,
-                           lobby_state as _lobby_state)
+from control.jam_role import (bit_jam_role, is_solo_role, solo_event,
+                              solo_role)
+from control.lobby import (DEFAULT_LOBBY, FEEDBACK_REFUSED, LobbyState,
+                           StartRequested, TERRARIUM_ADMIN)
 from control.registration import JoinResult, RegistrationState
 from control.role_config import (compose_role_config, manifest_fixture_targets,
                                  validate_role_declarations)
@@ -111,8 +114,8 @@ class GameServer:
         self.devices = DevicePool()
         # Control-global Room state (see control/rooms.py, control/
         # room_binding.py). Both may be None for a GameServer that predates
-        # the Room concept -- join() below treats that exactly as "no Room
-        # node exists," leaving normal player joins untouched.
+        # the Room concept -- handshake() below treats that exactly as "no
+        # Room node exists," leaving normal player validation untouched.
         self.room_binding = room_binding
         self.room = None
         self.bit: Bit | None = None
@@ -120,9 +123,20 @@ class GameServer:
         # and the Console. Set in load_bit, cleared in _unload.
         self.bit_name: str | None = None
         self.registration: RegistrationState | None = None
+        # The current Bit load's round id (spec 2026-10-01 section 3.4):
+        # minted in load_bit, cleared in _unload. A handshake carrying any
+        # other id is stale and dropped. _round_counter makes ids from
+        # successive loads of one Bit distinct even before the random tail.
+        self.round_id: str | None = None
+        self._round_counter = 0
         # Set by a transport layer: called once per device released during
-        # UNLOADING, so it can send that device's /ie<N>/release message.
+        # UNLOADING, so it can send that device's /<dev>/release message.
         self.on_release = None
+        # Set by a transport layer: called once per new non-ROOM assignment
+        # (materialize at run, or a RUNNING walk-up) as on_grant(dev,
+        # result), result carrying the composed role config, so it can
+        # build the device's bridge and send /<dev>/role.
+        self.on_grant = None
         # Set by a transport layer: called when a Bit's verb handler emits a
         # light cue, as on_light_cue(dev, status, data1, data2, when).
         # Boundary rule 3 -- the Bit decides the light consequence, the
@@ -175,7 +189,7 @@ class GameServer:
         self._warned_no_room = False     # once-per-Bit-load ROOM drop warning
         # Provenance stamp for the active Room, set by control/terrarium.py's
         # load_room on success and cleared by unload_room (also on a failed
-        # load's unwind). {} outside a Room. join() and fire_function() read
+        # load's unwind). {} outside a Room. _grant() and fire_function() read
         # this so role blobs and function records carry room_name/
         # terrarium_config_version without GameServer knowing anything about
         # TerrariumConfig itself.
@@ -183,8 +197,9 @@ class GameServer:
         # Snapshot of the loaded Bit's declared instrument-requirement slots
         # (control/instrument.py's InstrumentRequirement), keyed by slot
         # name. Set in load_bit on success, cleared on _unload. Consumed by
-        # join() to gate a Role.requires slot against its resolved
-        # requirement (see spec section 4) -- empty outside a loaded Bit.
+        # handshake() and _jam_for() to gate a Role.requires slot against
+        # its resolved requirement (see spec section 4) -- empty outside a
+        # loaded Bit.
         self._slot_requirements: dict[str, InstrumentRequirement] = {}
         # This Bit's declared GENERATOR functions, evaluated once per
         # RUNNING tick by _dispatch_generator_cues. Built in load_bit from
@@ -281,9 +296,21 @@ class GameServer:
                 # Resolved: clear so a later regression to this same name
                 # (e.g. the config entry is later removed) warns again.
                 self._warned_instruments.discard((dev, instrument))
-        self.devices.hello(dev, name, protoversion, self._clock(),
-                           carried=carried)
-        self._notify("on_devices_change")
+        before = self.devices.get(dev)
+        before_carried = before.carried if before is not None else None
+        info = self.devices.hello(dev, name, protoversion, self._clock(),
+                                  carried=carried)
+        if before is None or info.carried is not before_carried:
+            # First contact or a changed instrument only: a heartbeat
+            # re-hello (every HELLO_INTERVAL_S) is proof of life, not news.
+            self._notify("on_devices_change")
+        if self.state is State.RUNNING and self.registration is not None \
+                and dev in self._jam_candidates():
+            # RUNNING walk-up (spec section 3.6): a jam role at once.
+            role = self._jam_for(dev)
+            if self.registration.assign(dev, "", role):
+                self._grant(dev, role)
+                self._notify("on_registration_change")
 
     def reap_stale(self, timeout: float) -> list[str]:
         """Remove every DevicePool entry silent for `timeout` seconds,
@@ -311,11 +338,18 @@ class GameServer:
         for dev in self.devices.stale(now, timeout):
             if dev in room_devs:
                 continue
-            if self.registration is not None and \
-                    dev in self.registration.assignments:
+            held = self.registration is not None and \
+                dev in self.registration.assignments
+            reserved = self.registration is not None and \
+                dev in self.registration.validated
+            if held or reserved:
+                # A dev that only VALIDATED frees its scored slot too, so
+                # the lobby can leave FULL; it never had a role to release
+                # on the wire.
                 self.registration.release(dev)
-                self._clear_stream_trigger_state(dev)
                 released_any = True
+            if held:
+                self._clear_stream_trigger_state(dev)
                 if self.on_release:
                     try:
                         self.on_release(dev)
@@ -360,8 +394,9 @@ class GameServer:
             declared_slots = {r.slot for r in requirements}
             # A slot some Role.requires names (other than the reserved
             # "room" slot) is a role slot (spec section 4): it is resolved
-            # only at join, against the JOINING DEVICE's carried instrument
-            # (see join() below), never against the room's own fixtures --
+            # only at handshake/grant, against the DEVICE's carried
+            # instrument (see handshake() and _jam_for() below), never
+            # against the room's own fixtures --
             # a fixture has no gestures to offer. "room" itself stays a
             # room slot even when a Role happens to require it (deviation:
             # implicit-room-slot join handling, spec Status section).
@@ -414,7 +449,17 @@ class GameServer:
                         f"role {role.name!r} requires undeclared slot "
                         f"{role.requires!r}; declared: {sorted(known_slots)}")
             validate_role_declarations(role_table)
-            registration = RegistrationState(role_table)
+            lobby = getattr(getattr(bit, "config", None), "lobby", None) \
+                or DEFAULT_LOBBY
+            max_scored = lobby.max_scored
+            if max_scored is not None:
+                bounded = RegistrationState(role_table).scored_cap()
+                if bounded is not None and max_scored > bounded:
+                    raise ValueError(
+                        f"[lobby] max_scored {max_scored} exceeds the scored "
+                        f"roles' capacity sum {bounded}")
+            registration = RegistrationState(role_table,
+                                             max_scored=max_scored)
         except Exception as exc:
             self._set_state(State.IDLE)
             raise BitLoadError(f"failed to load Bit {name!r}: {exc}") from exc
@@ -425,6 +470,9 @@ class GameServer:
         self._warned_no_room = False
         self.bit_name = name
         self.registration = registration
+        self._round_counter += 1
+        self.round_id = (f"{name}-{self._round_counter}-"
+                         f"{secrets.token_hex(3)}")
         self._slot_requirements = {r.slot: r for r in requirements}
         # Built from the SAME table object validate_function_table just
         # checked, not a fresh read of the property -- function_table is a
@@ -475,7 +523,17 @@ class GameServer:
             raise InvalidTransition(
                 f"run requires SETUP, current state is {self.state}")
         self._run_elapsed = 0.0
+        # RUNNING first, so the agent's on_state_change has torn the lobby
+        # down and the bridges built in on_grant render Bit light, not
+        # lobby overrides (spec section 3.6).
         self._set_state(State.RUNNING)
+        granted = self.registration.materialize(self._jam_candidates(),
+                                                self._jam_for)
+        for dev, role in granted:
+            self._grant(dev, role)
+        if granted:
+            self._notify("on_registration_change")
+            self._notify("on_devices_change")
         self.bit.on_run_start()
 
     def is_admin(self, dev: str | None) -> bool:
@@ -491,8 +549,15 @@ class GameServer:
             return None
         if not self.lobby_config().enabled:
             return None
-        return _lobby_state(self.registration.counts(),
-                            self.registration.role_table).name
+        cap = self.registration.scored_cap()
+        if cap is not None and len(self.registration.validated) >= cap:
+            return LobbyState.FULL.name
+        return LobbyState.WAITING.name
+
+    def notify_devices_changed(self) -> None:
+        """Let the device-link layer report a device-visible change it
+        owns (e.g. a canvas URL) through the engine's observer list."""
+        self._notify("on_devices_change")
 
     def notify_lobby(self, event: str, dev: str) -> None:
         """Let the device-link layer announce a lobby event (invite,
@@ -534,59 +599,140 @@ class GameServer:
             reason=reason, feedback=feedback))
         return reason
 
-    def join(self, dev: str, node: str) -> JoinResult:
-        if self.state not in (State.SETUP, State.RUNNING):
-            return JoinResult(granted=False,
-                               reason="no Bit accepting registrations")
-        if self._is_room_node(node) and not self._room_armed():
-            return JoinResult(granted=False, reason="no such node")
-        result = self.registration.join(dev, node, self.state)
-        if result.granted and result.role_class == RoleClass.ROOM:
-            self._bind_room(dev)
+    def default_scored_node(self) -> str | None:
+        """The node a handshake validates against when it names none: the
+        manifest's default_join_role, else the first manifest node whose
+        role is scored, else the first role-table node whose first role is
+        scored. Never a jam node."""
+        table = (self.registration.role_table
+                 if self.registration is not None else None)
+        cfg = getattr(self.bit, "config", None) if self.bit is not None else None
+        if cfg is not None and table is not None and cfg.launch.default_join_role:
+            # Only when it actually names a SCORED role in the live table.
+            # default_join_role is the launcher's hint for a device picking
+            # its own node, and a Bit is free to point it at a jam role --
+            # a handshake never joins one.
+            declared = table.roles.get(cfg.launch.default_join_role)
+            node = cfg.node_for(cfg.launch.default_join_role)
+            if declared is not None and declared.scored and node is not None:
+                return node
+        if cfg is not None and table is not None:
+            for role_name, node in cfg.launch.nodes:
+                role = table.roles.get(role_name)
+                if role is not None and role.scored:
+                    return node
+        if table is not None:
+            for node, roles in table.node_map.items():
+                if roles and table.roles[roles[0]].scored:
+                    return node
+        return None
+
+    def handshake(self, dev: str, round_id: str, node: str) -> JoinResult:
+        """Received Handshake (spec section 3.4). Never raises. A granted
+        non-ROOM result is a VALIDATION only: `config` is None and no role
+        exists until run() materializes it. A stale round_id returns a
+        non-granted result with reason None: dropped, not denied."""
+        if self.registration is None:
+            return JoinResult(granted=False, reason="registration closed",
+                              hint="no Bit loaded")
+        if node and self._is_room_node(node):
+            if not self._room_armed():
+                return JoinResult(granted=False, reason="no such node",
+                                  hint="no Room fixture is armed")
+            result = self.registration.join_room(dev, node)
+            if result.granted:
+                self._bind_room(dev)
             return result
-        if result.granted:
-            # Compose from the registration's role-table snapshot -- Bits
-            # build role_table per property access, so a fresh call could
-            # return different Role objects than the ones counts track.
-            role = self.registration.role_table.roles[result.role]
-            # Resolved for every granted non-ROOM join, not just requires-
-            # bearing roles: event-trigger thresholds are a property of the
-            # carried instrument's server-owned detection contract,
-            # independent of whether this role also gates on a slot (e.g.
-            # TestBit's requires-less "jammer" role still needs its
-            # carrier's tap/shake thresholds).
-            info = self.devices.get(dev)
-            carried = getattr(info, "carried", None) or TUNESHROOM
-            if role.requires is not None:
-                # requires names a declared or implicit slot (Task 5's
-                # load-time validation guarantees this). The implicit
-                # "room" slot has no entry in _slot_requirements -- it's
-                # deliberately excluded there because it binds the room's
-                # own fixtures (already resolved at load_bit), not the
-                # carrier device joining this role. req is None means
-                # exactly that case, so treat it as satisfied.
-                req = self._slot_requirements.get(role.requires)
-                reason = satisfies(carried, req) if req is not None else None
-                if req is not None and reason is not None:
-                    self.registration.release(dev)
-                    self._clear_stream_trigger_state(dev)
-                    return JoinResult(granted=False, reason=reason)
-                result.slot = role.requires
-                result.instrument = carried.name
-            result.config = compose_role_config(
-                self.bit_name, self.bit.version, role,
-                room_name=self.provenance.get("room_name"),
-                terrarium_config_version=self.provenance.get(
-                    "terrarium_config_version"),
-                slot=result.slot, instrument=result.instrument,
-                event_triggers=carried.event_triggers, carried=carried)
-            try:
-                self.bit.on_join(dev, result.role)
-            except Exception:
-                logger.exception("Bit.on_join failed; continuing")
-            self._notify("on_registration_change")
-            self._notify("on_devices_change")
+        if self.devices.get(dev) is None:
+            return JoinResult(granted=False, reason="not connected",
+                              hint="send /game/hello first")
+        if self.bit is None or self.state is not State.SETUP:
+            hint = ("scored slots open only in SETUP; you will get a jam "
+                    "role at start" if self.state is State.RUNNING
+                    else "no Bit loaded")
+            return JoinResult(granted=False, reason="registration closed",
+                              hint=hint)
+        if round_id != self.round_id:
+            logger.info("handshake: stale round %r from %s", round_id, dev)
+            return JoinResult(granted=False)
+        target = node or self.default_scored_node()
+        if target is None:
+            return JoinResult(granted=False, reason="no such node",
+                              hint="this Bit declares no scored node")
+        already = dev in self.registration.validated
+        result = self.registration.validate(dev, target)
+        if not result.granted or already:
+            # A repeat handshake re-acks the original reservation without
+            # another registration change (no ceremony replay, step 5).
+            return result
+        role = self.registration.role_table.roles[result.role]
+        if role.requires is not None:
+            # The implicit "room" slot has no _slot_requirements entry (it
+            # binds the Room's own fixtures, resolved at load_bit), so a
+            # missing req means satisfied.
+            req = self._slot_requirements.get(role.requires)
+            carried = getattr(self.devices.get(dev), "carried", None) \
+                or DEFAULTSHROOM
+            reason = satisfies(carried, req) if req is not None else None
+            if reason is not None:
+                self.registration.release(dev)
+                return JoinResult(granted=False, reason=reason,
+                                  hint=f"this role needs slot {role.requires!r}")
+        self._notify("on_registration_change")
         return result
+
+    def _jam_for(self, dev: str):
+        """The jam role `dev` gets at RUNNING (spec section 3.7): the Bit's
+        own JAM-class role, unless its `requires` refuses this dev's
+        carried instrument, else a solo role synthesized for it."""
+        role = bit_jam_role(self.registration.role_table)
+        carried = getattr(self.devices.get(dev), "carried", None) \
+            or DEFAULTSHROOM
+        if role is not None and role.requires is not None:
+            req = self._slot_requirements.get(role.requires)
+            if req is not None and satisfies(carried, req) is not None:
+                logger.info("jam role %s refuses %s; using solo",
+                            role.name, dev)
+                role = None
+        return role if role is not None else solo_role(carried)
+
+    def _grant(self, dev: str, role) -> None:
+        """Compose `dev`'s role blob, tell the Bit (guarded) and hand the
+        result to on_grant (guarded). Called once per new non-ROOM
+        assignment, scored first then jam."""
+        carried = getattr(self.devices.get(dev), "carried", None) \
+            or DEFAULTSHROOM
+        result = JoinResult(granted=True, role=role.name,
+                            role_class=role.role_class, scored=role.scored,
+                            breath=role.breath)
+        if role.requires is not None:
+            result.slot = role.requires
+            result.instrument = carried.name
+        result.config = compose_role_config(
+            self.bit_name, self.bit.version, role,
+            room_name=self.provenance.get("room_name"),
+            terrarium_config_version=self.provenance.get(
+                "terrarium_config_version"),
+            slot=result.slot,
+            event_triggers=carried.event_triggers, carried=carried)
+        try:
+            self.bit.on_join(dev, role.name)
+        except Exception:
+            logger.exception("Bit.on_join failed; continuing")
+        if self.on_grant is not None:
+            try:
+                self.on_grant(dev, result)
+            except Exception:
+                logger.exception("on_grant raised for %s; continuing", dev)
+
+    def _jam_candidates(self) -> list[str]:
+        """Pooled devs that get a jam role at RUNNING: not a bound Room
+        fixture, not already assigned, not an admin id."""
+        room_devs = set(self.room.bound.values()) if self.room else set()
+        return [info.dev for info in self.devices.all()
+                if info.dev not in room_devs
+                and info.dev not in self.registration.assignments
+                and not self.is_admin(info.dev)]
 
     def _is_room_node(self, node: str) -> bool:
         for role_name in self.registration.role_table.node_map.get(node, ()):
@@ -684,8 +830,7 @@ class GameServer:
 
     def _clear_stream_trigger_state(self, dev: str) -> None:
         """Drop every StreamTrigger EMA entry for `dev`. Called wherever a
-        dev's registration ends (reap_stale, a join refused after slot
-        resolution, and wholesale in _unload) so a stale y_prev from a
+        dev's registration ends (reap_stale, and wholesale in _unload) so a stale y_prev from a
         departed occupant can never blend into the next one's first
         sample."""
         stale = [key for key in self._stream_trigger_state if key[0] == dev]
@@ -701,7 +846,7 @@ class GameServer:
         naming an out-of-range or non-numeric arg is skipped, never raises
         -- a device must never be able to wedge Control."""
         info = self.devices.get(dev)
-        carried = getattr(info, "carried", None) or TUNESHROOM
+        carried = getattr(info, "carried", None) or DEFAULTSHROOM
         triggers = [t for t in carried.stream_triggers if t.verb == verb]
         if not triggers:
             return args
@@ -741,6 +886,9 @@ class GameServer:
             return "no Bit running"
         if dev not in self.registration.assignments:
             return "device not registered"
+        role_name = self.registration.assignments[dev][1]
+        if is_solo_role(role_name):
+            return self._solo_gesture(dev, verb, args, gesture_time)
         try:
             handler = self.bit.verb_handlers().get(verb)
         except Exception:
@@ -772,6 +920,22 @@ class GameServer:
             return cues or "handler refused"
         self._dispatch_cues(list(stream_cue_list) + list(cues or ()), at,
                             FIRED_BY_GESTURE_VERB)
+        return None
+
+    def _solo_gesture(self, dev: str, verb: str, args: list,
+                      gesture_time: float | None) -> None:
+        """A gesture from a dev holding a synthesized solo role (spec
+        section 3.7): resolved against its carried instrument's
+        [solo.bindings] and fired on that dev through the fire ladder.
+        Unbound gestures are dropped, never refused."""
+        carried = getattr(self.devices.get(dev), "carried", None) \
+            or DEFAULTSHROOM
+        bindings = carried.solo.bindings if carried.solo else {}
+        fn = bindings.get(solo_event(verb, args))
+        if fn is None:
+            return None
+        at = self._origin(gesture_time) + self._horizon
+        self.fire_function(fn, fired_by=FIRED_BY_GESTURE_VERB, dev=dev, at=at)
         return None
 
     def _fixture_target(self, name: str) -> str:
@@ -938,7 +1102,7 @@ class GameServer:
         Each cue's dev is resolved to its list of concrete devs (a ROOM cue
         may resolve to several fixtures), and each resolved dev is checked
         against its OWN instrument -- a fixture's own instrument, or a
-        device's carried instrument (TUNESHROOM by default). An unknown dev
+        device's carried instrument (DEFAULTSHROOM by default). An unknown dev
         (no pool entry and not a Room fixture) is treated as accepting,
         matching today's behavior: this gate must never invent a refusal for
         a dev nothing declared an instrument for."""
@@ -956,7 +1120,7 @@ class GameServer:
     def _instrument_for(self, dev: str):
         """The Instrument behind a resolved dev: a bound Room fixture's
         declared instrument, else the device's carried instrument
-        (TUNESHROOM default -- same fallback _check_cue_kinds uses)."""
+        (DEFAULTSHROOM default -- same fallback _check_cue_kinds uses)."""
         if self.room is not None:
             name = fixture_name(dev)
             for fixture in self.room.profile.fixtures:
@@ -966,7 +1130,7 @@ class GameServer:
         info = self.devices.get(dev)
         if info is None:
             return None
-        return getattr(info, "carried", None) or TUNESHROOM
+        return getattr(info, "carried", None) or DEFAULTSHROOM
 
     def _resolve_script_for(self, name: str, instrument):
         """The ladder, per instrument: built-ins first (reserved names make
@@ -1358,6 +1522,7 @@ class GameServer:
         self.bit = None
         self.bit_name = None
         self.registration = None
+        self.round_id = None
         self._slot_requirements = {}
         self._generators = None
         self._stream_functions = {}

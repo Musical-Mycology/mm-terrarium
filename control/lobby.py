@@ -61,6 +61,9 @@ class LobbyConfig:
     invite_interval_s: float = 5.0
     ceremony_gap_s: float = 1.0
     double_tap_window_s: float = 1.5
+    # Optional cap on validated (scored) devices below the scored roles'
+    # capacity sum (spec 2026-10-01 section 3.4). None means no extra cap.
+    max_scored: int | None = None
 
 
 DEFAULT_LOBBY = LobbyConfig()
@@ -69,23 +72,6 @@ DEFAULT_LOBBY = LobbyConfig()
 class LobbyState(Enum):
     WAITING = auto()
     FULL = auto()
-
-
-def lobby_state(counts, role_table) -> LobbyState:
-    """FULL when every scored role with a finite capacity is at capacity
-    and at least one such role exists; an uncapped scored role means the
-    lobby can never fill. `counts` is RegistrationState.counts()."""
-    capped = False
-    for name, count, capacity in counts:
-        role = role_table.roles.get(name)
-        if role is None or not role.scored:
-            continue
-        if capacity is None:
-            return LobbyState.WAITING
-        capped = True
-        if count < capacity:
-            return LobbyState.WAITING
-    return LobbyState.FULL if capped else LobbyState.WAITING
 
 
 def scale_note(join_index: int) -> int:

@@ -42,9 +42,9 @@ def _role_table():
 def test_scored_count_sums_only_scored_roles():
     role_table = _role_table()
     registration = RegistrationState(role_table)
-    registration.join("dev1", "/ie1", state=None)
-    registration.join("dev2", "/ie1", state=None)
-    registration.join("dev3", "/ie2", state=None)
+    registration.validate("dev1", "/ie1")
+    registration.validate("dev2", "/ie1")
+    registration.assign("dev3", "/ie2", role_table.roles["jam"])
     gs = SimpleNamespace(bit=SimpleNamespace(role_table=role_table),
                           registration=registration)
     assert scored_count(gs) == 2
@@ -56,7 +56,7 @@ def test_scored_count_tolerates_count_for_role_missing_from_role_table():
     # lists it. scored_count must skip it, not KeyError main() mid-teardown.
     role_table = _role_table()
     registration = RegistrationState(role_table)
-    registration.join("dev1", "/ie1", state=None)
+    registration.validate("dev1", "/ie1")
     stale = RoleTable(
         roles=dict(role_table.roles,
                    room_test=Role(name="room_test",
@@ -65,8 +65,8 @@ def test_scored_count_tolerates_count_for_role_missing_from_role_table():
         node_map=dict(role_table.node_map, **{"/room": ["room_test"]}),
     )
     stale_registration = RegistrationState(stale)
-    stale_registration.join("dev1", "/ie1", state=None)
-    stale_registration.join("sim-room", "/room", state=None)
+    stale_registration.validate("dev1", "/ie1")
+    stale_registration.join_room("sim-room", "/room")
     gs = SimpleNamespace(bit=SimpleNamespace(role_table=role_table),
                           registration=stale_registration)
     assert scored_count(gs) == 1
