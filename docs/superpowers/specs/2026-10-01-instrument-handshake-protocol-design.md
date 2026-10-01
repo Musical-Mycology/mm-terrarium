@@ -4,7 +4,7 @@
 **Repos:** mm-terrarium (Control, harness, contract kit, docs), mm-tuneshroom
 (device session, simulator, contract replay; paired PR in this pass),
 mm-devshroom (firmware checklist, handed to Victor)
-**Status:** design approved in brainstorming; not implemented
+**Status:** design approved in brainstorming; not implemented. Task 1 (2026-10-01): hub forwards tcp-flagged messages to o2lite clients over TCP (o2/src/bridge.cpp:411-414).
 **Supersedes:** the registration flow in `docs/control-gameserver-design.md`
 and the lobby double-tap join of
 `2026-09-11-metronome-lobby-and-admin-start-design.md` (the lobby's visuals,
