@@ -2,7 +2,7 @@
 hub.
 
 Satisfies the small transport interface DeviceLinkAgent drives:
-drain_new_clients, drain_inbound, send, bind_dev, drop_dev. See
+drain_inbound, send, bind_dev, drop_dev. See
 docs/superpowers/specs/
 2026-08-12-control-o2lite-and-timed-cues-design.md section 5.1.
 
@@ -21,7 +21,7 @@ import logging
 import time
 
 from control.wire_json import dumps as _json_dumps
-from devicelink.contract import GAME_VERBS
+from devicelink.contract import GAME_VERBS, down_transport
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +263,10 @@ class FakeO2Lite:
         self._now = now
         self.services = ""
         self.sent: list[tuple[str, float, str, tuple]] = []
+        # Parallel to `sent`: which o2litepy call carried each message,
+        # "tcp" (send_cmd) or "udp" (send). Boundary rule 5: a test must
+        # be able to fail on a UDP /role.
+        self.channels: list[str] = []
         # APPENDED, never replaced, and matched first-wins -- exactly what
         # real o2litepy does (method_new appends at o2lite.py:908,
         # _msg_dispatch returns on the first match at o2lite.py:809-827,
@@ -317,18 +321,22 @@ class FakeO2Lite:
         return None
 
     def send(self, addr, timestamp, *args) -> None:
+        self._record(addr, timestamp, args, "udp")
+
+    def send_cmd(self, addr, timestamp, *args) -> None:
+        self._record(addr, timestamp, args, "tcp")
+
+    def _record(self, addr, timestamp, args, channel) -> None:
         typespec = args[0] if len(args) > 1 else ""
         rest = tuple(args[1:])
         self.sent.append((addr, timestamp, typespec, rest))
+        self.channels.append(channel)
         # The hub has no local short circuit either (boundary rule 4): a
         # message addressed to a service THIS connection owns goes out and
         # comes back around to our own handler. That round trip is what
         # verify_service_ownership reads, so the fake has to reproduce it.
         if self._owns(addr):
             self._queue.append((addr, typespec, rest, timestamp))
-
-    def send_cmd(self, addr, timestamp, *args) -> None:
-        self.send(addr, timestamp, *args)
 
     def poll(self) -> None:
         """Dispatch every message deliver() has queued since the last poll.
@@ -501,11 +509,6 @@ class O2LiteTransport:
 
     # --- the transport interface ------------------------------------------
 
-    def drain_new_clients(self) -> list:
-        """No connections to accept: a device is anonymous until it sends
-        /game/hello. agent.py:150 already tolerates an empty list."""
-        return []
-
     def drain_inbound(self) -> list:
         """Pump o2lite, then return everything that arrived.
 
@@ -589,9 +592,14 @@ class O2LiteTransport:
                                  "contains byte 0x03, the o2ws field "
                                  "separator", msg.get("address"), dev)
                     return
+        verb = msg["address"].rsplit("/", 1)[-1]
         try:
-            self._o2.send(msg["address"], msg.get("timestamp", 0.0),
-                          typespec, *args)
+            tcp = down_transport(verb) == "tcp"
+        except KeyError:
+            tcp = False
+        sender = self._o2.send_cmd if tcp else self._o2.send
+        try:
+            sender(msg["address"], msg.get("timestamp", 0.0), typespec, *args)
         except Exception:
             logger.exception("o2lite send to %s failed", dev)
 

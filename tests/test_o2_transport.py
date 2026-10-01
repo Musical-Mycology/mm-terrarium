@@ -13,6 +13,7 @@ def _started():
     # implementation detail of start() itself, not something the tests that
     # reuse this fixture to assert on device-directed sends care about.
     fake.sent.clear()
+    fake.channels.clear()
     return transport, fake
 
 
@@ -137,13 +138,6 @@ def test_drain_inbound_before_start_does_not_raise():
     quiet no-op, not an AttributeError on None.poll()."""
     transport = O2LiteTransport()
     assert transport.drain_inbound() == []
-
-
-def test_drain_new_clients_is_a_noop():
-    """o2lite has no connection to accept: a device is anonymous until it
-    says /game/hello. agent.py already tolerates an empty list here."""
-    transport, _fake = _started()
-    assert transport.drain_new_clients() == []
 
 
 def test_send_addresses_the_device_service_and_carries_the_timestamp():
@@ -760,3 +754,14 @@ def test_an_argument_count_that_does_not_match_the_typespec_is_refused(caplog):
                                    "args": ["role"], "timestamp": 0.0})
         assert fake.sent == []
         assert any("typespec" in rec.getMessage() for rec in caplog.records)
+
+
+def test_role_goes_tcp_leds_goes_udp():
+    from devicelink import protocol
+    transport, fake = _started()
+    transport.bind_dev("ie1", None)
+    transport.send("ie1", protocol.role_event("ie1", {"role": "p"}))
+    transport.send("ie1", protocol.leds_event("ie1", [0] * 36))
+    chans = dict(zip([s[0] for s in fake.sent], fake.channels))
+    assert chans["/ie1/role"] == "tcp"
+    assert chans["/ie1/leds"] == "udp"

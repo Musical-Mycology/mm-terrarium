@@ -134,6 +134,22 @@ def deny_event(dev: str, reason: str | None, hint: str | None) -> dict:
     return _event(f"/{dev}/deny", "ss", [reason or "", hint or ""])
 
 
+def handshake_event(dev: str, round_id: str) -> dict:
+    return _event(f"/{dev}/handshake", "s", [round_id])
+
+
+def validated_event(dev: str, round_id: str, role: str) -> dict:
+    return _event(f"/{dev}/validated", "ss", [round_id, role])
+
+
+def parse_handshake_args(args: list) -> tuple[str, str, str]:
+    """(dev, round_id, node) from a /game/handshake; ValueError when the
+    shape is wrong (contract rule 6: malformed is dropped)."""
+    if len(args) != 3 or not all(isinstance(a, str) for a in args):
+        raise ValueError(f"handshake wants 3 strings, got {args!r}")
+    return args[0], args[1], args[2]
+
+
 def leds_event(dev: str, channels, when: float = 0.0) -> dict:
     """channels: a flat sequence of ints, width-agnostic. This function does
     `list(channels)` with no length assertion, so any frame width rides the

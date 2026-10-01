@@ -8,7 +8,7 @@ import inspect
 
 import pytest
 
-from devicelink import protocol
+from devicelink import contract, protocol
 from devicelink.contract import GAME_VERBS, VERB_TABLE, row_for, typespec_allowed
 from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
 from devicelink.o2_transport import GAME_VERBS as TRANSPORT_GAME_VERBS
@@ -24,7 +24,7 @@ def test_game_verbs_is_derived_from_the_up_rows():
 # to register a handler per verb, so no caller depends on its order, and
 # deriving it from VERB_TABLE is free to produce a different one.
 EXPECTED_GAME_VERBS = frozenset({
-    "hello", "join", "tilt", "tap", "shake", "capture", "telemetry",
+    "hello", "handshake", "tilt", "tap", "shake", "capture", "telemetry",
     "canvas", "start", "hold", "swing",
 })
 
@@ -47,8 +47,8 @@ def test_hold_and_swing_are_new_up_rows_with_the_designed_shapes():
     assert swing.args == ("dev", "signed_peak_g", "count")
 
 
-def test_hello_join_start_are_tcp_and_gestures_are_udp_ok():
-    for verb in ("hello", "join", "start"):
+def test_hello_handshake_start_are_tcp_and_gestures_are_udp_ok():
+    for verb in ("hello", "handshake", "start"):
         assert row_for("up", verb).transport == "tcp"
     for verb in ("tap", "tilt", "shake", "hold", "swing"):
         assert row_for("up", verb).transport == "udp-ok"
@@ -116,3 +116,29 @@ def test_hold_and_swing_delivered_through_fake_o2lite_reach_drain_inbound():
     addresses = [(e["address"], e["typespec"], e["args"]) for e in drained]
     assert ("/game/hold", "sfi", ["ie1", 0.65, 1]) in addresses
     assert ("/game/swing", "sfi", ["ie1", -2.1, 1]) in addresses
+
+
+def test_v3_up_verbs():
+    assert "handshake" in contract.GAME_VERBS
+    assert "join" not in contract.GAME_VERBS
+
+
+def test_handshake_up_row():
+    row = contract.row_for("up", "handshake")
+    assert row.typespecs == ("sss",)
+    assert row.args == ("dev", "round_id", "node")
+    assert row.transport == "tcp" and row.pre_role
+
+
+def test_new_down_rows():
+    assert contract.row_for("down", "handshake").typespecs == ("s",)
+    assert contract.row_for("down", "validated").typespecs == ("ss",)
+
+
+def test_down_transport_split():
+    tcp = {"role", "deny", "release", "room", "error", "handshake", "validated"}
+    for row in contract.VERB_TABLE:
+        if row.direction != "down":
+            continue
+        want = "tcp" if row.verb in tcp else "udp-ok"
+        assert contract.down_transport(row.verb) == want, row.verb

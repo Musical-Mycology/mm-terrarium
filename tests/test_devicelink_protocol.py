@@ -152,3 +152,24 @@ def test_parse_canvas_url_refuses_data_scheme_relative_path_and_non_string():
 def test_parse_canvas_url_refuses_missing_url_arg():
     with pytest.raises(ValueError):
         protocol.parse_canvas_url(["ie1"])
+
+
+def test_handshake_event_shape():
+    msg = protocol.handshake_event("ie1", "TestBit-1-abc123")
+    assert msg["address"] == "/ie1/handshake"
+    assert msg["typespec"] == "s" and msg["args"] == ["TestBit-1-abc123"]
+
+
+def test_validated_event_shape():
+    msg = protocol.validated_event("ie1", "r1", "player")
+    assert msg["address"] == "/ie1/validated"
+    assert msg["typespec"] == "ss" and msg["args"] == ["r1", "player"]
+
+
+def test_parse_handshake_args():
+    import pytest
+    assert protocol.parse_handshake_args(["ie1", "r1", ""]) == ("ie1", "r1", "")
+    with pytest.raises(ValueError):
+        protocol.parse_handshake_args(["ie1", "r1"])
+    with pytest.raises(ValueError):
+        protocol.parse_handshake_args(["ie1", 3, ""])

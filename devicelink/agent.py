@@ -820,7 +820,6 @@ class DeviceLinkAgent:
 
     # --- driven once per tick-loop iteration -------------------------------
     def poll(self) -> None:
-        self.transport.drain_new_clients()      # devices are anonymous until hello
         for client, msg in self.transport.drain_inbound():
             try:
                 self._handle(client, msg)
