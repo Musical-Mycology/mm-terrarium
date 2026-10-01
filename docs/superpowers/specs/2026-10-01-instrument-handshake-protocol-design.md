@@ -4,7 +4,7 @@
 **Repos:** mm-terrarium (Control, harness, contract kit, docs), mm-tuneshroom
 (device session, simulator, contract replay; paired PR in this pass),
 mm-devshroom (firmware checklist, handed to Victor)
-**Status:** design approved in brainstorming; not implemented. Task 1 (2026-10-01): hub forwards tcp-flagged messages to o2lite clients over TCP (o2/src/bridge.cpp:411-414).
+**Status:** implemented in mm-terrarium (branch claude/instrument-handshake-protocol-833d7c); mm-tuneshroom pending. Task 1 (2026-10-01): hub forwards tcp-flagged messages to o2lite clients over TCP (o2/src/bridge.cpp:411-414).
 **Supersedes:** the registration flow in `docs/control-gameserver-design.md`
 and the lobby double-tap join of
 `2026-09-11-metronome-lobby-and-admin-start-design.md` (the lobby's visuals,
@@ -82,7 +82,7 @@ cleared at UNLOADING.
 | Verb | Dir | Typespec, args | Transport | Notes |
 |---|---|---|---|---|
 | `/game/hello` | up | `ssss` dev, name, protoversion, instrument (bare `s` still accepted) | TCP | Connect and heartbeat (every `HELLO_INTERVAL_S`, 5 s). Sends `/room` only on **first contact** (dev new to the pool) and on state or registration change, never on every beat |
-| `/<dev>/handshake` | down, **new** | `s` round_id | TCP | "You may validate for this round." Sent on first hello while SETUP and not FULL, then each invite cycle (5 s) until the dev validates, the lobby goes FULL, or SETUP ends. The white x2 flash stays as the visible cue |
+| `/<dev>/handshake` | down, **new** | `s` round_id | TCP | "You may validate for this round." Sent on first hello while SETUP and not FULL, then each invite cycle (5 s) until the dev validates, the lobby goes FULL, or SETUP ends. The schedule is the agent's own (it runs with or without a Room or lobby) and needs the Bit to have a scored node. The white x2 flash stays as the visible cue; a validation cancels that dev's still-queued flashes |
 | `/game/handshake` | up, **new** | `sss` dev, round_id, node | TCP | "Received Handshake": sent when the user makes the device's accept gesture (the device decides which; the reference is a double tap). `node` empty = the Bit's default scored role; else a Registration Node id (NFC/QR) |
 | `/<dev>/validated` | down, **new** | `ss` round_id, role | TCP | Ack accepted, slot reserved for `role`. The device stops prompting; the green ceremony plays as today |
 | `/<dev>/deny` | down | `ss` reason, hint | TCP (was UDP) | Refused ack. `hint` is now filled (section 3.6) |
@@ -116,6 +116,9 @@ In order, the first failure answers `/<dev>/deny`:
 1. Dev not in the pool (no hello yet): deny `not connected`, hint `send
    /game/hello first`.
 2. `node` names a Room node: section 3.5 (round id not checked).
+   A dev already bound to a Room fixture that names any other node is
+   denied `registration closed`, hint `this device is bound to a Room
+   fixture` (materialize would otherwise overwrite its ROOM assignment).
 3. No Bit, or state is not SETUP: deny `registration closed`, hint `scored
    slots open only in SETUP; you will get a jam role at start` (RUNNING) or
    `no Bit loaded` (other states).

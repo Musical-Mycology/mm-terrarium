@@ -1,0 +1,31 @@
+Role assignment at RUNNING (contract v3, 2026-10-01)
+
++---------+                   +-----+                   +-------+                   +--------+
+| Control |                   | Bit |                   | Agent |                   | Device |
++---------+                   +-----+                   +-------+                   +--------+
+     |                           |                          |                            |
+[ request_start accepts: run() sets RUNNING (lobby down), then materialize ]
+     |                           |                          |                            |
+[ per validated dev: its reserved scored role ]
+     |                           |                          |                            |
+     |on_join(dev, scored role)->|                          |                            |
+     |                           |                          |                            |
+     |--------------on_grant(dev, role blob)--------------->|                            |
+     |                           |                          |                            |
+     |                           |                          |-/<dev>/role scored (TCP)-->|
+     |                           |                          |                            |
+[ per other dev: first fitting unscored role, else solo:<instrument> ]
+     |                           |                          |                            |
+     |--on_join(dev, jam role)-->|                          |                            |
+     |                           |                          |                            |
+     |--------------on_grant(dev, role blob)--------------->|                            |
+     |                           |                          |                            |
+     |                           |                          |---/<dev>/role jam (TCP)--->|
+     |                           |                          |                            |
+     |------on_run_start()------>|                          |                            |
+     |                           |                          |                            |
+[ RUNNING walk-up: a first hello gets the jam steps at once ]
+     |                           |                          |                            |
++---------+                   +-----+                   +-------+                   +--------+
+| Control |                   | Bit |                   | Agent |                   | Device |
++---------+                   +-----+                   +-------+                   +--------+
