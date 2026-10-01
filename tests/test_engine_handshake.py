@@ -452,3 +452,60 @@ def test_lobby_without_scored_roles_waits():
     gs = GameServer({"J": _JamOnly})
     gs.load_bit("J")
     assert gs.lobby_state() == "WAITING"
+
+
+class _UnscoredBit(_Bit):
+    """Only unscored, non-JAM roles (the CaptureBit / MinigameBit shape)."""
+    roles_spec = ()
+
+    @property
+    def role_table(self):
+        roles = {r.name: r for r in self.roles_spec}
+        return RoleTable(roles=roles, node_map={})
+
+
+def _unscored_gs(*roles):
+    bit = type("U", (_UnscoredBit,), {"roles_spec": roles})
+    return _gs(bit)
+
+
+def test_shared_unscored_role_is_the_jam_role():
+    gs, grants = _unscored_gs(Role("recorder", RoleClass.SHARED, None, False))
+    gs.hello("a", "", "", "tuneshroom")
+    gs.request_start(None, "terrarium", "test")
+    assert [(d, r.role) for d, r in grants] == [("a", "recorder")]
+
+
+def test_unique_unscored_role_capacity_consumed_in_pool_order():
+    gs, grants = _unscored_gs(Role("player", RoleClass.UNIQUE, 1, False))
+    for d in ("a", "b", "c"):
+        gs.hello(d, "", "", "tuneshroom")
+    gs.request_start(None, "terrarium", "test")
+    assert [(d, r.role) for d, r in grants] == [
+        ("a", "player"), ("b", "solo:tuneshroom"), ("c", "solo:tuneshroom")]
+
+
+def test_unscored_role_requires_miss_falls_to_next_role():
+    class _B(_UnscoredBit):
+        roles_spec = (Role("miccer", RoleClass.SHARED, None, False,
+                           requires="hand"),
+                      Role("plain", RoleClass.SHARED, None, False))
+
+        def instrument_requirements(self):
+            return (InstrumentRequirement(
+                slot="hand", capabilities=frozenset({"audio.mic"})),)
+    gs, grants = _gs(_B)
+    gs.hello("a", "", "", None)             # defaultshroom lacks audio.mic
+    gs.hello("b", "", "", "tuneshroom")
+    gs.request_start(None, "terrarium", "test")
+    assert [(d, r.role) for d, r in grants] == [("a", "plain"),
+                                                ("b", "miccer")]
+
+
+def test_jam_class_preferred_over_earlier_unscored_role():
+    gs, grants = _unscored_gs(
+        Role("recorder", RoleClass.SHARED, None, False),
+        Role("jammer", RoleClass.JAM, None, False))
+    gs.hello("a", "", "", None)
+    gs.request_start(None, "terrarium", "test")
+    assert [(d, r.role) for d, r in grants] == [("a", "jammer")]

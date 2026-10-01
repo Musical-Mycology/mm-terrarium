@@ -1,6 +1,6 @@
 from control.instrument import DEFAULTSHROOM, TUNESHROOM
-from control.jam_role import (SOLO_PREFIX, bit_jam_role, is_solo_role,
-                              solo_event, solo_role)
+from control.jam_role import (SOLO_PREFIX, is_solo_role,
+                              solo_event, solo_role, unscored_roles)
 from control.roles import Role, RoleClass, RoleTable
 
 
@@ -26,12 +26,16 @@ def test_solo_role_manifest_is_a_copy():
     assert "x" not in TUNESHROOM.solo.light_manifest
 
 
-def test_bit_jam_role():
+def test_unscored_roles_jam_first_then_declaration_order():
+    shared1 = Role("s1", RoleClass.SHARED, None, False)
+    scored = Role("p", RoleClass.UNIQUE, 1, True)
+    uniq = Role("u", RoleClass.UNIQUE, 1, False)
     jam = Role("jammer", RoleClass.JAM, None, False)
-    t = RoleTable(roles={"p": Role("p", RoleClass.UNIQUE, 1, True),
-                         "jammer": jam}, node_map={})
-    assert bit_jam_role(t) is jam
-    assert bit_jam_role(RoleTable(roles={}, node_map={})) is None
+    room = Role("fixture", RoleClass.ROOM, None, False)
+    t = RoleTable(roles={"s1": shared1, "p": scored, "u": uniq,
+                         "fixture": room, "jammer": jam}, node_map={})
+    assert unscored_roles(t) == [jam, shared1, uniq]
+    assert unscored_roles(RoleTable(roles={}, node_map={})) == []
 
 
 def test_solo_event():

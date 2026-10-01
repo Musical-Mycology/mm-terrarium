@@ -184,9 +184,10 @@ a dev that already holds a role does nothing new.
 
 Resolved per device by `control/jam_role.py`:
 
-1. If the Bit's role table has a `JAM`-class role, every jammer gets it
-   (today's capacity and `requires` rules apply; a `requires` miss falls to
-   step 2 for that dev, logged).
+1. The Bit's first fitting unscored role: JAM-class roles first, then the
+   Bit's other unscored (SHARED or UNIQUE) roles in declaration order,
+   skipping a full role and one whose `requires` the carried instrument
+   fails (logged). ROOM-class roles are never candidates.
 2. Else a synthesized **solo role** for that device's carried instrument:
    - name `solo`, class `jam`, `scored = False`, no capacity;
    - `light_manifest` = `instrument.solo.light_manifest` if the instrument
@@ -477,4 +478,8 @@ All from the review, each with a test in section 7.1:
 - **UDP plus resend on mismatch** (the fallback if plan task 1 finds Arco
   does not relay TCP to o2lite clients): hello carries the held round and
   role, Control resends `/role` on mismatch; recovery up to 5 s.
+- JAM-class-only jam role: production Bits (CaptureBit, MinigameBit, Rev1Bit)
+  declare only unscored non-JAM roles, so their handlers would never run for
+  non-validated devices; decided against in favour of first fitting unscored
+  role.
 - TCP plus a role ack verb: Console visibility, one more verb; deferred.

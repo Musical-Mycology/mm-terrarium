@@ -20,8 +20,8 @@ from control.device_pool import DevicePool
 from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
                                  InstrumentRequirement, cue_kind, satisfies)
-from control.jam_role import (bit_jam_role, is_solo_role, solo_event,
-                              solo_role)
+from control.jam_role import (is_solo_role, solo_event, solo_role,
+                              unscored_roles)
 from control.lobby import (DEFAULT_LOBBY, FEEDBACK_REFUSED, LobbyState,
                            StartRequested, TERRARIUM_ADMIN)
 from control.registration import JoinResult, RegistrationState
@@ -692,18 +692,24 @@ class GameServer:
 
     def _jam_for(self, dev: str):
         """The jam role `dev` gets at RUNNING (spec section 3.7): the Bit's
-        own JAM-class role, unless its `requires` refuses this dev's
-        carried instrument, else a solo role synthesized for it."""
-        role = bit_jam_role(self.registration.role_table)
+        first fitting unscored role (JAM class first), skipping a full role
+        and one whose `requires` the carried instrument fails, else a solo
+        role synthesized for it."""
         carried = getattr(self.devices.get(dev), "carried", None) \
             or DEFAULTSHROOM
-        if role is not None and role.requires is not None:
-            req = self._slot_requirements.get(role.requires)
-            if req is not None and satisfies(carried, req) is not None:
-                logger.info("jam role %s refuses %s; using solo",
-                            role.name, dev)
-                role = None
-        return role if role is not None else solo_role(carried)
+        counts = {name: n for name, n, _cap in self.registration.counts()}
+        for role in unscored_roles(self.registration.role_table):
+            if role.capacity is not None \
+                    and counts.get(role.name, 0) >= role.capacity:
+                continue
+            if role.requires is not None:
+                req = self._slot_requirements.get(role.requires)
+                if req is not None and satisfies(carried, req) is not None:
+                    logger.info("jam role %s refuses %s; trying next",
+                                role.name, dev)
+                    continue
+            return role
+        return solo_role(carried)
 
     def _grant(self, dev: str, role) -> None:
         """Compose `dev`'s role blob, tell the Bit (guarded) and hand the
