@@ -17,6 +17,7 @@ from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.roles import Role, RoleClass, RoleTable
 from control.rooms import Room
 from control.state import State
+from tests.helpers_admit import admit, admit_running
 from tests.instrument_fixtures import GENERIC_SURFACE
 
 LIGHT_ONLY = Instrument(
@@ -171,7 +172,7 @@ class PlayerSlotBit(Bit):
     @property
     def role_table(self):
         role = Role(name="player", role_class=RoleClass.SHARED,
-                    capacity=None, scored=False, requires="player")
+                    capacity=None, scored=True, requires="player")
         return RoleTable(roles={"player": role},
                          node_map={"node1": ("player",)})
 
@@ -187,7 +188,7 @@ class UnsatisfiableSlotBit(Bit):
     @property
     def role_table(self):
         role = Role(name="player", role_class=RoleClass.SHARED,
-                    capacity=None, scored=False, requires="player")
+                    capacity=None, scored=True, requires="player")
         return RoleTable(roles={"player": role},
                          node_map={"node1": ("player",)})
 
@@ -203,9 +204,19 @@ class RequiresLessBit(Bit):
     @property
     def role_table(self):
         role = Role(name="player", role_class=RoleClass.SHARED,
-                    capacity=None, scored=False)
+                    capacity=None, scored=True)
         return RoleTable(roles={"player": role},
                          node_map={"node1": ("player",)})
+
+
+def _grant_at_start(gs, dev, node):
+    """Handshake in SETUP only validates; the composed grant (slot,
+    instrument, config) is delivered to the on_grant sink at start
+    (spec 3.6)."""
+    grants = []
+    gs.on_grant = lambda d, result: grants.append((d, result))
+    admit_running(gs, dev, node)
+    return dict(grants)[dev]
 
 
 def test_join_granted_when_carried_instrument_satisfies_slot():
@@ -213,8 +224,7 @@ def test_join_granted_when_carried_instrument_satisfies_slot():
     # instrument-wire) satisfies gesture.tap same as TUNESHROOM did.
     gs = GameServer({"PlayerSlotBit": PlayerSlotBit})
     gs.load_bit("PlayerSlotBit")
-    gs.devices.hello("dev1", "device-one", "1.0")
-    result = gs.join("dev1", "node1")
+    result = _grant_at_start(gs, "dev1", "node1")
     assert result.granted
     assert result.slot == "player"
     assert result.instrument == "defaultshroom"
@@ -229,16 +239,15 @@ def test_join_granted_when_carried_instrument_satisfies_slot():
 def test_join_refused_with_reason_when_contract_unsatisfied():
     gs = GameServer({"UnsatisfiableSlotBit": UnsatisfiableSlotBit})
     gs.load_bit("UnsatisfiableSlotBit")
-    gs.devices.hello("dev1", "device-one", "1.0")
-    result = gs.join("dev1", "node1")
+    result = admit(gs, "dev1", "node1")
     assert not result.granted
     assert "light.surface" in result.reason
 
     # The role's count must not have been consumed by the refused join --
     # a second (equally incapable, but that's not what's under test here)
     # device can still attempt and the role is still open, not at capacity.
-    gs.devices.hello("dev2", "device-two", "1.0")
-    result2 = gs.join("dev2", "node1")
+    gs.hello("dev2", "device-two", "1.0")
+    result2 = admit(gs, "dev2", "node1")
     assert not result2.granted
     assert result2.reason == result.reason  # same contract reason, not "at capacity"
 
@@ -246,8 +255,7 @@ def test_join_refused_with_reason_when_contract_unsatisfied():
 def test_role_without_requires_is_unchanged():
     gs = GameServer({"RequiresLessBit": RequiresLessBit})
     gs.load_bit("RequiresLessBit")
-    gs.devices.hello("dev1", "device-one", "1.0")
-    result = gs.join("dev1", "node1")
+    result = _grant_at_start(gs, "dev1", "node1")
     assert result.granted
     assert result.slot is None
     assert result.instrument is None
@@ -273,8 +281,7 @@ def test_testbit_player_join_is_granted_with_defaultshroom_carrier():
     # TUNESHROOM did.
     gs = GameServer({"TestBit": TestBit})
     gs.load_bit("TestBit")
-    gs.devices.hello("dev1", "device-one", "1.0")
-    result = gs.join("dev1", "TEST_PLAYER_NODE")
+    result = _grant_at_start(gs, "dev1", "TEST_PLAYER_NODE")
     assert result.granted
     assert result.slot == "player"
     assert result.instrument == "defaultshroom"
@@ -286,17 +293,21 @@ def test_testbit_jammer_join_ships_the_instrument_section():
     # (DEFAULTSHROOM-carrying) device.
     gs = GameServer({"TestBit": TestBit})
     gs.load_bit("TestBit")
-    gs.devices.hello("dev1", "device-one", "1.0")
-    result = gs.join("dev1", "TEST_JAM_NODE")
-    assert result.granted
+    # Spec 3.6: a RUNNING first hello is granted the jam role at once.
+    gs.run()
+    grants = []
+    gs.on_grant = lambda d, res: grants.append((d, res))
+    gs.hello("dev1", "device-one", "1.0")
+    result = dict(grants)["dev1"]
+    assert result.granted and result.role == "jammer"
     assert result.config["instrument"]["name"] == "defaultshroom"
 
 
 def test_testbit_player_join_refused_when_carrier_lacks_gesture_tilt():
     gs = GameServer({"TestBit": TestBit})
     gs.load_bit("TestBit")
-    gs.devices.hello("dev1", "device-one", "1.0")
+    gs.hello("dev1", "device-one", "1.0")
     gs.devices.get("dev1").carried = GESTURELESS_INSTRUMENT
-    result = gs.join("dev1", "TEST_PLAYER_NODE")
+    result = admit(gs, "dev1", "TEST_PLAYER_NODE")
     assert not result.granted
     assert "gesture.tilt" in result.reason
