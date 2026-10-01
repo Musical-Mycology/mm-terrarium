@@ -3029,3 +3029,84 @@ def test_a_raising_outputs_factory_never_breaks_the_room(monkeypatch):
 
     agent = DeviceLinkAgent(gs, FakeServer(), clock=lambda: 100.0, outputs_for=boom)
     agent._render_room()                       # must not raise
+
+
+# --- contract v3 handshake (spec 2026-10-01) over the real transport -------
+# These run the agent over O2LiteTransport + FakeO2Lite, so the down
+# transport (tcp vs udp) of each reply is observable (boundary rule 5).
+
+from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+
+
+@pytest.fixture
+def agent_with_room(monkeypatch):
+    """The Room-loaded lobby rig of tests/test_lobby_agent.py (TestBit in
+    SETUP, lobby enabled, admin start), over the o2lite transport."""
+    from tests.test_lobby_agent import _admin_cfg, _rig
+    fake = FakeO2Lite(now=100.0)
+    fake.set_services("actl")
+    transport = O2LiteTransport()
+    transport.start(fake)
+    gs, _server, agent, _audio, _sessions, _clk = _rig(
+        monkeypatch, _admin_cfg(), server=transport, clk=fake.time_get)
+    return agent, fake, gs
+
+
+def deliver_hello(fake, dev):
+    fake.deliver("/game/hello", "sss", (dev, "sim", "1"))
+
+
+def addrs(fake, address):
+    """Every message sent to `address`, as its argument tuple."""
+    return [s[3] for s in fake.sent if s[0] == address]
+
+
+def test_invite_sends_handshake_over_tcp(agent_with_room):
+    agent, fake, gs = agent_with_room          # SETUP, lobby enabled
+    deliver_hello(fake, "ie1")
+    agent.poll()
+    sent = [(s[0], s[3], c) for s, c in zip(fake.sent, fake.channels)
+            if s[0] == "/ie1/handshake"]
+    assert sent and sent[0][1] == (gs.round_id,) and sent[0][2] == "tcp"
+
+
+def test_ack_validates_then_role_at_start(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.deliver("/game/handshake", "sss", ("ie1", gs.round_id, ""))
+    agent.poll()
+    assert addrs(fake, "/ie1/validated") and not addrs(fake, "/ie1/role")
+    gs.request_start(None, "terrarium", "test"); agent.poll()
+    assert addrs(fake, "/ie1/role")
+
+
+def test_join_is_retired(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.deliver("/game/join", "ss", ("ie1", "TEST_PLAYER_NODE"))
+    agent.poll()
+    err = [s[3] for s in fake.sent if s[0] == "/ie1/error"]
+    assert ("join", "retired in contract v3: use /game/handshake") in err
+
+
+def test_tap_is_never_a_handshake(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.deliver("/game/tap", "sffi", ("ie1", 1.0, 50.0, 2)); agent.poll()
+    assert "ie1" not in gs.registration.validated
+
+
+def test_room_only_on_first_contact(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    n = len(addrs(fake, "/ie1/room"))
+    deliver_hello(fake, "ie1"); agent.poll()
+    assert len(addrs(fake, "/ie1/room")) == n
+
+
+def test_reaped_unjoined_device_leaves_no_transport_state(agent_with_room):
+    agent, fake, gs = agent_with_room
+    deliver_hello(fake, "ie1"); agent.poll()
+    fake.set_time(fake.time_get() + 30); agent.poll()
+    assert "ie1" not in agent.transport._devs
+    assert "ie1" not in agent.canvas_urls()

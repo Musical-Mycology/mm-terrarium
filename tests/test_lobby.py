@@ -1,6 +1,6 @@
 """control/lobby.py: the pure lobby core (spec section 2, 5)."""
 from control.lobby import (
-    CeremonySlots, DEFAULT_LOBBY, DoubleTapDetector, FEEDBACK_ACCEPT,
+    CeremonySlots, DEFAULT_LOBBY, FEEDBACK_ACCEPT,
     FEEDBACK_MINIMUM, FEEDBACK_NONE, FEEDBACK_REFUSED, InviteSchedule,
     LobbyConfig, NOTE_SCALE, TERRARIUM_ADMIN,
     hue_drift_cc, lobby_light_manifest, scale_note)
@@ -10,8 +10,7 @@ from control.start_condition import decide_start
 def test_reserved_admin_id_and_defaults():
     assert TERRARIUM_ADMIN == "terrarium"
     assert DEFAULT_LOBBY == LobbyConfig(enabled=True, invite_interval_s=5.0,
-                                        ceremony_gap_s=1.0,
-                                        double_tap_window_s=1.5)
+                                        ceremony_gap_s=1.0)
 
 
 def test_scale_climbs_a_major_and_wraps_every_seven():
@@ -89,18 +88,6 @@ def test_start_rule_minimum_not_met_gives_two_red():
 def test_start_rule_zero_minimum_allows_an_empty_start():
     d = _decide(scored=0, min_scored=0)
     assert d.accepted
-
-
-def test_double_tap_from_count_two_or_two_taps_in_window():
-    det = DoubleTapDetector(1.5)
-    assert det.observe("d", 2, 10.0) is True
-    assert det.observe("d", 1, 20.0) is False
-    assert det.observe("d", 1, 21.4) is True
-    assert det.observe("d", 1, 30.0) is False
-    assert det.observe("d", 1, 31.6) is False       # outside the window
-    assert det.observe("d", 1, 31.7) is True        # but paired with 31.6
-    det.forget("d")
-    assert det.observe("d", 1, 40.0) is False
 
 
 def test_invite_schedule_flashes_now_then_every_interval():

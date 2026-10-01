@@ -35,7 +35,7 @@ from pathlib import Path
 
 from control.boot_config import BootConfig
 from control.catalog import load_catalog
-from control.lobby import LobbyConfig, TERRARIUM_ADMIN
+from control.lobby import TERRARIUM_ADMIN
 from control.role_config import carried_instrument_view
 from contract_kit.recorder import CUE_HORIZON_S
 from contract_kit.scenarios import ALL_SCENARIOS
@@ -318,8 +318,7 @@ STEP_SCHEMA = {
 # keyed by the same names, each stating what the number means and its
 # unit. Checked against the code or the design spec, not guessed:
 # hello_interval_s and stale_timeout_s against devicelink/contract.py and
-# control/boot_config.py; lobby_double_tap_window_s against
-# control/lobby.py's DoubleTapDetector; cue_horizon_s against
+# control/boot_config.py; cue_horizon_s against
 # control/boot_config.py's own BootConfig.cue_horizon comment and
 # contract_kit/recorder.py's CUE_HORIZON_S docstring; bench_tolerance_ms
 # against BENCH_TOLERANCE_MS's own comment above.
@@ -332,11 +331,6 @@ LIFECYCLE_NOTES = {
         "Seconds of silence after which Control has dropped a device, "
         "which must join again on its next hello (see "
         "`step_schema.kinds.link.semantics`)."
-    ),
-    "lobby_double_tap_window_s": (
-        "Seconds within which two count-1 taps from the same device in "
-        "the lobby are paired into a join; a single tap already carrying "
-        "count >= 2 joins immediately regardless of this window."
     ),
     "cue_horizon_s": (
         "Seconds of lead time Control adds when it schedules a cue, "
@@ -506,7 +500,6 @@ def export_contract(*, commit: str,
         "lifecycle": {
             "hello_interval_s": HELLO_INTERVAL_S,
             "stale_timeout_s": _stale_timeout_s(),
-            "lobby_double_tap_window_s": LobbyConfig().double_tap_window_s,
             "cue_horizon_s": CUE_HORIZON_S,
             "bench_tolerance_ms": dict(BENCH_TOLERANCE_MS),
         },

@@ -27,15 +27,20 @@ def _admin_cfg(**start):
     return replace(cfg, start=replace(cfg.start, **fields))
 
 
-def _rig(monkeypatch, config=None, admin_devices=()):
-    clk = _Clock(100.0)
+def _rig(monkeypatch, config=None, admin_devices=(), *, server=None,
+         clk=None):
+    """A Room-loaded TestBit in SETUP with both fixtures bound. `server`
+    and `clk` default to a FakeServer and a hand-advanced clock; the
+    transport tests in tests/test_devicelink_agent.py pass an
+    O2LiteTransport over FakeO2Lite and that fake's own clock."""
+    clk = clk if clk is not None else _Clock(100.0)
     gs = GameServer({"TestBit": TestBit}, clock=clk, admin_devices=admin_devices)
     gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
     gs.room.bound["main"] = "sim-main"
     gs.room.bound["accent"] = "sim-accent"
     audio = _FakeAudioBridge()
     sessions = _fake_sessions(monkeypatch)
-    server = FakeServer()
+    server = server if server is not None else FakeServer()
     agent = DeviceLinkAgent(gs, server, room_audio=audio, clock=clk)
     gs.load_bit("TestBit", config=config)
     return gs, server, agent, audio, sessions, clk

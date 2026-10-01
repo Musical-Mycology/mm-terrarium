@@ -21,7 +21,7 @@ import logging
 import time
 
 from control.wire_json import dumps as _json_dumps
-from devicelink.contract import GAME_VERBS, down_transport
+from devicelink.contract import GAME_VERBS, RETIRED_UP_VERBS, down_transport
 
 logger = logging.getLogger(__name__)
 
@@ -446,9 +446,10 @@ class O2LiteTransport:
                 f"must start after arco.initialize() returns")
         self._o2 = o2lite
         o2lite.set_services(self._services)
-        for verb in GAME_VERBS:
+        for verb in GAME_VERBS + RETIRED_UP_VERBS:
             # typespec None means "match any": a verb's shape is the Bit's
-            # business, and GameServer.data already validates it.
+            # business, and GameServer.data already validates it. A retired
+            # verb is registered only so the agent can answer it.
             o2lite.method_new(f"/game/{verb}", None, True,
                               self._on_message, None)
         if not verify_service_ownership(o2lite, "game",

@@ -161,7 +161,7 @@ class DeviceLinkAgent:
         # ever populated for a dev currently mid-fade (set in _handle()
         # below) and always cleared by _finish_release, so it can never
         # outlive the fade it was recorded for. Exists because _on_hello has
-        # no equivalent of _on_join's `self._closing.pop(dev, None)`: a
+        # no equivalent of _on_grant's `self._closing.pop(dev, None)`: a
         # rejoin already rebuilds self.bridges[dev] from scratch, so a
         # stale fade's later _finish_release finds no matching entry in
         # self._closing to act on and is a no-op for that dev, but a
@@ -179,7 +179,7 @@ class DeviceLinkAgent:
         self._last_breath: dict[str, int] = {}
         # devs whose granted role set Role.breath=False (control/roles.py):
         # the Bit drives cc:11 itself and the breath would overwrite it on
-        # the same lane every tick. Recorded at _on_join from the JoinResult
+        # the same lane every tick. Recorded at _on_grant from the JoinResult
         # and cleared at _finish_release, exactly the way _last_breath is,
         # so a rejoin under a different role always re-reads the flag.
         self._breathless: set[str] = set()
@@ -233,6 +233,12 @@ class DeviceLinkAgent:
         # Lobby (spec 4, 5): alive only while the engine is in SETUP and
         # the loaded Bit's [lobby] enabled is true. Built by _enter_lobby.
         self._lobby: LobbyRuntime | None = None
+        # A stopped runtime still holding queued ceremony thunks (a bell
+        # or chime for a validation that landed just before start): poll()
+        # keeps ticking it until its queue is empty, then drops it.
+        self._draining_lobby: LobbyRuntime | None = None
+        # The validated set as of the last registration change: the
+        # ceremony celebrates each dev that newly appears in it.
         self._lobby_known: set[str] = set()
         # dev ids already refused by _handle's reserved-identity guard, so a
         # device sending on a loop is logged once rather than once a tick.
@@ -270,6 +276,7 @@ class DeviceLinkAgent:
         self._setup_room()
         game_server.add_observer(self)
         game_server.on_release = self._on_release
+        game_server.on_grant = self._on_grant
         game_server.on_light_cue = self._on_light_cue
         game_server.on_play_cue = self._on_play_cue
         game_server.on_solid_cue = self._on_solid_cue
@@ -415,7 +422,8 @@ class DeviceLinkAgent:
         self._lobby = LobbyRuntime(gs.lobby_config(), self._lobby_sinks(),
                                    self._clock,
                                    room_program=self._bit_room_program())
-        self._lobby_known = set(gs.registration.assignments) if gs.registration else set()
+        self._lobby_known = (set(gs.registration.validated)
+                             if gs.registration else set())
         self._lobby.start()
         self._sync_lobby_state()
 
@@ -428,6 +436,11 @@ class DeviceLinkAgent:
         if lobby is None:
             return
         lobby.stop()
+        # An in-flight ceremony plays out (spec 2026-10-01 section 5.5);
+        # only on the way into RUNNING, since an unload takes the Room's
+        # sessions and the Bit with it.
+        self._draining_lobby = (lobby if restore_light and lobby.draining()
+                                else None)
         if restore_light:
             for name, st in self._fixtures.items():
                 light = self._bit_fixture_light(name)
@@ -475,51 +488,20 @@ class DeviceLinkAgent:
             if self._fixture_key(dev) not in self._muted:
                 self._send(dev, protocol.play_event(dev, name, params))
 
+        def send_handshake(dev):
+            # No round, nothing to validate against: an invite without a
+            # handshake is only the white flash.
+            if gs.round_id is not None:
+                self._send(dev, protocol.handshake_event(dev, gs.round_id))
+
         return LobbySinks(
             fixture_names=lambda: list(self._fixtures),
             bound_dev=lambda name: fixture_dev(name) if name in self._fixtures else None,
             feed_light=feed_light, feed_audio=feed_audio,
             set_audio_control=set_audio_control, play_note=play_note,
             set_override=set_override, send_play=send_play,
-            request_join=self._handshake_join,
+            send_handshake=send_handshake,
             announce=gs.notify_lobby)
-
-    def _handshake_join(self, dev: str, client) -> None:
-        """A double tap from an invited device joins it, exactly as if the
-        device had sent /game/join itself."""
-        node = self._default_scored_node()
-        if node is None:
-            logger.warning("handshake for %s: the Bit declares no scored node",
-                           dev)
-            return
-        self._on_join(client, dev, [dev, node])
-
-    def _default_scored_node(self) -> str | None:
-        """The node a handshake joins: the manifest's default_join_role,
-        else the first manifest node whose role is scored, else the first
-        role-table node whose first role is scored. Never a jam node."""
-        gs = self.game_server
-        table = gs.registration.role_table if gs.registration is not None else None
-        cfg = getattr(gs.bit, "config", None) if gs.bit is not None else None
-        if cfg is not None and table is not None and cfg.launch.default_join_role:
-            # Only when it actually names a SCORED role in the live table.
-            # default_join_role is the launcher's hint for a device picking
-            # its own node, and a Bit is free to point it at a jam role --
-            # a handshake never joins one.
-            declared = table.roles.get(cfg.launch.default_join_role)
-            node = cfg.node_for(cfg.launch.default_join_role)
-            if declared is not None and declared.scored and node is not None:
-                return node
-        if cfg is not None and table is not None:
-            for role_name, node in cfg.launch.nodes:
-                role = table.roles.get(role_name)
-                if role is not None and role.scored:
-                    return node
-        if table is not None:
-            for node, roles in table.node_map.items():
-                if roles and table.roles[roles[0]].scored:
-                    return node
-        return None
 
     def _flash_fixtures_now(self, rgb, count: int) -> None:
         """Feedback flashes that outlive the lobby: the accept flash fires
@@ -577,17 +559,28 @@ class DeviceLinkAgent:
             reply.done.set()
 
     def _tick_lobby(self) -> None:
+        draining = self._draining_lobby
+        if draining is not None:
+            # A stopped runtime from the last SETUP: tick it until its
+            # queued ceremony has played out, then let it go.
+            draining.tick()
+            if not draining.draining():
+                self._draining_lobby = None
         lobby = self._lobby
         if lobby is None:
             return
         gs = self.game_server
-        joined = set(gs.registration.assignments) if gs.registration else set()
+        reg = gs.registration
+        joined = (set(reg.assignments) | set(reg.validated)) if reg else set()
         fixture_devs = set(gs.room.bound.values()) if gs.room is not None else set()
-        for info in gs.devices.all():
-            dev = info.dev
-            if dev in joined or dev in fixture_devs or dev in self._closing:
-                continue
-            lobby.consider_invite(dev)
+        # A Bit with no scored node has nothing to validate: no handshake
+        # and no white invite, which could never be accepted.
+        if gs.default_scored_node() is not None:
+            for info in gs.devices.all():
+                dev = info.dev
+                if dev in joined or dev in fixture_devs or dev in self._closing:
+                    continue
+                lobby.consider_invite(dev)
         lobby.tick()
 
     def _grant_room_audio(self, role) -> None:
@@ -826,7 +819,8 @@ class DeviceLinkAgent:
             except Exception:
                 logger.exception("devicelink inbound handling failed; "
                                  "dropping frame")
-        self.game_server.reap_stale(self._stale_timeout)
+        for dev in self.game_server.reap_stale(self._stale_timeout):
+            self._forget_reaped(dev)
         self._tick_overrides()
         self._feed_breath()
         self._drain_start_requests()
@@ -841,6 +835,21 @@ class DeviceLinkAgent:
         self._render_frames()
         self._render_room()
         self._tick_audio()
+
+    def _forget_reaped(self, dev: str) -> None:
+        """A reaped dev that never held a role (no bridge, not mid-fade)
+        gets no on_release, so nothing else forgets its transport binding,
+        canvas URL or lobby invite (spec 2026-10-01 section 5.5). A dev
+        with a bridge is released through on_release and its fade."""
+        if dev in self.bridges or dev in self._closing:
+            return
+        self.transport.drop_dev(dev)
+        self._canvas_urls.pop(dev, None)
+        self._overrides.pop(dev, None)
+        self._override_only.discard(dev)
+        self._last_frames.pop(dev, None)
+        if self._lobby is not None:
+            self._lobby.forget(dev)
 
     def _tick_overrides(self) -> None:
         """Drop any solid override whose duration has elapsed, before this
@@ -1231,8 +1240,11 @@ class DeviceLinkAgent:
             self._closing_revived.add(dev)
         if verb == "hello":
             self._on_hello(client, dev, env.args)
+        elif verb == "handshake":
+            self._on_handshake(client, dev, env.args)
         elif verb == "join":
-            self._on_join(client, dev, env.args)
+            self._send(dev, protocol.error_event(
+                dev, "join", "retired in contract v3: use /game/handshake"))
         elif verb == "canvas":
             self._on_canvas(dev, env.args)
         else:
@@ -1252,10 +1264,8 @@ class DeviceLinkAgent:
         # nothing else re-fires devices_changed for a non-fixture dev, so
         # Console tabs would otherwise show url null until an unrelated
         # device event. Room-fixture devs need no poke: poll()'s room diff
-        # already covers them. GameServer exposes no public single-event
-        # notify, only add_observer for registration, so this reaches into
-        # its private _notify -- see control/engine.py's add_observer.
-        self.game_server._notify("on_devices_change")
+        # already covers them.
+        self.game_server.notify_devices_changed()
 
     def canvas_urls(self) -> dict:
         """A copy of the live dev -> canvas-url map, for the Console."""
@@ -1266,31 +1276,52 @@ class DeviceLinkAgent:
         protoversion = args[2] if len(args) > 2 else ""
         instrument = args[3] if len(args) > 3 else None
         self.transport.bind_dev(dev, client, protoversion=protoversion)
+        # /room on first contact only (spec 2026-10-01 section 5.5): a
+        # heartbeat re-hello is proof of life, and every state or
+        # registration change already broadcasts a fresh /room.
+        new = self.game_server.devices.get(dev) is None
         self.game_server.hello(dev, name, protoversion, instrument)
-        self._send(dev, protocol.room_event(dev, self._room_blob()))
+        if new:
+            self._send(dev, protocol.room_event(dev, self._room_blob()))
 
-    def _on_join(self, client, dev: str, args: list) -> None:
-        if len(args) < 2:
-            self._send(dev, protocol.error_event(dev, "join", "missing node"))
+    def _on_handshake(self, client, dev: str, args: list) -> None:
+        """Received Handshake (spec 2026-10-01 section 3.4). A scored
+        grant in SETUP is a validation only: /<dev>/validated now, the
+        role at RUNNING through _on_grant. A Room-node grant binds dev to
+        its fixture. A stale round is dropped silently; every other
+        refusal is a /<dev>/deny."""
+        try:
+            _dev, round_id, node = protocol.parse_handshake_args(args)
+        except ValueError as exc:
+            logger.warning("dropping malformed handshake from %s: %s", dev, exc)
             return
         self.transport.bind_dev(dev, client)
-        result = self.game_server.join(dev, args[1])
-        if not result.granted:
-            self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
-            self._notify_join_denied(dev, args[1], result.reason)
-            return
-        if result.role_class == RoleClass.ROOM:
+        result = self.game_server.handshake(dev, round_id, node)
+        if result.granted and result.role_class == RoleClass.ROOM:
             # A ROOM grant binds dev to a Room fixture (GameServer._bind_room)
             # and carries no role config, so there is no bridge to build and
             # nothing to tell the device: its fixture's frames start arriving
-            # on /<dev>/leds. Registration already released any player role
-            # dev held (a role switch), so drop that role's bridge too, or dev
-            # gets two LED streams (spec 2026-09-25
-            # lobby-flash-mute-and-room-bridge section 3.2).
+            # on /<dev>/leds. A not-yet-bound fixture may already hold a jam
+            # role from a RUNNING walk-up; registration released it, so drop
+            # that role's bridge too, or dev gets two LED streams (spec
+            # 2026-09-25 lobby-flash-mute-and-room-bridge section 3.2).
             self._drop_player_bridge(dev)
             if self._lobby is not None:
                 self._lobby.forget(dev)
             return
+        if result.granted:
+            self._send(dev, protocol.validated_event(
+                dev, self.game_server.round_id, result.role))
+            return
+        if result.reason is None:
+            return        # stale round: dropped, logged by the engine
+        self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
+        self._notify_join_denied(dev, node, result.reason)
+
+    def _on_grant(self, dev: str, result) -> None:
+        """GameServer.on_grant: a new non-ROOM assignment (materialized at
+        run, or a RUNNING walk-up) with its composed role config. Build
+        dev's bridge and send /<dev>/role."""
         bridge = DeviceBridge(capability=self._capability, clock=self._clock)
         try:
             bridge.on_grant(result)
@@ -1318,8 +1349,6 @@ class DeviceLinkAgent:
         # in _closing -- so drop it explicitly rather than leave a stale
         # entry sitting around for a dev that may never be released again.
         self._closing_revived.discard(dev)
-        if self._lobby is not None:
-            self._lobby.forget(dev)
         self._send(dev, protocol.role_event(dev, result.config))
 
     def _drop_player_bridge(self, dev: str) -> None:
@@ -1350,23 +1379,15 @@ class DeviceLinkAgent:
         case -- so the transport must pass it through rather than invent
         anything.
 
-        Two verbs never reach GameServer.data. `start` is the device face of
-        the start authority (spec section 2) and goes to request_start. And a
-        `tap` from a device the lobby has invited is a handshake gesture, not
-        gameplay -- that device has no role yet, so data() could only refuse
-        it.
+        Only `start` bypasses GameServer.data: it is the device face of the
+        start authority (spec section 2) and goes to request_start. A tap is
+        always gameplay (spec 2026-10-01: the double-tap handshake is gone).
         """
         if verb == "start":
             key = args[1] if len(args) > 1 and isinstance(args[1], str) else ""
             reason = self.game_server.request_start(key, dev, f"device:{dev}")
             if reason is not None:
                 self._send(dev, protocol.error_event(dev, "start", reason))
-            return
-        if (verb == "tap" and self._lobby is not None
-                and self._lobby.is_invited(dev)):
-            count = int(args[3]) if len(args) > 3 else 1
-            stamp = gesture_time if gesture_time and gesture_time > 0 else self._clock()
-            self._lobby.observe_tap(dev, count, stamp, client)
             return
         reason = self.game_server.data(dev, verb, args,
                                        gesture_time=gesture_time)
@@ -1488,7 +1509,7 @@ class DeviceLinkAgent:
         began: a hello-only reconnect -- a bare heartbeat resend, or a
         genuine reconnect that never rejoins -- can land while a prior
         release's fade is still draining, and _on_hello has no equivalent
-        of _on_join's `self._closing.pop(dev, None)` rejoin guard. Left
+        of _on_grant's `self._closing.pop(dev, None)` rejoin guard. Left
         unconditional, this call would drop the FRESH connection _on_hello
         just rebound, not the stale one the fade actually belongs to.
         Everything else here still runs unconditionally, including the
@@ -1643,22 +1664,21 @@ class DeviceLinkAgent:
         self._send(dev, protocol.play_event(dev, name, params))
 
     def on_registration_change(self) -> None:
-        """A scored join is what the lobby's ceremony celebrates (spec 4),
-        so the diff against the last-known assignment set is taken here --
-        the engine reports that a registration changed, not which way."""
+        """A validation is what the lobby's ceremony celebrates (spec
+        2026-10-01 section 3.4), so the diff against the last-known
+        validated set is taken here -- the engine reports that a
+        registration changed, not which way. The one site that forgets a
+        validated dev's invite."""
         self._broadcast_room()
         lobby = self._lobby
         if lobby is None:
             return
         gs = self.game_server
-        assignments = gs.registration.assignments if gs.registration else {}
-        for dev in set(assignments) - self._lobby_known:
-            _node, role_name, _cls = assignments[dev]
-            role = gs.registration.role_table.roles.get(role_name)
-            if role is not None and role.scored:
-                lobby.forget(dev)
-                lobby.on_scored_join(dev)
-        self._lobby_known = set(assignments)
+        validated = gs.registration.validated if gs.registration else {}
+        for dev in set(validated) - self._lobby_known:
+            lobby.forget(dev)
+            lobby.on_scored_join(dev)
+        self._lobby_known = set(validated)
         self._sync_lobby_state()
 
     def on_start_requested(self, record) -> None:

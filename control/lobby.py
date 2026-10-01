@@ -60,7 +60,6 @@ class LobbyConfig:
     enabled: bool = True
     invite_interval_s: float = 5.0
     ceremony_gap_s: float = 1.0
-    double_tap_window_s: float = 1.5
     # Optional cap on validated (scored) devices below the scored roles'
     # capacity sum (spec 2026-10-01 section 3.4). None means no extra cap.
     max_scored: int | None = None
@@ -117,32 +116,6 @@ class StartRequest:
     key: str
     dev: str | None
     source: str
-
-
-class DoubleTapDetector:
-    """Two taps from one device within the window, or one tap carrying
-    count >= 2, is a double tap."""
-
-    def __init__(self, window_s: float) -> None:
-        self._window = window_s
-        self._last: dict[str, float] = {}
-
-    def observe(self, dev: str, count: int, stamp: float) -> bool:
-        if count >= 2:
-            self._last.pop(dev, None)
-            return True
-        prev = self._last.get(dev)
-        self._last[dev] = stamp
-        if prev is not None and 0.0 <= stamp - prev <= self._window:
-            self._last.pop(dev, None)
-            return True
-        return False
-
-    def forget(self, dev: str) -> None:
-        self._last.pop(dev, None)
-
-    def clear(self) -> None:
-        self._last.clear()
 
 
 class InviteSchedule:

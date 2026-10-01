@@ -122,6 +122,14 @@ VERB_TABLE: tuple[VerbRow, ...] = (
 GAME_VERBS: tuple[str, ...] = tuple(
     row.verb for row in VERB_TABLE if row.direction == "up")
 
+# Up verbs a v3 Control no longer accepts but still ANSWERS (spec
+# 2026-10-01 section 3.3: /game/join gets /<dev>/error ["join", "retired
+# in contract v3: use /game/handshake"]). Registered on the o2lite
+# connection beside GAME_VERBS so the old message reaches the agent rather
+# than being dropped unhandled; deliberately not a VERB_TABLE row, so the
+# exported contract never lists it.
+RETIRED_UP_VERBS: tuple[str, ...] = ("join",)
+
 
 def row_for(direction: str, verb: str) -> VerbRow:
     for row in VERB_TABLE:

@@ -23,8 +23,7 @@ from control.lobby import (BELL_DURATION_S, BELL_OFFSET_S, BELL_PROGRAM,
                            FEEDBACK_REFUSED, FIXTURE_FLASH_GAP_S,
                            FIXTURE_FLASH_ON_S, GREEN, GREEN_HUE_CC, HUE_CC,
                            LOBBY_DRONE_KEY, LOBBY_DRONE_VEL, LOBBY_PROGRAM,
-                           RED, WHITE, CeremonySlots, DoubleTapDetector,
-                           InviteSchedule, LobbyConfig, LobbyState,
+                           RED, WHITE, CeremonySlots, InviteSchedule, LobbyConfig, LobbyState,
                            hue_drift_cc, scale_note)
 from control.timed_queue import TimedQueue
 
@@ -39,7 +38,7 @@ class LobbySinks:
     play_note: Callable[[int, int, int, float], None]
     set_override: Callable[[str, tuple, float, float], None]
     send_play: Callable[[str, str, str], None]
-    request_join: Callable[[str, object], None]
+    send_handshake: Callable[[str], None]
     announce: Callable[[str, str], None]
 
 
@@ -56,7 +55,6 @@ class LobbyRuntime:
         self._queue = TimedQueue()
         self._slots = CeremonySlots(CEREMONY_SPAN_S, config.ceremony_gap_s)
         self._invites = InviteSchedule(config.invite_interval_s)
-        self._taps = DoubleTapDetector(config.double_tap_window_s)
         self._last_light: dict[tuple[str, int], int] = {}
         self._last_audio: dict[str, int] = {}
         self._joins = 0
@@ -81,14 +79,22 @@ class LobbyRuntime:
         if self._room_program is not None:
             for name in self._s.fixture_names():
                 self._s.feed_audio(name, 0xC0, int(self._room_program), 0)
-        self._queue = TimedQueue()
+        # The queue is KEPT (spec 2026-10-01 section 5.5): a ceremony
+        # whose validation landed just before start still plays its bell
+        # and chime. tick() drains due thunks before its _running check,
+        # and the agent keeps ticking a stopped runtime while draining().
+        # New invites stop: the schedule is cleared and the agent no
+        # longer calls consider_invite.
         self._invites.clear()
-        self._taps.clear()
         # The de-dupe caches are what a restarted lobby would otherwise
         # measure its first frame against, silencing the opening breath
         # and hue feeds.
         self._last_light.clear()
         self._last_audio.clear()
+
+    def draining(self) -> bool:
+        """Stopped, but queued ceremony or feedback thunks remain."""
+        return not self._running and self._queue.pending() > 0
 
     def set_state(self, state: LobbyState) -> None:
         if state is self._state:
@@ -168,7 +174,7 @@ class LobbyRuntime:
 
     # --- handshake (spec 5) --------------------------------------------
     def consider_invite(self, dev: str) -> None:
-        if self._state is not LobbyState.WAITING:
+        if not self._running or self._state is not LobbyState.WAITING:
             return
         first = not self._invites.invited(dev)
         if not self._invites.due(dev, self._clock()):
@@ -180,19 +186,12 @@ class LobbyRuntime:
             t = now + i * (DEVICE_FLASH_ON_S + DEVICE_FLASH_GAP_S)
             self._at(t, lambda d=dev: self._s.set_override(d, WHITE, 1.0,
                                                            DEVICE_FLASH_ON_S))
+        # Every invite cycle, the first included: the device answers with
+        # /game/handshake once its player accepts (spec section 3.2).
+        self._s.send_handshake(dev)
 
     def is_invited(self, dev: str) -> bool:
         return self._invites.invited(dev)
 
     def forget(self, dev: str) -> None:
         self._invites.forget(dev)
-        self._taps.forget(dev)
-
-    def observe_tap(self, dev: str, count: int, stamp: float, client) -> bool:
-        if not self._invites.invited(dev):
-            return False
-        if not self._taps.observe(dev, count, stamp):
-            return False
-        self._s.announce("handshake", dev)
-        self._s.request_join(dev, client)
-        return True

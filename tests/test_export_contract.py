@@ -15,7 +15,7 @@ pytest.importorskip("luxaeterna")
 
 from control.boot_config import BootConfig
 from control.catalog import load_catalog
-from control.lobby import LobbyConfig, TERRARIUM_ADMIN
+from control.lobby import TERRARIUM_ADMIN
 from control.role_config import carried_instrument_view
 from contract_kit.scenarios import ALL_SCENARIOS
 from devicelink.contract import HELLO_INTERVAL_S, VERB_TABLE, row_for
@@ -162,8 +162,9 @@ def test_lifecycle_comes_from_the_code():
     data = export_contract(commit="abc123")
     assert data["lifecycle"]["hello_interval_s"] == HELLO_INTERVAL_S
     assert data["lifecycle"]["stale_timeout_s"] == _stale_timeout_default()
-    assert (data["lifecycle"]["lobby_double_tap_window_s"]
-            == LobbyConfig().double_tap_window_s)
+    # The double tap is retired in contract v3 (spec 2026-10-01 section
+    # 5.5), and its window with it.
+    assert "lobby_double_tap_window_s" not in data["lifecycle"]
     assert data["lifecycle"]["bench_tolerance_ms"] == {"frame": 50,
                                                        "heartbeat": 1000}
 
@@ -190,7 +191,6 @@ def test_lifecycle_notes_cover_every_lifecycle_key_with_units():
     assert set(notes) == set(data["lifecycle"])
     assert "second" in notes["hello_interval_s"].lower()
     assert "second" in notes["stale_timeout_s"].lower()
-    assert "second" in notes["lobby_double_tap_window_s"].lower()
     assert "second" in notes["cue_horizon_s"].lower()
     assert "millisecond" in notes["bench_tolerance_ms"].lower()
 

@@ -28,7 +28,7 @@ class _Sinks:
         self.notes = []      # (program, key, vel, duration)
         self.overrides = []  # (t, dev, rgb, level, duration)
         self.plays = []      # (dev, name, params)
-        self.joins = []      # (dev, client)
+        self.handshakes = []  # dev, one per /<dev>/handshake invite
         self.events = []     # (event, dev)
         self.t = 0.0
 
@@ -43,7 +43,7 @@ class _Sinks:
             set_override=lambda dev, rgb, lvl, dur: self.overrides.append(
                 (self.t, dev, rgb, lvl, dur)),
             send_play=lambda dev, n, p: self.plays.append((dev, n, p)),
-            request_join=lambda dev, client: self.joins.append((dev, client)),
+            send_handshake=lambda dev: self.handshakes.append(dev),
             announce=lambda ev, dev: self.events.append((ev, dev)),
         )
 
@@ -209,22 +209,47 @@ def test_no_invites_while_full():
     assert not rt.is_invited("ie3")
 
 
-def test_double_tap_from_an_invited_device_requests_the_join():
+def test_every_invite_cycle_sends_the_handshake():
+    # The double tap is retired (spec 2026-10-01 section 5.5): each invite
+    # cycle, the first included, sends /<dev>/handshake beside the flash.
     rt, sinks, clock = _rt()
     rt.start()
     rt.consider_invite("ie3")
-    assert rt.observe_tap("ie3", 1, 50.0, "c3") is False
-    assert rt.observe_tap("ie3", 1, 51.0, "c3") is True
-    assert sinks.joins == [("ie3", "c3")]
-    assert ("handshake", "ie3") in sinks.events
-    assert rt.observe_tap("ie9", 2, 60.0, "c9") is False     # never invited
+    assert sinks.handshakes == ["ie3"]
+    assert ("invite", "ie3") in sinks.events
+    rt.consider_invite("ie3")                    # not yet due
+    assert sinks.handshakes == ["ie3"]
+    _run(rt, sinks, clock, DEFAULT_LOBBY.invite_interval_s + 0.1)
+    rt.consider_invite("ie3")
+    assert sinks.handshakes == ["ie3", "ie3"]
+    assert sinks.events.count(("invite", "ie3")) == 1     # announced once
     rt.forget("ie3")
     assert not rt.is_invited("ie3")
 
 
+def test_no_handshake_while_full():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.set_state(LobbyState.FULL)
+    rt.consider_invite("ie3")
+    assert sinks.handshakes == []
+
+
+def test_stop_ends_invites_but_drains_queued_thunks():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.on_scored_join("ie1")
+    rt.stop()
+    assert rt.draining()
+    rt.consider_invite("ie3")       # a stopped runtime invites no one
+    assert sinks.handshakes == [] and not rt.is_invited("ie3")
+    _run(rt, sinks, clock, 2.0)
+    assert not rt.draining()
+    assert [p[0] for p in sinks.plays] == ["ie1"]
+
+
 def test_stop_then_start_feeds_the_first_breath_and_hue_again():
-    """stop() has to reset the de-dupe caches and the tap detector, not
-    just the queue: a restarted lobby whose opening frame repeats the
+    """stop() has to reset the de-dupe caches: a restarted lobby whose opening frame repeats the
     values the old one last sent would come up silent and dark, because
     the caches still hold them."""
     rt, sinks, clock = _rt()
@@ -240,3 +265,15 @@ def test_stop_then_start_feeds_the_first_breath_and_hue_again():
         assert (name, 0xB0, HUE_CC, hue_drift_cc(0.0)) in fresh_light
         assert (name, 0xB0, BREATH_CC, breath_cc(0.0)) in fresh_light
         assert (name, BREATH_CC, breath_cc(0.0)) in fresh_ctrl
+
+
+def test_ceremony_survives_stop():
+    """stop() keeps the queued ceremony thunks (spec 2026-10-01): the
+    chime of a validation that landed just before start still plays."""
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.on_scored_join("ie1")
+    rt.stop()
+    clock.advance(2.0)
+    rt.tick()
+    assert sinks.plays == [("ie1", "chime", sinks.plays[0][2])]
