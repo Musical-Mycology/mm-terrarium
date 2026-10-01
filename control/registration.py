@@ -5,7 +5,6 @@ spec section 4 and the join-resolution rules in section 3 (SETUP vs RUNNING).
 from dataclasses import dataclass
 
 from control.roles import Role, RoleClass, RoleTable
-from control.state import State
 
 
 @dataclass

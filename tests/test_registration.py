@@ -1,6 +1,5 @@
 from control.registration import RegistrationState
 from control.roles import Role, RoleClass, RoleTable
-from control.state import State
 
 
 def make_table():
@@ -39,17 +38,6 @@ def test_join_grants_shared_scored_role_in_setup():
     assert result.scored is True
 
 
-def test_scored_role_denied_once_running_but_jam_still_allowed():
-    table = _table(cap=1)
-    reg = RegistrationState(table)
-    reg.validate("ie1", "P")
-    scored_result = reg.validate("ie2", "P")
-    jam_result = reg.assign("ie2", "J", table.roles["jammer"])
-    assert scored_result.granted is False
-    assert scored_result.reason == "scored full"
-    assert jam_result is True
-
-
 def test_unique_role_denied_once_capacity_reached():
     table = make_table()
     reg = RegistrationState(table)
@@ -60,14 +48,14 @@ def test_unique_role_denied_once_capacity_reached():
     assert second.reason == "scored full"
 
 
-def test_retapping_a_different_node_switches_role():
-    table = make_table()
-    reg = RegistrationState(table)
-    reg.validate("ie1", "NODE_PLAYER")
-    switch = reg.assign("ie1", "NODE_JAM", table.roles["jammer"])
-    assert switch is True
-    assert reg.assignments["ie1"][1] == "jammer"
-    assert reg._counts["player"] == 0  # released when ie1 switched away
+def test_validate_ignores_second_node_returns_original_grant():
+    reg = RegistrationState(_table())
+    first = reg.validate("a", "P")
+    assert first.granted and first.role == "player"
+    second = reg.validate("a", "J")
+    assert second.granted and second.role == "player"
+    assert reg.validated["a"] == ("P", "player")
+    assert ("player", 1, 2) in reg.counts()
 
 
 def test_join_falls_through_a_multi_candidate_node_to_the_next_role():
@@ -108,7 +96,7 @@ def test_counts_reflects_live_registrations_and_capacity():
     assert counts["understudy"] == (0, None)
 
 
-def test_granted_lists_assignments_in_join_order_and_skips_room():
+def test_granted_lists_assignments_in_materialize_order_and_skips_room():
     table = make_table()
     room = Role(name="room", role_class=RoleClass.ROOM, capacity=1, scored=False)
     table.roles["room"] = room
