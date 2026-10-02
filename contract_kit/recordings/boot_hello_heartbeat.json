@@ -1,6 +1,6 @@
 {
   "device": {
-    "join_node": null
+    "handshake": null
   },
   "name": "boot_hello_heartbeat",
   "profiles": [
@@ -29,7 +29,7 @@
     {
       "expect_quiet": {
         "addresses": [
-          "/game/join",
+          "/game/handshake",
           "/game/tap",
           "/game/hold",
           "/game/swing"
@@ -46,13 +46,22 @@
             "bit": "ContractBit",
             "nodes": [
               {
-                "capacity": null,
+                "capacity": 1,
                 "count": 0,
                 "id": "CONTRACT_PLAYER_NODE",
                 "roles": [
                   "player"
                 ],
                 "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
               }
             ],
             "state": "SETUP",
@@ -61,6 +70,17 @@
         ],
         "at": null,
         "typespec": "b"
+      },
+      "t": 0
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/handshake",
+        "args": [
+          "$ROUND"
+        ],
+        "at": null,
+        "typespec": "s"
       },
       "t": 0
     },
@@ -81,27 +101,12 @@
     },
     {
       "control_sends": {
-        "address": "/$DEV/room",
+        "address": "/$DEV/handshake",
         "args": [
-          {
-            "bit": "ContractBit",
-            "nodes": [
-              {
-                "capacity": null,
-                "count": 0,
-                "id": "CONTRACT_PLAYER_NODE",
-                "roles": [
-                  "player"
-                ],
-                "scored": true
-              }
-            ],
-            "state": "SETUP",
-            "version": "0.1"
-          }
+          "$ROUND"
         ],
         "at": null,
-        "typespec": "b"
+        "typespec": "s"
       },
       "t": 5000
     },
@@ -122,30 +127,15 @@
     },
     {
       "control_sends": {
-        "address": "/$DEV/room",
+        "address": "/$DEV/handshake",
         "args": [
-          {
-            "bit": "ContractBit",
-            "nodes": [
-              {
-                "capacity": null,
-                "count": 0,
-                "id": "CONTRACT_PLAYER_NODE",
-                "roles": [
-                  "player"
-                ],
-                "scored": true
-              }
-            ],
-            "state": "SETUP",
-            "version": "0.1"
-          }
+          "$ROUND"
         ],
         "at": null,
-        "typespec": "b"
+        "typespec": "s"
       },
       "t": 10000
     }
   ],
-  "summary": "Hello repeats every 5 s and declares an instrument; nothing else goes out before a join"
+  "summary": "Hello repeats every 5 s and declares an instrument; a device that never accepts sends nothing else"
 }

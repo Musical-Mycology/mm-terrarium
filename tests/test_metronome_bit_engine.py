@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from bits.metronome.metronome_bit import MetronomeBit
 from control.engine import GameServer
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
+from tests.helpers_admit import admit
 from tests.instrument_fixtures import GENERIC_SURFACE
 
 B = MetronomeBit.BEAT_S
@@ -48,7 +49,7 @@ def _running(players=("ie1",), t0=100.0):
     gs.load_bit("metro")
     for dev in players:
         gs.hello(dev, "sim", "1")
-        gs.join(dev, "METRO_PLAYER_NODE")
+        admit(gs, dev, "METRO_PLAYER_NODE")
     gs.run()
     return gs, clk, light
 
@@ -135,7 +136,7 @@ def test_a_tap_made_when_a_wait_beat_is_presented_is_judged_on_time():
     gs.on_light_cue = lambda *a: None
     gs.load_bit("metro")
     gs.hello("ie1", "sim", "1")
-    gs.join("ie1", "METRO_PLAYER_NODE")
+    admit(gs, "ie1", "METRO_PLAYER_NODE")
     gs.run()
     bit = gs.bit
     while bit._t0 is None:

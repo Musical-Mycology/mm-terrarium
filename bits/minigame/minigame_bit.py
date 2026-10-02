@@ -175,6 +175,13 @@ class MinigameBit(Bit):
         # clearing dev here orphaned the lobby's device (MetronomeBit
         # keeps its _players across run start for the same reason).
         self._sm.start()
+        # on_join fires inside run(), when validations materialize into
+        # roles, before this runs, so the player is kept: clearing _dev
+        # here orphaned the lobby's device (MetronomeBit keeps its _players
+        # across run start for the same reason).
+        self._enter(Phase.PENDING)
+        self._blink_t0 = None
+        self._next_blink = 0
 
     def on_join(self, dev: str, role_name: str) -> None:
         if role_name == "player":

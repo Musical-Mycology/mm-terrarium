@@ -1,5 +1,7 @@
-"""The eleven device contract kit scenarios (docs/superpowers/specs/
-2026-09-16-device-contract-kit-design.md sections 4.3 and 5.4).
+"""The device contract kit scenarios, contract v3 (docs/superpowers/specs/
+2026-09-16-device-contract-kit-design.md sections 4.3 and 5.4, as amended by
+2026-10-01-instrument-handshake-protocol-design.md section 6). There are
+len(ALL_SCENARIOS) of them: eighteen.
 
 Each function takes no arguments, builds its own Recorder, and returns an
 EXPORT FORMAT v1 scenario dict recorded from the REAL Control engine.
@@ -11,71 +13,119 @@ behavior its spec table row names.
 These files are the contract two other repos learn device behavior from (the
 Flutter Tuneshroom app and the Rev 1 ESP32 firmware), so where Control's real
 behavior differs from the spec's prose the RECORDING wins and the difference
-is stated in the scenario's own docstring. The three differences found while
+is stated in the scenario's own docstring. The differences found while
 recording:
 
-1. A pre-role tap outside a lobby is answered with `/$DEV/error tap "device
-   not registered"`. Rule 2 permits a device to SEND a tap before a role,
-   and Control accepts it as a lobby join tap when a Room is loaded
-   (`lobby_tap_join`), but with no Room there is no lobby to receive it
-   (`DeviceLinkAgent._enter_lobby` returns early when `gs.room is None`).
-   See `gestures_after_role` and `error_no_state_change`.
-2. A newly granted role plays a ~1.5 s opening signature before the role's
+1. A newly granted role plays a ~1.5 s opening signature before the role's
    own light manifest reaches the pixels, and that signature ignores light
    cues. A timed look sent during it changes nothing a device can see, so
    `timed_frames_hold_last` waits for the signature to settle before it
    taps. See that scenario's docstring.
-3. The closing fade's last frame is a dim non-black frame, not black, and
+2. The closing fade's last frame is a dim non-black frame, not black, and
    `/$DEV/release` follows it on the wire in the same millisecond while
    carrying no presentation time of its own. See `release_keeps_display`
    for the spec section 5.5 ordering answer.
+3. The round id Control mints per Bit load carries a random token, so it is
+   recorded as the `$ROUND` placeholder: "whatever the latest
+   `/$DEV/handshake` carried".
+4. The role blob's `class` value is the Role class name in upper case
+   ("UNIQUE", "JAM"), not the lower-case "jam" the kit brief used.
+5. A v3 device sends no gesture before a role, tap included, so the v2
+   pre-role tap is gone from `gestures_after_role` and
+   `error_no_state_change` now draws its error from a refused jammer hold.
+6. A `/game/join` is not a contract verb any more, so `join_retired_error`
+   records Control's answer to one without any step for the join itself.
 
 One rule for replay runners, which applies to every scenario and bites in
-`link_loss_rejoin`: a runner must not deliver any `control_sends` step while
-the scenario's link is down. Those steps record what Control really sends,
-and a device with its link down receives none of them.
+`link_loss_rejoin`, `link_loss_keeps_display` and `link_blip_keeps_role`:
+a runner must not deliver
+any `control_sends` step while the scenario's link is down. Those steps
+record what Control really sends, and a device with its link down receives
+none of them.
 """
 from __future__ import annotations
 
 from typing import Callable
 
 from contract_kit.contract_bit import CONTRACT_PLAYER_NODE
-from contract_kit.recorder import Recorder
+from contract_kit.recorder import ROOM_NODE_ID, Recorder
 
-# A node name no Bit's role table declares. GameServer.join() refuses any
-# node absent from the role table's node_map, so this is how a scenario asks
-# for a deny without inventing a second Bit.
+# A node name no Bit's role table declares. GameServer.handshake() refuses
+# any node absent from the role table's node_map, so this is how a scenario
+# asks for a deny without inventing a second Bit.
 NO_SUCH_NODE = "NO_SUCH_NODE"
 
-# The gesture verbs a device may not send before it holds a role (spec
-# section 4.3, rule 2; devicelink/contract.py's pre_role column).
+# The gesture verbs held back before a role besides tap (spec section 4.3,
+# rule 2; devicelink/contract.py's pre_role column). Tap is listed beside
+# them where a scenario needs it: in contract v3 it waits for a role too.
 POST_ROLE_GESTURES = ["/game/hold", "/game/swing"]
 
 # How long ContractBit's player-role opening signature runs before the
 # role's own light manifest reaches the pixels. Measured from the
-# recordings: the last signature frame is sent at t=1518 in
-# explicit_join_role, release_keeps_display and timed_frames_hold_last, and
-# at t=1503 in play_known_and_unknown, whose early tap shifts the tick phase
-# by one partial tick. Scenarios that need a light cue to be VISIBLE, or an
-# expect_frame that is not within one render tick of a frame change, wait
-# past this.
+# recordings: the last signature frame is sent about 1518 ms after the role
+# arrives. Scenarios that need a light cue to be VISIBLE, or an expect_frame
+# that is not within one render tick of a frame change, wait past this.
 SIGNATURE_SETTLED_MS = 2000
 
-# The hand-authored pair in timed_frames_hold_last. Two frames on one send
-# time with different presentation times, in colors no real frame in any
-# recording carries (pure blue and pure green in GRB order), so a device
-# showing the wrong one is unmistakable.
+# The common v3 timeline: the device's device.handshake policy accepts
+# ACCEPT_AFTER_MS after its first invite (which arrives with its first
+# hello, at t=0), the operator starts at START_T, and the role's look has
+# settled by ROLE_SETTLED_T.
+ACCEPT_AFTER_MS = 300
+ACCEPT_POLICY = {"node": "", "ack_after_ms": ACCEPT_AFTER_MS}
+START_T = 1000
+ROLE_SETTLED_T = START_T + SIGNATURE_SETTLED_MS
+# handshake_validate_then_role starts later, after the validation
+# ceremony's chime (about 1.8 s after the accept) has played.
+VALIDATE_START_T = 3000
+
+# handshake_over_cap_deny: the uncaptured rival validates first.
+RIVAL_ACCEPT_T = 100
+# handshake_stale_round.
+STALE_ROUND_ID = "stale"
+STALE_ACCEPT_T = 300
+GOOD_ACCEPT_T = 1000
+# late_hello_gets_jam: the link comes up after the round has started.
+WALK_UP_T = 500
+# room_node_handshake_binds.
+ARM_T = 500
+ROOM_ACCEPT_T = 1000
+# join_retired_error.
+LEGACY_JOIN_T = 200
+# link_loss_keeps_display: the link is back past the 15 s stale timeout.
+LINK_BACK_T = 18000
+# link_blip_keeps_role: the link drops at ROLE_SETTLED_T and is back well
+# inside the 15 s stale timeout (the device last spoke at ACCEPT_AFTER_MS),
+# then a tap proves the role was kept.
+BLIP_BACK_T = 8000
+BLIP_TAP_T = 9000
+
+# timed_frames_hold_last. The look's glide (taps at ROLE_SETTLED_T) has
+# stopped sending frames by LOOK_SETTLED_T. Then the hand-authored pair:
+# two frames on one send time with different presentation times, in colors
+# no real frame in any recording carries (pure blue and pure red in GRB
+# order), so a device showing the wrong one is unmistakable.
+LOOK_SETTLED_T = 6500
 AUTHORED_NEWER_GRB = [0, 0, 255] * 12
 AUTHORED_OLDER_GRB = [255, 0, 0] * 12
-AUTHORED_PAIR_T = 6000
-AUTHORED_NEWER_AT = 6200
-AUTHORED_OLDER_AT = 6100
+AUTHORED_PAIR_T = 7000
+AUTHORED_NEWER_AT = 7200
+AUTHORED_OLDER_AT = 7100
+AUTHORED_CHECK_T = 7500
+HOLD_CHECK_T = 13000
 
 
 def boot_hello_heartbeat() -> dict:
     """Rule 1: hello goes out once the link is up and repeats every 5 s,
-    declaring the carried instrument in its fourth argument, and the device
-    sends nothing else at all before it joins.
+    declaring the carried instrument in its fourth argument, and a device
+    that never accepts sends nothing else at all.
+
+    Control answers the FIRST hello with one `/$DEV/room` snapshot and the
+    round's `/$DEV/handshake` invite, and repeats the invite every 5 s
+    (the invite cycle) while the device stays un-validated. It does NOT
+    answer every heartbeat with a `/room` any more (contract v3): the
+    snapshot goes out on first contact and on state or registration
+    changes only.
 
     The instrument name itself is recorded as the `*` placeholder: which
     instrument a device carries is its own business, and only the four
@@ -83,11 +133,12 @@ def boot_hello_heartbeat() -> dict:
     """
     rec = Recorder(name="boot_hello_heartbeat",
                    summary="Hello repeats every 5 s and declares an "
-                           "instrument; nothing else goes out before a join",
-                   join_node=None)
+                           "instrument; a device that never accepts sends "
+                           "nothing else",
+                   handshake=None)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.expect_quiet(0, ["/game/join", "/game/tap", *POST_ROLE_GESTURES],
+    rec.expect_quiet(0, ["/game/handshake", "/game/tap", *POST_ROLE_GESTURES],
                      12000)
     rec.advance_to(5000)
     rec.expect_hello(5000)
@@ -97,53 +148,215 @@ def boot_hello_heartbeat() -> dict:
     return rec.finish()
 
 
-def explicit_join_role() -> dict:
-    """Joining a node by name and receiving the role blob for it.
+def handshake_validate_then_role() -> dict:
+    """The v3 entry path, end to end with a Room's lobby loaded: Hello,
+    Handshake, Received Handshake, Validated, then the role at RUNNING
+    (the spec's player-flow diagram).
 
-    The join goes out with the first hello, and Control answers with a fresh
-    `/$DEV/room` snapshot (the node's count is now 1), the `/$DEV/role` blob,
-    and then the granted session's opening signature on `/$DEV/leds`.
+    Control invites the device with `/$DEV/handshake [$ROUND]` on its first
+    hello, and the lobby's white invite flash starts on `/$DEV/leds`. The
+    device's `device.handshake` policy accepts 300 ms later with
+    `/game/handshake ["$DEV", "$ROUND", ""]` (an empty node asks for the
+    Bit's default scored role), and Control answers `/$DEV/validated
+    ["$ROUND", "player"]` plus a fresh `/$DEV/room` whose player count is
+    now 1. The validation ceremony follows: green flashes, then `/play
+    ["chime", "key=$KEY"]` about 1.8 s later. Validation cancels the
+    invite's second white flash, which was already queued, so nothing
+    white follows `/validated` (and only `/$DEV/handshake` is ever an
+    invite in any case).
+
+    Validated is a reservation, not a role: `/$DEV/role` (scored, `class`
+    "UNIQUE") arrives only when the operator starts the round at
+    VALIDATE_START_T, followed by the role's opening signature.
+
+    The start is at VALIDATE_START_T (3000 ms), not the kit brief's
+    1000 ms: the ceremony's chime lands about 2117 ms in, and a start
+    before it would record the round going RUNNING mid-ceremony instead of
+    the whole player flow (recording difference).
+
+    The chime's key is recorded as `key=$KEY`. It is the validation index
+    into a note scale, so a replaying device must reproduce the
+    parameter's shape and not its number.
     """
-    rec = Recorder(name="explicit_join_role",
-                   summary="Joining a node by name and receiving its role",
-                   join_node=CONTRACT_PLAYER_NODE)
+    rec = Recorder(name="handshake_validate_then_role",
+                   summary="Invited, the device accepts and is validated "
+                           "with the lobby ceremony; the scored role "
+                           "arrives at start",
+                   handshake=ACCEPT_POLICY, with_room=True)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.expect_join(0, CONTRACT_PLAYER_NODE)
-    rec.advance_to(SIGNATURE_SETTLED_MS)
-    rec.expect_frame(SIGNATURE_SETTLED_MS)
+    rec.advance_to(150)
+    rec.expect_frame(150)                    # the invite's first white flash
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.advance_to(400)
+    rec.expect_frame(400)                    # the ceremony's first green flash
+    rec.advance_to(VALIDATE_START_T)
+    rec.expect_play(VALIDATE_START_T, "chime")
+    rec.start(VALIDATE_START_T)
+    rec.advance_to(VALIDATE_START_T + SIGNATURE_SETTLED_MS)
+    rec.expect_frame(VALIDATE_START_T + SIGNATURE_SETTLED_MS)
     return rec.finish()
 
 
-def lobby_tap_join() -> dict:
-    """The lobby handshake: invite flashes show while the device is hello'd
-    but un-joined, two count-1 taps inside the 1.5 s double-tap window join
-    it, the role arrives, and the join ceremony plays `chime` with a `key=`
-    parameter 1.8 s later (control/lobby.py's CHIME_OFFSET_S).
+def handshake_over_cap_deny() -> dict:
+    """The scored cap. ContractBit's one scored role is UNIQUE with
+    capacity 1, so once another device has validated, this device's accept
+    is refused with `/$DEV/deny ["scored full", <hint>]`, and at start it
+    gets the Bit's jam role instead (`role` "jammer", `scored` false).
 
-    Unlike `gestures_after_role`, these pre-role taps draw no `/$DEV/error`:
-    a Room is loaded here, so the lobby is the thing that receives them.
+    The other device is real Control traffic from a second dev id that
+    this recording never captures: to the device under test it shows up
+    only as the `/$DEV/room` snapshot at t=100 whose player count went to
+    1. Control's answer to a full lobby is a deny, not silence; the hint
+    says a jam role follows at start.
 
-    The chime's key is recorded as `key=$KEY`. It is the join index into a
-    note scale, so a replaying device must reproduce the parameter's shape
-    and not its number.
+    The role blob's `class` value is the Role class's own name, "JAM", in
+    upper case (the brief for this kit said "jam"; the recording wins).
     """
-    rec = Recorder(name="lobby_tap_join",
-                   summary="Invite frames show before a role; two count-1 "
-                           "taps join; the role and the chime follow",
-                   join_node=None, with_room=True)
+    rec = Recorder(name="handshake_over_cap_deny",
+                   summary="An accept after the scored slot is taken is "
+                           "denied; the device gets the jam role at start",
+                   handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
-    # Both frame checks sit near the middle of a 200 ms flash, clear of the
-    # render tick either side of it.
+    rec.rival_accept(RIVAL_ACCEPT_T)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)          # the jammer's settled look
+    return rec.finish()
+
+
+def handshake_stale_round() -> dict:
+    """A `/game/handshake` whose round id is not the current round's is
+    dropped without an answer: no `/validated`, no `/deny`, nothing. The
+    device's later accept, echoing the round id its `/$DEV/handshake`
+    actually carried, validates normally.
+
+    The stale accept's round id is the literal "stale" in both the
+    `accept` input step and its `expect_out`, because a runner has to make
+    its device send exactly that; the good accept's is "$ROUND", the
+    latest id the device received.
+    """
+    rec = Recorder(name="handshake_stale_round",
+                   summary="An accept with a stale round id gets no answer; "
+                           "an accept with the current one validates",
+                   handshake=None)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.accept(STALE_ACCEPT_T, round_id=STALE_ROUND_ID)
+    rec.accept(GOOD_ACCEPT_T)
+    rec.advance_to(GOOD_ACCEPT_T + 500)
+    return rec.finish()
+
+
+def late_hello_gets_jam() -> dict:
+    """A RUNNING walk-up. The round is already running when the device's
+    link comes up, so its first hello is answered at once, in the same
+    millisecond: a first-contact `/$DEV/room` saying RUNNING, then
+    `/$DEV/role` for the jam role, then a second `/room` with the jam
+    count raised. No invite and no handshake: scored slots open only in
+    SETUP.
+    """
+    rec = Recorder(name="late_hello_gets_jam",
+                   summary="A device that hellos into a running round gets "
+                           "the jam role at once",
+                   handshake=None)
+    rec.start(0)
+    rec.link_up(WALK_UP_T)
+    rec.expect_hello(WALK_UP_T)
+    rec.advance_to(WALK_UP_T + SIGNATURE_SETTLED_MS)
+    rec.expect_frame(WALK_UP_T + SIGNATURE_SETTLED_MS)
+    return rec.finish()
+
+
+def jam_solo_fallback() -> dict:
+    """A Bit with no jam role (SoloContractBit) still gives a device that
+    never validated something alive at start: a solo role synthesized for
+    its carried instrument, `role` "solo:tuneshroom_rev1", `class` "JAM",
+    `scored` false.
+
+    tuneshroom_rev1 declares no `[solo]` table and no ambient light, so
+    the synthesized role carries an empty light manifest and no gesture
+    bindings; what reaches the pixels is the generic opening signature
+    every granted role plays, which settles dark. The role blob is the
+    contract here, not the look.
+    """
+    rec = Recorder(name="jam_solo_fallback",
+                   summary="With no jam role in the Bit, a device that never "
+                           "accepted gets a solo role for its instrument",
+                   handshake=None, bit="SoloContractBit")
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)
+    return rec.finish()
+
+
+def room_node_handshake_binds() -> dict:
+    """A handshake naming the Room's node binds the device to the fixture
+    the operator armed. No `/validated` and no `/role` come back (a bound
+    fixture is not a player); the fixture's own frames start on
+    `/$DEV/leds` in the same millisecond.
+
+    With a Room loaded, the lobby's white invite flash shows before the
+    accept (the frames at t=0 and t=414), alongside the `/$DEV/handshake`
+    invite itself. The node id is Control's own; the device learns it from
+    an NFC tag or QR code, never from this wire.
+
+    There is deliberately no `expect_frame` after the accept. Once bound,
+    Control sends the device its FIXTURE's slice (the TEST fixture is 60 px
+    GRB, 180 values), not a 12 px, 36-value player frame, so no 12-pixel
+    device could pass a display check there. That the fixture's `/$DEV/leds`
+    frames begin arriving at the accept is pinned by the recorded
+    `control_sends` themselves (inputs a runner delivers); the only
+    expectation a device can fail here is the `/game/handshake` it sends.
+    The one `expect_frame` at t=150 is the pre-bind invite flash, a normal
+    36-value frame.
+    """
+    rec = Recorder(name="room_node_handshake_binds",
+                   summary="Accepting with the Room node binds an armed "
+                           "fixture: no validated, no role, fixture frames",
+                   handshake=None, with_room=True)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    # Near the middle of the invite's first 200 ms white flash.
     rec.advance_to(150)
-    rec.expect_frame(150)                  # the invite's first white flash
-    rec.tap(1000, duration_ms=80.0)
-    rec.tap(1600, duration_ms=80.0)        # 600 ms later, inside the window
-    rec.advance_to(1750)
-    rec.expect_frame(1750)                 # the accept flash, after the role
-    rec.advance_to(3500)
-    rec.expect_play(3500, "chime")
+    rec.expect_frame(150)
+    rec.arm_fixture(ARM_T)
+    rec.accept(ROOM_ACCEPT_T, node=ROOM_NODE_ID)
+    rec.advance_to(ROOM_ACCEPT_T + 500)
+    return rec.finish()
+
+
+def join_retired_error() -> dict:
+    """A contract v2 device's `/game/join` is answered with `/$DEV/error
+    ["join", "retired in contract v3: use /game/handshake"]` and otherwise
+    ignored: the device stays hello'd, keeps being invited, and at start
+    gets the jam role like any device that never accepted.
+
+    The join itself is NOT a step in this file. A v3 device never sends
+    `/game/join` (firmware checklist item 8), so there is no input a
+    runner could deliver and no `expect_out` a compliant device could
+    pass. What a v3 device must do with the recorded `/error` is what
+    `error_no_state_change` already pins: nothing.
+    """
+    rec = Recorder(name="join_retired_error",
+                   summary="A v2 join draws the retirement /error and "
+                           "changes nothing; the device still gets jam at "
+                           "start",
+                   handshake=None)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.legacy_join(LEGACY_JOIN_T, CONTRACT_PLAYER_NODE)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)
+    rec.advance_to(5000)
+    rec.expect_hello(5000)
     return rec.finish()
 
 
@@ -169,10 +382,11 @@ def timed_frames_hold_last() -> dict:
     with the glide.
 
     **The last frame holds through silence.** The closing `expect_frame`
-    at 12000 is that same hand-authored newer frame, still showing almost
-    six seconds later.
+    is that same hand-authored newer frame, still showing almost six
+    seconds later.
 
-    The taps wait for SIGNATURE_SETTLED_MS on purpose. A newly granted
+    The role arrives at START_T (accept, then start), and the taps wait
+    for its opening signature to settle on purpose. A newly granted
     session plays a ~1.5 s opening signature that ignores light cues
     entirely, so a look sent inside that window is recorded but invisible,
     which would have made this scenario pass without testing anything.
@@ -183,26 +397,29 @@ def timed_frames_hold_last() -> dict:
                    summary="A future-stamped frame shows at its time; of "
                            "two frames due together only the newest shows; "
                            "the last frame holds through silence",
-                   join_node=CONTRACT_PLAYER_NODE)
+                   handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.advance_to(SIGNATURE_SETTLED_MS)
-    rec.expect_frame(SIGNATURE_SETTLED_MS)   # the settled role look
-    rec.tap(SIGNATURE_SETTLED_MS, duration_ms=80.0)
-    rec.tap(SIGNATURE_SETTLED_MS, duration_ms=80.0)
-    rec.advance_to(5500)
-    rec.expect_frame(5500)                   # the look, settled and quiet
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)         # the settled role look
+    rec.tap(ROLE_SETTLED_T, duration_ms=80.0)
+    rec.tap(ROLE_SETTLED_T, duration_ms=80.0)
+    rec.advance_to(LOOK_SETTLED_T)
+    rec.expect_frame(LOOK_SETTLED_T)         # the look, settled and quiet
     rec.advance_to(AUTHORED_PAIR_T)
     # Hand-authored, newest presentation time FIRST (see the docstring).
     rec.control_send_now("/$DEV/leds", "b", [AUTHORED_NEWER_GRB],
                          at=AUTHORED_NEWER_AT)
     rec.control_send_now("/$DEV/leds", "b", [AUTHORED_OLDER_GRB],
                          at=AUTHORED_OLDER_AT)
-    rec.advance_to(6500)
-    rec.expect_frame(6500)                   # the newer of the two, not the
+    rec.advance_to(AUTHORED_CHECK_T)
+    rec.expect_frame(AUTHORED_CHECK_T)       # the newer of the two, not the
                                              # one that arrived last
-    rec.advance_to(12000)
-    rec.expect_frame(12000)                  # still holding, long after
+    rec.advance_to(HOLD_CHECK_T)
+    rec.expect_frame(HOLD_CHECK_T)           # still holding, long after
     return rec.finish()
 
 
@@ -210,44 +427,53 @@ def gestures_after_role() -> dict:
     """The three gesture shapes and their stamps, and rule 2's pre-role
     window.
 
-    Tap is the one gesture a device may send before a role, so it is the
-    only one scripted before the join and hold and swing are held back
-    under an `expect_quiet`. With no Room loaded there is no lobby to
-    receive that tap, and Control answers it with `/$DEV/error tap "device
-    not registered"`: allowed to send is not the same as acted upon.
+    In contract v3 a device sends no gesture at all before it holds a
+    role, tap included (the verb table marks tap pre_role false; taps are
+    always gameplay now that the lobby no longer reads them as a join).
+    So tap, hold and swing are all held back under an `expect_quiet` from
+    link-up until the role arrives at START_T. (The kit brief kept v2's
+    pre-role tap here; a device sending it would break rule 2, so it is
+    gone.)
 
     Once the role is held, all three are stamped at their own onset, tap
     carries `sffi [dev, peak_g, duration_ms, count]` with peak_g 0 and
     count 1, and hold and swing carry `sfi`.
     """
     rec = Recorder(name="gestures_after_role",
-                   summary="Tap may go out before a role, hold and swing "
-                           "wait for one; all three stamp at onset",
-                   join_node=None)
+                   summary="No gesture goes out before a role; tap, hold "
+                           "and swing all stamp at onset after it",
+                   handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.tap(500, duration_ms=80.0)
-    rec.expect_quiet(500, POST_ROLE_GESTURES, 500)
-    rec.join_now(1000, CONTRACT_PLAYER_NODE)
-    rec.tap(1500, duration_ms=80.0)
-    rec.hold(2000, held_s=0.65)
-    rec.swing(2500, signed_g=-2.1)
-    rec.advance_to(3000)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.expect_quiet(0, ["/game/tap", *POST_ROLE_GESTURES], START_T)
+    rec.start(START_T)
+    rec.tap(START_T + 500, duration_ms=80.0)
+    rec.hold(START_T + 1000, held_s=0.65)
+    rec.swing(START_T + 1500, signed_g=-2.1)
+    rec.advance_to(START_T + 2000)
     return rec.finish()
 
 
 def deny_stays_hellod() -> dict:
-    """A join to a node no role table declares is denied with `/$DEV/deny
-    ss ["no such node", ""]`, and nothing else changes: no role, no frame,
-    and the hello heartbeat keeps running on its own 5 s cadence.
+    """An accept naming a node no role table declares is denied with
+    `/$DEV/deny ["no such node", <hint>]`, and nothing else changes: no
+    validation, no role, no frame, and the hello heartbeat keeps running
+    on its own 5 s cadence. Control keeps inviting the device every 5 s;
+    its `device.handshake` policy answers only the first invite of a
+    link-up, so it accepts once.
     """
     rec = Recorder(name="deny_stays_hellod",
-                   summary="A join to an unknown node is denied; the device "
-                           "stays hello'd with its heartbeat running",
-                   join_node=NO_SUCH_NODE)
+                   summary="An accept naming an unknown node is denied; "
+                           "the device stays hello'd with its heartbeat "
+                           "running",
+                   handshake={"node": NO_SUCH_NODE,
+                              "ack_after_ms": ACCEPT_AFTER_MS})
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.expect_join(0, NO_SUCH_NODE)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
     rec.advance_to(5000)
     rec.expect_hello(5000)
     rec.advance_to(10000)
@@ -266,7 +492,9 @@ def release_keeps_display() -> dict:
     fade's last `/$DEV/leds` frame and immediately after it on the wire, but
     the release carries no presentation time while that last frame is
     stamped one cue horizon (60 ms) into the future, so a device does see
-    the release before the final fade frame is due to show.
+    the release before the final fade frame is due to show. (`/release`
+    travels over TCP and `/leds` over UDP in contract v3, so on a real link
+    the two are not even on one stream.)
 
     Two details a device author should not mistake for rig artifacts: the
     fade's last frame is a dim non-black frame rather than black, and the
@@ -274,22 +502,25 @@ def release_keeps_display() -> dict:
     Bit really has been unloaded.
     """
     rec = Recorder(name="release_keeps_display",
-                   summary="Unloading the Bit fades and releases a joined "
-                           "device; the last fade frame holds and the "
-                           "heartbeat continues",
-                   join_node=CONTRACT_PLAYER_NODE)
+                   summary="Unloading the Bit fades and releases a device "
+                           "holding a role; the last fade frame holds and "
+                           "the heartbeat continues",
+                   handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.advance_to(SIGNATURE_SETTLED_MS)
-    rec.expect_frame(SIGNATURE_SETTLED_MS)   # the settled role look
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)         # the settled role look
     rec.unload_bit()
-    rec.advance_to(3000)
-    rec.expect_frame(3000)                   # the last fade frame
-    rec.expect_quiet(3000, POST_ROLE_GESTURES, 5000)
+    rec.advance_to(4000)
+    rec.expect_frame(4000)                   # the last fade frame
+    rec.expect_quiet(4000, ["/game/tap", *POST_ROLE_GESTURES], 5000)
     rec.advance_to(5000)
     rec.expect_hello(5000)                   # the heartbeat, after release
-    rec.advance_to(8000)
-    rec.expect_frame(8000)                   # still holding, 5 s later
+    rec.advance_to(9000)
+    rec.expect_frame(9000)                   # still holding, 5 s later
     return rec.finish()
 
 
@@ -306,63 +537,85 @@ def play_known_and_unknown() -> dict:
     rec = Recorder(name="play_known_and_unknown",
                    summary="A known sample plays; an unknown name is "
                            "ignored and later steps still pass",
-                   join_node=CONTRACT_PLAYER_NODE)
+                   handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.tap(200, duration_ms=80.0)
-    rec.expect_play(200, "tick")
-    rec.hold(700, held_s=0.65)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.tap(START_T + 200, duration_ms=80.0)
+    rec.expect_play(START_T + 200, "tick")
+    rec.hold(START_T + 700, held_s=0.65)
     rec.advance_to(5000)
     rec.expect_hello(5000)
     return rec.finish()
 
 
 def link_loss_rejoin() -> dict:
-    """Rule 7: there is no session resume. The link drops, the heartbeat
-    stops with it, and 15 s after the last hello Control reaps the device:
-    it fades the look out and sends `/$DEV/release` into a link that is not
-    there to hear it. When the link comes back the device hellos and joins
-    again from scratch, and the join is granted again.
+    """Guide rule 9 (checklist item 7), in SETUP: the link drops, the
+    heartbeat stops with it, and 15 s after the device last spoke Control
+    reaps it. The device itself keeps its round id and its validation
+    across the loss; it has no way to know it was reaped. When the link
+    comes back it hellos, and Control, which no longer knows it, invites
+    it again with `/$DEV/handshake`. That invite supersedes whatever the
+    device held: it takes the invite's round id (the same `$ROUND`, since
+    the Bit was never reloaded), accepts again, and is validated again.
+    The round stays in SETUP throughout, so this is the validation half;
+    `link_loss_keeps_display` and `link_blip_keeps_role` are the halves
+    with a role held.
 
-    A replay runner must NOT deliver any `control_sends` step while the
-    scenario's link is down. The 27 `/$DEV/leds` frames and the
-    `/$DEV/release` recorded between `link: down` at 2000 and `link: up` at
-    17000 are what Control really sends; the device never receives any of
-    them, which is the whole point of the scenario.
+    The reaped device held a validation but no role, so the reap sends
+    nothing to it at all (no fade, no `/release`): there was nothing to
+    end on the device. Nothing else is sent while the link is down either:
+    a validated device is owed no invite, and once reaped it is not in the
+    pool. The rule that a runner must not deliver a `control_sends` step
+    inside a down window still holds here; this recording simply has none
+    to skip.
     """
     rec = Recorder(name="link_loss_rejoin",
                    summary="After 15 s of silence Control drops the device; "
-                           "it hellos and joins again when the link is back",
-                   join_node=CONTRACT_PLAYER_NODE)
+                           "it hellos, is invited and validates again when "
+                           "the link is back",
+                   handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.expect_join(0, CONTRACT_PLAYER_NODE)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
     rec.link_down(2000)
     rec.advance_to(17000)                    # 17 s of silence: past the 15 s
     rec.link_up(17000)
     rec.expect_hello(17000)
-    rec.expect_join(17000, CONTRACT_PLAYER_NODE)
+    rec.advance_to(17000 + ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(17000 + ACCEPT_AFTER_MS)
     rec.advance_to(17500)
     return rec.finish()
 
 
 def error_no_state_change() -> dict:
-    """An `/$DEV/error` changes nothing. The tap at 200 arrives with no
-    role and no lobby to receive it and is refused with `error ss ["tap",
-    "device not registered"]`; the `/$DEV/room` snapshot after it is
-    identical to the one before it, the heartbeat keeps its cadence, and a
-    join 6 s later is still granted.
+    """An `/$DEV/error` changes nothing. The device never accepts, so at
+    start it holds the jam role, whose handler refuses a hold with
+    `/$DEV/error ["hold", "jammer role uses tap only"]`. Nothing else
+    follows it: no `/room`, no `/role`, no `/release`. The heartbeat
+    keeps its cadence, and a tap afterwards still plays `tick`.
+
+    In contract v2 this error came from a pre-role tap with no lobby to
+    receive it. A v3 device sends no gesture before a role (the verb table
+    marks tap pre_role false), so the error now comes from a gesture the
+    role's own handler refuses (the kit brief kept the pre-role tap; the
+    recording wins).
     """
     rec = Recorder(name="error_no_state_change",
-                   summary="A tap with no lobby and no role draws an /error "
-                           "that changes nothing; a later join still works",
-                   join_node=None)
+                   summary="A refused gesture draws an /error that changes "
+                           "nothing; a later tap still plays",
+                   handshake=None)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.tap(200, duration_ms=80.0)
+    rec.start(START_T)
+    rec.hold(START_T + 500, held_s=0.65)
     rec.advance_to(5000)
     rec.expect_hello(5000)
-    rec.join_now(6000, CONTRACT_PLAYER_NODE)
+    rec.tap(6000, duration_ms=80.0)
+    rec.expect_play(6000, "tick")
     rec.advance_to(6300)
     return rec.finish()
 
@@ -380,49 +633,52 @@ def malformed_dropped() -> dict:
     rec = Recorder(name="malformed_dropped",
                    summary="An unknown verb, a bad typespec and a non-list "
                            "leds arg are dropped; the device carries on",
-                   join_node=CONTRACT_PLAYER_NODE)
+                   handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.advance_to(200)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.advance_to(START_T + 200)
     rec.control_send_now("/$DEV/bogus", "s", ["hello"], malformed=True)
     rec.control_send_now("/$DEV/role", "s", ["not json"], malformed=True)
     rec.control_send_now("/$DEV/leds", "b", ["not a list"], malformed=True)
-    rec.tap(700, duration_ms=80.0)
-    rec.expect_play(700, "tick")             # a later gesture round-trips
-    rec.advance_to(SIGNATURE_SETTLED_MS)
-    rec.expect_frame(SIGNATURE_SETTLED_MS)   # a later frame still shows
+    rec.tap(START_T + 700, duration_ms=80.0)
+    rec.expect_play(START_T + 700, "tick")   # a later gesture round-trips
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)         # a later frame still shows
     rec.advance_to(5000)
     rec.expect_hello(5000)
     return rec.finish()
 
 
 def link_loss_keeps_display() -> dict:
-    """Rule 8's two device-side halves, and the fresh join a compliant
-    device sends once the link is back: a lost link ends the device's
-    held role, in every profile, and a rev1 device (the board, and the
-    app's rev1 profile) keeps its last frame lit through the loss until a
-    fresh role's own frames replace it. The heartbeat halts while the
-    link is down (rule 1's own "while the link stays up").
+    """Guide rule 9 (checklist item 7) past the 15 s stale timeout while
+    RUNNING: the device KEEPS its held role and round id across the loss,
+    in every profile, and a rev1 device (the board, and the app's rev1
+    profile) keeps its last frame lit through the loss. The heartbeat
+    halts while the link is down (rule 1's own "while the link stays up").
 
-    "Role ends" is not itself something a device sends over the wire, so
-    nothing here checks it directly. What IS wire-observable, and what
-    this scenario actually pins, is its consequence: a device that
-    correctly cleared its role when the link fell re-joins from scratch
-    once the link is back (the `expect_out` pair at t=17000), exactly as
-    `link_loss_rejoin` already pins for Control's own 15 s reap. A device
-    that wrongly went on believing it still held a role across the outage
-    would have no reason to send that join again.
+    Control reaps the silent device during the outage, so the fade and
+    `/$DEV/release` it sends then are never heard. Once the link is back
+    the device hellos (t=LINK_BACK_T); Control no longer knows it, so that
+    hello is a RUNNING walk-up and is answered with a fresh `/$DEV/role`,
+    the JAM role this time, not the scored role the device still holds (a
+    scored slot is only ever won in SETUP). The new `/role` supersedes the
+    held one, and its frames replace the held look. A device that dropped
+    its role on the loss passes this file too; `link_blip_keeps_role` is
+    the scenario that tells the two apart.
 
     The outage-window `expect_frame` is HAND-AUTHORED
     (`Recorder.expect_frame_held`), like the pair in
     `timed_frames_hold_last`, and for the same structural reason: this
     recorder can only observe what Control sends, and during a link loss
     the device hears none of it. Control itself stays quiet here until its
-    own 15 s stale timeout starts the reap fade (at t=15018 -- well after
-    this scenario's own outage check at t=8000), but a runner replaying
-    this file must not depend on that timing either way; what the device
-    is still showing has to be told to the recording directly, as whatever
-    had already reached it before the link fell.
+    own 15 s stale timeout starts the reap fade (well after this
+    scenario's own outage check), but a runner replaying this file must
+    not depend on that timing either way; what the device is still showing
+    has to be told to the recording directly, as whatever had already
+    reached it before the link fell.
 
     Whether a real Rev 1 board keeps its pixels lit through a link loss,
     rather than going dark, is inferred from the firmware plan's A2 code,
@@ -430,33 +686,77 @@ def link_loss_keeps_display() -> dict:
     section 7) before mm-devshroom's replay tests adopt this scenario.
     """
     rec = Recorder(name="link_loss_keeps_display",
-                   summary="A lost link ends the role and halts the "
-                           "heartbeat; a rev1 device keeps its last frame "
-                           "lit through the outage and rejoins once the "
-                           "link is back",
-                   join_node=CONTRACT_PLAYER_NODE)
+                   summary="A lost link halts the heartbeat; a rev1 device "
+                           "keeps its last frame lit through the outage, "
+                           "and once the link is back past the 15 s "
+                           "timeout a fresh jam role replaces the held one",
+                   handshake=ACCEPT_POLICY)
     rec.link_up(0)
     rec.expect_hello(0)
-    rec.expect_join(0, CONTRACT_PLAYER_NODE)
-    rec.advance_to(SIGNATURE_SETTLED_MS)
-    rec.expect_frame(SIGNATURE_SETTLED_MS)          # the settled role look
-    rec.link_down(SIGNATURE_SETTLED_MS)
-    rec.expect_quiet(SIGNATURE_SETTLED_MS,
-                     ["/game/hello", *POST_ROLE_GESTURES], 15000)
-    rec.expect_frame_held(8000, since_t_ms=SIGNATURE_SETTLED_MS)
-    rec.advance_to(17000)                           # 17 s of silence: past the 15 s
-    rec.link_up(17000)
-    rec.expect_hello(17000)
-    rec.expect_join(17000, CONTRACT_PLAYER_NODE)
-    rec.advance_to(17000 + SIGNATURE_SETTLED_MS)
-    rec.expect_frame(17000 + SIGNATURE_SETTLED_MS)  # the fresh role's settled look
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)                # the settled role look
+    rec.link_down(ROLE_SETTLED_T)
+    rec.expect_quiet(ROLE_SETTLED_T,
+                     ["/game/hello", "/game/tap", *POST_ROLE_GESTURES],
+                     LINK_BACK_T - ROLE_SETTLED_T)
+    rec.expect_frame_held(9000, since_t_ms=ROLE_SETTLED_T)
+    rec.advance_to(LINK_BACK_T)                     # past the 15 s timeout
+    rec.link_up(LINK_BACK_T)
+    rec.expect_hello(LINK_BACK_T)
+    rec.advance_to(LINK_BACK_T + SIGNATURE_SETTLED_MS)
+    rec.expect_frame(LINK_BACK_T + SIGNATURE_SETTLED_MS)  # the jam role's look
     return rec.finish()
 
 
+
+def link_blip_keeps_role() -> dict:
+    """Guide rule 9 (checklist item 7) inside the 15 s stale timeout while
+    RUNNING: the link drops at t=ROLE_SETTLED_T and is back at
+    t=BLIP_BACK_T, before Control has noticed anything. Control sends
+    nothing new: no `/$DEV/role`, no `/$DEV/handshake`, no `/$DEV/release`,
+    no `/$DEV/room`. The device must therefore still hold the scored role
+    it had: it hellos on link-up and every 5 s from there, and a tap at
+    t=BLIP_TAP_T goes out and plays the role's `tick`. A device that
+    dropped its role on the loss would hold back that tap (rule 2) and
+    fail, and nothing would ever give it a role again this round.
+    """
+    rec = Recorder(name="link_blip_keeps_role",
+                   summary="A link that drops and returns inside 15 s while "
+                           "RUNNING changes nothing: no role is re-sent and "
+                           "the held role still plays",
+                   handshake=ACCEPT_POLICY)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)                # the settled role look
+    rec.link_down(ROLE_SETTLED_T)
+    rec.expect_quiet(ROLE_SETTLED_T,
+                     ["/game/hello", "/game/tap", *POST_ROLE_GESTURES],
+                     BLIP_BACK_T - ROLE_SETTLED_T)
+    rec.link_up(BLIP_BACK_T)
+    rec.expect_hello(BLIP_BACK_T)
+    rec.tap(BLIP_TAP_T, duration_ms=80.0)
+    rec.expect_play(BLIP_TAP_T, "tick")
+    rec.advance_to(BLIP_BACK_T + 5000)
+    rec.expect_hello(BLIP_BACK_T + 5000)
+    rec.advance_to(BLIP_BACK_T + 5500)
+    return rec.finish()
+
 ALL_SCENARIOS: tuple[Callable[[], dict], ...] = (
     boot_hello_heartbeat,
-    explicit_join_role,
-    lobby_tap_join,
+    handshake_validate_then_role,
+    handshake_over_cap_deny,
+    handshake_stale_round,
+    late_hello_gets_jam,
+    jam_solo_fallback,
+    room_node_handshake_binds,
+    join_retired_error,
     timed_frames_hold_last,
     gestures_after_role,
     deny_stays_hellod,
@@ -466,4 +766,5 @@ ALL_SCENARIOS: tuple[Callable[[], dict], ...] = (
     error_no_state_change,
     malformed_dropped,
     link_loss_keeps_display,
+    link_blip_keeps_role,
 )

@@ -12,11 +12,16 @@ from control.catalog import load_catalog
 from control.cues import LightCue, PlayCue
 from control.engine import GameServer
 from control.instrument import DEFAULTSHROOM, satisfies
+from tests.helpers_admit import admit
 from contract_kit.contract_bit import (
+    CONTRACT_JAM_NODE,
     CONTRACT_PLAYER_NODE,
+    JAMMER_REFUSAL,
     REV1_CAPABILITIES,
     ContractBit,
 )
+from contract_kit.solo_contract_bit import SoloContractBit
+from control.roles import RoleClass
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,6 +37,33 @@ def test_role_table_has_one_scored_player_node_requiring_rev1():
     assert player.scored
     assert rt.node_map[CONTRACT_PLAYER_NODE] == ["player"]
     assert player.requires == "rev1"
+    # Contract v3: a bounded scored role, so one accept fills the round.
+    assert player.role_class is RoleClass.UNIQUE and player.capacity == 1
+
+
+def test_role_table_has_an_unscored_jam_role_using_tap():
+    rt = ContractBit().role_table
+    jammer = rt.roles["jammer"]
+    assert jammer.role_class is RoleClass.JAM and not jammer.scored
+    assert jammer.uses == ["tap"] and jammer.requires is None
+    assert rt.node_map[CONTRACT_JAM_NODE] == ["jammer"]
+
+
+def test_solo_contract_bit_has_the_same_player_and_no_jam_role():
+    rt = SoloContractBit().role_table
+    assert set(rt.roles) == {"player"}
+    assert rt.roles["player"] == ContractBit().role_table.roles["player"]
+
+
+def test_a_jammers_hold_and_swing_are_refused_and_a_players_are_not():
+    bit = ContractBit()
+    bit.on_join("jam1", "jammer")
+    bit.on_join("ply1", "player")
+    handlers = bit.verb_handlers()
+    assert handlers["hold"]("jam1", ["jam1", 0.65, 1], at=1.0) == JAMMER_REFUSAL
+    assert handlers["swing"]("jam1", ["jam1", 1.8, 1], at=1.0) == JAMMER_REFUSAL
+    assert handlers["hold"]("ply1", ["ply1", 0.65, 1], at=1.0) != JAMMER_REFUSAL
+    assert handlers["swing"]("ply1", ["ply1", 1.8, 1], at=1.0) == []
 
 
 def test_instrument_requirements_admit_rev1_and_refuse_defaultshroom():
@@ -97,14 +129,15 @@ def test_gameserver_grants_player_role_to_tuneshroom_rev1_and_refuses_others():
     gs.load_bit("ContractBit")
 
     gs.hello("dev_rev1", "rev1-dev", "1", instrument="tuneshroom_rev1")
-    granted = gs.join("dev_rev1", CONTRACT_PLAYER_NODE)
+    # Handshake validates in SETUP (spec 3.2); the role is bound at start.
+    granted = admit(gs, "dev_rev1", CONTRACT_PLAYER_NODE)
     assert granted.granted
     assert granted.role == "player"
 
     gs.hello("dev_tune", "tune-dev", "1", instrument="tuneshroom")
-    refused_tune = gs.join("dev_tune", CONTRACT_PLAYER_NODE)
+    refused_tune = admit(gs, "dev_tune", CONTRACT_PLAYER_NODE)
     assert not refused_tune.granted
 
     gs.hello("dev_test", "test-dev", "1", instrument="testshroom")
-    refused_test = gs.join("dev_test", CONTRACT_PLAYER_NODE)
+    refused_test = admit(gs, "dev_test", CONTRACT_PLAYER_NODE)
     assert not refused_test.granted

@@ -11,12 +11,17 @@ pytest.importorskip("luxaeterna.backends.websim")
 from bits.test.test_bit import TestBit
 from control.engine import GameServer
 from harness.device_bridge import DeviceBridge
+from tests.helpers_admit import admit, admit_running
 
 
 def _granted_join():
     gs = GameServer({"test_bit": TestBit})
     gs.load_bit("test_bit")
-    res = gs.join("dev1", "TEST_PLAYER_NODE")
+    grants = []
+    gs.on_grant = lambda dev, result: grants.append(result)
+    # The composed grant (config blob) exists only at start (spec 3.5).
+    admit_running(gs, "dev1", "TEST_PLAYER_NODE")
+    res = grants[0]
     assert res.granted
     return res
 
@@ -68,7 +73,8 @@ def test_on_release_is_safe_before_any_grant():
 
 def test_on_grant_rejects_a_denied_join():
     gs = GameServer({"test_bit": TestBit})          # no load_bit -> not accepting
-    res = gs.join("dev1", "TEST_PLAYER_NODE")
+    res = admit(gs, "dev1", "TEST_PLAYER_NODE")
     assert res.granted is False
+    assert res.reason == "registration closed"
     with pytest.raises(ValueError):
         DeviceBridge().on_grant(res)

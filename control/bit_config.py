@@ -309,18 +309,25 @@ def _parse_start(raw: dict, *, source: str) -> StartCondition:
 
 
 def _parse_lobby(raw: dict, *, source: str) -> LobbyConfig:
-    known = {"enabled", "invite_interval_s", "ceremony_gap_s",
-             "double_tap_window_s"}
+    # double_tap_window_s left with the double tap (spec 2026-10-01): an
+    # old manifest still naming it takes the unknown-key warning path.
+    known = {"enabled", "invite_interval_s", "ceremony_gap_s", "max_scored"}
     _warn_unknown_keys(raw, known, source=source, prefix="lobby")
     enabled = _get(raw, "enabled", bool, True, source=source, prefix="lobby")
     out = {}
-    for name in ("invite_interval_s", "ceremony_gap_s", "double_tap_window_s"):
+    for name in ("invite_interval_s", "ceremony_gap_s"):
         value = raw.get(name, getattr(DEFAULT_LOBBY, name))
         if not _is_number(value) or value < 0:
             raise ManifestError(source=source, key=f"lobby.{name}",
                                  message="expected a non-negative number")
         out[name] = float(value)
-    return LobbyConfig(enabled=enabled, **out)
+    max_scored = raw.get("max_scored")
+    if max_scored is not None and (
+            isinstance(max_scored, bool) or not isinstance(max_scored, int)
+            or max_scored < 1):
+        raise ManifestError(source=source, key="lobby.max_scored",
+                             message="expected a positive integer")
+    return LobbyConfig(enabled=enabled, max_scored=max_scored, **out)
 
 
 def _parse_console(raw: dict, *, source: str) -> ConsoleBlock:

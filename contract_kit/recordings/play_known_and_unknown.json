@@ -1,6 +1,9 @@
 {
   "device": {
-    "join_node": "CONTRACT_PLAYER_NODE"
+    "handshake": {
+      "ack_after_ms": 300,
+      "node": ""
+    }
   },
   "name": "play_known_and_unknown",
   "profiles": [
@@ -34,13 +37,22 @@
             "bit": "ContractBit",
             "nodes": [
               {
-                "capacity": null,
+                "capacity": 1,
                 "count": 0,
                 "id": "CONTRACT_PLAYER_NODE",
                 "roles": [
                   "player"
                 ],
                 "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
               }
             ],
             "state": "SETUP",
@@ -51,6 +63,31 @@
         "typespec": "b"
       },
       "t": 0
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/handshake",
+        "args": [
+          "$ROUND"
+        ],
+        "at": null,
+        "typespec": "s"
+      },
+      "t": 0
+    },
+    {
+      "expect_out": {
+        "address": "/game/handshake",
+        "args": [
+          "$DEV",
+          "$ROUND",
+          ""
+        ],
+        "stamp_t": null,
+        "typespec": "sss",
+        "within_ms": 50
+      },
+      "t": 300
     },
     {
       "control_sends": {
@@ -60,13 +97,22 @@
             "bit": "ContractBit",
             "nodes": [
               {
-                "capacity": null,
+                "capacity": 1,
                 "count": 1,
                 "id": "CONTRACT_PLAYER_NODE",
                 "roles": [
                   "player"
                 ],
                 "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
               }
             ],
             "state": "SETUP",
@@ -76,14 +122,61 @@
         "at": null,
         "typespec": "b"
       },
-      "t": 0
+      "t": 300
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/validated",
+        "args": [
+          "$ROUND",
+          "player"
+        ],
+        "at": null,
+        "typespec": "ss"
+      },
+      "t": 300
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/room",
+        "args": [
+          {
+            "bit": "ContractBit",
+            "nodes": [
+              {
+                "capacity": 1,
+                "count": 1,
+                "id": "CONTRACT_PLAYER_NODE",
+                "roles": [
+                  "player"
+                ],
+                "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
+              }
+            ],
+            "state": "RUNNING",
+            "version": "0.1"
+          }
+        ],
+        "at": null,
+        "typespec": "b"
+      },
+      "t": 1000
     },
     {
       "control_sends": {
         "address": "/$DEV/role",
         "args": [
           {
-            "class": "SHARED",
+            "class": "UNIQUE",
             "instrument": {
               "ambient": {
                 "light": {},
@@ -149,7 +242,42 @@
         "at": null,
         "typespec": "b"
       },
-      "t": 0
+      "t": 1000
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/room",
+        "args": [
+          {
+            "bit": "ContractBit",
+            "nodes": [
+              {
+                "capacity": 1,
+                "count": 1,
+                "id": "CONTRACT_PLAYER_NODE",
+                "roles": [
+                  "player"
+                ],
+                "scored": true
+              },
+              {
+                "capacity": null,
+                "count": 0,
+                "id": "CONTRACT_JAM_NODE",
+                "roles": [
+                  "jammer"
+                ],
+                "scored": false
+              }
+            ],
+            "state": "RUNNING",
+            "version": "0.1"
+          }
+        ],
+        "at": null,
+        "typespec": "b"
+      },
+      "t": 1000
     },
     {
       "control_sends": {
@@ -194,10 +322,10 @@
             0
           ]
         ],
-        "at": 60,
+        "at": 1060,
         "typespec": "b"
       },
-      "t": 0
+      "t": 1000
     },
     {
       "control_sends": {
@@ -242,10 +370,10 @@
             0
           ]
         ],
-        "at": 83,
+        "at": 1083,
         "typespec": "b"
       },
-      "t": 23
+      "t": 1023
     },
     {
       "control_sends": {
@@ -290,10 +418,10 @@
             0
           ]
         ],
-        "at": 106,
+        "at": 1106,
         "typespec": "b"
       },
-      "t": 46
+      "t": 1046
     },
     {
       "control_sends": {
@@ -338,10 +466,10 @@
             0
           ]
         ],
-        "at": 129,
+        "at": 1129,
         "typespec": "b"
       },
-      "t": 69
+      "t": 1069
     },
     {
       "control_sends": {
@@ -386,10 +514,10 @@
             0
           ]
         ],
-        "at": 152,
+        "at": 1152,
         "typespec": "b"
       },
-      "t": 92
+      "t": 1092
     },
     {
       "control_sends": {
@@ -434,10 +562,10 @@
             0
           ]
         ],
-        "at": 175,
+        "at": 1175,
         "typespec": "b"
       },
-      "t": 115
+      "t": 1115
     },
     {
       "control_sends": {
@@ -482,10 +610,10 @@
             0
           ]
         ],
-        "at": 198,
+        "at": 1198,
         "typespec": "b"
       },
-      "t": 138
+      "t": 1138
     },
     {
       "control_sends": {
@@ -530,10 +658,10 @@
             0
           ]
         ],
-        "at": 221,
+        "at": 1221,
         "typespec": "b"
       },
-      "t": 161
+      "t": 1161
     },
     {
       "control_sends": {
@@ -578,18 +706,18 @@
             0
           ]
         ],
-        "at": 244,
+        "at": 1244,
         "typespec": "b"
       },
-      "t": 184
+      "t": 1184
     },
     {
       "gesture": {
         "duration_ms": 80.0,
         "kind": "tap",
-        "onset_t": 200
+        "onset_t": 1200
       },
-      "t": 200
+      "t": 1200
     },
     {
       "expect_out": {
@@ -600,11 +728,11 @@
           80.0,
           1
         ],
-        "stamp_t": 200,
+        "stamp_t": 1200,
         "typespec": "sffi",
         "within_ms": 50
       },
-      "t": 200
+      "t": 1200
     },
     {
       "expect_play": {
@@ -612,7 +740,7 @@
         "params": "",
         "within_ms": 50
       },
-      "t": 200
+      "t": 1200
     },
     {
       "control_sends": {
@@ -657,10 +785,10 @@
             0
           ]
         ],
-        "at": 260,
+        "at": 1260,
         "typespec": "b"
       },
-      "t": 200
+      "t": 1200
     },
     {
       "control_sends": {
@@ -672,7 +800,7 @@
         "at": null,
         "typespec": "ss"
       },
-      "t": 200
+      "t": 1200
     },
     {
       "control_sends": {
@@ -717,10 +845,10 @@
             0
           ]
         ],
-        "at": 283,
+        "at": 1283,
         "typespec": "b"
       },
-      "t": 223
+      "t": 1223
     },
     {
       "control_sends": {
@@ -765,10 +893,10 @@
             0
           ]
         ],
-        "at": 306,
+        "at": 1306,
         "typespec": "b"
       },
-      "t": 246
+      "t": 1246
     },
     {
       "control_sends": {
@@ -813,10 +941,10 @@
             0
           ]
         ],
-        "at": 329,
+        "at": 1329,
         "typespec": "b"
       },
-      "t": 269
+      "t": 1269
     },
     {
       "control_sends": {
@@ -861,10 +989,10 @@
             0
           ]
         ],
-        "at": 352,
+        "at": 1352,
         "typespec": "b"
       },
-      "t": 292
+      "t": 1292
     },
     {
       "control_sends": {
@@ -909,10 +1037,10 @@
             0
           ]
         ],
-        "at": 398,
+        "at": 1398,
         "typespec": "b"
       },
-      "t": 338
+      "t": 1338
     },
     {
       "control_sends": {
@@ -957,10 +1085,10 @@
             0
           ]
         ],
-        "at": 421,
+        "at": 1421,
         "typespec": "b"
       },
-      "t": 361
+      "t": 1361
     },
     {
       "control_sends": {
@@ -1005,10 +1133,10 @@
             0
           ]
         ],
-        "at": 444,
+        "at": 1444,
         "typespec": "b"
       },
-      "t": 384
+      "t": 1384
     },
     {
       "control_sends": {
@@ -1053,10 +1181,10 @@
             0
           ]
         ],
-        "at": 467,
+        "at": 1467,
         "typespec": "b"
       },
-      "t": 407
+      "t": 1407
     },
     {
       "control_sends": {
@@ -1101,10 +1229,10 @@
             0
           ]
         ],
-        "at": 490,
+        "at": 1490,
         "typespec": "b"
       },
-      "t": 430
+      "t": 1430
     },
     {
       "control_sends": {
@@ -1149,10 +1277,10 @@
             0
           ]
         ],
-        "at": 513,
+        "at": 1513,
         "typespec": "b"
       },
-      "t": 453
+      "t": 1453
     },
     {
       "control_sends": {
@@ -1197,10 +1325,10 @@
             0
           ]
         ],
-        "at": 536,
+        "at": 1536,
         "typespec": "b"
       },
-      "t": 476
+      "t": 1476
     },
     {
       "control_sends": {
@@ -1245,10 +1373,10 @@
             0
           ]
         ],
-        "at": 559,
+        "at": 1559,
         "typespec": "b"
       },
-      "t": 499
+      "t": 1499
     },
     {
       "control_sends": {
@@ -1293,10 +1421,10 @@
             0
           ]
         ],
-        "at": 582,
+        "at": 1582,
         "typespec": "b"
       },
-      "t": 522
+      "t": 1522
     },
     {
       "control_sends": {
@@ -1341,10 +1469,10 @@
             0
           ]
         ],
-        "at": 605,
+        "at": 1605,
         "typespec": "b"
       },
-      "t": 545
+      "t": 1545
     },
     {
       "control_sends": {
@@ -1389,10 +1517,10 @@
             0
           ]
         ],
-        "at": 628,
+        "at": 1628,
         "typespec": "b"
       },
-      "t": 568
+      "t": 1568
     },
     {
       "control_sends": {
@@ -1437,10 +1565,10 @@
             0
           ]
         ],
-        "at": 651,
+        "at": 1651,
         "typespec": "b"
       },
-      "t": 591
+      "t": 1591
     },
     {
       "control_sends": {
@@ -1485,10 +1613,10 @@
             0
           ]
         ],
-        "at": 674,
+        "at": 1674,
         "typespec": "b"
       },
-      "t": 614
+      "t": 1614
     },
     {
       "control_sends": {
@@ -1533,10 +1661,10 @@
             0
           ]
         ],
-        "at": 697,
+        "at": 1697,
         "typespec": "b"
       },
-      "t": 637
+      "t": 1637
     },
     {
       "control_sends": {
@@ -1581,10 +1709,10 @@
             0
           ]
         ],
-        "at": 720,
+        "at": 1720,
         "typespec": "b"
       },
-      "t": 660
+      "t": 1660
     },
     {
       "control_sends": {
@@ -1629,18 +1757,18 @@
             0
           ]
         ],
-        "at": 743,
+        "at": 1743,
         "typespec": "b"
       },
-      "t": 683
+      "t": 1683
     },
     {
       "gesture": {
         "held_s": 0.65,
         "kind": "hold",
-        "onset_t": 700
+        "onset_t": 1700
       },
-      "t": 700
+      "t": 1700
     },
     {
       "expect_out": {
@@ -1650,11 +1778,11 @@
           0.65,
           1
         ],
-        "stamp_t": 700,
+        "stamp_t": 1700,
         "typespec": "sfi",
         "within_ms": 50
       },
-      "t": 700
+      "t": 1700
     },
     {
       "control_sends": {
@@ -1699,10 +1827,10 @@
             0
           ]
         ],
-        "at": 760,
+        "at": 1760,
         "typespec": "b"
       },
-      "t": 700
+      "t": 1700
     },
     {
       "control_sends": {
@@ -1714,7 +1842,7 @@
         "at": null,
         "typespec": "ss"
       },
-      "t": 700
+      "t": 1700
     },
     {
       "control_sends": {
@@ -1759,10 +1887,10 @@
             0
           ]
         ],
-        "at": 783,
+        "at": 1783,
         "typespec": "b"
       },
-      "t": 723
+      "t": 1723
     },
     {
       "control_sends": {
@@ -1807,10 +1935,10 @@
             0
           ]
         ],
-        "at": 806,
+        "at": 1806,
         "typespec": "b"
       },
-      "t": 746
+      "t": 1746
     },
     {
       "control_sends": {
@@ -1855,10 +1983,10 @@
             0
           ]
         ],
-        "at": 829,
+        "at": 1829,
         "typespec": "b"
       },
-      "t": 769
+      "t": 1769
     },
     {
       "control_sends": {
@@ -1903,10 +2031,10 @@
             0
           ]
         ],
-        "at": 852,
+        "at": 1852,
         "typespec": "b"
       },
-      "t": 792
+      "t": 1792
     },
     {
       "control_sends": {
@@ -1951,10 +2079,10 @@
             0
           ]
         ],
-        "at": 875,
+        "at": 1875,
         "typespec": "b"
       },
-      "t": 815
+      "t": 1815
     },
     {
       "control_sends": {
@@ -1999,10 +2127,10 @@
             0
           ]
         ],
-        "at": 898,
+        "at": 1898,
         "typespec": "b"
       },
-      "t": 838
+      "t": 1838
     },
     {
       "control_sends": {
@@ -2047,10 +2175,10 @@
             0
           ]
         ],
-        "at": 944,
+        "at": 1944,
         "typespec": "b"
       },
-      "t": 884
+      "t": 1884
     },
     {
       "control_sends": {
@@ -2095,10 +2223,10 @@
             0
           ]
         ],
-        "at": 967,
+        "at": 1967,
         "typespec": "b"
       },
-      "t": 907
+      "t": 1907
     },
     {
       "control_sends": {
@@ -2143,10 +2271,10 @@
             0
           ]
         ],
-        "at": 990,
+        "at": 1990,
         "typespec": "b"
       },
-      "t": 930
+      "t": 1930
     },
     {
       "control_sends": {
@@ -2191,10 +2319,10 @@
             0
           ]
         ],
-        "at": 1013,
+        "at": 2013,
         "typespec": "b"
       },
-      "t": 953
+      "t": 1953
     },
     {
       "control_sends": {
@@ -2239,10 +2367,10 @@
             0
           ]
         ],
-        "at": 1036,
+        "at": 2036,
         "typespec": "b"
       },
-      "t": 976
+      "t": 1976
     },
     {
       "control_sends": {
@@ -2287,10 +2415,10 @@
             0
           ]
         ],
-        "at": 1059,
+        "at": 2059,
         "typespec": "b"
       },
-      "t": 999
+      "t": 1999
     },
     {
       "control_sends": {
@@ -2335,10 +2463,10 @@
             0
           ]
         ],
-        "at": 1082,
+        "at": 2082,
         "typespec": "b"
       },
-      "t": 1022
+      "t": 2022
     },
     {
       "control_sends": {
@@ -2383,10 +2511,10 @@
             0
           ]
         ],
-        "at": 1105,
+        "at": 2105,
         "typespec": "b"
       },
-      "t": 1045
+      "t": 2045
     },
     {
       "control_sends": {
@@ -2431,10 +2559,10 @@
             0
           ]
         ],
-        "at": 1128,
+        "at": 2128,
         "typespec": "b"
       },
-      "t": 1068
+      "t": 2068
     },
     {
       "control_sends": {
@@ -2479,10 +2607,10 @@
             0
           ]
         ],
-        "at": 1151,
+        "at": 2151,
         "typespec": "b"
       },
-      "t": 1091
+      "t": 2091
     },
     {
       "control_sends": {
@@ -2527,10 +2655,10 @@
             0
           ]
         ],
-        "at": 1174,
+        "at": 2174,
         "typespec": "b"
       },
-      "t": 1114
+      "t": 2114
     },
     {
       "control_sends": {
@@ -2575,10 +2703,10 @@
             0
           ]
         ],
-        "at": 1197,
+        "at": 2197,
         "typespec": "b"
       },
-      "t": 1137
+      "t": 2137
     },
     {
       "control_sends": {
@@ -2623,10 +2751,10 @@
             0
           ]
         ],
-        "at": 1220,
+        "at": 2220,
         "typespec": "b"
       },
-      "t": 1160
+      "t": 2160
     },
     {
       "control_sends": {
@@ -2671,10 +2799,10 @@
             0
           ]
         ],
-        "at": 1243,
+        "at": 2243,
         "typespec": "b"
       },
-      "t": 1183
+      "t": 2183
     },
     {
       "control_sends": {
@@ -2719,10 +2847,10 @@
             0
           ]
         ],
-        "at": 1266,
+        "at": 2266,
         "typespec": "b"
       },
-      "t": 1206
+      "t": 2206
     },
     {
       "control_sends": {
@@ -2767,10 +2895,10 @@
             0
           ]
         ],
-        "at": 1289,
+        "at": 2289,
         "typespec": "b"
       },
-      "t": 1229
+      "t": 2229
     },
     {
       "control_sends": {
@@ -2815,10 +2943,10 @@
             0
           ]
         ],
-        "at": 1312,
+        "at": 2312,
         "typespec": "b"
       },
-      "t": 1252
+      "t": 2252
     },
     {
       "control_sends": {
@@ -2863,10 +2991,10 @@
             0
           ]
         ],
-        "at": 1335,
+        "at": 2335,
         "typespec": "b"
       },
-      "t": 1275
+      "t": 2275
     },
     {
       "control_sends": {
@@ -2911,10 +3039,10 @@
             0
           ]
         ],
-        "at": 1358,
+        "at": 2358,
         "typespec": "b"
       },
-      "t": 1298
+      "t": 2298
     },
     {
       "control_sends": {
@@ -2959,10 +3087,10 @@
             0
           ]
         ],
-        "at": 1381,
+        "at": 2381,
         "typespec": "b"
       },
-      "t": 1321
+      "t": 2321
     },
     {
       "control_sends": {
@@ -3007,10 +3135,10 @@
             0
           ]
         ],
-        "at": 1404,
+        "at": 2404,
         "typespec": "b"
       },
-      "t": 1344
+      "t": 2344
     },
     {
       "control_sends": {
@@ -3055,10 +3183,10 @@
             0
           ]
         ],
-        "at": 1427,
+        "at": 2427,
         "typespec": "b"
       },
-      "t": 1367
+      "t": 2367
     },
     {
       "control_sends": {
@@ -3103,10 +3231,10 @@
             0
           ]
         ],
-        "at": 1450,
+        "at": 2450,
         "typespec": "b"
       },
-      "t": 1390
+      "t": 2390
     },
     {
       "control_sends": {
@@ -3151,10 +3279,10 @@
             0
           ]
         ],
-        "at": 1473,
+        "at": 2473,
         "typespec": "b"
       },
-      "t": 1413
+      "t": 2413
     },
     {
       "control_sends": {
@@ -3199,10 +3327,10 @@
             0
           ]
         ],
-        "at": 1496,
+        "at": 2496,
         "typespec": "b"
       },
-      "t": 1436
+      "t": 2436
     },
     {
       "control_sends": {
@@ -3247,10 +3375,10 @@
             0
           ]
         ],
-        "at": 1519,
+        "at": 2519,
         "typespec": "b"
       },
-      "t": 1459
+      "t": 2459
     },
     {
       "control_sends": {
@@ -3295,10 +3423,10 @@
             0
           ]
         ],
-        "at": 1542,
+        "at": 2542,
         "typespec": "b"
       },
-      "t": 1482
+      "t": 2482
     },
     {
       "control_sends": {
@@ -3343,10 +3471,10 @@
             153
           ]
         ],
-        "at": 1565,
+        "at": 2565,
         "typespec": "b"
       },
-      "t": 1505
+      "t": 2505
     },
     {
       "expect_out": {
@@ -3360,32 +3488,6 @@
         "stamp_t": null,
         "typespec": "ssss",
         "within_ms": 50
-      },
-      "t": 5000
-    },
-    {
-      "control_sends": {
-        "address": "/$DEV/room",
-        "args": [
-          {
-            "bit": "ContractBit",
-            "nodes": [
-              {
-                "capacity": null,
-                "count": 1,
-                "id": "CONTRACT_PLAYER_NODE",
-                "roles": [
-                  "player"
-                ],
-                "scored": true
-              }
-            ],
-            "state": "SETUP",
-            "version": "0.1"
-          }
-        ],
-        "at": null,
-        "typespec": "b"
       },
       "t": 5000
     }

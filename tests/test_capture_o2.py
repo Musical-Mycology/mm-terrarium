@@ -1,4 +1,5 @@
-"""CaptureBit end to end over the o2lite transport: hello, join, open,
+"""CaptureBit end to end over the o2lite transport: hello (a RUNNING
+walk-up holds the recorder role), open,
 chunked telemetry, close, and a trace on disk with every sample and every
 PCM frame, no gaps. Carries tests/test_capture_smoke.py (deleted with the
 websocket wire) onto the only device transport."""
@@ -9,7 +10,7 @@ import pytest
 
 pytest.importorskip("luxaeterna")
 
-from bits.capture.capture_bit import CAPTURE_NODE, CaptureBit   # noqa: E402
+from bits.capture.capture_bit import CaptureBit                  # noqa: E402
 from capture.store import CaptureStore                            # noqa: E402
 from control.engine import GameServer                             # noqa: E402
 from control.wire_json import dumps as wire_dumps                 # noqa: E402
@@ -47,9 +48,13 @@ def _stack(tmp_path):
     agent = DeviceLinkAgent(gs, transport, clock=fake.time_get)
     gs.load_bit("capture")
     gs.run()
+    # A RUNNING hello is the whole entry path in contract v3: the walk-up
+    # gets the recorder role at once (spec 2026-10-01 section 3.6). A v3
+    # device never sends /game/join (it would earn the retirement /error).
     fake.deliver("/game/hello", "ssss", (DEV, "capture-client", "1", "testshroom"))
-    fake.deliver("/game/join", "ss", (DEV, CAPTURE_NODE))
     agent.poll()
+    assert gs.registration.assignments[DEV][1] == "recorder"
+    assert _addressed(fake, f"/{DEV}/role")
     return fake, store, gs, agent
 
 

@@ -29,7 +29,8 @@ from control.join_info import build_join_info
 from control.room_binding import RoomBindingRegistry
 from control.run_profile import RunProfile, deep_merge_overrides, parse_profile
 from control.simulator_process import SimulatorProcess
-from control.start_condition import scored_count, start_decision
+from control.lobby import TERRARIUM_ADMIN
+from control.start_condition import scored_count, timer_decision
 from control.state import State
 from control.teardown import TeardownStack
 from control.terrarium import Terrarium, TerrariumState
@@ -560,11 +561,11 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
                    game_server=None, announce_swaps: bool = False,
                    terrarium=None, uplink=None, pacer=None) -> str:
     """Poll the transport for setup_seconds while the Bit sits in SETUP, so
-    a device can join a scored role before run() closes the window.
-    registration.join() refuses scored roles once RUNNING
-    (control/registration.py's RegistrationState.join), and TestBit's
-    `player` is scored, so without this window harness/o2_shroom.py is
-    denied every time. setup_seconds <= 0 returns immediately (except for an
+    a device can validate a scored slot before run() closes the window.
+    GameServer.handshake() validates scored slots only in SETUP (once
+    RUNNING it denies `registration closed` and the device holds a jam
+    role), and TestBit's `player` is scored, so without this window
+    harness/o2_shroom.py never ends scored. setup_seconds <= 0 returns immediately (except for an
     "admin" condition, below), preserving the load-straight-into-run
     behavior; the value comes from --setup-seconds, else the Bit manifest's
     launch.setup_seconds. Driven by
@@ -576,7 +577,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     predicate rather than a second one. A SIGKILLed or OOM-killed
     run_stack cannot signal this process, so the only way to notice is to
     keep asking. Returns "parent-gone" if that fired, so main() can skip
-    straight to shutdown() instead of calling gs.run() into a stack whose
+    straight to shutdown() instead of starting a round in a stack whose
     supervisor is already gone.
 
     console_agent, when given, is polled once per iteration too -- a device
@@ -600,11 +601,11 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     RUNNING engine.
 
     condition, when given together with game_server, is consulted once per
-    iteration via control.start_condition.start_decision (scored count read
+    iteration via control.start_condition.timer_decision (scored count read
     off game_server via scored_count). "players" conditions distinguish a
     genuinely-met threshold ("players-met") from a timeout resolution
     ("timeout-start"/"timeout-abort") by checking the same scored>=min_scored
-    test start_decision itself prioritizes -- see control/start_condition.py.
+    test timer_decision itself prioritizes -- see control/start_condition.py.
     An "immediate" condition's own elapsed>=setup_seconds threshold is the
     same instant as this function's own deadline, so "expired" always wins
     that race; a "players"/"operator" condition never produces "expired".
@@ -619,7 +620,8 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     one-shot mode must announce nothing -- same gating as the other two
     CONTROL_ROUND_LOADED emit sites). The "state-changed" return itself
     always fires either way regardless of the flag, so the caller's
-    handoff handling (gs.run() or hand off) is unaffected by it.
+    handoff handling (a timer start through gs.request_start, or hand
+    off) is unaffected by it.
 
     Returns "expired", "parent-gone", "state-changed", "players-met",
     "timeout-start", or "timeout-abort".
@@ -629,7 +631,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
     short-circuits this into an immediate "expired") and the countdown
     print says so instead of counting down, since there is nothing to
     count down to -- the hold only ends on a state change or the
-    condition's own timeout_seconds via start_decision.
+    condition's own timeout_seconds via timer_decision.
 
     pacer, when given, replaces the default TickPacer(1/44) built on this
     function's own `sleep` (tests inject one); see harness/tick_pacer.py.
@@ -680,7 +682,7 @@ def _wait_in_setup(agent, setup_seconds: float, clock=time.monotonic,
             return "state-changed"
         if condition is not None and game_server is not None:
             scored = scored_count(game_server)
-            decision = start_decision(condition, scored=scored,
+            decision = timer_decision(condition, scored=scored,
                                       elapsed=now - start,
                                       setup_seconds=setup_seconds)
             if decision is not None:
@@ -860,7 +862,8 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
          state-change escape.
       4. "timeout-abort" -- the operator (or nobody) never met the start
          condition: `gs.abort()` and go straight to the next round rather
-         than running an unmet Bit. Otherwise `gs.run()`, but ONLY if the
+         than running an unmet Bit. Otherwise a timer start through
+         `gs.request_start(None, TERRARIUM_ADMIN, "timer")`, but ONLY if the
          engine is still in SETUP -- the same operator-handoff guard
          main() applies to round 1, since the Console is a second driver
          that can move the engine on its own during the hold.
@@ -916,7 +919,7 @@ def _serve_rounds(gs, agent, arco, *, parent_pid: int | None = None,
             _end_round(bit_name, f"timeout-abort ({scored} scored joined)")
             continue
         if gs.state is State.SETUP:
-            gs.run()
+            gs.request_start(None, TERRARIUM_ADMIN, "timer")
         # else: the operator already drove the engine from the Console
         # during the hold -- a handoff, not an error (same guard main()
         # applies to round 1).
@@ -1039,10 +1042,16 @@ class _LifecycleLogger:
     shapes ConsoleAgent does (there is no per-call payload at all; both
     hooks are pure "something changed, go re-read gs" signals).
 
-    Denials never reach this seam: GameServer.join() returns a refused
-    JoinResult without ever touching registration state, so neither hook
-    fires for a deny. Those print via DeviceLinkAgent's own on_join_denied
-    sink instead -- see _print_join_denied below.
+    Denials never reach this seam: GameServer.handshake() returns a
+    refused JoinResult without ever touching registration state, so neither
+    hook fires for a deny. Those print via DeviceLinkAgent's own
+    on_join_denied sink instead -- see _print_join_denied below.
+
+    A validation fires on_registration_change without touching
+    assignments (it lands in gs.registration.validated), so it prints
+    nothing here; the "join granted" lines print at RUNNING, when run()
+    materializes validations and jam grants into assignments and notifies
+    on_registration_change once.
 
     Derivation:
       - "device hello: <dev>" -- a dev appearing in gs.devices.all() that
@@ -1060,9 +1069,9 @@ class _LifecycleLogger:
         accurate -- both things happened.
       - "join granted: <dev> -> <role> (<category>) via <node>" -- a dev
         whose (node, role, role_class) tuple in gs.registration.assignments
-        is new or changed since the last on_registration_change (a role
-        switch -- re-tapping a different node -- changes the tuple without
-        the dev ever leaving assignments, and must still print).
+        is new or changed since the last on_registration_change. In
+        practice that is RUNNING: the materialized scored and jam roles,
+        and a later RUNNING walk-up's jam role.
       - "device released: <dev>" -- a dev that HAD an assignments entry
         last time but has none now. control/engine.py's on_release is a
         single transport-owned sink (already claimed by DeviceLinkAgent for
@@ -1074,11 +1083,13 @@ class _LifecycleLogger:
         against the assignments snapshot on_registration_change last left
         behind.
 
-    A Room join (role_class ROOM) never reaches either hook's assignments
-    diff as a grant: GameServer.join() returns before notifying
-    on_registration_change for those (control/engine.py's _bind_room()
-    notifies on_devices_change only), the same exclusion
-    ConsoleAgent._non_room_counts() applies to the registration panel.
+    A Room bind (role_class ROOM) normally never reaches this
+    assignments diff as a grant: GameServer.handshake()'s Room-node branch
+    notifies on_devices_change only (control/engine.py's _bind_room()), the
+    same exclusion ConsoleAgent._non_room_counts() applies to the
+    registration panel. The one exception is a dev that held a validation:
+    binding it frees that reservation, so on_registration_change fires too
+    and its ROOM assignment prints as "join granted ... (room)".
     """
 
     def __init__(self, game_server) -> None:
@@ -2087,7 +2098,7 @@ def main() -> None:
                         stop_clients=stop_clients, uplink=uplink))
             else:
                 if gs.state is State.SETUP:
-                    gs.run()
+                    gs.request_start(None, TERRARIUM_ADMIN, "timer")
                 else:
                     # The operator drove the engine from the Console during
                     # the hold. That is a handoff, not an error: run() from
