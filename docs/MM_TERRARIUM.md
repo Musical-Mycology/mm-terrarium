@@ -1269,6 +1269,17 @@ base64 and compare sha256 on both ends. After a Blender upgrade, re-run
 `tests/fixtures/models/marker_fixture.baked.glb` is the first real bake
 (256 px, the T2 gate).
 
+**Room fixtures and the Tower.** `_parse_room` refuses a fixture whose
+instrument disagrees with it (`fixture_instrument_mismatch`,
+`control/room_profile.py`): a declared `pixels` must equal the blocks' total,
+and a model must have one marker per pixel with each marker's zone one of the
+room zones covering it. `rooms/TOWER.toml` is the first fixture this matters
+for: 14 px (`progress` 0-7, `responder` 8-11, `beat` 12-13, the two base PARs),
+`GRB`, instrument `tower` with no model yet, so it runs on the no-layout
+fallback (a 14-dot strip in the Console). The artist's brief and the import
+recipe are `docs/tower-model-brief.md`; `tests/test_tower_import.py` dry-runs
+the import. Spec: `docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md`.
+
 #### Per-fixture light sessions and sinks
 
 - `DeviceLinkAgent._setup_room` gives every declared fixture, bound or not, its

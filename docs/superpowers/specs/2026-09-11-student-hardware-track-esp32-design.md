@@ -185,6 +185,8 @@ double-tap, and the Mushica cue table is updated to say so.
 
 ### 4.4 Tower: eight segments on one controller, bound as a Room fixture
 
+> **Superseded 2026-10-02** by docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md: the Tower is 8 single 5 V pixels plus 4 responders and 2 PARs (14 px), not a 120 px RGBW strip.
+
 **(recommended)** Eight 250 mm segments of 12 V SK6812 RGBW strip at 60 px/m
 (15 px each, 120 px total, one data line chained top to bottom), diffusion
 film over each, end-glow fiber bundles fed from the segments, PAR lights
@@ -315,6 +317,8 @@ runbook copies and fixes are made after this date.
 Already in hand at ETC (ordered Aug 28): ESP32-P4 boards, LIS3DH ×4,
 MAX98357A ×3, 40 mm speakers ×3, RGBW mini pixels ×20, jumper wire, USB-C
 cables, heat shrink, folding bench table. Two Radxa Zero 3W (spares).
+
+> **Superseded 2026-10-02:** the strip order below is replaced by the Tower drawing's parts (12 square 5 V addressable pixels, two PARs); see docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md.
 
 **Tower order, Week 4 (Sophia lists, Chris orders):** 2.5 m of 12 V SK6812
 RGBW 60 px/m strip, per-LED addressable, confirmed in the listing body ·

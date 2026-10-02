@@ -15,9 +15,12 @@ Rhino Z axis.
 
 - One **sphere** per physical LED, centred where the LED's emitting face sits.
 - Object name `LED_000`, `LED_001`, ... Three digits, zero-padded. **The
-  number is the LED's position on the physical data chain**: `LED_000` is
-  the first SK6812 after the controller. Indices run 0 to N-1 with no gaps
-  and no duplicates, where N is the instrument's pixel count.
+  number is the LED's frame index**: for pixels on a data chain that is the
+  position on the chain (`LED_000` is the first pixel after the controller);
+  a light the firmware drives another way (the Tower's PARs, over DMX) still
+  takes its frame index. Indices run 0 to N-1 with no gaps and no
+  duplicates, where N is the instrument's pixel count. A Room fixture puts
+  its origin at ground center, as its drawing does.
 - Every marker sits on a sublayer of a top-level layer named `LEDs`. The
   sublayer's name is the marker's **zone**: `LEDs::ring`, `LEDs::stem`.
   Zone names are lowercase `[a-z0-9_]+`. A marker directly on `LEDs`
