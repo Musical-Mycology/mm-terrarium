@@ -596,8 +596,8 @@ In `docs/superpowers/plans/2026-09-11-student-hardware-track-esp32.md`, under ea
 
 - [ ] **Step 5: Check and commit**
 
-Run: `grep -c "—" docs/tower-model-brief.md docs/instrument-model-guide.md`
-Expected: both counts 0 (no em dashes introduced; if the guide already had some, the count must be unchanged from `git show HEAD:docs/instrument-model-guide.md | grep -c "—"`).
+Run: `grep -c $'\342\200\224' docs/tower-model-brief.md docs/instrument-model-guide.md`
+Expected: both counts 0 (no em dashes introduced; if the guide already had some, the count must be unchanged from `git show HEAD:docs/instrument-model-guide.md | grep -c $'\342\200\224'`).
 Run: `.venv/bin/python -m pytest tests -q`
 Expected: all pass (some tests render diagrams or lint docs).
 

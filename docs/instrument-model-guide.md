@@ -9,7 +9,8 @@ everything needed to build the file is here.
 
 Model in any Rhino unit; the exporter converts to metres. Put the centre
 of the Shroom's base at the world origin, with the Shroom standing up the
-Rhino Z axis.
+Rhino Z axis. A Room fixture (the Tower, for example) puts its origin at
+ground center instead, as its drawing does.
 
 ## LED markers
 
@@ -19,8 +20,7 @@ Rhino Z axis.
   position on the chain (`LED_000` is the first pixel after the controller);
   a light the firmware drives another way (the Tower's PARs, over DMX) still
   takes its frame index. Indices run 0 to N-1 with no gaps and no
-  duplicates, where N is the instrument's pixel count. A Room fixture puts
-  its origin at ground center, as its drawing does.
+  duplicates, where N is the instrument's pixel count.
 - Every marker sits on a sublayer of a top-level layer named `LEDs`. The
   sublayer's name is the marker's **zone**: `LEDs::ring`, `LEDs::stem`.
   Zone names are lowercase `[a-z0-9_]+`. A marker directly on `LEDs`

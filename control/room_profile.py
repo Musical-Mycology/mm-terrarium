@@ -96,6 +96,7 @@ def fixture_instrument_mismatch(fixture: RoomFixture) -> str | None:
                 f"pixels = {inst.pixels} but the fixture's blocks total {count}")
     if not inst.layout:
         return None
+    # Defensive: the model parser already ties marker count to pixels.
     if len(inst.layout) != count:
         return (f"fixture {fixture.name!r}: instrument {inst.name!r}'s model has "
                 f"{len(inst.layout)} markers but the fixture has {count} pixels")
