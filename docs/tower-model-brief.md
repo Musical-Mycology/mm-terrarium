@@ -54,13 +54,14 @@ around a light bakes dark). The crown has no light source in this revision.
 One `.glb`, exported with the artist guide's settings (layers on, Rhino Z to
 glTF Y on, Draco off). Send it to Chris.
 
-## Importing the file (maintainers)
+## Importing the file (maintainers only; artists can skip this)
 
 1. Save it as `instruments/models/tower.glb`.
 2. Add `model = "models/tower.glb"` to `instruments/tower.toml` (same commit).
 3. Run `.venv/bin/python -m pytest tests -q`. The catalog refuses a wrong
-   name, count or size, and the room check refuses a sphere whose layer does
-   not match the `TOWER` room's zones, naming the sphere (for example
-   `LED_012`).
+   sphere name or count, and the room check refuses a sphere whose layer
+   does not match the `TOWER` room's zones, naming the sphere (for example
+   `LED_012`). Sphere size is never refused; it only sets the glow band, so
+   check it against the table above.
 4. Bake on Mycologist and export to mm-tuneshroom as `docs/MM_TERRARIUM.md`,
    *LED layout models*, describes.
