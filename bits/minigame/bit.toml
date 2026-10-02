@@ -1,7 +1,7 @@
 [bit]
 name = "MinigameBit"
 version = "0.1.0"
-description = "Single-Tuneshroom bench toy: tap starts 10 white blinks 2 s apart, tap again resets"
+description = "Single-Tuneshroom bench toy: tap starts a rainbow with 10 white blinks 2 s apart, tap again resets"
 entry = "minigame_bit:MinigameBit"
 kind = "tool"
 requires_terrarium_api = 1
@@ -20,4 +20,4 @@ when = "immediate"
 
 [console]
 display_name = "Minigame"
-notes = "Join one device on MINIGAME_PLAYER_NODE. It waits in PENDING until a tap starts a round (INGAME): the LED blinks white 10 times, 2 s apart, then the round ends on its own (END). A tap in INGAME or END resets to PENDING. No scoring, and it never completes on its own, so unload it when done."
+notes = "Join one device on MINIGAME_PLAYER_NODE. It waits in PENDING until a tap starts a round (INGAME): the ring shows a scrolling rainbow and blinks white over it 10 times, 2 s apart; the rainbow goes dark at the 10th blink and the round ends on its own (END). The ring is dark outside INGAME. A tap in INGAME or END resets to PENDING. No scoring, and it never completes on its own, so unload it when done."

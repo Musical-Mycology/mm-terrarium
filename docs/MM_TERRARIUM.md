@@ -1908,7 +1908,9 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   pixels and tap. Tap: `tick`, hue step; hold: `hold`, white 1 s; swing:
   red (negative g) or blue 0.5 s; each a DEVICE trigger the Console can fire.
 - **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a tap
-  starts 10 white `blink`s 2 s apart, a tap during or after the round resets;
+  starts a scrolling `rainbow` (the role's manifest at level 0, lit by
+  `rainbow_on` on `cc:7`, darkened by `rainbow_off` at the 10th blink) with
+  10 white `blink`s 2 s apart over it; a tap during or after the round resets;
   a player who joined in SETUP is kept. Tap only, so any Tuneshroom plays it.
 
 ### `www/` and `arcoserver/`
