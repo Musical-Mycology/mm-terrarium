@@ -8,6 +8,7 @@ from bits.minigame.minigame_bit import (
     BLINK_INTERVAL_S,
     BLINK_RGB,
     MINIGAME_PLAYER_NODE,
+    RAINBOW_LEVEL_CC,
     MinigameBit,
 )
 from control.bit_registry import BitRegistry
@@ -46,9 +47,10 @@ def test_run_start_keeps_the_player_that_joined_in_setup():
     assert _joined_bit().status()["dev"] == "ie1"
 
 
-def test_hold_starts_the_round_and_fires_blinks_on_a_2s_grid():
+def test_tap_in_pending_starts_the_round_and_fires_blinks_on_a_2s_grid():
     bit = _joined_bit()
-    assert bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=10.0) == []
+    assert bit.verb_handlers()["tap"]("ie1", ["ie1", 0.0, 80.0, 1], at=10.0) \
+        == [FireFunction("rainbow_on", "ie1", at=10.0)]
     assert bit.status()["phase"] == "INGAME"
     assert bit.fires(10.0) == [FireFunction("blink", dev="ie1", at=10.0)]
     assert bit.fires(11.9) == []
@@ -57,34 +59,59 @@ def test_hold_starts_the_round_and_fires_blinks_on_a_2s_grid():
 
 def test_tenth_blink_ends_the_round():
     bit = _joined_bit()
-    bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=0.0)
+    bit.verb_handlers()["tap"]("ie1", ["ie1", 0.0, 80.0, 1], at=0.0)
     fired = bit.fires(BLINK_INTERVAL_S * BLINK_COUNT)
-    assert len(fired) == BLINK_COUNT
+    assert len(fired) == BLINK_COUNT + 1
+    last = BLINK_INTERVAL_S * (BLINK_COUNT - 1)
+    assert fired[-1] == FireFunction("rainbow_off", dev="ie1", at=last)
     assert bit.status() == {"phase": "END", "dev": "ie1",
                             "blinks": BLINK_COUNT}
     assert bit.fires(1000.0) == []
 
 
-def test_hold_outside_pending_does_not_restart_the_round():
-    bit = _joined_bit()
-    bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=0.0)
-    bit.fires(2.0)
-    bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=3.0)
-    assert bit.status()["blinks"] == 2
-
-
-def test_tap_resets_to_pending_from_any_phase():
+def test_tap_in_ingame_resets_rather_than_restarting_the_round():
     bit = _joined_bit()
     tap = bit.verb_handlers()["tap"]
-    bit.verb_handlers()["hold"]("ie1", ["ie1", 0.8, 1], at=0.0)
+    tap("ie1", ["ie1", 0.0, 80.0, 1], at=0.0)
     bit.fires(4.0)
-    assert tap("ie1", ["ie1", 0.0, 80.0, 1], at=5.0) == []
+    assert tap("ie1", ["ie1", 0.0, 80.0, 1], at=5.0) \
+        == [FireFunction("rainbow_off", "ie1", at=5.0)]
     assert bit.status() == {"phase": "PENDING", "dev": "ie1", "blinks": 0}
+    assert bit.fires(100.0) == []
+
+
+def test_tap_in_end_resets_and_the_next_tap_starts_a_new_round():
+    bit = _joined_bit()
+    tap = bit.verb_handlers()["tap"]
+    tap("ie1", ["ie1", 0.0, 80.0, 1], at=0.0)
+    bit.fires(BLINK_INTERVAL_S * BLINK_COUNT)
+    assert bit.status()["phase"] == "END"
+    tap("ie1", ["ie1", 0.0, 80.0, 1], at=50.0)
+    assert bit.status()["phase"] == "PENDING"
+    tap("ie1", ["ie1", 0.0, 80.0, 1], at=60.0)
+    assert bit.status()["phase"] == "INGAME"
+    assert bit.fires(60.0) == [FireFunction("blink", dev="ie1", at=60.0)]
+
+
+def test_player_role_is_a_rainbow_held_dark_off_the_breath():
+    player = MinigameBit().role_table.roles["player"]
+    assert player.breath is False
+    (inst,) = player.light_manifest["instruments"]
+    assert inst["instrument"] == "rainbow"
+    assert inst["params"]["level"] == 0.0
+    assert inst["lanes"] == [{"source": f"cc:{RAINBOW_LEVEL_CC}",
+                              "dest": "level"}]
+
+
+def test_hold_is_not_handled_or_used():
+    bit = _joined_bit()
+    assert "hold" not in bit.verb_handlers()
+    assert "hold" not in bit.role_table.roles["player"].uses
 
 
 def test_gestures_from_another_device_are_ignored():
     bit = _joined_bit()
-    bit.verb_handlers()["hold"]("ie2", ["ie2", 0.8, 1], at=0.0)
+    bit.verb_handlers()["tap"]("ie2", ["ie2", 0.0, 80.0, 1], at=0.0)
     assert bit.status()["phase"] == "PENDING"
 
 
@@ -101,21 +128,32 @@ def _server(now):
                     carried_instruments={"testshroom": testshroom})
     solid = []
     gs.on_solid_cue = lambda *a: solid.append(a)
+    gs.on_light_cue = lambda *a: solid.append(("light",) + a)
     gs.load_bit("MinigameBit")
     gs.hello("ie1", "testshroom-dev", "1", instrument="testshroom")
     return gs, solid
 
 
+def _rainbow_levels(cues):
+    return [c[4] for c in cues
+            if c[0] == "light" and c[2:4] == (0xB0, RAINBOW_LEVEL_CC)]
+
+
 def _play_a_round(gs, solid, now):
-    assert gs.data("ie1", "hold", ["ie1", 0.8, 1]) is None
+    assert gs.data("ie1", "tap", ["ie1", 0.0, 80.0, 1]) is None
+    assert _rainbow_levels(solid) == [127]
     for _ in range(int((BLINK_COUNT * BLINK_INTERVAL_S + 1) / TICK)):
         now[0] += TICK
         gs.tick(TICK)
     assert gs.bit.status()["phase"] == "END"
-    assert len(solid) == BLINK_COUNT
-    assert all(c[0] == "ie1" and c[1] == BLINK_RGB for c in solid)
+    blinks = [c for c in solid if c[0] != "light"]
+    assert len(blinks) == BLINK_COUNT
+    assert all(c[0] == "ie1" and c[1] == BLINK_RGB for c in blinks)
+    assert _rainbow_levels(solid) == [127, 0]
     assert gs.data("ie1", "tap", ["ie1", 0.0, 80.0, 1]) is None
     assert gs.bit.status()["phase"] == "PENDING"
+    # Already dark: leaving END sends nothing (only INGAME's on_exit does).
+    assert _rainbow_levels(solid) == [127, 0]
 
 
 def test_hello_in_setup_then_start_plays_a_round():

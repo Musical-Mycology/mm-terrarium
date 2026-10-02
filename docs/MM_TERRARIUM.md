@@ -2148,10 +2148,12 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   first its carried instrument satisfies (a Rev 1 board `player`, else
   `sim`). Tap: `tick`, hue step; hold: `hold`, white 1 s; swing:
   red (negative g) or blue 0.5 s; each a DEVICE trigger the Console can fire.
+
 - **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a hold
   starts 10 white `blink`s 2 s apart, a tap resets. Its `player` is
   unscored `unique` capacity 1, so the first pooled device gets it at start
   (before `on_run_start`, which keeps it) and the rest get solo. Hold needs a Rev 1 board or the sim's long press.
+
 
 ### `www/` and `arcoserver/`
 
