@@ -622,3 +622,62 @@ def test_unreadable_bake_warns_but_does_not_fail_load(tmp_path, caplog, monkeypa
         cat = load_catalog(root)
     assert cat.published["glowcap"] is not None  # load still succeeds
     assert any("glowcap" in r.message for r in caplog.records)
+
+
+# --- instrument publish checks the published rooms that bind it ---
+
+_PX_ROOM = '''description = "r"
+backends = ["devicelink"]
+[[fixtures]]
+name = "main"
+color_order = "GRB"
+instrument = "glow"
+  [[fixtures.blocks]]
+  name = "main"
+  start = 0
+  count = 14
+'''
+
+
+def _glow(pixels: int) -> str:
+    return (f'pixels = {pixels}\ncapabilities = ["light.pixels"]\n'
+            'accepted_cues = ["midi"]\n')
+
+
+def _roomed_catalog(tmp_path, room_text=_PX_ROOM):
+    root = make_catalog(tmp_path)
+    rooms = tmp_path / "rooms"
+    rooms.mkdir()
+    (rooms / "TOWER.toml").write_text(room_text)
+    return root, rooms
+
+
+def test_instrument_publish_refused_when_a_published_room_would_break(tmp_path):
+    root, rooms = _roomed_catalog(tmp_path)
+    save_draft(root, "glow", _glow(15))
+    reason = publish_entry(root, "glow", rooms_root=rooms, instruments={})
+    assert reason is not None
+    assert "TOWER" in reason and "pixels = 15" in reason
+    assert (root / "drafts" / "glow.toml").exists()
+    assert not (root / "glow.toml").exists()
+
+
+def test_instrument_publish_succeeds_when_the_room_still_parses(tmp_path):
+    root, rooms = _roomed_catalog(tmp_path)
+    save_draft(root, "glow", _glow(14))
+    assert publish_entry(root, "glow", rooms_root=rooms, instruments={}) is None
+    assert (root / "glow.toml").exists()
+
+
+def test_instrument_publish_without_rooms_root_is_unchanged(tmp_path):
+    root, _rooms = _roomed_catalog(tmp_path)
+    save_draft(root, "glow", _glow(15))
+    assert publish_entry(root, "glow") is None
+    assert (root / "glow.toml").exists()
+
+
+def test_a_room_that_does_not_bind_the_instrument_does_not_block_it(tmp_path):
+    root, rooms = _roomed_catalog(tmp_path)
+    save_draft(root, "other", _glow(15))
+    assert publish_entry(root, "other", rooms_root=rooms, instruments={}) is None
+    assert (root / "other.toml").exists()
