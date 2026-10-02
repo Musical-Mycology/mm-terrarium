@@ -1,0 +1,35 @@
+description = "Tower: 2100 mm fixture, 14 px (8 progress, 4 responders, 2 PARs)"
+backends = ["devicelink"]
+
+[[fixtures]]
+name = "tower"
+color_order = "GRB"
+instrument = "tower"
+  [[fixtures.blocks]]
+  name = "lower"
+  start = 0
+  count = 4
+  [[fixtures.blocks]]
+  name = "upper"
+  start = 4
+  count = 4
+  [[fixtures.blocks]]
+  name = "responders"
+  start = 8
+  count = 4
+  [[fixtures.blocks]]
+  name = "par"
+  start = 12
+  count = 2
+  [[fixtures.zones]]
+  name = "progress"
+  start = 0
+  count = 8
+  [[fixtures.zones]]
+  name = "responder"
+  start = 8
+  count = 4
+  [[fixtures.zones]]
+  name = "beat"
+  start = 12
+  count = 2
