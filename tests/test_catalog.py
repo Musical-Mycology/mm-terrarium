@@ -228,6 +228,40 @@ def test_published_room_with_unknown_instrument_raises_located(tmp_path):
         load_catalog(tmp_path, kind="room", instruments=INSTRUMENTS)
 
 
+_ONE_FIXTURE_ROOM = '''backends = ["devicelink"]
+{arco}
+[[fixtures]]
+{fixture}
+'''
+_GOOD_FIXTURE = ('name = "main"\ncolor_order = "GRB"\ninstrument = "strip"'
+                 '\n  [[fixtures.blocks]]\n  name = "main"\n  start = 0\n  count = 30')
+
+
+@pytest.mark.parametrize("text, fragment", [
+    # a fixture missing name: located by its index, since it has no name
+    (_ONE_FIXTURE_ROOM.format(arco="", fixture='color_order = "GRB"\ninstrument = "strip"'),
+     "fixture #0"),
+    (_ONE_FIXTURE_ROOM.format(arco="", fixture='name = "main"\ninstrument = "strip"'),
+     "fixture 'main'"),
+    ('backends = ["devicelink"]\nfixtures = ["main"]\n', "fixture #0"),
+    (_ONE_FIXTURE_ROOM.format(arco="", fixture=_GOOD_FIXTURE.replace("  count = 30", "")),
+     "fixture 'main'"),
+    (_ONE_FIXTURE_ROOM.format(arco='[arco]\nready_timeout = "soon"\n', fixture=_GOOD_FIXTURE),
+     "arco"),
+    (_ONE_FIXTURE_ROOM.format(arco='arco = 5\n', fixture=_GOOD_FIXTURE), "arco"),
+    ('backends = ["devicelink"]\nfixtures = 5\n', "'fixtures' must be an array"),
+    ('backends = 5\n', "'backends' must be an array"),
+], ids=["fixture-missing-name", "fixture-missing-color-order", "fixture-not-a-table",
+        "block-missing-count", "arco-non-numeric", "arco-not-a-table",
+        "fixtures-not-an-array", "backends-not-an-array"])
+def test_published_malformed_room_raises_located(tmp_path, text, fragment):
+    (tmp_path / "LOFT.toml").write_text(text)
+    with pytest.raises(TerrariumConfigError) as excinfo:
+        load_catalog(tmp_path, kind="room", instruments=INSTRUMENTS)
+    assert excinfo.value.key == "rooms.LOFT"
+    assert fragment in str(excinfo.value)
+
+
 def test_room_draft_errors_are_collected_not_raised(tmp_path):
     drafts = tmp_path / "drafts"
     drafts.mkdir()

@@ -604,6 +604,11 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str,
 def _parse_room(rname: str, rraw: dict, *, source: str,
                 instruments: dict[str, Instrument]) -> RoomSpec:
     key = f"rooms.{rname}"
+    for list_key in ("backends", "fixtures"):
+        if not isinstance(rraw.get(list_key, []), list):
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"{list_key!r} must be an array")
     backends = tuple(rraw.get("backends", []))
     unknown = [b for b in backends if b not in KNOWN_BACKENDS]
     if unknown:
@@ -611,27 +616,45 @@ def _parse_room(rname: str, rraw: dict, *, source: str,
             source=source, key=key,
             message=f"unknown backends {unknown}; known: {sorted(KNOWN_BACKENDS)}")
     fixtures = []
-    for fraw in rraw.get("fixtures", []):
-        blocks = tuple(RoomBlock(b["name"], b["start"], b["count"])
-                       for b in fraw.get("blocks", []))
-        zones = tuple(RoomZone(z["name"], z["start"], z["count"])
-                      for z in fraw.get("zones", []))
+    for idx, fraw in enumerate(rraw.get("fixtures", [])):
+        if not isinstance(fraw, dict):
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"fixture #{idx} must be a table, got "
+                        f"{type(fraw).__name__}")
+        label = (repr(fraw["name"]) if isinstance(fraw.get("name"), str)
+                 else f"#{idx}")
         iname = fraw.get("instrument")
         if not iname:
             raise TerrariumConfigError(
                 source=source, key=key,
-                message=f"fixture {fraw.get('name')!r} missing required "
-                        f"'instrument' key")
+                message=f"fixture {label} missing required 'instrument' key")
         instrument = instruments.get(iname)
         if instrument is None:
             raise TerrariumConfigError(
                 source=source, key=key,
-                message=f"fixture {fraw.get('name')!r} references unknown "
+                message=f"fixture {label} references unknown "
                         f"instrument {iname!r}; known: {sorted(instruments)}")
-        fixtures.append(RoomFixture(name=fraw["name"],
-                                    color_order=fraw["color_order"],
-                                    blocks=blocks, zones=zones,
-                                    instrument=instrument))
+        # A published file reaches here unvalidated, so a missing key or a
+        # wrong-typed entry must surface as a located config error, never a
+        # raw KeyError the Console design paths do not catch.
+        try:
+            blocks = tuple(RoomBlock(b["name"], b["start"], b["count"])
+                           for b in fraw.get("blocks", []))
+            zones = tuple(RoomZone(z["name"], z["start"], z["count"])
+                          for z in fraw.get("zones", []))
+            fixtures.append(RoomFixture(name=fraw["name"],
+                                        color_order=fraw["color_order"],
+                                        blocks=blocks, zones=zones,
+                                        instrument=instrument))
+        except KeyError as exc:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"fixture {label} missing required key {exc}") from exc
+        except (TypeError, AttributeError, ValueError) as exc:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"fixture {label} is malformed: {exc}") from exc
     try:
         profile = RoomProfile(surface_id=f"room_{rname.lower()}",
                               fixtures=tuple(fixtures))
@@ -639,14 +662,21 @@ def _parse_room(rname: str, rraw: dict, *, source: str,
         raise TerrariumConfigError(source=source, key=key,
                                    message=str(exc)) from exc
     arco = rraw.get("arco", {})
+    try:
+        arco_ready_timeout = float(arco.get("ready_timeout", 15.0))
+        arco_settle_seconds = float(arco.get("settle_seconds", 0.0))
+    except (TypeError, AttributeError, ValueError) as exc:
+        raise TerrariumConfigError(
+            source=source, key=key,
+            message=f"[arco] must be a table of numbers: {exc}") from exc
     return RoomSpec(
         name=rname,
         description=rraw.get("description", ""),
         backends=backends,
         node_id=rraw.get("node_id", f"ROOM_{rname}_NODE"),
         profile=profile,
-        arco_ready_timeout=float(arco.get("ready_timeout", 15.0)),
-        arco_settle_seconds=float(arco.get("settle_seconds", 0.0)),
+        arco_ready_timeout=arco_ready_timeout,
+        arco_settle_seconds=arco_settle_seconds,
     )
 
 
