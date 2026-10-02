@@ -2519,3 +2519,19 @@ def test_a_covered_fixtures_stale_binding_is_not_a_surface_instrument():
     surface = agent._current_surface_instruments()
     assert "ie-stale" not in surface
     assert fixture_dev("accent") in surface
+
+
+def test_console_instrument_publish_refused_when_a_room_binds_it(tmp_path):
+    inst, rooms = _roots(tmp_path)
+    gs, srv, agent = _server_with_agent(catalog_root=inst, rooms_root=rooms)
+    # LOFT's fixture has 10 pixels; a draft declaring 12 would break it.
+    saved = agent._handle_command({
+        "command": "save_design", "name": "dev_strip_main",
+        "text": 'pixels = 12\ncapabilities = ["light.surface"]\n'
+                'accepted_cues = ["midi"]\n'})
+    assert saved["event"] == "designs_changed"
+    reply = agent._handle_command({"command": "publish_design",
+                                   "name": "dev_strip_main"})
+    assert reply["event"] == "error"
+    assert "LOFT" in reply["message"] and "pixels = 12" in reply["message"]
+    assert (inst / "drafts" / "dev_strip_main.toml").exists()

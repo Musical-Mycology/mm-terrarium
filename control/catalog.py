@@ -159,8 +159,32 @@ def clone_entry(root: Path, source_state: str, source_name: str,
     return None
 
 
+def _room_refusal_for_instrument(name: str, candidate: Instrument,
+                                  rooms_root: Path, instruments) -> str | None:
+    """The first published room that binds `name` and would no longer parse
+    with `candidate` in place of the published instrument, as its error
+    message. Rooms that are not valid TOML or do not bind `name` are not this
+    publish's business."""
+    resolved = {**(instruments or {}), name: candidate}
+    for path in sorted(Path(rooms_root).glob("*.toml")):
+        try:
+            raw = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
+            continue
+        fixtures = raw.get("fixtures")
+        if not isinstance(fixtures, list) or not any(
+                isinstance(f, dict) and f.get("instrument") == name
+                for f in fixtures):
+            continue
+        try:
+            _parse_room(path.stem, raw, source=str(path), instruments=resolved)
+        except TerrariumConfigError as exc:
+            return str(exc)
+    return None
+
+
 def publish_entry(root: Path, name: str, kind: str = "instrument",
-                   instruments=None) -> str | None:
+                   instruments=None, *, rooms_root: Path | None = None) -> str | None:
     _check_kind(kind, instruments)
     if _refuse_name(name, kind):
         return f"no draft named {name!r}"
@@ -173,6 +197,13 @@ def publish_entry(root: Path, name: str, kind: str = "instrument",
                            instruments, model_root=model_root)
     if errors:
         return "; ".join(errors)
+    if kind == "instrument" and rooms_root is not None:
+        candidate = _parse_text(name, src.read_text(encoding="utf-8"), src,
+                                kind, instruments, model_root=model_root)
+        refusal = _room_refusal_for_instrument(name, candidate, rooms_root,
+                                               instruments)
+        if refusal:
+            return refusal
     src.replace(root / f"{name}.toml")
     return None
 

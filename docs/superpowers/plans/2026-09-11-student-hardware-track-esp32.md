@@ -1211,6 +1211,8 @@ git commit -m "docs(hardware): tap timestamp error measured against a 500 ms per
 
 ## Task A7 [FW]: Tower build target
 
+> **Superseded 2026-10-02** by docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md (14 px, not 120; the room and instrument are committed; firmware is filed separately).
+
 **Owner:** Victor. **Files:** Modify `src/main.cpp`,
 `src/render/frames.cpp`, `platformio.ini`;
 Create `test/test_frames/test_tower_limit.cpp`.
@@ -1458,6 +1460,8 @@ git commit -m "docs(hardware): touch-through-silicone result, tap source decisio
 
 ## Task B3 [HW]: Tower build
 
+> **Superseded 2026-10-02** by docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md (14 px, not 120; the room and instrument are committed; firmware is filed separately).
+
 **Files:** Create `docs/hardware/tower-runbook.md`.
 
 - [ ] **Step 1: Cut and mount eight 250 mm segments on the mast, data chained top to bottom, one 3-pin JST per joint**
@@ -1554,6 +1558,8 @@ git commit -m "docs(hardware): units 2 and 3 built from the runbook; spares kit"
 # Phase C: Terrarium software
 
 ## Task C1 [SW]: The TOWER room and the Tower's binding
+
+> **Superseded 2026-10-02** by docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md (14 px, not 120; the room and instrument are committed; firmware is filed separately).
 
 **Owner:** Victor.
 **Files:**

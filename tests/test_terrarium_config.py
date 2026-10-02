@@ -102,7 +102,7 @@ def test_shipped_config_matches_code_profiles_golden():
     # these rooms' shapes (the old ROOM_PROFILES registry is deleted), so
     # this pins the exact fixture/block/zone literals the file declares.
     cfg = load_terrarium_config("terrarium.toml")
-    assert set(cfg.rooms) == {"TEST", "DEMO", "VENUE"}
+    assert set(cfg.rooms) == {"TEST", "DEMO", "VENUE", "TOWER"}
 
     test_room = cfg.rooms["TEST"]
     assert test_room.backends == ("devicelink",)
@@ -454,11 +454,11 @@ instrument = "shroomy"
 [[rooms.T.fixtures.blocks]]
 name = "b1"
 start = 0
-count = 10
+count = 12
 [[rooms.T.fixtures.zones]]
 name = "all"
 start = 0
-count = 10
+count = 12
 """
 
 
@@ -737,7 +737,7 @@ backends = ["devicelink", "array"]
 
 def test_shipped_rooms_come_from_the_catalog_and_match_the_pre_migration_profiles():
     config = load_terrarium_config("terrarium.toml")
-    assert set(config.rooms) == {"TEST", "DEMO", "VENUE"}
+    assert set(config.rooms) == {"TEST", "DEMO", "VENUE", "TOWER"}
     before = parse_terrarium_config(PRE_MIGRATION, source="pre-migration",
                                     extra_instruments=config.instruments)
     for name in ("TEST", "DEMO"):

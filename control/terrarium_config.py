@@ -21,7 +21,7 @@ from control.instrument import (Instrument, InstrumentError, SoloConfig,
 from control.lobby import TERRARIUM_ADMIN
 from control.model_layout import ModelLayoutError, parse_model_layout, read_glb_json
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
-                                  RoomZone)
+                                  RoomZone, fixture_instrument_mismatch)
 from control.triggers import EventTrigger, StreamTrigger
 
 logger = logging.getLogger(__name__)
@@ -638,6 +638,11 @@ def _parse_room(rname: str, rraw: dict, *, source: str,
     except (ValueError, KeyError, TypeError) as exc:
         raise TerrariumConfigError(source=source, key=key,
                                    message=str(exc)) from exc
+    for fixture in profile.fixtures:
+        problem = fixture_instrument_mismatch(fixture)
+        if problem is not None:
+            raise TerrariumConfigError(source=source, key=key,
+                                       message=f"room {rname!r} {problem}")
     arco = rraw.get("arco", {})
     return RoomSpec(
         name=rname,

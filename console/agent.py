@@ -490,8 +490,15 @@ class ConsoleAgent:
                 root, command.name, command.text, kind=command.kind,
                 instruments=instruments)
         elif isinstance(command, protocol.PublishDesignCommand):
-            refusal = publish_entry(root, command.name, kind=command.kind,
-                                    instruments=instruments)
+            if command.kind == "instrument":
+                # A publish must not break a published room that binds it.
+                refusal = publish_entry(
+                    root, command.name, kind="instrument",
+                    instruments=self._instruments_for_rooms(),
+                    rooms_root=self.rooms_root)
+            else:
+                refusal = publish_entry(root, command.name, kind=command.kind,
+                                        instruments=instruments)
         else:
             refusal = clone_entry(root, command.source_state,
                                   command.source_name, command.new_name,

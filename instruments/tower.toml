@@ -1,0 +1,5 @@
+description = "Tower fixture: 8 progress indicators, 4 responders, 2 base PAR lights (14 px)"
+pixels = 14
+capabilities = ["light.surface"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+# No model line yet: docs/tower-model-brief.md, section "Importing the file".
