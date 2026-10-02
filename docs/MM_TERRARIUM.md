@@ -1273,7 +1273,11 @@ base64 and compare sha256 on both ends. After a Blender upgrade, re-run
 instrument disagrees with it (`fixture_instrument_mismatch`,
 `control/room_profile.py`): a declared `pixels` must equal the blocks' total,
 and a model must have one marker per pixel with each marker's zone one of the
-room zones covering it. `rooms/TOWER.toml` is the first fixture this matters
+room zones covering it. Instrument publishes get the same check from the
+other side: `publish_entry(..., rooms_root=)` (wired in the Console's Design
+Panel) refuses an instrument that would break a published room binding it,
+so a publish can never leave the Terrarium unable to boot.
+`rooms/TOWER.toml` is the first fixture this matters
 for: 14 px (`progress` 0-7, `responder` 8-11, `beat` 12-13, the two base PARs),
 `GRB`, instrument `tower` with no model yet, so it runs on the no-layout
 fallback (a 14-dot strip in the Console). The artist's brief and the import
