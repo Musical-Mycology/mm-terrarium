@@ -22,8 +22,10 @@ in-repo at
 developed with Roger Dannenberg.
 
 **Status:**
-- Running today: the o2lite device path end to end (Tuneshrooms and the
-  Chrome/Flutter guest app join, register, and play over a real Arco); Room
+- Running today: the o2lite device path end to end on contract v3 (the
+  Chrome/Flutter guest app and Testshrooms hello, accept the handshake, and
+  play over a real Arco; the Rev 1 Tuneshroom firmware is still on v2 and
+  gets a jam role every round until mm-devshroom#7 lands); Room
   audio and light (a Room fixture's drone and hue driven the same way a
   device's are); the cue machinery (`Bit.fires(at)`, generators and
   device-triggered `LightCue`s reach both the calling device and the Room
