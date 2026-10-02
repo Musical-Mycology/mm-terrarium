@@ -83,6 +83,34 @@ class RoomFixture:
         return len(self.color_order)
 
 
+def fixture_instrument_mismatch(fixture: RoomFixture) -> str | None:
+    """Why this fixture's instrument disagrees with the fixture, or None.
+    A declared `pixels` must equal the blocks' total, and a model layout
+    must have one marker per pixel with each named zone covering that
+    pixel in this fixture's zones. Spec 2026-10-02 tower fixture layout,
+    section 5.3."""
+    inst = fixture.instrument
+    count = fixture.pixel_count
+    if inst.pixels and inst.pixels != count:
+        return (f"fixture {fixture.name!r}: instrument {inst.name!r} declares "
+                f"pixels = {inst.pixels} but the fixture's blocks total {count}")
+    if not inst.layout:
+        return None
+    if len(inst.layout) != count:
+        return (f"fixture {fixture.name!r}: instrument {inst.name!r}'s model has "
+                f"{len(inst.layout)} markers but the fixture has {count} pixels")
+    for p in inst.layout:
+        if p.zone is None:
+            continue
+        covering = [z.name for z in fixture.zones
+                    if z.start <= p.index < z.start + z.count]
+        if p.zone not in covering:
+            return (f"fixture {fixture.name!r}: model marker LED_{p.index:03d} "
+                    f"is in zone {p.zone!r} but the room puts pixel {p.index} "
+                    f"in {covering}")
+    return None
+
+
 @dataclass(frozen=True)
 class RoomProfile:
     """One Room's physical (or simulated) light surface: N fixtures laid end

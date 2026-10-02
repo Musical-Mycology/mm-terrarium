@@ -454,11 +454,11 @@ instrument = "shroomy"
 [[rooms.T.fixtures.blocks]]
 name = "b1"
 start = 0
-count = 10
+count = 12
 [[rooms.T.fixtures.zones]]
 name = "all"
 start = 0
-count = 10
+count = 12
 """
 
 
