@@ -1,9 +1,12 @@
 """LobbyRuntime through fake sinks: no luxaeterna, no Arco (spec 4, 5)."""
 from control.breath import BREATH_CC, breath_cc
-from control.lobby import (BELL_PROGRAM, BELL_VEL, DEFAULT_LOBBY, FEEDBACK_ACCEPT,
+from control.lobby import (BELL_PROGRAM, BELL_VEL, DEFAULT_LOBBY,
+                           DEVICE_FLASH_TRAIN_S, FEEDBACK_ACCEPT,
                            FEEDBACK_MINIMUM, FEEDBACK_NONE, FEEDBACK_REFUSED,
                            GREEN, GREEN_HUE_CC, HUE_CC, LOBBY_DRONE_KEY,
-                           LOBBY_PROGRAM, LobbyState, RED, WHITE, hue_drift_cc)
+                           LOBBY_PROGRAM, LobbyState, PULSE_PEAK,
+                           PULSE_PERIOD_S, RED, WHITE, hue_drift_cc,
+                           pulse_level)
 from devicelink.lobby_runtime import LobbyRuntime, LobbySinks
 
 
@@ -29,6 +32,7 @@ class _Sinks:
         self.overrides = []  # (t, dev, rgb, level, duration)
         self.plays = []      # (dev, name, params)
         self.events = []     # (event, dev)
+        self.bases = []     # (t, dev, rgb-or-None, level)
         self.t = 0.0
 
     def as_sinks(self):
@@ -43,6 +47,8 @@ class _Sinks:
                 (self.t, dev, rgb, lvl, dur)),
             send_play=lambda dev, n, p: self.plays.append((dev, n, p)),
             announce=lambda ev, dev: self.events.append((ev, dev)),
+            set_base=lambda dev, rgb, lvl: self.bases.append(
+                (self.t, dev, rgb, lvl)),
         )
 
 
@@ -58,6 +64,10 @@ def _run(rt, sinks, clock, seconds, dt=1 / 44):
         clock.advance(dt)
         sinks.t = clock.t
         rt.tick()
+
+
+def _bases_for(sinks, dev):
+    return [b for b in sinks.bases if b[1] == dev]
 
 
 def test_start_sets_the_pad_and_sounds_the_drone_on_every_fixture():
@@ -282,3 +292,115 @@ def test_forget_drops_only_that_devs_queued_invite_flashes():
     ie4 = [o[2] for o in sinks.overrides if o[1] == "ie4"]
     assert ie4 == [WHITE, WHITE]
     assert [p[:2] for p in sinks.plays] == [("ie3", "chime")]
+
+
+def test_pulse_level_rises_from_dark_to_its_peak_and_back():
+    assert pulse_level(-1.0) == 0.0 and pulse_level(0.0) == 0.0
+    assert abs(pulse_level(PULSE_PERIOD_S / 2) - PULSE_PEAK) < 1e-9
+    assert pulse_level(PULSE_PERIOD_S) < 1e-9
+    assert 0.0 < pulse_level(1.0) < PULSE_PEAK
+    assert DEVICE_FLASH_TRAIN_S == 0.8
+
+
+def test_an_invite_holds_the_white_base_dark_through_its_flashes_then_pulses():
+    rt, sinks, clock = _rt()
+    rt.start()
+    t0 = clock.t
+    rt.consider_invite("ie3")
+    _run(rt, sinks, clock, 0.75)
+    dark = _bases_for(sinks, "ie3")
+    assert dark and all(b[2] == WHITE and b[3] == 0.0 for b in dark)
+    _run(rt, sinks, clock, 2.0)
+    lit = [b for b in _bases_for(sinks, "ie3") if b[3] > 0]
+    assert lit and lit[0][0] >= t0 + DEVICE_FLASH_TRAIN_S - 1e-9
+    assert all(b[2] == WHITE and b[3] <= PULSE_PEAK + 1e-9 for b in lit)
+
+
+def test_a_steady_base_is_sent_once():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie3")
+    _run(rt, sinks, clock, 0.5)                 # still held dark
+    assert len(_bases_for(sinks, "ie3")) == 1
+
+
+def test_validation_turns_the_base_green_after_the_ceremony_flashes():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie1")
+    rt.consider_invite("ie2")
+    _run(rt, sinks, clock, 1.0)
+    t0 = clock.t
+    rt.forget("ie1")
+    rt.on_scored_join("ie1")                    # ceremony slot at t0
+    rt.forget("ie2")
+    rt.on_scored_join("ie2")                    # queued: slot at t0 + 2.8
+    assert _bases_for(sinks, "ie1")[-1][2:] == (None, 0.0)
+    _run(rt, sinks, clock, 0.75)
+    new = [b for b in _bases_for(sinks, "ie1") if b[0] > t0]
+    assert new and all(b[2] == GREEN and b[3] == 0.0 for b in new)
+    _run(rt, sinks, clock, 1.5)
+    assert _bases_for(sinks, "ie1")[-1][2] == GREEN
+    assert _bases_for(sinks, "ie1")[-1][3] > 0
+    assert [b for b in _bases_for(sinks, "ie2") if b[0] > t0 and b[3] > 0] == []
+    _run(rt, sinks, clock, 2.0)
+    lit2 = [b for b in _bases_for(sinks, "ie2") if b[0] > t0 and b[3] > 0]
+    assert lit2 and lit2[0][2] == GREEN
+    assert lit2[0][0] >= t0 + 2.8 + DEVICE_FLASH_TRAIN_S - 1e-6
+
+
+def test_full_clears_white_bases_and_keeps_green_ones():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie1")
+    rt.consider_invite("ie2")
+    _run(rt, sinks, clock, 1.0)
+    rt.forget("ie2")
+    rt.on_scored_join("ie2")
+    _run(rt, sinks, clock, 0.1)
+    rt.set_state(LobbyState.FULL)
+    assert _bases_for(sinks, "ie1")[-1][2] is None
+    _run(rt, sinks, clock, 2.0)
+    assert _bases_for(sinks, "ie1")[-1][2] is None
+    assert _bases_for(sinks, "ie2")[-1][2] == GREEN
+
+
+def test_stop_clears_every_base():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie1")
+    rt.on_scored_join("ie2")
+    _run(rt, sinks, clock, 0.1)
+    rt.stop()
+    assert _bases_for(sinks, "ie1")[-1][2] is None
+    assert _bases_for(sinks, "ie2")[-1][2] is None
+    n = len(sinks.bases)
+    _run(rt, sinks, clock, 1.0)
+    assert len(sinks.bases) == n
+
+
+def test_a_deny_purges_the_white_flash_flashes_red_twice_and_holds_the_pulse_dark():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie1")
+    _run(rt, sinks, clock, 0.3)                 # second white flash still queued
+    t0 = clock.t
+    rt.on_deny("ie1")
+    _run(rt, sinks, clock, 0.75)
+    after = [o for o in sinks.overrides if o[1] == "ie1" and o[0] >= t0]
+    assert [o[2:] for o in after] == [(RED, 1.0, 0.2), (RED, 1.0, 0.2)]
+    assert abs(after[1][0] - after[0][0] - 0.4) < 0.03
+    assert [b for b in _bases_for(sinks, "ie1") if b[3] > 0] == []
+    _run(rt, sinks, clock, 1.0)
+    lit = [b for b in _bases_for(sinks, "ie1") if b[3] > 0]
+    assert lit and lit[0][2] == WHITE
+    assert lit[0][0] >= t0 + DEVICE_FLASH_TRAIN_S - 1e-9
+
+
+def test_a_deny_with_no_status_flashes_red_and_sets_no_base():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.on_deny("ie9")
+    _run(rt, sinks, clock, 2.0)
+    assert [o[2] for o in sinks.overrides if o[1] == "ie9"] == [RED, RED]
+    assert _bases_for(sinks, "ie9") == []

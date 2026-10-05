@@ -10,6 +10,7 @@ lobby_runtime.py does that through injected sinks.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -32,6 +33,9 @@ BELL_VEL = 100
 # Join ceremony offsets from the ceremony's start time `at` (spec 4).
 DEVICE_FLASH_ON_S = 0.2
 DEVICE_FLASH_GAP_S = 0.2
+# A two-flash device train, first flash on to last gap off: the pulse
+# under it is held dark this long so the off-gaps read as black.
+DEVICE_FLASH_TRAIN_S = 2 * (DEVICE_FLASH_ON_S + DEVICE_FLASH_GAP_S)
 BELL_OFFSET_S = 0.8
 BELL_DURATION_S = 1.0
 CHIME_OFFSET_S = 1.8
@@ -44,6 +48,11 @@ FIXTURE_FLASH_GAP_S = 0.25
 HUE_CC = 74
 GREEN_HUE_CC = 42            # aurora hue ~0.33
 HUE_DRIFT_PERIOD_S = 20.0
+
+# The lexicon's slow pulse (Invite between flashes, Ready): Lux Aeterna's
+# sys:idle period, peaking well under a flash's full level.
+PULSE_PERIOD_S = 4.0
+PULSE_PEAK = 0.35
 
 GREEN = (0, 255, 0)
 RED = (255, 0, 0)
@@ -83,6 +92,14 @@ def hue_drift_cc(t: float, period: float = HUE_DRIFT_PERIOD_S) -> int:
     phase = (t % period) / period
     tri = 2.0 * phase if phase < 0.5 else 2.0 * (1.0 - phase)
     return round(tri * 127)
+
+
+def pulse_level(t: float) -> float:
+    """A raised cosine from dark: 0 at and before t=0, PULSE_PEAK at half a
+    period, dark again at a full one."""
+    if t <= 0:
+        return 0.0
+    return PULSE_PEAK * (1.0 - math.cos(2.0 * math.pi * t / PULSE_PERIOD_S)) / 2.0
 
 
 def lobby_light_manifest() -> dict:

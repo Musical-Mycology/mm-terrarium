@@ -264,6 +264,11 @@ class DeviceLinkAgent:
         # the device out of _render_frames' override-only pass before the
         # blackout ever went out.
         self._override_only: set[str] = set()
+        # dev -> (rgb, level): the lobby's status pulse for a hello'd device
+        # with no role (white while invited, green once validated; lexicon
+        # G1), fed by LobbyRuntime's set_base sink. The role-less pass in
+        # _render_frames paints it under any override.
+        self._bases: dict[str, tuple[tuple[int, int, int], float]] = {}
         # Web starts (harness/www_server.py) arrive on the server thread
         # and are drained here, on the tick thread, so the engine is only
         # ever touched from one thread.
@@ -496,6 +501,12 @@ class DeviceLinkAgent:
         def set_override(dev, rgb, level, duration):
             self._on_solid_cue(dev, rgb, level, duration, self._clock())
 
+        def set_base(dev, rgb, level):
+            if rgb is None:
+                self._bases.pop(dev, None)
+            else:
+                self._bases[dev] = (rgb, level)
+
         def send_play(dev, name, params):
             if self._fixture_key(dev) not in self._muted:
                 self._send(dev, protocol.play_event(dev, name, params))
@@ -506,7 +517,7 @@ class DeviceLinkAgent:
             feed_light=feed_light, feed_audio=feed_audio,
             set_audio_control=set_audio_control, play_note=play_note,
             set_override=set_override, send_play=send_play,
-            announce=gs.notify_lobby)
+            announce=gs.notify_lobby, set_base=set_base)
 
     def _flash_fixtures_now(self, rgb, count: int) -> None:
         """Feedback flashes that outlive the lobby: the accept flash fires

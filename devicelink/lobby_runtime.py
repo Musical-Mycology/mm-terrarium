@@ -19,13 +19,14 @@ from control.breath import BREATH_CC, breath_cc
 from control.lobby import (BELL_DURATION_S, BELL_OFFSET_S, BELL_PROGRAM,
                            BELL_VEL, CEREMONY_SPAN_S, CHIME_OFFSET_S,
                            DEVICE_FLASH_GAP_S, DEVICE_FLASH_ON_S,
+                           DEVICE_FLASH_TRAIN_S,
                            FEEDBACK_ACCEPT, FEEDBACK_MINIMUM,
                            FEEDBACK_REFUSED, FIXTURE_FLASH_GAP_S,
                            FIXTURE_FLASH_ON_S, GREEN, GREEN_HUE_CC, HUE_CC,
                            LOBBY_DRONE_KEY, LOBBY_DRONE_VEL, LOBBY_PROGRAM,
                            RED, WHITE, CeremonySlots, InviteSchedule,
                            LobbyConfig, LobbyState, hue_drift_cc,
-                           scale_note)
+                           pulse_level, scale_note)
 from control.timed_queue import TimedQueue
 
 
@@ -40,6 +41,16 @@ class LobbySinks:
     set_override: Callable[[str, tuple, float, float], None]
     send_play: Callable[[str, str, str], None]
     announce: Callable[[str, str], None]
+    set_base: Callable[[str, tuple | None, float], None]
+
+
+@dataclass
+class _Status:
+    """One hello'd device's slow pulse: WHITE while invited, GREEN once
+    validated. Dark until `start`, which every flash train for the device
+    pushes past its own end."""
+    rgb: tuple
+    start: float
 
 
 class LobbyRuntime:
@@ -58,6 +69,10 @@ class LobbyRuntime:
         self._last_light: dict[tuple[str, int], int] = {}
         self._last_audio: dict[str, int] = {}
         self._joins = 0
+        self._status: dict[str, _Status] = {}
+        # dev -> (rgb, level byte) last handed to set_base, so a steady
+        # pulse (held dark, say) costs nothing per tick.
+        self._last_base: dict[str, tuple] = {}
 
     # --- lifecycle -----------------------------------------------------
     @property
@@ -86,6 +101,10 @@ class LobbyRuntime:
         # New invites stop: the schedule is cleared and the agent no
         # longer calls consider_invite.
         self._invites.clear()
+        # No pulse outlives the lobby: at RUNNING every device gets a role,
+        # and an abort leaves nothing to wait for.
+        for dev in list(self._status):
+            self._clear_status(dev)
         # The de-dupe caches are what a restarted lobby would otherwise
         # measure its first frame against, silencing the opening breath
         # and hue feeds.
@@ -104,6 +123,10 @@ class LobbyRuntime:
             self._drone(False)
             for name in self._s.fixture_names():
                 self._light(name, HUE_CC, GREEN_HUE_CC)
+            # FULL stops invites, so nobody is invited any more. A
+            # validated device keeps its green Ready pulse.
+            for dev in [d for d, st in self._status.items() if st.rgb == WHITE]:
+                self._clear_status(dev)
         else:
             self._drone(True)
 
@@ -121,6 +144,8 @@ class LobbyRuntime:
             thunk()
         if not self._running:
             return
+        for dev, st in list(self._status.items()):
+            self._base(dev, st.rgb, pulse_level(now - st.start))
         t = now - self._origin
         breath = breath_cc(t)
         drift = hue_drift_cc(t)
@@ -141,11 +166,34 @@ class LobbyRuntime:
     def _at(self, when: float, thunk) -> None:
         self._queue.push(when, thunk, now=self._clock())
 
+    # --- device status pulse (lexicon G1) ------------------------------
+    def _hold(self, dev: str, rgb: tuple, until: float) -> None:
+        """Give `dev` the `rgb` pulse, dark until at least `until`."""
+        st = self._status.get(dev)
+        if st is None or st.rgb != rgb:
+            self._status[dev] = _Status(rgb, until)
+        else:
+            st.start = max(st.start, until)
+
+    def _base(self, dev: str, rgb: tuple, level: float) -> None:
+        key = (rgb, round(level * 255))
+        if self._last_base.get(dev) == key:
+            return
+        self._last_base[dev] = key
+        self._s.set_base(dev, rgb, level)
+
+    def _clear_status(self, dev: str) -> None:
+        self._status.pop(dev, None)
+        if self._last_base.pop(dev, None) is not None:
+            self._s.set_base(dev, None, 0.0)
+
     # --- join ceremony (spec 4) ----------------------------------------
     def on_scored_join(self, dev: str) -> None:
         key = scale_note(self._joins)
         self._joins += 1
         at = self._slots.reserve(self._clock())
+        # Ready: the green pulse rises once the ceremony's flashes are done.
+        self._hold(dev, GREEN, at + DEVICE_FLASH_TRAIN_S)
         for i in range(2):
             t = at + i * (DEVICE_FLASH_ON_S + DEVICE_FLASH_GAP_S)
             self._at(t, lambda d=dev: self._s.set_override(d, GREEN, 1.0,
@@ -188,6 +236,22 @@ class LobbyRuntime:
         for i in range(2):
             t = now + i * (DEVICE_FLASH_ON_S + DEVICE_FLASH_GAP_S)
             self._at(t, _InviteFlash(dev, self._s))
+        self._hold(dev, WHITE, now + DEVICE_FLASH_TRAIN_S)
+
+    # --- deny flash (lexicon G2) ---------------------------------------
+    def on_deny(self, dev: str) -> None:
+        """Failure: red x2 on the denied device. Its still-queued white
+        invite flash goes first, so white and red never interleave. A
+        device still invited gets its white pulse back after the red."""
+        self._purge_invite_flashes(dev)
+        now = self._clock()
+        for i in range(2):
+            t = now + i * (DEVICE_FLASH_ON_S + DEVICE_FLASH_GAP_S)
+            self._at(t, lambda d=dev: self._s.set_override(d, RED, 1.0,
+                                                           DEVICE_FLASH_ON_S))
+        st = self._status.get(dev)
+        if st is not None:
+            st.start = max(st.start, now + DEVICE_FLASH_TRAIN_S)
 
     def is_invited(self, dev: str) -> bool:
         return self._invites.invited(dev)
@@ -197,8 +261,12 @@ class LobbyRuntime:
         so a device that validates mid-invite sees no white flash after its
         /validated (a white frame there reads as a second invite). Only
         that dev's invite flashes go: other devs' flashes and every
-        ceremony cue stay queued."""
+        ceremony cue stay queued. Its status pulse goes too."""
         self._invites.forget(dev)
+        self._purge_invite_flashes(dev)
+        self._clear_status(dev)
+
+    def _purge_invite_flashes(self, dev: str) -> None:
         self._queue.purge(
             lambda thunk: isinstance(thunk, _InviteFlash) and thunk.dev == dev)
 
