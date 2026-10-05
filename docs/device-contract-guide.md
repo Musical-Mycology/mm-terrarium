@@ -199,7 +199,7 @@ must accept (down) the verb before it holds a role.
 | `/<dev>/release` | down | (none) | TCP | no | Ends the role; does not clear the display |
 | `/<dev>/room` | down | `b` blob | TCP | yes | Informational; hardware may ignore it |
 | `/<dev>/error` | down | `ss` context, message | TCP | yes | A refusal that changes no state |
-| `/<dev>/leds` | down | `b` GRB frame: a player device's own pixel count x 3 (36 bytes for the 12 px Rev 1); a Room-bound device's frames are its fixture's channel count (the TEST fixture is 180), which a device that only ever plays need not support | UDP | yes | High rate; loss tolerated. Also carries the lobby's white invite and green ceremony flashes when a Room is loaded |
+| `/<dev>/leds` | down | `b` GRB frame: a player device's own pixel count x 3 (36 bytes for the 12 px Rev 1); a Room-bound device's frames are its fixture's channel count (the TEST fixture is 180), which a device that only ever plays need not support | UDP | yes | High rate; loss tolerated. Also carries the lobby's white invite and green ceremony flashes when a Room is loaded; what each status light means is `docs/light-lexicon.md` |
 | `/<dev>/play` | down | `ss` name, params | UDP | no | A device-local sample by name |
 | `/game/start` | up | `ss` dev, key | TCP | yes | A keyed admin start; Rev 1 does not send it |
 | `/game/tap` | up | `sffi` dev, peak_g, duration_ms, count | UDP | no | Gameplay only; Control never reads a tap as a join |
@@ -245,8 +245,9 @@ fail without it.
    `link.service_is_dev_id`.)
 2. **Hello** (`ssss`, instrument `tuneshroom_rev1`) on link-up and every 5 s.
    (`boot_hello_heartbeat`, every scenario.)
-3. **On `/<dev>/handshake`:** store the round id and show a prompt (the white
-   flash arrives as frames anyway when a Room is loaded). On a double tap
+3. **On `/<dev>/handshake`:** store the round id. Draw no invite light of
+   your own: the white flash x2 arrives as frames when a Room is loaded, and
+   that pattern is reserved for Control (`docs/light-lexicon.md`, *Invite*). On a double tap
    while a round id is held, send `/game/handshake [dev, round_id, node]`,
    with `node` from NFC if a tag was touched, else `""`.
    (`handshake_validate_then_role`, `handshake_stale_round`,
@@ -268,6 +269,12 @@ fail without it.
    `link_loss_rejoin`, `link_loss_keeps_display`.)
 8. **Never send `/game/join`.** (`join_retired_error` shows the answer a v2
    device gets; no scenario ever asks a device to send it.)
+9. **Your own light, before Control's.** Until the first `/<dev>/leds`
+   frame, draw the light lexicon's firmware signals yourself: *Solo* (the
+   aurora) with no Wi-Fi or no Terrarium, *Looking* (a slow white pulse) on
+   Wi-Fi with no Terrarium talking to you. From the first frame on, show
+   only Control's frames. (No scenario checks this; `docs/light-lexicon.md`
+   section 4 and gap G4.)
 
 Until this lands, the current firmware's `/game/join` gets the retirement
 `/error`; it still hellos, so it gets a jam role at start and stays usable on
@@ -437,3 +444,6 @@ over a real link exercises it.
    the `/game/handshake` it produces. The reference is a double tap; the
    firmware's own classifier must keep it out of the gameplay tap stream
    (before a role there is no gameplay tap stream anyway, rule 2).
+7. **Long link loss and the light.** Rule 9 keeps the last frame lit through
+   an outage. Whether a link lost for longer should fall back to the light
+   lexicon's *Looking* pulse is undecided (`docs/light-lexicon.md`, gap G4).

@@ -86,21 +86,32 @@ What happens, wire-level, after the reload (this is the current
 1. **hello.** The link connects to Arco this time; Control registers the
    device and pushes the Room's declared instrument config back
    (`/ie1/room`).
-2. **Invite.** The lobby is `WAITING` and this device hasn't joined, so
-   Control starts sending an invite: a white/black LED flash repeating
-   every 5 s. The page's status chip moves from "connecting" to "in lobby".
-3. **Handshake.** Double-tap the Tuneshroom in the browser (or physically,
-   on real hardware) while it's showing the invite flash. One tap with
-   `count >= 2`, or two taps within 1.5 s, both count.
-4. **Join.** Control grants the join exactly as an explicit `/game/join`
-   would -- the served role blob replaces the bundled solo blob (geometry,
-   ambient, thresholds, functions all switch over).
-5. **Ceremony.** Two green flashes on the device, a bell up the A-major
-   scale on the Room's own fixture voice, and a chime sent to the device.
+2. **Invite.** The Bit is in `SETUP` and this device has not validated, so
+   Control sends `/ie1/handshake <round_id>` and, with the lobby up, a
+   white flash x2 on the device, both repeating every 5 s. Between flashes
+   the device goes dark for now; the light lexicon's target is a slow white
+   pulse (`docs/light-lexicon.md`, gap G1).
+3. **Accept.** Double-tap the Tuneshroom in the browser (on the display, the
+   Tap tile, or the phone's accelerometer), or press **Accept**, while an
+   invite is pending. The device sends `/game/handshake` with the round id.
+4. **Validated.** Control reserves a scored slot and answers
+   `/ie1/validated <round_id> <role>`. This is **not** a role yet: the solo
+   blob stays applied and gestures stay off the wire until start. A refusal
+   is `/ie1/deny <reason> <hint>` instead (no light yet; the lexicon's
+   target is red x2), and that device still gets a jam role at start.
+5. **Ceremony.** Two green flashes on the device (the lexicon's *Success*),
+   a bell up the A-major scale on the Room's own fixture voice, and a chime
+   sent to the device. The device then holds dark until start; the
+   lexicon's target is a slow green pulse (*Ready*).
 6. **Start.** The Bit is still in `SETUP` (`min_scored` is 1, but nothing
    auto-starts on count). Go to the Console and click **Run**. That calls
    `GameServer.request_start` as the Console's always-admin source (no key
-   needed), flips `SETUP` -> `RUNNING`, and the round begins.
+   needed), flips `SETUP` -> `RUNNING`, and the round begins: the validated
+   device gets its scored `/ie1/role` (the served role blob replaces the
+   bundled solo blob: geometry, ambient, thresholds, functions), plays the
+   `sys:loaded` green welcome, and every other connected device gets a jam
+   role. The Room's bound fixtures flash the start feedback (today green
+   x1 for an accept; the lexicon's target is green x2).
 
    A real player instead scans the Join card's Start QR/URL or an NFC tag,
    which needs the Bit's key (`metro-dev` for MetronomeBit). The Console's
@@ -114,9 +125,9 @@ immediately alive again for the next round.
 ### Headless alternative (no Flutter/browser)
 
 If you just need a scriptable device with no UI, `mm-terrarium`'s own
-`harness/o2_shroom.py --handshake` does the same hello/invite/double-tap/
-join/ceremony sequence entirely on the CLI, printing each step
-(`handshake: invite seen, double-tap sent at ...`, role-granted, etc.). It
+`harness/o2_shroom.py --handshake` does the same hello, invite, accept,
+validated and role sequence entirely on the CLI, logging each message it
+receives. It
 has no solo mode, though -- it's a plain o2lite client, so it must be
 launched **after** Arco is already up (i.e. after Step 3, not before Step
 2), unlike the Flutter app above:
@@ -142,9 +153,9 @@ launched **after** Arco is already up (i.e. after Step 3, not before Step
 ## Diagrams
 
 `docs/diagrams/player-flow.seq` (rendered into `docs/MM_TERRARIUM.md` under
-*What it is, in one picture*) now shows this lobby handshake --
-invite, double-tap, ceremony, admin start -- instead of the older immediate
-`/game/join` flow it still showed before this pass. Regenerate after any
+*What it is, in one picture*) shows this contract v3 handshake: invite,
+accept, validated, ceremony, start, role. What each light in it means is
+`docs/light-lexicon.md`. Regenerate after any
 further protocol change with `.venv/bin/python -m tools.render_diagrams`;
 `tests/test_diagrams.py` fails the suite if a diagram source and its
 committed output ever drift apart.
