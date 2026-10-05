@@ -136,6 +136,18 @@ def _normalize_key(value: object) -> object:
     return value
 
 
+
+def _decode_blob(addr: str, blob):
+    """One outbound blob as recorded. An LED frame is raw pixel bytes, never
+    JSON: from_o2_arg would read a frame whose bytes are all ASCII digits
+    (a uniform level of 49 to 57, which a dim pulse passes through) as a
+    JSON number, so frames are listed straight from the bytes."""
+    if addr.endswith("/leds"):
+        raw = bytes(getattr(blob, "data", blob))[:getattr(blob, "size", None)]
+        return list(raw)
+    return from_o2_arg(blob)
+
+
 class Recorder:
     """One scenario's rig. Construct, script the device, then finish().
 
@@ -292,7 +304,7 @@ class Recorder:
         if not addr.startswith(f"/{self.dev}/"):
             return                      # a _svcheck probe, or a Room fixture
         typespec = raw_args[0] if raw_args else ""
-        values = [from_o2_arg(v) if t == "b" else v
+        values = [_decode_blob(addr, v) if t == "b" else v
                   for t, v in zip(typespec, raw_args[1:])]
         if addr == f"/{self.dev}/handshake":
             self._round_ids.add(values[0])

@@ -78,6 +78,15 @@ ROLE_SETTLED_T = START_T + SIGNATURE_SETTLED_MS
 # handshake_validate_then_role starts later, after the validation
 # ceremony's chime (about 1.8 s after the accept) has played.
 VALIDATE_START_T = 3000
+# Ready (light lexicon): the validation ceremony's green flashes end 800 ms
+# after the accept, then a 4 s green pulse rises from dark; this check sits
+# near its first peak, where the frame barely moves within a tolerance.
+READY_PULSE_CHECK_T = 2900
+# deny_stays_hellod with the Room's lobby up: red x2 from the deny at
+# ACCEPT_AFTER_MS (this check is mid first flash), then the white invite
+# pulse resumes 800 ms after the deny and peaks 2 s later.
+DENY_FLASH_CHECK_T = 400
+DENY_PULSE_CHECK_T = 3100
 
 # handshake_over_cap_deny: the uncaptured rival validates first.
 RIVAL_ACCEPT_T = 100
@@ -164,6 +173,10 @@ def handshake_validate_then_role() -> dict:
     invite's second white flash, which was already queued, so nothing
     white follows `/validated` (and only `/$DEV/handshake` is ever an
     invite in any case).
+    Between the invite's flashes the device shows a dim white pulse, and
+    once the ceremony's green flashes are done a dim green pulse (the light
+    lexicon's Ready) holds until `/$DEV/role`; READY_PULSE_CHECK_T checks
+    it near its peak.
 
     Validated is a reservation, not a role: `/$DEV/role` (scored, `class`
     "UNIQUE") arrives only when the operator starts the round at
@@ -191,6 +204,8 @@ def handshake_validate_then_role() -> dict:
     rec.expect_handshake_out(ACCEPT_AFTER_MS)
     rec.advance_to(400)
     rec.expect_frame(400)                    # the ceremony's first green flash
+    rec.advance_to(READY_PULSE_CHECK_T)
+    rec.expect_frame(READY_PULSE_CHECK_T)    # Ready: the dim green pulse
     rec.advance_to(VALIDATE_START_T)
     rec.expect_play(VALIDATE_START_T, "chime")
     rec.start(VALIDATE_START_T)
@@ -303,8 +318,9 @@ def room_node_handshake_binds() -> dict:
     `/$DEV/leds` in the same millisecond.
 
     With a Room loaded, the lobby's white invite flash shows before the
-    accept (the frames at t=0 and t=414), alongside the `/$DEV/handshake`
-    invite itself. The node id is Control's own; the device learns it from
+    accept (the frames at t=0 and t=403), then the dim white invite pulse
+    rises (the frames at t=914 and t=983) until the bind clears it,
+    alongside the `/$DEV/handshake` invite itself. The node id is Control's own; the device learns it from
     an NFC tag or QR code, never from this wire.
 
     There is deliberately no `expect_frame` after the accept. Once bound,
@@ -458,22 +474,33 @@ def gestures_after_role() -> dict:
 
 def deny_stays_hellod() -> dict:
     """An accept naming a node no role table declares is denied with
-    `/$DEV/deny ["no such node", <hint>]`, and nothing else changes: no
-    validation, no role, no frame, and the hello heartbeat keeps running
-    on its own 5 s cadence. Control keeps inviting the device every 5 s;
-    its `device.handshake` policy answers only the first invite of a
-    link-up, so it accepts once.
+    `/$DEV/deny ["no such node", <hint>]`: no validation and no role, and
+    the hello heartbeat keeps running on its own 5 s cadence. Control
+    keeps inviting the device every 5 s; its `device.handshake` policy
+    answers only the first invite of a link-up, so it accepts once.
+
+    With a Room's lobby up, the deny is visible (the light lexicon's
+    Failure): red x2 on `/$DEV/leds` from the deny, replacing the invite's
+    still-queued second white flash, then the dim white invite pulse
+    resumes, because the lobby is WAITING and the device is still invited.
+    DENY_FLASH_CHECK_T checks the first red flash and DENY_PULSE_CHECK_T
+    the pulse near its peak.
     """
     rec = Recorder(name="deny_stays_hellod",
-                   summary="An accept naming an unknown node is denied; "
-                           "the device stays hello'd with its heartbeat "
-                           "running",
+                   summary="An accept naming an unknown node is denied with "
+                           "a red flash; the device stays hello'd and "
+                           "invited with its heartbeat running",
                    handshake={"node": NO_SUCH_NODE,
-                              "ack_after_ms": ACCEPT_AFTER_MS})
+                              "ack_after_ms": ACCEPT_AFTER_MS},
+                   with_room=True)
     rec.link_up(0)
     rec.expect_hello(0)
     rec.advance_to(ACCEPT_AFTER_MS)
     rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.advance_to(DENY_FLASH_CHECK_T)
+    rec.expect_frame(DENY_FLASH_CHECK_T)     # Failure: the first red flash
+    rec.advance_to(DENY_PULSE_CHECK_T)
+    rec.expect_frame(DENY_PULSE_CHECK_T)     # still invited: the white pulse
     rec.advance_to(5000)
     rec.expect_hello(5000)
     rec.advance_to(10000)
