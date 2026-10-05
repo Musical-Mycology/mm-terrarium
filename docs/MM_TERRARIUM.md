@@ -773,7 +773,9 @@ SETUP, not FULL: /handshake │            │            │
   the ceremony. A deny never ends anything: the device stays hello'd and
   gets a jam role at start. With the lobby up, a deny flashes the
   device red x2 (`LobbyRuntime.on_deny`), then its white invite pulse
-  resumes if it is still invited.
+  resumes if it is still invited. A fixture-bound device's deny flashes
+  nothing: the override would land on its fixture key and paint the whole
+  fixture red, the Room's *start below minimum* signal.
 - **Cap**: `scored_cap()` sums the scored roles' capacities, lowered by
   `[lobby] max_scored` (positive int; `load_bit` refuses one above a
   bounded sum); an unbounded scored role makes the cap `max_scored` or
@@ -1385,6 +1387,10 @@ holds a `LightSession` per granted device and per fixture, ships
   - handlers take `(address, types, info)`, **pull** args in typespec
     order (`pull_args`) and get the address without its leading `/`;
   - a blob must have `.size`/`.data`; a bare int list raises (`to_o2_arg`);
+  - decode an inbound blob with `decode_blob(address, blob)`, never bare
+    `from_o2_arg`: that tries JSON first, so a uniform `/leds` frame at a
+    level from 48 to 57 (all ASCII digits, as a dim status pulse sends)
+    comes back as an int. `/leds` decodes as raw bytes;
   - handlers run only inside `o2lite.poll()`, which `drain_inbound()` pumps;
   - `method_new` appends and dispatch takes the **first** match, so the
     svcheck handler is registered once per (connection, service);
