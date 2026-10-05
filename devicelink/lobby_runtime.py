@@ -101,6 +101,11 @@ class LobbyRuntime:
         # New invites stop: the schedule is cleared and the agent no
         # longer calls consider_invite.
         self._invites.clear()
+        # Device flashes go, though: a white invite or red deny flash still
+        # queued would fire after the device holds its new role and paint
+        # over its sys:loaded welcome. Ceremony cues and fixture feedback
+        # stay.
+        self._queue.purge(lambda thunk: isinstance(thunk, _DeviceFlash))
         # No pulse outlives the lobby: at RUNNING every device gets a role,
         # and an abort leaves nothing to wait for.
         for dev in list(self._status):
@@ -247,8 +252,7 @@ class LobbyRuntime:
         now = self._clock()
         for i in range(2):
             t = now + i * (DEVICE_FLASH_ON_S + DEVICE_FLASH_GAP_S)
-            self._at(t, lambda d=dev: self._s.set_override(d, RED, 1.0,
-                                                           DEVICE_FLASH_ON_S))
+            self._at(t, _DenyFlash(dev, self._s))
         st = self._status.get(dev)
         if st is not None:
             st.start = max(st.start, now + DEVICE_FLASH_TRAIN_S)
@@ -271,16 +275,31 @@ class LobbyRuntime:
             lambda thunk: isinstance(thunk, _InviteFlash) and thunk.dev == dev)
 
 
-class _InviteFlash:
-    """One queued white invite flash for `dev`: a named thunk rather than a
-    lambda, so LobbyRuntime.forget can purge exactly these from its
-    TimedQueue."""
+class _DeviceFlash:
+    """One queued per-device flash for `dev`: a named thunk rather than a
+    lambda, so LobbyRuntime can purge exactly these from its TimedQueue
+    (forget and on_deny drop a dev's invite flashes, stop drops all)."""
 
     __slots__ = ("dev", "_sinks")
+    rgb: tuple
 
     def __init__(self, dev: str, sinks: LobbySinks) -> None:
         self.dev = dev
         self._sinks = sinks
 
     def __call__(self) -> None:
-        self._sinks.set_override(self.dev, WHITE, 1.0, DEVICE_FLASH_ON_S)
+        self._sinks.set_override(self.dev, self.rgb, 1.0, DEVICE_FLASH_ON_S)
+
+
+class _InviteFlash(_DeviceFlash):
+    """A white invite flash."""
+
+    __slots__ = ()
+    rgb = WHITE
+
+
+class _DenyFlash(_DeviceFlash):
+    """A red deny flash (lexicon G2)."""
+
+    __slots__ = ()
+    rgb = RED

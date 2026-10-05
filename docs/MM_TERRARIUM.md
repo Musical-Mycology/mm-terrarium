@@ -817,7 +817,8 @@ SETUP, not FULL: /handshake │            │            │
   ([`docs/light-lexicon.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md)).
   **The ceremony survives a fast start**: `stop()` keeps the queue, so a
   start inside 1.8 s lets the bell and chime play out (`draining()`); an
-  abort drops it.
+  abort drops it. Queued white invite and red deny flashes do not survive
+  `stop()`: one landing after the role would paint over `sys:loaded`.
 - `TERRARIUM_ADMIN = "terrarium"` is always admin and refused as a device id
   before any dispatch; `[admin] devices` in `terrarium.toml` adds more.
 - **`GameServer.request_start(key, source_dev, source)` is the one start
