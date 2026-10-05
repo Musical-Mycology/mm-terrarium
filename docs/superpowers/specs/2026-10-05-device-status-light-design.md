@@ -229,10 +229,8 @@ not re-exported by this work.
   they say nothing changes on the pixels before `/role` (they now show
   Control-rendered status frames; the device still just displays frames).
 
-**Branching.** Code lands on a branch off `main`. The lexicon exists only in
-PR #178; if that PR has not merged when the docs task runs, the doc commit
-is stacked on its branch and this branch is rebased onto `main` once it
-merges.
+**Branching.** Everything lands on `claude/device-status-light`, cut from
+`main` after PR #178 (the lexicon) merged, so no stacking is needed.
 
 ## 9. Out of scope
 
