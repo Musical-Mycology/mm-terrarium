@@ -173,8 +173,9 @@ def handshake_validate_then_role() -> dict:
     invite's second white flash, which was already queued, so nothing
     white follows `/validated` (and only `/$DEV/handshake` is ever an
     invite in any case).
-    Between the invite's flashes the device shows a dim white pulse, and
-    once the ceremony's green flashes are done a dim green pulse (the light
+    The white invite pulse never shows here: it is held dark until 800 ms
+    after the invite's flashes, and the accept at 300 ms comes first. Once
+    the ceremony's green flashes are done, a dim green pulse (the light
     lexicon's Ready) holds until `/$DEV/role`; READY_PULSE_CHECK_T checks
     it near its peak.
 
