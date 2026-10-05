@@ -755,6 +755,7 @@ class DeviceLinkAgent:
         for dev in gone:
             self._overrides.pop(dev, None)
             self._override_only.discard(dev)
+            self._bases.pop(dev, None)
             self._last_frames.pop(dev, None)
         # Belt and braces alongside the engine's own GameServer._mute_key
         # canonicalization: a latched mute never lapses on its own (see
@@ -888,6 +889,7 @@ class DeviceLinkAgent:
         self._canvas_urls.pop(dev, None)
         self._overrides.pop(dev, None)
         self._override_only.discard(dev)
+        self._bases.pop(dev, None)
         self._last_frames.pop(dev, None)
         if self._lobby is not None:
             self._lobby.forget(dev)
@@ -920,11 +922,18 @@ class DeviceLinkAgent:
         if entry is None:
             return frame
         rgb, level, _expires = entry
+        return self._solid_frame(rgb, level, len(frame), color_order)
+
+    @staticmethod
+    def _solid_frame(rgb, level: float, length: int,
+                     color_order: str = "GRB") -> bytes:
+        """`length` bytes of one colour at `level`, in the surface's own
+        channel order; W stays 0."""
         by_name = {**dict(zip("RGB", rgb)), "W": 0}
         pixel = bytes(max(0, min(255, round(by_name[ch] * level)))
                       for ch in color_order)
-        reps = len(frame) // len(pixel) + 1
-        return (pixel * reps)[:len(frame)]
+        reps = length // len(pixel) + 1
+        return (pixel * reps)[:length]
 
     def _on_solid_cue(self, dev: str, rgb: tuple[int, int, int],
                       level: float, duration: float | None,
@@ -1194,12 +1203,15 @@ class DeviceLinkAgent:
             if closing:
                 self._check_closing_done(dev, session)
         # A device with no session (hello'd, not joined: the one being
-        # invited) renders only its override, and one black frame when the
-        # override expires, so an invite is visible before any role exists.
+        # invited or waiting on start) renders its lobby status pulse
+        # (_bases) with any override painted on top, so an invite and
+        # Ready are visible before any role exists. With neither, it gets
+        # one black frame and drops out.
         black = bytes(_DEVICE_CHANNELS)
         gs = self.game_server
         bound = set(gs.room.bound.values()) if gs.room is not None else set()
-        for dev in list(set(self._overrides) | self._override_only):
+        for dev in list(set(self._overrides) | self._override_only
+                        | set(self._bases)):
             # Only a KNOWN device that is not a Room fixture may be painted
             # here. `bound` is checked as well as _fixture_for because
             # the two disagree while a Room is being torn down, and a
@@ -1209,8 +1221,13 @@ class DeviceLinkAgent:
                     or gs.devices.get(dev) is None):
                 self._override_only.discard(dev)
                 continue
-            frame = (self._apply_override(dev, black, order)
-                     if dev in self._overrides else black)
+            base = self._bases.get(dev)
+            frame = black
+            if base is not None and dev not in self._muted:
+                frame = self._solid_frame(base[0], base[1], _DEVICE_CHANNELS,
+                                          order)
+            if dev in self._overrides:
+                frame = self._apply_override(dev, frame, order)
             if self._last_frames.get(dev) == frame:
                 continue
             self._last_frames[dev] = frame
@@ -1219,9 +1236,9 @@ class DeviceLinkAgent:
                     dev, frame, when=self._clock() + self._horizon))
             except Exception:
                 logger.exception("leds send for %s failed", dev)
-            if frame == black:
-                # Nothing more to say until another override lands: forget
-                # the frame so this dev drops out of the loop entirely.
+            if frame == black and dev not in self._bases:
+                # Nothing more to say until another override or base
+                # lands: forget the frame so this dev drops out of the loop.
                 self._override_only.discard(dev)
                 self._last_frames.pop(dev, None)
             else:
@@ -1366,6 +1383,10 @@ class DeviceLinkAgent:
             return        # stale round: dropped, logged by the engine
         self._send(dev, protocol.deny_event(dev, result.reason, result.hint))
         self._notify_join_denied(dev, node, result.reason)
+        # Failure on the device (lexicon G2): lobby-gated like the invite
+        # flash, so a deny with no lobby (no Room, RUNNING) shows nothing.
+        if self._lobby is not None:
+            self._lobby.on_deny(dev)
 
     def _on_grant(self, dev: str, result) -> None:
         """GameServer.on_grant: a new non-ROOM assignment (materialized at
@@ -1419,6 +1440,7 @@ class DeviceLinkAgent:
         self._closing_revived.discard(dev)
         self._overrides.pop(dev, None)
         self._override_only.discard(dev)
+        self._bases.pop(dev, None)
 
     def _on_verb(self, dev: str, verb: str, args: list,
                  gesture_time: float = 0.0, client=None) -> None:
@@ -1587,6 +1609,7 @@ class DeviceLinkAgent:
         # painting it.
         self._overrides.pop(dev, None)
         self._override_only.discard(dev)
+        self._bases.pop(dev, None)
         self._canvas_urls.pop(dev, None)
         # Send BEFORE drop_dev, same reasoning as _on_release's no-bridge
         # branch above: dropping the connection mapping first would make

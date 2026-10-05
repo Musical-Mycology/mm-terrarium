@@ -465,3 +465,75 @@ def test_an_accepted_start_flashes_every_fixture_green_twice(monkeypatch):
             was_green[name] = green
         clk.advance(1 / 44)
     assert episodes == {"main": 2, "accent": 2}
+
+
+def _leds(server, dev):
+    return [bytes(m["args"][0]) for (_d, m) in server.sent
+            if m["address"] == f"/{dev}/leds"]
+
+
+def _dim(frame, pixel):
+    """True if every pixel of `frame` is `pixel` scaled to one level in
+    (0, 255): a pulse frame, not a flash and not black."""
+    peak = max(pixel)
+    level = frame[pixel.index(peak)]
+    want = bytes(round(c * level / peak) for c in pixel) * 12
+    return 0 < level < 255 and frame == want
+
+
+def test_an_invited_device_pulses_white_between_invite_flashes(monkeypatch):
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    _poll(agent, clk, 2.0)
+    assert _dim(_leds(server, "ie1")[-1], (255, 255, 255))
+
+
+def test_a_validated_device_pulses_green_until_its_role(monkeypatch):
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    _handshake(server, agent, gs, "c1", "ie1")
+    _poll(agent, clk, 2.5)
+    assert _dim(_leds(server, "ie1")[-1], (255, 0, 0))   # GRB green
+    gs.request_start(None, TERRARIUM_ADMIN, "console")
+    agent.poll()
+    assert agent._bases == {}
+    assert _sent(server, "/ie1/role")
+
+
+def test_a_deny_flashes_the_device_red_twice(monkeypatch):
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    _poll(agent, clk, 1.0)
+    n = len(server.sent)
+    _handshake(server, agent, gs, "c1", "ie1", "NO_SUCH_NODE")
+    _poll(agent, clk, 1.0)
+    later = [m for (_d, m) in server.sent[n:]
+             if m["address"] in ("/ie1/deny", "/ie1/leds")]
+    assert later[0]["address"] == "/ie1/deny"
+    red = bytes([0, 255, 0] * 12)                        # GRB red
+    reds = [m for m in later if m["address"] == "/ie1/leds"
+            and bytes(m["args"][0]) == red]
+    assert len(reds) == 2
+
+
+def test_a_muted_invited_device_stays_black(monkeypatch):
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    _hello(server, agent, "c1", "ie1")
+    gs._dispatch_cues([MuteCue("ie1")], at=clk.t)
+    n = len(_leds(server, "ie1"))
+    _poll(agent, clk, 3.0)
+    assert all(f == bytes(36) for f in _leds(server, "ie1")[n:])
+
+
+def test_a_full_lobby_clears_the_white_pulse_with_one_black_frame(monkeypatch):
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    gs.registration.role_table.roles["player"].capacity = 1
+    _hello(server, agent, "c1", "ie1")
+    _poll(agent, clk, 2.0)
+    assert _dim(_leds(server, "ie1")[-1], (255, 255, 255))
+    n = len(_leds(server, "ie1"))
+    _hello(server, agent, "c2", "ie2")
+    _handshake(server, agent, gs, "c2", "ie2")
+    assert gs.lobby_state() == "FULL"
+    _poll(agent, clk, 1.0)
+    assert _leds(server, "ie1")[n:] == [bytes(36)]
