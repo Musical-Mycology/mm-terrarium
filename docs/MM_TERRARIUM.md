@@ -756,8 +756,10 @@ SETUP, not FULL: /handshake │            │            │
   `/<dev>/handshake round_id` (TCP) on a device's first hello in SETUP,
   then every `invite_interval_s` (5 s) while SETUP, the round id is set,
   the lobby is not FULL and the Bit has a scored node, whether or not a
-  Room or lobby exists. The lobby only adds the white x2 flash, and a
-  validation cancels that device's still-queued flashes.
+  Room or lobby exists. The lobby only adds the white x2 flash and the status pulse (white
+  while invited, green once validated, until `/role`; both held dark
+  through any flash train so its gaps read black), and a validation cancels
+  that device's still-queued flashes.
 - **Validation** (`GameServer.handshake`; the first failure answers
   `/<dev>/deny reason hint`): not pooled, `not connected`; no Bit,
   `registration closed`; a Room node binds (below); a bound fixture or a
@@ -769,8 +771,9 @@ SETUP, not FULL: /handshake │            │            │
   denies with the `satisfies()` reason, hint `this role needs: ...`.
   Accept: `/<dev>/validated round_id role` (TCP), `on_registration_change`,
   the ceremony. A deny never ends anything: the device stays hello'd and
-  gets a jam role at start. A deny shows no light today; the lexicon's
-  target is red x2 on the device (gap G2).
+  gets a jam role at start. With the lobby up, a deny flashes the
+  device red x2 (`LobbyRuntime.on_deny`), then its white invite pulse
+  resumes if it is still invited.
 - **Cap**: `scored_cap()` sums the scored roles' capacities, lowered by
   `[lobby] max_scored` (positive int; `load_bit` refuses one above a
   bounded sum); an unbounded scored role makes the cap `max_scored` or
@@ -806,7 +809,8 @@ SETUP, not FULL: /handshake │            │            │
   `control/lobby.py` is pure (WAITING/FULL, `NOTE_SCALE`, schedulers);
   `devicelink/lobby_runtime.py` renders an aurora with pad and drone,
   green and silent when FULL. Per validation, 1 s apart: green x2, a bell
-  up the scale at +0.8 s, a device chime cue with `key=<midi>` at +1.8 s.
+  up the scale at +0.8 s, a device chime cue with `key=<midi>` at +1.8 s. A validated device then
+  pulses green until its role.
   Every flash here is a reserved signal in the light lexicon
   ([`docs/light-lexicon.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md)).
   **The ceremony survives a fast start**: `stop()` keeps the queue, so a
@@ -821,8 +825,8 @@ SETUP, not FULL: /handshake │            │            │
   raises and fires `on_start_requested`. `decide_start` checks a key first
   (wrong key or no admin start: refused with no feedback), then SETUP,
   then accepts an admin or refuses a non-admin below `min_scored`. Fixture
-  feedback: accept green x1, minimum red x2, other refusal red x3, bad key
-  nothing. The lexicon's target for accept is green x2 (its gap G3).
+  feedback: accept green x2, minimum red x2, other refusal red x3, bad key
+  nothing.
 - **`GET /prepare?key=&bit=[&dev=]`** (`control/prepare.py`) loads a Bit
   for MycoQuest: no Room is a visible 409; unknown Bit, non-admin Bit or bad
   key is a silent 202 like an accept; IDLE loads it; SETUP with that Bit is
@@ -1453,10 +1457,10 @@ holds a `LightSession` per granted device and per fixture, ships
   streams. The Bit is not told its player left (*Not yet built / deferred*).
 - **Overrides** (`SolidCue`, lobby flashes, mute blackout) are painted in
   the strip's channel order (`SolidCue` names R, G, B; W stays 0). A
-  hello'd device with no role shows only its override, then one black frame,
-  so it is dark between invites and after the ceremony; the light
-  lexicon's target is a white pulse while invited and a green pulse once
-  validated (gap G1).
+  hello'd device with no role shows its lobby status pulse (`_bases`, from
+  `LobbyRuntime`'s `set_base` sink: white while invited, green once
+  validated) with any override on top, black while muted; when both are
+  gone it gets one black frame.
   `_finish_release` and `unwire_room` drop overrides, since a blackout
   never expires. A muted surface ignores `SolidCue` (*Cues (SolidCue,
   SURFACE, mute)*).
@@ -2374,11 +2378,9 @@ Kept explicit so the doc does not over-claim.
   control, v3 replay); mm-devshroom's firmware still joins (*Relationships
   to other repos*), so until mm-devshroom#7 lands a Rev 1 board is
   jam-only.
-- **The light lexicon's gaps** ([`docs/light-lexicon.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md)
-  section 6): Control does not yet render the white pulse between invites
-  or the green Ready pulse once validated (G1), flash red x2 on a deny
-  (G2), or flash green x2 (rather than x1) on a start accept (G3); Rev 1
-  firmware does not yet render Solo or the white Looking pulse (G4).
+- **The light lexicon's G4** ([`docs/light-lexicon.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md)
+  section 6): Rev 1 firmware does not yet render Solo or the white Looking
+  pulse, and link-loss fallback to Looking is undecided.
 - **Room liveness is undesigned**: Room-bound devices are never reaped
   (liveness spec section 5).
 - **A device's clock-sync to Arco after Control has connected is unreliable**

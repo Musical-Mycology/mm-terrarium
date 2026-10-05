@@ -89,20 +89,19 @@ What happens, wire-level, after the reload (this is the current
 2. **Invite.** The Bit is in `SETUP` and this device has not validated, so
    Control sends `/ie1/handshake <round_id>` and, with the lobby up, a
    white flash x2 on the device, both repeating every 5 s. Between flashes
-   the device goes dark for now; the light lexicon's target is a slow white
-   pulse (`docs/light-lexicon.md`, gap G1).
+   the device shows a slow white pulse (the lexicon's *Invite*).
 3. **Accept.** Double-tap the Tuneshroom in the browser (on the display, the
    Tap tile, or the phone's accelerometer), or press **Accept**, while an
    invite is pending. The device sends `/game/handshake` with the round id.
 4. **Validated.** Control reserves a scored slot and answers
    `/ie1/validated <round_id> <role>`. This is **not** a role yet: the solo
    blob stays applied and gestures stay off the wire until start. A refusal
-   is `/ie1/deny <reason> <hint>` instead (no light yet; the lexicon's
-   target is red x2), and that device still gets a jam role at start.
+   is `/ie1/deny <reason> <hint>` instead (the device flashes red x2, the
+   lexicon's *Failure*), and that device still gets a jam role at start.
 5. **Ceremony.** Two green flashes on the device (the lexicon's *Success*),
    a bell up the A-major scale on the Room's own fixture voice, and a chime
-   sent to the device. The device then holds dark until start; the
-   lexicon's target is a slow green pulse (*Ready*).
+   sent to the device. The device then pulses green until start (the
+   lexicon's *Ready*).
 6. **Start.** The Bit is still in `SETUP` (`min_scored` is 1, but nothing
    auto-starts on count). Go to the Console and click **Run**. That calls
    `GameServer.request_start` as the Console's always-admin source (no key
@@ -110,8 +109,8 @@ What happens, wire-level, after the reload (this is the current
    device gets its scored `/ie1/role` (the served role blob replaces the
    bundled solo blob: geometry, ambient, thresholds, functions), plays the
    `sys:loaded` green welcome, and every other connected device gets a jam
-   role. The Room's bound fixtures flash the start feedback (today green
-   x1 for an accept; the lexicon's target is green x2).
+   role. The Room's bound fixtures flash the start feedback (green
+   x2 for an accept).
 
    A real player instead scans the Join card's Start QR/URL or an NFC tag,
    which needs the Bit's key (`metro-dev` for MetronomeBit). The Console's

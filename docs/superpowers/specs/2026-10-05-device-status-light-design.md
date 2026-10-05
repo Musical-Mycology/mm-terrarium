@@ -159,8 +159,9 @@ Timing stays the fixture timing (`FIXTURE_FLASH_ON_S`, `FIXTURE_FLASH_GAP_S`).
 Re-recorded with `tools/record_scenarios.py`; `tests/test_contract_scenarios.py`
 fails on any diff against the committed recordings.
 
-- `handshake_validate_then_role`: gains white pulse frames after the invite
-  train and green pulse frames after the ceremony, until `/role` at 3000.
+- `handshake_validate_then_role`: gains no white pulse frames (the accept at
+  300 comes before the 800 ms dark hold) and gains green pulse frames after
+  the ceremony, until `/role` at 3000.
 - `room_node_handshake_binds`: gains white pulse frames between the invite
   train and the Room-node accept at 1000; the bind's `forget` clears it.
 - `deny_stays_hellod`: switches to `with_room=True`, so it records the
