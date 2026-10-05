@@ -158,7 +158,7 @@ class LobbyRuntime:
 
     # --- start feedback (spec 2) ---------------------------------------
     def feedback(self, feedback: str) -> None:
-        count, rgb = {FEEDBACK_ACCEPT: (1, GREEN), FEEDBACK_MINIMUM: (2, RED),
+        count, rgb = {FEEDBACK_ACCEPT: (2, GREEN), FEEDBACK_MINIMUM: (2, RED),
                       FEEDBACK_REFUSED: (3, RED)}.get(feedback, (0, GREEN))
         self._flash_fixtures(rgb, count)
 

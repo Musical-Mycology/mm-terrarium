@@ -100,7 +100,7 @@ def test_running_swaps_back_to_the_bits_room_declaration(monkeypatch):
     assert main.manifest.instruments[0].instrument == "rainbow"   # TestBit's ROOM
     assert ("main", 0x80, LOBBY_DRONE_KEY, 0) in audio.fed
     assert ("main", 0xC0, 89, 0) in audio.fed                    # TestBit's program restored
-    # accept: one green flash on both fixtures
+    # accept: the first of two green flashes on both fixtures
     agent.poll()
     assert agent._overrides[fixture_dev("main")][0] == GREEN
     assert agent._overrides[fixture_dev("accent")][0] == GREEN
@@ -446,3 +446,22 @@ def test_validating_mid_invite_cancels_the_queued_second_white_flash(monkeypatch
             seen.append(agent._overrides["ie1"][0])
     assert WHITE not in seen
     assert GREEN in seen
+
+
+def test_an_accepted_start_flashes_every_fixture_green_twice(monkeypatch):
+    """Lexicon *Start accepted*: green x2 on every bound Room fixture, on
+    the agent's own flash path because RUNNING has torn the lobby down."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
+    gs.request_start(None, TERRARIUM_ADMIN, "console")
+    assert gs.state is State.RUNNING
+    episodes = {"main": 0, "accent": 0}
+    was_green = {"main": False, "accent": False}
+    for _ in range(int(1.5 * 44)):
+        agent.poll()
+        for name in episodes:
+            entry = agent._overrides.get(fixture_dev(name))
+            green = entry is not None and entry[0] == GREEN
+            episodes[name] += green and not was_green[name]
+            was_green[name] = green
+        clk.advance(1 / 44)
+    assert episodes == {"main": 2, "accent": 2}

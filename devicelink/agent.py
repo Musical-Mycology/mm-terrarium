@@ -1738,7 +1738,7 @@ class DeviceLinkAgent:
             # the config, not self._lobby: a Bit with [lobby] enabled =
             # false gets no room reaction at all.
             if self.game_server.lobby_config().enabled:
-                self._flash_fixtures_now(GREEN, 1)
+                self._flash_fixtures_now(GREEN, 2)
         elif self._lobby is not None:
             self._lobby.feedback(record.feedback)
 

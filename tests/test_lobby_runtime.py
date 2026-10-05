@@ -145,13 +145,13 @@ def test_second_join_climbs_the_scale_and_waits_its_turn():
     assert abs((ie2_first - ie1_first) - 2.8) < 0.03
 
 
-def test_feedback_flashes_fixtures_green_once_red_twice_or_thrice():
+def test_feedback_flashes_fixtures_green_twice_red_twice_or_thrice():
     rt, sinks, clock = _rt()
     rt.start()
     rt.feedback(FEEDBACK_ACCEPT)
     _run(rt, sinks, clock, 2.0)
     assert [o[1:4] for o in sinks.overrides] == [
-        ("sim-main", GREEN, 1.0), ("sim-accent", GREEN, 1.0)]
+        ("sim-main", GREEN, 1.0), ("sim-accent", GREEN, 1.0)] * 2
     sinks.overrides.clear()
     rt.feedback(FEEDBACK_MINIMUM)
     _run(rt, sinks, clock, 2.0)
@@ -173,7 +173,7 @@ def test_unbound_fixture_gets_no_flash():
     rt.start()
     rt.feedback(FEEDBACK_ACCEPT)
     _run(rt, sinks, clock, 1.0)
-    assert [o[1] for o in sinks.overrides] == ["sim-main"]
+    assert [o[1] for o in sinks.overrides] == ["sim-main", "sim-main"]
 
 
 def test_invite_flashes_white_twice_and_repeats_every_interval():
