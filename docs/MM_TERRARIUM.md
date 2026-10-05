@@ -83,6 +83,12 @@ renderer. The venue array's WLED ESP32 controllers are the third sink,
 `[[artnet]]` (see *Fixture sinks and Art-Net* below); no physical LED has
 been driven over it yet, hardware bring-up is still pending.
 
+**What each status light means** (invite, success, ready, failure, solo) is
+[`docs/light-lexicon.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md):
+the normative visual language every device, fixture and Bit shares, agreed
+2026-10-05. Its patterns are reserved, so a Bit never reuses one for game
+feedback, and its section 6 lists where Control does not match it yet.
+
 The diagram below traces one frame from a Bit's cue through both live sinks
 (device and Console) to the Art-Net sink.
 
@@ -763,7 +769,8 @@ SETUP, not FULL: /handshake │            │            │
   denies with the `satisfies()` reason, hint `this role needs: ...`.
   Accept: `/<dev>/validated round_id role` (TCP), `on_registration_change`,
   the ceremony. A deny never ends anything: the device stays hello'd and
-  gets a jam role at start.
+  gets a jam role at start. A deny shows no light today; the lexicon's
+  target is red x2 on the device (gap G2).
 - **Cap**: `scored_cap()` sums the scored roles' capacities, lowered by
   `[lobby] max_scored` (positive int; `load_bit` refuses one above a
   bounded sum); an unbounded scored role makes the cap `max_scored` or
@@ -800,6 +807,8 @@ SETUP, not FULL: /handshake │            │            │
   `devicelink/lobby_runtime.py` renders an aurora with pad and drone,
   green and silent when FULL. Per validation, 1 s apart: green x2, a bell
   up the scale at +0.8 s, a device chime cue with `key=<midi>` at +1.8 s.
+  Every flash here is a reserved signal in the light lexicon
+  ([`docs/light-lexicon.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md)).
   **The ceremony survives a fast start**: `stop()` keeps the queue, so a
   start inside 1.8 s lets the bell and chime play out (`draining()`); an
   abort drops it.
@@ -813,7 +822,7 @@ SETUP, not FULL: /handshake │            │            │
   (wrong key or no admin start: refused with no feedback), then SETUP,
   then accepts an admin or refuses a non-admin below `min_scored`. Fixture
   feedback: accept green x1, minimum red x2, other refusal red x3, bad key
-  nothing.
+  nothing. The lexicon's target for accept is green x2 (its gap G3).
 - **`GET /prepare?key=&bit=[&dev=]`** (`control/prepare.py`) loads a Bit
   for MycoQuest: no Room is a visible 409; unknown Bit, non-admin Bit or bad
   key is a silent 202 like an accept; IDLE loads it; SETUP with that Bit is
@@ -1444,7 +1453,10 @@ holds a `LightSession` per granted device and per fixture, ships
   streams. The Bit is not told its player left (*Not yet built / deferred*).
 - **Overrides** (`SolidCue`, lobby flashes, mute blackout) are painted in
   the strip's channel order (`SolidCue` names R, G, B; W stays 0). A
-  hello'd device with no role shows only its override, then one black frame.
+  hello'd device with no role shows only its override, then one black frame,
+  so it is dark between invites and after the ceremony; the light
+  lexicon's target is a white pulse while invited and a green pulse once
+  validated (gap G1).
   `_finish_release` and `unwire_room` drop overrides, since a blackout
   never expires. A muted surface ignores `SolidCue` (*Cues (SolidCue,
   SURFACE, mute)*).
@@ -2303,7 +2315,8 @@ appended, never inserted.
   device contract, `www/o2ws.js` with its `web/o2ws.js`, and
   `docs/telemetry-trace-schema.md` (its capture client, derived thresholds
   and simulator presets are unbuilt). The legacy M1a / Sensor-Check harness
-  stays there as a reference; nothing was ported.
+  stays there as a reference; nothing was ported. Its solo mode is the
+  light lexicon's Solo signal (`docs/light-lexicon.md`).
 - **mm-devshroom**: Rev 1 ESP32 Tuneshroom firmware (Victor's), consuming
   the exported device contract. What a v3 device must do is the firmware
   checklist in `docs/device-contract-guide.md` section 5.3 (spec section
@@ -2312,6 +2325,9 @@ appended, never inserted.
   `/game/join`. Its `origin/main` firmware still sends `/game/join` once
   per link, with no resend; until it adopts the handshake it gets the
   retirement `/error`, still hellos, and gets a jam role at every start.
+  Before Control talks to it, the firmware draws its own light: the light
+  lexicon's Solo (aurora) and Looking (slow white pulse) signals, neither
+  built yet (`docs/light-lexicon.md` gap G4).
 - **mm-fairyring**: the cloud broker, Terrarium `uplink/` to fairyring to
   MycoQuest. `uplink/` is written against a protocol fairyring implements;
   the broker is built in its own repo, not yet deployed. Its cross-repo
@@ -2328,7 +2344,10 @@ appended, never inserted.
   that under-cover `pixel_count` at construction (`harness/room_surface.py`
   conforms); and `LightSession.render_into` passing the injected clock's
   reading as `t`, so fixture sessions sharing `DeviceLinkAgent`'s clock
-  scroll a `primary` rainbow as one gradient.
+  scroll a `primary` rainbow as one gradient. Its `sys:*` status
+  signatures (`synth/status.py`: `sys:loaded` on a role grant,
+  `sys:closing` on release, `sys:error` on a manifest that fails to
+  resolve) are part of the light lexicon, and their patterns are reserved.
 
 ## Not yet built / deferred
 
@@ -2350,10 +2369,16 @@ Kept explicit so the doc does not over-claim.
   replay spike (section 8 of the device contract kit spec, *The device
   contract and `contract_kit/`*), and an executable Mushica capability-gate
   test (waits on the Mushica Bit).
-- **Device clients on contract v3**: mm-tuneshroom's paired PR (device
-  session `acceptHandshake`, simulator Accept control, v3 replay) is
-  pending, and mm-devshroom's firmware still joins (*Relationships to other
-  repos*). Until each lands, that device is jam-only.
+- **Device clients on contract v3**: mm-tuneshroom is on v3 (its PR #35,
+  merged 2026-10-01: device session `acceptHandshake`, simulator Accept
+  control, v3 replay); mm-devshroom's firmware still joins (*Relationships
+  to other repos*), so until mm-devshroom#7 lands a Rev 1 board is
+  jam-only.
+- **The light lexicon's gaps** ([`docs/light-lexicon.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md)
+  section 6): Control does not yet render the white pulse between invites
+  or the green Ready pulse once validated (G1), flash red x2 on a deny
+  (G2), or flash green x2 (rather than x1) on a start accept (G3); Rev 1
+  firmware does not yet render Solo or the white Looking pulse (G4).
 - **Room liveness is undesigned**: Room-bound devices are never reaped
   (liveness spec section 5).
 - **A device's clock-sync to Arco after Control has connected is unreliable**
@@ -2440,6 +2465,9 @@ Each spec's Status line records what was live-verified; all specs are in
   (contract v3: hello, handshake, validated, one role per device at
   RUNNING); supersedes the registration flow in the canonical architecture
   doc and the lobby double-tap join (*Lobby and the handshake*).
+- [Light lexicon](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md)
+  (2026-10-05): the reserved status-light vocabulary for every instrument,
+  fixture and Bit, and where the code does not match it yet.
 - Cited under *Not yet built*: [o2lite connectivity migration](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-08-o2lite-connectivity-migration-design.md) (Phase 3 open), [device liveness](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-08-25-device-liveness-detection-design.md), [VENUE Room](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-25-venue-room-design.md).
 
 Game-design background (RenQuest integration, Bit scoring and loop rules,
