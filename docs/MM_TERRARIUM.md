@@ -756,10 +756,10 @@ SETUP, not FULL: /handshake │            │            │
   `/<dev>/handshake round_id` (TCP) on a device's first hello in SETUP,
   then every `invite_interval_s` (5 s) while SETUP, the round id is set,
   the lobby is not FULL and the Bit has a scored node, whether or not a
-  Room or lobby exists. The lobby only adds the white x2 flash and the status pulse (white
-  while invited, green once validated, until `/role`; both held dark
-  through any flash train so its gaps read black), and a validation cancels
-  that device's still-queued flashes.
+  Room or lobby exists. The lobby only adds the white x2 flash and the
+  status pulse (white while invited, green once validated, until `/role`;
+  both held dark through any flash train so its gaps read black), and a
+  validation cancels that device's still-queued flashes.
 - **Validation** (`GameServer.handshake`; the first failure answers
   `/<dev>/deny reason hint`): not pooled, `not connected`; no Bit,
   `registration closed`; a Room node binds (below); a bound fixture or a
@@ -809,8 +809,8 @@ SETUP, not FULL: /handshake │            │            │
   `control/lobby.py` is pure (WAITING/FULL, `NOTE_SCALE`, schedulers);
   `devicelink/lobby_runtime.py` renders an aurora with pad and drone,
   green and silent when FULL. Per validation, 1 s apart: green x2, a bell
-  up the scale at +0.8 s, a device chime cue with `key=<midi>` at +1.8 s. A validated device then
-  pulses green until its role.
+  up the scale at +0.8 s, a device chime cue with `key=<midi>` at +1.8 s.
+  A validated device then pulses green until its role.
   Every flash here is a reserved signal in the light lexicon
   ([`docs/light-lexicon.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md)).
   **The ceremony survives a fast start**: `stop()` keeps the queue, so a

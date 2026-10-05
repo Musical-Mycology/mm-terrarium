@@ -36,7 +36,7 @@ from control.rooms import Room
 from control.terrarium_config import load_terrarium_config
 from devicelink.agent import DeviceLinkAgent
 from devicelink.contract import HELLO_INTERVAL_S
-from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, from_o2_arg
+from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, decode_blob
 
 from contract_kit.contract_bit import ContractBit
 from contract_kit.solo_contract_bit import SoloContractBit
@@ -134,18 +134,6 @@ def _normalize_key(value: object) -> object:
     if isinstance(value, str):
         return _KEY_RE.sub("key=$KEY", value)
     return value
-
-
-
-def _decode_blob(addr: str, blob):
-    """One outbound blob as recorded. An LED frame is raw pixel bytes, never
-    JSON: from_o2_arg would read a frame whose bytes are all ASCII digits
-    (a uniform level of 49 to 57, which a dim pulse passes through) as a
-    JSON number, so frames are listed straight from the bytes."""
-    if addr.endswith("/leds"):
-        raw = bytes(getattr(blob, "data", blob))[:getattr(blob, "size", None)]
-        return list(raw)
-    return from_o2_arg(blob)
 
 
 class Recorder:
@@ -298,13 +286,14 @@ class Recorder:
 
         Wrapping the FAKE's send rather than O2LiteTransport.send is what
         lets this see Blob-wrapped arguments exactly as the wire carries
-        them, which is why from_o2_arg is the right decoder for them.
+        them; decode_blob reads each by its address, since an LED frame is raw
+        bytes where every other blob is JSON.
         """
         orig(addr, timestamp, *raw_args)
         if not addr.startswith(f"/{self.dev}/"):
             return                      # a _svcheck probe, or a Room fixture
         typespec = raw_args[0] if raw_args else ""
-        values = [_decode_blob(addr, v) if t == "b" else v
+        values = [decode_blob(addr, v) if t == "b" else v
                   for t, v in zip(typespec, raw_args[1:])]
         if addr == f"/{self.dev}/handshake":
             self._round_ids.add(values[0])

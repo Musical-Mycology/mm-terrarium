@@ -522,7 +522,10 @@ def test_a_muted_invited_device_stays_black(monkeypatch):
     gs._dispatch_cues([MuteCue("ie1")], at=clk.t)
     n = len(_leds(server, "ie1"))
     _poll(agent, clk, 3.0)
-    assert all(f == bytes(36) for f in _leds(server, "ie1")[n:])
+    assert "ie1" in agent._bases                  # a pulse exists, suppressed
+    after = _leds(server, "ie1")[n:]
+    assert after, "the mute must send the clearing black frame"
+    assert all(f == bytes(36) for f in after)
 
 
 def test_a_full_lobby_clears_the_white_pulse_with_one_black_frame(monkeypatch):
@@ -537,3 +540,17 @@ def test_a_full_lobby_clears_the_white_pulse_with_one_black_frame(monkeypatch):
     assert gs.lobby_state() == "FULL"
     _poll(agent, clk, 1.0)
     assert _leds(server, "ie1")[n:] == [bytes(36)]
+
+
+def test_a_denied_fixture_bound_device_does_not_flash_the_fixture_red(monkeypatch):
+    """A device bound to a Room fixture is denied `registration closed`; the
+    deny flash is a player signal and must not reach the whole fixture."""
+    gs, server, agent, audio, sessions, clk = _rig(monkeypatch)
+    _hello(server, agent, "c1", "sim-main")
+    _handshake(server, agent, gs, "c1", "sim-main")
+    assert _sent(server, "/sim-main/deny")
+    for _ in range(44):
+        clk.advance(1 / 44)
+        agent.poll()
+        entry = agent._overrides.get(fixture_dev("main"))
+        assert entry is None or entry[0] != RED

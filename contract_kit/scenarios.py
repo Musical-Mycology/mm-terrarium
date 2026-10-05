@@ -321,8 +321,9 @@ def room_node_handshake_binds() -> dict:
     With a Room loaded, the lobby's white invite flash shows before the
     accept (the frames at t=0 and t=403), then the dim white invite pulse
     rises (the frames at t=914 and t=983) until the bind clears it,
-    alongside the `/$DEV/handshake` invite itself. The node id is Control's own; the device learns it from
-    an NFC tag or QR code, never from this wire.
+    alongside the `/$DEV/handshake` invite itself. The node id is Control's
+    own; the device learns it from an NFC tag or QR code, never from this
+    wire.
 
     There is deliberately no `expect_frame` after the accept. Once bound,
     Control sends the device its FIXTURE's slice (the TEST fixture is 60 px

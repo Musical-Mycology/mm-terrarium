@@ -109,8 +109,8 @@ What happens, wire-level, after the reload (this is the current
    device gets its scored `/ie1/role` (the served role blob replaces the
    bundled solo blob: geometry, ambient, thresholds, functions), plays the
    `sys:loaded` green welcome, and every other connected device gets a jam
-   role. The Room's bound fixtures flash the start feedback (green
-   x2 for an accept).
+   role. The Room's bound fixtures flash the start feedback
+   (green x2 for an accept).
 
    A real player instead scans the Join card's Start QR/URL or an NFC tag,
    which needs the Bit's key (`metro-dev` for MetronomeBit). The Console's

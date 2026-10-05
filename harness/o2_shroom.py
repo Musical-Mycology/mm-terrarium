@@ -663,7 +663,7 @@ def main() -> None:
             had its leading '/' stripped. Arguments are pulled in typespec
             order, not handed over as a list."""
             try:
-                values = pull_args(o2lite, typespec or "")
+                values = pull_args(o2lite, typespec or "", f"/{address}")
             except Exception:
                 # Mirrors devicelink/o2_transport.py's _on_message
                 # diagnostic, but print rather than logging: this module has

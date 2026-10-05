@@ -583,7 +583,7 @@ def test_o2lite_frame_is_released_across_the_shared_clock():
     Control genuinely share (o2litepy is a module-level singleton -- design
     spec 2026-08-12 section 5.2); ShroomClient.tick() is the exact client
     code harness/o2_shroom.py drives with o2lite.time_get()."""
-    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, from_o2_arg
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, decode_blob
     from harness.shroom_client import ShroomClient
 
     fake_o2 = FakeO2Lite(now=45.0)          # O2 clock starts near zero
@@ -628,7 +628,7 @@ def test_o2lite_frame_is_released_across_the_shared_clock():
         assert led_sends, "expected the agent to emit at least one /ie1/leds frame"
 
         for addr, ts, typespec, args in led_sends:
-            decoded = [from_o2_arg(a) if t == "b" else a
+            decoded = [decode_blob(addr, a) if t == "b" else a
                       for t, a in zip(typespec, args)]
             client.handle({"timestamp": ts, "address": addr,
                            "typespec": typespec, "args": decoded})

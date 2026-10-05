@@ -1385,7 +1385,9 @@ class DeviceLinkAgent:
         self._notify_join_denied(dev, node, result.reason)
         # Failure on the device (lexicon G2): lobby-gated like the invite
         # flash, so a deny with no lobby (no Room, RUNNING) shows nothing.
-        if self._lobby is not None:
+        # Player-addressed only: a fixture-bound device would re-key the red
+        # flash onto its whole Room fixture.
+        if self._lobby is not None and self._fixture_key(dev) == dev:
             self._lobby.on_deny(dev)
 
     def _on_grant(self, dev: str, result) -> None:

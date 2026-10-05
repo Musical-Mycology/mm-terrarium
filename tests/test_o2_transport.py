@@ -765,3 +765,14 @@ def test_role_goes_tcp_leds_goes_udp():
     chans = dict(zip([s[0] for s in fake.sent], fake.channels))
     assert chans["/ie1/role"] == "tcp"
     assert chans["/ie1/leds"] == "udp"
+
+
+def test_decode_blob_keeps_an_all_digit_leds_frame_as_raw_bytes():
+    """36 bytes of 53 are the ASCII text "555...", which from_o2_arg reads as
+    a JSON number; an LED frame is never JSON."""
+    from devicelink.o2_transport import decode_blob, from_o2_arg
+    blob = bytes([53]) * 36
+    assert from_o2_arg(blob) == 555555555555555555555555555555555555
+    assert decode_blob("/ie1/leds", blob) == [53] * 36
+    assert decode_blob("/ie1/role", b'{"a": 1}') == {"a": 1}
+    assert decode_blob("/ie1/room", blob) == from_o2_arg(blob)
