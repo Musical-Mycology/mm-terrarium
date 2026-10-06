@@ -36,7 +36,7 @@ from control.rooms import Room
 from control.terrarium_config import load_terrarium_config
 from devicelink.agent import DeviceLinkAgent
 from devicelink.contract import HELLO_INTERVAL_S
-from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, from_o2_arg
+from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, decode_blob
 
 from contract_kit.contract_bit import ContractBit
 from contract_kit.solo_contract_bit import SoloContractBit
@@ -286,13 +286,14 @@ class Recorder:
 
         Wrapping the FAKE's send rather than O2LiteTransport.send is what
         lets this see Blob-wrapped arguments exactly as the wire carries
-        them, which is why from_o2_arg is the right decoder for them.
+        them; decode_blob reads each by its address, since an LED frame is raw
+        bytes where every other blob is JSON.
         """
         orig(addr, timestamp, *raw_args)
         if not addr.startswith(f"/{self.dev}/"):
             return                      # a _svcheck probe, or a Room fixture
         typespec = raw_args[0] if raw_args else ""
-        values = [from_o2_arg(v) if t == "b" else v
+        values = [decode_blob(addr, v) if t == "b" else v
                   for t, v in zip(typespec, raw_args[1:])]
         if addr == f"/{self.dev}/handshake":
             self._round_ids.add(values[0])

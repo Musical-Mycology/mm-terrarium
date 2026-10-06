@@ -118,8 +118,9 @@ _GETTERS = {"s": "get_string", "i": "get_int32", "f": "get_float",
             "b": "get_blob", "B": "get_bool"}
 
 
-def pull_args(o2lite, typespec: str) -> list:
-    """Read one message's arguments off `o2lite`, in typespec order."""
+def pull_args(o2lite, typespec: str, address: str = "") -> list:
+    """Read one message's arguments off `o2lite`, in typespec order. `address`
+    (with its leading '/') lets decode_blob treat /leds blobs as raw bytes."""
     args = []
     for type_char in typespec:
         getter = _GETTERS.get(type_char)
@@ -127,9 +128,20 @@ def pull_args(o2lite, typespec: str) -> list:
             raise ValueError(f"unsupported O2 type {type_char!r}")
         value = getattr(o2lite, getter)()
         if type_char == "b":
-            value = from_o2_arg(value)
+            value = decode_blob(address, value)
         args.append(value)
     return args
+
+
+def decode_blob(address: str, blob):
+    """One blob by the address it travels on. An LED frame is raw pixel
+    bytes, never JSON: from_o2_arg would read a frame whose bytes are all
+    ASCII digits (a uniform level of 48 to 57, which a dim pulse passes
+    through) as a JSON number, so frames are listed straight from the bytes."""
+    if address.endswith("/leds"):
+        raw = bytes(getattr(blob, "data", blob))[:getattr(blob, "size", None)]
+        return list(raw)
+    return from_o2_arg(blob)
 
 
 def from_o2_arg(blob):

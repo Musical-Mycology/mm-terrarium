@@ -31,6 +31,8 @@ from contract_kit.contract_bit import (JAMMER_REFUSAL, KNOWN_SAMPLE,
 from contract_kit.recorder import CUE_HORIZON_S, ROOM_NODE_ID, Recorder
 from contract_kit.scenarios import (ACCEPT_AFTER_MS, ACCEPT_POLICY,
                                     ALL_SCENARIOS, AUTHORED_CHECK_T,
+                                    DENY_FLASH_CHECK_T, DENY_PULSE_CHECK_T,
+                                    READY_PULSE_CHECK_T,
                                     BLIP_BACK_T, BLIP_TAP_T,
                                     AUTHORED_NEWER_AT, AUTHORED_NEWER_GRB,
                                     AUTHORED_OLDER_AT, AUTHORED_OLDER_GRB,
@@ -324,6 +326,13 @@ def test_handshake_validate_then_role_reserves_then_grants_at_start():
     assert not [s for s in _frames(data) if s["t"] >= ACCEPT_AFTER_MS
                 and set(s["control_sends"]["args"][0]) == {255}]
 
+    # Ready (lexicon): a dim green pulse holds until the role.
+    ready = [s for s in _kind(data, "expect_frame")
+             if s["t"] == READY_PULSE_CHECK_T]
+    assert len(ready) == 1
+    grb = ready[0]["expect_frame"]["grb"]
+    assert grb == [grb[0], 0, 0] * 12 and 0 < grb[0] < 255
+
     # Validated is a reservation: the role only arrives at start.
     role = _sends(data, "/$DEV/role")
     assert [s["t"] for s in role] == [VALIDATE_START_T]
@@ -526,10 +535,20 @@ def test_deny_leaves_the_device_hellod_with_its_heartbeat_running():
     assert reason == "no such node" and hint
     assert _outs(data, "/game/handshake")[0]["expect_out"]["args"] == [
         "$DEV", "$ROUND", NO_SUCH_NODE]
-    # Denied means denied: no validation, no role, no pixels.
+    # Denied means denied: no validation, no role.
     assert _sends(data, "/$DEV/validated") == []
     assert _sends(data, "/$DEV/role") == []
-    assert _frames(data) == []
+    # Failure (lexicon): red x2 from the deny, then the white invite pulse
+    # comes back, since the lobby is WAITING and the device is still invited.
+    red = [0, 255, 0] * 12                                   # GRB red
+    reds = [s for s in _frames(data) if s["control_sends"]["args"][0] == red]
+    assert len(reds) == 2
+    assert ACCEPT_AFTER_MS <= reds[0]["t"] <= ACCEPT_AFTER_MS + 23
+    flash, pulse = _kind(data, "expect_frame")
+    assert flash["t"] == DENY_FLASH_CHECK_T and flash["expect_frame"]["grb"] == red
+    grb = pulse["expect_frame"]["grb"]
+    assert pulse["t"] == DENY_PULSE_CHECK_T
+    assert grb == [grb[0]] * 36 and 0 < grb[0] < 255
     # The heartbeat carries on, and the policy accepts only once.
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000, 10000]
     assert len(_outs(data, "/game/handshake")) == 1
