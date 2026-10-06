@@ -404,3 +404,65 @@ def test_a_deny_with_no_status_flashes_red_and_sets_no_base():
     _run(rt, sinks, clock, 2.0)
     assert [o[2] for o in sinks.overrides if o[1] == "ie9"] == [RED, RED]
     assert _bases_for(sinks, "ie9") == []
+
+
+def test_a_deny_leaves_the_device_invited():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie1")
+    rt.on_deny("ie1")
+    assert rt.is_invited("ie1")
+
+
+def test_a_steady_lit_base_is_not_resent_at_the_same_clock():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie3")
+    _run(rt, sinks, clock, DEVICE_FLASH_TRAIN_S + PULSE_PERIOD_S / 4)
+    lit = [b for b in _bases_for(sinks, "ie3") if b[3] > 0]
+    assert lit                                  # the pulse is up
+    n = len(sinks.bases)
+    rt.tick()                                   # same clock, same level
+    assert len(sinks.bases) == n
+
+
+def test_stop_drops_a_denys_queued_second_red_flash():
+    """A start 0.1 s after a deny: the second red flash would land after
+    the device holds its role and paint over its sys:loaded welcome."""
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.on_deny("ie1")
+    _run(rt, sinks, clock, 0.1)                 # the first red flash
+    rt.stop()
+    _run(rt, sinks, clock, 1.0)
+    assert [o[2] for o in sinks.overrides if o[1] == "ie1"] == [RED]
+    assert not rt.draining()
+
+
+def test_stop_drops_an_invite_trains_queued_second_white_flash():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie3")
+    _run(rt, sinks, clock, 0.1)                 # the first white flash
+    rt.stop()
+    _run(rt, sinks, clock, 1.0)
+    assert [o[2] for o in sinks.overrides if o[1] == "ie3"] == [WHITE]
+    assert not rt.draining()
+
+
+def test_stop_keeps_the_ceremony_while_dropping_device_flashes():
+    rt, sinks, clock = _rt()
+    rt.start()
+    rt.consider_invite("ie3")
+    rt.on_deny("ie4")
+    rt.on_scored_join("ie1")
+    _run(rt, sinks, clock, 0.1)
+    rt.stop()
+    assert rt.draining()
+    _run(rt, sinks, clock, 2.0)
+    assert [o[2] for o in sinks.overrides if o[1] == "ie3"] == [WHITE]
+    assert [o[2] for o in sinks.overrides if o[1] == "ie4"] == [RED]
+    assert [o[2] for o in sinks.overrides if o[1] == "ie1"] == [GREEN, GREEN]
+    assert [(n[0], n[2]) for n in sinks.notes] == [(BELL_PROGRAM, BELL_VEL)]
+    assert [p[:2] for p in sinks.plays] == [("ie1", "chime")]
+    assert not rt.draining()

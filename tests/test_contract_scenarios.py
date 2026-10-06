@@ -43,6 +43,7 @@ from contract_kit.scenarios import (ACCEPT_AFTER_MS, ACCEPT_POLICY,
                                     ROOM_ACCEPT_T, SIGNATURE_SETTLED_MS,
                                     STALE_ACCEPT_T, STALE_ROUND_ID, START_T,
                                     VALIDATE_START_T, WALK_UP_T)
+from control.lobby import PULSE_PEAK
 from devicelink.contract import RETIRED_UP_VERBS, row_for, typespec_allowed
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -331,7 +332,8 @@ def test_handshake_validate_then_role_reserves_then_grants_at_start():
              if s["t"] == READY_PULSE_CHECK_T]
     assert len(ready) == 1
     grb = ready[0]["expect_frame"]["grb"]
-    assert grb == [grb[0], 0, 0] * 12 and 0 < grb[0] < 255
+    assert grb == [grb[0], 0, 0] * 12
+    assert 0 < grb[0] <= round(PULSE_PEAK * 255)
 
     # Validated is a reservation: the role only arrives at start.
     role = _sends(data, "/$DEV/role")
