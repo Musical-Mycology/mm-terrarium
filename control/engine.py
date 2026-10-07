@@ -1140,6 +1140,36 @@ class GameServer:
                             f"{kind!r} cues")
         return None
 
+    def _check_cues_land(self, cues) -> str | None:
+        """Refuse a fire none of whose cues can reach anything, instead of
+        reporting a no-op as fired.
+
+        A midi (lane) cue feeds a light session, and a connected device has
+        one only while it holds a role -- under contract v3 that is from
+        RUNNING, so in SETUP a lane cue to a hello'd device is dropped at the
+        agent. Solid, play and mute cues reach any connected device. A Room
+        fixture, a dev holding a role, and a dev not in the pool at all
+        (nothing to say about it, as in _check_cue_kinds) all count as
+        landing. Refuses only when NOTHING lands, so a fire that reaches some
+        of its targets (an @all fire in SETUP, say) is never blocked."""
+        held = (self.registration.assignments
+                if self.registration is not None else {})
+        bound = set(self.room.bound.values()) if self.room is not None else set()
+        stranded: list[str] = []
+        for cue in cues:
+            for resolved in self._resolve_devs(cue.dev):
+                if (cue_kind(cue) != "midi" or fixture_name(resolved)
+                        or resolved in bound
+                        or resolved in held
+                        or self.devices.get(resolved) is None):
+                    return None
+                if resolved not in stranded:
+                    stranded.append(resolved)
+        if not stranded:
+            return None
+        return (f"{', '.join(stranded)} has no role yet: lane (midi) cues "
+                f"need the role's light session, which starts at RUNNING")
+
     def _instrument_for(self, dev: str):
         """The Instrument behind a resolved dev: a bound Room fixture's
         declared instrument, else the device's carried instrument
@@ -1239,7 +1269,8 @@ class GameServer:
                 # so a ROOM target fans out to every bound fixture -- no
                 # collapse to one canonical dev.
                 cues = expand_script(decl, at, devs)
-                refusal = self._check_cue_kinds(cues)
+                refusal = (self._check_cue_kinds(cues)
+                           or self._check_cues_land(cues))
                 if refusal is not None:
                     return refusal
                 if not any(isinstance(c, MuteCue) for c in cues):
