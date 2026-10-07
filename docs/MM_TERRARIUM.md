@@ -906,7 +906,10 @@ Acting side: **Function** (`control/functions.py`); sensing side:
   and instrument tables, so a built-in is never shadowed.
 - **The fire ladder** (`fire_function`; the Bit's table counts only in
   SETUP/RUNNING): (1) a non-empty-script entry fires as declared, refused
-  whole if a cue kind is outside a destination's `accepted_cues`; (2) an
+  whole if a cue kind is outside a destination's `accepted_cues`, or if
+  none of its cues can land (`_check_cues_land`: only lane/midi cues to
+  pooled devices holding no role, so no light session, as in SETUP under
+  contract v3; solid/play/mute reach any connected device); (2) an
   empty-script name-fire or undeclared name resolves per dev, built-ins
   first, then the instrument's SCRIPTED function; (3) a dev resolving
   nothing is skipped and logged. An undeclared name targets SURFACE in any
