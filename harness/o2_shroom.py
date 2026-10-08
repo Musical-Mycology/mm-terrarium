@@ -76,6 +76,26 @@ def next_heartbeat_time(now: float, interval: float) -> float:
     return now + interval
 
 
+def beat_legacy_hello(interval: float) -> float:
+    """The BeatLink legacy hello interval for --heartbeat-interval.
+
+    interval <= 0 means "no resend" (like next_heartbeat_time), so it maps
+    to infinity: a literal 0 would make BeatLink re-hello on every lap."""
+    return float("inf") if interval <= 0 else interval
+
+
+def link_transition(was_linked: bool, bridge_id):
+    """One lap's link view: returns (event, linked) where event is "up",
+    "down" or None. A bridge id that is None or negative means the hub is
+    away."""
+    linked = isinstance(bridge_id, int) and bridge_id >= 0
+    if linked and not was_linked:
+        return "up", linked
+    if was_linked and not linked:
+        return "down", linked
+    return None, linked
+
+
 def run_beat_actions(actions, *, send_beat, send_hello, drop_transport,
                      drop_role, say) -> None:
     """Carry out BeatLink's actions (harness/beat_link.py). Each effect is
@@ -641,7 +661,7 @@ def main() -> None:
             pass   # hub away; the heartbeat resend tries again
 
     beat = None if args.no_beat else BeatLink(
-        legacy_hello=args.heartbeat_interval)
+        legacy_hello=beat_legacy_hello(args.heartbeat_interval))
 
     def _send_beat(seq: int, rtt_ms: int) -> None:
         try:
@@ -649,10 +669,17 @@ def main() -> None:
         except (AssertionError, OSError):
             pass   # hub away; BeatLink's lost timer handles it
 
+    transport_dropped = False
+
+    def _drop_transport() -> None:
+        nonlocal transport_dropped
+        transport_dropped = True
+        o2lite.tcp_close()
+
     def do_beat(actions) -> None:
         run_beat_actions(
             actions, send_beat=_send_beat, send_hello=send_hello,
-            drop_transport=o2lite.tcp_close,
+            drop_transport=_drop_transport,
             drop_role=client.reset_for_lobby,
             say=lambda line: print(line, flush=True))
 
@@ -793,13 +820,22 @@ def main() -> None:
                     print(problem, file=sys.stderr)
                     raise SystemExit(1)
                 if beat is not None:
-                    linked = isinstance(bridge_id, int) and bridge_id >= 0
-                    if linked and not was_linked:
+                    event, was_linked = link_transition(was_linked, bridge_id)
+                    if event == "up":
                         do_beat(beat.link_up(time.monotonic()))
-                    elif was_linked and not linked:
+                    elif event == "down":
                         do_beat(beat.link_down(time.monotonic()))
-                    was_linked = linked
                     do_beat(beat.tick(time.monotonic()))
+                    if transport_dropped:
+                        # We closed the transport ourselves. A reconnect
+                        # that lands inside one poll() can reuse the same
+                        # bridge id, which would hide the relink. Mark our
+                        # own view down so the next positive id is always
+                        # a change: reconnect_recheck re-verifies and
+                        # link_up fires.
+                        transport_dropped = False
+                        bridge_id = -1
+                        was_linked = False
                 now = o2lite.time_get()
                 if now < 0:
                     # Across a room recycle the clock goes unsynced until

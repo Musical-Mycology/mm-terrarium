@@ -152,3 +152,13 @@ def test_jitter_stays_inside_the_band():
             gaps.append(t - last)
             last = t
     assert all(0.88 <= g <= 1.12 for g in gaps)
+
+
+def test_infinite_legacy_hello_sends_only_the_initial_hello():
+    bl = BeatLink(jitter=0.0, legacy_hello=float("inf"))
+    hellos = len(_sends(bl.link_up(0.0), SendHello))
+    t = 0.0
+    while t < 30.0:
+        t += 0.05
+        hellos += len(_sends(bl.tick(t), SendHello))
+    assert hellos == 1

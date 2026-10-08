@@ -927,3 +927,26 @@ def test_no_beat_flag_parses():
     import harness.o2_shroom as o2s
     src = inspect.getsource(o2s.main)
     assert '"--no-beat"' in src
+
+
+def test_beat_legacy_hello_maps_zero_to_never():
+    from harness.o2_shroom import beat_legacy_hello
+    assert beat_legacy_hello(0) == float("inf")
+    assert beat_legacy_hello(-1.0) == float("inf")
+    assert beat_legacy_hello(5.0) == 5.0
+
+
+def test_link_transition_reports_up_down_and_steady():
+    from harness.o2_shroom import link_transition
+    assert link_transition(False, 7) == ("up", True)
+    assert link_transition(True, 7) == (None, True)
+    assert link_transition(True, -1) == ("down", False)
+    assert link_transition(True, None) == ("down", False)
+    assert link_transition(False, -1) == (None, False)
+
+
+def test_own_drop_then_same_bridge_id_still_relinks():
+    """After the loop marks its own view down (bridge_id -1, was_linked
+    False), a reconnect that reuses the old id reads as a change."""
+    from harness.o2_shroom import link_transition
+    assert link_transition(False, 7) == ("up", True)
