@@ -856,7 +856,11 @@ def beat_relink_within_grace() -> dict:
     rec.advance_to(ROLE_SETTLED_T)
     rec.expect_frame(ROLE_SETTLED_T)
     rec.link_down(RELINK_DROP_T)
-    rec.expect_link_state(RELINK_DROP_T, "looking")
+    # Checked well past the drop, not at it: section 6.1 defines Looking by
+    # lifecycle.link_lost_s of silence, and only by then do a device that
+    # shows Looking on the socket drop and one that waits out the silence
+    # agree. Still before BLIP_BACK_T.
+    rec.expect_link_state(RELINK_DROP_T + 3500, "looking")
     rec.link_up(BLIP_BACK_T)
     rec.expect_hello(BLIP_BACK_T)
     rec.expect_beat_out(BLIP_BACK_T, 0)

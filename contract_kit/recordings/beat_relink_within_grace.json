@@ -3595,7 +3595,7 @@
       "expect_link_state": {
         "state": "looking"
       },
-      "t": 3500
+      "t": 7000
     },
     {
       "link": "up",

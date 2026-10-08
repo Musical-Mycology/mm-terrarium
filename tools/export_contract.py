@@ -486,6 +486,9 @@ REPLAY_NOTES = [
     "sends /game/beat; a runner ignores those outputs, and since the "
     "recording holds no /$DEV/beat reply the device never arms, keeps "
     "its lifecycle.hello_interval_s hello and never shows Looking.",
+    "A device compares the epoch on every /$DEV/beat reply, whatever "
+    "its seq, including a reply to a seq it has already had answered; "
+    "that is how beat_epoch_change_rehellos delivers the new epoch.",
     "A beat-capable device closes its own link when it shows Looking; "
     "a runner treats that as the link going down until the scenario's "
     "next link step brings it up.",
