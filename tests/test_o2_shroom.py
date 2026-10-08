@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 from devicelink import protocol
@@ -902,3 +904,26 @@ def test_the_retired_join_path_is_gone_from_o2_shroom():
                  '"/game/join"'):
         assert gone not in src, gone
     assert "--handshake-delay" in src
+
+
+def test_run_beat_actions_dispatches_each_kind():
+    from harness.beat_link import (DropRole, DropTransport, SendBeat,
+                                   SendHello, StateChanged)
+    from harness.o2_shroom import run_beat_actions
+    log = []
+    run_beat_actions(
+        [SendHello(), SendBeat(3, 17), DropTransport(), DropRole(),
+         StateChanged("looking")],
+        send_beat=lambda seq, rtt: log.append(("beat", seq, rtt)),
+        send_hello=lambda: log.append(("hello",)),
+        drop_transport=lambda: log.append(("drop",)),
+        drop_role=lambda: log.append(("role",)),
+        say=lambda line: log.append(("say", line)))
+    assert log == [("hello",), ("beat", 3, 17), ("drop",), ("role",),
+                   ("say", "LINK STATE: looking")]
+
+
+def test_no_beat_flag_parses():
+    import harness.o2_shroom as o2s
+    src = inspect.getsource(o2s.main)
+    assert '"--no-beat"' in src

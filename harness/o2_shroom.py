@@ -29,6 +29,8 @@ import sys
 
 from devicelink.contract import HELLO_INTERVAL_S
 from harness import markers
+from harness.beat_link import (BeatLink, DropRole, DropTransport, SendBeat,
+                               SendHello, StateChanged)
 from harness.arco_paths import ARCO_PYTHONPATH, ensure_o2litepy
 from harness.shroom_client import LED_CHANNELS, ShroomClient
 from harness.signals import parent_is_gone, sigterm_as_keyboard_interrupt
@@ -72,6 +74,23 @@ def next_heartbeat_time(now: float, interval: float) -> float:
     if interval <= 0:
         return float("inf")
     return now + interval
+
+
+def run_beat_actions(actions, *, send_beat, send_hello, drop_transport,
+                     drop_role, say) -> None:
+    """Carry out BeatLink's actions (harness/beat_link.py). Each effect is
+    injected, so this stays testable without o2lite."""
+    for action in actions:
+        if isinstance(action, SendHello):
+            send_hello()
+        elif isinstance(action, SendBeat):
+            send_beat(action.seq, action.rtt_ms)
+        elif isinstance(action, DropTransport):
+            drop_transport()
+        elif isinstance(action, DropRole):
+            drop_role()
+        elif isinstance(action, StateChanged):
+            say(f"{markers.DEVICE_LINK_STATE} {action.state}")
 
 
 # Seconds after the operator's last drag-tilt before the synthetic sweep
@@ -460,6 +479,10 @@ def main() -> None:
                              "testshroom, the harness's own catalog "
                              "instrument). Pass an empty string to stay "
                              "undeclared, resolving to defaultshroom.")
+    parser.add_argument("--no-beat", action="store_true",
+                        help="behave as a legacy client: no /game/beat, "
+                             "only the hello every --heartbeat-interval "
+                             "seconds (spec 2026-10-08)")
     parser.add_argument("--heartbeat-interval", type=float,
                         default=HELLO_INTERVAL_S,
                         help="Resend /game/hello every N seconds while "
@@ -617,6 +640,22 @@ def main() -> None:
         except (AssertionError, OSError):
             pass   # hub away; the heartbeat resend tries again
 
+    beat = None if args.no_beat else BeatLink(
+        legacy_hello=args.heartbeat_interval)
+
+    def _send_beat(seq: int, rtt_ms: int) -> None:
+        try:
+            o2lite.send("/game/beat", 0, "sii", args.dev, seq, rtt_ms)
+        except (AssertionError, OSError):
+            pass   # hub away; BeatLink's lost timer handles it
+
+    def do_beat(actions) -> None:
+        run_beat_actions(
+            actions, send_beat=_send_beat, send_hello=send_hello,
+            drop_transport=o2lite.tcp_close,
+            drop_role=client.reset_for_lobby,
+            say=lambda line: print(line, flush=True))
+
     # ONE cleanup path, covering everything after backend.open(). The guard
     # starts here and not at the tick loop because every step between is
     # interruptible: o2lite.initialize() blocks on mDNS discovery,
@@ -673,12 +712,18 @@ def main() -> None:
                 # running this tool will actually see.
                 print(f"dropping /{address}: unreadable arguments")
                 return                      # drop the frame, never raise
+            if beat is not None:
+                beat.on_control_message(time.monotonic())
+                if address.endswith("/beat"):
+                    do_beat(beat.on_beat_reply(time.monotonic(),
+                                               values[0], values[1]))
+                    return
             client.handle({"timestamp": o2lite.msg_timestamp,
                            "address": f"/{address}",
                            "typespec": typespec or "", "args": values})
 
         for kind in ("role", "leds", "release", "deny", "error",
-                     "room", "play", "handshake", "validated"):
+                     "room", "play", "handshake", "validated", "beat"):
             o2lite.method_new(f"/{args.dev}/{kind}", None, True, on_down, None)
 
         while o2lite.time_get() < 0:       # block until clock sync
@@ -702,7 +747,11 @@ def main() -> None:
             # cleanup from the finally now instead of by hand.
             raise SystemExit(1)
 
-        send_hello()
+        if beat is None:
+            send_hello()
+        else:
+            do_beat(beat.link_up(time.monotonic()))
+        was_linked = True
 
         start = o2lite.time_get()
         interval = 1.0 / args.tilt_hz
@@ -743,6 +792,14 @@ def main() -> None:
                 if problem is not None:
                     print(problem, file=sys.stderr)
                     raise SystemExit(1)
+                if beat is not None:
+                    linked = isinstance(bridge_id, int) and bridge_id >= 0
+                    if linked and not was_linked:
+                        do_beat(beat.link_up(time.monotonic()))
+                    elif was_linked and not linked:
+                        do_beat(beat.link_down(time.monotonic()))
+                    was_linked = linked
+                    do_beat(beat.tick(time.monotonic()))
                 now = o2lite.time_get()
                 if now < 0:
                     # Across a room recycle the clock goes unsynced until
@@ -750,7 +807,7 @@ def main() -> None:
                     # below would misfire on -1.
                     time.sleep(0.05)
                     continue
-                if now >= next_heartbeat:
+                if beat is None and now >= next_heartbeat:
                     send_hello()
                     next_heartbeat = next_heartbeat_time(now, args.heartbeat_interval)
                 if not deny_printed and client.last_deny is not None:
