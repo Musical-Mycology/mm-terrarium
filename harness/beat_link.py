@@ -127,7 +127,8 @@ class BeatLink:
         self._up = False
         self._next_beat = self._next_hello = None
         if self.state == LINKED:
-            self._lost_since = now
+            # Solo is timed from the last Control message, as in tick().
+            self._lost_since = self._last_heard
             self._set(LOOKING, out)
         elif self.state == LINKING:
             self._set(DOWN, out)
@@ -160,15 +161,8 @@ class BeatLink:
     def tick(self, now: float) -> list:
         out: list = []
         if self._up:
-            if self._next_beat is not None and now >= self._next_beat:
-                out.append(self._beat(now))
-                self._next_beat = self._advance(self._next_beat,
-                                                self._gap(), now)
-            if (not self.armed and self._next_hello is not None
-                    and now >= self._next_hello):
-                out.append(SendHello())
-                self._next_hello = self._advance(self._next_hello,
-                                                 self._legacy_hello, now)
+            # Check for loss first: the tick that declares LOOKING sends
+            # no beat and no legacy hello.
             if (self.armed and self.state == LINKED
                     and now - self._last_heard >= self._lost_after):
                 self._lost_since = self._last_heard
@@ -177,6 +171,16 @@ class BeatLink:
                 self._next_beat = self._next_hello = None
                 out.append(DropTransport())
                 self._set(LOOKING, out)
+            else:
+                if self._next_beat is not None and now >= self._next_beat:
+                    out.append(self._beat(now))
+                    self._next_beat = self._advance(self._next_beat,
+                                                    self._gap(), now)
+                if (not self.armed and self._next_hello is not None
+                        and now >= self._next_hello):
+                    out.append(SendHello())
+                    self._next_hello = self._advance(self._next_hello,
+                                                     self._legacy_hello, now)
         if (self.state == LOOKING and self._lost_since is not None
                 and now - self._lost_since >= self._grace):
             self._set(SOLO, out)

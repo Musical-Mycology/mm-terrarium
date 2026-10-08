@@ -96,7 +96,20 @@ def test_a_transport_drop_from_below_while_linked_is_looking_at_once():
     bl.link_up(0.0)
     bl.on_beat_reply(0.0, 0, "abc123")
     assert StateChanged(LOOKING) in bl.link_down(1.0)
-    assert StateChanged(SOLO) in bl.tick(16.0)
+    # Solo is timed from the last message (0.0), not from the drop (1.0).
+    assert StateChanged(SOLO) not in bl.tick(14.9)
+    assert StateChanged(SOLO) in bl.tick(15.0)
+
+
+def test_the_tick_that_declares_looking_sends_no_beat():
+    bl = _bl()
+    bl.link_up(0.0)
+    bl.on_beat_reply(0.0, 0, "abc123")
+    bl.tick(1.0)
+    bl.tick(2.0)
+    acts = bl.tick(3.0)                      # last message at 0.0 is 3 s old
+    assert _sends(acts, SendBeat) == []
+    assert DropTransport() in acts and StateChanged(LOOKING) in acts
 
 
 def test_a_transport_drop_before_ever_linking_is_just_down():
