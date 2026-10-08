@@ -9,7 +9,7 @@ guest, contract replay), mm-devshroom (firmware issue for Victor)
 `2026-08-25-device-liveness-detection-design.md` where it rejects a
 Control-side reply ("Control-initiated ping/pong, and any ack"). Its reap
 algorithm (section 4) and its Room-device exclusion (section 5) stand.
-**Amends:** contract guide rule 9's display clause and light lexicon gap
+**Amends:** contract guide rule 9 (a clause for beat-capable devices) and light lexicon gap
 G4 (both decided here, section 6).
 
 ## 1. Problem
@@ -215,25 +215,34 @@ issue (section 9) fixes that.
 
 ## 8. Contract kit
 
-New scenarios (in `tests/test_contract_scenarios.py`, exported by
-`tools/export_contract.py`):
+Every scenario gains `device.beats` (bool). The recorder's scripted device
+runs the reference device state machine (section 6.1) when it is true.
 
-- `beat_reply_echo`: hello, beats `seq` 0..2, each answered with the same
-  `seq` and one fixed epoch.
-- `beat_link_lost_looking`: replies stop; at 3 s the device reports
-  LOOKING and stops beating; transport down.
-- `beat_relink_within_grace`: while RUNNING, relink at 8 s: hello, `seq`
-  restarts at 0, Control resends the current frame, no `/role`; a tap still
-  plays.
-- `beat_epoch_change_rehellos`: a reply with a new epoch makes the device
-  drop its role and send hello.
-- `beat_legacy_terrarium`: no replies ever; the device keeps the 5 s hello
-  and never enters LOOKING.
+New scenarios (in `contract_kit/scenarios.py`, recorded to
+`contract_kit/recordings/`, exported by `tools/export_contract.py`), all
+`device.beats: true`:
 
-Rewritten: `link_loss_keeps_display` becomes frame held through 3 s, then
-Looking; `link_blip_keeps_role` gains the resent frame on relink. Contract
-guide rule 9's display clause and its scenario list change to match, and
-the kit's `replay_notes` describe the LOOKING and SOLO expectations.
+- `beat_reply_echo`: hello and beat `seq` 0 at link-up, then beats 1 and 2
+  a second apart, each answered by `/$DEV/beat` with the same `seq` and
+  one fixed epoch; no 5 s hello.
+- `beat_link_lost_looking`: RUNNING with a role; Control goes silent (the
+  recorder stops ticking it); the device stops beating and reports
+  LOOKING 3 s after Control's last message, then SOLO at 15 s.
+- `beat_relink_within_grace`: RUNNING; the link drops and is back at 8 s:
+  hello, `seq` restarts at 0, Control resends the current frame and no
+  `/role`; a tap still plays.
+- `beat_epoch_change_rehellos`: a hand-authored reply carrying a new epoch
+  makes the device drop its role and send hello.
+
+The existing scenarios are unchanged and carry `device.beats: false`.
+They are the legacy-client contract, and they also cover a beat-capable
+device facing an older Terrarium: their recordings hold no `/$DEV/beat`
+reply, so such a device never arms, keeps the 5 s hello and never enters
+LOOKING. A runner replaying them against a beat-capable device ignores
+its `/game/beat` outputs (a new `replay_notes` sentence). Contract guide
+rule 9 keeps its text for unarmed devices and gains a clause for armed
+ones (held frame for 3 s, then Looking, then Solo), and the kit's
+`replay_notes` describe LOOKING and SOLO.
 
 ## 9. Rollout
 
