@@ -142,6 +142,30 @@ def validated_event(dev: str, round_id: str, role: str) -> dict:
     return _event(f"/{dev}/validated", "ss", [round_id, role])
 
 
+def beat_event(dev: str, seq: int, epoch: str) -> dict:
+    """Control's reply to /game/beat (spec 2026-10-08 section 4)."""
+    return _event(f"/{dev}/beat", "is", [seq, epoch])
+
+
+def _non_negative_int(value) -> bool:
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and value >= 0)
+
+
+def parse_beat_args(args: list) -> tuple[str, int, int]:
+    """(dev, seq, rtt_ms) from a /game/beat; rtt_ms is 0 when the device
+    sent the two-argument form. ValueError when the shape is wrong
+    (contract rule 6: malformed is dropped)."""
+    if len(args) not in (2, 3) or not isinstance(args[0], str):
+        raise ValueError(f"beat wants dev, seq[, rtt_ms], got {args!r}")
+    seq = args[1]
+    rtt_ms = args[2] if len(args) == 3 else 0
+    if not _non_negative_int(seq) or not _non_negative_int(rtt_ms):
+        raise ValueError(f"beat seq and rtt_ms must be ints >= 0, "
+                         f"got {args!r}")
+    return args[0], seq, rtt_ms
+
+
 def parse_handshake_args(args: list) -> tuple[str, str, str]:
     """(dev, round_id, node) from a /game/handshake; ValueError when the
     shape is wrong (contract rule 6: malformed is dropped)."""

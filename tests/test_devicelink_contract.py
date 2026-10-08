@@ -19,12 +19,13 @@ def test_game_verbs_is_derived_from_the_up_rows():
 
 
 # The up verbs devicelink/o2_transport.py's GAME_VERBS carries under contract
-# v3: the pre-v3 set with `join` replaced by `handshake`. A set, not a tuple: o2_transport.py only ever loops GAME_VERBS
-# to register a handler per verb, so no caller depends on its order, and
-# deriving it from VERB_TABLE is free to produce a different one.
+# v3 plus the bidirectional-heartbeat `beat` (spec 2026-10-08): the pre-v3 set
+# with `join` replaced by `handshake`. A set, not a tuple: o2_transport.py only
+# ever loops GAME_VERBS to register a handler per verb, so no caller depends on
+# its order, and deriving it from VERB_TABLE is free to produce a different one.
 EXPECTED_GAME_VERBS = frozenset({
     "hello", "handshake", "tilt", "tap", "shake", "capture", "telemetry",
-    "canvas", "start", "hold", "swing",
+    "canvas", "start", "hold", "swing", "beat",
 })
 
 
@@ -141,3 +142,34 @@ def test_down_transport_split():
             continue
         want = "tcp" if row.verb in tcp else "udp-ok"
         assert contract.down_transport(row.verb) == want, row.verb
+
+
+def test_beat_constants():
+    assert contract.BEAT_INTERVAL_S == 1.0
+    assert contract.BEAT_JITTER_S == 0.1
+    assert contract.LINK_LOST_S == 3.0
+    assert contract.GRACE_S == 15.0
+    assert contract.HELLO_INTERVAL_S == 5.0
+
+
+def test_beat_rows():
+    up = contract.row_for("up", "beat")
+    assert up.typespecs == ("si", "sii")
+    assert up.args == ("dev", "seq", "rtt_ms")
+    assert up.transport == "udp-ok" and up.pre_role
+    down = contract.row_for("down", "beat")
+    assert down.typespecs == ("is",)
+    assert down.args == ("seq", "epoch")
+    assert down.transport == "udp-ok" and down.pre_role
+    assert "beat" in contract.GAME_VERBS
+
+
+def test_beat_delivered_through_fake_o2lite_reaches_drain_inbound():
+    fake = FakeO2Lite(now=100.0)
+    fake.set_services("actl")
+    transport = O2LiteTransport()
+    transport.start(fake)
+    fake.deliver("/game/beat", "sii", ("ie1", 4, 12), timestamp=0.0)
+    drained = [env for (_client, env) in transport.drain_inbound()]
+    assert ("/game/beat", "sii", ["ie1", 4, 12]) in [
+        (e["address"], e["typespec"], e["args"]) for e in drained]
