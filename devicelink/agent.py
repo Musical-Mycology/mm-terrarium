@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import secrets
 from dataclasses import dataclass, field, replace
 
 from control.breath import BREATH_CC, breath_cc
@@ -42,6 +43,7 @@ from control.rooms import room_role_name
 from control.state import State
 from control.timed_queue import TimedQueue
 from devicelink import protocol
+from devicelink.link_monitor import LinkMonitor
 from devicelink.lobby_runtime import LobbyRuntime, LobbySinks
 from harness.device_bridge import DeviceBridge
 from harness.room_surface import to_fixture_capability
@@ -98,7 +100,8 @@ class DeviceLinkAgent:
     def __init__(self, game_server: GameServer, transport, *, clock,
                  capability=None, room_audio=None, horizon: float = 0.0,
                  room_profile=None, on_room_frame=None, on_join_denied=None,
-                 stale_timeout: float = 15.0, outputs_for=None):
+                 stale_timeout: float = 15.0, outputs_for=None,
+                 epoch: str | None = None):
         self.game_server = game_server
         self.transport = transport
         self._capability = capability
@@ -151,6 +154,18 @@ class DeviceLinkAgent:
         # it). No persistence: an ephemeral port is stale the moment its
         # process dies. Read by the Console through canvas_urls().
         self._canvas_urls: dict[str, str] = {}
+        # The beat heartbeat (spec 2026-10-08-bidirectional-heartbeat-
+        # design.md). epoch is fixed for this agent's life and rides every
+        # /<dev>/beat reply, so a device that sees it change knows Control
+        # restarted. Injectable only so the contract kit records
+        # deterministically.
+        self.epoch = epoch or secrets.token_hex(3)
+        self._links = LinkMonitor()
+        # dev -> (state, bars) as last reported to the Console, and when
+        # the next comparison is due (once a second is plenty for a
+        # human-facing read-out).
+        self._link_marks: dict[str, tuple] = {}
+        self._next_link_check = 0.0
         # dev -> render-attempt count, for devices released but still being
         # driven through their closing fade. Presence in this dict, not in
         # self.bridges, is the source of truth for "closing" (a device can
@@ -778,6 +793,8 @@ class DeviceLinkAgent:
         self._room_cues = TimedQueue()
         self._light_cues = TimedQueue()
         self._warned_play.clear()
+        self._links.clear()
+        self._link_marks.clear()
 
     def controllers(self) -> dict[str, dict[int, int]]:
         """Live controller read-out per fixture name, for the Console."""
@@ -861,6 +878,7 @@ class DeviceLinkAgent:
                                  "dropping frame")
         for dev in self.game_server.reap_stale(self._stale_timeout):
             self._forget_reaped(dev)
+        self._tick_link_marks()
         self._tick_overrides()
         self._feed_breath()
         self._drain_start_requests()
@@ -882,6 +900,7 @@ class DeviceLinkAgent:
         gets no on_release, so nothing else forgets its transport binding,
         canvas URL or lobby invite (spec 2026-10-01 section 5.5). A dev
         with a bridge is released through on_release and its fade."""
+        self._links.forget(dev)
         self._handshakes.forget(dev)
         if dev in self.bridges or dev in self._closing:
             return
@@ -1307,6 +1326,8 @@ class DeviceLinkAgent:
                 dev, "join", "retired in contract v3: use /game/handshake"))
         elif verb == "canvas":
             self._on_canvas(dev, env.args)
+        elif verb == "beat":
+            self._on_beat(client, dev, env.args)
         else:
             self._on_verb(dev, verb, env.args, env.timestamp, client=client)
 
@@ -1327,6 +1348,51 @@ class DeviceLinkAgent:
         # already covers them.
         self.game_server.notify_devices_changed()
 
+    def _on_beat(self, client, dev: str, args: list) -> None:
+        """/game/beat: answer at once with /<dev>/beat seq epoch (spec
+        2026-10-08 section 7). A beat from a dev not in the pool is
+        dropped: hello creates the entry, and the device's next beat a
+        second later is answered."""
+        try:
+            _dev, seq, rtt_ms = protocol.parse_beat_args(args)
+        except ValueError as exc:
+            logger.warning("dropping malformed beat from %s: %s", dev, exc)
+            return
+        if not self.game_server.devices.known(dev):
+            return
+        self.transport.bind_dev(dev, client)
+        self._links.on_beat(dev, seq, rtt_ms, self._clock())
+        self._send(dev, protocol.beat_event(dev, seq, self.epoch))
+
+    def link_view(self) -> dict:
+        """dev -> LinkMonitor.view for every pooled beat-capable device,
+        for the Console."""
+        now = self._clock()
+        out = {}
+        for info in self.game_server.devices.all():
+            view = self._links.view(info.dev, info.last_seen, now)
+            if view is not None:
+                out[info.dev] = view
+        return out
+
+    def _tick_link_marks(self) -> None:
+        """Tell the Console when any device's (state, bars) changed. At
+        most once a second: bars move slowly and the Console only needs
+        the edges."""
+        if not self._links and not self._link_marks:
+            # No beat-capable device: read no clock, so a legacy-only
+            # run behaves exactly as before.
+            return
+        now = self._clock()
+        if now < self._next_link_check:
+            return
+        self._next_link_check = now + 1.0
+        marks = {dev: (v["state"], v["bars"])
+                 for dev, v in self.link_view().items()}
+        if marks != self._link_marks:
+            self._link_marks = marks
+            self.game_server.notify_devices_changed()
+
     def canvas_urls(self) -> dict:
         """A copy of the live dev -> canvas-url map, for the Console."""
         return dict(self._canvas_urls)
@@ -1336,6 +1402,13 @@ class DeviceLinkAgent:
         protoversion = args[2] if len(args) > 2 else ""
         instrument = args[3] if len(args) > 3 else None
         self.transport.bind_dev(dev, client, protoversion=protoversion)
+        if (self.game_server.devices.get(dev) is not None
+                and self._links.beats(dev)):
+            # A relink inside the grace window (spec 2026-10-08 section 7):
+            # the device kept its role (contract rule 9), but its Looking
+            # pulse painted over the display, so the next render sends its
+            # current frame whole. Nothing else is re-sent.
+            self._last_frames.pop(dev, None)
         # /room on first contact only (spec 2026-10-01 section 5.5): a
         # heartbeat re-hello is proof of life, and every state or
         # registration change already broadcasts a fresh /room. Sent

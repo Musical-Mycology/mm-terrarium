@@ -59,6 +59,9 @@ class LinkMonitor:
         elif seq > seqs[-1]:
             seqs.append(seq)
 
+    def __len__(self) -> int:
+        return len(self._links)
+
     def beats(self, dev: str) -> bool:
         return dev in self._links
 
