@@ -1,5 +1,6 @@
 {
   "device": {
+    "beats": false,
     "handshake": null
   },
   "name": "room_node_handshake_binds",

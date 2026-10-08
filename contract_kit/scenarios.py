@@ -1,7 +1,8 @@
-"""The device contract kit scenarios, contract v3 (docs/superpowers/specs/
+"""The device contract kit scenarios, contract v4 (docs/superpowers/specs/
 2026-09-16-device-contract-kit-design.md sections 4.3 and 5.4, as amended by
-2026-10-01-instrument-handshake-protocol-design.md section 6). There are
-len(ALL_SCENARIOS) of them: eighteen.
+2026-10-01-instrument-handshake-protocol-design.md section 6 and
+2026-10-08-bidirectional-heartbeat-design.md). There are len(ALL_SCENARIOS)
+of them: twenty-two, the last four recorded with a beat-capable device.
 
 Each function takes no arguments, builds its own Recorder, and returns an
 EXPORT FORMAT v1 scenario dict recorded from the REAL Control engine.
@@ -122,6 +123,18 @@ AUTHORED_NEWER_AT = 7200
 AUTHORED_OLDER_AT = 7100
 AUTHORED_CHECK_T = 7500
 HOLD_CHECK_T = 13000
+
+# beat_link_lost_looking: Control freezes once the role look has settled.
+FREEZE_T = ROLE_SETTLED_T + 500
+# beat_relink_within_grace: the link drops half a second after the role
+# look settled, between two beats, so no reply to a beat shares the drop's
+# millisecond (a runner delivers no control_sends while the link is down).
+RELINK_DROP_T = ROLE_SETTLED_T + 500
+# beat_epoch_change_rehellos: the hand-authored reply with a new epoch,
+# between two beats so it never shares a millisecond with Control's own
+# reply to one (that reply, in the old epoch, would read as a second flip).
+EPOCH_CHANGE_T = 4500
+NEW_EPOCH = "f1f1f1"
 
 
 def boot_hello_heartbeat() -> dict:
@@ -777,6 +790,105 @@ def link_blip_keeps_role() -> dict:
     rec.advance_to(BLIP_BACK_T + 5500)
     return rec.finish()
 
+
+def beat_reply_echo() -> dict:
+    """Spec 2026-10-08 section 4: a beat-capable device hellos and beats
+    seq 0 at link-up, then beats every second; Control answers each beat
+    at once with the same seq and one epoch. No 5 s hello."""
+    rec = Recorder(name="beat_reply_echo",
+                   summary="Each /game/beat is answered with its seq and "
+                           "the epoch; the 5 s hello stops",
+                   handshake=None, beats=True)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.expect_beat_out(0, 0)
+    rec.advance_to(1000)
+    rec.expect_beat_out(1000, 1)
+    rec.advance_to(2000)
+    rec.expect_beat_out(2000, 2)
+    rec.expect_link_state(2000, "linked")
+    rec.advance_to(5600)
+    # Declared once the rig has run past the window, so the recorder's own
+    # clash check covers all of it.
+    rec.expect_quiet(1, ["/game/hello"], 5500)
+    return rec.finish()
+
+
+def beat_link_lost_looking() -> dict:
+    """Spec 2026-10-08 section 6.1: with a role held while RUNNING, Control
+    goes silent. 3 s after its last message the device shows Looking,
+    closes its link and stops beating; 15 s after it, Solo."""
+    rec = Recorder(name="beat_link_lost_looking",
+                   summary="Control goes silent: Looking after 3 s, beats "
+                           "stop, Solo at 15 s",
+                   handshake=ACCEPT_POLICY, beats=True)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)
+    rec.control_freeze(FREEZE_T)
+    rec.expect_link_state(FREEZE_T + 1500, "linked")
+    rec.expect_link_state(FREEZE_T + 3500, "looking")
+    rec.expect_link_state(FREEZE_T + 15500, "solo")
+    # Declared once the rig has run past the window, so the recorder's own
+    # clash check covers all of it.
+    rec.expect_quiet(FREEZE_T + 3500, ["/game/beat", "/game/hello"], 10000)
+    return rec.finish()
+
+
+def beat_relink_within_grace() -> dict:
+    """Spec 2026-10-08 section 7: the link drops while RUNNING, at
+    RELINK_DROP_T, and is back at BLIP_BACK_T. The device hellos, restarts seq at 0, and is linked at
+    the first reply; Control repaints its current frame and re-sends no
+    /role or /room (rule 9: the device kept them); a tap still plays."""
+    rec = Recorder(name="beat_relink_within_grace",
+                   summary="A relink inside 15 s: seq restarts, Control "
+                           "repaints the frame, no role is re-sent",
+                   handshake=ACCEPT_POLICY, beats=True)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.advance_to(ACCEPT_AFTER_MS)
+    rec.expect_handshake_out(ACCEPT_AFTER_MS)
+    rec.start(START_T)
+    rec.advance_to(ROLE_SETTLED_T)
+    rec.expect_frame(ROLE_SETTLED_T)
+    rec.link_down(RELINK_DROP_T)
+    rec.expect_link_state(RELINK_DROP_T, "looking")
+    rec.link_up(BLIP_BACK_T)
+    rec.expect_hello(BLIP_BACK_T)
+    rec.expect_beat_out(BLIP_BACK_T, 0)
+    rec.expect_link_state(BLIP_BACK_T + 50, "linked")
+    rec.advance_to(BLIP_BACK_T + 100)
+    rec.expect_frame(BLIP_BACK_T + 100)
+    rec.tap(BLIP_TAP_T, duration_ms=80.0)
+    rec.expect_play(BLIP_TAP_T, "tick")
+    rec.advance_to(BLIP_TAP_T + 500)
+    return rec.finish()
+
+
+def beat_epoch_change_rehellos() -> dict:
+    """Spec 2026-10-08 section 6.1: a reply carrying a different epoch
+    means Control restarted; the device drops its role and hellos at
+    once. The new-epoch reply is hand-authored, like the pair in
+    timed_frames_hold_last: a second answer to beat 4 (sent at t=4000),
+    half a second later, as a Control that restarted in between would
+    send. Every reply after it carries the new epoch."""
+    rec = Recorder(name="beat_epoch_change_rehellos",
+                   summary="A reply with a new epoch makes the device "
+                           "drop its role and hello again",
+                   handshake=None, beats=True)
+    rec.link_up(0)
+    rec.expect_hello(0)
+    rec.advance_to(EPOCH_CHANGE_T)
+    rec.control_beat_now(seq=4, epoch=NEW_EPOCH)
+    rec.expect_hello(EPOCH_CHANGE_T)
+    rec.advance_to(EPOCH_CHANGE_T + 1500)
+    return rec.finish()
+
+
 ALL_SCENARIOS: tuple[Callable[[], dict], ...] = (
     boot_hello_heartbeat,
     handshake_validate_then_role,
@@ -796,4 +908,8 @@ ALL_SCENARIOS: tuple[Callable[[], dict], ...] = (
     malformed_dropped,
     link_loss_keeps_display,
     link_blip_keeps_role,
+    beat_reply_echo,
+    beat_link_lost_looking,
+    beat_relink_within_grace,
+    beat_epoch_change_rehellos,
 )

@@ -97,11 +97,15 @@ def _direction_and_verb(address):
 _ARG_TYPES = {"s": str, "f": float, "i": int, "b": (list, dict)}
 
 
-def _contract_violation(address, typespec, args):
+def _contract_violation(address, typespec, args, wildcard=False):
     """Why this message is not a valid contract message, or None if it is.
 
     Used in both directions: every real recorded message must return None,
     and every step the malformed scenario flags must return a reason.
+
+    `wildcard` is for expect_out args, where "*" matches any value
+    (step_schema.placeholders), so it stands in for an int as readily as
+    for a str (/game/beat's rtt_ms).
     """
     try:
         direction, verb = _direction_and_verb(address)
@@ -117,6 +121,8 @@ def _contract_violation(address, typespec, args):
     if len(args) != len(typespec):
         return f"{address} {typespec!r} carries {len(args)} args"
     for code, value in zip(typespec, args):
+        if wildcard and value == "*":
+            continue
         want = _ARG_TYPES[code]
         if code == "i" and isinstance(value, bool):
             return f"{address} arg for {code!r} is a bool"
@@ -172,7 +178,8 @@ def test_every_recorded_message_is_a_contract_message(scenario_fn):
             if msg is None:
                 continue
             reason = _contract_violation(msg["address"], msg["typespec"],
-                                         msg["args"])
+                                         msg["args"],
+                                         wildcard=key == "expect_out")
             if msg.get("malformed"):
                 assert reason is not None, (
                     f"t={step['t']} {key} is flagged malformed but is a "
@@ -223,23 +230,24 @@ def test_no_device_ever_sends_a_retired_verb(scenario_fn):
 
 
 @pytest.mark.parametrize("scenario_fn", ALL_SCENARIOS, ids=lambda f: f.__name__)
-def test_the_device_field_is_the_v3_handshake_policy(scenario_fn):
+def test_the_device_field_is_the_handshake_policy_and_beats(scenario_fn):
     data = _load(scenario_fn.__name__)
-    assert set(data["device"]) == {"handshake"}
+    assert set(data["device"]) == {"handshake", "beats"}
     policy = data["device"]["handshake"]
     assert policy is None or set(policy) == {"node", "ack_after_ms"}
 
 
 @pytest.mark.parametrize("scenario_fn", ALL_SCENARIOS, ids=lambda f: f.__name__)
-def test_control_verbs_are_tcp_rows_and_only_leds_and_play_are_udp(scenario_fn):
+def test_control_verbs_are_tcp_rows_and_only_leds_play_and_beat_are_udp(
+        scenario_fn):
     """Every down verb a recording carries routes by its row's transport
-    (spec 2026-10-01 section 3.3)."""
+    (spec 2026-10-01 section 3.3; /$DEV/beat from spec 2026-10-08)."""
     data = _load(scenario_fn.__name__)
     for step in _sends(data):
         if step["control_sends"].get("malformed"):
             continue
         _direction, verb = _direction_and_verb(step["control_sends"]["address"])
-        expected = "udp-ok" if verb in ("leds", "play") else "tcp"
+        expected = "udp-ok" if verb in ("leds", "play", "beat") else "tcp"
         assert row_for("down", verb).transport == expected
 
 
@@ -284,7 +292,7 @@ def test_boot_hello_heartbeat_hellos_every_5s_and_says_nothing_else():
     assert set(quiet["addresses"]) == {"/game/handshake", "/game/tap",
                                        "/game/hold", "/game/swing"}
     assert quiet["for_ms"] == 12000
-    assert data["device"] == {"handshake": None}
+    assert data["device"] == {"handshake": None, "beats": False}
     # /room once, on first contact, not per heartbeat; the invite repeats.
     assert [s["t"] for s in _sends(data, "/$DEV/room")] == [0]
     invites = _sends(data, "/$DEV/handshake")
@@ -296,7 +304,7 @@ def test_boot_hello_heartbeat_hellos_every_5s_and_says_nothing_else():
 
 def test_handshake_validate_then_role_reserves_then_grants_at_start():
     data = _load("handshake_validate_then_role")
-    assert data["device"] == {"handshake": ACCEPT_POLICY}
+    assert data["device"] == {"handshake": ACCEPT_POLICY, "beats": False}
     assert [s["t"] for s in _sends(data, "/$DEV/handshake")] == [0]
     accept = _outs(data, "/game/handshake")
     assert [(s["t"], s["expect_out"]["args"]) for s in accept] == [
@@ -729,3 +737,52 @@ def test_a_policy_accept_is_always_checked_as_an_expect_out(scenario_fn):
     first_invite = _first_t(data, "/$DEV/handshake")
     outs = [s["t"] for s in _outs(data, "/game/handshake")]
     assert first_invite + policy["ack_after_ms"] in outs
+
+
+# --- the beat heartbeat (spec 2026-10-08) -----------------------------------
+
+def test_every_scenario_declares_beats():
+    for path in RECORDINGS.glob("*.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["device"]["beats"] in (True, False), path.name
+
+
+def test_beat_reply_echo_answers_every_seq_with_one_epoch():
+    data = _load("beat_reply_echo")
+    assert data["device"]["beats"] is True
+    replies = _sends(data, "/$DEV/beat")
+    assert [s["control_sends"]["args"] for s in replies][:3] == [
+        [0, "e0e0e0"], [1, "e0e0e0"], [2, "e0e0e0"]]
+    outs = [s["expect_out"] for s in data["steps"] if "expect_out" in s]
+    assert [o["args"][1] for o in outs if o["address"] == "/game/beat"] == [0, 1, 2]
+
+
+def test_beat_link_lost_looking_then_solo():
+    data = _load("beat_link_lost_looking")
+    states = [(s["t"], s["expect_link_state"]["state"])
+              for s in data["steps"] if "expect_link_state" in s]
+    assert [st for _t, st in states] == ["linked", "looking", "solo"]
+
+
+def test_beat_relink_within_grace_repaints_and_sends_no_role():
+    data = _load("beat_relink_within_grace")
+    relink_t = next(s["t"] for s in data["steps"]
+                    if s.get("link") == "up" and s["t"] > 0)
+    after = [s for s in data["steps"] if s["t"] >= relink_t]
+    assert any("control_sends" in s
+               and s["control_sends"]["address"] == "/$DEV/leds" for s in after)
+    assert not any("control_sends" in s
+                   and s["control_sends"]["address"] in ("/$DEV/role",
+                                                         "/$DEV/room")
+                   for s in after)
+    assert any("expect_play" in s for s in after)
+
+
+def test_beat_epoch_change_rehellos():
+    data = _load("beat_epoch_change_rehellos")
+    new = [s for s in _sends(data, "/$DEV/beat")
+           if s["control_sends"]["args"][1] == "f1f1f1"]
+    assert new, "no reply ever carried the new epoch"
+    t = new[0]["t"]
+    assert any("expect_out" in s and s["expect_out"]["address"] == "/game/hello"
+               and s["t"] == t for s in data["steps"])

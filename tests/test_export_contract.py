@@ -421,16 +421,16 @@ def test_instrument_triggers_match_the_toml():
 
 def test_contract_version_and_provenance():
     data = export_contract(commit="abc123")
-    # Contract v3 (spec 2026-10-01 section 6): the handshake replaces
-    # /game/join, observable by every device.
-    assert data["contract_version"] == 3
+    # Contract v4 (spec 2026-10-08): the beat heartbeat, on top of v3's
+    # handshake (spec 2026-10-01 section 6).
+    assert data["contract_version"] == 4
     assert data["_provenance"] == {"commit": "abc123", "tool": "export_contract/1"}
 
 
 def test_main_writes_contract_and_scenario_files(tmp_path):
     main([str(tmp_path)])
     contract = json.loads((tmp_path / "contract.json").read_text())
-    assert contract["contract_version"] == 3
+    assert contract["contract_version"] == 4
     scenario_files = sorted(p.name for p in (tmp_path / "scenarios").glob("*.json"))
     assert scenario_files == sorted(f"{fn.__name__}.json" for fn in ALL_SCENARIOS)
 
@@ -498,6 +498,21 @@ def test_export_fails_loudly_when_a_recording_has_no_scenario(tmp_path, monkeypa
     assert not out_dir.exists() or not any(out_dir.iterdir())
 
 
-def test_contract_version_is_3():
+def test_contract_version_is_4():
     from tools.export_contract import CONTRACT_VERSION
-    assert CONTRACT_VERSION == 3
+    assert CONTRACT_VERSION == 4
+
+
+def test_export_v4_publishes_the_beat_lifecycle():
+    data = export_contract(commit="abc123")
+    assert data["contract_version"] == 4
+    life = data["lifecycle"]
+    assert life["beat_interval_s"] == 1.0
+    assert life["beat_jitter_s"] == 0.1
+    assert life["link_lost_s"] == 3.0
+    assert life["grace_s"] == 15.0
+    for key in ("beat_interval_s", "beat_jitter_s", "link_lost_s", "grace_s"):
+        assert key in data["lifecycle_notes"]
+    assert "expect_link_state" in data["step_schema"]["kinds"]
+    joined = " ".join(data["replay_notes"]).lower()
+    assert "/game/beat" in joined and "beats" in joined
