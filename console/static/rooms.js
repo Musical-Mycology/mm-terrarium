@@ -68,6 +68,17 @@ function updateStatusLine(name, rooms) {
 
 // ------------------------------------------------------------ room detail
 
+// Beat link read-out (spec 2026-10-08 section 7). null for a legacy device.
+function linkChip(link) {
+  if (!link) return null;
+  if (link.state === "missing") return mk("span", "chip rose linktag", "Missing");
+  if (link.bars == null) return null;
+  const chip = mk("span", "mono linktag",
+    "▮".repeat(link.bars) + "▯".repeat(4 - link.bars));
+  if (link.rtt_ms != null) chip.setAttribute("title", `${link.rtt_ms} ms`);
+  return chip;
+}
+
 function deviceTag(dev) {
   const fixtures = (currentRoom && currentRoom.fixtures) || [];
   if (fixtures.some((f) => f.dev === dev.dev)) return ["Fixture", "chip terra"];
@@ -122,6 +133,8 @@ function renderDetail() {
     if (dev.role) row.appendChild(mk("span", "mono dim", dev.role));
     const [label, chipClass] = deviceTag(dev);
     row.appendChild(mk("span", `${chipClass} roletag`, label));
+    const linkEl = linkChip(dev.link);
+    if (linkEl) row.appendChild(linkEl);
     mount.appendChild(row);
   }
 

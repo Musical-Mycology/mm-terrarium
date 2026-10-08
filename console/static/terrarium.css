@@ -64,6 +64,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2.5px solid var(--gold
 .chip.gold  { color: var(--gold);  border: 1.5px solid var(--gold); }
 .chip.terra { color: var(--terra); border: 1.5px solid var(--terra); }
 .chip.dim   { color: var(--ink-dim); border: 1.5px solid var(--hair-tan); }
+.linktag { letter-spacing: 1px; color: var(--sage); }
 .chip.solid-rose  { background: var(--rose);  color: var(--bg); border: none; }
 .chip.solid-gold  { background: var(--gold-deep); color: var(--on-gold); border: none; }
 
