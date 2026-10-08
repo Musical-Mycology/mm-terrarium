@@ -257,9 +257,33 @@ the kit's `replay_notes` describe the LOOKING and SOLO expectations.
 3. **mm-devshroom**: an issue for Victor, as contract v3 went in
    mm-devshroom#7. Checklist: beats and arming; force o2lite down on loss;
    Looking and Solo rendering; keep role state through link loss (rule 9);
-   `WIFI_PS_NONE`; replay export v4. Separately listed: the mDNS discovery
-   loop's `continue` never advances `r` (`lib/o2/o2liteesp32.cpp:190,202`),
-   which hangs on a non-matching first result.
+   `WIFI_PS_NONE`; replay export v4.
+
+   **Prerequisite: the mDNS discovery hang must be fixed before or with
+   the heartbeat firmware.** In `o2ldisc_poll()`
+   (`lib/o2/o2liteesp32.cpp:181-203` on mm-devshroom `origin/main`
+   `cce3dec`), both `continue` statements (lines 190 and 202) skip
+   advancing `r`, so a first mDNS result that is not a usable Arco
+   (another ensemble's `_o2proc._tcp`, or a stale or renamed record such
+   as "arco (2)") spins the main loop forever, freezing the lights with
+   it. It is upstream o2lite code (rbdannenberg/o2 `src/o2liteesp32.cpp`
+   lines 182 and 194, present since 2021), reported to Roger on
+   2026-09-16 and unfixed in both upstream and the vendored copy.
+
+   The heartbeat makes it worse. Today discovery runs at boot and after a
+   TCP error; with section 6.1 it runs after every lost link. Right after
+   a Terrarium restart the old Arco's record can still be cached or
+   re-advertised under a renamed instance, which is exactly the result
+   that hangs, so the epoch-change recovery would freeze the device
+   instead of recovering it.
+
+   Fix: iterate as `for (r = results; r; r = r->next)` (or advance `r`
+   before each `continue`), as a documented local patch listed in
+   `lib/o2/VENDORED.md` alongside the existing ones, and send the same
+   change to Roger as a follow-up on the existing report. If Roger has
+   fixed it upstream by the time the firmware work starts, re-vendoring
+   replaces the local patch. The bench (section 10) includes a second
+   O2 host on the LAN to prove discovery skips it.
 
 ## 10. Testing
 
@@ -269,7 +293,7 @@ the kit's `replay_notes` describe the LOOKING and SOLO expectations.
 | Contract kit | The section 8 scenarios replay identically in mm-tuneshroom and mm-devshroom. |
 | Harness integration (`run_stack --ci`) | SIGSTOP Control: the Testshroom reports LOOKING within 3.5 s. SIGCONT inside 15 s: same role, gestures play. Past 15 s: a fresh jam role. Control restart: epoch change, fresh hello. A `--no-beat` Testshroom against the new Control behaves as today. |
 | Load | 30 simulated beat-capable devices at 1 Hz stay within the 44 Hz tick budget. |
-| Bench (real Rev 1 board, with Victor) | AP power-off, Terrarium kill, cable pull: measured detection time on both sides. Device clock after a forced relink (see section 11). |
+| Bench (real Rev 1 board, with Victor) | AP power-off, Terrarium kill, cable pull: measured detection time on both sides. Device clock after a forced relink (see section 11). Discovery with a second O2 host (another ensemble or a renamed "arco (2)") advertised first, and a Terrarium restart: the device must relink, not hang (section 9, prerequisite). |
 
 ## 11. Risks
 
