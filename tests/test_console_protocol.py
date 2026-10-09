@@ -49,7 +49,7 @@ def test_device_view_shape():
     info = DeviceInfo(dev="ie3", name="Shroom Three", protoversion="1")
     assert protocol.device_view(info, "player") == {
         "dev": "ie3", "name": "Shroom Three", "role": "player", "url": None,
-        "muted": False, "instrument": "defaultshroom", "fixture": None}
+        "muted": False, "instrument": "defaultshroom", "fixture": None, "link": None}
     assert protocol.device_view(info, None)["role"] is None
     assert protocol.device_view(info, "player", "http://h:9/")["url"] == \
         "http://h:9/"

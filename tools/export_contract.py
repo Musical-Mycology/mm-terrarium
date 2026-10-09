@@ -42,7 +42,9 @@ from contract_kit.scenarios import (ALL_SCENARIOS, AUTHORED_CHECK_T,
                                     AUTHORED_NEWER_AT, AUTHORED_OLDER_AT,
                                     AUTHORED_PAIR_T, HOLD_CHECK_T,
                                     LINK_BACK_T, ROLE_SETTLED_T)
-from devicelink.contract import HELLO_INTERVAL_S, VERB_TABLE, row_for
+from devicelink.contract import (BEAT_INTERVAL_S, BEAT_JITTER_S, GRACE_S,
+                                 HELLO_INTERVAL_S, LINK_LOST_S, VERB_TABLE,
+                                 row_for)
 from devicelink.o2_transport import MAX_DEV_LEN
 from devicelink.protocol import O2_MAX_MSG_LEN
 
@@ -62,8 +64,10 @@ TOOL_VERSION = "export_contract/1"
 # (spec 2026-10-01-instrument-handshake-protocol section 6) replaces
 # /game/join with the handshake: device.join_node becomes
 # device.handshake, the join step kind becomes accept, and the control
-# verbs move to TCP, so it bumps again to 3.
-CONTRACT_VERSION = 3
+# verbs move to TCP, so it bumps again to 3. The beat heartbeat (spec
+# 2026-10-08) adds /game/beat and /<dev>/beat, four beat scenarios,
+# device.beats and expect_link_state, so it bumps to 4.
+CONTRACT_VERSION = 4
 
 # The live bench replay's timing tolerances (spec section 4.2, "the
 # tolerances the live bench replay uses"; section 8). No single constant
@@ -191,15 +195,20 @@ STEP_SCHEMA = {
         ),
         "device": (
             "object, {\"handshake\": null or {\"node\": str, "
-            "\"ack_after_ms\": int}}: the device's own accept policy, "
-            "an input. null means the device never accepts on its own "
-            "(an accept step may still make it accept). Non-null means "
+            "\"ack_after_ms\": int}, \"beats\": bool}: handshake is the "
+            "device's own accept policy, an input. null means the device "
+            "never accepts on its own (an accept step may still make it "
+            "accept). Non-null means "
             "that on every link-up the device answers the FIRST "
             "/$DEV/handshake it receives, ack_after_ms after receiving "
             "it, with /game/handshake [\"$DEV\", <that round id>, node] "
             "(node \"\" asks for the Bit's default scored role). The "
             "policy accepts once per link-up, and its accept carries no "
-            "accept step of its own."
+            "accept step of its own. beats is true when the device under test runs the beat "
+            "heartbeat in this scenario: it hellos and beats at link-up, "
+            "beats every lifecycle.beat_interval_s, and follows "
+            "expect_link_state; false scenarios record no /$DEV/beat "
+            "reply, so a beat-capable device never arms in them."
         ),
         "steps": "list of step objects (see \"kinds\" below).",
     },
@@ -357,6 +366,20 @@ STEP_SCHEMA = {
                 "for_ms": "int; width in ms of the window, starting at t.",
             },
         },
+        "expect_link_state": {
+            "role": (
+                "expectation, hand-authored: the device's own link state "
+                "at t (spec 2026-10-08 section 6.1). Only in scenarios "
+                "with device.beats true."
+            ),
+            "fields": {
+                "state": (
+                    "str; \"linked\" (a reply arrived on this link), "
+                    "\"looking\" (lost: the white Looking pulse) or "
+                    "\"solo\" (lost past lifecycle.grace_s: the aurora)."
+                ),
+            },
+        },
     },
 }
 
@@ -391,6 +414,22 @@ LIFECYCLE_NOTES = {
         "`step_schema.tolerance`: frame for how late an expect_frame's "
         "pixels may still appear, heartbeat for how late a /game/hello "
         "resend may still arrive."
+    ),
+    "beat_interval_s": (
+        "Seconds between a beat-capable device's /game/beat sends while "
+        "its link is up."
+    ),
+    "beat_jitter_s": (
+        "Seconds of random spread, plus or minus, on each beat gap so "
+        "devices do not beat in step. Recordings use none."
+    ),
+    "link_lost_s": (
+        "Seconds with no message from Control after which an armed "
+        "beat-capable device shows Looking and closes its link."
+    ),
+    "grace_s": (
+        "Seconds after Control's last message at which a lost device "
+        "shows Solo; Control drops it at the same point."
     ),
 }
 
@@ -439,10 +478,20 @@ REPLAY_NOTES = [
     f"this one from a later control_sends step the way an ordinary "
     f"expect_frame would.",
     "Control sends role, deny, release, room, error, handshake and "
-    "validated over TCP and leds and play over UDP (each verb's "
+    "validated over TCP and leds, play and beat over UDP (each verb's "
     "`transport` in `verbs`). The recordings do not mark the channel per "
     "step; a bench replay that delivers over a real link should route "
     "each verb the way its row says.",
+    "In a scenario with device.beats false a beat-capable device still "
+    "sends /game/beat; a runner ignores those outputs, and since the "
+    "recording holds no /$DEV/beat reply the device never arms, keeps "
+    "its lifecycle.hello_interval_s hello and never shows Looking.",
+    "A device compares the epoch on every /$DEV/beat reply, whatever "
+    "its seq, including a reply to a seq it has already had answered; "
+    "that is how beat_epoch_change_rehellos delivers the new epoch.",
+    "A beat-capable device closes its own link when it shows Looking; "
+    "a runner treats that as the link going down until the scenario's "
+    "next link step brings it up.",
 ]
 
 
@@ -565,6 +614,10 @@ def export_contract(*, commit: str,
             "stale_timeout_s": _stale_timeout_s(),
             "cue_horizon_s": CUE_HORIZON_S,
             "bench_tolerance_ms": dict(BENCH_TOLERANCE_MS),
+            "beat_interval_s": BEAT_INTERVAL_S,
+            "beat_jitter_s": BEAT_JITTER_S,
+            "link_lost_s": LINK_LOST_S,
+            "grace_s": GRACE_S,
         },
         "lifecycle_notes": dict(LIFECYCLE_NOTES),
         "instruments": {

@@ -24,6 +24,7 @@ a plain CLI (tools/record_scenarios.py) with no pytest on the path.
 from __future__ import annotations
 
 import dataclasses
+import math
 import re
 from pathlib import Path
 
@@ -37,6 +38,8 @@ from control.terrarium_config import load_terrarium_config
 from devicelink.agent import DeviceLinkAgent
 from devicelink.contract import HELLO_INTERVAL_S
 from devicelink.o2_transport import FakeO2Lite, O2LiteTransport, decode_blob
+from harness.beat_link import (BeatLink, DropRole, DropTransport, SendBeat,
+                               SendHello, StateChanged)
 
 from contract_kit.contract_bit import ContractBit
 from contract_kit.solo_contract_bit import SoloContractBit
@@ -124,6 +127,11 @@ ROUND_PLACEHOLDER = "$ROUND"
 # recording reloads a Bit, so this never appears in the export today.
 PREV_ROUND_PLACEHOLDER = "$ROUND_PREV"
 
+# The epoch every recording's Control replies with. DeviceLinkAgent mints
+# a random one in production; a fixed one keeps recordings deterministic.
+# A device compares epochs only for equality, so the value is opaque.
+RECORDED_EPOCH = "e0e0e0"
+
 _KEY_RE = re.compile(r"key=\d+")
 
 
@@ -179,12 +187,19 @@ class Recorder:
     def __init__(self, *, name: str, summary: str,
                  profiles: tuple[str, ...] = ("rev1",),
                  handshake: dict | None = None, with_room: bool = False,
-                 dev: str = DEV, bit: str = "ContractBit") -> None:
+                 dev: str = DEV, bit: str = "ContractBit",
+                 beats: bool = False) -> None:
         """`handshake` is the scripted device's accept policy, exported as
         the scenario's `device.handshake`: None means it never accepts on
         its own; {"node": str, "ack_after_ms": int} means that on every
         link-up it answers the FIRST /$DEV/handshake it receives with
-        /game/handshake [dev, round_id, node], ack_after_ms later."""
+        /game/handshake [dev, round_id, node], ack_after_ms later.
+
+        `beats`, exported as `device.beats`, makes the scripted device run
+        the beat heartbeat through harness/beat_link.py's reference
+        BeatLink: it hellos and beats at link-up, beats every second, and
+        its link state can be checked with expect_link_state. False is the
+        legacy device, which only hellos every HELLO_INTERVAL_MS."""
         if handshake is not None and set(handshake) != {"node",
                                                           "ack_after_ms"}:
             raise ValueError(
@@ -217,6 +232,13 @@ class Recorder:
         self._round_ids: set[str] = set()
         self._awaiting_invite = False
         self._accept_due_ms: int | None = None
+        self.beats = beats
+        # The scripted device's own beat state machine (spec 2026-10-08
+        # section 6.1), jitter 0 so every beat lands on a whole second.
+        self._beat_link = BeatLink(jitter=0.0) if beats else None
+        self._beat_actions: list = []
+        self._link_states: list[tuple[int, str]] = []
+        self._control_frozen = False
 
         self._fake = FakeO2Lite(now=0.0)
         # O2LiteTransport.start refuses a connection that has not seen
@@ -268,7 +290,8 @@ class Recorder:
                 self._gs.room.bound[fixture] = fixture_dev
         self._agent = DeviceLinkAgent(self._gs, self._transport,
                                       horizon=self.cue_horizon,
-                                      clock=self._fake.time_get)
+                                      clock=self._fake.time_get,
+                                      epoch=RECORDED_EPOCH)
         self._gs.load_bit(bit)
         self._round_ids.add(self._gs.round_id)
 
@@ -309,6 +332,14 @@ class Recorder:
                 self._awaiting_invite = False
                 self._accept_due_ms = (self._now_ms
                                        + int(self.handshake["ack_after_ms"]))
+        if self._beat_link is not None and self._linked_up:
+            # Any down message is proof of life to a beat-capable device,
+            # but only while its link is up (step_schema.link_down_delivery).
+            now_s = self._now_ms / 1000.0
+            self._beat_link.on_control_message(now_s)
+            if addr == f"/{self.dev}/beat":
+                self._beat_actions += self._beat_link.on_beat_reply(
+                    now_s, values[0], values[1])
 
     # --- clock / link ------------------------------------------------------
 
@@ -333,19 +364,34 @@ class Recorder:
                 f"timeline)")
         while self._now_ms < target_ms:
             step_ms = min(TICK_MS, target_ms - self._now_ms)
-            for due in (self._next_hello_ms, self._accept_due_ms):
-                if (self._linked_up and due is not None
-                        and due < self._now_ms + step_ms):
+            dues = []
+            if self._linked_up:
+                dues += [self._next_hello_ms, self._accept_due_ms]
+            if self._beat_link is not None:
+                # The beat link's own deadlines (a beat, Looking, Solo) run
+                # whether or not the link is up: Solo comes due while it
+                # is down. Whole milliseconds, rounded up, so the tick that
+                # lands there is never early.
+                nd = self._beat_link.next_due()
+                if nd is not None:
+                    dues.append(math.ceil(round(nd * 1000, 6)))
+            for due in dues:
+                if due is not None and due < self._now_ms + step_ms:
                     # Land exactly on a device send rather than stepping
                     # past it, so a hello is stamped at 5000 and not 5014.
-                    step_ms = min(step_ms, due - self._now_ms)
+                    step_ms = max(1, min(step_ms, due - self._now_ms))
             self._set_now(self._now_ms + step_ms)
-            self._agent.poll()
+            if not self._control_frozen:
+                self._agent.poll()
             self._run_due_device_sends()
 
     def _run_due_device_sends(self) -> None:
         """The scripted device's own timed sends that are due now: the
-        hello heartbeat, then the device.handshake policy's auto-accept."""
+        hello heartbeat (or, with beats, whatever the BeatLink has due),
+        then the device.handshake policy's auto-accept."""
+        if self._beat_link is not None:
+            self._beat_actions += self._beat_link.tick(self._now_ms / 1000.0)
+            self._apply_beat_actions()
         if not self._linked_up:
             return
         if (self._next_hello_ms is not None
@@ -362,12 +408,22 @@ class Recorder:
         """The device's link comes up at `t_ms`: it hellos immediately, and
         every HELLO_INTERVAL_MS after that until link_down. A recorder
         built with a `handshake` policy then accepts the first
-        /$DEV/handshake this link-up receives, ack_after_ms after it."""
+        /$DEV/handshake this link-up receives, ack_after_ms after it.
+
+        With beats, the BeatLink sends the hello (and beat 0, and its own
+        legacy hello until a reply arms it); the 5 s schedule here is
+        unused."""
         self.advance_to(t_ms)
         self.steps.append({"t": t_ms, "link": "up"})
         self._linked_up = True
         self._awaiting_invite = self.handshake is not None
         self._accept_due_ms = None
+        if self._beat_link is not None:
+            self._next_hello_ms = None
+            self._beat_actions += self._beat_link.link_up(t_ms / 1000.0)
+            self._apply_beat_actions()
+            self._run_due_device_sends()
+            return
         self._next_hello_ms = t_ms + HELLO_INTERVAL_MS
         self._send_hello(t_ms)
         # An invite answered with ack_after_ms 0 is due right now.
@@ -383,13 +439,48 @@ class Recorder:
         self._next_hello_ms = None
         self._awaiting_invite = False
         self._accept_due_ms = None
+        if self._beat_link is not None:
+            self._beat_actions += self._beat_link.link_down(t_ms / 1000.0)
+            self._apply_beat_actions()
+
+    def _apply_beat_actions(self) -> None:
+        """Carry out what the BeatLink asked for, at the rig's now. A send
+        can feed a reply straight back (Control answers a beat at once),
+        so whatever that queued is applied in turn."""
+        actions, self._beat_actions = self._beat_actions, []
+        for action in actions:
+            if isinstance(action, SendHello):
+                self._send_hello(self._now_ms)
+            elif isinstance(action, SendBeat):
+                self._send_beat(self._now_ms, action.seq, action.rtt_ms)
+            elif isinstance(action, DropTransport):
+                # The device closed its own link: no step is recorded
+                # (replay_notes), and like link_down any pending policy
+                # accept goes with it.
+                self._linked_up = False
+                self._awaiting_invite = False
+                self._accept_due_ms = None
+            elif isinstance(action, DropRole):
+                pass                         # the rig models no role state
+            elif isinstance(action, StateChanged):
+                self._link_states.append((self._now_ms, action.state))
+        if self._beat_actions:
+            self._apply_beat_actions()
+
+    def _send_beat(self, t_ms: int, seq: int, rtt_ms: int) -> None:
+        self._scripted.append((t_ms, "/game/beat", seq))
+        self._fake.deliver("/game/beat", "sii", (self.dev, seq, rtt_ms),
+                           timestamp=0.0)
+        if not self._control_frozen:
+            self._agent.poll()
 
     def _send_hello(self, t_ms: int) -> None:
         self._scripted.append((t_ms, "/game/hello", INSTRUMENT))
         self._fake.deliver("/game/hello", "ssss",
                            (self.dev, "contract-kit", "1", INSTRUMENT),
                            timestamp=t_ms / 1000.0)
-        self._agent.poll()
+        if not self._control_frozen:
+            self._agent.poll()
 
     def _send_handshake(self, t_ms: int, round_id: str | None,
                         node: str) -> None:
@@ -415,6 +506,13 @@ class Recorder:
         self._fake.deliver("/game/join", "ss", (self.dev, node),
                            timestamp=t_ms / 1000.0)
         self._agent.poll()
+
+    def control_freeze(self, t_ms: int) -> None:
+        """Control stops answering at t_ms (a frozen or dead Terrarium);
+        the device's link stays up. Operator input: records no step, the
+        device only ever sees the silence."""
+        self.advance_to(t_ms)
+        self._control_frozen = True
 
     def _scripted_at(self, t_ms: int, address: str) -> list:
         return [detail for (t, addr, detail) in self._scripted
@@ -566,6 +664,33 @@ class Recorder:
             "address": "/game/handshake", "typespec": "sss",
             "args": ["$DEV", echoed, node], "stamp_t": None,
             "within_ms": DEFAULT_WITHIN_MS}})
+
+    def expect_beat_out(self, t_ms: int, seq: int) -> None:
+        """The device must send /game/beat with this seq at t_ms. rtt_ms is
+        "*": a device's own measurement is not contract.
+
+        Raises unless this rig really did script that beat at `t_ms`.
+        """
+        if seq not in self._scripted_at(t_ms, "/game/beat"):
+            raise AssertionError(self._no_send_scripted(t_ms, "/game/beat"))
+        self.steps.append({"t": t_ms, "expect_out": {
+            "address": "/game/beat", "typespec": "sii",
+            "args": ["$DEV", seq, "*"], "stamp_t": None,
+            "within_ms": DEFAULT_WITHIN_MS}})
+
+    def expect_link_state(self, t_ms: int, state: str) -> None:
+        """HAND-AUTHORED like expect_frame_held: the device's own link
+        state at t_ms (spec 2026-10-08 section 6.1). Checked against this
+        rig's reference BeatLink, so it can never be a guessed time."""
+        if self._beat_link is None:
+            raise AssertionError("expect_link_state needs a Recorder(beats=True)")
+        self.advance_to(t_ms)
+        reached = [s for (t, s) in self._link_states if t <= t_ms]
+        if not reached or reached[-1] != state:
+            raise AssertionError(
+                f"the reference device is {reached[-1] if reached else None!r} "
+                f"at t={t_ms}ms, not {state!r}")
+        self.steps.append({"t": t_ms, "expect_link_state": {"state": state}})
 
     def expect_quiet(self, t_ms: int, addresses: list[str], for_ms: int) -> None:
         """None of `addresses` may be sent from `t_ms` for `for_ms`.
@@ -727,6 +852,20 @@ class Recorder:
             step["malformed"] = True
         self.steps.append({"t": self._now_ms, "control_sends": step})
 
+    def control_beat_now(self, seq: int, epoch: str) -> None:
+        """A hand-authored /$DEV/beat reply (the epoch-change scenario):
+        recorded like control_send_now AND delivered to the scripted
+        device, which reacts to it. The rig's Control takes the new epoch
+        too, as a restarted Control would, so its later replies agree and
+        the device does not see the epoch flip back."""
+        if self._beat_link is None:
+            raise AssertionError("control_beat_now needs a Recorder(beats=True)")
+        self._agent.epoch = epoch
+        self.control_send_now("/$DEV/beat", "is", [seq, epoch])
+        self._beat_actions += self._beat_link.on_beat_reply(
+            self._now_ms / 1000.0, seq, epoch)
+        self._apply_beat_actions()
+
     # --- output ------------------------------------------------------------
 
     def _round_label(self, value: object) -> object:
@@ -765,6 +904,7 @@ class Recorder:
             "profiles": self.profiles,
             "device": {"handshake": (dict(self.handshake)
                                      if self.handshake is not None
-                                     else None)},
+                                     else None),
+                       "beats": self.beats},
             "steps": all_steps,
         }

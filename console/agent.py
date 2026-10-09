@@ -44,7 +44,7 @@ class ConsoleAgent:
                  terrarium=None, catalog_root=None, bench_session_factory=None,
                  captures_root=None, rooms_root=None, join_info=None,
                  stop_room_clients=None, restart_room_clients=None,
-                 clients_live=None):
+                 clients_live=None, link_view=None):
         self.game_server = game_server
         self.server = server
         self.registry = registry
@@ -84,6 +84,10 @@ class ConsoleAgent:
         # DeviceLinkAgent.canvas_urls(). None (a GameServer built without a
         # DeviceLinkAgent) yields no URLs anywhere in the Console's views.
         self._canvas_urls = canvas_urls
+        # Optional Callable[[], dict] of dev -> beat link view, from
+        # DeviceLinkAgent.link_view() (spec 2026-10-08 section 7). None
+        # yields link: null on every device.
+        self._link_view = link_view
         # Optional Callable[[], dict | None] building the Join card's read
         # model (control/join_info.py's build_join_info), from
         # harness/terrarium_boot.py. None (every embedding without a guest
@@ -893,6 +897,7 @@ class ConsoleAgent:
         gs = self.game_server
         assignments = gs.registration.assignments if gs.registration else {}
         urls = self._canvas_urls() if self._canvas_urls else {}
+        links = self._link_view() if self._link_view else {}
         bound_fixtures = {}
         if gs.room is not None and gs.room.bound:
             bound_fixtures = {d: name for name, d in gs.room.bound.items()}
@@ -904,7 +909,7 @@ class ConsoleAgent:
                 role_name = assigned[1]
             out.append(protocol.device_view(
                 info, role_name, urls.get(info.dev), gs.is_muted(info.dev),
-                bound_fixtures.get(info.dev)))
+                bound_fixtures.get(info.dev), links.get(info.dev)))
         return out
 
     def _current_status(self) -> dict:

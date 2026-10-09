@@ -1,9 +1,9 @@
 {
   "device": {
-    "beats": false,
+    "beats": true,
     "handshake": null
   },
-  "name": "boot_hello_heartbeat",
+  "name": "beat_reply_echo",
   "profiles": [
     "rev1"
   ],
@@ -28,14 +28,16 @@
       "t": 0
     },
     {
-      "expect_quiet": {
-        "addresses": [
-          "/game/handshake",
-          "/game/tap",
-          "/game/hold",
-          "/game/swing"
+      "expect_out": {
+        "address": "/game/beat",
+        "args": [
+          "$DEV",
+          0,
+          "*"
         ],
-        "for_ms": 12000
+        "stamp_t": null,
+        "typespec": "sii",
+        "within_ms": 50
       },
       "t": 0
     },
@@ -86,19 +88,107 @@
       "t": 0
     },
     {
+      "control_sends": {
+        "address": "/$DEV/beat",
+        "args": [
+          0,
+          "e0e0e0"
+        ],
+        "at": null,
+        "typespec": "is"
+      },
+      "t": 0
+    },
+    {
+      "expect_quiet": {
+        "addresses": [
+          "/game/hello"
+        ],
+        "for_ms": 5500
+      },
+      "t": 1
+    },
+    {
       "expect_out": {
-        "address": "/game/hello",
+        "address": "/game/beat",
         "args": [
           "$DEV",
-          "*",
-          "*",
+          1,
           "*"
         ],
         "stamp_t": null,
-        "typespec": "ssss",
+        "typespec": "sii",
         "within_ms": 50
       },
-      "t": 5000
+      "t": 1000
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/beat",
+        "args": [
+          1,
+          "e0e0e0"
+        ],
+        "at": null,
+        "typespec": "is"
+      },
+      "t": 1000
+    },
+    {
+      "expect_out": {
+        "address": "/game/beat",
+        "args": [
+          "$DEV",
+          2,
+          "*"
+        ],
+        "stamp_t": null,
+        "typespec": "sii",
+        "within_ms": 50
+      },
+      "t": 2000
+    },
+    {
+      "expect_link_state": {
+        "state": "linked"
+      },
+      "t": 2000
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/beat",
+        "args": [
+          2,
+          "e0e0e0"
+        ],
+        "at": null,
+        "typespec": "is"
+      },
+      "t": 2000
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/beat",
+        "args": [
+          3,
+          "e0e0e0"
+        ],
+        "at": null,
+        "typespec": "is"
+      },
+      "t": 3000
+    },
+    {
+      "control_sends": {
+        "address": "/$DEV/beat",
+        "args": [
+          4,
+          "e0e0e0"
+        ],
+        "at": null,
+        "typespec": "is"
+      },
+      "t": 4000
     },
     {
       "control_sends": {
@@ -112,31 +202,17 @@
       "t": 5000
     },
     {
-      "expect_out": {
-        "address": "/game/hello",
-        "args": [
-          "$DEV",
-          "*",
-          "*",
-          "*"
-        ],
-        "stamp_t": null,
-        "typespec": "ssss",
-        "within_ms": 50
-      },
-      "t": 10000
-    },
-    {
       "control_sends": {
-        "address": "/$DEV/handshake",
+        "address": "/$DEV/beat",
         "args": [
-          "$ROUND"
+          5,
+          "e0e0e0"
         ],
         "at": null,
-        "typespec": "s"
+        "typespec": "is"
       },
-      "t": 10000
+      "t": 5000
     }
   ],
-  "summary": "Hello repeats every 5 s and declares an instrument; a device that never accepts sends nothing else"
+  "summary": "Each /game/beat is answered with its seq and the epoch; the 5 s hello stops"
 }

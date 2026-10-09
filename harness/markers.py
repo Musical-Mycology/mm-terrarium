@@ -94,6 +94,11 @@ ROLE_GRANTED = "ROLE GRANTED:"
 # FAILURE_MARKERS.
 DEVICE_JOIN_DENIED = "JOIN DENIED:"
 
+# The beat heartbeat's device-side state changed (spec 2026-10-08 section
+# 6.1): "LINK STATE: linking|linked|looking|solo|down". Printed by the
+# Testshroom, watched in live checks, never fatal.
+DEVICE_LINK_STATE = "LINK STATE:"
+
 # The hub refused this device's service announcement because another
 # process already offers that name (o2/src/bridge.cpp:231-237). The device
 # clock-syncs, prints a watch URL and then receives nothing at all, which
@@ -162,6 +167,7 @@ READY_MARKERS = {
 # Printed and watched, never fatal. A deny is expected in the over-cap case.
 INFO_MARKERS = {
     "DEVICE_JOIN_DENIED": DEVICE_JOIN_DENIED,
+    "DEVICE_LINK_STATE": DEVICE_LINK_STATE,
 }
 
 FAILURE_MARKERS = {

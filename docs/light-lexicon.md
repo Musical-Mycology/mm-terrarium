@@ -66,8 +66,8 @@ it: **firmware** (the device, alone, before Control is talking to it) or
 
 | Signal | Pattern | Means | Renders | Today |
 |---|---|---|---|---|
-| **Solo** | the aurora: all colours drifting, gestures play local functions | No Wi-Fi, or no Terrarium found. The device is a toy on its own. | firmware / app | Ships in mm-tuneshroom's solo mode (`[solo]` in `instruments/tuneshroom.toml`, exported to its `assets/solo/tuneshroom.json`). Rev 1 firmware: not yet. |
-| **Looking** | slow white pulse | On Wi-Fi; no Terrarium is talking to it yet (discovering, or hello'd to a Terrarium with no round open). | firmware | Not yet. Rev 1 firmware animates while joining Wi-Fi, then goes dark. |
+| **Solo** | the aurora: all colours drifting, gestures play local functions | No Wi-Fi, or no Terrarium found. The device is a toy on its own. An armed beat-capable device also lands here once its link has been lost past 15 s. | firmware / app | Ships in mm-tuneshroom's solo mode (`[solo]` in `instruments/tuneshroom.toml`, exported to its `assets/solo/tuneshroom.json`). Rev 1 firmware: not yet. |
+| **Looking** | slow white pulse | On Wi-Fi; no Terrarium is talking to it yet (discovering, or hello'd to a Terrarium with no round open). Also the lost-link cause: an armed beat-capable device after 3 s with nothing from Control. | firmware | Not yet. Rev 1 firmware animates while joining Wi-Fi, then goes dark. |
 | **Invite** | white flash x2, repeating every 5 s | A round is open and this device may join: double-tap to accept. | Control | Ships (`LobbyRuntime.consider_invite`; needs a Room loaded with the lobby enabled; the `/handshake` itself goes out regardless). Between invites the device shows the slow white pulse. |
 | **Success** | green flash x2 | What you just tried worked. On the device: the handshake validated. | Control | Ships for validation (the join ceremony: green x2, then a Room bell at +0.8 s and a device chime at +1.8 s). |
 | **Ready** | slow green pulse | Validated: a scored slot is reserved; waiting for the round to start. | Control | Ships (`LobbyRuntime` status pulse, from the end of the ceremony's green flashes until `/role`; lobby-gated like the invite). |
@@ -88,8 +88,9 @@ Control starts talking to it: Solo and Looking are the device's own, and
 every later signal arrives as frames. The device stays a pixel sink from
 then on; it never draws Invite, Ready or Failure itself. The handover point
 is the first `/<dev>/leds` frame, and a lost link keeps the last frame lit
-(device contract guide, rule 9 and section 8). Whether a long link loss should
-drop back to Looking is open (gap G4).
+(device contract guide, rule 9 and section 8). An armed beat-capable device that hears
+nothing from Control for 3 s drops back to Looking, and to Solo at 15 s (spec
+`2026-10-08-bidirectional-heartbeat-design.md` section 6.2).
 
 ## 5. The signals on a Room fixture
 
@@ -113,20 +114,21 @@ the device that asked.
 ## 6. Gaps between this lexicon and the code
 
 G1 to G3 shipped on 2026-10-05 (spec
-`docs/superpowers/specs/2026-10-05-device-status-light-design.md`); G4 is
-still open. A gap is a Control or firmware change, not a doc change.
+`docs/superpowers/specs/2026-10-05-device-status-light-design.md`); G4 was
+decided on 2026-10-08 and its firmware half is still open. A gap is a
+Control or firmware change, not a doc change.
 
 - **G1. Done:** the white invite pulse and the green Ready pulse live in
   `LobbyRuntime`'s status pulse plus `DeviceLinkAgent._bases`.
 - **G2. Done:** `/<dev>/deny` flashes red x2 via `LobbyRuntime.on_deny`.
 - **G3. Done:** Start accepted is green x2 (`FEEDBACK_ACCEPT` and
   `_flash_fixtures_now`).
-- **G4. Rev 1 firmware renders Solo and Looking** (mm-devshroom, with
-  Sophia's solo-mode work), and the contract decides whether a link lost for
-  longer than some bound falls back to Looking. Contract v3 says it holds
-  the display.
+- **G4. Decided 2026-10-08; firmware open.** Looking after 3 s of silence,
+  Solo at 15 s, for beat-capable devices (spec
+  `docs/superpowers/specs/2026-10-08-bidirectional-heartbeat-design.md`).
+  Rev 1 firmware still has to render both (mm-devshroom).
 
-G4 is firmware (mm-devshroom).
+The remaining G4 work is firmware (mm-devshroom).
 
 ## 7. Adding a signal
 

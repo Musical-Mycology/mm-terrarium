@@ -1,5 +1,6 @@
 {
   "device": {
+    "beats": false,
     "handshake": null
   },
   "name": "error_no_state_change",

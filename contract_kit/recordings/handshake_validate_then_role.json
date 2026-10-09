@@ -1,5 +1,6 @@
 {
   "device": {
+    "beats": false,
     "handshake": {
       "ack_after_ms": 300,
       "node": ""

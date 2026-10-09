@@ -195,3 +195,14 @@ def test_start_url_marker_value_and_absent_from_dicts():
     assert markers.START_URL == "START_URL:"
     assert markers.START_URL not in markers.READY_MARKERS.values()
     assert markers.START_URL not in markers.FAILURE_MARKERS.values()
+
+
+def test_link_state_marker_is_info_and_emitted_by_o2_shroom():
+    import ast
+
+    import harness.o2_shroom
+    assert markers.DEVICE_LINK_STATE == "LINK STATE:"
+    assert markers.DEVICE_LINK_STATE in markers.INFO_MARKERS.values()
+    tree = ast.parse(inspect.getsource(harness.o2_shroom))
+    assert any(isinstance(n, ast.Attribute) and n.attr == "DEVICE_LINK_STATE"
+               for n in ast.walk(tree))

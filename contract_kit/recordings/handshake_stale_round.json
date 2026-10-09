@@ -1,5 +1,6 @@
 {
   "device": {
+    "beats": false,
     "handshake": null
   },
   "name": "handshake_stale_round",

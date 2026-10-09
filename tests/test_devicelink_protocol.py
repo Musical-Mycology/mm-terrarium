@@ -172,3 +172,24 @@ def test_parse_handshake_args():
         protocol.parse_handshake_args(["ie1", "r1"])
     with pytest.raises(ValueError):
         protocol.parse_handshake_args(["ie1", 3, ""])
+
+
+def test_beat_event_shape():
+    msg = protocol.beat_event("ie1", 7, "a1b2c3")
+    assert msg["address"] == "/ie1/beat"
+    assert msg["typespec"] == "is"
+    assert msg["args"] == [7, "a1b2c3"]
+
+
+def test_parse_beat_args_both_forms():
+    assert protocol.parse_beat_args(["ie1", 3]) == ("ie1", 3, 0)
+    assert protocol.parse_beat_args(["ie1", 3, 41]) == ("ie1", 3, 41)
+
+
+@pytest.mark.parametrize("bad", [
+    [], ["ie1"], [1, 2], ["ie1", "3"], ["ie1", -1], ["ie1", True],
+    ["ie1", 3, -5], ["ie1", 3, 1.5], ["ie1", 3, 4, 5],
+])
+def test_parse_beat_args_rejects_malformed(bad):
+    with pytest.raises(ValueError):
+        protocol.parse_beat_args(bad)

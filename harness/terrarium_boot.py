@@ -2002,6 +2002,7 @@ def main() -> None:
                                          room_controllers=agent.controllers,
                                          clock=clock, registry=registry,
                                          canvas_urls=agent.canvas_urls,
+                                         link_view=agent.link_view,
                                          terrarium=terrarium,
                                          catalog_root=catalog_root,
                                          rooms_root=rooms_root,

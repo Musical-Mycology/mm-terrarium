@@ -2535,3 +2535,21 @@ def test_console_instrument_publish_refused_when_a_room_binds_it(tmp_path):
     assert reply["event"] == "error"
     assert "LOFT" in reply["message"] and "pixels = 12" in reply["message"]
     assert (inst / "drafts" / "dev_strip_main.toml").exists()
+
+
+def test_devices_view_carries_link_state():
+    gs = GameServer({"test_bit": TestBit})
+    gs.devices.hello("ie1", "one", "1")
+    gs.devices.hello("ie2", "two", "1")
+    agent = ConsoleAgent(gs, FakeConsoleServer(), link_view=lambda: {
+        "ie1": {"state": "missing", "bars": 2, "rtt_ms": 40, "loss": 0.1}})
+    views = {v["dev"]: v for v in agent._devices_view()}
+    assert views["ie1"]["link"]["state"] == "missing"
+    assert views["ie2"]["link"] is None
+
+
+def test_devices_view_without_a_link_source():
+    gs = GameServer({"test_bit": TestBit})
+    gs.devices.hello("ie1", "one", "1")
+    agent = ConsoleAgent(gs, FakeConsoleServer())
+    assert agent._devices_view()[0]["link"] is None

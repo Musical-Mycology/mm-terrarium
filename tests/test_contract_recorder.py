@@ -12,7 +12,8 @@ import pytest
 pytest.importorskip("luxaeterna")
 
 from contract_kit.contract_bit import JAMMER_REFUSAL
-from contract_kit.recorder import CUE_HORIZON_S, ROOM_NODE_ID, Recorder
+from contract_kit.recorder import (CUE_HORIZON_S, RECORDED_EPOCH, ROOM_NODE_ID,
+                                   Recorder)
 
 # The device accepts its first invite 300 ms after it arrives.
 ACCEPT = {"node": "", "ack_after_ms": 300}
@@ -67,7 +68,7 @@ def test_finish_shape_matches_export_format_v1():
     assert data["name"] == "shape_check"
     assert data["summary"] == "one line"
     assert data["profiles"] == ["rev1"]
-    assert data["device"] == {"handshake": None}
+    assert data["device"] == {"handshake": None, "beats": False}
     # No _provenance: the spec puts it only in the export's contract.json,
     # and a commit hash in every recording would dirty all of them on every
     # re-record.
@@ -87,7 +88,7 @@ def test_the_handshake_policy_accepts_the_first_invite_and_is_validated():
     rec.expect_handshake_out(300)
     data = rec.finish()
 
-    assert data["device"] == {"handshake": ACCEPT}
+    assert data["device"] == {"handshake": ACCEPT, "beats": False}
     invites = _sends(data, "/$DEV/handshake")
     assert [(s["t"], s["control_sends"]["args"]) for s in invites] == [
         (0, ["$ROUND"])]
@@ -153,7 +154,7 @@ def test_accept_records_an_input_step_before_its_own_expect_out():
     data = rec.finish()
 
     assert [s["t"] for s in _sends(data, "/$DEV/validated")] == [600]
-    assert data["device"] == {"handshake": None}
+    assert data["device"] == {"handshake": None, "beats": False}
     inputs = [s for s in data["steps"] if "accept" in s]
     assert inputs == [{"t": 600, "accept": {"node": ""}}]
     outs = [s for s in data["steps"]
@@ -740,3 +741,62 @@ def test_an_echo_of_a_previous_rounds_id_is_not_recorded_as_round():
     assert first not in str(data) and second not in str(data)
     # The old echo is dropped; the current one validates.
     assert [s["t"] for s in _sends(data, "/$DEV/validated")] == [5200]
+
+
+# --- beats mode (spec 2026-10-08) ------------------------------------------
+
+def test_a_beats_recorder_beats_every_second_and_control_echoes_each():
+    rec = Recorder(name="beats", summary="s", handshake=None, beats=True)
+    rec.link_up(0)
+    rec.advance_to(2000)
+    for t, seq in ((0, 0), (1000, 1), (2000, 2)):
+        rec.expect_beat_out(t, seq)
+    data = rec.finish()
+    assert data["device"] == {"handshake": None, "beats": True}
+    replies = _sends(data, "/$DEV/beat")
+    assert [(s["t"], s["control_sends"]["args"]) for s in replies] == [
+        (0, [0, RECORDED_EPOCH]), (1000, [1, RECORDED_EPOCH]),
+        (2000, [2, RECORDED_EPOCH])]
+
+
+def test_expect_beat_out_raises_for_a_beat_the_rig_never_sent():
+    rec = Recorder(name="beats", summary="s", handshake=None, beats=True)
+    rec.link_up(0)
+    rec.advance_to(1500)
+    with pytest.raises(AssertionError, match="/game/beat"):
+        rec.expect_beat_out(1500, 1)
+    with pytest.raises(AssertionError, match="/game/beat"):
+        rec.expect_beat_out(1000, 2)
+
+
+def test_expect_link_state_is_checked_against_the_reference_device():
+    rec = Recorder(name="beats", summary="s", handshake=None, beats=True)
+    rec.link_up(0)
+    with pytest.raises(AssertionError, match="'linked' at t=1000ms"):
+        rec.expect_link_state(1000, "looking")
+    rec.expect_link_state(1500, "linked")
+    assert rec.finish()["steps"][-1] == {
+        "t": 1500, "expect_link_state": {"state": "linked"}}
+
+
+def test_a_frozen_control_makes_the_device_look_then_go_solo():
+    """Looking LINK_LOST_S after Control's last message, and no beat on or
+    after that tick; Solo GRACE_S after the same message."""
+    rec = Recorder(name="beats", summary="s", handshake=None, beats=True)
+    rec.link_up(0)
+    rec.control_freeze(1500)                 # last reply: beat 1, at 1000
+    rec.expect_link_state(3999, "linked")
+    rec.expect_link_state(4000, "looking")
+    rec.expect_link_state(15999, "looking")
+    rec.expect_link_state(16000, "solo")
+    beats = [t for (t, addr, _d) in rec._scripted if addr == "/game/beat"]
+    assert beats == [0, 1000, 2000, 3000]
+
+
+def test_a_legacy_recorder_never_beats_and_has_no_link_state():
+    rec = Recorder(name="legacy", summary="s", handshake=None)
+    rec.link_up(0)
+    rec.advance_to(3000)
+    assert not [a for (_t, a, _d) in rec._scripted if a == "/game/beat"]
+    with pytest.raises(AssertionError, match="beats=True"):
+        rec.expect_link_state(3000, "linked")

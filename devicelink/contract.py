@@ -27,6 +27,17 @@ from dataclasses import dataclass, field
 # read it from here rather than restating it.
 HELLO_INTERVAL_S = 5.0
 
+# The beat heartbeat (spec 2026-10-08-bidirectional-heartbeat-design.md
+# section 4). A beat-capable device sends /game/beat every BEAT_INTERVAL_S
+# +/- BEAT_JITTER_S and Control answers each with /<dev>/beat. The device
+# declares its link lost after LINK_LOST_S with nothing from Control, and
+# its slot is gone after GRACE_S (equal to BootConfig.stale_timeout's
+# default, the reap). tools/export_contract.py publishes all four.
+BEAT_INTERVAL_S = 1.0
+BEAT_JITTER_S = 0.1
+LINK_LOST_S = 3.0
+GRACE_S = 15.0
+
 
 @dataclass(frozen=True)
 class VerbRow:
@@ -88,6 +99,13 @@ VERB_TABLE: tuple[VerbRow, ...] = (
     VerbRow("telemetry", "up", ("sfb",), ("dev", "t0", "batch"), "tcp", False,
             "(recommended) tcp, for the same reason as capture: a dropped "
             "chunk shows up as a gap in the trace (capture/store.py)."),
+    VerbRow("beat", "up", ("si", "sii"), ("dev", "seq", "rtt_ms"),
+            "udp-ok", True,
+            "Heartbeat from a beat-capable device (spec 2026-10-08): "
+            "sent every BEAT_INTERVAL_S +/- BEAT_JITTER_S once the link "
+            "is up. seq restarts at 0 on every link. rtt_ms is the "
+            "device's last measured round trip in ms, 0 or absent when "
+            "unknown. Control answers each one with /<dev>/beat."),
     # --- down: Control -> device (/<dev>/<verb>) ---
     VerbRow("role", "down", ("b",), ("config",), "tcp", False,
             "Sent once per round at RUNNING (or at a RUNNING walk-up's "
@@ -117,6 +135,10 @@ VERB_TABLE: tuple[VerbRow, ...] = (
     VerbRow("room", "down", ("b",), ("blob",), "tcp", True,
             "Sent on first contact and on every state or registration "
             "change; hardware may ignore it."),
+    VerbRow("beat", "down", ("is",), ("seq", "epoch"), "udp-ok", True,
+            "Control's reply to every /game/beat: seq is echoed; epoch "
+            "is 6 hex characters fixed for the life of one Control "
+            "process, so a change means Control restarted."),
 )
 
 GAME_VERBS: tuple[str, ...] = tuple(

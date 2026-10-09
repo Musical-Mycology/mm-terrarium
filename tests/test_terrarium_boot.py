@@ -2324,7 +2324,7 @@ def test_main_wires_the_shipped_instrument_catalog_root_into_the_console_agent(
     def fake_build(config, bit_registry, **kwargs):
         gs = FakeObservable()
         server = object()
-        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
+        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[], link_view=lambda: {})
         teardown = TeardownStack()
         terrarium = FakeObservable()
         return gs, server, agent, None, teardown, terrarium
@@ -2366,7 +2366,7 @@ def test_main_wires_the_bench_session_factory_and_captures_root(monkeypatch):
     def fake_build(config, bit_registry, **kwargs):
         gs = FakeObservable()
         server = object()
-        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
+        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[], link_view=lambda: {})
         teardown = TeardownStack()
         terrarium = FakeObservable()
         return gs, server, agent, None, teardown, terrarium
@@ -2411,7 +2411,7 @@ def test_main_wires_stop_clients_into_the_no_room_boot_serve_loop(monkeypatch):
     def fake_build(config, bit_registry, **kwargs):
         gs = FakeObservable()
         server = object()
-        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[])
+        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[], link_view=lambda: {})
         teardown = TeardownStack()
         terrarium = FakeObservable()
         return gs, server, agent, None, teardown, terrarium
@@ -2482,7 +2482,7 @@ def test_main_no_room_boot_skips_transport_start_and_leaves_clients_stopped(
         # must too.
         room_audio = types.SimpleNamespace(pool=pool,
                                            shutdown=lambda: None)
-        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[],
+        agent = types.SimpleNamespace(controllers=lambda: {}, canvas_urls=[], link_view=lambda: {},
                                       room_audio=room_audio)
         teardown = TeardownStack()
         terrarium = _FakeTerrarium()

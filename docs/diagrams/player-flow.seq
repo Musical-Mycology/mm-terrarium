@@ -1,4 +1,4 @@
-title: Player flow, hello to role (contract v3, 2026-10-01)
+title: Player flow, hello to role (contract v4, 2026-10-08)
 
 participants: Tuneshroom, Arco, Control
 
@@ -7,7 +7,7 @@ Tuneshroom -> Arco: /game/hello dev name proto instrument
 Arco -> Control: /game/hello
 Control -> Arco: /ie1/room (first contact only)
 Arco -> Tuneshroom: /ie1/room
-note: heartbeat: the identical hello every 5 s; no /room per beat
+note: heartbeat: /game/beat every 1 s, each answered /ie1/beat seq epoch (legacy: hello every 5 s, no reply)
 
 # Invite. SETUP, round set, lobby not FULL: repeats every 5 s until validated.
 Control -> Arco: /ie1/handshake round (TCP)

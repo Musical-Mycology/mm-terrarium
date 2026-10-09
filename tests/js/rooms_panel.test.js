@@ -177,6 +177,20 @@ function snapshotMsg(rooms, terrarium_state) {
   assert.ok(html().includes("Newcomer"), "new device appears");
   assert.ok(!html().includes("Wanderer"), "departed device disappears");
 
+  // Beat link state (spec 2026-10-08 section 7): Missing chip, signal
+  // bars with the round trip as a tooltip, nothing for a legacy device.
+  send({ event: "devices_changed",
+         devices: [
+           { dev: "ie1", name: "Testshroom 1", role: "player",
+             link: { state: "live", bars: 3, rtt_ms: 42, loss: 0.03 } },
+           { dev: "ie7", name: "Newcomer", role: null,
+             link: { state: "missing", bars: 1, rtt_ms: null, loss: 0.4 } },
+           { dev: "ie8", name: "Legacy", role: null, link: null }] });
+  assert.ok(/Testshroom 1[\s\S]*?▮▮▮▯/.test(html()), "3 of 4 bars");
+  assert.ok(html().includes("42 ms"), "rtt tooltip");
+  assert.ok(/Newcomer[\s\S]*?Missing/.test(html()), "missing chip");
+  assert.ok(!/Legacy[\s\S]*?(Missing|▮)/.test(html()), "legacy shows no link");
+
   // 7. D7 unload case: a row whose unload_blocked carries a reason renders
   //    its Unload button disabled with the reason as its tooltip; a row
   //    without one keeps the button live.

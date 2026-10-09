@@ -1,5 +1,6 @@
 {
   "device": {
+    "beats": false,
     "handshake": null
   },
   "name": "late_hello_gets_jam",
