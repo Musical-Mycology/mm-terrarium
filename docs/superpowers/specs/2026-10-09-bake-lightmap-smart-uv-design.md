@@ -39,7 +39,7 @@ one edit-mode session, so one shared atlas), but
 bpy.ops.uv.smart_project(
     angle_limit=math.radians(66.0),       # Blender's own default
     margin_method="FRACTION",
-    island_margin=lightmap_island_margin(resolution),
+    island_margin=lightmap_island_margin(resolution, BAKE_MARGIN_PX),
     area_weight=0.0,
     correct_aspect=True,
     scale_to_bounds=False)
@@ -47,8 +47,8 @@ bpy.ops.uv.smart_project(
 
 Smart UV Project groups neighbouring faces into charts by angle and packs
 the charts itself, so the atlas is spent on surface, not on per-face
-margins. `lightmap_island_margin(resolution)` (helper) is
-`2 * BAKE_MARGIN_PX / resolution`: islands sit at least two bake margins
+margins. `lightmap_island_margin(resolution, BAKE_MARGIN_PX)` (helper)
+is `2 * BAKE_MARGIN_PX / resolution`: islands sit at least two bake margins
 apart, so the 4 px dilation never bleeds one island into another.
 
 Measured on the test Tower with Smart UV Project: unwrap 0.4 s, 492k of the
@@ -77,7 +77,7 @@ Helpers in `tools/model_bake_helpers.py` (pure Python, pytest-tested):
 - `refuse_thin_lightmap(coverage, resolution, minimum)`: raises `BakeError`
   naming the thinnest mesh and its texel count; `coverage` maps mesh name
   to texels.
-- `lightmap_island_margin(resolution) -> float`.
+- `lightmap_island_margin(resolution, margin_px) -> float`.
 
 The bpy side only gathers each target's UV polygons and calls them. 16
 texels is a floor for "this part gets any light map at all", not a quality
