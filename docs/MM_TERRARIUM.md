@@ -1285,8 +1285,13 @@ consumer is mm-tuneshroom's 3D view (`docs/instrument-model-guide.md` is the art
 the parser nor `Instrument.layout` is read by the server in this slice.
 
 **Bake and export.** `tools/bake_model.py` bakes per-LED light maps in
-headless Blender (Cycles Diffuse + Transmission per LED, summed, row-flipped,
-normalised by the brightest texel, packed 4 LEDs per RGBA PNG) and writes
+headless Blender: every mesh unwrapped into one shared atlas with
+Smart UV Project (Lightmap Pack's one island per face left a 188k-face
+model with 0.008 texels per face, so every map baked black; spec
+`docs/superpowers/specs/2026-10-09-bake-lightmap-smart-uv-design.md`), a
+refusal before the first LED if any mesh gets under 16 atlas texels, then
+Cycles Diffuse + Transmission per LED, summed, row-flipped, normalised by
+the brightest texel, packed 4 LEDs per RGBA PNG and writes
 `<stem>.baked.glb` beside the source; `tools/model_bake_helpers.inject_bake`
 is the one writer of the baked-file contract (`extras.mm_bake`, spec
 section 4.1) and refuses anything `validate_baked_glb` rejects.
@@ -1312,7 +1317,7 @@ run: `git archive HEAD control tools <model dir> | portal ssh mycologist
 base64 and compare sha256 on both ends. After a Blender upgrade, re-run
 `tools/blender_probe.py` there before moving the pin. The committed
 `tests/fixtures/models/marker_fixture.baked.glb` is the first real bake
-(256 px, the T2 gate).
+(256 px, the T2 gate) and was re-baked 2026-10-09 with Smart UV Project.
 
 **Room fixtures and the Tower.** `_parse_room` refuses a fixture whose
 instrument disagrees with it (`fixture_instrument_mismatch`,
