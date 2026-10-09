@@ -38,6 +38,25 @@ def test_http_root_is_the_repo_www_dir_and_port_matches_the_printed_one():
     assert os.path.isfile(os.path.join(www, "o2wsclocksync.htm"))
 
 
+def test_polling_rate_clears_thirty_devices():
+    # O2 reads one message per socket per o2_poll, and Arco polls once per
+    # main-loop pass at polling_rate (default 500 Hz). Every device's /leds
+    # shares Arco's one UDP socket, so 500 Hz backs frames up by seconds
+    # from 6 devices; 5000 Hz measured clean at 30 (2026-10-09 sweep).
+    assert int(_prefs()["polling_rate"]) >= 5000
+
+
+def test_each_setting_sits_on_one_line():
+    # Arco's config reader silently ignored a json.dump(indent=2) rewrite of
+    # this file (every setting fell back to its default) while still
+    # printing "finished reading". Keep one {"key": "value"} per line.
+    with open(os.path.join(ARCOSERVER_DIR, "arco_server_prefs.json"),
+              encoding="utf-8") as handle:
+        text = handle.read()
+    for key, value in _prefs().items():
+        assert f'{{"{key}": "{value}"}}' in text, key
+
+
 def test_http_root_fits_arcos_buffer():
     assert len(_prefs()["http_root"]) < 120       # prefs.cpp:64 char[120]
 

@@ -2236,7 +2236,10 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
 
 - Arco runs with `arcoserver/` as cwd (prefs come from the cwd; no
   `http_enable` key); `arcoserver/arco_server_prefs.json` sets `http_root`
-  `"www"`, port 8080. `arcoserver/www` symlinks `../www` because O2's HTTP
+  `"www"`, port 8080 and `polling_rate` 5000 (*Host platform*). Keep one
+  `{"key": "value"}` per line: a `json.dump(indent=2)` rewrite was silently
+  ignored, every setting back at its default, though Arco still printed
+  "finished reading". `arcoserver/www` symlinks `../www` because O2's HTTP
   server rejects any path containing `..` (`o2/src/websock.cpp:905`), root
   included. `o2debug.log` lands there. `www/` also holds `index.htm` (not
   `index.html`), `o2wsclocksync.htm` and a gitignored `app/` guest build.
@@ -2308,6 +2311,30 @@ appended, never inserted.
   Pending with Roger
   ([report draft](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/upstream/2026-10-09-o2-csget-bad-id-abort.md));
   a pull or reset in `~/projects/o2` drops it.
+- **Arco's `polling_rate` caps how many devices a room can drive.** O2's
+  `o2n_recv` reads one message per socket per `o2_poll`, and Arco polls
+  once per main-loop pass at `polling_rate` (default 500 Hz). Control's
+  `/leds` are UDP (`udp-ok`), so every device's frames share Arco's one UDP
+  socket, and macOS's 786 KB UDP buffer turns overload into seconds of
+  lateness rather than drops. Sweep on Mycological (M1 Pro, 2026-10-09,
+  MetronomeBit, 45 s `--ci`, LED frame lateness p50 / p95):
+
+  | polling_rate | devices | p50 | p95 | growth over the run |
+  |---|---|---|---|---|
+  | 500 | 5 | 54 ms | 123 ms | +0.2 s |
+  | 500 | 6 | 1.4 s | 2.5 s | +2.6 s |
+  | 500 | 10 | 4.9 s | 8.8 s | +9.2 s |
+  | 2000 | 20 | 16 ms | 167 ms | +0.1 s |
+  | 2000 | 30 | 2.8 s | 3.3 s | +2.8 s |
+  | 5000 | 30 | 2.4 ms | 7.0 ms | none |
+
+  Frames delivered per run stayed flat at each rate whatever the device
+  count (about 4.4k at 500 Hz, 16.5k at 2000), and Arco plus Control never
+  used more than about 20% of one core, so the rate, not CPU, was the
+  limit. `arcoserver/arco_server_prefs.json` sets 5000 (Arco about 13% of
+  one core at 30 devices). The devices were Python Testshrooms on the same
+  Mac; real ESP32 counts still need a hardware check. The read limit is
+  the second item in the cs/get report draft for Roger.
 - **No NAT'd hosts for real devices.** O2 discovery and Art-Net to WLED are
   UDP on the LAN; a NAT'd VM or **WSL2 in its default NAT mode** sits on its
   own subnet and gets neither. WSL2 is still the default *dev* host

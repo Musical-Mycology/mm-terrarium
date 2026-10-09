@@ -4,6 +4,7 @@
   ],
   "default": [
     {"http_root": "www"},
-    {"http_port": "8080"}
+    {"http_port": "8080"},
+    {"polling_rate": "5000"}
   ]
 }

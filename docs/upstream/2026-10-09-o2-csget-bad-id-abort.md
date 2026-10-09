@@ -51,3 +51,26 @@ already sent was read after the close. ESP32 devices that drop Wi-Fi follow
 the same path.
 
 Fix: `o2_drop_msg_data("bad ID in o2lite/cs/get message", msgdata);`
+
+## O2: a host reads one message per socket per o2_poll
+
+`o2n_recv` (`src/o2network.cpp:1093` at bb394bf) calls
+`read_event_handler()` once for each readable socket, and the handler reads
+one UDP datagram or one whole TCP message, then returns. A socket with a
+backlog yields one message per `o2_poll`. The Arco server calls `o2_poll`
+once per main-loop pass at `polling_rate` (default 500 Hz,
+`server/src/arco.cpp:1333` and `:1389`), so each socket delivers at most
+about 500 messages per second.
+
+All o2lite clients' UDP traffic arrives on the host's single UDP server
+socket. With Control sending LED frames by UDP to N devices at 44 Hz, Arco
+falls behind at 6 devices: frame lateness at 6, 10 and 30 devices was
+1.4 s, 4.9 s and 5.5 s median, and grew for the whole run. CPU stayed under
+22% of one core. The number of frames delivered per run was the same at
+every device count (about 4.4k), and it rose in proportion when we raised
+`polling_rate` (16.5k at 2000 Hz). At 5000 Hz, 30 devices run at 2.4 ms
+median lateness. The macOS UDP receive buffer (786 KB) holds the backlog,
+so overload shows as seconds of delay rather than drops. That backlog is
+also what left the stale cs/get above unread long enough to hit the abort.
+
+We now run Arco at `polling_rate` 5000.
