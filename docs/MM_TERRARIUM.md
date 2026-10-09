@@ -1326,6 +1326,12 @@ for: 14 px (`progress` 0-7, `responder` 8-11, `beat` 12-13, the two base PARs),
 fallback (a 14-dot strip in the Console). The artist's brief and the import
 recipe are `docs/tower-model-brief.md`; `tests/test_tower_import.py` dry-runs
 the import. Spec: `docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md`.
+Light placement follows the artist's first model (2026-10-05), zig-zag
+included, since 2026-10-09. **Check a model's size before committing it:**
+that first export was 1.18 GB (39M triangles, nearly all decorative fungus
+growths), and nothing in the catalog refuses a dense model, so the artist
+guide's budget (300k triangles, 20 MB) is enforced only by the import
+recipe's first step.
 
 #### Per-fixture light sessions and sinks
 
