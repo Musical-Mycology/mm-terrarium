@@ -950,3 +950,15 @@ def test_own_drop_then_same_bridge_id_still_relinks():
     False), a reconnect that reuses the old id reads as a change."""
     from harness.o2_shroom import link_transition
     assert link_transition(False, 7) == ("up", True)
+
+
+def test_beat_reply_args_accepts_seq_and_epoch():
+    from harness.o2_shroom import beat_reply_args
+    assert beat_reply_args([3, "abc123"]) == (3, "abc123")
+
+
+@pytest.mark.parametrize("values", [[], [1], ["1", "abc123"], [1, 2],
+                                    [True, "abc123"], [1.5, "abc123"]])
+def test_beat_reply_args_drops_a_malformed_beat(values):
+    from harness.o2_shroom import beat_reply_args
+    assert beat_reply_args(values) is None

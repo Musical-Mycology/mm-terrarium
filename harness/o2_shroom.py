@@ -96,6 +96,20 @@ def link_transition(was_linked: bool, bridge_id):
     return None, linked
 
 
+def beat_reply_args(values) -> tuple[int, str] | None:
+    """(seq, epoch) of a /<dev>/beat reply, or None when it is malformed
+    (fewer than two values, seq not an int, epoch not a str): the caller
+    drops it rather than raising inside the o2lite callback."""
+    if len(values) < 2:
+        return None
+    seq, epoch = values[0], values[1]
+    if isinstance(seq, bool) or not isinstance(seq, int):
+        return None
+    if not isinstance(epoch, str):
+        return None
+    return seq, epoch
+
+
 def run_beat_actions(actions, *, send_beat, send_hello, drop_transport,
                      drop_role, say) -> None:
     """Carry out BeatLink's actions (harness/beat_link.py). Each effect is
@@ -742,8 +756,11 @@ def main() -> None:
             if beat is not None:
                 beat.on_control_message(time.monotonic())
                 if address.endswith("/beat"):
-                    do_beat(beat.on_beat_reply(time.monotonic(),
-                                               values[0], values[1]))
+                    reply = beat_reply_args(values)
+                    if reply is None:
+                        print(f"dropping /{address}: malformed beat reply")
+                        return
+                    do_beat(beat.on_beat_reply(time.monotonic(), *reply))
                     return
             client.handle({"timestamp": o2lite.msg_timestamp,
                            "address": f"/{address}",

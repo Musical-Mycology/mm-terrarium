@@ -514,13 +514,6 @@ class Recorder:
         self.advance_to(t_ms)
         self._control_frozen = True
 
-    def control_thaw(self, t_ms: int) -> None:
-        """Control answers again from t_ms, starting with whatever the
-        device sent while it was frozen. Records no step."""
-        self.advance_to(t_ms)
-        self._control_frozen = False
-        self._agent.poll()
-
     def _scripted_at(self, t_ms: int, address: str) -> list:
         return [detail for (t, addr, detail) in self._scripted
                 if t == t_ms and addr == address]

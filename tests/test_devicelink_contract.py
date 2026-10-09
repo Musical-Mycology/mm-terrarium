@@ -173,3 +173,12 @@ def test_beat_delivered_through_fake_o2lite_reaches_drain_inbound():
     drained = [env for (_client, env) in transport.drain_inbound()]
     assert ("/game/beat", "sii", ["ie1", 4, 12]) in [
         (e["address"], e["typespec"], e["args"]) for e in drained]
+
+
+def test_grace_matches_the_boot_config_stale_timeout_default():
+    import dataclasses
+
+    from control.boot_config import BootConfig
+    default = next(f.default for f in dataclasses.fields(BootConfig)
+                   if f.name == "stale_timeout")
+    assert contract.GRACE_S == float(default)
