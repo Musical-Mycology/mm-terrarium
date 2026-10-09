@@ -503,6 +503,9 @@ over a real link exercises it.
    the `/game/handshake` it produces. The reference is a double tap; the
    firmware's own classifier must keep it out of the gameplay tap stream
    (before a role there is no gameplay tap stream anyway, rule 2).
-7. **Long link loss and the light.** Rule 9 keeps the last frame lit through
-   an outage. Whether a link lost for longer should fall back to the light
-   lexicon's *Looking* pulse is undecided (`docs/light-lexicon.md`, gap G4).
+7. **Long link loss and the light.** An unarmed device keeps its last frame
+   lit through a link loss (rule 9). An armed beat-capable device holds the
+   frame for 3 s with nothing from Control, then shows Looking, then Solo at
+   15 s. It may show Looking at once on a socket error, but is not required
+   to. Gap G4 was decided 2026-10-08 (`docs/light-lexicon.md`); the firmware
+   rendering is still open.

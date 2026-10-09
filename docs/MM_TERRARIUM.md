@@ -1425,19 +1425,21 @@ holds a `LightSession` per granted device and per fixture, ships
 
 #### Message vocabulary
 
-- **`devicelink/contract.py`'s `VERB_TABLE`** is the source (contract v3):
+- **`devicelink/contract.py`'s `VERB_TABLE`** is the source (contract v4):
   a `VerbRow` per verb (typespecs, arg names, `tcp`/`udp-ok`, `pre_role`).
   Up (`/game/<verb>`): `hello` (`ssss` dev, name, protoversion,
   instrument; bare `s` still accepted), `handshake` (`sss` dev, round_id,
   node), `start`, `tap`, `tilt`, `shake`, `hold`, `swing`, `canvas`
-  (simulators), `capture`, `telemetry`. Down (`/<dev>/<verb>`):
+  (simulators), `capture`, `telemetry`, `beat` (`si` or `sii` dev, seq, rtt_ms). Down
+  (`/<dev>/<verb>`):
   `handshake` (`s` round_id), `validated` (`ss` round_id, role), `deny`
-  (`ss` reason, hint), `role`, `room`, `release`, `error`, `leds`, `play`.
-  Before a role a device may send only `hello`, `handshake`, `start` (and
-  `canvas`).
+  (`ss` reason, hint), `role`, `room`, `release`, `error`, `leds`, `play`,
+  `beat` (`is` seq, epoch).
+  Before a role a device may send only `hello`, `handshake`, `start`,
+  `beat` (and `canvas`).
 - **Down rows carry a transport**: `tcp` for `role`, `deny`, `release`,
   `room`, `error`, `handshake`, `validated`; `udp` (`udp-ok`) for `leds`,
-  `play`. `FakeO2Lite` records the channel per message, so a test can
+  `play`, `beat`. `FakeO2Lite` records the channel per message, so a test can
   assert `/role` went TCP.
 - **`/game/join` is retired**: `contract.RETIRED_UP_VERBS` keeps it
   registered only so Control can answer `/<dev>/error ["join", "retired in
