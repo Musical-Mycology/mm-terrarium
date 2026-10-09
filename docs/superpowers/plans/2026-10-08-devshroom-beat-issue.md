@@ -73,6 +73,20 @@ Details that are easy to get wrong:
 - **Control answers every beat, even from a device it does not know yet.** When only Control restarts, Arco keeps your TCP link up, and the new Control replies to your very next beat with its new epoch. So a Control-only restart shows up as an epoch change within about a second (drop role, hello), with no Looking and no mDNS rediscovery. Looking is for when nothing answers at all.
 - **Rule 9 stays.** After a relink inside the 15 s window Control repaints your current `/leds` frame and re-sends no `/role`, `/validated` or `/room`. You must still have them.
 
+### Known gap: a relink that never gets a reply (spec decision pending)
+
+The spec arms the lost timer only after the first beat reply on the current link. That is what keeps a beat-capable device quiet against an older Terrarium that never replies. It has a side effect, found while building the app side (mm-tuneshroom PR #39):
+- **The failure:** after Looking, the device relinks. If that new link comes up at the transport level but no beat reply ever arrives, the device is unarmed on it again, so it never declares that link lost. It never drops the link and never retries.
+- **When it happens:** for example, a socket left half-open after a Wi-Fi roam or an AP restart, or a link to an Arco whose Control is wedged.
+- **What the device shows:** it stays in Looking and then Solo, which is correct. But it does not recover on its own until something closes the socket.
+
+The reference `BeatLink` and the app behave this way today. A spec change is being considered in mm-terrarium. The likely shape: a device that already holds an epoch from an earlier reply treats a relink with no reply within `link_lost_s` as lost again, so it drops the transport and retries. A device that has never had a reply stays in legacy mode as now.
+
+What to do for now:
+- Port the reference as it is. Do not invent a different rule on the device, so firmware, app and contract stay in step.
+- Structure the code so the change is one condition. The check "is this link armed" should be a single place you can widen to "armed, or relinked with a known epoch".
+- On the bench, note whether you ever see a relink sit unreplied. That tells us how much the spec change matters.
+
 ### Replaying export v4
 
 - Bump the version guard in your replay tests to 4.
@@ -92,6 +106,7 @@ Spec section 10, bench row. Measure detection time on both sides for each:
 Plus:
 - **Second O2 host.** Advertise another ensemble's `_o2proc._tcp`, or a renamed "arco (2)", first on the LAN, then restart Terrarium. The device must skip it and relink, not hang. This proves the section 1 fix.
 - **Stale clock after a forced disconnect** (spec section 11). o2lite resets `clock_synchronized` only in `o2l_clock_initialize`, not on disconnect, and does not reset its ping schedule (`lib/o2/o2lite.c`, clock ping around 1147-1160). A relinked device may stamp gestures with a stale offset. Check the offset after a forced relink. If it is real, re-initialise the clock on relink and add it to the o2lite defect list for Roger.
+- **Half-open relink.** After the device shows Looking, power-cycle the AP, or roam it to a second AP, while Terrarium stays up. Note whether the relink gets a beat reply or sits unreplied in Looking or Solo (see the known gap in section 2).
 - **False Looking on a busy AP.** With power save off the 3 s window has margin. If the bench shows false Looking on a venue AP, tell us: the first knob is raising `LINK_LOST_S`, before touching the beat interval.
 
 ## 4. Done when
