@@ -16,6 +16,7 @@ bake host (see docs/MM_TERRARIUM.md, LED layout models).
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import tempfile
 from pathlib import Path
@@ -28,7 +29,8 @@ from control.model_layout import ModelLayoutError, parse_source_layout  # noqa: 
 from tools.model_bake_helpers import (  # noqa: E402
     BakeContractError, BakeError, bake_output_path, build_mm_bake_extras,
     check_blender_version, encode_png_rgba8, flip_rows, group_leds_by_four,
-    inject_bake, layout_to_blender_m, normalise_maps, quantise_group_rgba8,
+    inject_bake, layout_to_blender_m, lightmap_island_margin, lightmap_texels,
+    normalise_maps, quantise_group_rgba8, refuse_thin_lightmap,
 )
 
 PINNED_BLENDER = "4.5"   # confirmed on the bake host by tools/blender_probe.py
@@ -89,16 +91,32 @@ def _prepare_meshes(targets: list) -> None:
         uvs.new(name=LIGHTMAP_UV)
 
 
-def _lightmap_pack(targets: list) -> None:
-    """All bake targets packed together into one shared atlas (spec 5.3 step 2)."""
+def _lightmap_unwrap(targets: list, resolution: int) -> None:
+    """All bake targets unwrapped together into one shared atlas with
+    Smart UV Project (spec 2026-10-09; amends spec 5.3 step 2). Lightmap
+    Pack made one island per face and left a 188k-face model with 0.008
+    texels per face. Smart UV Project packs its own charts."""
     _select_only(targets)
     for obj in targets:
         obj.data.uv_layers.active = obj.data.uv_layers[LIGHTMAP_UV]
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.lightmap_pack(PREF_CONTEXT="ALL_FACES", PREF_PACK_IN_ONE=True,
-                             PREF_NEW_UVLAYER=False)
+    bpy.ops.uv.smart_project(
+        angle_limit=math.radians(66.0), margin_method="FRACTION",
+        island_margin=lightmap_island_margin(resolution, BAKE_MARGIN_PX),
+        area_weight=0.0, correct_aspect=True, scale_to_bounds=False)
     bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def _lightmap_coverage(targets: list, resolution: int) -> dict:
+    """Each target's light-map area in texels, from its 'lightmap' UVs."""
+    coverage = {}
+    for obj in targets:
+        uv = obj.data.uv_layers[LIGHTMAP_UV].data
+        polygons = [[tuple(uv[i].uv) for i in poly.loop_indices]
+                    for poly in obj.data.polygons]
+        coverage[obj.name] = lightmap_texels(polygons, resolution)
+    return coverage
 
 
 def _default_material():
@@ -224,7 +242,8 @@ def main() -> None:
         raise BakeError("no non-marker mesh to bake onto")
 
     _prepare_meshes(targets)
-    _lightmap_pack(targets)
+    _lightmap_unwrap(targets, args.resolution)
+    refuse_thin_lightmap(_lightmap_coverage(targets, args.resolution), args.resolution)
     materials = _ensure_materials(targets)
     _configure_scene(args.samples)
     image, nodes = _add_bake_nodes(materials, args.resolution)
