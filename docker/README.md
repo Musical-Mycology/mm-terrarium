@@ -216,6 +216,10 @@ messages:
   succeeded, so Roger Dannenberg has taken the fixes. Delete the patch step
   from the Dockerfile and `docs/upstream/arco-linux-build.patch`.
 
+The o2 patch (`docs/upstream/o2-csget-bad-id.patch`, a one-line fix for an
+Arco abort on a stale o2lite cs/get) is handled the same way against
+`O2_SHA`, with the same two failure messages naming `O2_SHA`.
+
 ## Self-check
 
 **RUN ON: WSL UBUNTU**

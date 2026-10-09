@@ -1,0 +1,13 @@
+diff --git a/src/bridge.cpp b/src/bridge.cpp
+index 2328c78..9fb1068 100644
+--- a/src/bridge.cpp
++++ b/src/bridge.cpp
+@@ -169,7 +169,7 @@ void o2_bridge_csget_handler(O2msg_data_ptr msgdata, int seqno,
+                              const char *replyto)
+ {
+     if (!o2_message_source || !ISA_BRIDGE(o2_message_source)) {
+-        o2_drop_message("bad ID in o2lite/cs/get message", msgdata);
++        o2_drop_msg_data("bad ID in o2lite/cs/get message", msgdata);
+         return;  // some non-O2lite sender invoked /_o2/o2lite/get!
+     }
+     if (!o2_clock_is_synchronized) {  // can't reply with time
