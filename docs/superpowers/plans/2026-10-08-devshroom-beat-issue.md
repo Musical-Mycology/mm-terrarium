@@ -1,11 +1,11 @@
 # Beat heartbeat: device side (contract v4)
 
-Victor, this is the firmware half of the problem you raised: the device cannot tell when Terrarium is gone. mm-terrarium has the Control side, the Testshroom and the contract kit done. mm-devshroom needs the device side.
+Victor, this is the firmware half of the problem you raised: the device cannot tell when Terrarium is gone. The mm-terrarium half (Control's beat reply, the Console link view, the Python Testshroom and contract kit export v4) is merged on `main`. mm-devshroom needs the device side.
 
 - Spec: `mm-terrarium` `docs/superpowers/specs/2026-10-08-bidirectional-heartbeat-design.md` (sections 4 to 6 are the device contract, 9 the prerequisite, 10 and 11 the bench and risks).
 - Guide: `mm-terrarium` `docs/device-contract-guide.md` (rules 9 and 10, firmware checklist items 10 to 15, section 8 item 7).
 - Reference state machine to port: `mm-terrarium` `harness/beat_link.py` (`BeatLink`). It is pure, with no sockets and no clock of its own: you feed it local time in seconds (never O2 time, which goes away during a relink) and carry out the actions it returns.
-- Contract export: `tools/export_contract.py`, `CONTRACT_VERSION = 4`.
+- Contract export: `mm-terrarium` `tools/export_contract.py`, `CONTRACT_VERSION = 4`.
 
 Rollout order does not matter. A device that never gets a beat reply stays in legacy mode and keeps today's 5 s hello.
 
@@ -32,7 +32,8 @@ States: `down` (no transport, never linked, display untouched), `linking` (trans
 
 | Input | Condition | Actions | New state |
 |---|---|---|---|
-| link up (transport connected) | any | send hello, reset `seq` to 0, send beat 0, schedule next beat (interval plus jitter) and next legacy hello (5 s), set last-heard to now, clear `armed` | `down` becomes `linking`; every other state stays (looking and solo stay until a reply) |
+| link up (transport connected) | was `linked` (a bounce you saw as a new link, with no link down first) | send hello, reset `seq` to 0, send beat 0, schedule next beat and next legacy hello; keep `armed` and `last_heard`, so loss detection keeps running | unchanged (`linked`) |
+| link up | any other state | send hello, reset `seq` to 0, send beat 0, schedule next beat (interval plus jitter) and next legacy hello (5 s), set last-heard to now, clear `armed` | `down` becomes `linking`; `looking` and `solo` stay until a reply |
 | link down (socket error) | was `linked` | stop beats and hello, clear `armed`, remember `lost_since = last_heard` | `looking` |
 | link down | was `linking` | stop beats and hello, clear `armed` | `down` |
 | link down | was `looking`, `solo` or `down` | stop beats and hello, clear `armed` | unchanged |
@@ -69,6 +70,7 @@ Details that are easy to get wrong:
 - **Compare the epoch on every `/<dev>/beat` reply, whatever its seq**, including a reply to a seq you already had answered. `beat_epoch_change_rehellos` delivers the new epoch exactly that way.
 - **Any message from Control is proof of life**, not only beat replies (checklist 3).
 - **Integration trap (found in the Python Testshroom).** If you detect a relink by watching o2lite's bridge id change, then after your own drop (Looking) you must treat your own link as down. Otherwise a fast reconnect that lands on the same bridge id is never seen as a new link, and the device stays Looking forever. In o2litepy, `tcp_close` sets the bridge id to -1. In the C o2lite, `disconnect()` in `lib/o2/o2lite.c` clears `o2l_bridge_id` and `tcp_sock`. What to do: when you drop the transport yourself, also reset your remembered link state (your "last seen bridge id" or "link was up" flag), so the next valid bridge id counts as a new link and runs the link-up path (hello, `seq` 0, beat 0).
+- **Control answers every beat, even from a device it does not know yet.** When only Control restarts, Arco keeps your TCP link up, and the new Control replies to your very next beat with its new epoch. So a Control-only restart shows up as an epoch change within about a second (drop role, hello), with no Looking and no mDNS rediscovery. Looking is for when nothing answers at all.
 - **Rule 9 stays.** After a relink inside the 15 s window Control repaints your current `/leds` frame and re-sends no `/role`, `/validated` or `/room`. You must still have them.
 
 ### Replaying export v4
