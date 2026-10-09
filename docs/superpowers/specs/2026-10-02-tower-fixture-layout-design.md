@@ -40,7 +40,7 @@ text is otherwise left as history.
 |---|---|---|
 | Maitake base | 0 to 350 | two concealed off-the-shelf PAR lights; "game clock + celebration; not tap-responsive" |
 | Light path + indicators | 450 to 1640 | 8 mushroom stages, 1 addressable LED each, silicone diffuser per stage; "correct taps bloom indicators upward, lit mushrooms remain on as progress" |
-| Responders | sides, about 900 to 1510 | 4 identical detachable discs, diameter 190 mm, single color, "real-time tap feedback only" |
+| Responders | sides, about 1000 to 1750 (artist's model) | 4 identical detachable discs, diameter 190 mm, single color, "real-time tap feedback only" |
 | Crown | 1550 to 2100 | fiber optics and props; no light source in this revision |
 
 Indicator chain (drawing panel A): square PCB with one central addressable
@@ -56,18 +56,18 @@ markers, Bits) uses these indices.
 
 | px | Zone | Block | Element | Nominal (x, z) mm | Marker size |
 |---|---|---|---|---|---|
-| 0 | `progress` | `lower` | stage 1/8 | (0, 480) | medium |
-| 1 | `progress` | `lower` | stage 2/8 | (0, 632) | medium |
-| 2 | `progress` | `lower` | stage 3/8 | (0, 785) | medium |
-| 3 | `progress` | `lower` | stage 4/8 | (0, 937) | medium |
-| 4 | `progress` | `upper` | stage 5/8 | (0, 1089) | medium |
-| 5 | `progress` | `upper` | stage 6/8 | (0, 1242) | medium |
-| 6 | `progress` | `upper` | stage 7/8 | (0, 1394) | medium |
-| 7 | `progress` | `upper` | stage 8/8 | (0, 1547) | medium |
-| 8 | `responder` | `responders` | R1 lower-left | (-330, 900) | medium |
-| 9 | `responder` | `responders` | R2 lower-right | (+315, 1045) | medium |
-| 10 | `responder` | `responders` | R3 upper-left | (-330, 1370) | medium |
-| 11 | `responder` | `responders` | R4 upper-right | (+310, 1510) | medium |
+| 0 | `progress` | `lower` | stage 1/8 | (+44, 482) | medium |
+| 1 | `progress` | `lower` | stage 2/8 | (+34, 632) | medium |
+| 2 | `progress` | `lower` | stage 3/8 | (-20, 791) | medium |
+| 3 | `progress` | `lower` | stage 4/8 | (-29, 937) | medium |
+| 4 | `progress` | `upper` | stage 5/8 | (+50, 1089) | medium |
+| 5 | `progress` | `upper` | stage 6/8 | (+36, 1242) | medium |
+| 6 | `progress` | `upper` | stage 7/8 | (-25, 1394) | medium |
+| 7 | `progress` | `upper` | stage 8/8 | (+45, 1547) | medium |
+| 8 | `responder` | `responders` | R1 lower-left | (-244, 1000) | medium |
+| 9 | `responder` | `responders` | R2 lower-right | (+255, 1250) | medium |
+| 10 | `responder` | `responders` | R3 upper-left | (-251, 1500) | medium |
+| 11 | `responder` | `responders` | R4 upper-right | (+239, 1750) | medium |
 | 12 | `beat` | `par` | PAR left | (-80, 90) | large |
 | 13 | `beat` | `par` | PAR right | (+80, 90) | large |
 
@@ -75,9 +75,10 @@ Rules:
 
 - **Coordinates.** x is the drawing's X (viewer's right positive), z is the
   drawing's Y (up). y (depth) is left to the artist: each marker sits where
-  that light actually emits. Responder and PAR positions are read off the
-  elevation and are nominal to about 25 mm; indicator Z values are the
-  drawing's own figures.
+  that light actually emits. Pixels 0 to 11 are read off the artist's first
+  model (`Tower.glb`, 2026-10-05), which Chris made the reference for light
+  count and placement on 2026-10-09, zig-zag included; the PARs (12, 13)
+  are read off the elevation. All are nominal to about 25 mm.
 - **Progress order.** px 0 is the base stage, so "bloom upward" is ascending
   index, and the controller in the base feeds stage 1 first.
 - **Responder order.** Bottom to top, left before right.
@@ -177,9 +178,11 @@ No new tooling: this is the existing pipeline.
 
 1. **Color order** of the purchased pixels: check `GRB` at the bench by
    sending a pure red frame and confirming the indicators show red.
-2. **Indicator x = 0.** The elevation draws the indicators zig-zagging about
-   50 mm either side of center, but a 152.4 mm factory pitch cannot span that
-   (the hop would need about 182 mm). This spec follows the chain table.
+2. **Indicator zig-zag vs chain pitch.** Superseded 2026-10-09: the
+   indicators zig-zag as in the artist's model (section 4). The hops there
+   run about 145 to 170 mm against the chain's 152.4 mm factory pitch, so
+   check at the bench that the chain reaches every stage, or order longer
+   leads.
 3. **Responders detachable for transport only;** all four attached during a
    show.
 4. **PAR DMX channel map.**
