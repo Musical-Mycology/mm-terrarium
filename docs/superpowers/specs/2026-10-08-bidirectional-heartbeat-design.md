@@ -4,7 +4,7 @@
 **Repos:** mm-terrarium (contract, Control, Console, Testshroom, contract
 kit, docs), mm-tuneshroom (device link and session, simulator, browser
 guest, contract replay), mm-devshroom (firmware issue for Victor)
-**Status:** design approved in brainstorming 2026-10-08; not implemented.
+**Status:** implemented in mm-terrarium (branch claude/terrarium-heartbeat-devshroom-d5dec8); mm-tuneshroom and mm-devshroom pending.
 **Supersedes:** section 2 of
 `2026-08-25-device-liveness-detection-design.md` where it rejects a
 Control-side reply ("Control-initiated ping/pong, and any ack"). Its reap

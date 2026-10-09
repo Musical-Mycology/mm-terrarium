@@ -1,5 +1,7 @@
 # Device liveness detection: reaping a stale DevicePool/registration entry
 
+**Partly superseded (2026-10-08):** section 2's rejection of a Control-side reply is reversed by `2026-10-08-bidirectional-heartbeat-design.md`; sections 4 and 5 stand.
+
 Closes the entry under *Not yet built / deferred* in `docs/MM_TERRARIUM.md`:
 *"A stale device entry survives an ungraceful disconnect."* A Tuneshroom (or
 simulated device) that crashes, loses power, or walks out of range without

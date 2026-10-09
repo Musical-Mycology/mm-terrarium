@@ -88,8 +88,9 @@ Control starts talking to it: Solo and Looking are the device's own, and
 every later signal arrives as frames. The device stays a pixel sink from
 then on; it never draws Invite, Ready or Failure itself. The handover point
 is the first `/<dev>/leds` frame, and a lost link keeps the last frame lit
-(device contract guide, rule 9 and section 8). Whether a long link loss should
-drop back to Looking is open (gap G4).
+(device contract guide, rule 9 and section 8). An armed beat-capable device that hears
+nothing from Control for 3 s drops back to Looking, and to Solo at 15 s (spec
+`2026-10-08-bidirectional-heartbeat-design.md` section 6.2).
 
 ## 5. The signals on a Room fixture
 
@@ -113,20 +114,20 @@ the device that asked.
 ## 6. Gaps between this lexicon and the code
 
 G1 to G3 shipped on 2026-10-05 (spec
-`docs/superpowers/specs/2026-10-05-device-status-light-design.md`); G4 is
-still open. A gap is a Control or firmware change, not a doc change.
+`docs/superpowers/specs/2026-10-05-device-status-light-design.md`); G4 was
+decided on 2026-10-08 and its firmware half is still open. A gap is a Control or firmware change, not a doc change.
 
 - **G1. Done:** the white invite pulse and the green Ready pulse live in
   `LobbyRuntime`'s status pulse plus `DeviceLinkAgent._bases`.
 - **G2. Done:** `/<dev>/deny` flashes red x2 via `LobbyRuntime.on_deny`.
 - **G3. Done:** Start accepted is green x2 (`FEEDBACK_ACCEPT` and
   `_flash_fixtures_now`).
-- **G4. Rev 1 firmware renders Solo and Looking** (mm-devshroom, with
-  Sophia's solo-mode work), and the contract decides whether a link lost for
-  longer than some bound falls back to Looking. Contract v3 says it holds
-  the display.
+- **G4. Decided 2026-10-08; firmware open.** Looking after 3 s of silence,
+  Solo at 15 s, for beat-capable devices (spec
+  `docs/superpowers/specs/2026-10-08-bidirectional-heartbeat-design.md`).
+  Rev 1 firmware still has to render both (mm-devshroom).
 
-G4 is firmware (mm-devshroom).
+The remaining G4 work is firmware (mm-devshroom).
 
 ## 7. Adding a signal
 

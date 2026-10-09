@@ -178,7 +178,7 @@ Player flow, hello to role (contract v3, 2026-10-01)
        |                                       |                                     |
        |<--------------/ie1/room---------------|                                     |
        |                                       |                                     |
-[ heartbeat: the identical hello every 5 s; no /room per beat ]
+[ heartbeat: /game/beat every 1 s, each answered /ie1/beat seq epoch (legacy: hello every 5 s, no reply) ]
        |                                       |                                     |
        |                                       |<-----/ie1/handshake round (TCP)-----|
        |                                       |                                     |
@@ -965,10 +965,25 @@ accepts the extension); never check browser JS by grepping source.
   clears all.
 - `on_devices_change` fires before `on_registration_change` so
   `terrarium_boot`'s logger prints both "released" and "timed out".
-- The heartbeat is the first `/game/hello` resent identically
-  (`harness/o2_shroom.py --heartbeat-interval`, default 5 s, 0 disables);
-  it pushes no `/room` and fires no `on_devices_change`. A dev heard from in its
-  closing fade is marked revived, so that fade skips `transport.drop_dev`.
+- The heartbeat has two forms (spec
+  `docs/superpowers/specs/2026-10-08-bidirectional-heartbeat-design.md`).
+  A legacy client resends its first `/game/hello` every 5 s
+  (`harness/o2_shroom.py --heartbeat-interval`; `--no-beat` keeps a
+  Testshroom legacy) and gets nothing back. It pushes no `/room` and
+  fires no `on_devices_change`. A beat-capable client sends
+  `/game/beat dev seq [rtt_ms]` (UDP) every 1 s, and `DeviceLinkAgent`
+  answers each with `/<dev>/beat seq epoch` (`epoch` minted once per agent
+  with `secrets.token_hex(3)`, so a device sees a Control restart).
+  `devicelink/link_monitor.py` (`LinkMonitor`) tracks live or missing
+  (3 s) and loss and RTT for the Console's signal bars, through
+  `agent.link_view()`: a rose "Missing" chip, else four bars with the rtt
+  as a tooltip. Missing is display only, the 15 s reap is unchanged. A
+  hello from a pooled beat-capable dev is a relink: the agent pops its
+  `_last_frames` entry so the current frame is repainted, and re-sends
+  nothing else (contract rule 9). The device side is
+  `harness/beat_link.py`, the reference the firmware and app port. A dev
+  heard from in its closing fade is marked revived, so that fade skips
+  `transport.drop_dev`.
 
 #### API version
 
@@ -1882,8 +1897,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   or, `--no-join`, the Room simulator (hello only; `--room-type`/`--fixture`),
   titled by its `dev`, printing `BROWSE_URL:` or `ROOM_URL:`.
 - It syncs its clock (parent-watched), then `service_conflict` checks
-  ownership: a loss prints `FATAL: service`, exit 1. The heartbeat hello
-  is identical to the first. `--handshake` answers each `/<dev>/handshake`
+  ownership: a loss prints `FATAL: service`, exit 1. A legacy heartbeat
+  hello is identical to the first. `--handshake` answers each `/<dev>/handshake`
   once per round id with `/game/handshake dev round_id node`
   (`send_handshake_ack`, TCP), after `--handshake-delay SECONDS` (default
   0); without it the device only hellos and ends jam. There is no
@@ -1894,6 +1909,13 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   arms on `tap`. `--persist`: release means `reset_for_lobby()` and loop.
   A deny never ends a round (only a release does); its `JOIN DENIED:` line
   is informational (`INFO_MARKERS`).
+- **Beats by default** via `BeatLink` (`harness/beat_link.py`), printing
+  `LINK STATE: <state>` (`DEVICE_LINK_STATE` in `harness/markers.py`) on
+  each change. `--no-beat` makes it a legacy client. `--heartbeat-interval`
+  keeps meaning the legacy hello interval, and 0 disables it in both modes.
+  After its own transport drop the loop treats the link as down, so a
+  reconnect is always seen. `harness/run_stack.py` cannot pass `--no-beat`
+  through.
 - **ABORT resilience** (ABORT stops the hub): hello/handshake sends swallow
   `AssertionError`/`OSError`; `reconnect_recheck` idles on a lost bridge id
   (`HUB_AWAY_NOTE`), re-verifies a new one (10 s, resend 2 s, retry if the
@@ -2390,7 +2412,11 @@ Kept explicit so the doc does not over-claim.
   jam-only.
 - **The light lexicon's G4** ([`docs/light-lexicon.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/light-lexicon.md)
   section 6): Rev 1 firmware does not yet render Solo or the white Looking
-  pulse, and link-loss fallback to Looking is undecided.
+  pulse. Looking after 3 s and Solo at 15 s is decided for beat-capable
+  devices (spec 2026-10-08).
+- **Beat adoption**: mm-tuneshroom and mm-devshroom beat adoption is
+  pending (heartbeat spec section 9). Device repos must bump their
+  contract-version guard to 4.
 - **Room liveness is undesigned**: Room-bound devices are never reaped
   (liveness spec section 5).
 - **A device's clock-sync to Arco after Control has connected is unreliable**
