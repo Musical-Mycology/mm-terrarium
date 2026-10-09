@@ -107,16 +107,21 @@ class BeatLink:
 
     def link_up(self, now: float) -> list:
         """The transport came up: hello, then beat 0. The display stays in
-        LOOKING or SOLO until a reply proves Control is there."""
+        LOOKING or SOLO until a reply proves Control is there. A link_up
+        while LINKED (no link_down between) stays armed and keeps the lost
+        timer running from the last message heard."""
         out: list = [SendHello()]
         self._up = True
-        self.armed = False
+        relinked_while_linked = self.state == LINKED
+        if not relinked_while_linked:
+            self.armed = False
         self._seq = 0
         self._sent_at.clear()
         out.append(self._beat(now))
         self._next_beat = now + self._gap()
         self._next_hello = now + self._legacy_hello
-        self._last_heard = now
+        if not relinked_while_linked:
+            self._last_heard = now
         if self.state == DOWN:
             self._set(LINKING, out)
         return out

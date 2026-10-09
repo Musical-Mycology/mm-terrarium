@@ -162,3 +162,14 @@ def test_infinite_legacy_hello_sends_only_the_initial_hello():
         t += 0.05
         hellos += len(_sends(bl.tick(t), SendHello))
     assert hellos == 1
+
+
+def test_link_up_while_linked_keeps_the_lost_timer_running():
+    bl = _bl()
+    bl.link_up(0.0)
+    bl.on_beat_reply(0.0, 0, "abc123")
+    acts = bl.link_up(1.0)                   # no link_down in between
+    assert _sends(acts, SendHello) and _sends(acts, SendBeat)[0].seq == 0
+    assert bl.armed and bl.state == LINKED
+    assert StateChanged(LOOKING) not in bl.tick(2.99)
+    assert StateChanged(LOOKING) in bl.tick(3.0)   # last_heard + 3 s
