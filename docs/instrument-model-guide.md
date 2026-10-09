@@ -38,12 +38,74 @@ material around an LED bakes dark. Marker spheres need no material; the
 bake removes them. A mesh with no material is baked as generic
 translucent silicone.
 
+## Keep the geometry light
+
+The file ships inside the Tuneshroom app and is drawn on a phone, the light
+maps are baked on a CPU-only machine, and git refuses any file over 100 MB.
+The model is a look-dev view of where light comes out, not a manufacturing
+model, so its meshes only need to read well at arm's length on a screen.
+
+**Budget** for the exported `.glb`:
+
+| | Limit |
+|---|---|
+| Whole model | 300,000 triangles, 20 MB |
+| Any one part | 20,000 triangles |
+| A small part (under 50 mm), each copy | 2,000 triangles |
+
+A first Tower export came in at 39 million triangles and 1.18 GB: 99% of it
+was 42 copies of one 26 mm part at 925,000 triangles each. The steps below
+exist to catch exactly that.
+
+**Before exporting, in Rhino:**
+
+1. **Coarsen the render mesh.** Surfaces export at the document's render
+   mesh density, not at a setting in the export dialog. Open *File >
+   Properties > Mesh* (on Mac, *Rhino > Settings > Mesh*), choose *Custom*,
+   and start from: *Maximum angle* 20, *Maximum distance, edge to surface*
+   0.5 mm, *Minimum edge length* 0.5 mm, *Refine mesh* off. Curved silicone
+   still reads smooth at these values; flat parts drop to a handful of
+   triangles.
+2. **Clear per-object overrides.** An object can carry its own finer mesh
+   settings that ignore step 1: select all, open *Properties > Render Mesh
+   Settings*, and turn *Custom Mesh* off unless a part genuinely needs it.
+3. **Turn off render mesh modifiers.** *Displacement*, *Edge Softening*,
+   *Shut Lining*, *Thickening* and *Curve Piping* (Object Properties) each
+   generate dense geometry at export. Displacement alone can turn a
+   coin-sized part into a million triangles. Paint surface texture with the
+   material instead.
+4. **Reduce parts that are already meshes.** Imported STL/OBJ parts,
+   scans and vendor models keep their own density whatever step 1 says.
+   Run `ReduceMesh` on each, with *Reduce to* set to the budget above.
+5. **Simplify or drop small repeated hardware.** Screws, nuts, standoffs,
+   connectors and decorative studs are rarely visible in the view. Drop
+   them, or model one simple copy (a cylinder is fine) and repeat that.
+6. **Count it.** Select everything you will export and run
+   `PolygonCount`: it reports the triangles and quads Rhino will write
+   (count a quad as two triangles). Select any part that looks large on its
+   own and check it against the per-part budget. Over budget: go back to
+   step 1 to 5 for the parts responsible.
+
 ## Export (File > Export Selected or Save As, `.glb`)
 
 - *Export Layers*: **on** (zones depend on it).
 - *Map Rhino Z to glTF Y*: **on**.
-- *Use Draco compression*: **off** (the catalog refuses Draco).
+- *Use Draco compression*: **off** (the catalog refuses Draco). Draco only
+  shrinks the file; it would not fix a dense mesh anyway.
 - *Export texture coordinates* and *Export vertex normals*: on.
+- *SubD Meshing* (only if the model has SubD objects): keep *Subdivision
+  level* at 1 or 2, or tick *Use control net* if the cage alone looks right.
+  Each level up multiplies those parts' triangles by about four.
+
+**Check the file before sending it:**
+
+- **Size.** Over 20 MB means something is still too dense; go back to
+  *Keep the geometry light*.
+- **Layers.** Import the `.glb` into an empty Blender scene (*File >
+  Import > glTF 2.0*; Blender is free) and look at the *Outliner*: the
+  markers must sit under an object named `LEDs`, inside their zone
+  sublayer. A flat list of objects means *Export Layers* was off.
+- **Markers.** Every `LED_###` from 0 to N-1 is present, none missing.
 
 ## Using another tool
 
