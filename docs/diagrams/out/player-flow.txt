@@ -1,4 +1,4 @@
-Player flow, hello to role (contract v3, 2026-10-01)
+Player flow, hello to role (contract v4, 2026-10-08)
 
 +------------+                             +------+                             +---------+
 | Tuneshroom |                             | Arco |                             | Control |

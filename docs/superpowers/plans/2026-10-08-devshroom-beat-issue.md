@@ -44,7 +44,7 @@ States: `down` (no transport, never linked, display untouched), `linking` (trans
 | tick | `looking` and `now - lost_since >= 15.0` (evaluated on every tick, link up or not) | show Solo | `solo` |
 
 Details that are easy to get wrong:
-- `seq` wraps at 2^31. Remember send times for the last 32 unanswered seqs only.
+- `seq` wraps at 2^31. Remember send times for the last 32 unanswered seqs only. Implement a ring buffer; do not copy the reference's `min()` eviction, which is wrong after seq wraps.
 - The stored `epoch` survives a relink. Only a reply on a later link can show it changed.
 - A transport that comes up while `looking` or `solo` does not leave that state. Only a beat reply does.
 - `rtt_ms` goes out as the third arg of the next beat. It is 0 until the first reply.

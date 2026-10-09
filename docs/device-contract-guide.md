@@ -305,8 +305,9 @@ fail without it.
     Control's last message (`lifecycle.grace_s`) it shows Solo. Time Solo
     from that last message on every path into Looking. A transport drop from
     below may show Looking at once, but the contract requires it only after
-    3 s of silence. Control's first frame after the relink replaces the
-    pulse. (`beat_link_lost_looking`, `beat_relink_within_grace`.)
+    3 s of silence. The device leaves Looking at the first beat reply on the
+    new link; Control's repaint, sent at the same moment on relink,
+    supplies the frame. (`beat_link_lost_looking`, `beat_relink_within_grace`.)
 12. **Force the transport down on loss.** When Looking is declared, close
     the o2lite TCP socket and clear the bridge id so rediscovery starts
     now instead of waiting on a socket that may never error. o2lite has no
