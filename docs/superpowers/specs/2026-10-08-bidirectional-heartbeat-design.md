@@ -187,7 +187,10 @@ issue (section 9) fixes that.
 - **Reply.** `DeviceLinkAgent` handles `/game/beat` by touching the pool
   entry (as every verb does), marking the device `beats`, recording the
   arrival, and sending `/<dev>/beat seq epoch` at once. The epoch is minted
-  in `DeviceLinkAgent.__init__`.
+  in `DeviceLinkAgent.__init__`. A beat from a dev not in the pool is
+  answered too, without touching the pool or the monitor: after a
+  Control-only restart Arco keeps the device's TCP link, so this reply is
+  how the device sees the new epoch at once instead of going Looking.
 - **Missing.** For a `beats` device, `now - last_seen > LINK_LOST_S` makes
   it `missing`: shown on the Console, nothing else changes. A beat or any
   other message clears it. Non-beat devices never show `missing`.

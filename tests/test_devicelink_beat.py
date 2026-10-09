@@ -53,12 +53,16 @@ def test_the_rtt_form_is_answered_too():
     assert agent.link_view()["ie1"]["rtt_ms"] == 18
 
 
-def test_a_beat_before_hello_is_dropped():
+def test_a_beat_from_an_unknown_dev_is_answered_but_not_pooled():
+    """A Control-only restart leaves the device's TCP link up, so its beat
+    arrives before any hello: answering it at once is how the device sees
+    the new epoch. The pool is untouched (hello creates the entry)."""
     gs, server, agent, clk = _rig()
     server.arrive("c1")
-    _beat(server, agent, 0)
-    assert server.addressed("/ie1/beat") == []
+    _beat(server, agent, 7)
+    assert [m["args"] for m in server.addressed("/ie1/beat")] == [[7, "abc123"]]
     assert gs.devices.known("ie1") is False
+    assert "ie1" not in agent.link_view()
 
 
 def test_a_malformed_beat_is_dropped():
@@ -100,6 +104,32 @@ def test_a_legacy_repeated_hello_still_gets_one_room_and_nothing_else():
         _hello(server, agent)
     assert len(server.addressed("/ie1/room")) == 1
     assert server.addressed("/ie1/beat") == []
+
+
+def test_relink_of_a_beating_room_fixture_resends_its_static_frame(monkeypatch):
+    from tests.test_devicelink_agent import (_fake_sessions,
+                                             _room_ready_game_server)
+    _fake_sessions(monkeypatch)
+    clk = _Clock()
+    gs = _room_ready_game_server()
+    server = FakeServer()
+    agent = DeviceLinkAgent(gs, server, clock=clk, epoch="abc123")
+    dev = "sim-room-main"
+    _hello(server, agent, dev=dev)
+    _beat(server, agent, 0, dev=dev)
+    for _ in range(10):                      # let the Room frame settle
+        clk.advance(1.0 / 44.0)
+        agent.poll()
+    before = len(server.addressed(f"/{dev}/leds"))
+    assert before > 0
+    clk.advance(1.0 / 44.0)
+    agent.poll()
+    assert len(server.addressed(f"/{dev}/leds")) == before   # static Room
+
+    _hello(server, agent, dev=dev)           # relink
+    _beat(server, agent, 0, dev=dev)
+
+    assert len(server.addressed(f"/{dev}/leds")) == before + 1
 
 
 def test_relink_of_a_beating_role_holder_resends_its_frame_and_no_role():

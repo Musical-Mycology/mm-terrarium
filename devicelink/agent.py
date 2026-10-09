@@ -1351,17 +1351,18 @@ class DeviceLinkAgent:
     def _on_beat(self, client, dev: str, args: list) -> None:
         """/game/beat: answer at once with /<dev>/beat seq epoch (spec
         2026-10-08 section 7). A beat from a dev not in the pool is
-        dropped: hello creates the entry, and the device's next beat a
-        second later is answered."""
+        answered too (the transport is bound, the link monitor is not
+        touched, hello creates the pool entry): after a Control-only
+        restart Arco keeps the device's TCP link, and this reply is how
+        the device sees the new epoch at once instead of going Looking."""
         try:
             _dev, seq, rtt_ms = protocol.parse_beat_args(args)
         except ValueError as exc:
             logger.warning("dropping malformed beat from %s: %s", dev, exc)
             return
-        if not self.game_server.devices.known(dev):
-            return
         self.transport.bind_dev(dev, client)
-        self._links.on_beat(dev, seq, rtt_ms, self._clock())
+        if self.game_server.devices.known(dev):
+            self._links.on_beat(dev, seq, rtt_ms, self._clock())
         self._send(dev, protocol.beat_event(dev, seq, self.epoch))
 
     def link_view(self) -> dict:
@@ -1404,11 +1405,13 @@ class DeviceLinkAgent:
         self.transport.bind_dev(dev, client, protoversion=protoversion)
         if (self.game_server.devices.get(dev) is not None
                 and self._links.beats(dev)):
-            # A relink inside the grace window (spec 2026-10-08 section 7):
-            # the device kept its role (contract rule 9), but its Looking
-            # pulse painted over the display, so the next render sends its
-            # current frame whole. Nothing else is re-sent.
-            self._last_frames.pop(dev, None)
+            # Any hello from a pooled beat-capable device. An armed device
+            # sends hello only on a relink (spec 2026-10-08 section 7): it
+            # kept its role (contract rule 9), but its Looking pulse
+            # painted over the display, so the next render sends its
+            # current frame whole, a bound Room fixture's included.
+            # Nothing else is re-sent.
+            self._invalidate_frame(dev)
         # /room on first contact only (spec 2026-10-01 section 5.5): a
         # heartbeat re-hello is proof of life, and every state or
         # registration change already broadcasts a fresh /room. Sent
