@@ -12,6 +12,7 @@ not hide the rest.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import tempfile
 import traceback
@@ -65,14 +66,16 @@ def _cube_with_two_uvs():
 
 
 def _packed_cube() -> tuple:
-    """Fresh two-UV cube with the lightmap set packed; returns (obj, uv_range)."""
+    """Fresh two-UV cube with the lightmap set unwrapped (Smart UV Project,
+    as the bake does); returns (obj, uv_range)."""
     obj = _cube_with_two_uvs()
     uvs = obj.data.uv_layers
     uvs.active = uvs["lightmap"]
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.lightmap_pack(PREF_CONTEXT="ALL_FACES", PREF_PACK_IN_ONE=True,
-                             PREF_NEW_UVLAYER=False)
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66.0), margin_method="FRACTION",
+                             island_margin=8 / 1024, area_weight=0.0,
+                             correct_aspect=True, scale_to_bounds=False)
     bpy.ops.object.mode_set(mode="OBJECT")
     lightmap_uvs = np.empty(len(obj.data.loops) * 2, dtype=np.float32)
     uvs["lightmap"].data.foreach_get("uv", lightmap_uvs)
@@ -81,7 +84,7 @@ def _packed_cube() -> tuple:
     return obj, [float(lightmap_uvs.min()), float(lightmap_uvs.max())]
 
 
-def _lightmap_pack() -> dict:
+def _lightmap_unwrap() -> dict:
     _obj, uv_range = _packed_cube()
     return {"lightmap_uv_range": uv_range}
 
@@ -176,13 +179,13 @@ def _mini_bake() -> dict:
 def main() -> None:
     report = {"version": list(bpy.app.version), "version_string": bpy.app.version_string,
               "python": sys.version.split()[0]}
-    _section(report, "op_lightmap_pack", lambda: _op_props(bpy.ops.uv.lightmap_pack))
+    _section(report, "op_smart_project", lambda: _op_props(bpy.ops.uv.smart_project))
     _section(report, "op_bake", lambda: _op_props(bpy.ops.object.bake))
     _section(report, "op_export_gltf", lambda: _op_props(bpy.ops.export_scene.gltf))
     _section(report, "op_import_gltf", lambda: _op_props(bpy.ops.import_scene.gltf))
     _section(report, "op_make_single_user", lambda: _op_props(bpy.ops.object.make_single_user))
     _section(report, "principled_inputs", _principled_inputs)
-    _section(report, "lightmap_pack", _lightmap_pack)
+    _section(report, "lightmap_unwrap", _lightmap_unwrap)
     _section(report, "export_plain", _export_plain)
     _section(report, "export_uv_referenced", _export_uv_referenced)
     _section(report, "mini_bake", _mini_bake)

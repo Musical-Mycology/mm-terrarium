@@ -270,9 +270,10 @@ def test_validate_baked_glb_refuses_a_file_without_mm_bake():
 
 from control.model_layout import PixelLayout
 from tools.model_bake_helpers import (
-    BakeError, bake_output_path, build_mm_bake_extras, check_blender_version,
-    flip_rows, group_leds_by_four, layout_to_blender_m, normalise_maps,
-    quantise_group_rgba8,
+    MIN_LIGHTMAP_TEXELS, BakeError, bake_output_path, build_mm_bake_extras,
+    check_blender_version, flip_rows, group_leds_by_four, layout_to_blender_m,
+    lightmap_island_margin, lightmap_texels, normalise_maps,
+    quantise_group_rgba8, refuse_thin_lightmap, uv_polygon_area,
 )
 
 
@@ -319,6 +320,34 @@ def test_normalise_maps_clamps_negative_texels_to_zero():
 def test_normalise_maps_refuses_an_all_black_bake():
     with pytest.raises(BakeError, match="black"):
         normalise_maps({0: [0.0, 0.0], 1: [0.0, 0.0]})
+
+
+def test_uv_polygon_area_of_a_unit_square_and_a_triangle():
+    assert uv_polygon_area([(0, 0), (1, 0), (1, 1), (0, 1)]) == 1.0
+    assert uv_polygon_area([(0, 0), (0.5, 0), (0, 0.5)]) == 0.125
+
+
+def test_uv_polygon_area_ignores_winding_and_degenerate_polygons():
+    assert uv_polygon_area([(0, 1), (1, 1), (1, 0), (0, 0)]) == 1.0
+    assert uv_polygon_area([(0, 0), (1, 1)]) == 0.0
+
+
+def test_lightmap_texels_scales_summed_area_by_resolution_squared():
+    quarter = [(0, 0), (0.5, 0), (0.5, 0.5), (0, 0.5)]
+    assert lightmap_texels([quarter, quarter], 4) == 8.0
+
+
+def test_lightmap_island_margin_is_two_bake_margins_as_a_fraction():
+    assert lightmap_island_margin(1024, 4) == 8 / 1024
+
+
+def test_refuse_thin_lightmap_names_the_thinnest_mesh():
+    with pytest.raises(BakeError, match=r"'Mesh_39' gets 3 light-map texels at 1024 px \(minimum 16\)"):
+        refuse_thin_lightmap({"Body": 900.0, "Mesh_39": 3.2, "Mesh_7": 10.0}, 1024)
+
+
+def test_refuse_thin_lightmap_passes_at_the_floor():
+    refuse_thin_lightmap({"Body": float(MIN_LIGHTMAP_TEXELS)}, 256)
 
 
 def test_quantise_group_rgba8_packs_leds_into_r_g_b_a_in_group_order():
