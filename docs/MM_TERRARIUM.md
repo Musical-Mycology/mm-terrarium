@@ -2473,9 +2473,15 @@ Kept explicit so the doc does not over-claim.
   section 6): Rev 1 firmware does not yet render Solo or the white Looking
   pulse. Looking after 3 s and Solo at 15 s is decided for beat-capable
   devices (spec 2026-10-08).
-- **Beat adoption**: mm-tuneshroom and mm-devshroom beat adoption is
-  pending (heartbeat spec section 9). Device repos must bump their
-  contract-version guard to 4.
+- **Beat adoption**: mm-tuneshroom (PR #39) and mm-devshroom (issue #11)
+  beat adoption is pending (heartbeat spec section 9). Device repos must
+  bump their contract-version guard to 4.
+- **An unreplied relink is never dropped**: the lost timer arms only on a
+  beat reply (heartbeat spec section 6.1), so a relink that comes up but
+  never hears Control (a half-open socket after a Wi-Fi roam) stays in
+  Looking, then Solo, and never retries on its own. `harness/beat_link.py`
+  and the app behave this way. Spec decision pending: a device already
+  holding an epoch treats an unreplied relink as lost.
 - **Room liveness is undesigned**: Room-bound devices are never reaped
   (liveness spec section 5).
 - **A device's clock-sync to Arco after Control has connected is unreliable**
