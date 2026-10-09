@@ -449,7 +449,9 @@ The end state: `./terrarium.sh --room TEST --seconds 45` runs clean.
    `rbdannenberg/o2` (not in the Musical-Mycology org; arco's cmake finds it
    as a sibling). `mm`'s clone-missing-repos sweep skips arco, luxaeterna
    and mm-devshroom (no `mm-meta.yml`), so clone them by hand.
-3. **Build o2:**
+3. **Patch and build o2.** Apply the stale cs/get fix first (*Host
+   platform*): `git -C ~/projects/o2 apply
+   "$PWD/docs/upstream/o2-csget-bad-id.patch"` from this repo's root.
 
    ```bash
    cd ~/projects/o2 && cmake -S . -B Release -DCMAKE_BUILD_TYPE=Release \
@@ -2294,6 +2296,18 @@ appended, never inserted.
   section 4.5). The later venue target, bare-metal Linux on a Raspberry Pi 5
   with an I2S DAC HAT, is deferred past the show (design doc, *Host
   Platform*).
+- **Every Arco build needs `docs/upstream/o2-csget-bad-id.patch`**, the
+  show Mac included. Unpatched O2 (`src/bridge.cpp:172`, upstream through
+  bb394bf) aborts the host whenever an `/_o2/o2lite/cs/get` carries a bridge
+  id it no longer holds: cs/get is UDP, the bridge dies with its TCP, so
+  any device whose connection drops with a ping still unread kills Arco
+  (SIGABRT in `o2_postpone_delivery`). It surfaced 2026-10-09 at 30
+  Testshrooms, when a device's beat link dropped its own transport while
+  Arco ran seconds behind; one client reproduces it deterministically.
+  Applied on Mycological 2026-10-09; the container applies it at build.
+  Pending with Roger
+  ([report draft](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/upstream/2026-10-09-o2-csget-bad-id-abort.md));
+  a pull or reset in `~/projects/o2` drops it.
 - **No NAT'd hosts for real devices.** O2 discovery and Art-Net to WLED are
   UDP on the LAN; a NAT'd VM or **WSL2 in its default NAT mode** sits on its
   own subnet and gets neither. WSL2 is still the default *dev* host

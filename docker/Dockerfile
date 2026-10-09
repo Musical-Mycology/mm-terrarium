@@ -32,7 +32,17 @@ ARG ARCO_REPO
 ARG ARCO_SHA
 WORKDIR /build
 RUN git init -q o2 && git -C o2 fetch -q --depth 1 "$O2_REPO" "$O2_SHA" \
-    && git -C o2 checkout -q FETCH_HEAD \
+    && git -C o2 checkout -q FETCH_HEAD
+COPY docs/upstream/o2-csget-bad-id.patch /build/upstream/
+# A stale o2lite cs/get aborts the host (docs/upstream/2026-10-09-o2-csget-
+# bad-id-abort.md); pending upstream with Roger Dannenberg, applied here only.
+RUN if git -C o2 apply --check /build/upstream/o2-csget-bad-id.patch; then \
+      git -C o2 apply /build/upstream/o2-csget-bad-id.patch; \
+    elif git -C o2 apply --reverse --check /build/upstream/o2-csget-bad-id.patch; then \
+      echo "o2-csget-bad-id.patch is already in O2_SHA: the fix landed upstream. Delete the patch step here and docs/upstream/o2-csget-bad-id.patch." >&2; exit 1; \
+    else \
+      echo "o2-csget-bad-id.patch no longer applies to O2_SHA: rebase the patch onto the new pin." >&2; exit 1; \
+    fi \
     && cmake -S o2 -B o2/Release -DCMAKE_BUILD_TYPE=Release -DTESTS_BUILD=OFF \
          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     && cmake --build o2/Release -j"$(nproc)"
