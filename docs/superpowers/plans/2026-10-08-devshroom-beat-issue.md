@@ -78,9 +78,9 @@ Details that are easy to get wrong:
 - Four new scenarios, all with `device.beats: true`: `beat_reply_echo`, `beat_link_lost_looking`, `beat_relink_within_grace`, `beat_epoch_change_rehellos`. They use the new `expect_link_state` step (`linked`, `looking`, `solo`).
 - The 18 older scenarios gain `"beats": false`. Their recordings hold no `/$DEV/beat` reply, so a beat-capable device never arms in them, keeps the 5 s hello and never shows Looking. Your runner ignores the device's `/game/beat` outputs there.
 - A device that shows Looking closes its own link. The runner treats that as the link going down until the scenario's next link step brings it up.
-- `docs/device-contract-guide.md` section 2 and rule 10 list what each scenario checks and at which times.
+- `docs/device-contract-guide.md` section 5.2 rule 10 lists what each scenario checks and at which times.
 
-## 3. Bench (real Rev 1 board, with Chris)
+## 3. Bench (real Rev 1 board)
 
 Spec section 10, bench row. Measure detection time on both sides for each:
 - AP power-off.
