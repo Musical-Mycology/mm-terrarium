@@ -1291,7 +1291,7 @@ model with 0.008 texels per face, so every map baked black; spec
 `docs/superpowers/specs/2026-10-09-bake-lightmap-smart-uv-design.md`), a
 refusal before the first LED if any mesh gets under 16 atlas texels, then
 Cycles Diffuse + Transmission per LED, summed, row-flipped, normalised by
-the brightest texel, packed 4 LEDs per RGBA PNG and writes
+the brightest texel, packed 4 LEDs per RGBA PNG. It writes
 `<stem>.baked.glb` beside the source; `tools/model_bake_helpers.inject_bake`
 is the one writer of the baked-file contract (`extras.mm_bake`, spec
 section 4.1) and refuses anything `validate_baked_glb` rejects.
