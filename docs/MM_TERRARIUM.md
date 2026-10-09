@@ -29,8 +29,13 @@ developed with Roger Dannenberg.
   audio and light (a Room fixture's drone and hue driven the same way a
   device's are); the cue machinery (`Bit.fires(at)`, generators and
   device-triggered `LightCue`s reach both the calling device and the Room
-  from one shared computed time); and **MetronomeBit**, the first
-  production game Bit.
+  from one shared computed time); **MetronomeBit**, the first
+  production game Bit; and the **beat heartbeat** (contract kit v4:
+  Control answers `/game/beat`, Testshrooms beat by default; live-checked
+  2026-10-09, mm-tuneshroom and mm-devshroom adoption pending).
+- Known limit: a 30-device simulated run aborts Arco (O2 assertion in
+  `o2_postpone_delivery`), with legacy clients too; under investigation,
+  so the safe per-room device count is not yet known.
 - Missing or deferred: see *Not yet built / deferred* below, most notably
   fairyring, a scoring framework beyond a Bit's own `result()` payload, and
   native iOS/Android/Radxa connectivity.
@@ -973,14 +978,18 @@ accepts the extension); never check browser JS by grepping source.
   fires no `on_devices_change`. A beat-capable client sends
   `/game/beat dev seq [rtt_ms]` (UDP) every 1 s, and `DeviceLinkAgent`
   answers each with `/<dev>/beat seq epoch` (`epoch` minted once per agent
-  with `secrets.token_hex(3)`, so a device sees a Control restart).
+  with `secrets.token_hex(3)`, so a device sees a Control restart). A
+  beat from a dev not in the pool is answered too (bound, not pooled, not
+  tracked), so a device whose link outlived a Control restart sees the new
+  epoch on its next beat instead of going Looking first.
   `devicelink/link_monitor.py` (`LinkMonitor`) tracks live or missing
   (3 s) and loss and RTT for the Console's signal bars, through
   `agent.link_view()`: a rose "Missing" chip, else four bars with the rtt
   as a tooltip. Missing is display only, the 15 s reap is unchanged. A
-  hello from a pooled beat-capable dev is a relink: the agent pops its
-  `_last_frames` entry so the current frame is repainted, and re-sends
-  nothing else (contract rule 9). The device side is
+  hello from a pooled beat-capable dev is a relink: the agent calls
+  `_invalidate_frame(dev)` (both `_last_frames` and a bound fixture's
+  `last_frame`) so the current frame is repainted, and re-sends nothing
+  else (contract rule 9). The device side is
   `harness/beat_link.py`, the reference the firmware and app port. A dev
   heard from in its closing fade is marked revived, so that fade skips
   `transport.drop_dev`.
