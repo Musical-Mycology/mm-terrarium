@@ -395,6 +395,46 @@ def normalise_maps(raw_maps: dict) -> tuple:
     return {led: [t / peak for t in texels] for led, texels in clamped.items()}, peak
 
 
+MIN_LIGHTMAP_TEXELS = 16
+
+
+def uv_polygon_area(points: list) -> float:
+    """Shoelace area of one UV polygon, (u, v) points in order; winding
+    does not matter and fewer than three points is 0."""
+    if len(points) < 3:
+        return 0.0
+    twice = 0.0
+    for (u0, v0), (u1, v1) in zip(points, points[1:] + points[:1]):
+        twice += u0 * v1 - u1 * v0
+    return abs(twice) / 2.0
+
+
+def lightmap_texels(polygons: list, resolution: int) -> float:
+    """A mesh's light-map coverage in texels: its UV polygons' summed
+    area on a resolution x resolution atlas."""
+    return sum(uv_polygon_area(p) for p in polygons) * resolution * resolution
+
+
+def lightmap_island_margin(resolution: int, margin_px: int) -> float:
+    """Smart UV Project's island margin (margin_method FRACTION): two bake
+    margins, so the bake's dilation never bleeds one island into another."""
+    return 2 * margin_px / resolution
+
+
+def refuse_thin_lightmap(coverage: dict, resolution: int,
+                         minimum: int = MIN_LIGHTMAP_TEXELS) -> None:
+    """Refuses before any LED is baked when a mesh's share of the shared
+    atlas is under `minimum` texels (spec 2026-10-09): such a mesh bakes
+    black. `coverage` maps mesh name to texels."""
+    if not coverage:
+        return
+    name, texels = min(coverage.items(), key=lambda item: item[1])
+    if texels < minimum:
+        raise BakeError(
+            f"mesh {name!r} gets {int(texels)} light-map texels at {resolution} px "
+            f"(minimum {minimum}): simplify or drop small parts, or raise --resolution")
+
+
 def _to_byte(value: float) -> int:
     if value <= 0.0:
         return 0
