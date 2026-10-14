@@ -2074,8 +2074,8 @@ network makes auth a prerequisite.
 - **Live view**: the Room card (`surface.js`: dot rows per block, zone bar,
   Release/Arm, an `Art-Net` chip (no Arm) when covered, `Muted`, canvas
   links `http(s)` only), Triggers (`functions.js`), Live values, status,
-  Join, log. `_decodePixels` decodes by `color_order`, W added onto RGB;
-  `design.js`'s bench paints GRB on purpose (a Shroom capability).
+  Join, log. `decodeRgbw` (`pixels.js`) decodes the one RGBW wire, W added
+  onto RGB; `design.js`'s bench paints through the same decoder.
 - **Pickers**: All, each fixture as `@fixture:<name>` (`(unbound)`,
   `(muted)`), then unbound devices; DEVICE pickers never offer a fixture
   ("no device joined" disables Fire). A refill maps a device that just bound

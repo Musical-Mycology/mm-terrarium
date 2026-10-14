@@ -19,6 +19,7 @@
 import * as wire from "./wire.js";
 import { rebuild as rebuildForms } from "./design_forms.js";
 import { mk, clear } from "./dom.js";
+import { decodeRgbw } from "./pixels.js";
 
 let lastDesigns = [];      // last-seen designs_changed/snapshot rows (both kinds)
 let current = null;        // {name, state, kind} of the open design, or null
@@ -179,23 +180,20 @@ export function renderBenchFunctions(el, functions, send) {
   }
 }
 
-// Paints one filled rect per pixel from a flat GRB channel list, matching
-// surface.js's onRoomFrame color handling (channels[i*3]=g, +1=r, +2=b).
+// Paints one filled rect per pixel from a flat RGBW channel list, with the
+// same fold as the Room strips (pixels.js).
 export function paintBenchFrame(canvas, channels) {
   const ctx = canvas.getContext("2d");
   const w = canvas.width || canvas.clientWidth || 0;
   const h = canvas.height || canvas.clientHeight || 0;
   ctx.clearRect(0, 0, w, h);
-  const n = Math.floor(channels.length / 3);
-  if (n === 0) return;
-  const pitch = w / n;
-  for (let i = 0; i < n; i++) {
-    const g = channels[i * 3] || 0;
-    const r = channels[i * 3 + 1] || 0;
-    const b = channels[i * 3 + 2] || 0;
+  const pixels = decodeRgbw(channels);
+  if (pixels.length === 0) return;
+  const pitch = w / pixels.length;
+  pixels.forEach(([r, g, b], i) => {
     ctx.fillStyle = `rgb(${r},${g},${b})`;
     ctx.fillRect(pitch * i, 0, pitch, h);
-  }
+  });
 }
 
 function onBenchStarted(functions) {

@@ -57,12 +57,6 @@ const ROOM = {
     ]).map((r) => [r.source, r.readers.map((x) => `${x.instrument} ${x.dest}`).join(" · ")]),
     [["cc:11", "aurora level"], ["cc:74", "aurora hue · flsyn cc:74"], ["note", "bloom trigger"]]);
 
-  // pure pixel decode: width from color_order, W drawn additively
-  assert.deepStrictEqual(surface._decodePixels([255, 0, 0], "GRB"), [[0, 255, 0]]);
-  assert.deepStrictEqual(surface._decodePixels([10, 20, 30, 5], "RGBW"), [[15, 25, 35]]);
-  assert.deepStrictEqual(surface._decodePixels([10, 0, 0, 250], "RGBW"), [[255, 250, 250]]);
-  assert.deepStrictEqual(surface._decodePixels([1, 2, 3], undefined), [[2, 1, 3]]); // GRB default
-
   surface.init();
   wire.connect({ WebSocketImpl: FakeSocket });
   const sock = FakeSocket.instances.at(-1);
