@@ -32,8 +32,11 @@ nobody can tell "you scored" from "you joined a different round".
 - **The count is the code.** Two flashes is the plain form (success, failure,
   invite). Three red flashes is a distinct code ("refused: not allowed
   now"). New codes take a new count or colour, never an existing one.
-- **Flashes fill the whole strip** at full level, in the strip's own channel
-  order (`SolidCue` semantics, W stays 0). Timing, from `control/lobby.py`:
+- **Flashes fill the whole strip** at full level, on the wire, R, G, B, W
+  (`SolidCue` takes `(r, g, b)` with W = 0, or `(r, g, b, w)`).
+  "White" in this lexicon is the W channel at the stated level: (0, 0, 0, 255)
+  scaled. A device with no white die shows it by folding W into R, G and B
+  (device-contract-guide rule 10). Timing, from `control/lobby.py`:
   0.2 s on and 0.2 s off on a player device (`DEVICE_FLASH_ON_S`,
   `DEVICE_FLASH_GAP_S`), 0.25 s on and 0.25 s off on a Room fixture
   (`FIXTURE_FLASH_ON_S`, `FIXTURE_FLASH_GAP_S`).

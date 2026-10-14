@@ -113,11 +113,11 @@ BLIP_TAP_T = 9000
 # timed_frames_hold_last. The look's glide (taps at ROLE_SETTLED_T) has
 # stopped sending frames by LOOK_SETTLED_T. Then the hand-authored pair:
 # two frames on one send time with different presentation times, in colors
-# no real frame in any recording carries (pure blue and pure red in GRB
+# no real frame in any recording carries (pure blue and pure red, R, G, B, W
 # order), so a device showing the wrong one is unmistakable.
 LOOK_SETTLED_T = 6500
-AUTHORED_NEWER_GRB = [0, 0, 255] * 12
-AUTHORED_OLDER_GRB = [255, 0, 0] * 12
+AUTHORED_NEWER_RGBW = [0, 0, 255, 0] * 12
+AUTHORED_OLDER_RGBW = [255, 0, 0, 0] * 12
 AUTHORED_PAIR_T = 7000
 AUTHORED_NEWER_AT = 7200
 AUTHORED_OLDER_AT = 7100
@@ -340,13 +340,13 @@ def room_node_handshake_binds() -> dict:
 
     There is deliberately no `expect_frame` after the accept. Once bound,
     Control sends the device its FIXTURE's slice (the TEST fixture is 60 px
-    GRB, 180 values), not a 12 px, 36-value player frame, so no 12-pixel
+    RGBW, 240 values), not a 12 px, 48-value player frame, so no 12-pixel
     device could pass a display check there. That the fixture's `/$DEV/leds`
     frames begin arriving at the accept is pinned by the recorded
     `control_sends` themselves (inputs a runner delivers); the only
     expectation a device can fail here is the `/game/handshake` it sends.
     The one `expect_frame` at t=150 is the pre-bind invite flash, a normal
-    36-value frame.
+    48-value frame.
     """
     rec = Recorder(name="room_node_handshake_binds",
                    summary="Accepting with the Room node binds an armed "
@@ -442,9 +442,9 @@ def timed_frames_hold_last() -> dict:
     rec.expect_frame(LOOK_SETTLED_T)         # the look, settled and quiet
     rec.advance_to(AUTHORED_PAIR_T)
     # Hand-authored, newest presentation time FIRST (see the docstring).
-    rec.control_send_now("/$DEV/leds", "b", [AUTHORED_NEWER_GRB],
+    rec.control_send_now("/$DEV/leds", "b", [AUTHORED_NEWER_RGBW],
                          at=AUTHORED_NEWER_AT)
-    rec.control_send_now("/$DEV/leds", "b", [AUTHORED_OLDER_GRB],
+    rec.control_send_now("/$DEV/leds", "b", [AUTHORED_OLDER_RGBW],
                          at=AUTHORED_OLDER_AT)
     rec.advance_to(AUTHORED_CHECK_T)
     rec.expect_frame(AUTHORED_CHECK_T)       # the newer of the two, not the
