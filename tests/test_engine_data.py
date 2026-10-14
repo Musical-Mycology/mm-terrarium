@@ -370,8 +370,7 @@ def _room_bound(bit, cue_horizon=0.06, clock=lambda: 1000.0, bound="sim-room"):
     from control.rooms import Room
     from tests.instrument_fixtures import GENERIC_SURFACE
     profile = RoomProfile(surface_id="room_test", fixtures=(
-        RoomFixture(name="main", color_order="GRB",
-                   blocks=(RoomBlock("main", 0, 10),),
+        RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                    zones=(RoomZone("all", 0, 10),),
                    instrument=GENERIC_SURFACE),))
     gs = GameServer({"vb": lambda: bit}, cue_horizon=cue_horizon, clock=clock)

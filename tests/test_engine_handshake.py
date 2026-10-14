@@ -366,8 +366,7 @@ def test_notify_devices_changed_is_public():
 
 
 ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-                blocks=(RoomBlock("main", 0, 10),),
+    RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                 zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),))
 
 

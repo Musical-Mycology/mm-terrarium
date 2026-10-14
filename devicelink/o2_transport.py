@@ -79,7 +79,7 @@ class Blob:
 def to_o2_arg(type_char: str, value):
     """Convert one JSON-envelope argument into what o2litepy's send expects.
 
-    'b' is the one that matters. Passing a Python list (36 LED ints) or a
+    'b' is the one that matters. Passing a Python list (48 LED ints) or a
     dict (the role config) straight through raises AttributeError inside
     _add_blob, which reads x.size and x.data. A list of ints is raw bytes;
     anything else is UTF-8 JSON, which is what the device decodes on the

@@ -767,7 +767,7 @@ class Recorder:
         nothing.
         """
         self.steps.append(
-            {"t": t_ms, "expect_frame": {"grb": self._frame_showing_at(t_ms)}})
+            {"t": t_ms, "expect_frame": {"rgbw": self._frame_showing_at(t_ms)}})
 
     def expect_frame_held(self, t_ms: int, since_t_ms: int) -> None:
         """A HAND-AUTHORED expect_frame for a moment inside a link-down
@@ -793,7 +793,7 @@ class Recorder:
         reached the device by `since_t_ms`.
         """
         self.steps.append({"t": t_ms, "expect_frame": {
-            "grb": self._frame_showing_at(since_t_ms)}})
+            "rgbw": self._frame_showing_at(since_t_ms)}})
 
     def expect_play(self, t_ms: int, name: str,
                     within_ms: int = DEFAULT_WITHIN_MS) -> None:

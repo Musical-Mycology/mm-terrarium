@@ -12,6 +12,7 @@
 // identity anything here is keyed on.
 import * as wire from "./wire.js";
 import { mk, clear } from "./dom.js";
+import { decodeRgbw } from "./pixels.js";
 
 const FRAME_LIVE_MS = 2000;
 const PIX_PER_BLOCK = 144;
@@ -592,7 +593,7 @@ function render() {
   head.appendChild(h2);
   const headRight = mk("div");
   headRight.appendChild(mk("span", "mono dim",
-    `${room.capability.pixel_count} px · ${room.capability.color_order}`));
+    `${room.capability.pixel_count} px · RGBW`));
   framesChipEl = mk("span", "chip dim", "No frames");
   headRight.appendChild(framesChipEl);
   head.appendChild(headRight);
@@ -715,30 +716,10 @@ function render() {
 
 // -------------------------------------------------------------------- frames
 
-// One fixture frame -> [r, g, b] per pixel. The width comes from the
-// fixture's color_order (3 for GRB/RGB, 4 for RGBW); W is drawn additively
-// onto r, g and b, clipped at 255. Spec 2026-09-23 section 6.2.
-export function _decodePixels(channels, colorOrder) {
-  const order = colorOrder || "GRB";
-  const width = order.length;
-  const n = Math.floor(channels.length / width);
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const v = {};
-    for (let j = 0; j < width; j++) v[order[j]] = channels[i * width + j] || 0;
-    const w = v.W || 0;
-    out.push([Math.min(255, (v.R || 0) + w), Math.min(255, (v.G || 0) + w),
-              Math.min(255, (v.B || 0) + w)]);
-  }
-  return out;
-}
-
 function onRoomFrame(msg) {
   // rule 9: a frame for a fixture this panel has no strip for is a no-op.
   if (!canvasesByName[msg.fixture]) return;
-  const fixture = ((currentRoom && currentRoom.fixtures) || [])
-    .find((f) => f.name === msg.fixture);
-  const pixels = _decodePixels(msg.channels || [], fixture && fixture.color_order);
+  const pixels = decodeRgbw(msg.channels || []);
   lastPaintByName[msg.fixture] = pixels;
   lastFrameAt[msg.fixture] = Date.now();
   repaintFixture(msg.fixture);

@@ -193,12 +193,10 @@ class _Room:
         from tests.instrument_fixtures import GENERIC_SURFACE
         self.name = "TEST"
         self.profile = RoomProfile(surface_id="room_test", fixtures=(
-            RoomFixture(name="main", color_order="GRB",
-                       blocks=(RoomBlock("main", 0, 10),),
+            RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                        zones=(RoomZone("all", 0, 10),),
                        instrument=GENERIC_SURFACE),
-            RoomFixture(name="accent", color_order="GRB",
-                       blocks=(RoomBlock("accent", 0, 10),),
+            RoomFixture(name="accent", blocks=(RoomBlock("accent", 0, 10),),
                        zones=(RoomZone("all", 0, 10),),
                        instrument=GENERIC_SURFACE),
         ))

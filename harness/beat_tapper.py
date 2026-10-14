@@ -32,7 +32,7 @@ from __future__ import annotations
 # aurora frames (tests/test_metronome_bit_live_frames.py renders them): the
 # renderer slews the cc:11 60 -> 110 pulse over ~150 ms, so at the 44 Hz
 # frame rate the STEEPEST single-frame step of a real beat is only +11%
-# (sum 1500 -> 1668 on a 36-channel frame, then 1.08, 1.07, 1.05, 1.03 as
+# (sum 1500 -> 1668 on a 48-channel frame, then 1.08, 1.07, 1.05, 1.03 as
 # it climbs to 2280). Between beats the surface decays, 0.8% to 1.5% per
 # frame. 0.05 sits between the two with room on both sides. The old 0.25
 # was calibrated on the synthetic step frames of tests/test_beat_tapper.py

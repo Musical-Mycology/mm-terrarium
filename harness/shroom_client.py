@@ -3,7 +3,7 @@
 What is a Testshroom: the harness's own instrument type, used in testing.
 Every simulated device this repo spawns (harness/o2_shroom.py, the smoke
 drivers, run_stack's browser canvases) is a Testshroom: a browser-canvas
-instrument with a 12 px GRB surface and the standard gesture verbs. It is
+instrument with a 12 px RGBW surface and the standard gesture verbs. It is
 deliberately NOT defined as "a simulated Tuneshroom": its shape happens to
 match today's Tuneshroom wire, but it is decoupled from what real Tuneshroom
 hardware becomes -- the Testshroom's job is to exercise Control's seams, not
@@ -33,7 +33,7 @@ The wire, from devicelink/protocol.py and devicelink/agent.py:
     down  /<dev>/role    b    [config]       (sent at RUNNING)
     down  /<dev>/deny    ss   [reason, hint] (informational; the device is
                                          jam at start)
-    down  /<dev>/leds    b    [[36 ints]]
+    down  /<dev>/leds    b    [[48 ints]]
     down  /<dev>/play    ss   [name, params]
     down  /<dev>/release ""   []
     down  /<dev>/error   ss   [context, message]
@@ -58,13 +58,9 @@ from harness import markers
 
 logger = logging.getLogger(__name__)
 
-# 12 pixels x GRB, per protocol.leds_event: the Testshroom's own declared
-# surface shape. It matches today's Tuneshroom wire but is not defined AS that
-# wire -- if the hardware changes shape, the Testshroom does not have to
-# follow. (Hardware note: the real parts are SK6812 RGBW and the white die is
-# currently unreachable over this wire; see the plan's Task B7, a pending
-# decision rather than a bug to fix here.)
-LED_CHANNELS = 36
+# 12 pixels x R, G, B, W, per protocol.leds_event (contract v5): the
+# Testshroom's own declared surface shape.
+LED_CHANNELS = 48
 
 # Bound on frames buffered in _pending between ticks. Under normal operation
 # (tick() driven at the render rate -- see _TICK_INTERVAL) this never comes
@@ -105,11 +101,10 @@ class ShroomClient:
         # never propagates -- a broken speaker must not kill the session.
         self.on_play = on_play
         # Frame width this client will accept, in channels. Defaults to the
-        # Testshroom's 12 px x GRB shape, so every existing caller is
+        # Testshroom's 12 px x RGBW shape, so every existing caller is
         # unchanged. harness/o2_shroom.py passes its surface's own width
-        # instead when it runs as a Room fixture (pixel_count times the
-        # color order's length): a fixture is not a Testshroom and need not
-        # have 36 channels. See control/room_profile.py's fixture_slices.
+        # instead when it runs as a Room fixture (pixel_count times 4): a fixture is not a Testshroom and need not
+        # have 48 channels. See control/room_profile.py's fixture_slices.
         self.expected_channels = expected_channels
         self.config: dict | None = None
         # The latest /<dev>/handshake invite's round id, and the role the

@@ -14,8 +14,7 @@ ARR = Instrument(name="arr", capabilities=frozenset({"light.surface",
                                                      "audio.flsyn"}),
                  accepted_cues=("midi", "play", "solid", "mute"))
 PROFILE = RoomProfile(surface_id="r", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-                blocks=(RoomBlock("main", 0, 10),),
+    RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                 zones=(RoomZone("all", 0, 10),), instrument=ARR),))
 
 
@@ -27,11 +26,9 @@ def _gs_with_room():
 
 
 TWO_FIXTURE_PROFILE = RoomProfile(surface_id="r2", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-                blocks=(RoomBlock("main", 0, 10),),
+    RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                 zones=(RoomZone("all", 0, 10),), instrument=ARR),
-    RoomFixture(name="accent", color_order="GRB",
-                blocks=(RoomBlock("accent", 0, 10),),
+    RoomFixture(name="accent", blocks=(RoomBlock("accent", 0, 10),),
                 zones=(RoomZone("all", 0, 10),), instrument=ARR),
 ))
 

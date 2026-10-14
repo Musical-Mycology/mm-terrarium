@@ -781,7 +781,7 @@ def test_list_bits_marks_a_disabled_bit(capsys, tmp_path):
         'bit_paths = ["."]\n\n'
         '[instruments.strip]\ncapabilities = []\n\n'
         '[rooms.T]\ndescription = "d"\nbackends = ["devicelink"]\n'
-        '[[rooms.T.fixtures]]\nname = "main"\ncolor_order = "GRB"\n'
+        '[[rooms.T.fixtures]]\nname = "main"\n'
         'instrument = "strip"\n'
         '[[rooms.T.fixtures.blocks]]\nname = "main"\nstart = 0\ncount = 10\n')
 

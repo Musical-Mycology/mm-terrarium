@@ -13,7 +13,7 @@ def _room_raw(count=4, zones=(("a", 0, 2), ("b", 2, 2))):
     return {
         "backends": ["devicelink"],
         "fixtures": [{
-            "name": "f", "color_order": "GRB", "instrument": "strip",
+            "name": "f", "instrument": "strip",
             "blocks": [{"name": "all", "start": 0, "count": count}],
             "zones": [{"name": n, "start": s, "count": c} for n, s, c in zones],
         }],

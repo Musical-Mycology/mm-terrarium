@@ -287,12 +287,12 @@ def test_tap_encodes_the_documented_wire_row():
     assert msg["args"] == ["ie1", 1.0, 50.0, 2]
 
 
-def test_default_width_is_still_thirty_six():
+def test_default_width_is_still_forty_eight():
     """Every existing caller constructs ShroomClient without this argument
     and must be unaffected."""
     from harness.shroom_client import LED_CHANNELS, ShroomClient
     client = ShroomClient("ie1", "node-a")
-    assert client.expected_channels == LED_CHANNELS == 36
+    assert client.expected_channels == LED_CHANNELS == 48
 
 
 def test_a_wider_client_accepts_its_own_width():
@@ -337,6 +337,7 @@ def test_a_default_client_drops_a_one_eighty_channel_frame():
     client = ShroomClient("ie1", "node-a")
 
     assert client.handle(protocol.leds_event("ie1", list(range(180)))) == ""
+    assert client.handle(protocol.leds_event("ie1", list(range(36)))) == ""
 
 
 def test_canvas_message_shape():

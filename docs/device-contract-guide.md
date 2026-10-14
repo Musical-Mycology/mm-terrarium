@@ -3,7 +3,7 @@
 **Audience:** whoever builds an embedded device that speaks to Control. Today
 that is Victor, who owns the Rev 1 ESP32-P4 firmware in **mm-devshroom**
 (checked out at `/Users/chris/projects/mm-devshroom` on Chris's machines).
-**Covers:** `contract_version` **4**, with **twenty-two** recorded scenarios
+**Covers:** `contract_version` **5**, with **twenty-two** recorded scenarios
 (`len(contract_kit.scenarios.ALL_SCENARIOS)`). Contract v3 replaces
 `/game/join` with the instrument handshake (hello, handshake, received
 handshake, validated, then one role per device at start) and moves every
@@ -11,6 +11,8 @@ control verb to TCP. Contract v4 adds the beat heartbeat (`/game/beat` and
 `/<dev>/beat`), four lifecycle numbers, the `device.beats` scenario field,
 the `expect_link_state` step kind and four beat scenarios; the 18 v3
 scenarios are unchanged except that each now carries `"beats": false`.
+Contract v5 makes every `/leds` frame RGBW (R, G, B, W, 4 per pixel, 48 bytes for
+the 12 px Rev 1) and renames `expect_frame.grb` to `expect_frame.rgbw`.
 **History:** first written 2026-09-22 against `contract_version` 1 (eleven
 scenarios) and the merged Dart runner in mm-tuneshroom
 ([PR #29](https://github.com/Musical-Mycology/mm-tuneshroom/pull/29)); a fix
@@ -19,7 +21,8 @@ wave the same day added a `join` step kind and `link_loss_keeps_display`
 `join` step kind and `device.join_node`; the same day's final fix wave
 made a lost link keep the role and round id (rule 9) and added
 `link_blip_keeps_role`. Updated 2026-10-08 for v4, the bidirectional
-heartbeat (spec `docs/superpowers/specs/2026-10-08-bidirectional-heartbeat-design.md`).
+heartbeat (spec `docs/superpowers/specs/2026-10-08-bidirectional-heartbeat-design.md`),
+and 2026-10-14 for v5, the RGBW pixel wire (spec 2026-10-14 rgbw-device-wire).
 
 **Binding specs:** `docs/superpowers/specs/2026-10-01-instrument-handshake-protocol-design.md`
 (sections 3, 6 and 8: the protocol, the v3 kit, and the firmware checklist)
@@ -77,7 +80,7 @@ commit naming `_provenance.commit`, and never hand-edit it.
 | Check | Why |
 |---|---|
 | `_provenance.tool` equals `export_contract/1` and `_provenance.commit` is 12 hex characters | catches a hand-made or partial folder |
-| `contract_version` equals the number the runner was written for (4 today) | a bump means a device can observe a difference; review the runner against the new `step_schema` before changing the number |
+| `contract_version` equals the number the runner was written for (5 today) | a bump means a device can observe a difference; review the runner against the new `step_schema` before changing the number |
 | the `scenarios` index and the files under `scenarios/` match, both ways | the tool never deletes stale files |
 | each file's `name` equals its stem and its `profiles` equal its index row; no file has `_provenance` | a stale or edited copy |
 | the built-in Rev 1 thresholds equal `instruments.tuneshroom_rev1.triggers` | `tap.max_ms`, `hold.min_ms`, `swing.peak_g`, `swing.window_ms`; the plan names the firmware constants `TouchClassifier::TAP_MAX_S` and `HOLD_MIN_S` in seconds, so divide by 1000 |
@@ -93,7 +96,7 @@ the export folder.
 | Key | What it holds | What a runner does with it |
 |---|---|---|
 | `_provenance` | `commit` (12 hex) and `tool` | guard only |
-| `contract_version` | integer, 4 | refuse to run on any other value |
+| `contract_version` | integer, 5 | refuse to run on any other value |
 | `verbs` | one row per verb: `address`, `direction` (`up` or `down`), `typespecs`, `args`, `transport` (`tcp` or `udp-ok`), `pre_role`, `notes` | the shapes your send path and handlers must match; `pre_role` false means the session must not send it without a role; `transport` is the channel Control sends a down verb on |
 | `link` | `arg_types` (`b`, `f`, `i`, `s`), `max_message_bytes` 4096, `service_is_dev_id` true | what the o2lite link must be able to do; the dev id is the O2 service name |
 | `limits` | `dev_id_max_len` 31, `max_message_bytes` 4096, `reserved_dev_ids` (`terrarium`) | validate your own dev id |
@@ -113,7 +116,7 @@ Inside `step_schema`:
   `malformed`), `gesture` (`kind`, `onset_t`, then `duration_ms` for tap,
   `held_s` for hold, `signed_g` for swing) and `accept` (`node`, optional
   `round_id`). Five are expectations: `expect_out` (`address`, `typespec`,
-  `args`, `stamp_t`, `within_ms`), `expect_frame` (`grb`, 36 ints; see the `/leds` row for Room-bound frames),
+  `args`, `stamp_t`, `within_ms`), `expect_frame` (`rgbw`, 48 ints; see the `/leds` row for Room-bound frames),
   `expect_play` (`name`, `params`, `within_ms`), `expect_quiet`
   (`addresses`, `for_ms`) and `expect_link_state` (`state`: `linked`,
   `looking` or `solo`; only in scenarios whose `device.beats` is true). In
@@ -155,7 +158,7 @@ callbacks inside the session.
 
 **Three outputs:** `takeEffects()`, one ordered list of `Send{envelope,
 stampMs}` and `Play{name, params}` (one list because order is contract: the
-`tick` sample plays immediately before its tap is sent); `frame`, the GRB bytes
+`tick` sample plays immediately before its tap is sent); `frame`, the RGBW bytes
 to show; and `snapshot`, a plain value with equality (phase, role config,
 instrument, held round id, handshake pending, deny reason, link state and so
 on).
@@ -205,11 +208,11 @@ must accept (down) the verb before it holds a role.
 | `/game/handshake` | up | `sss` dev, round_id, node | TCP | yes | Received Handshake: the person accepted. `round_id` echoes the latest `/<dev>/handshake`; `node` `""` asks for the Bit's default scored role, else a Registration Node or Room node id |
 | `/<dev>/validated` | down | `ss` round_id, role | TCP | yes | The accept succeeded and a scored slot is reserved for `role`. Stop prompting. The role itself arrives at start |
 | `/<dev>/deny` | down | `ss` reason, hint | TCP | yes | A refused accept. Reasons: `not connected`, `registration closed`, `scored full`, `no such node`, or a capability miss. `hint` is always filled |
-| `/<dev>/role` | down | `b` the composed role blob | TCP | no | Once per round, at start (or at once for a hello into a running round). `class` and `scored` say scored or jam |
+| `/<dev>/role` | down | `b` the composed role blob | TCP | no | Once per round, at start (or at once for a hello into a running round). `class` and `scored` say scored or jam. A function-script `solid` step's `rgb` list has 3 or 4 values, R, G, B[, W]; three values mean W = 0 |
 | `/<dev>/release` | down | (none) | TCP | no | Ends the role; does not clear the display |
 | `/<dev>/room` | down | `b` blob | TCP | yes | Informational; hardware may ignore it |
 | `/<dev>/error` | down | `ss` context, message | TCP | yes | A refusal that changes no state |
-| `/<dev>/leds` | down | `b` GRB frame: a player device's own pixel count x 3 (36 bytes for the 12 px Rev 1); a Room-bound device's frames are its fixture's channel count (the TEST fixture is 180), which a device that only ever plays need not support | UDP | yes | High rate; loss tolerated. Also carries the lobby's white invite and green ceremony flashes when a Room is loaded; what each status light means is `docs/light-lexicon.md` |
+| `/<dev>/leds` | down | `b` RGBW frame: R, G, B, W per pixel, a player device's own pixel count x 4 (48 bytes for the 12 px Rev 1); a Room-bound device's frames are its fixture's pixel count x 4 (the TEST fixture is 240), which a device that only ever plays need not support | UDP | yes | High rate; loss tolerated. Also carries the lobby's white invite and green ceremony flashes when a Room is loaded; what each status light means is `docs/light-lexicon.md` |
 | `/<dev>/play` | down | `ss` name, params | UDP | no | A device-local sample by name |
 | `/<dev>/beat` | down | `is` seq, epoch | UDP | yes | Control's reply to every `/game/beat`: `seq` echoed, `epoch` 6 hex characters fixed for the life of one Control process, so a changed epoch means Control restarted |
 | `/game/start` | up | `ss` dev, key | TCP | yes | A keyed admin start; Rev 1 does not send it |
@@ -232,9 +235,10 @@ unchanged; Rev 1 sends none of them.
 | 5 | A frame shows at its presentation time; when several are due only the newest shows; the last holds through silence | `timed_frames_hold_last` | pixels at t=3000, 6500, 7500 and 13000 | **newest by presentation time, not by arrival.** The two `/leds` steps at t=7000 are hand-authored: blue with `at` 7200 is sent first, red with `at` 7100 second. Both expect_frames at 7500 and 13000 want blue. Plan Task A3's `FrameQueue::due` picks the most recently pushed due frame and drops the rest, so it shows red and fails here. Select by greatest `at`, ties to the later arrival; drop an older timed arrival than the frame on screen |
 | 6 | `/release` ends the role; frames already queued still show and the last holds | `release_keeps_display` | a dim non-black frame at t=4000 and again at t=9000 after release at t=3621; tap, hold and swing quiet for 5 s; hello continues at t=5000 | release arrives untimed in the same millisecond as the fade's last frame, which is stamped 60 ms later (and on a real link they travel on different channels, TCP and UDP). Do not clear the queue or the pixels on release (spec D5); do keep the heartbeat |
 | 7 | `count` is the taps in one gesture and Rev 1 sends 1; stamps mark onset | `gestures_after_role`, `play_known_and_unknown`, `error_no_state_change`, `timed_frames_hold_last` | `expect_out` with `stamp_t` equal to the gesture's `onset_t`, within 1 ms; tap args `["$DEV", 0.0, <duration_ms>, 1]`, hold `["$DEV", <held_s>, 1]`, swing `["$DEV", <signed_g>, 1]` | `peak_g` is 0.0 for a touch tap. The O2 timestamp on the message is the onset time, so a hold released after 650 ms is stamped at touch-down. The accept double tap is the firmware's own business: it becomes `/game/handshake`, never two `/game/tap`s before a role |
-| 8 | An unknown sample is ignored; a malformed or unknown message is dropped; an `/error` changes nothing | `malformed_dropped`, `play_known_and_unknown`, `error_no_state_change`, `join_retired_error` | the three flagged steps at t=1200 are delivered, then a tap still sends, `tick` still plays and the role's frame still shows at t=3000; after a jammer's refused hold (`/error ["hold", "jammer role uses tap only"]`) a later tap still plays | validate the blob before touching state: a player device drops a `/leds` blob that is not exactly its own pixel count x 3 (36 bytes for Rev 1), never truncating (A2 already does this); a `/role` that does not decode to a JSON object with a `role` string is dropped |
-| 9 | A lost link keeps the role and the round id; a later message supersedes them: a new `/role` replaces the held role, a `/handshake` while a role is held ends that role (its round is over) and is a fresh invite, and `/release` ends the role (rule 6). After 15 s of silence Control has dropped the device, so its next hello is answered as a new device's | `link_blip_keeps_role` (back inside 15 s while RUNNING: hello at t=8000 and 13000, nothing re-sent, a tap at t=9000 still sends and plays `tick`), `link_loss_rejoin` (in SETUP: hello, a fresh `/handshake`, accept, `/validated` again at t=17000 and 17300), `link_loss_keeps_display` (while RUNNING: hello at t=18000 and a fresh jam `/role`) | the `expect_out` hello after each `link: up`; in `link_blip_keeps_role` the tap's `expect_out` and `expect_play`; in `link_loss_rejoin` the second `/game/handshake` | `linkDown` keeps the role, the round id and any validation, and stops the heartbeat. A device that dropped its role on a short blip would hold its gestures back (rule 2) and, since Control believes the role is still held, would never be sent another this round. A rev1 device keeps its last frame lit through the outage (section 8). That is the rule for a device that is not armed. An armed beat-capable device (one that has had a `/<dev>/beat` reply on this link) holds its last frame for up to 3 s (`lifecycle.link_lost_s`) after the last message from Control, then shows Looking, then Solo at 15 s (`lifecycle.grace_s`). A transport drop from below may show Looking at once, but the contract only requires Looking after 3 s of silence. On relink inside the window Control repaints the device's current frame and re-sends nothing else (no `/role`, `/validated` or `/room`) |
+| 8 | An unknown sample is ignored; a malformed or unknown message is dropped; an `/error` changes nothing | `malformed_dropped`, `play_known_and_unknown`, `error_no_state_change`, `join_retired_error` | the three flagged steps at t=1200 are delivered, then a tap still sends, `tick` still plays and the role's frame still shows at t=3000; after a jammer's refused hold (`/error ["hold", "jammer role uses tap only"]`) a later tap still plays | validate the blob before touching state: a player device drops a `/leds` blob that is not exactly its own pixel count x 4 (48 bytes for Rev 1), never truncating (A2 already does this); a `/role` that does not decode to a JSON object with a `role` string is dropped |
+| 9 | A lost link keeps the role and the round id; a later message supersedes them: a new `/role` replaces the held role, a `/handshake` while a role is held ends that role (its round is over) and is a fresh invite, and `/release` ends the role (rule 6). After 15 s of silence Control has dropped the device, so its next hello is answered as a new device's | `link_blip_keeps_role` (back inside 15 s while RUNNING: hello at t=8000 and 13000, nothing re-sent, a tap at t=9000 still sends and plays `tick`), `link_loss_rejoin` (in SETUP: hello, a fresh `/handshake`, accept, `/validated` again at t=17000 and 17300), `link_loss_keeps_display` (while RUNNING: hello at t=18000 and a fresh jam `/role`) | the `expect_out` hello after each `link: up`; in `link_blip_keeps_role` the tap's `expect_out` and `expect_play`; in `link_loss_rejoin` the second `/game/handshake` | `linkDown` keeps the role, the round id and any validation, and stops the heartbeat. A device that dropped its role on a short blip would hold its gestures back (rule 2) and, since Control believes the role is still held, would never be sent another this round. A rev1 device keeps its last frame lit through the outage (section 8). That is the rule for a device that is not armed. An armed beat-capable device (one that has had a `/<dev>/beat` reply on this link) holds its last frame for up to 3 s (`lifecycle.link_lost_s`) after the last message from Control, then shows Looking, then Solo at 15 s (`lifecycle.grace_s`). Draw Looking's white on the W channel. A transport drop from below may show Looking at once, but the contract only requires Looking after 3 s of silence. On relink inside the window Control repaints the device's current frame and re-sends nothing else (no `/role`, `/validated` or `/room`) |
 | 10 | A beat-capable device beats, arms on the first reply, and watches Control: every `/<dev>/beat` seq is echoed with one epoch; 3 s of silence after arming shows Looking, closes the link and stops beating; 15 s after Control's last message shows Solo; after a relink the seq restarts at 0 and the device is linked again at the first reply; a changed epoch makes the device drop its role and hello again | `beat_reply_echo` (hello and beat 0 at t=0, beats at 1000 and 2000, linked at 2000, no hello for 5.5 s), `beat_link_lost_looking` (Control freezes at t=3500: linked at 5000, looking at 7000, solo at 19000, no beat or hello from 7000 for 10 s), `beat_relink_within_grace` (link down at t=3500, looking by t=7000, back at t=8000: hello and beat 0, linked at 8050, the frame repainted at 8100, a tap at 9000 still plays `tick`), `beat_epoch_change_rehellos` (a reply with epoch `f1f1f1` at t=4500 makes the device hello at 4500) | the `expect_out` hello and beat (`rtt_ms` is `*`) and the device's own link state at each `expect_link_state` time | arm only on a reply, never on TCP connect. Any message from Control resets the 3 s timer, not only a beat reply, and Solo is timed from the last such message on every path into Looking. The tick that declares Looking sends no beat. Compare the epoch on every reply, whatever its seq. Keep the role, round id and validation through Looking (rule 9); drop them only on a changed epoch |
+| 11 | Fold W if you have no white die | `handshake_validate_then_role` (white invite flash `0, 0, 0, 255` at t=150), and every other scenario that shows a white frame | `expect_frame` `rgbw`, 48 ints, the wire as Control sent it; the fold is the device's own display step and is not checked by a recording | A device whose LEDs have no white die shows each pixel as r + w, g + w, b + w, each clipped at 255. The physical strip order (GRB, GRBW) is your driver's setting; the wire is always R, G, B, W. |
 
 Two Control behaviors the recordings also show and a session must tolerate: a
 newly granted role opens with a signature of about 1.5 s that ignores light
@@ -335,6 +339,8 @@ fail without it.
     Roger. Land it before or with the beat firmware (spec
     `docs/superpowers/specs/2026-10-08-bidirectional-heartbeat-design.md`,
     section 9).
+16. **RGBW pixel wire (v5).** Decode `/leds` as R, G, B, W, 4 per pixel;
+    fold W on RGB-only LEDs (rule 11); replay export v5.
 
 Until this lands, the current firmware's `/game/join` gets the retirement
 `/error`; it still hellos, so it gets a jam role at start and stays usable on
@@ -392,13 +398,13 @@ mm-tuneshroom), restated for a C or C++ test build and updated for v3.
    | `expect_out` | address and typespec equal; args element-wise with `$DEV`, `$ROUND` (the fixed string from rule 3), `*` and numbers within 1e-3; send time in `[t, t + within_ms]` inclusive; when `stamp_t` is non-null the message's stamp within 1 ms of it. Consume the matched send so two identical expectations need two sends (the two taps at t=3000 in `timed_frames_hold_last`) |
    | `expect_play` | name equal; params equal after turning `key=$KEY` into `key=<integer>`; time in `[t, t + within_ms]`; consumed |
    | `expect_quiet` | no send of a listed address with time in `[t, t + for_ms)`, half-open |
-   | `expect_frame` | all 36 values equal at `t`, or else all 36 equal at `t + 23`. Never applied to a Room-bound scenario: `room_node_handshake_binds` has no `expect_frame` after the bind, because its frames are the fixture's width (180 for the TEST fixture), not 36 |
+   | `expect_frame` | all 48 values equal at `t`, or else all 48 equal at `t + 23`. Never applied to a Room-bound scenario: `room_node_handshake_binds` has no `expect_frame` after the bind, because its frames are the fixture's width (240 for the TEST fixture), not 48 |
    | malformed `control_sends` | state equal, frame equal, no effects |
 
 8. **Loud on drift.** An unknown step kind (including the retired `join`), an
    unknown gesture kind, an unknown `link` value, an unknown profile tag, a
    `device` field other than `handshake` and `beats`, or a `contract_version`
-   other than 4 must fail the test with the file and step index, never skip.
+   other than 5 must fail the test with the file and step index, never skip.
 9. **Profile tags.** `rev1` runs a Rev 1 session; `any` runs every profile
    the device has. The board has one profile, so both tags run it once. Take
    the names from the `scenarios` index.
@@ -425,7 +431,7 @@ Port these; each is an inline scenario or a stub target:
 
 | Must-fail case | How the Dart test builds it |
 |---|---|
-| wrong frame | link up, then `expect_frame` with 36 nines at t=100; the single failure mentions `frame` |
+| wrong frame | link up, then `expect_frame` with 48 nines at t=100; the single failure mentions `frame` |
 | missing send | `expect_out /game/tap` with no gesture before it |
 | quiet-window breach | `expect_quiet` on `/game/tap` for 500 ms, then a tap at t=100 |
 | wrong stamp | a tap at t=100 and an `expect_out` with `stamp_t` 150; the message must name both 150 and the 100 it got |

@@ -9,6 +9,7 @@ Pure stdlib (control/ discipline).
 from __future__ import annotations
 
 from control.cues import TARGET, MuteCue, PlayCue, SolidCue
+from control.pixel_wire import WHITE_W
 from control.functions import Function, FunctionKind, ScriptStep
 
 RESERVED_NAMES: frozenset[str] = frozenset({"flash", "stop", "ping"})
@@ -33,10 +34,10 @@ def builtin_functions(instrument) -> dict[str, Function]:
         steps = []
         if has_samples:
             steps.append(ScriptStep(0.0, PlayCue(TARGET, "chime", "")))
-        steps.append(ScriptStep(0.0, SolidCue(TARGET, (255, 255, 255), 0.9, 5.0)))
+        steps.append(ScriptStep(0.0, SolidCue(TARGET, WHITE_W, 0.9, 5.0)))
         out["flash"] = Function(
             name="flash", kind=FunctionKind.SCRIPTED, script=tuple(steps),
-            description="Light test: solid white for 5 s, then resume")
+            description="Light test: solid white (the W die) for 5 s, then resume")
     if has_light or has_samples or has_flsyn:
         out["stop"] = Function(
             name="stop", kind=FunctionKind.SCRIPTED,

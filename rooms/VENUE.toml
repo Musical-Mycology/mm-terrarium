@@ -3,8 +3,7 @@ backends = ["devicelink", "array"]
 
 [[fixtures]]
 name = "bars"
-# Art-Net wire order. WLED's own LED settings carry the strip's physical GRBW.
-color_order = "RGBW"
+# Wire is RGBW (contract v5); WLED's own LED settings carry the strip's physical GRBW.
 instrument = "venue_array"
   [[fixtures.blocks]]
   name = "m1"
@@ -48,7 +47,6 @@ instrument = "venue_array"
 # engine's block/zone count is N and each start is a multiple of N.
 [[fixtures]]
 name = "fiber"
-color_order = "RGBW"
 instrument = "venue_fiber"
   [[fixtures.blocks]]
   name = "e1"

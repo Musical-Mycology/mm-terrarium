@@ -34,14 +34,13 @@ const FUNCTIONS = [
   buttons[0].onclick();
   assert.deepStrictEqual(fired, [{ command: "bench_fire", name: "flash" }]);
 
-  // -- paintBenchFrame: one filled rect per pixel, GRB -> rgb -------------
+  // -- paintBenchFrame: one filled rect per pixel, RGBW with W folded -----
   const paintCanvas = document.createElement("canvas");
-  design.paintBenchFrame(paintCanvas, [10, 20, 30, 40, 50, 60]);
+  design.paintBenchFrame(paintCanvas, [10, 20, 30, 0, 40, 50, 60, 5]);
   const ctx = paintCanvas.getContext("2d");
   assert.strictEqual(ctx.calls.length, 2);
-  // channels arrive GRB: [g, r, b] per pixel
-  assert.strictEqual(ctx.calls[0].fillStyle, "rgb(20,10,30)");
-  assert.strictEqual(ctx.calls[1].fillStyle, "rgb(50,40,60)");
+  assert.strictEqual(ctx.calls[0].fillStyle, "rgb(10,20,30)");
+  assert.strictEqual(ctx.calls[1].fillStyle, "rgb(45,55,65)");
 
   // -- Simulate sends bench_start for the current selection, disabled with
   // no selection -----------------------------------------------------------
@@ -68,10 +67,10 @@ const FUNCTIONS = [
   assert.deepStrictEqual(sock.sent.at(-1), { command: "bench_fire", name: "riser" });
 
   // -- bench_frame paints the canvas ---------------------------------------
-  send({ event: "bench_frame", channels: [1, 2, 3] });
+  send({ event: "bench_frame", channels: [1, 2, 3, 0] });
   const canvasCtx = byId.get("benchCanvas").getContext("2d");
   assert.strictEqual(canvasCtx.calls.length, 1);
-  assert.strictEqual(canvasCtx.calls[0].fillStyle, "rgb(2,1,3)");
+  assert.strictEqual(canvasCtx.calls[0].fillStyle, "rgb(1,2,3)");
 
   // -- tilt slider sends bench_lane with the scaled value -----------------
   tilt.value = "50";

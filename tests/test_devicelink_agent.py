@@ -1063,8 +1063,7 @@ def _animated_ambient_game_server():
                                     waveform="triangle", period=12.0,
                                     lo=0, hi=127)),))
     profile = RoomProfile(surface_id="room_anim", fixtures=(
-        RoomFixture(name="main", color_order="GRB",
-                   blocks=(RoomBlock("main", 0, 10),),
+        RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                    zones=(RoomZone("all", 0, 10),), instrument=animated),))
     gs = GameServer({"TestBit": TestBit})
     # Named DEMO (not a fresh room type) so gs.load_bit("TestBit") below
@@ -1542,7 +1541,7 @@ def test_mute_of_one_fixture_blacks_only_its_slice(two_fixture_agent):
     agent, audio, main_dev, accent_dev = two_fixture_agent
     # Paint main non-black first so the assertion below cannot be satisfied
     # by an idle Room frame that just happens to already be all zero.
-    agent._on_solid_cue(main_dev, (255, 255, 255), 0.9, 5.0, agent._clock())
+    agent._on_solid_cue(main_dev, (0, 0, 0, 255), 0.9, 5.0, agent._clock())
     agent.poll()
     agent._on_mute_change(accent_dev, True)
     agent.poll()
@@ -1550,7 +1549,7 @@ def test_mute_of_one_fixture_blacks_only_its_slice(two_fixture_agent):
     accent_frame = _last_leds_payload(agent.transport, accent_dev)
     main_frame = _last_leds_payload(agent.transport, main_dev)
     assert set(accent_frame) == {0}
-    assert set(main_frame) == {round(255 * 0.9)}
+    assert set(main_frame[3::4]) == {round(255 * 0.9)}
 
 
 def test_mute_of_one_fixture_silences_only_its_voice(two_fixture_agent):
@@ -1564,12 +1563,12 @@ def test_solid_cue_at_one_fixture_paints_only_its_slice(two_fixture_agent):
     agent.poll()   # settle the initial render
     main_before = _last_leds_payload(agent.transport, main_dev)
 
-    agent._on_solid_cue(accent_dev, (255, 255, 255), 0.9, 5.0, agent._clock())
+    agent._on_solid_cue(accent_dev, (0, 0, 0, 255), 0.9, 5.0, agent._clock())
     agent.poll()
 
     accent_frame = _last_leds_payload(agent.transport, accent_dev)
     main_frame = _last_leds_payload(agent.transport, main_dev)
-    assert set(accent_frame) == {round(255 * 0.9)}
+    assert set(accent_frame[3::4]) == {round(255 * 0.9)}
     assert main_frame == main_before
 
 
@@ -1639,7 +1638,7 @@ def test_bound_fixture_receives_its_own_frame_stamped_when(monkeypatch):
     agent._render_room()
     (dev, msg), = server.sent
     assert dev == "sim-room-main"
-    assert len(msg["args"][0]) == 180
+    assert len(msg["args"][0]) == 240
     assert msg["timestamp"] == 100.5
 
 
@@ -1691,8 +1690,8 @@ def test_room_frame_is_the_bound_fixtures_own_width():
     frames = [m for dev, m in server.sent if m["address"] == "/sim-room-main/leds"]
     assert frames, "the Room emitted no frame for its bound fixture"
     main = next(f for f in TEST_PROFILE.fixtures if f.name == "main")
-    assert len(frames[-1]["args"][0]) == main.pixel_count * 3
-    assert len(frames[-1]["args"][0]) == 180
+    assert len(frames[-1]["args"][0]) == main.pixel_count * 4
+    assert len(frames[-1]["args"][0]) == 240
 
 
 def test_two_bound_fixtures_each_receive_their_own_width():
@@ -1714,8 +1713,8 @@ def test_two_bound_fixtures_each_receive_their_own_width():
     main_frames = [m for d, m in server.sent if m["address"] == "/sim-room-main/leds"]
     accent_frames = [m for d, m in server.sent if m["address"] == "/sim-room-accent/leds"]
     assert main_frames and accent_frames
-    assert len(main_frames[-1]["args"][0]) == 180     # main: 60 px
-    assert len(accent_frames[-1]["args"][0]) == 90    # accent: 30 px
+    assert len(main_frames[-1]["args"][0]) == 240     # main: 60 px
+    assert len(accent_frames[-1]["args"][0]) == 120    # accent: 30 px
 
 
 def test_an_unbound_second_fixture_does_not_block_the_first_from_rendering():
@@ -1874,8 +1873,7 @@ def test_an_explicit_room_profile_overrides_the_resolved_one():
     from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
     from tests.instrument_fixtures import GENERIC_SURFACE
     profile = RoomProfile(surface_id="custom", fixtures=(
-        RoomFixture(name="only", color_order="GRB",
-                   blocks=(RoomBlock("only", 0, 24),),
+        RoomFixture(name="only", blocks=(RoomBlock("only", 0, 24),),
                    zones=(RoomZone("all", 0, 24),),
                    instrument=GENERIC_SURFACE),))
     gs = _room_ready_game_server()
@@ -1966,7 +1964,7 @@ def test_room_frames_reach_the_sink():
     # Keyed by fixture NAME, not by dev: the Console draws a strip per
     # fixture, bound or not.
     assert seen[0][0] == "main"
-    assert len(seen[0][1]) == 180
+    assert len(seen[0][1]) == 240
     assert {name for name, _frame in seen} == {"main", "accent"}
 
 
@@ -2291,17 +2289,17 @@ def _last_leds_payload(server, dev):
 
 def test_solid_override_replaces_outgoing_frame():
     gs, server, agent, dev, clk = _agent_with_joined_device()
-    agent._on_solid_cue(dev, (255, 255, 255), 0.9, 5.0, when=clk())
+    agent._on_solid_cue(dev, (0, 0, 0, 255), 0.9, 5.0, when=clk())
     agent.poll()
     frame = _last_leds_payload(server, dev)
-    assert set(frame) == {round(255 * 0.9)}
+    assert set(frame[3::4]) == {round(255 * 0.9)}
 
 
 def test_solid_override_expires_back_to_session():
     gs, server, agent, dev, clk = _agent_with_joined_device()
-    agent._on_solid_cue(dev, (255, 255, 255), 0.9, 0.5, when=clk())
+    agent._on_solid_cue(dev, (0, 0, 0, 255), 0.9, 0.5, when=clk())
     agent.poll()
-    assert set(_last_leds_payload(server, dev)) == {round(255 * 0.9)}
+    assert set(_last_leds_payload(server, dev)[3::4]) == {round(255 * 0.9)}
     clk.advance(1.0)
     agent.poll()
     assert set(_last_leds_payload(server, dev)) != {round(255 * 0.9)}
@@ -2360,10 +2358,9 @@ def test_room_solid_cue_paints_every_bound_fixture(two_fixture_agent):
     gs._dispatch_cues([SolidCue(ROOM, (255, 0, 0), 1.0, 5.0)], at=1.0)
     agent._render_room()
     frames = {dev: bytes(msg["args"][0]) for dev, msg in agent.transport.sent}
-    # Both TEST fixtures are GRB (rooms/TEST.toml), and a SolidCue names a
-    # colour, not a wire layout -- so red goes out G=0, R=255, B=0.
-    assert frames[main] == bytes([0, 255, 0]) * 60
-    assert frames[accent] == bytes([0, 255, 0]) * 30
+    # Every fixture is RGBW on the wire (contract v5): red is R=255, W=0.
+    assert frames[main] == bytes([255, 0, 0, 0]) * 60
+    assert frames[accent] == bytes([255, 0, 0, 0]) * 30
 
 
 def test_unwire_room_drops_a_muted_fixtures_latched_override(two_fixture_agent):
@@ -2484,7 +2481,7 @@ def test_a_solid_cue_paints_an_unbound_fixture(monkeypatch):
     gs._dispatch_cues([SolidCue(fixture_dev("main"), (255, 0, 0), 1.0, 5.0)],
                       at=100.0)
     agent._render_room()
-    assert frames["main"] == bytes([0, 255, 0]) * 60     # GRB red
+    assert frames["main"] == bytes([255, 0, 0, 0]) * 60     # RGBW red
 
 
 def test_a_bound_devs_mute_is_keyed_by_its_fixture(monkeypatch):
@@ -2507,7 +2504,7 @@ def test_a_mute_latched_while_unbound_still_blacks_the_fixture_after_a_bind(monk
     server.bind_dev("sim-room-main", "c")
     agent._render_room()
     (frame,) = [m["args"][0] for d, m in server.sent if d == "sim-room-main"]
-    assert bytes(frame) == bytes(180)
+    assert bytes(frame) == bytes(240)
 
 
 def test_a_play_cue_for_an_unbound_fixture_is_dropped_and_warned_once(monkeypatch, caplog):
@@ -2936,7 +2933,7 @@ def test_a_non_mute_fire_still_unlatches_and_applies_its_solid(monkeypatch):
                             dev=fixture_dev("main")) is None
 
     assert fixture_dev("main") not in agent._muted
-    assert agent._overrides[fixture_dev("main")][0] == (255, 255, 255)
+    assert agent._overrides[fixture_dev("main")][0] == (0, 0, 0, 255)
 
 
 def test_a_queued_join_flash_cannot_unblack_a_carried_over_mute(monkeypatch):
@@ -2986,7 +2983,7 @@ def test_a_configured_output_starts_with_the_room_and_gets_unbound_frames(monkey
     gs, agent, out, calls = _outputs_rig(monkeypatch)
     assert calls == ["TEST"] and out.started == 1
     agent._render_room()
-    assert len(out.frames) == 1 and len(out.frames[0][0]) == 180
+    assert len(out.frames) == 1 and len(out.frames[0][0]) == 240
 
 
 def test_outputs_follow_the_room_not_the_bit(monkeypatch):
@@ -3285,3 +3282,14 @@ def test_no_handshake_once_setup_ends(agent_with_room):
     gs.request_start(None, "terrarium", "test"); agent.poll()
     _poll_for(agent, fake, 6.0)
     assert len(_handshake_sends(fake)) == 1
+
+
+def test_player_frames_are_48_bytes_rgbw():
+    from devicelink import agent as agent_mod
+    assert agent_mod._DEVICE_CHANNELS == 48
+
+
+def test_solid_frame_has_no_order_and_writes_w():
+    from devicelink.agent import DeviceLinkAgent
+    assert DeviceLinkAgent._solid_frame((0, 255, 0), 1.0, 8) == bytes([0, 255, 0, 0] * 2)
+    assert DeviceLinkAgent._solid_frame((0, 0, 0, 255), 1.0, 8) == bytes([0, 0, 0, 255] * 2)

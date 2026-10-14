@@ -293,8 +293,8 @@ def _parse_script_step(iname, fname, idx, sraw, *, source, key):
         if not isinstance(v, dict):
             raise err(f"solid must be a table, got {type(v).__name__}")
         rgb = v.get("rgb")
-        if (not isinstance(rgb, list) or len(rgb) != 3):
-            raise err(f"solid.rgb must be [r, g, b], got {rgb!r}")
+        if (not isinstance(rgb, list) or len(rgb) not in (3, 4)):
+            raise err(f"solid.rgb must be [r, g, b] or [r, g, b, w], got {rgb!r}")
         return ScriptStep(float(offset), SolidCue(
             TARGET, tuple(rgb), v.get("level", 1.0), v.get("duration")))
     return ScriptStep(float(offset), MuteCue(TARGET))
@@ -635,6 +635,13 @@ def _parse_room(rname: str, rraw: dict, *, source: str,
                 source=source, key=key,
                 message=f"fixture {label} references unknown "
                         f"instrument {iname!r}; known: {sorted(instruments)}")
+        if "color_order" in fraw:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"fixture {label} sets color_order, which is retired "
+                        f"(contract v5: every fixture is RGBW on the wire; set "
+                        f"the strip's physical order in firmware or WLED). "
+                        f"Delete the key.")
         # A published file reaches here unvalidated, so a missing key or a
         # wrong-typed entry must surface as a located config error, never a
         # raw KeyError the Console design paths do not catch.
@@ -644,7 +651,6 @@ def _parse_room(rname: str, rraw: dict, *, source: str,
             zones = tuple(RoomZone(z["name"], z["start"], z["count"])
                           for z in fraw.get("zones", []))
             fixtures.append(RoomFixture(name=fraw["name"],
-                                        color_order=fraw["color_order"],
                                         blocks=blocks, zones=zones,
                                         instrument=instrument))
         except KeyError as exc:
@@ -756,10 +762,6 @@ def validate_artnet_outputs(outputs, rooms: dict, *, source: str) -> None:
             raise TerrariumConfigError(source=source, key=key,
                 message=f"unknown fixture {out.fixture!r} in room {out.room!r}; "
                         f"known: {[f.name for f in spec.profile.fixtures]}")
-        if fixture.color_order != "RGBW":
-            raise TerrariumConfigError(source=source, key=key,
-                message=f"fixture {out.fixture!r} is {fixture.color_order}; an "
-                        f"Art-Net output needs color_order = \"RGBW\" (the wire order)")
         if (out.room, out.fixture) in seen:
             raise TerrariumConfigError(source=source, key=key,
                 message=f"fixture {out.room}.{out.fixture} has more than one "

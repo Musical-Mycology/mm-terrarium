@@ -57,12 +57,6 @@ const ROOM = {
     ]).map((r) => [r.source, r.readers.map((x) => `${x.instrument} ${x.dest}`).join(" · ")]),
     [["cc:11", "aurora level"], ["cc:74", "aurora hue · flsyn cc:74"], ["note", "bloom trigger"]]);
 
-  // pure pixel decode: width from color_order, W drawn additively
-  assert.deepStrictEqual(surface._decodePixels([255, 0, 0], "GRB"), [[0, 255, 0]]);
-  assert.deepStrictEqual(surface._decodePixels([10, 20, 30, 5], "RGBW"), [[15, 25, 35]]);
-  assert.deepStrictEqual(surface._decodePixels([10, 0, 0, 250], "RGBW"), [[255, 250, 250]]);
-  assert.deepStrictEqual(surface._decodePixels([1, 2, 3], undefined), [[2, 1, 3]]); // GRB default
-
   surface.init();
   wire.connect({ WebSocketImpl: FakeSocket });
   const sock = FakeSocket.instances.at(-1);
@@ -266,18 +260,18 @@ const ROOM = {
     assert.ok(surface._laneTable(), "lane table returns once instruments are non-empty again");
   }
 
-  // frames: GRB decode, keyed by fixture NAME; an unknown fixture is a
+  // frames: RGBW decode, keyed by fixture NAME; an unknown fixture is a
   // no-op (rule 9)
   send({ event: "room_frame", fixture: "main",
-         channels: [255, 0, 0].concat(Array(177).fill(0)) });  // G=255 first px
-  assert.deepStrictEqual(surface._lastPaint("main")[0], [0, 255, 0]); // [r,g,b]
+         channels: [255, 0, 0, 0].concat(Array(236).fill(0)) });  // R=255 first px
+  assert.deepStrictEqual(surface._lastPaint("main")[0], [255, 0, 0]); // [r,g,b]
   send({ event: "room_frame", fixture: "ghost", channels: [1, 2, 3] }); // no throw
 
   // an UNBOUND fixture (dev: null) still has a strip canvas and still
   // paints: the Room is loaded with all its instruments whether or not a
   // device is bound, so accent's frames must land too.
   send({ event: "room_frame", fixture: "accent",
-         channels: [0, 0, 255].concat(Array(87).fill(0)) });  // B=255 first px
+         channels: [0, 0, 255, 0].concat(Array(116).fill(0)) });  // B=255 first px
   assert.ok(surface._lastPaint("accent").length > 0);
   assert.deepStrictEqual(surface._lastPaint("accent")[0], [0, 0, 255]);
 

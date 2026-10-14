@@ -19,13 +19,11 @@ from harness.terrarium_boot import _RoomWiring
 from tests.test_terrarium import DEMO_SPEC, TEST_SPEC, make_config, make_terrarium
 
 ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-               blocks=(RoomBlock("main", 0, 60),),
+    RoomFixture(name="main", blocks=(RoomBlock("main", 0, 60),),
                zones=(RoomZone("left", 0, 20),
                      RoomZone("center", 20, 20),
                      RoomZone("right", 40, 20)), instrument=GENERIC_SURFACE),
-    RoomFixture(name="accent", color_order="GRB",
-               blocks=(RoomBlock("accent", 0, 30),),
+    RoomFixture(name="accent", blocks=(RoomBlock("accent", 0, 30),),
                zones=(RoomZone("low", 0, 15),
                      RoomZone("high", 15, 15)), instrument=GENERIC_SURFACE),
 ))
@@ -1474,7 +1472,6 @@ ROOM_TOML = '''description = "Loft"
 backends = ["devicelink"]
 [[fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "dev_strip_main"
   [[fixtures.blocks]]
   name = "main"

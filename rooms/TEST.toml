@@ -3,7 +3,6 @@ backends = ["devicelink"]
 
 [[fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "dev_strip_main"
   [[fixtures.blocks]]
   name = "main"
@@ -24,7 +23,6 @@ instrument = "dev_strip_main"
 
 [[fixtures]]
 name = "accent"
-color_order = "GRB"
 instrument = "dev_strip_accent"
   [[fixtures.blocks]]
   name = "accent"

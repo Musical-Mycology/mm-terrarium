@@ -133,9 +133,12 @@ class SolidCue:
     `duration` is seconds from `when`; None means latched until explicitly
     cleared (the mute blackout). `when=None` follows LightCue's convention:
     apply at the dispatch-supplied presentation time.
+
+    `rgb` is (r, g, b) or (r, g, b, w); three values mean W = 0
+    (control/pixel_wire.py).
     """
     dev: str
-    rgb: tuple[int, int, int]
+    rgb: tuple
     level: float
     duration: float | None
     when: float | None = None

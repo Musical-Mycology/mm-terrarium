@@ -14,6 +14,8 @@ import math
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from control.pixel_wire import WHITE_W
+
 # The Terrarium's own admin identity: always in the effective admin set,
 # never removable by config, and refused as a hello'd dev id.
 TERRARIUM_ADMIN = "terrarium"
@@ -56,7 +58,8 @@ PULSE_PEAK = 0.35
 
 GREEN = (0, 255, 0)
 RED = (255, 0, 0)
-WHITE = (255, 255, 255)
+# The lexicon's white is the W die alone (contract v5).
+WHITE = WHITE_W
 
 FEEDBACK_NONE = "none"
 FEEDBACK_ACCEPT = "accept"

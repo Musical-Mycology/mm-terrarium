@@ -11,13 +11,11 @@ from control.room_view import room_view
 from control.rooms import Room, room_role
 
 TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-               blocks=(RoomBlock("main", 0, 60),),
+    RoomFixture(name="main", blocks=(RoomBlock("main", 0, 60),),
                zones=(RoomZone("left", 0, 20),
                      RoomZone("center", 20, 20),
                      RoomZone("right", 40, 20)), instrument=GENERIC_SURFACE),
-    RoomFixture(name="accent", color_order="GRB",
-               blocks=(RoomBlock("accent", 0, 30),),
+    RoomFixture(name="accent", blocks=(RoomBlock("accent", 0, 30),),
                zones=(RoomZone("low", 0, 15),
                      RoomZone("high", 15, 15)), instrument=GENERIC_SURFACE),
 ))
@@ -71,11 +69,11 @@ def test_fixtures_list_carries_name_dev_and_slice():
     assert fixtures[0]["dev"] == "sim-room-main"
     assert fixtures[0]["pixel_count"] == 60
     assert fixtures[0]["channel_start"] == 0
-    assert fixtures[0]["channel_count"] == 180
+    assert fixtures[0]["channel_count"] == 240
     assert fixtures[1]["dev"] is None    # accent not bound in this fixture's default
     assert fixtures[1]["pixel_count"] == 30
-    assert fixtures[1]["channel_start"] == 180
-    assert fixtures[1]["channel_count"] == 90
+    assert fixtures[1]["channel_start"] == 240
+    assert fixtures[1]["channel_count"] == 120
 
 
 def test_fixtures_zones_are_scoped_to_their_own_fixture():
@@ -123,8 +121,7 @@ def test_fixture_instrument_renders_declared_event_triggers():
         ),
     )
     profile = RoomProfile(surface_id="room_sense", fixtures=(
-        RoomFixture(name="main", color_order="GRB",
-                   blocks=(RoomBlock("main", 0, 10),),
+        RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                    zones=(), instrument=sensing),))
     room = Room(name="SENSE", profile=profile, node_id="ROOM_SENSE_NODE")
     room.bound = {"main": "sim-sense-main"}
@@ -147,8 +144,7 @@ def test_fixture_instrument_renders_declared_generator_functions():
                                     waveform="triangle", period=12.0,
                                     lo=0, hi=127)),))
     profile = RoomProfile(surface_id="room_anim", fixtures=(
-        RoomFixture(name="main", color_order="GRB",
-                   blocks=(RoomBlock("main", 0, 10),),
+        RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                    zones=(), instrument=animated),))
     room = Room(name="ANIM", profile=profile, node_id="ROOM_ANIM_NODE")
     room.bound = {"main": "sim-anim-main"}
@@ -176,8 +172,7 @@ def test_fixture_instrument_renders_declared_scripted_functions():
             kind=FunctionKind.SCRIPTED,
             script=(ScriptStep(0.0, (TARGET, 0xB0, 74, 127)),)),))
     profile = RoomProfile(surface_id="room_scripted", fixtures=(
-        RoomFixture(name="main", color_order="GRB",
-                   blocks=(RoomBlock("main", 0, 10),),
+        RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                    zones=(), instrument=scripted),))
     room = Room(name="SCRIPTED", profile=profile, node_id="ROOM_SCRIPTED_NODE")
     room.bound = {"main": "sim-scripted-main"}
@@ -192,7 +187,7 @@ def test_capability_carries_the_whole_concatenated_surface():
     view = _view()
     assert view["capability"]["surface_id"] == "room_test"
     assert view["capability"]["pixel_count"] == 90
-    assert view["capability"]["color_order"] == "GRB"
+    assert "color_order" not in view["capability"]
     assert [z["name"] for z in view["capability"]["zones"]] == [
         "main.left", "main.center", "main.right", "accent.low", "accent.high"]
 
@@ -306,13 +301,6 @@ def test_the_room_role_name_never_appears_in_the_view():
     view = _view()
     view["capability"].pop("surface_id")
     assert room_role_name("TEST") not in json.dumps(view)
-
-
-def test_fixtures_view_carries_each_fixtures_color_order():
-    from control.room_view import fixtures_view
-    room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
-    assert [f["color_order"] for f in fixtures_view(TEST_PROFILE, room)] == \
-        [f.color_order for f in TEST_PROFILE.fixtures]
 
 
 def test_fixtures_default_to_unmuted():

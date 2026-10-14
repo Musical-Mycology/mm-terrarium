@@ -29,8 +29,7 @@ LIGHT_ONLY = Instrument(
 
 def _light_only_profile(pixel_count=90):
     return RoomProfile(surface_id="room_light_only", fixtures=(
-        RoomFixture(name="main", color_order="GRB",
-                    blocks=(RoomBlock("main", 0, pixel_count),),
+        RoomFixture(name="main", blocks=(RoomBlock("main", 0, pixel_count),),
                     zones=(RoomZone("all", 0, pixel_count),),
                     instrument=LIGHT_ONLY),))
 

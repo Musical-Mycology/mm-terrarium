@@ -33,6 +33,8 @@ developed with Roger Dannenberg.
   production game Bit; and the **beat heartbeat** (contract kit v4:
   Control answers `/game/beat`, Testshrooms beat by default; live-checked
   2026-10-09, mm-tuneshroom and mm-devshroom adoption pending).
+  Pixel frames are RGBW on every sink (contract v5, 2026-10-14);
+  mm-tuneshroom and mm-devshroom adoption pending.
 - Known limit: a 30-device simulated run aborts Arco (O2 assertion in
   `o2_postpone_delivery`), with legacy clients too; under investigation,
   so the safe per-room device count is not yet known.
@@ -81,7 +83,7 @@ is a Python library imported into the Control+GameServer process. Control
 builds one `LightSession` per granted device and one per Room fixture, drives
 them with direct method calls (`feed_midi`, `swap`), and renders them on the
 44 Hz tick. Every output is then a **pixel sink** fed through
-`FixtureSink.send_frame(frame, when)`. A Tuneshroom gets its 36 raw bytes on
+`FixtureSink.send_frame(frame, when)`. A Tuneshroom gets its 48 raw RGBW bytes on
 `/<dev>/leds` and shows them at `when`. It runs no Lux Aeterna and no Python
 renderer. The venue array's WLED ESP32 controllers are the third sink,
 `ArtNetFixtureSink` (`devicelink/artnet_sink.py`), wired in through
@@ -1155,17 +1157,17 @@ pending) and treated as the design. In `console/agent.py`:
 
 - `control/rooms.py`'s `Room` has `bound` (fixture to dev);
   `control/room_profile.py`'s `RoomProfile` is N `RoomFixture`s end to end in
-  physical order, each with `color_order` (RGB or RGBW, one per Room),
-  `blocks`, `zones` and a required `instrument`.
+  physical order, each with `blocks`, `zones` and a required `instrument`.
 - **Blocks are hardware, zones are targets.** A `RoomBlock` (max 170 px) is one
   physical run; blocks tile the fixture and sum to its `pixel_count`, and only
   `harness/o2_shroom.py --identify-blocks` reads them (a colour per block, to
   check a build-out by eye). Zones may not overlap or overrun. `primary` is
   synthesized by the adapter, never declared or drawn.
-- `channel_count` (3 or 4 per pixel) is the one frame width; a simulator drops
-  a wrong-width frame rather than truncating, so a mismatch renders nothing.
+- `color_order` is retired: every fixture is 4 channels (R, G, B, W), and a
+  Room TOML that sets it is refused. `channel_count` (pixels x 4) is the one
+  frame width; a simulator drops a wrong-width frame rather than truncating, so a mismatch renders nothing.
   luxaeterna's `Universe` defaults to 512: pass `channel_count=`.
-- **TEST**: GRB `main` (60 px, `dev_strip_main`) and `accent` (30 px,
+- **TEST**: `main` (60 px, `dev_strip_main`) and `accent` (30 px,
   `dev_strip_accent`: identical instruments, separate identities). **DEMO**:
   one RGBW `array`, 864 px (the real 6 m array), blocks `m1`..`m6` of 144,
   zones `left`/`center`/`right` of 288, `venue_array`. RGBW is Art-Net wire
@@ -1329,7 +1331,7 @@ Panel) refuses an instrument that would break a published room binding it,
 so a publish can never leave the Terrarium unable to boot.
 `rooms/TOWER.toml` is the first fixture this matters
 for: 14 px (`progress` 0-7, `responder` 8-11, `beat` 12-13, the two base PARs),
-`GRB`, instrument `tower` with no model yet, so it runs on the no-layout
+RGBW, instrument `tower` with no model yet, so it runs on the no-layout
 fallback (a 14-dot strip in the Console). The artist's brief and the import
 recipe are `docs/tower-model-brief.md`; `tests/test_tower_import.py` dry-runs
 the import. Spec: `docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md`.
@@ -1447,8 +1449,8 @@ holds a `LightSession` per granted device and per fixture, ships
 
 #### Message vocabulary
 
-- **`devicelink/contract.py`'s `VERB_TABLE`** is the source (contract v4,
-  additive: a v3 client is unaffected):
+- **`devicelink/contract.py`'s `VERB_TABLE`** is the source (contract v5; the v4 beat verbs
+  were additive: a v3 client is unaffected):
   a `VerbRow` per verb (typespecs, arg names, `tcp`/`udp-ok`, `pre_role`).
   Up (`/game/<verb>`): `hello` (`ssss` dev, name, protoversion,
   instrument; bare `s` still accepted), `handshake` (`sss` dev, round_id,
@@ -1478,7 +1480,7 @@ holds a `LightSession` per granted device and per fixture, ships
 |---|---|---|
 | `/<dev>/role` | `b`, UTF-8 JSON of the composed config | `s`, the identical JSON text |
 | `/<dev>/room` | `b`, UTF-8 JSON of the room blob | `s`, the identical JSON text |
-| `/<dev>/leds` | `b`, raw channel bytes; timestamp is the presentation time | `s`, base64 of the identical bytes; same timestamp |
+| `/<dev>/leds` | `b`, raw RGBW channel bytes (48 for a 12 px player device); timestamp is the presentation time | `s`, base64 of the identical bytes; same timestamp |
 
 - Only `O2LiteTransport.send` rewrites, keyed by the protoversion recorded
   at hello (a handshake rebinds without erasing it); a string holding `0x03`
@@ -1506,7 +1508,7 @@ holds a `LightSession` per granted device and per fixture, ships
   (no fade, `/release` or `drop_dev`), else the device gets two LED
   streams. The Bit is not told its player left (*Not yet built / deferred*).
 - **Overrides** (`SolidCue`, lobby flashes, mute blackout) are painted in
-  the strip's channel order (`SolidCue` names R, G, B; W stays 0). A
+  the RGBW wire (`SolidCue` takes `(r, g, b)` with W = 0 or `(r, g, b, w)`; white is `(0, 0, 0, 255)`). A
   hello'd device with no role shows its lobby status pulse (`_bases`, from
   `LobbyRuntime`'s `set_base` sink: white while invited, green once
   validated) with any override on top, black while muted; when both are
@@ -1714,7 +1716,7 @@ firmware guide: `docs/device-contract-guide.md`.
   constants, the Rev 1 instrument, scenario index, notes, `step_schema`)
   and byte-copies the scenarios, refusing a mismatch with `ALL_SCENARIOS`.
   Device repos commit it at `test/contract/`; it alone must suffice.
-- `CONTRACT_VERSION` (3) bumps on any device-observable change. 2 added
+- `CONTRACT_VERSION` (5) bumps on any device-observable change. 2 added
   `link_loss_keeps_display`, whose outage frame is hand-authored
   (`expect_frame_held`): the recorder sees only Control. **3** is the
   handshake: `device.join_node` became `device.handshake` (`null` or
@@ -1729,7 +1731,11 @@ firmware guide: `docs/device-contract-guide.md`.
   and round id across a link loss until a later `/role`, `/handshake` or
   `/release` supersedes them). `ContractBit` declares a bounded scored role and a
   jam role; `SoloContractBit` (no jam role) backs `jam_solo_fallback`. The firmware-side rules and the v3 checklist are in
-  `docs/device-contract-guide.md`.
+  `docs/device-contract-guide.md`. **5** is the RGBW pixel wire: every `/leds`
+  frame is R, G, B, W (48 ints for a player device), `expect_frame.grb`
+  became `expect_frame.rgbw`, and the hand-authored pair is now
+  `AUTHORED_NEWER_RGBW` / `AUTHORED_OLDER_RGBW`; the guide gained rule 11
+  (fold W on RGB-only LEDs).
 - **The change flow is one-way**: change the table (and Control) here,
   re-record, re-export; device replays fail until they match. Device repos
   never edit a verb or a scenario.
@@ -1918,7 +1924,7 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
 
 #### The Testshroom (`o2_shroom`) and WebSim input
 
-- **Two roles**: a player (`ShroomClient`, 36 ch, `--instrument testshroom`)
+- **Two roles**: a player (`ShroomClient`, 48 ch, `--instrument testshroom`)
   or, `--no-join`, the Room simulator (hello only; `--room-type`/`--fixture`),
   titled by its `dev`, printing `BROWSE_URL:` or `ROOM_URL:`.
 - It syncs its clock (parent-watched), then `service_conflict` checks
@@ -2036,7 +2042,7 @@ network makes auth a prerequisite.
   dropped, never queued (boundary rule 2); bench frames too
   (`BENCH_FRAME_INTERVAL`, 0.1 s). Other views rebroadcast only on change.
 - The `room` payload (*Shown by addition*, *Rooms and fixtures*): `fixtures[]`
-  (`dev`, `color_order`, `muted`, `artnet`), `controllers` (flat, first
+  (`dev`, `muted`, `artnet`), `controllers` (flat, first
   fixture wins), `fixture_controllers` (no Console module reads it).
   `surface_instruments` maps `@fixture:` tokens, bound devs (not a covered
   fixture's stale one) and devices; `builtins` add carried instruments.
@@ -2074,8 +2080,8 @@ network makes auth a prerequisite.
 - **Live view**: the Room card (`surface.js`: dot rows per block, zone bar,
   Release/Arm, an `Art-Net` chip (no Arm) when covered, `Muted`, canvas
   links `http(s)` only), Triggers (`functions.js`), Live values, status,
-  Join, log. `_decodePixels` decodes by `color_order`, W added onto RGB;
-  `design.js`'s bench paints GRB on purpose (a Shroom capability).
+  Join, log. `decodeRgbw` (`pixels.js`) decodes the one RGBW wire, W added
+  onto RGB; `design.js`'s bench paints through the same decoder.
 - **Pickers**: All, each fixture as `@fixture:<name>` (`(unbound)`,
   `(muted)`), then unbound devices; DEVICE pickers never offer a fixture
   ("no device joined" disables Fire). A refill maps a device that just bound
@@ -2458,13 +2464,6 @@ Kept explicit so the doc does not over-claim.
   o2litepy; `control/join_info.py`'s `NATIVE_NOTE`). o2ws timing on a real,
   OS-focused phone on the venue LAN is unmeasured, and two of the three
   `www/o2ws.js` patches are not reported upstream.
-- **The Tuneshroom LED wire cannot reach the white die.** The Rev 1 board's
-  12 pixels are RGBW, but `protocol.leds_event` ships 36 ints (12 px GRB)
-  and luxaeterna's `shroom_capability` says `color_order: "GRB"`, so a
-  driver must hardcode `w=0`. Widening to 48 means changing
-  `devicelink/protocol.py`, `shroom_capability`, the WebSim backend,
-  mm-tuneshroom's `lib/link/envelope.dart` and the contract together: **an
-  open decision, not a bug to quietly fix.**
 - **Contract kit:** mm-devshroom's native replay environment, the live bench
   replay spike (section 8 of the device contract kit spec, *The device
   contract and `contract_kit/`*), and an executable Mushica capability-gate

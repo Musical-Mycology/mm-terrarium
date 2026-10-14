@@ -496,3 +496,16 @@ def test_bit_stream_output_may_name_a_fixture():
         stream=StreamSpec(verb="tilt", arg=0, in_lo=-90.0, in_hi=90.0, outputs=(
             StreamOutput(fixture_dev("main"), 0xB0, 74, 0.0, 127.0),)))})
     validate_function_table(table, {"tilt"}, owner="bit")
+
+
+@pytest.mark.parametrize("rgb", [(255, 0, 0, 0, 0), (255, 0)])
+def test_solid_cue_wrong_colour_length_refused(rgb):
+    bad = (ScriptStep(0.0, SolidCue(TARGET, rgb, 1.0, 5.0)),)
+    with pytest.raises(ValueError, match=f"length {len(rgb)}"):
+        validate_function_table(_table(_function(script=bad)), VERBS)
+
+
+@pytest.mark.parametrize("rgb", [(255, 0, 0), (0, 0, 0, 255)])
+def test_solid_cue_three_or_four_colour_values_pass(rgb):
+    good = (ScriptStep(0.0, SolidCue(TARGET, rgb, 1.0, 5.0)),)
+    validate_function_table(_table(_function(script=good)), VERBS)

@@ -18,19 +18,16 @@ from control.terrarium_config import ArtNetOutput, RoomSpec, TerrariumConfig
 from tests.test_engine import RoomCapableBit
 
 TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-               blocks=(RoomBlock("main", 0, 10),),
+    RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),
-    RoomFixture(name="accent", color_order="GRB",
-               blocks=(RoomBlock("accent", 0, 10),),
+    RoomFixture(name="accent", blocks=(RoomBlock("accent", 0, 10),),
                zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),
 ))
 TEST_SPEC = RoomSpec(name="TEST", description="", backends=("devicelink",),
                      node_id="ROOM_TEST_NODE", profile=TEST_PROFILE)
 
 DEMO_PROFILE = RoomProfile(surface_id="room_demo", fixtures=(
-    RoomFixture(name="array", color_order="GRB",
-               blocks=(RoomBlock("array", 0, 10),),
+    RoomFixture(name="array", blocks=(RoomBlock("array", 0, 10),),
                zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),
 ))
 DEMO_SPEC = RoomSpec(name="DEMO", description="",
@@ -565,11 +562,9 @@ def test_wait_without_skip_still_raises_when_nothing_binds():
 
 
 VENUE_PROFILE = RoomProfile(surface_id="room_venue", fixtures=(
-    RoomFixture(name="bars", color_order="RGBW",
-               blocks=(RoomBlock("m1", 0, 10),),
+    RoomFixture(name="bars", blocks=(RoomBlock("m1", 0, 10),),
                zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),
-    RoomFixture(name="fiber", color_order="RGBW",
-               blocks=(RoomBlock("e1", 0, 3),),
+    RoomFixture(name="fiber", blocks=(RoomBlock("e1", 0, 3),),
                zones=(RoomZone("all", 0, 3),), instrument=GENERIC_SURFACE),
 ))
 VENUE_SPEC = RoomSpec(name="VENUE", description="",

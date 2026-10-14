@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import logging
 
+from control.pixel_wire import CHANNELS_PER_PIXEL, rgbw
+
 # Fixed identification palette, assigned to blocks in declaration order
-# (red, orange, yellow, green, blue, violet). RGB triples; laid out per the
-# fixture's color_order when painted. Repeats past six blocks.
+# (red, orange, yellow, green, blue, violet). RGB triples; laid out R, G, B, W
+# (W = 0) when painted. Repeats past six blocks.
 BLOCK_PALETTE: tuple[tuple[int, int, int], ...] = (
     (255, 0, 0), (255, 128, 0), (255, 255, 0),
     (0, 255, 0), (0, 0, 255), (148, 0, 211),
@@ -28,12 +30,10 @@ def identify_blocks_frame(profile, fixture_name: str) -> bytes:
     boundaries this slice (blocks are otherwise declarative -- see
     control/room_profile.py's RoomBlock)."""
     fixture = next(f for f in profile.fixtures if f.name == fixture_name)
-    order = fixture.color_order.upper()
-    width = len(order)
+    width = CHANNELS_PER_PIXEL
     frame = bytearray(fixture.pixel_count * width)
     for i, block in enumerate(fixture.blocks):
-        rgb = dict(zip("RGB", BLOCK_PALETTE[i % len(BLOCK_PALETTE)]), W=0)
-        px = bytes(rgb[ch] for ch in order)
+        px = bytes(rgbw(BLOCK_PALETTE[i % len(BLOCK_PALETTE)]))
         frame[block.start * width:(block.start + block.count) * width] = \
             px * block.count
     return bytes(frame)
@@ -45,8 +45,8 @@ class WebSimLeds:
 
     `channels` is the frame width this surface expects. It is a parameter
     rather than the LED_CHANNELS constant because a Room is not a Testshroom:
-    the Room's width comes from its RoomProfile (60 px x 3 = 180), while a
-    player device is still 12 px x GRB = 36.
+    the Room's width comes from its RoomProfile (60 px x 4 = 240), while a
+    player device is still 12 px x RGBW = 48.
     """
 
     def __init__(self, backend, channels: int, on_show=None,

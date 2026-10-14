@@ -3,7 +3,6 @@ backends = ["devicelink"]
 
 [[fixtures]]
 name = "tower"
-color_order = "GRB"
 instrument = "tower"
   [[fixtures.blocks]]
   name = "lower"

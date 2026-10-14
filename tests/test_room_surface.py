@@ -10,13 +10,11 @@ from tests.instrument_fixtures import GENERIC_SURFACE
 from harness.room_surface import to_capability
 
 TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-               blocks=(RoomBlock("main", 0, 60),),
+    RoomFixture(name="main", blocks=(RoomBlock("main", 0, 60),),
                zones=(RoomZone("left", 0, 20),
                      RoomZone("center", 20, 20),
                      RoomZone("right", 40, 20)), instrument=GENERIC_SURFACE),
-    RoomFixture(name="accent", color_order="GRB",
-               blocks=(RoomBlock("accent", 0, 30),),
+    RoomFixture(name="accent", blocks=(RoomBlock("accent", 0, 30),),
                zones=(RoomZone("low", 0, 15),
                      RoomZone("high", 15, 15)), instrument=GENERIC_SURFACE),
 ))
@@ -30,7 +28,7 @@ def test_scalar_fields_carry_across():
     cap = to_capability(room_profile("TEST"))
     assert cap.surface_id == "room_test"
     assert cap.pixel_count == 90
-    assert cap.color_order == "GRB"
+    assert cap.color_order == "RGBW"
 
 
 def test_declared_zones_carry_across_in_order():
@@ -63,16 +61,14 @@ def test_adapter_does_not_mutate_the_profile():
 
 def test_a_profile_with_no_zones_still_yields_a_usable_primary():
     profile = RoomProfile(surface_id="bare", fixtures=(
-        RoomFixture(name="only", color_order="GRB",
-                   blocks=(RoomBlock("only", 0, 12),), zones=(), instrument=GENERIC_SURFACE),))
+        RoomFixture(name="only", blocks=(RoomBlock("only", 0, 12),), zones=(), instrument=GENERIC_SURFACE),))
     cap = to_capability(profile)
     assert cap.zone("primary").count == 12
 
 
 def test_zone_order_is_preserved_for_an_unsorted_profile():
     profile = RoomProfile(surface_id="odd", fixtures=(
-        RoomFixture(name="only", color_order="GRB",
-                   blocks=(RoomBlock("only", 0, 30),),
+        RoomFixture(name="only", blocks=(RoomBlock("only", 0, 30),),
                    zones=(RoomZone("b", 10, 20), RoomZone("a", 0, 10)), instrument=GENERIC_SURFACE),))
     cap = to_capability(profile)
     # Namespaced now (RoomProfile.zones prefixes every zone with its

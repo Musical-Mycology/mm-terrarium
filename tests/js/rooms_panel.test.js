@@ -156,7 +156,7 @@ function snapshotMsg(rooms, terrarium_state) {
   send(detailSnapshot);
   const activeCard = rooms._cardFor("TEST");
   const html = () => activeCard.innerHTML;
-  assert.ok(/60 px[\s\S]*?GRB/.test(html()), "capability line");
+  assert.ok(/60 px[\s\S]*?RGBW/.test(html()), "capability line");
   assert.ok(/main[\s\S]*?sim-room/.test(html()), "fixture shows its bound dev");
   assert.ok(html().includes("main.left"), "fixture zones listed");
   assert.ok(/Testshroom 1[\s\S]*?Scored/.test(html()), "scored device tagged");

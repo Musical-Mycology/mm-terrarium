@@ -86,13 +86,14 @@ def test_fire_unknown_name_refuses():
 
 
 def test_flash_overrides_frame_white_then_expires():
-    # builtins.py: flash is a solid white (255, 255, 255) SolidCue at
-    # level=0.9 for duration=5.0s.
+    # builtins.py: flash is a solid white, the W die alone (0, 0, 0, 255),
+    # SolidCue at level=0.9 for duration=5.0s.
     bench, session, t = make_bench([])
+    session.frame = [0] * 8                          # two RGBW pixels
     bench.tick()
     assert bench.fire("flash") is None
     frame = bench.tick()
-    assert frame is not None and max(frame) > 200   # 255 * 0.9 ~= 230
+    assert frame == [0, 0, 0, 230] * 2               # 255 * 0.9 ~= 230
     t[0] = 5.1                                       # past the 5 s duration
     late = bench.tick()
     assert late is not None and max(late) < 200

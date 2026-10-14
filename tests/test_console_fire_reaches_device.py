@@ -94,7 +94,9 @@ def test_a_solid_fire_reaches_a_device_with_no_role_yet(name):
     assert rig.gs.state.name == "SETUP"
     err, frames = rig.click(name)
     assert err is None
-    assert _lit(frames) and _lit(frames)[0][:3] == bytes((230, 230, 230))
+    # blink names an RGB white (W = 0); flash is the lexicon's W die alone.
+    want = {"blink": (230, 230, 230, 0), "flash": (0, 0, 0, 230)}[name]
+    assert _lit(frames) and _lit(frames)[0][:4] == bytes(want)
 
 
 @pytest.mark.parametrize("name", ["rainbow_on", "rainbow_off"])
