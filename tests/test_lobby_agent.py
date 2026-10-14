@@ -554,3 +554,31 @@ def test_a_denied_fixture_bound_device_does_not_flash_the_fixture_red(monkeypatc
         agent.poll()
         entry = agent._overrides.get(fixture_dev("main"))
         assert entry is None or entry[0] != RED
+
+
+def test_an_agent_built_after_the_boot_load_bit_still_runs_the_lobby(monkeypatch):
+    # harness/terrarium_boot.py's build() loads the Bit (engine to SETUP)
+    # BEFORE it constructs the agent, so the agent never observes that
+    # transition. It must still stand the lobby up, or no hello'd device
+    # (o2lite Testshroom or o2ws browser) ever sees its invite pulse.
+    from devicelink.o2_transport import FakeO2Lite, O2LiteTransport
+    fake = FakeO2Lite(now=100.0)
+    fake.set_services("actl")
+    transport = O2LiteTransport()
+    transport.start(fake)
+    gs = GameServer({"TestBit": TestBit}, clock=fake.time_get)
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    gs.room.bound["main"] = "sim-main"
+    gs.room.bound["accent"] = "sim-accent"
+    _fake_sessions(monkeypatch)
+    gs.load_bit("TestBit", config=_admin_cfg())
+    assert gs.state is State.SETUP
+    agent = DeviceLinkAgent(gs, transport, room_audio=_FakeAudioBridge(),
+                            clock=fake.time_get)
+    assert agent._lobby is not None
+    fake.deliver("/game/hello", "sss", ("ie9", "flutter-sim", "o2ws/1"))
+    agent.poll()
+    leds = [s for s in fake.sent if s[0] == "/ie9/leds"]
+    # String flavor: the white invite flash, base64 of 36 x 0xFF.
+    assert leds and leds[0][2] == "s"
+    assert leds[0][3] == ("/" * 48,)
