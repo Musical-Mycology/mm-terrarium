@@ -809,7 +809,10 @@ def _room_ready_game_server(bound=None):
     binding = RoomBindingRegistry()
     gs = GameServer({"TestBit": TestBit}, room_binding=binding)
     gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
-    gs.load_bit("TestBit")
+    # Lobby off: the agent is built after this load_bit, so it stands the
+    # lobby up at construction, and these tests are about the Bit's own
+    # ROOM declaration.
+    gs.load_bit("TestBit", config=_no_lobby_config())
     for fixture, dev in bound.items():
         gs.room.bound[fixture] = dev
         binding.bind("TEST", fixture, dev)

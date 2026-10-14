@@ -19,7 +19,7 @@ from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from tests.instrument_fixtures import GENERIC_SURFACE
 from control.rooms import Room
 from devicelink.agent import DeviceLinkAgent
-from tests.test_devicelink_agent import FakeServer
+from tests.test_devicelink_agent import FakeServer, _no_lobby_config
 
 HORIZON = 0.060
 TICK = 1.0 / 44.0
@@ -118,7 +118,7 @@ def _stack(now):
     """
     clock = lambda: now[0]
     binding = RoomBindingRegistry()
-    gs = GameServer({"TestBit": lambda: TestBit(run_duration=1000.0)},
+    gs = GameServer({"TestBit": lambda config=None: TestBit(config, run_duration=1000.0)},
                     room_binding=binding, cue_horizon=HORIZON, clock=clock)
     profile = RoomProfile(surface_id="room_test", fixtures=(
         RoomFixture(name="main", color_order="GRB",
@@ -127,7 +127,9 @@ def _stack(now):
     gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
     gs.room.bound["main"] = "sim-room"
     binding.bind("TEST", "main", "sim-room")
-    gs.load_bit("TestBit")
+    # Lobby off: an agent built in SETUP stands the lobby up, and these
+    # tests time the Bit's own cues, not the lobby's aurora.
+    gs.load_bit("TestBit", config=_no_lobby_config())
 
     server = FakeServer()
     audio = TickRecordingAudioBridge(clock)
