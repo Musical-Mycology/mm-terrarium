@@ -337,6 +337,7 @@ def test_a_default_client_drops_a_one_eighty_channel_frame():
     client = ShroomClient("ie1", "node-a")
 
     assert client.handle(protocol.leds_event("ie1", list(range(180)))) == ""
+    assert client.handle(protocol.leds_event("ie1", list(range(36)))) == ""
 
 
 def test_canvas_message_shape():

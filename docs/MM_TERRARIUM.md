@@ -1449,8 +1449,8 @@ holds a `LightSession` per granted device and per fixture, ships
 
 #### Message vocabulary
 
-- **`devicelink/contract.py`'s `VERB_TABLE`** is the source (contract v4,
-  additive: a v3 client is unaffected):
+- **`devicelink/contract.py`'s `VERB_TABLE`** is the source (contract v5; the v4 beat verbs
+  were additive: a v3 client is unaffected):
   a `VerbRow` per verb (typespecs, arg names, `tcp`/`udp-ok`, `pre_role`).
   Up (`/game/<verb>`): `hello` (`ssss` dev, name, protoversion,
   instrument; bare `s` still accepted), `handshake` (`sss` dev, round_id,

@@ -208,7 +208,7 @@ must accept (down) the verb before it holds a role.
 | `/game/handshake` | up | `sss` dev, round_id, node | TCP | yes | Received Handshake: the person accepted. `round_id` echoes the latest `/<dev>/handshake`; `node` `""` asks for the Bit's default scored role, else a Registration Node or Room node id |
 | `/<dev>/validated` | down | `ss` round_id, role | TCP | yes | The accept succeeded and a scored slot is reserved for `role`. Stop prompting. The role itself arrives at start |
 | `/<dev>/deny` | down | `ss` reason, hint | TCP | yes | A refused accept. Reasons: `not connected`, `registration closed`, `scored full`, `no such node`, or a capability miss. `hint` is always filled |
-| `/<dev>/role` | down | `b` the composed role blob | TCP | no | Once per round, at start (or at once for a hello into a running round). `class` and `scored` say scored or jam |
+| `/<dev>/role` | down | `b` the composed role blob | TCP | no | Once per round, at start (or at once for a hello into a running round). `class` and `scored` say scored or jam. A function-script `solid` step's `rgb` list has 3 or 4 values, R, G, B[, W]; three values mean W = 0 |
 | `/<dev>/release` | down | (none) | TCP | no | Ends the role; does not clear the display |
 | `/<dev>/room` | down | `b` blob | TCP | yes | Informational; hardware may ignore it |
 | `/<dev>/error` | down | `ss` context, message | TCP | yes | A refusal that changes no state |

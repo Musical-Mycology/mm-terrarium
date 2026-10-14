@@ -679,6 +679,10 @@ def _validate_step_cue(step: ScriptStep, where: str, owner: str) -> None:
         return
     if isinstance(cue, SolidCue):
         _check_dev(cue.dev, where, owner)
+        if not isinstance(cue.rgb, (tuple, list)) or len(cue.rgb) not in (3, 4):
+            raise ValueError(
+                f"{where}: rgb has length {len(cue.rgb)!r}, expected 3 (R, G, B) "
+                f"or 4 (R, G, B, W)")
         for i, ch in enumerate(cue.rgb):
             if isinstance(ch, bool) or not isinstance(ch, int) or not 0 <= ch <= 255:
                 raise ValueError(f"{where}: rgb[{i}] {ch!r} is outside 0-255")

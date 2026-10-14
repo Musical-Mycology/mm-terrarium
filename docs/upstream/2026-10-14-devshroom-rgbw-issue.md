@@ -26,5 +26,5 @@ Do this:
    equivalent), with no fold.
 6. Replay contract export v5.
 
-The lexicon's whites (the invite flash, the Looking pulse) now arrive as
-W only, `0,0,0,255`, so without step 2 they show black.
+Control's invite flash now arrives W only, `0,0,0,255`, and rule 9 asks the device
+to draw Looking on W, so without step 2 both show black on the dev board.
