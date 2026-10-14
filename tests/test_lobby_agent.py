@@ -1,5 +1,6 @@
 """DeviceLinkAgent drives the lobby (spec 4, 5) and routes start (spec 3).
 Offline: FakeFixtureSession for light, _FakeAudioBridge for sound."""
+import base64
 import queue
 from dataclasses import replace
 from pathlib import Path
@@ -579,6 +580,7 @@ def test_an_agent_built_after_the_boot_load_bit_still_runs_the_lobby(monkeypatch
     fake.deliver("/game/hello", "sss", ("ie9", "flutter-sim", "o2ws/1"))
     agent.poll()
     leds = [s for s in fake.sent if s[0] == "/ie9/leds"]
-    # String flavor: the white invite flash, base64 of 36 x 0xFF.
+    # String flavor: the white invite flash, base64 of the W die alone,
+    # (0, 0, 0, 255) per pixel over 12 pixels (contract v5).
     assert leds and leds[0][2] == "s"
-    assert leds[0][3] == ("/" * 48,)
+    assert leds[0][3] == (base64.b64encode(bytes([0, 0, 0, 255] * 12)).decode(),)
