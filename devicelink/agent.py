@@ -309,6 +309,8 @@ class DeviceLinkAgent:
         game_server.on_play_cue = self._on_play_cue
         game_server.on_solid_cue = self._on_solid_cue
         game_server.on_mute_change = self._on_mute_change
+        if game_server.state == State.SETUP:
+            self._enter_setup()
 
     def _setup_room(self) -> None:
         """One LightSession per fixture, over that fixture's own strip with
@@ -1531,6 +1533,17 @@ class DeviceLinkAgent:
             self._send(dev, protocol.error_event(dev, verb, reason))
 
     # --- engine-owned sinks -------------------------------------------------
+    def _enter_setup(self) -> None:
+        """SETUP entry: a fresh invite schedule and the lobby. Run from
+        on_state_change, and from __init__ when the engine is already in
+        SETUP: harness/terrarium_boot.py's build() calls load_bit before it
+        constructs this agent, so that round's SETUP transition is never
+        observed, and without this the lobby (every invite and validated
+        pulse) stays down for the whole round."""
+        self._handshakes = InviteSchedule(
+            self.game_server.lobby_config().invite_interval_s)
+        self._enter_lobby()
+
     def on_state_change(self, old_state: State, new_state: State) -> None:
         """FluidSynth is silent without a note (see control/audio.py), so
         the Room's declared drone has to start once the Bit is actually
@@ -1583,9 +1596,7 @@ class DeviceLinkAgent:
         if new_state in (State.LOADED, State.IDLE):
             self._setup_room()
         if new_state == State.SETUP:
-            self._handshakes = InviteSchedule(
-                gs.lobby_config().invite_interval_s)
-            self._enter_lobby()
+            self._enter_setup()
         elif new_state == State.RUNNING:
             self._exit_lobby(restore_light=True)
         elif new_state in (State.UNLOADING, State.IDLE, State.LOADED):
