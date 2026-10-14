@@ -13,7 +13,10 @@ Firmware today (origin/main 0225e78):
 Do this:
 1. Decode `/leds` as R, G, B, W, 4 per pixel. Drop a blob whose size is not
    exactly the device's declared pixel count x 4 (rule 8); never truncate.
-   `testshroom` declares 12 px, so expect 48 bytes and draw the first 6.
+   `testshroom` declares 12 px, so expect exactly 48 bytes. The dev board has
+   6 LEDs (`LED_COUNT = 6`, `include/hardware_config.h`), so draw the first 6
+   pixels and ignore the rest; this is not truncation, the frame is still
+   validated at 48.
 2. The dev board's NeoPixels have no white die: show each pixel as
    `min(255, r + w)`, `min(255, g + w)`, `min(255, b + w)` (rule 11).
 3. Keep `NEO_GRB` as the driver order. The wire order is now independent of
