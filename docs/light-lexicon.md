@@ -36,7 +36,7 @@ nobody can tell "you scored" from "you joined a different round".
   (`SolidCue` takes `(r, g, b)` with W = 0, or `(r, g, b, w)`).
   "White" in this lexicon is the W channel at the stated level: (0, 0, 0, 255)
   scaled. A device with no white die shows it by folding W into R, G and B
-  (device-contract-guide rule 10). Timing, from `control/lobby.py`:
+  (device-contract-guide rule 11). Timing, from `control/lobby.py`:
   0.2 s on and 0.2 s off on a player device (`DEVICE_FLASH_ON_S`,
   `DEVICE_FLASH_GAP_S`), 0.25 s on and 0.25 s off on a Room fixture
   (`FIXTURE_FLASH_ON_S`, `FIXTURE_FLASH_GAP_S`).

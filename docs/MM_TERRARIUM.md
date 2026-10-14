@@ -1734,8 +1734,8 @@ firmware guide: `docs/device-contract-guide.md`.
   `docs/device-contract-guide.md`. **5** is the RGBW pixel wire: every `/leds`
   frame is R, G, B, W (48 ints for a player device), `expect_frame.grb`
   became `expect_frame.rgbw`, and the hand-authored pair is now
-  `AUTHORED_NEWER_RGBW` / `AUTHORED_OLDER_RGBW`; the guide gained rule 10
-  (fold W on RGB-only LEDs) and the old rule 10 became 11.
+  `AUTHORED_NEWER_RGBW` / `AUTHORED_OLDER_RGBW`; the guide gained rule 11
+  (fold W on RGB-only LEDs).
 - **The change flow is one-way**: change the table (and Control) here,
   re-record, re-export; device replays fail until they match. Device repos
   never edit a verb or a scenario.
