@@ -35,6 +35,7 @@ from control.lobby import (DEFAULT_LOBBY, FIXTURE_FLASH_GAP_S,
                            FIXTURE_FLASH_ON_S, GREEN, TERRARIUM_ADMIN,
                            InviteSchedule, LobbyState, StartRequest,
                            lobby_light_manifest)
+from control.pixel_wire import WIRE_ORDER
 from control.prepare import PrepareRequest
 from control.role_config import compose_role_config, slice_light_manifest
 from control.roles import Role, RoleClass
@@ -1091,7 +1092,7 @@ class DeviceLinkAgent:
                 continue
             frame = bytes(st.universe.get_frame()[:fixture.pixel_count * fixture.channels])
             frame = self._apply_override(fixture_dev(fixture.name), frame,
-                                         fixture.color_order)
+                                         WIRE_ORDER)
             if dev != st.last_dev:
                 # A rebind (or a first binding) has to resend even if this
                 # fixture's own bytes have not moved.

@@ -166,8 +166,7 @@ def test_fixture_ambient_returns_that_fixtures_own_manifests():
     ugen = {"instruments": [{"instrument": "flsyn", "program": 1}]}
     inst = Instrument(name="glow", capabilities=frozenset({"light.surface"}),
                       light_manifest=light, ugen_manifest=ugen)
-    fixture = RoomFixture(name="f", color_order="GRB",
-                          blocks=(RoomBlock("b", 0, 10),), zones=(), instrument=inst)
+    fixture = RoomFixture(name="f", blocks=(RoomBlock("b", 0, 10),), zones=(), instrument=inst)
     out_light, out_ugen = fixture_ambient(fixture)
     assert (out_light, out_ugen) == (light, ugen)
     out_light["instruments"][0]["target"] = "ring"
@@ -176,8 +175,7 @@ def test_fixture_ambient_returns_that_fixtures_own_manifests():
 
 def test_fixture_ambient_is_empty_dicts_when_nothing_declared():
     inst = Instrument(name="bare", capabilities=frozenset({"light.surface"}))
-    fixture = RoomFixture(name="f", color_order="GRB",
-                          blocks=(RoomBlock("b", 0, 10),), zones=(), instrument=inst)
+    fixture = RoomFixture(name="f", blocks=(RoomBlock("b", 0, 10),), zones=(), instrument=inst)
     assert fixture_ambient(fixture) == ({}, {})
 
 

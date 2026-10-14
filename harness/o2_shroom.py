@@ -27,6 +27,7 @@ import os
 import queue
 import sys
 
+from control.pixel_wire import CHANNELS_PER_PIXEL
 from devicelink.contract import HELLO_INTERVAL_S
 from harness import markers
 from harness.beat_link import (BeatLink, DropRole, DropTransport, SendBeat,
@@ -467,7 +468,7 @@ def build(dev: str, node: str = "TEST_PLAYER_NODE",
 
         profile = load_terrarium_config("terrarium.toml").rooms[room_type].profile
         capability = to_fixture_capability(profile, fixture)
-        channels = capability.pixel_count * len(capability.color_order)
+        channels = capability.pixel_count * CHANNELS_PER_PIXEL
 
     on_input = (None if input_queue is None
                 else lambda msg: enqueue_input(

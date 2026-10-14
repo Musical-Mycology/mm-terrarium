@@ -40,7 +40,7 @@ def test_venue_fiber_is_a_light_only_instrument():
 
 def test_venue_declares_bars_then_fiber_both_rgbw():
     assert [f.name for f in VENUE.fixtures] == ["bars", "fiber"]
-    assert all(f.color_order == "RGBW" for f in VENUE.fixtures)
+    assert all(f.channels == 4 for f in VENUE.fixtures)
     assert CONFIG.rooms["VENUE"].node_id == "ROOM_VENUE_NODE"
     assert CONFIG.rooms["VENUE"].backends == ("devicelink", "array")
 

@@ -107,7 +107,7 @@ function renderDetail() {
   const cap = currentRoom.capability || {};
   section(mount, "Capability");
   mount.appendChild(mk("p", "mono dim",
-    `${cap.pixel_count} px · ${cap.color_order}` +
+    `${cap.pixel_count} px · RGBW` +
     ((cap.zones || []).length ? ` · ${cap.zones.length} zones` : "")));
 
   section(mount, "Fixtures & bindings");

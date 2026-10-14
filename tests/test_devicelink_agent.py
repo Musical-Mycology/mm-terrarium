@@ -1060,8 +1060,7 @@ def _animated_ambient_game_server():
                                     waveform="triangle", period=12.0,
                                     lo=0, hi=127)),))
     profile = RoomProfile(surface_id="room_anim", fixtures=(
-        RoomFixture(name="main", color_order="GRB",
-                   blocks=(RoomBlock("main", 0, 10),),
+        RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                    zones=(RoomZone("all", 0, 10),), instrument=animated),))
     gs = GameServer({"TestBit": TestBit})
     # Named DEMO (not a fresh room type) so gs.load_bit("TestBit") below
@@ -1871,8 +1870,7 @@ def test_an_explicit_room_profile_overrides_the_resolved_one():
     from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
     from tests.instrument_fixtures import GENERIC_SURFACE
     profile = RoomProfile(surface_id="custom", fixtures=(
-        RoomFixture(name="only", color_order="GRB",
-                   blocks=(RoomBlock("only", 0, 24),),
+        RoomFixture(name="only", blocks=(RoomBlock("only", 0, 24),),
                    zones=(RoomZone("all", 0, 24),),
                    instrument=GENERIC_SURFACE),))
     gs = _room_ready_game_server()

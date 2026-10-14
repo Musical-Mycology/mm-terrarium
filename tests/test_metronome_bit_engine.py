@@ -32,8 +32,7 @@ class _Room:
         self.name = "DEMO"
         self.node_id = "ROOM_DEMO_NODE"
         self.profile = RoomProfile(surface_id="room_demo", fixtures=(
-            RoomFixture(name="main", color_order="GRB",
-                       blocks=(RoomBlock("main", 0, 10),),
+            RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                        zones=(RoomZone("all", 0, 10),),
                        instrument=GENERIC_SURFACE),
         ))

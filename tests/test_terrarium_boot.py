@@ -27,13 +27,11 @@ from harness.terrarium_boot import (_LifecycleLogger, _print_join_denied,
                                     resolve_room_spec, shutdown)
 
 TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-               blocks=(RoomBlock("main", 0, 60),),
+    RoomFixture(name="main", blocks=(RoomBlock("main", 0, 60),),
                zones=(RoomZone("left", 0, 20),
                      RoomZone("center", 20, 20),
                      RoomZone("right", 40, 20)), instrument=GENERIC_SURFACE),
-    RoomFixture(name="accent", color_order="GRB",
-               blocks=(RoomBlock("accent", 0, 30),),
+    RoomFixture(name="accent", blocks=(RoomBlock("accent", 0, 30),),
                zones=(RoomZone("low", 0, 15),
                      RoomZone("high", 15, 15)), instrument=GENERIC_SURFACE),
 ))
@@ -3593,12 +3591,7 @@ def test_build_spawns_no_simulator_for_an_artnet_covered_fixture():
     from control.terrarium_config import ArtNetOutput, TerrariumConfig
     import dataclasses
     from tests.test_terrarium import DEMO_SPEC
-    # [[artnet]] fixtures are RGBW (validate_artnet_outputs); the shared
-    # DEMO_SPEC is GRB, so give the sink a real RGBW fixture.
-    rgbw = dataclasses.replace(DEMO_SPEC.profile.fixtures[0],
-                               color_order="RGBW")
-    demo = dataclasses.replace(DEMO_SPEC, profile=dataclasses.replace(
-        DEMO_SPEC.profile, fixtures=(rgbw,)))
+    demo = DEMO_SPEC
     terrarium_config = TerrariumConfig(
         schema=1, name="t", bit_paths=(), rooms={"DEMO": demo},
         version="v", artnet_outputs=(ArtNetOutput(

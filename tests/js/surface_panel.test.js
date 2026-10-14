@@ -266,18 +266,18 @@ const ROOM = {
     assert.ok(surface._laneTable(), "lane table returns once instruments are non-empty again");
   }
 
-  // frames: GRB decode, keyed by fixture NAME; an unknown fixture is a
+  // frames: RGBW decode, keyed by fixture NAME; an unknown fixture is a
   // no-op (rule 9)
   send({ event: "room_frame", fixture: "main",
-         channels: [255, 0, 0].concat(Array(177).fill(0)) });  // G=255 first px
-  assert.deepStrictEqual(surface._lastPaint("main")[0], [0, 255, 0]); // [r,g,b]
+         channels: [255, 0, 0, 0].concat(Array(236).fill(0)) });  // R=255 first px
+  assert.deepStrictEqual(surface._lastPaint("main")[0], [255, 0, 0]); // [r,g,b]
   send({ event: "room_frame", fixture: "ghost", channels: [1, 2, 3] }); // no throw
 
   // an UNBOUND fixture (dev: null) still has a strip canvas and still
   // paints: the Room is loaded with all its instruments whether or not a
   // device is bound, so accent's frames must land too.
   send({ event: "room_frame", fixture: "accent",
-         channels: [0, 0, 255].concat(Array(87).fill(0)) });  // B=255 first px
+         channels: [0, 0, 255, 0].concat(Array(116).fill(0)) });  // B=255 first px
   assert.ok(surface._lastPaint("accent").length > 0);
   assert.deepStrictEqual(surface._lastPaint("accent")[0], [0, 0, 255]);
 

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from control.instrument import (Instrument, InstrumentError,
                                  validate_instrument,
                                  validate_instrument_manifests)
+from control.pixel_wire import CHANNELS_PER_PIXEL
 
 # One BLOCK is one physical run (a meter of strip, one controller output),
 # capped at 170 px. Universes are no longer a block's concern: an Art-Net
@@ -65,7 +66,6 @@ class RoomFixture:
     decomposed into blocks (see RoomBlock). See design spec section 3 and
     the 2026-08-19 block spec section 2."""
     name: str
-    color_order: str
     blocks: tuple[RoomBlock, ...]
     zones: tuple[RoomZone, ...]
     instrument: Instrument
@@ -78,9 +78,9 @@ class RoomFixture:
 
     @property
     def channels(self) -> int:
-        """Channels per pixel on this fixture's wire: 3 for RGB orders, 4 for
-        RGBW. Spec 2026-09-23 section 6.2."""
-        return len(self.color_order)
+        """Channels per pixel on this fixture's wire: always 4, R, G, B, W
+        (contract v5, control/pixel_wire.py)."""
+        return CHANNELS_PER_PIXEL
 
 
 def fixture_instrument_mismatch(fixture: RoomFixture) -> str | None:
@@ -132,18 +132,6 @@ class RoomProfile:
         if len(names) != len(set(names)):
             raise ValueError(
                 f"profile {self.surface_id!r} has duplicate fixture names: {names}")
-        for fixture in self.fixtures:
-            if sorted(fixture.color_order) not in (sorted("RGB"), sorted("RGBW")):
-                raise ValueError(
-                    f"fixture {fixture.name!r} color_order "
-                    f"{fixture.color_order!r} must be a permutation of RGB "
-                    f"or RGBW")
-        orders = {f.color_order for f in self.fixtures}
-        if len(orders) > 1:
-            raise ValueError(
-                f"profile {self.surface_id!r} mixes color_order {sorted(orders)}; "
-                f"one Room renders through one shared session this slice "
-                f"(non-goal N4)")
         for fixture in self.fixtures:
             if not fixture.blocks:
                 raise ValueError(
@@ -209,14 +197,8 @@ class RoomProfile:
     @property
     def channel_count(self) -> int:
         """Wire width of one rendered frame, whole-profile: each fixture's
-        pixels times its own channels (3 for RGB, 4 for RGBW)."""
+        pixels times 4 (R, G, B, W)."""
         return sum(f.pixel_count * f.channels for f in self.fixtures)
-
-    @property
-    def color_order(self) -> str:
-        """The shared color order every fixture in this profile declares
-        (validated equal in __post_init__)."""
-        return self.fixtures[0].color_order
 
     @property
     def zones(self) -> tuple[RoomZone, ...]:

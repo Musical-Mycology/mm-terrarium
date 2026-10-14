@@ -66,8 +66,7 @@ _AMBIENT_ARRAY = Instrument(
                                 lo=0, hi=127)),),
 )
 _AMBIENT_DEMO_PROFILE = RoomProfile(surface_id="room_demo_ambient", fixtures=(
-    RoomFixture(name="array", color_order="GRB",
-               blocks=DEMO_PROFILE.fixtures[0].blocks,
+    RoomFixture(name="array", blocks=DEMO_PROFILE.fixtures[0].blocks,
                zones=DEMO_PROFILE.fixtures[0].zones,
                instrument=_AMBIENT_ARRAY),
 ))

@@ -12,6 +12,7 @@ section 4.
 
 from __future__ import annotations
 
+from control.pixel_wire import WIRE_ORDER
 from control.room_profile import RoomProfile
 from luxaeterna.synth.capability import SurfaceCapability, Zone
 
@@ -31,7 +32,7 @@ def to_capability(profile: RoomProfile) -> SurfaceCapability:
     return SurfaceCapability(
         surface_id=profile.surface_id,
         pixel_count=profile.pixel_count,
-        color_order=profile.color_order,
+        color_order=WIRE_ORDER,
         zones=zones,
     )
 
@@ -49,6 +50,6 @@ def to_fixture_capability(profile: RoomProfile, fixture_name: str):
     return SurfaceCapability(
         surface_id=f"{profile.surface_id}_{fixture_name}",
         pixel_count=fixture.pixel_count,
-        color_order=fixture.color_order,
+        color_order=WIRE_ORDER,
         zones=zones,
     )

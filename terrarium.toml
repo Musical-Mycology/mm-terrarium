@@ -16,7 +16,7 @@ room_paths = ["rooms"]
 
 # [[artnet]]
 # A Room fixture's physical output to a WLED ESP32 controller (Art-Net).
-# The fixture must be color_order = "RGBW". max_amps is required: outputs
+# max_amps is required: outputs
 # sharing one PSU must SUM to <= 80% of its rating. For a no-hardware run,
 # point host at 127.0.0.1 and run `python -m harness.artnet_listen`.
 # room = "DEMO"

@@ -121,8 +121,7 @@ def _stack(now):
     gs = GameServer({"TestBit": lambda: TestBit(run_duration=1000.0)},
                     room_binding=binding, cue_horizon=HORIZON, clock=clock)
     profile = RoomProfile(surface_id="room_test", fixtures=(
-        RoomFixture(name="main", color_order="GRB",
-                   blocks=(RoomBlock("main", 0, 10),),
+        RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                    zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),))
     gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
     gs.room.bound["main"] = "sim-room"

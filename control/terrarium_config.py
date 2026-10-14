@@ -635,6 +635,13 @@ def _parse_room(rname: str, rraw: dict, *, source: str,
                 source=source, key=key,
                 message=f"fixture {label} references unknown "
                         f"instrument {iname!r}; known: {sorted(instruments)}")
+        if "color_order" in fraw:
+            raise TerrariumConfigError(
+                source=source, key=key,
+                message=f"fixture {label} sets color_order, which is retired "
+                        f"(contract v5: every fixture is RGBW on the wire; set "
+                        f"the strip's physical order in firmware or WLED). "
+                        f"Delete the key.")
         # A published file reaches here unvalidated, so a missing key or a
         # wrong-typed entry must surface as a located config error, never a
         # raw KeyError the Console design paths do not catch.
@@ -644,7 +651,6 @@ def _parse_room(rname: str, rraw: dict, *, source: str,
             zones = tuple(RoomZone(z["name"], z["start"], z["count"])
                           for z in fraw.get("zones", []))
             fixtures.append(RoomFixture(name=fraw["name"],
-                                        color_order=fraw["color_order"],
                                         blocks=blocks, zones=zones,
                                         instrument=instrument))
         except KeyError as exc:
@@ -756,10 +762,6 @@ def validate_artnet_outputs(outputs, rooms: dict, *, source: str) -> None:
             raise TerrariumConfigError(source=source, key=key,
                 message=f"unknown fixture {out.fixture!r} in room {out.room!r}; "
                         f"known: {[f.name for f in spec.profile.fixtures]}")
-        if fixture.color_order != "RGBW":
-            raise TerrariumConfigError(source=source, key=key,
-                message=f"fixture {out.fixture!r} is {fixture.color_order}; an "
-                        f"Art-Net output needs color_order = \"RGBW\" (the wire order)")
         if (out.room, out.fixture) in seen:
             raise TerrariumConfigError(source=source, key=key,
                 message=f"fixture {out.room}.{out.fixture} has more than one "

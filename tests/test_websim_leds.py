@@ -63,10 +63,10 @@ def test_identify_blocks_frame_paints_demo_blocks_distinctly():
 def test_identify_blocks_frame_works_for_a_single_block_fixture():
     profile = room_profile("TEST")
     frame = identify_blocks_frame(profile, "accent")
-    assert len(frame) == 30 * 3
+    assert len(frame) == 30 * 4
     r, g, b = BLOCK_PALETTE[0]
-    assert frame[:3] == bytes((g, r, b))
-    assert frame == frame[:3] * 30
+    assert frame[:4] == bytes((r, g, b, 0))
+    assert frame == frame[:4] * 30
 
 
 def test_o2_shroom_exposes_identify_blocks():

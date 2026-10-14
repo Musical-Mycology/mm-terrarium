@@ -12,11 +12,10 @@ def _fixture():
     return profile.fixtures[0]
 
 
-def test_tower_is_one_14_pixel_grb_fixture():
+def test_tower_is_one_14_pixel_rgbw_fixture():
     fx = _fixture()
     assert fx.pixel_count == 14
-    assert fx.color_order == "GRB"
-    assert fx.channels == 3
+    assert fx.channels == 4
 
 
 def test_tower_blocks_follow_the_physical_runs():

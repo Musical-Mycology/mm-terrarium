@@ -515,12 +515,10 @@ from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 _INST = Instrument(name="strip", capabilities=frozenset({"light.surface"}),
                    accepted_cues=("midi", "play", "solid", "mute"))
 _PROFILE = RoomProfile(surface_id="r", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-                blocks=(RoomBlock("b", 0, 60),),
+    RoomFixture(name="main", blocks=(RoomBlock("b", 0, 60),),
                 zones=(RoomZone("left", 0, 30), RoomZone("right", 30, 30)),
                 instrument=_INST),
-    RoomFixture(name="accent", color_order="GRB",
-                blocks=(RoomBlock("b", 0, 30),),
+    RoomFixture(name="accent", blocks=(RoomBlock("b", 0, 30),),
                 zones=(RoomZone("low", 0, 15), RoomZone("high", 15, 15)),
                 instrument=_INST),
 ))

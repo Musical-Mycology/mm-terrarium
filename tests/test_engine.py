@@ -17,8 +17,7 @@ from control.state import State
 from tests.helpers_admit import admit, admit_running
 
 ROOM_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
-    RoomFixture(name="main", color_order="GRB",
-               blocks=(RoomBlock("main", 0, 10),),
+    RoomFixture(name="main", blocks=(RoomBlock("main", 0, 10),),
                zones=(RoomZone("all", 0, 10),), instrument=GENERIC_SURFACE),))
 
 

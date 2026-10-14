@@ -31,11 +31,10 @@ def room_profile(name: str) -> RoomProfile:
     return load_terrarium_config("terrarium.toml").rooms[name].profile
 
 
-def _fixture(name="main", blocks=None, zones=(), color_order="GRB",
-            instrument=GENERIC_SURFACE):
+def _fixture(name="main", blocks=None, zones=(), instrument=GENERIC_SURFACE):
     if blocks is None:
         blocks = (RoomBlock("b1", 0, 60),)
-    return RoomFixture(name=name, color_order=color_order,
+    return RoomFixture(name=name,
                        blocks=blocks, zones=zones, instrument=instrument)
 
 
@@ -103,12 +102,8 @@ def test_pixel_count_sums_every_fixture():
     assert room_profile("TEST").pixel_count == 90
 
 
-def test_channel_count_is_three_per_pixel_of_the_whole_profile():
-    assert room_profile("TEST").channel_count == 270
-
-
-def test_color_order_is_the_shared_order():
-    assert room_profile("TEST").color_order == "GRB"
+def test_channel_count_is_four_per_pixel_of_the_whole_profile():
+    assert room_profile("TEST").channel_count == 360
 
 
 def test_zones_are_namespaced_by_fixture():
@@ -140,7 +135,7 @@ def test_test_rooms_declared_zones_happen_to_tile_gaplessly():
 
 def test_fixture_slices_are_channel_offsets_in_declaration_order():
     slices = room_profile("TEST").fixture_slices()
-    assert slices == (("main", 0, 180), ("accent", 180, 90))
+    assert slices == (("main", 0, 240), ("accent", 240, 120))
 
 
 def test_primary_is_not_declared_here():
@@ -159,7 +154,7 @@ def test_demo_profile_matches_the_real_array_scale():
     assert array.name == "array"          # matches tests/test_room_binding.py
     assert array.pixel_count == 864
     assert profile.channel_count == 3456
-    assert array.color_order == "RGBW"
+    assert array.channels == 4
     assert [b.name for b in array.blocks] == ["m1", "m2", "m3", "m4", "m5", "m6"]
     assert all(b.count == 144 for b in array.blocks)
     assert [z.name for z in array.zones] == ["left", "center", "right"]
@@ -202,13 +197,6 @@ def test_duplicate_fixture_names_are_rejected():
         RoomProfile(surface_id="dup", fixtures=(
             _fixture(name="a", blocks=(RoomBlock("a", 0, 10),)),
             _fixture(name="a", blocks=(RoomBlock("a", 0, 10),))))
-
-
-def test_mixed_color_order_across_fixtures_is_rejected():
-    with pytest.raises(ValueError, match="color_order"):
-        RoomProfile(surface_id="mixed", fixtures=(
-            _fixture(name="a", color_order="GRB", blocks=(RoomBlock("a", 0, 10),)),
-            _fixture(name="b", color_order="RGB", blocks=(RoomBlock("b", 0, 10),))))
 
 
 def test_zones_overrunning_their_fixture_are_rejected():
@@ -364,14 +352,14 @@ def test_uplink_never_imports_harness():
 
 def test_rgbw_fixture_has_four_channels_and_sizes_the_profile():
     profile = RoomProfile(surface_id="r", fixtures=(
-        _fixture(name="a", color_order="RGBW", blocks=(RoomBlock("a", 0, 10),)),))
+        _fixture(name="a", blocks=(RoomBlock("a", 0, 10),)),))
     assert profile.fixtures[0].channels == 4
     assert profile.channel_count == 40
     assert profile.fixture_slices() == (("a", 0, 40),)
 
 
-@pytest.mark.parametrize("order", ["RG", "RGBB", "RGBX", "RGBWW", "rgb"])
-def test_a_color_order_that_is_not_a_permutation_of_rgb_or_rgbw_is_refused(order):
-    with pytest.raises(ValueError, match="color_order"):
-        RoomProfile(surface_id="r", fixtures=(
-            _fixture(name="a", color_order=order, blocks=(RoomBlock("a", 0, 10),)),))
+def test_channel_count_is_pixels_times_four():
+    profile = RoomProfile(surface_id="room_x", fixtures=(
+        _fixture(name="a", blocks=(RoomBlock("a", 0, 10),)),
+        _fixture(name="b", blocks=(RoomBlock("b", 0, 5),))))
+    assert profile.channel_count == 15 * 4

@@ -25,7 +25,6 @@ accepted_cues = ["midi", "play", "solid", "mute"]
 backends = ["devicelink"]
 [[rooms.ONE.fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "dev_strip"
 [[rooms.ONE.fixtures.blocks]]
 name = "b1"
@@ -110,12 +109,12 @@ def test_shipped_config_matches_code_profiles_golden():
     assert test_room.profile.surface_id == "room_test"
     assert [f.name for f in test_room.profile.fixtures] == ["main", "accent"]
     main, accent = test_room.profile.fixtures
-    assert main.color_order == "GRB"
+    assert main.channels == 4
     assert [(b.name, b.start, b.count) for b in main.blocks] == \
         [("main", 0, 60)]
     assert [(z.name, z.start, z.count) for z in main.zones] == \
         [("left", 0, 20), ("center", 20, 20), ("right", 40, 20)]
-    assert accent.color_order == "GRB"
+    assert accent.channels == 4
     assert [(b.name, b.start, b.count) for b in accent.blocks] == \
         [("accent", 0, 30)]
     assert [(z.name, z.start, z.count) for z in accent.zones] == \
@@ -128,7 +127,7 @@ def test_shipped_config_matches_code_profiles_golden():
     assert demo_room.profile.surface_id == "room_demo"
     assert [f.name for f in demo_room.profile.fixtures] == ["array"]
     array = demo_room.profile.fixtures[0]
-    assert array.color_order == "RGBW"
+    assert array.channels == 4
     assert [(b.name, b.start, b.count) for b in array.blocks] == [
         ("m1", 0, 144), ("m2", 144, 144), ("m3", 288, 144),
         ("m4", 432, 144), ("m5", 576, 144), ("m6", 720, 144),
@@ -175,7 +174,6 @@ accepted_cues = ["midi", "play", "solid", "mute"]
 backends = ["devicelink"]
 [[rooms.DEMO.fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "venue_array"
 [[rooms.DEMO.fixtures.blocks]]
 name = "b1"
@@ -195,7 +193,6 @@ name = "t"
 backends = ["devicelink"]
 [[rooms.ONE.fixtures]]
 name = "main"
-color_order = "GRB"
 [[rooms.ONE.fixtures.blocks]]
 name = "b1"
 start = 0
@@ -214,7 +211,6 @@ name = "t"
 backends = ["devicelink"]
 [[rooms.ONE.fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "no_such"
 [[rooms.ONE.fixtures.blocks]]
 name = "b1"
@@ -239,7 +235,6 @@ accepted_cues = ["midi"]
 backends = ["devicelink"]
 [[rooms.ONE.fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "bad_one"
 [[rooms.ONE.fixtures.blocks]]
 name = "b1"
@@ -315,7 +310,6 @@ accepted_cues = ["midi", "play", "solid", "mute"]
 backends = ["devicelink"]
 [[rooms.DEMO.fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "venue_array"
 [[rooms.DEMO.fixtures.blocks]]
 name = "b1"
@@ -371,7 +365,6 @@ functions = ["tap"]
 backends = ["devicelink"]
 [[rooms.ONE.fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "dev_strip"
 [[rooms.ONE.fixtures.blocks]]
 name = "b1"
@@ -411,7 +404,6 @@ script = [
 backends = ["devicelink"]
 [[rooms.R.fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "arr"
 [[rooms.R.fixtures.blocks]]
 name = "main"
@@ -449,7 +441,6 @@ description = "d"
 backends = ["devicelink"]
 [[rooms.T.fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "shroomy"
 [[rooms.T.fixtures.blocks]]
 name = "b1"
@@ -536,7 +527,6 @@ _ROOM = '''description = "Loft"
 backends = ["devicelink"]
 [[fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "strip"
   [[fixtures.blocks]]
   name = "main"
@@ -584,7 +574,6 @@ def test_inline_and_catalog_rooms_merge(tmp_path):
     backends = ["devicelink"]
       [[rooms.STAGE.fixtures]]
       name = "m"
-      color_order = "GRB"
       instrument = "strip"
         [[rooms.STAGE.fixtures.blocks]]
         name = "m"
@@ -601,7 +590,6 @@ def test_room_defined_inline_and_in_catalog_is_refused(tmp_path):
     backends = ["devicelink"]
       [[rooms.LOFT.fixtures]]
       name = "m"
-      color_order = "GRB"
       instrument = "strip"
         [[rooms.LOFT.fixtures.blocks]]
         name = "m"
@@ -652,7 +640,6 @@ backends = ["devicelink"]
 
   [[rooms.TEST.fixtures]]
   name = "main"
-  color_order = "GRB"
   instrument = "dev_strip_main"
     [[rooms.TEST.fixtures.blocks]]
     name = "main"
@@ -673,7 +660,6 @@ backends = ["devicelink"]
 
   [[rooms.TEST.fixtures]]
   name = "accent"
-  color_order = "GRB"
   instrument = "dev_strip_accent"
     [[rooms.TEST.fixtures.blocks]]
     name = "accent"
@@ -694,7 +680,6 @@ backends = ["devicelink", "array"]
 
   [[rooms.DEMO.fixtures]]
   name = "array"
-  color_order = "RGBW"
   instrument = "venue_array"
     [[rooms.DEMO.fixtures.blocks]]
     name = "m1"
@@ -821,7 +806,7 @@ def test_uplink_must_be_a_table():
     assert err.value.key == "uplink"
 
 
-ARTNET_BASE = MINIMAL.replace('color_order = "GRB"', 'color_order = "RGBW"').replace(
+ARTNET_BASE = MINIMAL.replace(
     'backends = ["devicelink"]', 'backends = ["devicelink", "array"]')
 
 
@@ -857,12 +842,6 @@ def test_a_bad_artnet_entry_is_a_located_error(body, needle):
     with pytest.raises(TerrariumConfigError, match=needle) as exc:
         _with_artnet("[[artnet]]\n" + body)
     assert exc.value.key.startswith("artnet[0]")
-
-
-def test_an_rgb_fixture_cannot_be_an_artnet_output():
-    text = MINIMAL + '\n[[artnet]]\nroom = "ONE"\nfixture = "main"\nhost = "h"\nmax_amps = 1.0\n'
-    with pytest.raises(TerrariumConfigError, match="RGBW"):
-        parse_terrarium_config(text, source="t.toml")
 
 
 def test_duplicate_and_overlapping_outputs_are_refused():
@@ -992,3 +971,22 @@ def test_psu_budget_ignores_outputs_on_other_or_no_psus():
     validate_psu_budgets((_out("bars", 9.4), _out("fiber", 50.0, psu=None),
                           _out("x", 3.0, psu="q")), {"p": 12.5, "q": 5.0},
                          source="t")
+
+
+def test_a_fixture_with_color_order_is_refused_with_a_located_error(tmp_path):
+    from control.terrarium_config import TerrariumConfigError, load_terrarium_config
+    text = MINIMAL.replace('name = "main"\n', 'name = "main"\ncolor_order = "GRB"\n', 1)
+    path = tmp_path / "terrarium.toml"
+    path.write_text(text)
+    with pytest.raises(TerrariumConfigError, match="color_order, which is retired"):
+        load_terrarium_config(str(path))
+
+
+def test_every_fixture_is_four_channels():
+    from control.pixel_wire import CHANNELS_PER_PIXEL
+    from control.terrarium_config import load_terrarium_config
+    rooms = load_terrarium_config("terrarium.toml").rooms
+    for room in rooms.values():
+        for fixture in room.profile.fixtures:
+            assert fixture.channels == CHANNELS_PER_PIXEL
+            assert not hasattr(fixture, "color_order")

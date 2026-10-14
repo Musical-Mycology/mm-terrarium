@@ -175,7 +175,6 @@ backends = ["devicelink"]
 
 [[fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "strip"
   [[fixtures.blocks]]
   name = "main"
@@ -192,7 +191,6 @@ instrument = "strip"
 
 [[fixtures]]
 name = "accent"
-color_order = "GRB"
 instrument = "strip"
   [[fixtures.blocks]]
   name = "accent"
@@ -233,13 +231,13 @@ _ONE_FIXTURE_ROOM = '''backends = ["devicelink"]
 [[fixtures]]
 {fixture}
 '''
-_GOOD_FIXTURE = ('name = "main"\ncolor_order = "GRB"\ninstrument = "strip"'
+_GOOD_FIXTURE = ('name = "main"\ninstrument = "strip"'
                  '\n  [[fixtures.blocks]]\n  name = "main"\n  start = 0\n  count = 30')
 
 
 @pytest.mark.parametrize("text, fragment", [
     # a fixture missing name: located by its index, since it has no name
-    (_ONE_FIXTURE_ROOM.format(arco="", fixture='color_order = "GRB"\ninstrument = "strip"'),
+    (_ONE_FIXTURE_ROOM.format(arco="", fixture='instrument = "strip"'),
      "fixture #0"),
     (_ONE_FIXTURE_ROOM.format(arco="", fixture='name = "main"\ninstrument = "strip"'),
      "fixture 'main'"),
@@ -664,7 +662,6 @@ _PX_ROOM = '''description = "r"
 backends = ["devicelink"]
 [[fixtures]]
 name = "main"
-color_order = "GRB"
 instrument = "glow"
   [[fixtures.blocks]]
   name = "main"

@@ -592,7 +592,7 @@ function render() {
   head.appendChild(h2);
   const headRight = mk("div");
   headRight.appendChild(mk("span", "mono dim",
-    `${room.capability.pixel_count} px · ${room.capability.color_order}`));
+    `${room.capability.pixel_count} px · RGBW`));
   framesChipEl = mk("span", "chip dim", "No frames");
   headRight.appendChild(framesChipEl);
   head.appendChild(headRight);
@@ -716,7 +716,7 @@ function render() {
 // -------------------------------------------------------------------- frames
 
 // One fixture frame -> [r, g, b] per pixel. The width comes from the
-// fixture's color_order (3 for GRB/RGB, 4 for RGBW); W is drawn additively
+// order (the room wire is always RGBW; GRB/RGB still decode); W is drawn additively
 // onto r, g and b, clipped at 255. Spec 2026-09-23 section 6.2.
 export function _decodePixels(channels, colorOrder) {
   const order = colorOrder || "GRB";
@@ -736,9 +736,8 @@ export function _decodePixels(channels, colorOrder) {
 function onRoomFrame(msg) {
   // rule 9: a frame for a fixture this panel has no strip for is a no-op.
   if (!canvasesByName[msg.fixture]) return;
-  const fixture = ((currentRoom && currentRoom.fixtures) || [])
-    .find((f) => f.name === msg.fixture);
-  const pixels = _decodePixels(msg.channels || [], fixture && fixture.color_order);
+  // Every fixture is RGBW on the wire (contract v5); views carry no order.
+  const pixels = _decodePixels(msg.channels || [], "RGBW");
   lastPaintByName[msg.fixture] = pixels;
   lastFrameAt[msg.fixture] = Date.now();
   repaintFixture(msg.fixture);

@@ -58,7 +58,7 @@ def test_build_wires_the_client_and_backend():
 
 def test_no_join_build_uses_the_room_surface():
     client, backend = build("sim-room", serve=False, room_type="TEST", fixture="main")
-    assert client.expected_channels == 180
+    assert client.expected_channels == 240
 
 
 def test_a_player_build_is_unchanged():

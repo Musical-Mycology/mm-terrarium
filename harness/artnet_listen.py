@@ -83,8 +83,9 @@ class Reassembler:
 def _websim(pixel_count: int):
     from luxaeterna.backends.websim import WebSimBackend
     from luxaeterna.synth.capability import SurfaceCapability, Zone
+    from control.pixel_wire import WIRE_ORDER
     cap = SurfaceCapability(surface_id="artnet_listen", pixel_count=pixel_count,
-                            color_order="RGBW",
+                            color_order=WIRE_ORDER,
                             zones=[Zone("primary", 0, pixel_count)])
     backend = WebSimBackend(capability=cap, serve=True, label="artnet_listen")
     backend.open()
