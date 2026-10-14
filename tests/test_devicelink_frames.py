@@ -103,13 +103,13 @@ def joined():
     return _make_rig()
 
 
-def test_emits_a_36_channel_frame(joined):
+def test_emits_a_48_channel_frame(joined):
     gs, server, agent = joined
     for _ in range(5):
         agent.poll()
     frames = server.addressed("/ie1/leds")
     assert frames, "expected at least one LED frame"
-    assert len(frames[0]["args"][0]) == 36
+    assert len(frames[0]["args"][0]) == 48
     assert all(0 <= v <= 255 for v in frames[0]["args"][0])
 
 
@@ -122,14 +122,14 @@ def test_unchanged_frame_is_sent_once(joined):
         state = "running"
 
         def render_into(self, universe):
-            universe.set_range(0, bytes([7] * 36))
+            universe.set_range(0, bytes([7] * 48))
 
     agent.bridges["ie1"].session = ConstantSession()
     for _ in range(4):
         agent.poll()
     frames = server.addressed("/ie1/leds")
     assert len(frames) == 1, "a constant frame must be sent once, not per tick"
-    assert frames[0]["args"][0] == [7] * 36
+    assert frames[0]["args"][0] == [7] * 48
 
 
 def _run_hue_sweep(gs, server, agent, apply_cues: bool) -> None:
@@ -365,7 +365,7 @@ def test_device_frame_carries_the_cues_own_time_not_the_render_clock():
     # Deviation from the brief: aurora's hue is behind a Smooth() one-pole
     # glide (luxaeterna's synth/presets.py), which only moves with real dt.
     # Rendering at the exact same `now` as the rig's last warm-up frame gives
-    # dt ~= 0, so the fed hue would not visibly move any byte of the 36-
+    # dt ~= 0, so the fed hue would not visibly move any byte of the 48-
     # channel frame -- unrelated to the cue-timing behavior under test. Move
     # the clock first so the glide has room to actually change the frame;
     # `at` stays anchored to the original `base`, so it stays well in the

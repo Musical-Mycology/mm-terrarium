@@ -64,7 +64,7 @@ class DesignBench:
                      if fn.kind is FunctionKind.GENERATOR]
         self._runner = GeneratorRunner(generators)
         self._heap: list[tuple[float, int, int, int]] = []
-        self._solid: tuple[tuple[int, int, int], float, float] | None = None
+        self._solid: tuple[tuple, float, float] | None = None
         self._muted = False
         self._ema_state: dict[str, float] = {}
         self._last_frame: list[int] | None = None
@@ -88,7 +88,10 @@ class DesignBench:
         if self._solid is not None:
             rgb, level, expires_at = self._solid
             if expires_at is None or elapsed < expires_at:
-                frame = [max(0, min(255, int(round(rgb[i % 3] * level))))
+                # Frames are R, G, B, W per pixel (contract v5); a
+                # three-value colour has W = 0.
+                px = tuple(rgb) + (0,) * (4 - len(rgb))
+                frame = [max(0, min(255, int(round(px[i % 4] * level))))
                           for i in range(len(frame))]
             else:
                 self._solid = None

@@ -40,16 +40,16 @@ def test_on_grant_builds_a_session_that_lights_from_the_composed_blob():
             break
     assert session.state == "running"
     session.render_into(uni)
-    frame = uni.get_frame()[:36]
+    frame = uni.get_frame()[:48]
     assert max(frame) > 0                                 # aurora lit without a note
-    assert max(frame[0::3]) > max(frame[1::3])            # green-dominant (hue 0.33)
+    assert max(frame[1::4]) > max(frame[0::4])            # green-dominant (hue 0.33)
 
     session.feed_midi(0xB0, 74, 0)                        # cc:74=0 -> hue glides toward red
     for _ in range(60):
         session.render_into(uni)
-    frame = uni.get_frame()[:36]
+    frame = uni.get_frame()[:48]
     assert max(frame) > 0
-    assert max(frame[1::3]) > max(frame[0::3])            # GRB: red > green, after the glide settles
+    assert max(frame[0::4]) > max(frame[1::4])            # RGBW: red > green, after the glide settles
 
 
 def test_on_release_requests_close():

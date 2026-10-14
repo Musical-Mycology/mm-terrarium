@@ -35,7 +35,7 @@ from control.lobby import (DEFAULT_LOBBY, FIXTURE_FLASH_GAP_S,
                            FIXTURE_FLASH_ON_S, GREEN, TERRARIUM_ADMIN,
                            InviteSchedule, LobbyState, StartRequest,
                            lobby_light_manifest)
-from control.pixel_wire import WIRE_ORDER
+from control.pixel_wire import CHANNELS_PER_PIXEL, solid_frame
 from control.prepare import PrepareRequest
 from control.role_config import compose_role_config, slice_light_manifest
 from control.roles import Role, RoleClass
@@ -63,11 +63,10 @@ logger = logging.getLogger(__name__)
 # frames is generous headroom over the ~0.6s sys:closing signature.
 _MAX_CLOSING_FRAMES = 200
 
-# One player device's frame width: 12 pixels x 3 channels. The same figure
-# harness/shroom_client.py calls LED_CHANNELS -- named here because
-# _render_frames needs a black frame of exactly that width for a device
-# that has no session to render one.
-_DEVICE_CHANNELS = 36
+# One player device's frame width: 12 pixels x 4 channels, R, G, B, W
+# (contract v5, control/pixel_wire.py). The same figure
+# harness/shroom_client.py calls LED_CHANNELS.
+_DEVICE_CHANNELS = 12 * CHANNELS_PER_PIXEL
 
 
 @dataclass
@@ -930,32 +929,22 @@ class DeviceLinkAgent:
             del self._overrides[dev]
             self._invalidate_frame(dev)
 
-    def _apply_override(self, dev: str, frame: bytes,
-                        color_order: str = "GRB") -> bytes:
-        """Paint every pixel of `frame` the override's colour, in the
-        surface's own channel order. `rgb` is always stated R, G, B -- a
-        SolidCue names a colour, not a wire layout -- so a GRB strip (every
-        strip this Room ships) needs the channels reordered here or green
-        lands as red. A SolidCue names an RGB colour; on an RGBW strip W
-        stays 0."""
+    def _apply_override(self, dev: str, frame: bytes) -> bytes:
+        """Paint every pixel of `frame` the override's colour, R, G, B, W.
+        A colour named (r, g, b) has W = 0; the lexicon's white is
+        (0, 0, 0, 255)."""
         entry = self._overrides.get(dev)
         if entry is None:
             return frame
-        rgb, level, _expires = entry
-        return self._solid_frame(rgb, level, len(frame), color_order)
+        color, level, _expires = entry
+        return self._solid_frame(color, level, len(frame))
 
     @staticmethod
-    def _solid_frame(rgb, level: float, length: int,
-                     color_order: str = "GRB") -> bytes:
-        """`length` bytes of one colour at `level`, in the surface's own
-        channel order; W stays 0."""
-        by_name = {**dict(zip("RGB", rgb)), "W": 0}
-        pixel = bytes(max(0, min(255, round(by_name[ch] * level)))
-                      for ch in color_order)
-        reps = length // len(pixel) + 1
-        return (pixel * reps)[:length]
+    def _solid_frame(color, level: float, length: int) -> bytes:
+        """`length` bytes of one colour at `level`, R, G, B, W."""
+        return solid_frame(color, level, length)
 
-    def _on_solid_cue(self, dev: str, rgb: tuple[int, int, int],
+    def _on_solid_cue(self, dev: str, rgb: tuple,
                       level: float, duration: float | None,
                       when: float | None) -> None:
         """A Bit's SolidCue reached the engine sink. Store the override and
@@ -1091,8 +1080,7 @@ class DeviceLinkAgent:
                 logger.exception("fixture %s render failed; skipping frame", fixture.name)
                 continue
             frame = bytes(st.universe.get_frame()[:fixture.pixel_count * fixture.channels])
-            frame = self._apply_override(fixture_dev(fixture.name), frame,
-                                         WIRE_ORDER)
+            frame = self._apply_override(fixture_dev(fixture.name), frame)
             if dev != st.last_dev:
                 # A rebind (or a first binding) has to resend even if this
                 # fixture's own bytes have not moved.
@@ -1177,8 +1165,6 @@ class DeviceLinkAgent:
         go out on the wire at all. _finish_release() below is what removes
         it and sends /<dev>/release, once CLOSING is done (or the stuck-
         session guard fires)."""
-        order = (self._capability.color_order
-                 if self._capability is not None else "GRB")
         for dev, bridge in list(self.bridges.items()):
             universe = self._universes.get(dev)
             session = bridge.session
@@ -1209,7 +1195,7 @@ class DeviceLinkAgent:
             # room.bound write -- the fast-path shape), so a mute latched
             # under the fixture's token must still black this frame out
             # (spec 2026-09-25 mute-key-bind-migration section 3.2).
-            frame = self._apply_override(self._fixture_key(dev), frame, order)
+            frame = self._apply_override(self._fixture_key(dev), frame)
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame
                 # The cue's own time when a cue produced this frame, else
@@ -1235,7 +1221,7 @@ class DeviceLinkAgent:
             # Only a KNOWN device that is not a Room fixture may be painted
             # here. `bound` is checked as well as _fixture_for because
             # the two disagree while a Room is being torn down, and a
-            # fixture dev must never be handed a 36-channel player frame.
+            # fixture dev must never be handed a 48-channel player frame.
             if (fixture_name(dev) is not None or dev in self.bridges
                     or dev in bound or self._fixture_for(dev) is not None
                     or gs.devices.get(dev) is None):
@@ -1244,10 +1230,9 @@ class DeviceLinkAgent:
             base = self._bases.get(dev)
             frame = black
             if base is not None and dev not in self._muted:
-                frame = self._solid_frame(base[0], base[1], _DEVICE_CHANNELS,
-                                          order)
+                frame = self._solid_frame(base[0], base[1], _DEVICE_CHANNELS)
             if dev in self._overrides:
-                frame = self._apply_override(dev, frame, order)
+                frame = self._apply_override(dev, frame)
             if self._last_frames.get(dev) == frame:
                 continue
             self._last_frames[dev] = frame

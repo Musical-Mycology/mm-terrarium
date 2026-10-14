@@ -293,8 +293,8 @@ def _parse_script_step(iname, fname, idx, sraw, *, source, key):
         if not isinstance(v, dict):
             raise err(f"solid must be a table, got {type(v).__name__}")
         rgb = v.get("rgb")
-        if (not isinstance(rgb, list) or len(rgb) != 3):
-            raise err(f"solid.rgb must be [r, g, b], got {rgb!r}")
+        if (not isinstance(rgb, list) or len(rgb) not in (3, 4)):
+            raise err(f"solid.rgb must be [r, g, b] or [r, g, b, w], got {rgb!r}")
         return ScriptStep(float(offset), SolidCue(
             TARGET, tuple(rgb), v.get("level", 1.0), v.get("duration")))
     return ScriptStep(float(offset), MuteCue(TARGET))

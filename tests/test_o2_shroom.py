@@ -66,7 +66,7 @@ def test_a_player_build_is_unchanged():
     from harness.o2_shroom import build
     client, backend = build("ie1", serve=False)
     assert backend._cap.pixel_count == 12
-    assert client.expected_channels == 36
+    assert client.expected_channels == 48
 
 
 def test_build_stamps_the_capability_with_the_devs_own_id():

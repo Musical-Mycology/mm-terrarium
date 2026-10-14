@@ -24,7 +24,7 @@ def test_light_only_instrument_gets_flash_and_stop_no_ping():
     cue = flash.script[0].cue
     assert isinstance(cue, SolidCue)
     assert (cue.dev, cue.rgb, cue.level, cue.duration) == (
-        TARGET, (255, 255, 255), 0.9, 5.0)
+        TARGET, (0, 0, 0, 255), 0.9, 5.0)
 
 
 def test_samples_instrument_flash_adds_chime_and_ping_is_playcue():
@@ -50,3 +50,9 @@ def test_stop_is_a_mute_latch_and_requires_light_or_audio():
     fns = builtin_functions(_inst({"light.surface"}))
     assert isinstance(fns["stop"].script[0].cue, MuteCue)
     assert builtin_functions(_inst({"gesture.tap"})) == {}
+
+
+def test_builtin_flash_is_w_white():
+    fn = builtin_functions(_inst({"light.pixels"}))["flash"]
+    solids = [s.cue for s in fn.script if isinstance(s.cue, SolidCue)]
+    assert solids and solids[0].rgb == (0, 0, 0, 255)

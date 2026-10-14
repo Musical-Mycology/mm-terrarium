@@ -990,3 +990,16 @@ def test_every_fixture_is_four_channels():
         for fixture in room.profile.fixtures:
             assert fixture.channels == CHANNELS_PER_PIXEL
             assert not hasattr(fixture, "color_order")
+
+
+@pytest.mark.parametrize("rgb,ok", [([1, 2, 3], True), ([1, 2, 3, 4], True),
+                                    ([1, 2], False), ([1, 2, 3, 4, 5], False)])
+def test_solid_rgb_takes_three_or_four_values(rgb, ok):
+    from control.terrarium_config import TerrariumConfigError, _parse_script_step
+    raw = {"offset": 0.0, "solid": {"rgb": rgb, "level": 1.0}}
+    if ok:
+        step = _parse_script_step("i", "f", 0, raw, source="t", key="k")
+        assert tuple(step.cue.rgb) == tuple(rgb)
+    else:
+        with pytest.raises(TerrariumConfigError, match=r"solid.rgb must be"):
+            _parse_script_step("i", "f", 0, raw, source="t", key="k")

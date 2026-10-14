@@ -46,7 +46,7 @@ def _run(agent, clk, seconds):
 
 
 def _hue_of(frame):
-    g, r, b = frame[0], frame[1], frame[2]      # GRB order (Task 7 reorders overrides)
+    r, g, b = frame[0], frame[1], frame[2]      # RGBW order
     return (r, g, b)
 
 
@@ -71,7 +71,10 @@ def test_invite_paints_the_device_white_twice():
         agent.poll()
         for (_d, m) in server.sent[seen:]:
             if m["address"] == "/ie1/leds":
-                whites.append(all(b >= 250 for b in bytes(m["args"][0])))
+                f = bytes(m["args"][0])
+                whites.append(all(b >= 250 for b in f[3::4])
+                              and not any(f[0::4]) and not any(f[1::4])
+                              and not any(f[2::4]))
         seen = len(server.sent)
     # two runs of white frames with a non-white gap between
     runs = 0
@@ -112,3 +115,9 @@ def test_minimum_refusal_flashes_red_twice():
             runs += 1
         prev = x
     assert runs == 2
+
+
+def test_lobby_white_is_the_w_die():
+    from control.lobby import GREEN, RED, WHITE
+    assert WHITE == (0, 0, 0, 255)
+    assert GREEN == (0, 255, 0) and RED == (255, 0, 0)

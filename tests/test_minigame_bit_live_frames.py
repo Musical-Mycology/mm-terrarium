@@ -87,7 +87,7 @@ class _Rig:
 
 
 def _pixels(frame):
-    return [tuple(frame[i:i + 3]) for i in range(0, len(frame), 3)]
+    return [tuple(frame[i:i + 4]) for i in range(0, len(frame), 4)]
 
 
 def _is_rainbow(frame):

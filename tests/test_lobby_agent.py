@@ -184,19 +184,19 @@ def test_a_ceremony_validated_just_before_start_still_plays_out(monkeypatch):
     assert agent._draining_lobby is None                       # drained, dropped
 
 
-def test_invite_frames_reach_an_unjoined_device_in_grb_then_go_black(monkeypatch):
+def test_invite_frames_reach_an_unjoined_device_in_rgbw_then_go_black(monkeypatch):
     gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
     _hello(server, agent, "c1", "ie1")
     leds = [bytes(m["args"][0]) for (_d, m) in server.sent if m["address"] == "/ie1/leds"]
-    assert leds[-1] == bytes([255, 255, 255] * 12)
+    assert leds[-1] == bytes([0, 0, 0, 255] * 12)      # the W die alone
     _poll(agent, clk, 0.3)
     leds = [bytes(m["args"][0]) for (_d, m) in server.sent if m["address"] == "/ie1/leds"]
-    assert leds[-1] == bytes(36)                              # black once the flash expires
-    # a green override on a GRB surface lands as G=255,R=0,B=0
+    assert leds[-1] == bytes(48)                              # black once the flash expires
+    # a green override lands as R=0,G=255,B=0,W=0
     agent._on_solid_cue("ie1", GREEN, 1.0, 1.0, clk.t)
     agent.poll()
     leds = [bytes(m["args"][0]) for (_d, m) in server.sent if m["address"] == "/ie1/leds"]
-    assert leds[-1][:3] == bytes([255, 0, 0])
+    assert leds[-1][:4] == bytes([0, 255, 0, 0])
 
 
 def test_tap_from_an_invited_unjoined_device_is_gameplay_and_refused(monkeypatch):
@@ -485,7 +485,7 @@ def test_an_invited_device_pulses_white_between_invite_flashes(monkeypatch):
     gs, server, agent, audio, sessions, clk = _rig(monkeypatch, _admin_cfg())
     _hello(server, agent, "c1", "ie1")
     _poll(agent, clk, 2.0)
-    assert _dim(_leds(server, "ie1")[-1], (255, 255, 255))
+    assert _dim(_leds(server, "ie1")[-1], (0, 0, 0, 255))
 
 
 def test_a_validated_device_pulses_green_until_its_role(monkeypatch):
@@ -493,7 +493,7 @@ def test_a_validated_device_pulses_green_until_its_role(monkeypatch):
     _hello(server, agent, "c1", "ie1")
     _handshake(server, agent, gs, "c1", "ie1")
     _poll(agent, clk, 2.5)
-    assert _dim(_leds(server, "ie1")[-1], (255, 0, 0))   # GRB green
+    assert _dim(_leds(server, "ie1")[-1], (0, 255, 0, 0))   # green
     gs.request_start(None, TERRARIUM_ADMIN, "console")
     agent.poll()
     assert agent._bases == {}
@@ -510,7 +510,7 @@ def test_a_deny_flashes_the_device_red_twice(monkeypatch):
     later = [m for (_d, m) in server.sent[n:]
              if m["address"] in ("/ie1/deny", "/ie1/leds")]
     assert later[0]["address"] == "/ie1/deny"
-    red = bytes([0, 255, 0] * 12)                        # GRB red
+    red = bytes([255, 0, 0, 0] * 12)                     # RGBW red
     reds = [m for m in later if m["address"] == "/ie1/leds"
             and bytes(m["args"][0]) == red]
     assert len(reds) == 2
@@ -525,7 +525,7 @@ def test_a_muted_invited_device_stays_black(monkeypatch):
     assert "ie1" in agent._bases                  # a pulse exists, suppressed
     after = _leds(server, "ie1")[n:]
     assert after, "the mute must send the clearing black frame"
-    assert all(f == bytes(36) for f in after)
+    assert all(f == bytes(48) for f in after)
 
 
 def test_a_full_lobby_clears_the_white_pulse_with_one_black_frame(monkeypatch):
@@ -533,13 +533,13 @@ def test_a_full_lobby_clears_the_white_pulse_with_one_black_frame(monkeypatch):
     gs.registration.role_table.roles["player"].capacity = 1
     _hello(server, agent, "c1", "ie1")
     _poll(agent, clk, 2.0)
-    assert _dim(_leds(server, "ie1")[-1], (255, 255, 255))
+    assert _dim(_leds(server, "ie1")[-1], (0, 0, 0, 255))
     n = len(_leds(server, "ie1"))
     _hello(server, agent, "c2", "ie2")
     _handshake(server, agent, gs, "c2", "ie2")
     assert gs.lobby_state() == "FULL"
     _poll(agent, clk, 1.0)
-    assert _leds(server, "ie1")[n:] == [bytes(36)]
+    assert _leds(server, "ie1")[n:] == [bytes(48)]
 
 
 def test_a_denied_fixture_bound_device_does_not_flash_the_fixture_red(monkeypatch):
