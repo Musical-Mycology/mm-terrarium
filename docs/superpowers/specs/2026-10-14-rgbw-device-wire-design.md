@@ -98,7 +98,7 @@ that is not exactly its pixel count x 4, and never truncates. A 36-byte
   - `SolidCue` and the lobby's `rgb` overrides are affected
     (`devicelink/agent.py` `_apply_override` / `_solid_frame` at
     `:932-953`, and `control/lobby.py`).
-  - A `SolidCue` that names only RGB gets W = 0.
+  - A `SolidCue` colour of three values gets W = 0.
   - The new `_solid_frame` writes R, G, B, W with no order parameter.
 - **The lexicon's whites use the die.**
   - `control/lobby.py:59` `WHITE = (255, 255, 255)` becomes
@@ -136,7 +136,7 @@ that is not exactly its pixel count x 4, and never truncates. A 36-byte
 | `control/room_view.py:60,138`, `console/static/rooms.js:110` | Stop passing and showing `color_order`. |
 | `rooms/*.toml` | Delete every `color_order` line: TEST, TOWER, DEMO, VENUE. WLED's own GRBW setting is unchanged. |
 | `terrarium.toml:19` | Drop the "must be RGBW" comment. |
-| `control/lobby.py:59` and the lobby/override path | `WHITE` becomes RGBW `(0,0,0,255)`, and every signal colour becomes a 4-tuple. `SolidCue` gains an optional `w` (default 0). |
+| `control/lobby.py:59` and the lobby/override path | `WHITE` becomes RGBW `(0,0,0,255)`, and every signal colour becomes a 4-tuple. `SolidCue.rgb` accepts (r, g, b) or (r, g, b, w); three values mean W = 0. |
 | `harness/shroom_client.py:36,61-67,90,108-113` | `LED_CHANNELS = 48`. Decode R, G, B, W. Drop the "white die unreachable / Task B7" comment. |
 | `harness/o2_shroom.py:455-470`, `harness/websim_leds.py:15-49`, `harness/design_session.py`, `harness/device_bridge.py`, `harness/room_surface.py` | Width is pixel count x 4 everywhere; no order. |
 | `console/static/surface.js:719-741`, `console/static/design.js:182-195` | A single RGBW decoder with the fold (section 3.2). `design.js`'s hardcoded GRB goes. |
