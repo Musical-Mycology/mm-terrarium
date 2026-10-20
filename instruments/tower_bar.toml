@@ -1,4 +1,0 @@
-description = "Bench Tower: a 10-light progress bar (10 px)"
-pixels = 10
-capabilities = ["light.surface"]
-accepted_cues = ["midi", "play", "solid", "mute"]

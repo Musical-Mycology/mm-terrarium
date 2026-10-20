@@ -736,7 +736,7 @@ class GameServer:
             or DEFAULTSHROOM
         result = JoinResult(granted=True, role=role.name,
                             role_class=role.role_class, scored=role.scored,
-                            breath=role.breath)
+                            breath=role.breath, zones=tuple(role.zones))
         if role.requires is not None:
             result.slot = role.requires
             result.instrument = carried.name

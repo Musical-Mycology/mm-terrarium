@@ -38,6 +38,31 @@ def validate_role_declarations(role_table: RoleTable) -> None:
         validate_ugen_manifest(role)
         _validate_string_list(role, "uses")
         _validate_string_list(role, "samples")
+        _validate_zones(role)
+
+
+# A player device's surface: Rev 1's 12 px (devicelink/agent.py's frame).
+PLAYER_PIXELS = 12
+
+
+def _validate_zones(role: Role) -> None:
+    where = f"role {role.name!r} zones"
+    names = set()
+    for idx, zone in enumerate(role.zones):
+        try:
+            name, start, count = zone
+        except (TypeError, ValueError):
+            raise ValueError(f"{where}[{idx}]: must be (name, start, count)")
+        if not isinstance(name, str) or not name or name == "primary":
+            raise ValueError(f"{where}[{idx}]: name must be a non-empty "
+                             "string other than 'primary'")
+        if name in names:
+            raise ValueError(f"{where}[{idx}]: duplicate zone {name!r}")
+        names.add(name)
+        if not (isinstance(start, int) and isinstance(count, int)) \
+                or start < 0 or count < 1 or start + count > PLAYER_PIXELS:
+            raise ValueError(f"{where}[{idx}]: {name!r} must lie within "
+                             f"the device's {PLAYER_PIXELS} pixels")
 
 
 def _validate_light_manifest(role: Role) -> None:

@@ -76,6 +76,14 @@ class Role:
     # load_bit against the Bit's declared slots (spec section 4); a typo
     # raises BitLoadError rather than silently never gating.
     requires: str | None = None
+    # Extra named zones on the device's own 12 px player surface, as
+    # (name, start, count) pixel ranges, so this role's light_manifest can
+    # target single lights (a progress bar's "p0".."p9") rather than only
+    # the shroom's ring/stem. () (the default) keeps the plain shroom
+    # surface. Carried out on JoinResult; DeviceLinkAgent builds the
+    # device's surface from it (harness/device_bridge.py's
+    # zoned_capability). Validated at Bit load (control/role_config.py).
+    zones: tuple[tuple[str, int, int], ...] = ()
 
 
 @dataclass

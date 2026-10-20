@@ -1335,9 +1335,6 @@ RGBW, instrument `tower` with no model yet, so it runs on the no-layout
 fallback (a 14-dot strip in the Console). The artist's brief and the import
 recipe are `docs/tower-model-brief.md`; `tests/test_tower_import.py` dry-runs
 the import. Spec: `docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md`.
-`rooms/TOWER_BAR.toml` is a separate bench Room for MinigameBit: one 10 px
-fixture `tower` (instrument `tower_bar`), one zone per light, bound with
-the same `ROOM_TOWER_NODE`, so it leaves the spec layout above untouched.
 Light placement follows the artist's first model (2026-10-05), zig-zag
 included, since 2026-10-09. **Check a model's size before committing it:**
 that first export was 1.18 GB (39M triangles, nearly all decorative fungus
@@ -2246,17 +2243,21 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   `sim`). Tap: `tick`, hue step; hold: `hold`, white 1 s; swing:
   red (negative g) or blue 0.5 s; each a DEVICE trigger the Console can fire.
 
-- **MinigameBit** (`bits/minigame/`, TOWER_BAR, `MINIGAME_PLAYER_NODE`): a
-  shared progress bar on the Tower. Every tap from a player adds 1% (a
-  gesture's `count` taps add that many); progress runs 0-100% whatever the
-  bar's length, spread over the `tower` fixture's zones bottom first (on
-  TOWER_BAR's 10, 10% a light), and at 100% the bar holds full. It sizes
-  the bar from `Bit.room`, which `load_bit` stamps on every Bit before
-  reading its roles and Room manifests. Each light is a zone bound to an
-  aurora held dark whose level rides its own cc lane (20 + k); a tap sends
-  a `LightCue` to `@fixture:tower` for each light it moved. Its `player` is an unscored, uncapped JAM role that
-  `admits` only `ie<N>` ids, so every other device (the Tower before it
-  binds, say) gets solo.
+- **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a
+  shared progress bar on every Tower. It sorts devices by id with
+  `admits`: `ie<N>` takes `player`, `devtower<N>` (instrument `devtower`) takes `tower` (both
+  unscored, uncapped JAM roles), anything else gets solo. A Tower is a
+  plain device, not a Room fixture: no Arm, no Room node, a 12 px player
+  frame. Every tap from a player adds 1% (a gesture's `count` taps add
+  that many) to one figure all Towers show on pixels 0-3, bottom first,
+  25% a light; at 100% the bar holds full. The `tower` role declares
+  `Role.zones` `p0`..`p3`, one pixel each, which `DeviceLinkAgent` builds
+  into that device's surface (`harness/device_bridge.py`'s
+  `zoned_capability`, which pads the unnamed pixels 4-11 with an
+  `unzoned4` zone so the zones tile the frame), so each light is a zone bound to an aurora held
+  dark whose level rides its own cc lane (20 + k). A tap sends each Tower
+  a `LightCue` for each light it moved, or the whole bar to a Tower that
+  joined since the last tap.
 
 
 ### `www/` and `arcoserver/`

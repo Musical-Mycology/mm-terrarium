@@ -46,7 +46,7 @@ from control.timed_queue import TimedQueue
 from devicelink import protocol
 from devicelink.link_monitor import LinkMonitor
 from devicelink.lobby_runtime import LobbyRuntime, LobbySinks
-from harness.device_bridge import DeviceBridge
+from harness.device_bridge import DeviceBridge, zoned_capability
 from harness.room_surface import to_fixture_capability
 from luxaeterna.synth.director import CLOSING
 from luxaeterna.synth.manifest import LightManifest
@@ -1458,7 +1458,11 @@ class DeviceLinkAgent:
         """GameServer.on_grant: a new non-ROOM assignment (materialized at
         run, or a RUNNING walk-up) with its composed role config. Build
         dev's bridge and send /<dev>/role."""
-        bridge = DeviceBridge(capability=self._capability, clock=self._clock)
+        cap = self._capability
+        if getattr(result, "zones", ()):
+            # The role names single lights of its own (Role.zones).
+            cap = zoned_capability(dev, result.zones)
+        bridge = DeviceBridge(capability=cap, clock=self._clock)
         try:
             bridge.on_grant(result)
         except Exception:
