@@ -26,7 +26,9 @@ from pathlib import Path
 
 from control.model_layout import layout_to_json, parse_model_layout
 from tests.glb_builder import GlbBuilder
-from tools.model_bake_helpers import encode_png_rgba8, inject_bake
+from tools.model_bake_helpers import (
+    DEFAULT_DECADES, encode_png_rgba8, inject_bake, map_encoding_block,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "models"
@@ -104,7 +106,8 @@ def build_mmbake_fixture(layout_pixels: tuple, source_sha256: str) -> bytes:
     mm_bake = {
         "source_sha256": source_sha256,
         "pixels": len(layout_pixels),
-        "map_scale": 1.0,
+        "map_scale": [1.0] * len(layout_pixels),
+        "map_encoding": map_encoding_block(DEFAULT_DECADES),
         "uv": "TEXCOORD_1",
         "resolution": MAP_RESOLUTION,
         "blender": "n/a (synthetic fixture, no Blender involved)",

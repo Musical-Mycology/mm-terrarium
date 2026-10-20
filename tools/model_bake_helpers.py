@@ -45,8 +45,11 @@ class InjectBakeError(BakeContractError):
 
 
 LIGHTMAP_TEXCOORD = "TEXCOORD_1"
-MM_BAKE_KEYS = ("source_sha256", "pixels", "map_scale", "maps", "uv",
-                "resolution", "blender", "layout")
+MM_BAKE_KEYS = ("source_sha256", "pixels", "map_scale", "map_encoding", "maps",
+                "uv", "resolution", "blender", "layout")
+_MAP_ENCODING_KEYS = ("curve", "decades")
+MAP_CURVE = "log10"
+DEFAULT_DECADES = 5
 _LAYOUT_KEYS = ("index", "x_mm", "y_mm", "z_mm", "size", "zone")
 _SIZES = ("small", "medium", "large")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -153,6 +156,11 @@ def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _is_positive_number(value) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and value > 0)
+
+
 def validate_mm_bake(mm_bake) -> None:
     """Spec section 4.1's root extras.mm_bake, checked field by field with
     the same rules mm-tuneshroom's lib/render/model_layout.dart applies
@@ -173,9 +181,20 @@ def validate_mm_bake(mm_bake) -> None:
     if not _is_int(pixels) or pixels < 1:
         raise BakeContractError("mm_bake.pixels must be an integer >= 1")
     scale = mm_bake["map_scale"]
-    if (not isinstance(scale, (int, float)) or isinstance(scale, bool)
-            or not math.isfinite(scale) or scale <= 0):
-        raise BakeContractError("mm_bake.map_scale must be a finite number > 0")
+    if (not isinstance(scale, list) or len(scale) != pixels
+            or not all(_is_positive_number(s) for s in scale)):
+        raise BakeContractError(
+            f"mm_bake.map_scale must be a list of {pixels} finite numbers > 0, "
+            f"one per LED (spec 2026-10-20 replaced the single number)")
+    encoding = mm_bake["map_encoding"]
+    if not isinstance(encoding, dict) or sorted(encoding) != sorted(_MAP_ENCODING_KEYS):
+        raise BakeContractError(
+            f"mm_bake.map_encoding must be an object with exactly "
+            f"{list(_MAP_ENCODING_KEYS)}")
+    if encoding["curve"] != MAP_CURVE:
+        raise BakeContractError(f"mm_bake.map_encoding.curve must be {MAP_CURVE!r}")
+    if not _is_positive_number(encoding["decades"]):
+        raise BakeContractError("mm_bake.map_encoding.decades must be a finite number > 0")
     if mm_bake["uv"] != LIGHTMAP_TEXCOORD:
         raise BakeContractError(f"mm_bake.uv must be {LIGHTMAP_TEXCOORD!r}")
     if not _is_int(mm_bake["resolution"]) or mm_bake["resolution"] < 1:
@@ -378,21 +397,51 @@ def flip_rows(values: list, width: int, height: int) -> list:
 
 
 def normalise_maps(raw_maps: dict) -> tuple:
-    """Divide every LED's texels by the brightest texel across all LEDs
-    (spec section 5.3 step 4); map_scale is that peak, so
-    texel * map_scale recovers the baked value. Negative texels (bake
-    noise) clamp to 0. An all-black bake is refused: it means no LED's
-    light reached any baked surface, which is a modelling or material
-    error, not a result."""
-    clamped = {led: [t if t > 0.0 else 0.0 for t in texels]
+    """Divide each LED's texels by that LED's own brightest texel (spec
+    2026-10-20, amending section 5.3 step 4); returns (normalised,
+    scales), scales ordered by LED index, so texel * scales[i] recovers
+    LED i's baked value. Negative and NaN texels (bake noise) clamp to 0.
+    Any LED whose map is all black is refused, naming every such LED: its
+    light reaches no baked surface, a modelling or material error, not a
+    result."""
+    clamped = {led: [t if t > 0.0 else 0.0 for t in texels]   # NaN > 0 is False
                for led, texels in raw_maps.items()}
-    peak = max((max(texels) for texels in clamped.values() if texels), default=0.0)
-    if peak <= 0.0:
+    peaks = {led: max(texels, default=0.0) for led, texels in clamped.items()}
+    dark = sorted(led for led, peak in peaks.items() if peak <= 0.0)
+    if dark:
+        names = ", ".join(f"LED {led}" for led in dark)
         raise BakeError(
-            "every light map is black: no LED lit any baked surface; check the "
-            "markers sit where the surface can see them and the materials "
-            "are not fully opaque around them")
-    return {led: [t / peak for t in texels] for led, texels in clamped.items()}, peak
+            f"{names} lit no baked surface (an all-black light map); check each "
+            f"marker sits where the surface can see it and the materials around "
+            f"it are not fully opaque")
+    normalised = {led: [t / peaks[led] for t in texels] for led, texels in clamped.items()}
+    return normalised, [peaks[led] for led in sorted(peaks)]
+
+
+def encode_log10(t: float, decades: float) -> int:
+    """One normalised texel (0..1) as an 8-bit code on the log10 curve
+    (spec 2026-10-20): 255 is the LED's peak, each code step is the same
+    ratio 10^(decades/255), and 0 is black (t <= 0 or below code 1)."""
+    if not t > 0.0:
+        return 0
+    code = round(255.0 * (1.0 + math.log10(t) / decades))
+    return max(0, min(255, code))
+
+
+def decode_log10(code: int, decades: float) -> float:
+    """encode_log10's inverse: code 0 is black, otherwise
+    10^(decades * (code/255 - 1)). The 3D view applies the same formula."""
+    if code <= 0:
+        return 0.0
+    return 10.0 ** (decades * (code / 255.0 - 1.0))
+
+
+def coverage_report(normalised: dict, decades: float) -> list:
+    """Per LED (ordered by index), the share of its texels that encode
+    above code 0: the bake log's check that no LED is a pinprick."""
+    return [sum(1 for t in normalised[led] if encode_log10(t, decades) > 0)
+            / max(len(normalised[led]), 1)
+            for led in sorted(normalised)]
 
 
 MIN_LIGHTMAP_TEXELS = 16
@@ -435,36 +484,35 @@ def refuse_thin_lightmap(coverage: dict, resolution: int,
             f"(minimum {minimum}): simplify or drop small parts, or raise --resolution")
 
 
-def _to_byte(value: float) -> int:
-    if value <= 0.0:
-        return 0
-    if value >= 1.0:
-        return 255
-    return int(value * 255.0 + 0.5)
-
-
-def quantise_group_rgba8(group: list, normalised: dict, texel_count: int) -> bytes:
+def quantise_group_rgba8(group: list, normalised: dict, texel_count: int,
+                         decades: float) -> bytes:
     """One texture's raw RGBA8 bytes (encode_png_rgba8's input): the LEDs
-    of `group` in R, G, B, A order, unused channels of a short final
-    group 0."""
+    of `group` in R, G, B, A order, each texel on the log10 curve, unused
+    channels of a short final group 0."""
     out = bytearray(texel_count * 4)
     for channel, led in enumerate(group):
         texels = normalised[led]
         if len(texels) != texel_count:
             raise ValueError(f"LED {led} map has {len(texels)} texels, expected {texel_count}")
-        out[channel::4] = bytes(_to_byte(t) for t in texels)
+        out[channel::4] = bytes(encode_log10(t, decades) for t in texels)
     return bytes(out)
 
 
-def build_mm_bake_extras(*, source_sha256: str, layout_pixels: tuple, map_scale: float,
-                         resolution: int, blender_version: str) -> dict:
+def map_encoding_block(decades: float) -> dict:
+    """mm_bake.map_encoding for the log10 curve at `decades`."""
+    return {"curve": MAP_CURVE, "decades": decades}
+
+
+def build_mm_bake_extras(*, source_sha256: str, layout_pixels: tuple, map_scale: list,
+                         decades: float, resolution: int, blender_version: str) -> dict:
     """extras.mm_bake for a real bake (spec section 4.1). "maps" is a
     placeholder in the right shape; inject_bake rewrites it with the
     actual texture indices. Validated before it is returned."""
     extras = {
         "source_sha256": source_sha256,
         "pixels": len(layout_pixels),
-        "map_scale": map_scale,
+        "map_scale": list(map_scale),
+        "map_encoding": map_encoding_block(decades),
         "maps": list(range(len(group_leds_by_four(len(layout_pixels))))),
         "uv": LIGHTMAP_TEXCOORD,
         "resolution": resolution,
