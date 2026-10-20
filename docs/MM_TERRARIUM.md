@@ -1292,8 +1292,15 @@ Smart UV Project (Lightmap Pack's one island per face left a 188k-face
 model with 0.008 texels per face, so every map baked black; spec
 `docs/superpowers/specs/2026-10-09-bake-lightmap-smart-uv-design.md`), a
 refusal before the first LED if any mesh gets under 16 atlas texels, then
-Cycles Diffuse + Transmission per LED, summed, row-flipped, normalised by
-the brightest texel, packed 4 LEDs per RGBA PNG. It writes
+Cycles Diffuse + Transmission per LED, summed, row-flipped, each LED
+normalised by its own peak (`mm_bake.map_scale`, one per LED), stored on a
+log10 curve (`mm_bake.map_encoding`, `--decades`, default 5; one global
+linear scale left the Tower's PARs at 0 and lit 0.13% of the atlas at
+best; spec `docs/superpowers/specs/2026-10-20-bake-lightmap-encoding-design.md`),
+packed 4 LEDs per RGBA PNG. A bake with any all-black LED is refused,
+naming each, and the log prints every LED's lit share; `--raw PATH.npz`
+keeps the float maps so a curve change can be re-encoded without a re-bake.
+It writes
 `<stem>.baked.glb` beside the source; `tools/model_bake_helpers.inject_bake`
 is the one writer of the baked-file contract (`extras.mm_bake`, spec
 section 4.1) and refuses anything `validate_baked_glb` rejects.
@@ -1319,7 +1326,8 @@ run: `git archive HEAD control tools <model dir> | portal ssh mycologist
 base64 and compare sha256 on both ends. After a Blender upgrade, re-run
 `tools/blender_probe.py` there before moving the pin. The committed
 `tests/fixtures/models/marker_fixture.baked.glb` is the first real bake
-(256 px, the T2 gate) and was re-baked 2026-10-09 with Smart UV Project.
+(256 px, the T2 gate), re-baked 2026-10-09 with Smart UV Project and
+2026-10-20 on the log10 encoding.
 
 **Room fixtures and the Tower.** `_parse_room` refuses a fixture whose
 instrument disagrees with it (`fixture_instrument_mismatch`,

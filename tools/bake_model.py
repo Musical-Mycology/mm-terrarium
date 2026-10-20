@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from control.model_layout import ModelLayoutError, parse_source_layout  # noqa: E402
 from tools.model_bake_helpers import (  # noqa: E402
     DEFAULT_DECADES, BakeContractError, BakeError, bake_output_path,
-    build_mm_bake_extras, check_blender_version, coverage_report, encode_png_rgba8, flip_rows, group_leds_by_four,
+    build_mm_bake_extras, check_blender_version, check_decades, coverage_report, encode_png_rgba8, flip_rows, group_leds_by_four,
     inject_bake, layout_to_blender_m, lightmap_island_margin, lightmap_texels,
     normalise_maps, quantise_group_rgba8, refuse_thin_lightmap,
 )
@@ -231,6 +231,7 @@ def _export(targets: list, image, nodes: list, path: Path) -> bytes:
 def main() -> None:
     args = _parse_args()
     blender = check_blender_version(tuple(bpy.app.version), PINNED_BLENDER)
+    check_decades(args.decades)
     model_path = args.model.resolve()
     layout = parse_source_layout(model_path.read_bytes(), path=str(model_path))
 

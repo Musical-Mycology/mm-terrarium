@@ -400,11 +400,12 @@ def normalise_maps(raw_maps: dict) -> tuple:
     """Divide each LED's texels by that LED's own brightest texel (spec
     2026-10-20, amending section 5.3 step 4); returns (normalised,
     scales), scales ordered by LED index, so texel * scales[i] recovers
-    LED i's baked value. Negative and NaN texels (bake noise) clamp to 0.
+    LED i's baked value. Negative and non-finite texels (bake noise)
+    clamp to 0.
     Any LED whose map is all black is refused, naming every such LED: its
     light reaches no baked surface, a modelling or material error, not a
     result."""
-    clamped = {led: [t if t > 0.0 else 0.0 for t in texels]   # NaN > 0 is False
+    clamped = {led: [t if math.isfinite(t) and t > 0.0 else 0.0 for t in texels]
                for led, texels in raw_maps.items()}
     peaks = {led: max(texels, default=0.0) for led, texels in clamped.items()}
     dark = sorted(led for led, peak in peaks.items() if peak <= 0.0)
@@ -416,6 +417,14 @@ def normalise_maps(raw_maps: dict) -> tuple:
             f"it are not fully opaque")
     normalised = {led: [t / peaks[led] for t in texels] for led, texels in clamped.items()}
     return normalised, [peaks[led] for led in sorted(peaks)]
+
+
+def check_decades(decades: float) -> float:
+    """Refuses a --decades that is not a finite number > 0, before any LED
+    is baked rather than after."""
+    if not _is_positive_number(decades):
+        raise BakeError(f"--decades must be a finite number > 0, got {decades!r}")
+    return decades
 
 
 def encode_log10(t: float, decades: float) -> int:

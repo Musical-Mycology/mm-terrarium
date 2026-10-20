@@ -293,7 +293,7 @@ def test_validate_baked_glb_refuses_a_file_without_mm_bake():
 from control.model_layout import PixelLayout
 from tools.model_bake_helpers import (
     DEFAULT_DECADES, MIN_LIGHTMAP_TEXELS, BakeError, bake_output_path,
-    build_mm_bake_extras, check_blender_version, coverage_report, decode_log10,
+    build_mm_bake_extras, check_blender_version, check_decades, coverage_report, decode_log10,
     encode_log10, flip_rows, group_leds_by_four, layout_to_blender_m,
     lightmap_island_margin, lightmap_texels, normalise_maps,
     quantise_group_rgba8, refuse_thin_lightmap, uv_polygon_area,
@@ -340,9 +340,19 @@ def test_normalise_maps_orders_scales_by_led_index():
     assert scales == [2.0, 4.0]
 
 
-def test_normalise_maps_clamps_negative_and_nan_texels_to_zero():
-    normalised, scales = normalise_maps({0: [-0.5, float("nan"), 2.0]})
-    assert (normalised, scales) == ({0: [0.0, 0.0, 1.0]}, [2.0])
+def test_normalise_maps_clamps_negative_and_non_finite_texels_to_zero():
+    normalised, scales = normalise_maps({0: [-0.5, float("nan"), float("inf"), 2.0]})
+    assert (normalised, scales) == ({0: [0.0, 0.0, 0.0, 1.0]}, [2.0])
+
+
+@pytest.mark.parametrize("bad", [0, -1.0, float("nan"), float("inf"), True])
+def test_check_decades_refuses_anything_but_a_finite_positive_number(bad):
+    with pytest.raises(BakeError, match="--decades"):
+        check_decades(bad)
+
+
+def test_check_decades_returns_a_good_value():
+    assert check_decades(5) == 5 and check_decades(3.5) == 3.5
 
 
 def test_normalise_maps_refuses_naming_every_dark_led():
