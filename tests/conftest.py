@@ -6,6 +6,28 @@ import pytest
 _REAL_BITS_ROOT = Path(__file__).resolve().parent.parent / "bits"
 
 
+def pytest_sessionstart(session):
+    """Refuse to run against a luxaeterna older than its PR #24. Contract v5
+    frames are RGBW, and the luxaeterna that renders them is the sibling
+    editable install, which nothing pins: a checkout left behind that PR
+    packs 3-byte GRB pixels, and every contract-kit recording then reports
+    "has drifted from its committed recording" with no hint that the cause
+    is outside this repo (2026-10-20). Without luxaeterna at all the core
+    suite still runs; those tests importorskip it."""
+    try:
+        from luxaeterna.synth.capability import shroom_capability
+    except ImportError:
+        return
+    order = shroom_capability().color_order
+    if order != "RGBW":
+        import luxaeterna
+        raise pytest.UsageError(
+            f"luxaeterna at {Path(luxaeterna.__file__).parent} renders "
+            f"Shroom pixels as {order}, not RGBW (contract v5). Update "
+            "luxaeterna to its PR #24 or later: "
+            "git -C ~/projects/luxaeterna pull --ff-only")
+
+
 @pytest.fixture(autouse=True)
 def _host_preflight_off(monkeypatch):
     """The entry points' Avahi/WSL preflight (harness/host_preflight.py)
