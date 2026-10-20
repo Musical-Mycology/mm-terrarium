@@ -55,8 +55,9 @@ def _terrarium_with_model(tmp_path: Path, glb: bytes) -> str:
     (tmp_path / "instruments" / "models").mkdir(parents=True)
     (tmp_path / "rooms").mkdir()
     shutil.copy(REPO / "rooms" / "TOWER.toml", tmp_path / "rooms" / "TOWER.toml")
-    inst_text = (REPO / "instruments" / "tower.toml").read_text()
-    assert "\nmodel" not in inst_text  # the repo still runs on the fallback
+    inst_text = "".join(
+        line for line in (REPO / "instruments" / "tower.toml").read_text().splitlines(True)
+        if not line.startswith("model"))  # swap in the synthetic model
     (tmp_path / "instruments" / "tower.toml").write_text(
         inst_text + 'model = "models/tower.glb"\n')
     (tmp_path / "instruments" / "models" / "tower.glb").write_bytes(glb)
