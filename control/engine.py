@@ -391,6 +391,7 @@ class GameServer:
         try:
             bit_cls = self.bit_registry[name]
             bit = bit_cls(config) if config is not None else bit_cls()
+            bit.room = self.room
             role_table = bit.role_table
             requirements = tuple(bit.instrument_requirements())
             declared_slots = {r.slot for r in requirements}
@@ -697,9 +698,10 @@ class GameServer:
 
     def _jam_for(self, dev: str):
         """The jam role `dev` gets at RUNNING (spec section 3.7): the Bit's
-        first fitting unscored role (JAM class first), skipping a full role
-        and one whose `requires` the carried instrument fails, else a solo
-        role synthesized for it."""
+        first fitting unscored role (JAM class first), skipping a full role,
+        one whose `requires` the carried instrument fails and one the Bit
+        does not admit dev to (Bit.admits), else a solo role synthesized
+        for it."""
         carried = getattr(self.devices.get(dev), "carried", None) \
             or DEFAULTSHROOM
         counts = {name: n for name, n, _cap in self.registration.counts()}
@@ -713,8 +715,18 @@ class GameServer:
                     logger.info("jam role %s refuses %s; trying next",
                                 role.name, dev)
                     continue
+            if not self._bit_admits(dev, role.name):
+                continue
             return role
         return solo_role(carried)
+
+    def _bit_admits(self, dev: str, role_name: str) -> bool:
+        try:
+            return bool(self.bit.admits(dev, role_name))
+        except Exception:
+            logger.exception("Bit.admits failed for %s; refusing %s",
+                             dev, role_name)
+            return False
 
     def _grant(self, dev: str, role) -> None:
         """Compose `dev`'s role blob, tell the Bit (guarded) and hand the

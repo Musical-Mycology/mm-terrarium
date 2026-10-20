@@ -56,7 +56,7 @@ The line is the *pattern*, not the colour:
 What the in-repo Bits do today, checked against that line (all allowed):
 MetronomeBit shifts a player's hue to red on a miss and back to green on
 recovery (`fail_player`, `metro_recovery`: a hue lane, not a flash);
-MinigameBit blinks single 0.5 s white flashes; Rev1Bit's hold and swing are
+MinigameBit fills the Tower's progress bar one green light at a time; Rev1Bit's hold and swing are
 single `SolidCue` flashes (white, red, blue); the built-in `flash`
 diagnostic is one steady 5 s white (section 4, Identify).
 

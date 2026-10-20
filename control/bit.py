@@ -49,6 +49,12 @@ class Bit(ABC):
     # hand-constructed test Bit exact.
     cue_horizon: float = 0.0
 
+    # The active Room (control.rooms.Room), or None with no Room loaded.
+    # Stamped by GameServer.load_bit right after construction, before
+    # role_table or room_manifests() is read, so a Bit can size its Room
+    # light to the fixtures and zones the Room declares. Read-only to a Bit.
+    room = None
+
     @property
     @abstractmethod
     def role_table(self) -> RoleTable:
@@ -94,6 +100,14 @@ class Bit(ABC):
         (before on_run_start), and for each later RUNNING walk-up's jam
         role. `role_name` is the granted role's name. Default: no-op.
         Guarded by GameServer -- a raising Bit cannot break the grant."""
+
+    def admits(self, dev: str, role_name: str) -> bool:
+        """Whether `dev` may take the unscored role `role_name` as its jam
+        role at RUNNING (run() and each walk-up). A refusal moves on to the
+        Bit's next fitting unscored role, else the device's solo role.
+        Default: every device. Guarded by GameServer -- a raising Bit
+        refuses."""
+        return True
 
     def update(self, dt: float) -> bool:
         """Called once per tick while RUNNING.

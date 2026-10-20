@@ -807,14 +807,14 @@ SETUP, not FULL: /handshake │            │            │
   first `/room`); a re-hello from a role holder does nothing.
 - **Jam and Solo** (`control/jam_role.py`): the jam role is the Bit's
   first fitting unscored role (JAM class first, then its other unscored
-  roles in declaration order, skipping full roles and unmet `requires`;
-  never ROOM), else a synthesized `solo:<instrument>` (class `jam`,
+  roles in declaration order, skipping full roles, unmet `requires` and
+  roles the Bit's `admits(dev, role_name)` refuses; never ROOM), else a synthesized `solo:<instrument>` (class `jam`,
   unscored, uncapped; light from the carried instrument's `[solo]`, else
   its ambient; `uses` from `[solo.bindings]`; no `ugen_manifest`). Its
   gestures are served Control-side: `_solo_gesture` resolves the binding
   (`double_tap` is `tap` count 2) and fires that instrument function
   through the fire ladder; unbound gestures drop. A synthesized solo role
-  is never a jam candidate. CaptureBit, MinigameBit and Rev1Bit declare
+  is never a jam candidate. CaptureBit and Rev1Bit declare
   only unscored non-JAM roles and work unchanged through this rule.
 - **The lobby** (every Bit, unless `[lobby] enabled = false`):
   `control/lobby.py` is pure (WAITING/FULL, `NOTE_SCALE`, schedulers);
@@ -1335,6 +1335,9 @@ RGBW, instrument `tower` with no model yet, so it runs on the no-layout
 fallback (a 14-dot strip in the Console). The artist's brief and the import
 recipe are `docs/tower-model-brief.md`; `tests/test_tower_import.py` dry-runs
 the import. Spec: `docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md`.
+`rooms/TOWER_BAR.toml` is a separate bench Room for MinigameBit: one 10 px
+fixture `tower` (instrument `tower_bar`), one zone per light, bound with
+the same `ROOM_TOWER_NODE`, so it leaves the spec layout above untouched.
 Light placement follows the artist's first model (2026-10-05), zig-zag
 included, since 2026-10-09. **Check a model's size before committing it:**
 that first export was 1.18 GB (39M triangles, nearly all decorative fungus
@@ -2243,10 +2246,17 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   `sim`). Tap: `tick`, hue step; hold: `hold`, white 1 s; swing:
   red (negative g) or blue 0.5 s; each a DEVICE trigger the Console can fire.
 
-- **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a hold
-  starts 10 white `blink`s 2 s apart, a tap resets. Its `player` is
-  unscored `unique` capacity 1, so the first pooled device gets it at start
-  (before `on_run_start`, which keeps it) and the rest get solo. Hold needs a Rev 1 board or the sim's long press.
+- **MinigameBit** (`bits/minigame/`, TOWER_BAR, `MINIGAME_PLAYER_NODE`): a
+  shared progress bar on the Tower. Every tap from a player adds 1% (a
+  gesture's `count` taps add that many); progress runs 0-100% whatever the
+  bar's length, spread over the `tower` fixture's zones bottom first (on
+  TOWER_BAR's 10, 10% a light), and at 100% the bar holds full. It sizes
+  the bar from `Bit.room`, which `load_bit` stamps on every Bit before
+  reading its roles and Room manifests. Each light is a zone bound to an
+  aurora held dark whose level rides its own cc lane (20 + k); a tap sends
+  a `LightCue` to `@fixture:tower` for each light it moved. Its `player` is an unscored, uncapped JAM role that
+  `admits` only `ie<N>` ids, so every other device (the Tower before it
+  binds, say) gets solo.
 
 
 ### `www/` and `arcoserver/`
