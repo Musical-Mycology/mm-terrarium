@@ -5,7 +5,8 @@ Blender (spec: mm-tuneshroom docs/superpowers/specs/
 amended in docs/superpowers/plans/2026-09-28-3d-model-t2-bake-export.md).
 
     Blender -b --factory-startup --python-exit-code 1 -P tools/bake_model.py -- \
-        <model.glb> [--resolution 1024] [--samples 128] [--out PATH]
+        <model.glb> [--resolution 1024] [--samples 128] [--decades 5]
+        [--raw PATH.npz] [--out PATH]
 
 Writes <model dir>/<model stem>.baked.glb unless --out is given. Every
 piece of logic that does not need bpy lives in tools/model_bake_helpers.py
@@ -27,8 +28,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from control.model_layout import ModelLayoutError, parse_source_layout  # noqa: E402
 from tools.model_bake_helpers import (  # noqa: E402
-    BakeContractError, BakeError, bake_output_path, build_mm_bake_extras,
-    check_blender_version, encode_png_rgba8, flip_rows, group_leds_by_four,
+    DEFAULT_DECADES, BakeContractError, BakeError, bake_output_path,
+    build_mm_bake_extras, check_blender_version, coverage_report, encode_png_rgba8, flip_rows, group_leds_by_four,
     inject_bake, layout_to_blender_m, lightmap_island_margin, lightmap_texels,
     normalise_maps, quantise_group_rgba8, refuse_thin_lightmap,
 )
@@ -49,6 +50,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("model", type=Path)
     parser.add_argument("--resolution", type=int, default=DEFAULT_RESOLUTION)
     parser.add_argument("--samples", type=int, default=DEFAULT_SAMPLES)
+    parser.add_argument("--decades", type=float, default=DEFAULT_DECADES,
+                        help="width of the log10 texel curve (spec 2026-10-20)")
+    parser.add_argument("--raw", type=Path, default=None,
+                        help="also save the raw float maps here (.npz), so a curve "
+                             "change can be re-encoded without re-baking")
     parser.add_argument("--out", type=Path, default=None)
     return parser.parse_args(argv)
 
@@ -254,20 +260,29 @@ def main() -> None:
         raw[pixel.index] = _bake_led(layout_to_blender_m(pixel), image, args.resolution)
         print(f"bake_model: LED {pixel.index + 1}/{len(layout.pixels)} baked", flush=True)
 
+    if args.raw is not None:
+        np.savez_compressed(args.raw, **{f"led_{led:03d}": np.asarray(texels, np.float32)
+                                         for led, texels in raw.items()})
+        print(f"bake_model: raw maps saved to {args.raw}")
     normalised, map_scale = normalise_maps(raw)
     texels = args.resolution * args.resolution
     pngs = [encode_png_rgba8(args.resolution, args.resolution,
-                             quantise_group_rgba8(group, normalised, texels))
+                             quantise_group_rgba8(group, normalised, texels, args.decades))
             for group in group_leds_by_four(len(layout.pixels))]
+    for pixel, lit in zip(layout.pixels, coverage_report(normalised, args.decades)):
+        print(f"bake_model: LED {pixel.index} {pixel.zone} peak "
+              f"{map_scale[pixel.index]:.6g} lit {lit * 100:.3f}%")
 
     with tempfile.TemporaryDirectory() as tmp:
         exported = _export(targets, image, nodes, Path(tmp) / "export.glb")
     mm_bake = build_mm_bake_extras(
         source_sha256=layout.model_sha256, layout_pixels=layout.pixels,
-        map_scale=map_scale, resolution=args.resolution, blender_version=blender)
+        map_scale=map_scale, decades=args.decades, resolution=args.resolution,
+        blender_version=blender)
     out = args.out or bake_output_path(model_path)
     out.write_bytes(inject_bake(exported, pngs, mm_bake))
-    print(f"bake_model: wrote {out} (map_scale {map_scale:.6g})")
+    print(f"bake_model: wrote {out} (map_scale {min(map_scale):.6g} to "
+          f"{max(map_scale):.6g}, {args.decades:g} decades)")
 
 
 if __name__ == "__main__":
