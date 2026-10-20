@@ -1344,9 +1344,10 @@ RGBW, instrument `tower` on the artist's 2026-10-19 model
 That export needed three fixes on import, all for her next one: Rhino
 flattened the zone layers into root nodes named `LEDs::<zone>` (the parser
 wants one `LEDs` node with zone children), the PAR markers sat inside the
-mast, and three responder markers sit inside an opaque disc. Even so the
-bake's single `map_scale` crushes the responders to under 10/255 and the
-PARs to 0, the open encoding question. The artist's brief and the import
+mast, and three responder markers sit inside an opaque disc. Re-baked
+2026-10-20 on the log10 encoding: every LED lights 0.4% (a progress LED
+behind its diffuser) to 24% (a PAR) of the atlas; the PARs' raw peak is
+about 1/770 of a progress LED's, which one global scale had rounded to 0. The artist's brief and the import
 recipe are `docs/tower-model-brief.md`; `tests/test_tower_import.py` dry-runs
 the import. Spec: `docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md`.
 Light placement follows the artist's first model (2026-10-05), zig-zag
