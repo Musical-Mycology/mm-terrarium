@@ -606,3 +606,34 @@ def test_existing_shipped_instruments_views_are_byte_identical_to_before():
         # not part of "byte-identical" here -- json.dumps(sort_keys=True)
         # is what a real exporter uses, e.g. tools/export_solo.py).
         json.dumps(view, sort_keys=True)
+
+
+# --- Role.zones: single lights on the player surface -----------------------
+
+from control.role_config import validate_role_declarations as _validate_roles
+
+
+def _zoned(zones):
+    role = Role("tower", RoleClass.JAM, None, False, zones=zones)
+    return RoleTable(roles={"tower": role}, node_map={"T": ["tower"]})
+
+
+def test_role_zones_within_the_twelve_pixels_validate():
+    _validate_roles(_zoned(tuple((f"p{k}", k, 1) for k in range(12))))
+    _validate_roles(_zoned((("bar", 0, 10),)))
+    _validate_roles(_zoned(()))
+
+
+@pytest.mark.parametrize("zones, match", [
+    ((("p0", 0, 1), ("p0", 1, 1)), "duplicate zone 'p0'"),
+    ((("p12", 12, 1),), "within the device's 12 pixels"),
+    ((("all", 0, 13),), "within the device's 12 pixels"),
+    ((("none", 0, 0),), "within the device's 12 pixels"),
+    ((("neg", -1, 1),), "within the device's 12 pixels"),
+    ((("primary", 0, 1),), "other than 'primary'"),
+    ((("", 0, 1),), "other than 'primary'"),
+    ((("p0", 0),), r"must be \(name, start, count\)"),
+])
+def test_bad_role_zones_refuse_to_load(zones, match):
+    with pytest.raises(ValueError, match=match):
+        _validate_roles(_zoned(zones))

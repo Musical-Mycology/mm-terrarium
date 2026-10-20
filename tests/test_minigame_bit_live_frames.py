@@ -1,146 +1,130 @@
-"""MinigameBit's INGAME rainbow, rendered the way a live run renders it.
+"""MinigameBit's progress bar, rendered the way a live run renders it.
 
 test_minigame_bit.py asserts on the cues the Bit reports. This asserts on
-the bytes the player device displays: a real GameServer, a real
-DeviceLinkAgent and a real luxaeterna LightSession, ticked at 44 Hz on a
-hand-advanced clock (the harness pattern of
-tests/test_metronome_bit_live_frames.py).
+the bytes a Tower displays: a real GameServer, a real DeviceLinkAgent and
+real luxaeterna LightSessions, ticked at 44 Hz on a hand-advanced clock (the
+harness pattern of tests/test_metronome_bit_live_frames.py). The Tower is a
+plain devtower<N> device holding the tower role, so its frame is the 12 px
+player frame with the bar on pixels 0..3.
 """
 
 import pytest
 
 pytest.importorskip("luxaeterna")
 
-from bits.minigame.minigame_bit import (
-    BLINK_COUNT,
-    BLINK_INTERVAL_S,
-    MINIGAME_PLAYER_NODE,
-    MinigameBit,
-)
+from bits.minigame.minigame_bit import MinigameBit
 from control.engine import GameServer
-from control.room_binding import RoomBindingRegistry
-from control.rooms import Room
-from control.terrarium_config import load_terrarium_config
-from devicelink.agent import DeviceLinkAgent
 from devicelink.contract import HELLO_INTERVAL_S
+from devicelink.agent import DeviceLinkAgent
 
 from tests.test_devicelink_agent import FakeServer, _Clock
 
-TEST_PROFILE = load_terrarium_config("terrarium.toml").rooms["TEST"].profile
+PROGRESS_LIGHTS = 4
+PLAYER_PIXELS = 12
 
 HORIZON = 0.060
 TICK = 1.0 / 44.0
 TAP = ["ie1", 0.0, 80.0, 1]
+DEVICES = (("c1", "devtower1"), ("c2", "ie1"))
 
 
 class _Rig:
-    """A running MinigameBit with ie1 joined as the player."""
+    """A running MinigameBit: devtower1 holding the tower role, ie1 playing."""
 
     def __init__(self):
         self.clk = _Clock(100.0)
         self.gs = GameServer({"MinigameBit": MinigameBit},
-                             room_binding=RoomBindingRegistry(),
                              cue_horizon=HORIZON, clock=self.clk)
-        self.gs.room = Room(name="TEST", profile=TEST_PROFILE,
-                            node_id="ROOM_TEST_NODE")
-        self.gs.load_bit("MinigameBit")
         self.server = FakeServer()
         self.agent = DeviceLinkAgent(self.gs, self.server, clock=self.clk,
                                      horizon=HORIZON)
-        self.server.arrive("c1")
-        self.server.deliver("c1", "/game/hello", "sss", ["ie1", "sim", "1"])
-        self.agent.poll()
-        self.server.deliver("c1", "/game/join", "ss",
-                            ["ie1", MINIGAME_PLAYER_NODE])
-        self.agent.poll()
+        self.gs.load_bit("MinigameBit")
+        for client, dev in DEVICES:
+            self._hello(client, dev)
         self.gs.run()
+        self.agent.poll()
+        assert self.gs.bit.status()["players"] == ["ie1"]
+        assert self.gs.bit.status()["towers"] == ["devtower1"]
         self._seen = 0
         self._last_hello = self.clk()
-        self.frames = []           # [(when, frame)] for ie1, in send order
+        self.frames = []           # [(when, frame)] for devtower1
+
+    def _hello(self, client, dev):
+        self.server.arrive(client)
+        self.server.deliver(client, "/game/hello", "sss", [dev, "sim", "1"])
+        self.agent.poll()
 
     def run(self, seconds):
         for _ in range(int(round(seconds / TICK))):
             self.clk.advance(TICK)
             if self.clk() - self._last_hello >= HELLO_INTERVAL_S:
-                # A real device's heartbeat; without it Control reaps the
-                # silent device after 15 s, mid-round.
-                self.server.deliver("c1", "/game/hello", "sss",
-                                    ["ie1", "sim", "1"])
+                # Real devices' heartbeats; without them Control reaps the
+                # silent devices after 15 s.
+                for client, dev in DEVICES:
+                    self.server.deliver(client, "/game/hello", "sss",
+                                        [dev, "sim", "1"])
                 self._last_hello = self.clk()
             self.agent.poll()
             self.gs.tick(TICK)
             for _dev, msg in self.server.sent[self._seen:]:
-                if msg["address"] == "/ie1/leds":
+                if msg["address"] == "/devtower1/leds":
                     self.frames.append((msg["timestamp"],
                                         bytes(msg["args"][0])))
             self._seen = len(self.server.sent)
 
-    def tap(self):
-        self.server.deliver("c1", "/game/tap", "sffi", TAP,
-                            timestamp=self.clk())
-        self.agent.poll()
+    def tap(self, n=1):
+        for _ in range(n):
+            self.server.deliver("c2", "/game/tap", "sffi", TAP,
+                                timestamp=self.clk())
+            self.agent.poll()
 
-    def shown_at(self, t):
-        """The frame on the ring at time `t`: the newest `when` <= t."""
-        due = [f for when, f in self.frames if when <= t]
-        return due[-1] if due else None
+    def pixels(self):
+        """Each pixel's brightness (its brightest channel) on the newest
+        frame."""
+        frame = self.frames[-1][1]
+        px = [frame[i:i + 4] for i in range(0, len(frame), 4)]
+        assert len(px) == PLAYER_PIXELS
+        return [max(p) for p in px]
 
-
-def _pixels(frame):
-    return [tuple(frame[i:i + 4]) for i in range(0, len(frame), 4)]
-
-
-def _is_rainbow(frame):
-    """Lit, and not one colour: a rainbow's pixels differ around the ring."""
-    px = _pixels(frame)
-    return sum(frame) > 0 and len(set(px)) >= 6
+    def lights(self):
+        return self.pixels()[:PROGRESS_LIGHTS]
 
 
-def test_ring_is_dark_in_pending_after_the_role_signature():
+def test_the_bar_starts_dark():
     rig = _Rig()
-    rig.run(3.0)                   # clear luxaeterna's ~1.5 s role signature
-    assert sum(rig.shown_at(rig.clk())) == 0
+    rig.run(3.0)                   # clear the ~1.5 s role signature
+    assert rig.pixels() == [0] * PLAYER_PIXELS
 
 
-def test_ingame_shows_a_scrolling_rainbow_between_blinks():
+def test_taps_fill_the_bar_bottom_first_a_twentyfifth_of_a_light_each():
     rig = _Rig()
-    rig.run(3.0)
-    rig.tap()                      # PENDING -> INGAME
-    t0 = rig.clk() + HORIZON
-    rig.run(4.0)
-    # Mid-gap between blink 0 (t0..t0+0.5) and blink 1 (t0+2.0).
-    a, b = rig.shown_at(t0 + 1.0), rig.shown_at(t0 + 1.5)
-    assert _is_rainbow(a), _pixels(a)
-    assert _is_rainbow(b), _pixels(b)
-    assert a != b, "the rainbow did not move"
-
-
-def test_blinks_still_flash_white_over_the_rainbow():
-    rig = _Rig()
-    rig.run(3.0)
-    rig.tap()
-    t0 = rig.clk() + HORIZON
-    rig.run(3.0)
-    blink = rig.shown_at(t0 + 2.0 + 0.25)      # inside blink 1
-    assert len(set(_pixels(blink))) == 1 and sum(blink) > 0
-
-
-def test_rainbow_goes_dark_when_the_round_ends():
-    rig = _Rig()
-    rig.run(3.0)
-    rig.tap()
-    rig.run(BLINK_COUNT * BLINK_INTERVAL_S + 2.0)
-    assert rig.gs.bit.status()["phase"] == "END"
-    assert sum(rig.shown_at(rig.clk())) == 0
-
-
-def test_a_reset_tap_darkens_the_rainbow():
-    rig = _Rig()
-    rig.run(3.0)
-    rig.tap()
+    rig.run(3.0)                   # clear the ~1.5 s role signature
+    rig.tap(35)                    # 35%: light 0 full, light 1 at 0.4
     rig.run(1.0)
-    assert _is_rainbow(rig.shown_at(rig.clk()))
-    rig.tap()                      # INGAME -> PENDING
+    lights = rig.lights()
+    assert lights[0] > 200
+    assert lights[1] == pytest.approx(lights[0] * 0.4, abs=3)
+    assert lights[2:] == [0] * (PROGRESS_LIGHTS - 2)
+    assert rig.pixels()[PROGRESS_LIGHTS:] == \
+        [0] * (PLAYER_PIXELS - PROGRESS_LIGHTS)
+
+
+def test_one_tap_lights_a_twentyfifth_of_the_first_light():
+    rig = _Rig()
+    rig.run(3.0)                   # clear the ~1.5 s role signature
+    rig.tap(25)
     rig.run(1.0)
-    assert rig.gs.bit.status()["phase"] == "PENDING"
-    assert sum(rig.shown_at(rig.clk())) == 0
+    full = rig.lights()[0]
+    assert full > 200
+    rig2 = _Rig()
+    rig2.run(3.0)
+    rig2.tap(1)
+    rig2.run(1.0)
+    assert rig2.lights()[0] == pytest.approx(full / 25, abs=2)
+
+
+def test_a_player_never_gets_the_tower_surface():
+    rig = _Rig()
+    assert rig.agent.bridges["ie1"].session.cap.pixel_count == PLAYER_PIXELS
+    zones = {z.name for z in rig.agent.bridges["devtower1"].session.cap.zones}
+    assert {f"p{k}" for k in range(PROGRESS_LIGHTS)} <= zones

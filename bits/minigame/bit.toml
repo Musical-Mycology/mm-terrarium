@@ -1,7 +1,7 @@
 [bit]
 name = "MinigameBit"
-version = "0.1.0"
-description = "Single-Tuneshroom bench toy: tap starts a rainbow with 10 white blinks 2 s apart, tap again resets"
+version = "0.3.0"
+description = "Tower progress bar: each tap from an ie<N> device adds 1%, shown on every devtower<N> device's 4 lights"
 entry = "minigame_bit:MinigameBit"
 kind = "tool"
 requires_terrarium_api = 1
@@ -20,4 +20,4 @@ when = "immediate"
 
 [console]
 display_name = "Minigame"
-notes = "Join one device on MINIGAME_PLAYER_NODE. It waits in PENDING until a tap starts a round (INGAME): the ring shows a scrolling rainbow and blinks white over it 10 times, 2 s apart; the rainbow goes dark at the 10th blink and the round ends on its own (END). The ring is dark outside INGAME. A tap in INGAME or END resets to PENDING. No scoring, and it never completes on its own, so unload it when done."
+notes = "Connect devtower<N> devices (devtower1, devtower2, ...) and ie<N> devices; any other device keeps its own solo behaviour. A Tower is a plain device, not a Room fixture: it needs no Arm and must not handshake a Room node. Every tap from an ie<N> device adds 1% to one shared progress figure, shown on every Tower's first 4 lights, bottom first, 25% each. A Tower that connects late catches up on the next tap. At 100% the bar holds full and taps do nothing. No scoring, and it never completes on its own, so unload or reload it to start over."

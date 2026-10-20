@@ -1,0 +1,7 @@
+description = "Dev Tower: ESP32-P4 bench board, 4-LED progress bar on a 12-px frame, speaker"
+pixels = 12
+capabilities = ["light.pixels", "audio.samples"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+  [ambient]
+  [ambient.light]
+  instruments = [ { instrument = "aurora", target = "primary" } ]

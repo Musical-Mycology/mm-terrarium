@@ -24,6 +24,9 @@ class JoinResult:
     # Role.requires (wire-friendly: name, not the Instrument object).
     slot: str | None = None
     instrument: str | None = None
+    # Role.zones, carried out to DeviceLinkAgent so it builds the device's
+    # surface with them. () on a denial and for a plain-shroom role.
+    zones: tuple = ()
     # Composed per-role config blob for /<dev>/role -- filled by
     # GameServer._grant at RUNNING (control/role_config.py);
     # RegistrationState itself never touches it.
