@@ -25,7 +25,9 @@ def test_encode_png_rgba8_refuses_the_wrong_pixel_length():
 
 def _mm_bake(pixels: int) -> dict:
     """A valid mm_bake for `pixels` LEDs (inject_bake rewrites "maps")."""
-    return {"source_sha256": "ab" * 32, "pixels": pixels, "map_scale": 1.0,
+    return {"source_sha256": "ab" * 32, "pixels": pixels,
+            "map_scale": [1.0] * pixels,
+            "map_encoding": {"curve": "log10", "decades": 5},
             "maps": [], "uv": "TEXCOORD_1", "resolution": 2, "blender": "test",
             "layout": [{"index": i, "x_mm": 0, "y_mm": 0, "z_mm": i,
                         "size": "medium", "zone": None} for i in range(pixels)]}
@@ -46,7 +48,8 @@ def _bakeable_glb_bytes() -> bytes:
 
 def test_inject_bake_adds_images_textures_sampler_and_root_extras():
     png = _flat_png(2, 2, (1, 2, 3, 4))
-    mm_bake = {"source_sha256": "ab" * 32, "pixels": 1, "map_scale": 1.0,
+    mm_bake = {"source_sha256": "ab" * 32, "pixels": 1, "map_scale": [1.0],
+               "map_encoding": {"curve": "log10", "decades": 5},
                "resolution": 2, "blender": "4.2", "uv": "TEXCOORD_1",
                "layout": [{"index": 0, "x_mm": 0, "y_mm": 0, "z_mm": 0,
                            "size": "medium", "zone": None}]}
@@ -220,8 +223,19 @@ def test_validate_mm_bake_accepts_a_valid_block():
     (lambda b: b.update(source_sha256="a" * 64 + "\n"), "source_sha256"),
     (lambda b: b.update(pixels=0), "pixels"),
     (lambda b: b.update(pixels=True), "pixels"),
-    (lambda b: b.update(map_scale=float("nan")), "map_scale"),
-    (lambda b: b.update(map_scale=0), "map_scale"),
+    (lambda b: b.update(map_scale=1.0), "map_scale"),
+    (lambda b: b.update(map_scale=[1.0] * 4), "map_scale"),
+    (lambda b: b["map_scale"].__setitem__(2, 0), "map_scale"),
+    (lambda b: b["map_scale"].__setitem__(2, float("nan")), "map_scale"),
+    (lambda b: b["map_scale"].__setitem__(2, True), "map_scale"),
+    (lambda b: b.pop("map_encoding"), "missing required key"),
+    (lambda b: b.update(map_encoding=5), "map_encoding"),
+    (lambda b: b["map_encoding"].update(curve="gamma"), "curve"),
+    (lambda b: b["map_encoding"].update(decades=0), "decades"),
+    (lambda b: b["map_encoding"].update(decades=True), "decades"),
+    (lambda b: b["map_encoding"].update(decades=float("inf")), "decades"),
+    (lambda b: b["map_encoding"].update(gamma=2.2), "map_encoding"),
+    (lambda b: b["map_encoding"].pop("curve"), "map_encoding"),
     (lambda b: b.update(uv="TEXCOORD_0"), "uv"),
     (lambda b: b.update(resolution=0), "resolution"),
     (lambda b: b.update(blender=""), "blender"),
@@ -241,6 +255,14 @@ def test_validate_mm_bake_refuses_each_contract_violation(mutate, match):
     mutate(bake)
     with pytest.raises(BakeContractError, match=match):
         validate_mm_bake(bake)
+
+
+def test_validate_mm_bake_accepts_int_and_float_decades():
+    bake = _valid_bake()
+    bake["map_encoding"]["decades"] = 4.5
+    validate_mm_bake(bake)
+    bake["map_encoding"]["decades"] = 5
+    validate_mm_bake(bake)
 
 
 def test_validate_baked_glb_accepts_the_committed_mmbake_fixture():
@@ -270,8 +292,9 @@ def test_validate_baked_glb_refuses_a_file_without_mm_bake():
 
 from control.model_layout import PixelLayout
 from tools.model_bake_helpers import (
-    MIN_LIGHTMAP_TEXELS, BakeError, bake_output_path, build_mm_bake_extras,
-    check_blender_version, flip_rows, group_leds_by_four, layout_to_blender_m,
+    DEFAULT_DECADES, MIN_LIGHTMAP_TEXELS, BakeError, bake_output_path,
+    build_mm_bake_extras, check_blender_version, check_decades, coverage_report, decode_log10,
+    encode_log10, flip_rows, group_leds_by_four, layout_to_blender_m,
     lightmap_island_margin, lightmap_texels, normalise_maps,
     quantise_group_rgba8, refuse_thin_lightmap, uv_polygon_area,
 )
@@ -306,20 +329,64 @@ def test_flip_rows_refuses_the_wrong_length():
         flip_rows([1, 2, 3], 2, 2)
 
 
-def test_normalise_maps_scales_by_the_brightest_texel_across_all_leds():
-    normalised, scale = normalise_maps({0: [0.5, 1.0], 1: [2.0, 0.0]})
-    assert scale == 2.0
-    assert normalised == {0: [0.25, 0.5], 1: [1.0, 0.0]}
+def test_normalise_maps_scales_each_led_by_its_own_peak():
+    normalised, scales = normalise_maps({0: [0.5, 1.0], 1: [2.0, 0.0]})
+    assert scales == [1.0, 2.0]
+    assert normalised == {0: [0.5, 1.0], 1: [1.0, 0.0]}
 
 
-def test_normalise_maps_clamps_negative_texels_to_zero():
-    normalised, scale = normalise_maps({0: [-0.5, 1.0]})
-    assert (normalised, scale) == ({0: [0.0, 1.0]}, 1.0)
+def test_normalise_maps_orders_scales_by_led_index():
+    _, scales = normalise_maps({1: [4.0], 0: [2.0]})
+    assert scales == [2.0, 4.0]
 
 
-def test_normalise_maps_refuses_an_all_black_bake():
-    with pytest.raises(BakeError, match="black"):
-        normalise_maps({0: [0.0, 0.0], 1: [0.0, 0.0]})
+def test_normalise_maps_clamps_negative_and_non_finite_texels_to_zero():
+    normalised, scales = normalise_maps({0: [-0.5, float("nan"), float("inf"), 2.0]})
+    assert (normalised, scales) == ({0: [0.0, 0.0, 0.0, 1.0]}, [2.0])
+
+
+@pytest.mark.parametrize("bad", [0, -1.0, float("nan"), float("inf"), True])
+def test_check_decades_refuses_anything_but_a_finite_positive_number(bad):
+    with pytest.raises(BakeError, match="--decades"):
+        check_decades(bad)
+
+
+def test_check_decades_returns_a_good_value():
+    assert check_decades(5) == 5 and check_decades(3.5) == 3.5
+
+
+def test_normalise_maps_refuses_naming_every_dark_led():
+    with pytest.raises(BakeError, match=r"LED 1, LED 2\b"):
+        normalise_maps({0: [1.0], 1: [0.0, 0.0], 2: [-1.0]})
+
+
+def test_default_decades_is_five():
+    assert DEFAULT_DECADES == 5
+
+
+def test_encode_log10_endpoints_and_floor():
+    assert encode_log10(1.0, 5) == 255
+    assert encode_log10(0.0, 5) == 0
+    assert encode_log10(1e-6, 5) == 0
+    assert encode_log10(10 ** (-5 * 254 / 255), 5) == 1
+    assert encode_log10(1e-5 * 0.999, 5) == 0
+
+
+def test_decode_log10_zero_is_black_and_255_is_the_peak():
+    assert decode_log10(0, 5) == 0.0
+    assert decode_log10(255, 5) == 1.0
+
+
+def test_log10_round_trip_is_within_half_a_code_step():
+    half_step = 10 ** (5 / 510) - 1
+    for k in range(0, 491):
+        t = 10 ** (-k / 100)          # 1 down to 10^-4.9
+        code = encode_log10(t, 5)
+        assert abs(decode_log10(code, 5) / t - 1) <= half_step + 1e-9, t
+
+
+def test_coverage_report_is_the_share_of_texels_above_code_zero():
+    assert coverage_report({1: [1e-6, 0.5], 0: [1.0, 0.0]}, 5) == [0.5, 0.5]
 
 
 def test_uv_polygon_area_of_a_unit_square_and_a_triangle():
@@ -351,25 +418,29 @@ def test_refuse_thin_lightmap_passes_at_the_floor():
 
 
 def test_quantise_group_rgba8_packs_leds_into_r_g_b_a_in_group_order():
-    normalised = {4: [1.0, 0.0], 5: [0.5, 0.0], 6: [0.0, 1.0]}
-    out = quantise_group_rgba8([4, 5, 6], normalised, texel_count=2)
-    # texel 0: R=LED4 255, G=LED5 128, B=LED6 0, A=unused 0
-    assert out == bytes([255, 128, 0, 0, 0, 0, 255, 0])
+    normalised = {4: [1.0, 0.0], 5: [0.1, 0.0], 6: [0.0, 1.0]}
+    out = quantise_group_rgba8([4, 5, 6], normalised, texel_count=2, decades=5)
+    # texel 0: R=LED4 255, G=LED5 one decade down (204), B=LED6 0, A=unused 0
+    assert out == bytes([255, 204, 0, 0, 0, 0, 255, 0])
 
 
 def test_quantise_group_rgba8_refuses_a_map_of_the_wrong_length():
     with pytest.raises(ValueError, match="LED 1"):
-        quantise_group_rgba8([0, 1], {0: [0.0, 0.0], 1: [0.0]}, texel_count=2)
+        quantise_group_rgba8([0, 1], {0: [0.0, 0.0], 1: [0.0]}, texel_count=2,
+                             decades=5)
 
 
 def test_build_mm_bake_extras_passes_the_contract_and_uses_the_one_serializer():
     layout = tuple(PixelLayout(index=i, x_mm=i, y_mm=0, z_mm=10, size="small",
                                zone=None) for i in range(5))
     extras = build_mm_bake_extras(source_sha256="cd" * 32, layout_pixels=layout,
-                                  map_scale=0.87, resolution=256,
+                                  map_scale=[0.87, 0.5, 1.0, 2.0, 3.0],
+                                  decades=5, resolution=256,
                                   blender_version="4.5.14")
     validate_mm_bake(extras)
     assert extras["pixels"] == 5 and extras["maps"] == [0, 1]
+    assert extras["map_scale"] == [0.87, 0.5, 1.0, 2.0, 3.0]
+    assert extras["map_encoding"] == {"curve": "log10", "decades": 5}
     assert extras["uv"] == "TEXCOORD_1" and extras["blender"] == "4.5.14"
     assert extras["layout"][4] == {"index": 4, "x_mm": 4, "y_mm": 0, "z_mm": 10,
                                    "size": "small", "zone": None}
