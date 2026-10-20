@@ -13,10 +13,9 @@ import pytest
 
 pytest.importorskip("luxaeterna")
 
-from bits.minigame.minigame_bit import MinigameBit
 from console.agent import ConsoleAgent
 from control.bit import Bit
-from control.cues import TARGET
+from control.cues import TARGET, SolidCue
 from control.engine import GameServer
 from control.functions import (Condition, ConditionSource, Function,
                                FunctionTable, FunctionTarget, ScriptStep)
@@ -78,8 +77,50 @@ class _Rig:
         return (err["message"] if err else None), frames
 
 
+RAINBOW_LEVEL_CC = 7
+
+
+class _RainbowBit(Bit):
+    """One unscored player role whose ring is a rainbow held dark, with
+    lane Functions that light and darken it and a solid blink: the shape
+    MinigameBit had before it became the Tower progress bar."""
+    room_types = {"TEST"}
+
+    @property
+    def role_table(self):
+        player = Role(
+            name="player", role_class=RoleClass.UNIQUE, capacity=1,
+            scored=False, uses=["tap"], breath=False,
+            light_manifest={"instruments": [
+                {"instrument": "rainbow", "target": "primary",
+                 "params": {"hue": 0.0, "level": 0.0, "span": 1.0,
+                            "speed": 0.25},
+                 "lanes": [{"source": f"cc:{RAINBOW_LEVEL_CC}",
+                            "dest": "level"}]}]})
+        return RoleTable(roles={"player": player},
+                         node_map={"PLAYER_NODE": ["player"]})
+
+    @property
+    def function_table(self):
+        def device_fn(name, step):
+            return Function(
+                name=name, description=name, target=FunctionTarget.DEVICE,
+                condition=Condition(name=name, description=name,
+                                    source=ConditionSource.BIT_ADJUDICATED),
+                script=(ScriptStep(0.0, step),))
+
+        return FunctionTable(functions={
+            "rainbow_on": device_fn(
+                "rainbow_on", (TARGET, 0xB0, RAINBOW_LEVEL_CC, 127)),
+            "rainbow_off": device_fn(
+                "rainbow_off", (TARGET, 0xB0, RAINBOW_LEVEL_CC, 0)),
+            "blink": device_fn(
+                "blink", SolidCue(TARGET, (255, 255, 255), 0.9, 0.5)),
+        })
+
+
 def _minigame():
-    rig = _Rig({"MinigameBit": MinigameBit}, "MinigameBit")
+    rig = _Rig({"RainbowBit": _RainbowBit}, "RainbowBit")
     rig.run(3.0)
     return rig
 

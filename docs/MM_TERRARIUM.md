@@ -807,14 +807,14 @@ SETUP, not FULL: /handshake │            │            │
   first `/room`); a re-hello from a role holder does nothing.
 - **Jam and Solo** (`control/jam_role.py`): the jam role is the Bit's
   first fitting unscored role (JAM class first, then its other unscored
-  roles in declaration order, skipping full roles and unmet `requires`;
-  never ROOM), else a synthesized `solo:<instrument>` (class `jam`,
+  roles in declaration order, skipping full roles, unmet `requires` and
+  roles the Bit's `admits(dev, role_name)` refuses; never ROOM), else a synthesized `solo:<instrument>` (class `jam`,
   unscored, uncapped; light from the carried instrument's `[solo]`, else
   its ambient; `uses` from `[solo.bindings]`; no `ugen_manifest`). Its
   gestures are served Control-side: `_solo_gesture` resolves the binding
   (`double_tap` is `tap` count 2) and fires that instrument function
   through the fire ladder; unbound gestures drop. A synthesized solo role
-  is never a jam candidate. CaptureBit, MinigameBit and Rev1Bit declare
+  is never a jam candidate. CaptureBit and Rev1Bit declare
   only unscored non-JAM roles and work unchanged through this rule.
 - **The lobby** (every Bit, unless `[lobby] enabled = false`):
   `control/lobby.py` is pure (WAITING/FULL, `NOTE_SCALE`, schedulers);
@@ -2249,10 +2249,21 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   `sim`). Tap: `tick`, hue step; hold: `hold`, white 1 s; swing:
   red (negative g) or blue 0.5 s; each a DEVICE trigger the Console can fire.
 
-- **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a hold
-  starts 10 white `blink`s 2 s apart, a tap resets. Its `player` is
-  unscored `unique` capacity 1, so the first pooled device gets it at start
-  (before `on_run_start`, which keeps it) and the rest get solo. Hold needs a Rev 1 board or the sim's long press.
+- **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a
+  shared progress bar on every Tower. It sorts devices by id with
+  `admits`: `ie<N>` takes `player`, `devtower<N>` (instrument `devtower`) takes `tower` (both
+  unscored, uncapped JAM roles), anything else gets solo. A Tower is a
+  plain device, not a Room fixture: no Arm, no Room node, a 12 px player
+  frame. Every tap from a player adds 1% (a gesture's `count` taps add
+  that many) to one figure all Towers show on pixels 0-3, bottom first,
+  25% a light; at 100% the bar holds full. The `tower` role declares
+  `Role.zones` `p0`..`p3`, one pixel each, which `DeviceLinkAgent` builds
+  into that device's surface (`harness/device_bridge.py`'s
+  `zoned_capability`, which pads the unnamed pixels 4-11 with an
+  `unzoned4` zone so the zones tile the frame), so each light is a zone bound to an aurora held
+  dark whose level rides its own cc lane (20 + k). A tap sends each Tower
+  a `LightCue` for each light it moved, or the whole bar to a Tower that
+  joined since the last tap.
 
 
 ### `www/` and `arcoserver/`

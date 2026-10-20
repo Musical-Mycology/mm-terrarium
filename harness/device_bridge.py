@@ -9,9 +9,42 @@ from __future__ import annotations
 
 import time
 
-from luxaeterna.synth.capability import shroom_capability
+from control.pixel_wire import WIRE_ORDER
+from control.role_config import PLAYER_PIXELS
+from luxaeterna.synth.capability import SurfaceCapability, Zone, shroom_capability
 from luxaeterna.synth.manifest import LightManifest
 from luxaeterna.synth.session import build_session
+
+
+def zoned_capability(dev: str, zones) -> SurfaceCapability:
+    """A player device's 12 px surface carrying a role's own zones
+    (Role.zones, (name, start, count) each) plus `primary` over the whole
+    surface, which an untargeted manifest instrument resolves to -- the
+    same shape harness/room_surface.py gives a Room fixture. A role may
+    name only some pixels (a 4-light bar on the 12 px frame): the rest get
+    `unzoned<start>` filler zones, since luxaeterna wants a surface's zones
+    to tile it whole."""
+    named = [Zone(name, start, count) for name, start, count in zones]
+    return SurfaceCapability(
+        surface_id=dev,
+        pixel_count=PLAYER_PIXELS,
+        color_order=WIRE_ORDER,
+        zones=named + _unzoned(named) + [Zone("primary", 0, PLAYER_PIXELS)],
+    )
+
+
+def _unzoned(zones) -> list[Zone]:
+    """One zone per run of player pixels that `zones` leave uncovered."""
+    covered = {p for z in zones for p in range(z.start, z.start + z.count)}
+    out, start = [], None
+    for p in range(PLAYER_PIXELS + 1):
+        if p < PLAYER_PIXELS and p not in covered:
+            if start is None:
+                start = p
+        elif start is not None:
+            out.append(Zone(f"unzoned{start}", start, p - start))
+            start = None
+    return out
 
 
 class DeviceBridge:

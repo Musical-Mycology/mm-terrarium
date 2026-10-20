@@ -465,7 +465,7 @@ def test_lobby_without_scored_roles_waits():
 
 
 class _UnscoredBit(_Bit):
-    """Only unscored, non-JAM roles (the CaptureBit / MinigameBit shape)."""
+    """Only unscored, non-JAM roles (the CaptureBit shape)."""
     roles_spec = ()
 
     @property

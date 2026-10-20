@@ -78,3 +78,17 @@ def test_on_grant_rejects_a_denied_join():
     assert res.reason == "registration closed"
     with pytest.raises(ValueError):
         DeviceBridge().on_grant(res)
+
+
+def test_zoned_capability_pads_the_pixels_a_role_leaves_unnamed():
+    # A 4-light bar on the 12 px frame: luxaeterna refuses zones that do
+    # not tile the surface ("gap at pixel 4") unless the rest is filled.
+    from harness.device_bridge import zoned_capability
+    cap = zoned_capability("devtower1", [(f"p{k}", k, 1) for k in range(4)])
+    assert [(z.name, z.start, z.count) for z in cap.zones] == [
+        ("p0", 0, 1), ("p1", 1, 1), ("p2", 2, 1), ("p3", 3, 1),
+        ("unzoned4", 4, 8), ("primary", 0, 12)]
+    gappy = zoned_capability("devtower1", [("a", 2, 3), ("b", 7, 1)])
+    assert [(z.name, z.start, z.count) for z in gappy.zones
+            if z.name.startswith("unzoned")] == [
+        ("unzoned0", 0, 2), ("unzoned5", 5, 2), ("unzoned8", 8, 4)]
