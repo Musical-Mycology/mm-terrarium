@@ -2,4 +2,7 @@ description = "Tower fixture: 8 progress indicators, 4 responders, 2 base PAR li
 pixels = 14
 capabilities = ["light.surface"]
 accepted_cues = ["midi", "play", "solid", "mute"]
-# No model line yet: docs/tower-model-brief.md, section "Importing the file".
+# Sophia's 2026-10-19 export, regrouped under one LEDs node (Rhino flattened
+# the sublayers), PAR markers pulled to the mast's front face, responder
+# discs given the diffusers' transmission. docs/tower-model-brief.md.
+model = "models/tower.glb"

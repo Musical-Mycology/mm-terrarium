@@ -35,10 +35,10 @@ def test_tower_room_uses_devicelink():
     assert CONFIG.rooms["TOWER"].node_id == "ROOM_TOWER_NODE"
 
 
-def test_tower_instrument_runs_on_the_no_model_fallback():
+def test_tower_instrument_carries_its_model_layout():
     inst = _fixture().instrument
     assert inst.name == "tower"
     assert inst.pixels == 14
     assert "light.surface" in inst.capabilities
-    assert inst.layout == ()
-    assert inst.model_sha256 is None
+    assert [p.zone for p in inst.layout] == ["progress"] * 8 + ["responder"] * 4 + ["beat"] * 2
+    assert inst.model_sha256 is not None

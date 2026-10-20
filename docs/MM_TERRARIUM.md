@@ -1331,8 +1331,14 @@ Panel) refuses an instrument that would break a published room binding it,
 so a publish can never leave the Terrarium unable to boot.
 `rooms/TOWER.toml` is the first fixture this matters
 for: 14 px (`progress` 0-7, `responder` 8-11, `beat` 12-13, the two base PARs),
-RGBW, instrument `tower` with no model yet, so it runs on the no-layout
-fallback (a 14-dot strip in the Console). The artist's brief and the import
+RGBW, instrument `tower` on the artist's 2026-10-19 model
+(`instruments/models/tower.glb`, 242k triangles, 7 MB, baked beside it).
+That export needed three fixes on import, all for her next one: Rhino
+flattened the zone layers into root nodes named `LEDs::<zone>` (the parser
+wants one `LEDs` node with zone children), the PAR markers sat inside the
+mast, and three responder markers sit inside an opaque disc. Even so the
+bake's single `map_scale` crushes the responders to under 10/255 and the
+PARs to 0, the open encoding question. The artist's brief and the import
 recipe are `docs/tower-model-brief.md`; `tests/test_tower_import.py` dry-runs
 the import. Spec: `docs/superpowers/specs/2026-10-02-tower-fixture-layout-design.md`.
 Light placement follows the artist's first model (2026-10-05), zig-zag
