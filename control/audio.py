@@ -16,6 +16,13 @@ not the implementation. So the channel here is real but INTERNAL to the backend:
 nothing in this file names one. The type is DeviceVoice, not Synth, so this is
 not read as that abstraction having landed. See
 docs/superpowers/specs/2026-08-06-tuneshroom-audio-design.md section 9.1.
+
+A role declares one voice per ugen_manifest instrument; the list index is the
+PART number. A Room cue's status-byte channel nibble selects the part (a nibble
+naming no declared part falls back to part 0). At most one part is `drums`:
+the pool gives it the channel General MIDI percussion needs and keeps melodic
+voices off it, but that mapping is the pool's, not named here. The lobby breath
+(set_control) and the drone address part 0.
 """
 
 from __future__ import annotations
@@ -60,6 +67,7 @@ class FakeVoice:
 
     def __init__(self) -> None:
         self.sent: list[tuple] = []
+        self.drums = False        # set by FakePool.acquire(drums=True)
 
     def note_on(self, key: int, vel: int) -> None:
         self.sent.append(("note_on", key, vel))
@@ -84,8 +92,9 @@ class FakePool:
         self.polls = 0
         self.shut = False
 
-    def acquire(self) -> FakeVoice:
+    def acquire(self, *, drums: bool = False) -> FakeVoice:
         voice = FakeVoice()
+        voice.drums = drums
         self.acquired.append(voice)
         return voice
 
@@ -122,16 +131,31 @@ def parse_cc_ref(ref, where: str | None = None) -> int:
     return num
 
 
-class _DeviceAudio:
-    """Per-device state: the voice, its lane map, and its drone."""
+class _Part:
+    """One declared instrument's voice and its lane map."""
 
-    __slots__ = ("voice", "lanes", "drone", "drone_key")
+    __slots__ = ("voice", "lanes")
 
-    def __init__(self, voice, lanes: dict[int, int], drone: dict | None) -> None:
+    def __init__(self, voice, lanes: dict[int, int]) -> None:
         self.voice = voice
         self.lanes = lanes
+
+
+class _DeviceAudio:
+    """Per-device state: its parts (index = part number) and the drone, which
+    belongs to part 0."""
+
+    __slots__ = ("parts", "drone", "drone_key")
+
+    def __init__(self, parts: list[_Part], drone: dict | None) -> None:
+        self.parts = parts
         self.drone = drone
         self.drone_key: int | None = None       # set while the drone sounds
+
+    @property
+    def voice(self):
+        """Part 0's voice: the lobby breath and the drone address it."""
+        return self.parts[0].voice
 
 
 class AudioBridge:
@@ -164,9 +188,10 @@ class AudioBridge:
         return self._pool
 
     def on_grant(self, dev: str, role: Role) -> None:
-        """Role adopted: acquire a voice, wire its lanes, sound the welcome.
-        A role declaring no instruments is silent and must not consume a voice,
-        but it may still have a welcome cue.
+        """Role adopted: acquire a voice per declared instrument, wire each
+        one's lanes, sound the welcome. A role declaring no instruments is
+        silent and must not consume a voice, but it may still have a welcome
+        cue.
 
         A no-op once shutdown() has run. harness/terrarium_boot.shutdown()
         shuts this bridge (and the pool's arco.finish()) BEFORE the Room
@@ -177,14 +202,19 @@ class AudioBridge:
             return
         instruments = role.ugen_manifest.get("instruments", [])
         if instruments:
-            decl = instruments[0]        # v0: one instrument per role
-            voice = self._pool.acquire()
-            program = decl.get("program")
-            if program is not None:
-                voice.program_change(int(program))
-            lanes = {parse_cc_ref(lane["source"]): parse_cc_ref(lane["dest"])
-                     for lane in decl.get("lanes", [])}
-            self._devices[dev] = _DeviceAudio(voice, lanes, decl.get("drone"))
+            parts = []
+            for decl in instruments:     # list index = part number
+                # drums is passed only when set, so a pool that predates the
+                # flag still serves every melodic role.
+                voice = (self._pool.acquire(drums=True) if decl.get("drums")
+                         else self._pool.acquire())
+                program = decl.get("program")
+                if program is not None:
+                    voice.program_change(int(program))
+                lanes = {parse_cc_ref(lane["source"]): parse_cc_ref(lane["dest"])
+                         for lane in decl.get("lanes", [])}
+                parts.append(_Part(voice, lanes))
+            self._devices[dev] = _DeviceAudio(parts, instruments[0].get("drone"))
         self._play_welcome(role)
 
     def _play_welcome(self, role: Role) -> None:
@@ -216,8 +246,8 @@ class AudioBridge:
         self._pending_offs.append((self._clock() + float(duration), voice, int(key)))
 
     def set_control(self, dev: str, cc: int, value: int) -> None:
-        """Write a controller straight to dev's voice, ignoring the role's
-        lane map. The lobby breath uses this: a Bit's ROOM ugen need not
+        """Write a controller straight to dev's part-0 voice, ignoring the
+        role's lane map. The lobby breath uses this: a Bit's ROOM ugen need not
         declare cc:11 for the lobby to swell its pad."""
         entry = self._devices.get(dev)
         if entry is None:
@@ -252,22 +282,26 @@ class AudioBridge:
         self._apply_midi(dev, status, d1, d2)
 
     def _apply_midi(self, dev: str, status: int, d1: int, d2: int) -> None:
-        """The one path from a MIDI byte to a synth call. An undeclared cc is
-        dropped, which is what makes the lane a remap seam and not decoration."""
+        """The one path from a MIDI byte to a synth call. The status byte's
+        channel nibble selects the part; a nibble naming no declared part
+        falls back to part 0. An undeclared cc is dropped, which is what makes
+        the lane a remap seam and not decoration."""
         entry = self._devices.get(dev)
         if entry is None:
             return
+        nibble = status & 0x0F
+        part = entry.parts[nibble if nibble < len(entry.parts) else 0]
         kind = status & 0xF0
         if kind == 0x90 and d2 > 0:
-            entry.voice.note_on(d1, d2)
+            part.voice.note_on(d1, d2)
         elif kind == 0x80 or (kind == 0x90 and d2 == 0):
-            entry.voice.note_off(d1)
+            part.voice.note_off(d1)
         elif kind == 0xB0:
-            dest = entry.lanes.get(d1)
+            dest = part.lanes.get(d1)
             if dest is not None:
-                entry.voice.control_change(dest, d2)
+                part.voice.control_change(dest, d2)
         elif kind == 0xC0:
-            entry.voice.program_change(d1)
+            part.voice.program_change(d1)
 
     def start_drone(self, dev: str) -> None:
         """FluidSynth is silent without a note, so the role's declared drone is
@@ -288,8 +322,8 @@ class AudioBridge:
         entry.drone_key = None
 
     def silence(self, dev: str) -> None:
-        """Quiet a granted voice in place: drone off (if sounding) and every
-        note flushed. The grant survives, so the next feed sounds again --
+        """Quiet a granted device in place: drone off (if sounding) and every
+        part's notes flushed. The grant survives, so the next feed sounds again --
         this is Stop's audio half, not a release."""
         entry = self._devices.get(dev)
         if entry is None:
@@ -297,7 +331,8 @@ class AudioBridge:
         if entry.drone_key is not None:
             entry.voice.note_off(entry.drone_key)
             entry.drone_key = None
-        entry.voice.all_off()
+        for part in entry.parts:
+            part.voice.all_off()
 
     def on_release(self, dev: str) -> None:
         entry = self._devices.pop(dev, None)
@@ -305,8 +340,9 @@ class AudioBridge:
             return
         if entry.drone_key is not None:
             entry.voice.note_off(entry.drone_key)
-        entry.voice.all_off()
-        self._pool.release(entry.voice)
+        for part in entry.parts:
+            part.voice.all_off()
+            self._pool.release(part.voice)
 
     def shutdown(self) -> None:
         """Free every voice, then the pool. Boundary rule 1: owning the ugen id
