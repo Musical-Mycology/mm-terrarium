@@ -492,3 +492,40 @@ def test_set_control_and_drone_use_part_zero_only():
     assert pool.acquired[1].sent == []
     bridge.stop_drone("room")
     assert pool.acquired[0].sent[-1] == ("note_off", 45)
+
+
+def test_failed_grant_releases_the_voices_it_already_took():
+    class ThirdAcquireFails(FakePool):
+        def acquire(self, *, drums: bool = False):
+            if len(self.acquired) == 2:
+                raise RuntimeError("no free MIDI channels")
+            return super().acquire(drums=drums)
+
+    pool = ThirdAcquireFails()
+    bridge = AudioBridge(pool)
+    with pytest.raises(RuntimeError, match="no free MIDI channels"):
+        bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    assert len(pool.acquired) == 2
+    assert pool.released == pool.acquired
+    bridge.feed_midi("room", 0x90, 60, 100)      # nothing was registered
+    assert all(("note_on", 60, 100) not in v.sent for v in pool.acquired)
+
+
+def test_failed_program_change_releases_that_voice_too():
+    from control.audio import FakeVoice
+
+    class BadProgramVoice(FakeVoice):
+        def program_change(self, prog: int) -> None:
+            raise BrokenPipeError(32, "Broken pipe")
+
+    class BadPool(FakePool):
+        def acquire(self, *, drums: bool = False):
+            voice = BadProgramVoice() if len(self.acquired) == 2 else FakeVoice()
+            voice.drums = drums
+            self.acquired.append(voice)
+            return voice
+
+    pool = BadPool()
+    with pytest.raises(BrokenPipeError):
+        AudioBridge(pool).on_grant("room", _role(ugens=FOUR_PARTS))
+    assert pool.released == pool.acquired and len(pool.acquired) == 3

@@ -240,8 +240,11 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
 
 
 # One Flsyn carries 16 MIDI channels; an instrument's list index is its part
-# number and each part holds one of them (control/audio.py).
+# number and each part holds one of them (control/audio.py). One channel is
+# reserved for the drums part (harness/arco_synth.py), so a manifest can hold
+# at most 15 melodic instruments inside the 16 total.
 MAX_PARTS = 16
+MAX_MELODIC_PARTS = MAX_PARTS - 1
 
 
 def validate_ugen_manifest(subject: Role | dict, where: str | None = None) -> None:
@@ -315,6 +318,11 @@ def validate_ugen_manifest(subject: Role | dict, where: str | None = None) -> No
                         f"{lane_where}: missing required field {req!r}")
             parse_cc_ref(lane["source"], f"{lane_where} source")
             parse_cc_ref(lane["dest"], f"{lane_where} dest")
+    melodic = len(instruments) - (drums_at is not None)
+    if melodic > MAX_MELODIC_PARTS:
+        raise ValueError(
+            f"{where}: at most {MAX_MELODIC_PARTS} non-drums instruments "
+            f"(one MIDI channel is reserved for drums), got {melodic}")
 
 
 def _fixture(profile, name: str):

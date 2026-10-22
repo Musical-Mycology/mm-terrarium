@@ -671,9 +671,22 @@ def test_ugen_program_range(program):
 
 
 def test_ugen_at_most_16_instruments():
-    ok = {"instruments": [{"instrument": "flsyn"} for _ in range(16)]}
+    ok = {"instruments": [{"instrument": "flsyn"} for _ in range(15)]
+          + [{"instrument": "kit", "drums": True}]}
     validate_ugen_manifest(_role(ugen_manifest=ok))
-    bad = {"instruments": [{"instrument": "flsyn"} for _ in range(17)]}
+    bad = {"instruments": [{"instrument": "flsyn"} for _ in range(16)]
+           + [{"instrument": "kit", "drums": True}]}
     with pytest.raises(ValueError) as ei:
         validate_ugen_manifest(_role(ugen_manifest=bad))
     assert "16" in str(ei.value) and "instruments" in str(ei.value)
+
+
+def test_ugen_at_most_15_melodic_instruments():
+    # Channel 9 is reserved for drums, so 16 melodic parts cannot all be
+    # given a voice even though 16 is the total cap.
+    ok = {"instruments": [{"instrument": "flsyn"} for _ in range(15)]}
+    validate_ugen_manifest(_role(ugen_manifest=ok))
+    bad = {"instruments": [{"instrument": "flsyn"} for _ in range(16)]}
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=bad))
+    assert "15" in str(ei.value) and "drums" in str(ei.value)

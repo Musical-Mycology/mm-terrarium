@@ -203,17 +203,24 @@ class AudioBridge:
         instruments = role.ugen_manifest.get("instruments", [])
         if instruments:
             parts = []
-            for decl in instruments:     # list index = part number
-                # drums is passed only when set, so a pool that predates the
-                # flag still serves every melodic role.
-                voice = (self._pool.acquire(drums=True) if decl.get("drums")
-                         else self._pool.acquire())
-                program = decl.get("program")
-                if program is not None:
-                    voice.program_change(int(program))
-                lanes = {parse_cc_ref(lane["source"]): parse_cc_ref(lane["dest"])
-                         for lane in decl.get("lanes", [])}
-                parts.append(_Part(voice, lanes))
+            try:
+                for decl in instruments:     # list index = part number
+                    # drums is passed only when set, so a pool that predates
+                    # the flag still serves every melodic role.
+                    voice = (self._pool.acquire(drums=True)
+                             if decl.get("drums") else self._pool.acquire())
+                    lanes = {parse_cc_ref(lane["source"]): parse_cc_ref(lane["dest"])
+                             for lane in decl.get("lanes", [])}
+                    part = _Part(voice, lanes)
+                    parts.append(part)       # owned from here: released on failure
+                    program = decl.get("program")
+                    if program is not None:
+                        voice.program_change(int(program))
+            except BaseException:
+                # A failed grant must not leak the voices it already took.
+                for part in parts:
+                    self._pool.release(part.voice)
+                raise
             self._devices[dev] = _DeviceAudio(parts, instruments[0].get("drone"))
         self._play_welcome(role)
 
