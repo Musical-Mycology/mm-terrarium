@@ -1554,9 +1554,11 @@ class GameServer:
         no gesture behind it, so its origin is Control's own clock.
 
         Guarded exactly like _dispatch_bit_cues was: a raising fires() must
-        not stop this Bit reaching COMPLETING. Anything other than a
-        FireFunction is logged and dropped -- fires() may only report fires,
-        never drive a lane directly (that is what generators are for).
+        not stop this Bit reaching COMPLETING. fires() may return
+        FireFunction, LightCue, MusicCue and MusicPurge (see
+        _FIRES_CUE_TYPES); anything else is logged and dropped. A plain
+        tuple or PlayCue is not a timed cue, and continuous lane-driving is
+        what generators are for.
         """
         at = self._clock() + self._horizon
         try:
