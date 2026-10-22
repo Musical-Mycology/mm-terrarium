@@ -179,6 +179,31 @@ class SolidCue:
 
 
 @dataclass(frozen=True)
+class PixelFlashCue:
+    """Paint ONE pixel of a fixture a solid colour for `duration` seconds,
+    over whatever the frame holds -- the single-pixel sibling of SolidCue.
+    Distinct from SolidCue (which repaints the whole frame) and from LightCue
+    (which feeds an instrument, and the lexicon has no white instrument), so
+    a Bit can flicker white on one Tower pixel while its light session keeps
+    running. Applied Control-side at the frame-building seam
+    (DeviceLinkAgent); nothing on the device wire changes.
+
+    `duration` is seconds from `when`; `when=None` follows LightCue's
+    convention: apply at the dispatch-supplied presentation time. `pixel` is
+    the pixel index within the fixture's frame (not a byte offset); an index
+    outside the frame is ignored.
+
+    `rgb` is (r, g, b) or (r, g, b, w); three values mean W = 0
+    (control/pixel_wire.py). The lexicon's white is (0, 0, 0, 255).
+    """
+    dev: str
+    pixel: int
+    rgb: tuple
+    duration: float
+    when: float | None = None
+
+
+@dataclass(frozen=True)
 class MuteCue:
     """Latch a surface dark and silent (the Stop function). Distinct type for
     the same identity-dispatch reason as every cue here. Un-latching is not a

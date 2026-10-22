@@ -15,8 +15,8 @@ import time
 
 from control.bit import Bit
 from control.cues import (ALL, ROOM, FireFunction, LightCue, MusicCue,
-                          MusicPurge, MuteCue, PlayCue, SolidCue, fixture_dev,
-                          fixture_name)
+                          MusicPurge, MuteCue, PixelFlashCue, PlayCue, SolidCue,
+                          fixture_dev, fixture_name)
 from control.device_pool import DevicePool
 from control.generator_runner import GeneratorRunner
 from control.instrument import (DEFAULTSHROOM, TUNESHROOM,
@@ -51,7 +51,8 @@ logger = logging.getLogger(__name__)
 # The cue kinds Bit.fires() may return. Anything else is logged and dropped
 # in GameServer._dispatch_bit_fires; admitting one more kind is a one-line
 # edit here.
-_FIRES_CUE_TYPES = (FireFunction, LightCue, MusicCue, MusicPurge)
+_FIRES_CUE_TYPES = (FireFunction, LightCue, MusicCue, MusicPurge,
+                    PixelFlashCue)
 
 # How far ahead of Control's own clock a device-supplied gesture timestamp may
 # be before it is refused. A device whose clock is wrong could otherwise park a
@@ -161,6 +162,10 @@ class GameServer:
         # set by a transport, applied at the frame-building seam, never by a
         # Bit directly.
         self.on_solid_cue = None
+        # Device-local single-pixel flash, as on_pixel_flash(dev, pixel, rgb,
+        # duration, when). Same boundary rule as on_solid_cue; skipped for a
+        # muted dev.
+        self.on_pixel_flash = None
         # Called whenever a device's mute latch changes, as
         # on_mute_change(dev, muted). Set by a transport; the Console reads
         # `muted` (below) to learn latch state.
@@ -1472,6 +1477,15 @@ class GameServer:
                         if sink is None:
                             continue
                         sink(dev, cue.rgb, cue.level, cue.duration, when)
+                elif isinstance(cue, PixelFlashCue):
+                    sink = self.on_pixel_flash
+                    when = at if cue.when is None else cue.when
+                    for dev in self._resolve_devs(cue.dev):
+                        if self.is_muted(dev):
+                            continue
+                        if sink is None:
+                            continue
+                        sink(dev, cue.pixel, cue.rgb, cue.duration, when)
                 elif isinstance(cue, MuteCue):
                     sink = self.on_mute_change
                     devs = self._resolve_devs(cue.dev)
@@ -1555,7 +1569,7 @@ class GameServer:
 
         Guarded exactly like _dispatch_bit_cues was: a raising fires() must
         not stop this Bit reaching COMPLETING. fires() may return
-        FireFunction, LightCue, MusicCue and MusicPurge (see
+        FireFunction, LightCue, MusicCue, MusicPurge and PixelFlashCue (see
         _FIRES_CUE_TYPES); anything else is logged and dropped. A plain
         tuple or PlayCue is not a timed cue, and continuous lane-driving is
         what generators are for.
