@@ -460,3 +460,9 @@ body.dimmed .shell { opacity: 0.8; }
 .joinnode { border-top: 1.5px solid var(--hair); padding-top: 10px; margin-top: 10px; }
 .joinnode h4 { margin: 0 0 6px; font-family: var(--f-mono); font-size: 13px; }
 .joinnode .qr svg { width: 168px; height: 168px; display: block; margin: 6px 0; }
+
+/* Gesture panel (gestures.js): picker, buttons and the tilt slider laid out
+   as wrapping rows inside a card. */
+#gestureCard .firerow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+#gestureCard input[type="range"] { flex: 1; min-width: 120px; }
+#gestureCard .mono { min-width: 3em; text-align: right; }

@@ -186,7 +186,7 @@ class ConsoleAgent:
     def _handle_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
         if name in ("arm_room", "release_room", "fire_function",
-                    "get_design", "save_design",
+                    "gesture", "get_design", "save_design",
                     "publish_design", "clone_design",
                     "bench_start", "bench_stop", "bench_fire", "bench_lane",
                     "list_captures", "capture_stats", "replay_trace"):
@@ -390,6 +390,8 @@ class ConsoleAgent:
             if reason is not None:
                 return protocol.error_event(name, reason)
             return None
+        if isinstance(command, protocol.GestureCommand):
+            return self._handle_gesture_command(name, command)
         room_name = command.room_type
         gs = self.game_server
         if gs.room_binding is None or gs.room is None or gs.room.name != room_name:
@@ -403,6 +405,24 @@ class ConsoleAgent:
             gs.room_binding.arm(room_name, command.fixture, command.window_seconds)
         elif isinstance(command, protocol.ReleaseRoomCommand):
             gs.room_binding.release(room_name, command.fixture)
+        return None
+
+    def _handle_gesture_command(self, name: str, command) -> dict | None:
+        """A simulated tuneshroom gesture, delivered exactly as a real
+        device's /game/<verb> would be (gesture_time None: Control's clock is
+        the origin). Only a player device can be simulated: a Room fixture or
+        an admin id is the installation itself, never a person's phone."""
+        gs = self.game_server
+        if gs.is_admin(command.dev):
+            return protocol.error_event(
+                name, f"{command.dev} is an admin id, not a player device")
+        if gs.room is not None and command.dev in gs.room.bound.values():
+            return protocol.error_event(
+                name, f"{command.dev} is bound to a Room fixture, "
+                      f"not a player device")
+        reason = gs.data(command.dev, command.verb, command.args)
+        if reason is not None:
+            return protocol.error_event(name, reason)
         return None
 
     def _root_for(self, kind: str):
