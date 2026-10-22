@@ -110,6 +110,10 @@ class StackConfig:
     node: str | None = None
     node_explicit: bool = False       # True iff --node was passed on the CLI
     devices_explicit: bool = False    # True iff --devices was passed
+    # Instrument the spawned devices declare (None = the device default),
+    # and whether they stay quiet so a person drives them from the Console.
+    device_instrument: str | None = None
+    manual_devices: bool = False
     open_urls: bool = False           # open each BROWSE_URL in the browser
     profile: str | None = None        # forwarded to terrarium_boot verbatim
     serve: bool = False               # forward --serve to terrarium_boot
@@ -253,6 +257,10 @@ def device_command(cfg: StackConfig, index: int, ppid: int) -> list[str]:
     ]
     if cfg.persist_shrooms:
         command += ["--persist"]
+    if cfg.device_instrument:
+        command += ["--instrument", cfg.device_instrument]
+    if cfg.manual_devices:
+        command += ["--manual"]
     if index <= cfg.handshake_devices:
         command += ["--handshake"]
     return command
@@ -743,6 +751,16 @@ def parse_args(argv=None):
                     help="How many simulated player devices to join. "
                          "Default: the selected Bit manifest's "
                          "launch.default_devices.")
+    ap.add_argument("--device-instrument", default=None, metavar="NAME",
+                    help="The instrument each simulated device carries "
+                         "(its --instrument). Default: the selected Bit "
+                         "manifest's launch.device_instrument, else the "
+                         "device's own default.")
+    ap.add_argument("--manual-devices", action="store_true",
+                    help="Simulated devices stay quiet: no synthetic tap "
+                         "or tilt, so a person drives them from the "
+                         "Console (their --manual). Also set by the "
+                         "selected Bit's launch.manual_devices.")
     ap.add_argument("--seconds", type=float, default=None,
                     help="How long to hold the stack up. Default: forever "
                          "(Ctrl-C to stop), or 45s under --ci.")
@@ -944,6 +962,10 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
     devices = (args.devices if args.devices is not None
                else profile.devices if profile.devices is not None
                else bit_cfg.launch.default_devices)
+    device_instrument = (args.device_instrument
+                         if args.device_instrument is not None
+                         else bit_cfg.launch.device_instrument or None)
+    manual_devices = args.manual_devices or bit_cfg.launch.manual_devices
     room_type = args.room or profile.room_type or bit_cfg.launch.default_room_type
 
     log_dir = args.log_dir or os.path.join(
@@ -993,6 +1015,8 @@ def config_from_args(args, registry: BitRegistry | None = None) -> StackConfig:
         console_port=console_port, room_type=room_type, config=args.config,
         bit=bit, node=node, node_explicit=args.node is not None,
         devices_explicit=args.devices is not None,
+        device_instrument=device_instrument,
+        manual_devices=manual_devices,
         open_urls=args.open, profile=args.profile,
         serve=serve,
         persist_shrooms=args.persist_shrooms,
