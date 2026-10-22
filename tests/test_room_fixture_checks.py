@@ -83,3 +83,22 @@ def test_marker_on_a_pixel_in_no_room_zone_is_refused():
 def test_marker_count_must_match_the_fixture():
     with pytest.raises(TerrariumConfigError, match="3 markers"):
         _parse(Instrument(name="strip", layout=_layout(["a", "a", "b"])))
+
+
+def test_room_may_subdivide_a_model_zone():
+    # One model zone "progress" (px 0-7) refined into bottom/middle/top.
+    _parse(Instrument(name="strip", pixels=8,
+                      layout=_layout(["progress"] * 8)),
+           count=8, zones=(("bottom", 0, 3), ("middle", 3, 2), ("top", 5, 3)))
+
+
+def test_room_zone_straddling_two_model_zones_is_a_mismatch():
+    # The room zone "mid" (px 2-5) spans progress (0-3) and responder (4-7).
+    with pytest.raises(TerrariumConfigError) as exc:
+        _parse(Instrument(name="strip", pixels=8,
+                          layout=_layout(["progress"] * 4 + ["responder"] * 4)),
+               count=8, zones=(("low", 0, 2), ("mid", 2, 4), ("high", 6, 2)))
+    message = str(exc.value)
+    assert "LED_002" in message
+    assert "'progress'" in message
+    assert "['mid']" in message
