@@ -306,6 +306,8 @@ class DeviceLinkAgent:
         game_server.on_release = self._on_release
         game_server.on_grant = self._on_grant
         game_server.on_light_cue = self._on_light_cue
+        game_server.on_music_cue = self._on_music_cue
+        game_server.on_music_purge = self._on_music_purge
         game_server.on_play_cue = self._on_play_cue
         game_server.on_solid_cue = self._on_solid_cue
         game_server.on_mute_change = self._on_mute_change
@@ -1060,7 +1062,7 @@ class DeviceLinkAgent:
         # voice. A fixture that lost its grant since the cue was queued (a
         # Bit<->ambient swap, or a fixture that never carried audio.* in the
         # first place) is skipped rather than fed.
-        for (name, status, d1, d2) in self._room_cues.due(self._clock()):
+        for (name, status, d1, d2, _tag) in self._room_cues.due(self._clock()):
             if self._room_audio is None or name not in self._room_audio_fixtures:
                 continue
             try:
@@ -1794,7 +1796,8 @@ class DeviceLinkAgent:
         now = self._clock()
         st = self._fixture_for(dev)
         if st is not None:
-            self._room_cues.push(when, (st.name, status, data1, data2), now=now)
+            self._room_cues.push(when, (st.name, status, data1, data2, None),
+                                 now=now)
         feed_at = None if when is None else when - self._horizon
         if feed_at is not None and feed_at > now:
             # A Bit-declared cue further out than one horizon. Hold the
@@ -1804,6 +1807,36 @@ class DeviceLinkAgent:
                                   now=now)
             return
         self._feed_light_now(dev, status, data1, data2, when)
+
+    def _on_music_cue(self, dev: str, status: int,
+                      data1: int, data2: int,
+                      when: float | None = None,
+                      tag: str | None = None) -> None:
+        """A MusicCue is Room AUDIO only. It rides `_room_cues` so it keeps
+        the Bit's timestamp and can be purged by `tag`, but it is never fed
+        to the fixture's light session (nor queued on `_light_cues`): the
+        Tower's light is driven separately by the Bit's state, and music
+        notes must not leak into it. A dev that is not a Room fixture, or
+        is muted, is dropped (the engine already skips muted devs; this is
+        the second line of defense, as in _on_light_cue)."""
+        dev = self._fixture_key(dev)
+        if dev in self._muted:
+            return
+        st = self._fixture_for(dev)
+        if st is None:
+            return
+        self._room_cues.push(when, (st.name, status, data1, data2, tag),
+                             now=self._clock())
+
+    def _on_music_purge(self, dev: str, tag: str) -> None:
+        """Drop the fixture's not-yet-sounded cues carrying `tag`. Untagged
+        light-path entries (tag None) never match a real tag."""
+        st = self._fixture_for(dev)
+        if st is None:
+            return
+        name = st.name
+        self._room_cues.purge(
+            lambda payload: payload[0] == name and payload[4] == tag)
 
     def _on_play_cue(self, dev: str, name: str, params: str) -> None:
         """Forward a Bit's local-sample cue to the device. Unlike the light
