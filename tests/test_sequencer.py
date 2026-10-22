@@ -142,6 +142,39 @@ def test_loop_repeats_at_loop_length():
     assert any(w == pytest.approx(seq.time_at(16)) for w in whens)
 
 
+def test_loop_drops_notes_struck_on_its_end_bar_line():
+    """piano.mid strikes keys 56 and 72 at beat 16.0 == its loop length,
+    with zero-length note-offs. Kept, they would land on the next
+    iteration's downbeat as ghost notes; a loop drops them (and their
+    paired note-offs) instead."""
+    piano = asset("piano")
+    seq = started(piano=dict(midi=piano, part=0, loop=True))
+    seq.enable("piano", T0)
+    cues = run(seq, T0, seq.time_at(32) + 0.1)
+    for key in (56, 72):
+        for c in [c for c in cues if c.data1 == key]:
+            assert c.when != pytest.approx(seq.time_at(16))
+            assert c.when != pytest.approx(seq.time_at(32))
+    ons = note_ons(cues)
+    first = [c for c in ons if c.when < seq.time_at(16) - 1e-9]
+    second = [c for c in ons if seq.time_at(16) - 1e-9 <= c.when
+              < seq.time_at(32) - 1e-9]
+    assert len(first) == len(second) == 53
+
+
+def test_loop_keeps_note_off_on_its_end_bar_line():
+    """A note struck inside the loop whose note-off lands on the loop's
+    end is kept; only note-ons at or past the end are dropped."""
+    seq = started(a=dict(midi=mf(*note(60, 3, 4), *note(62, 4, 4), end=4),
+                         part=0, loop=True))
+    seq.enable("a", T0)
+    cues = run(seq, T0, seq.time_at(4))
+    assert [c.data1 for c in note_ons(cues)] == [60]
+    assert any(c.status & 0xF0 == 0x80 and c.data1 == 60
+               and c.when == pytest.approx(seq.time_at(4)) for c in cues)
+    assert not any(c.data1 == 62 for c in cues)
+
+
 def test_enable_chases_held_note():
     seq = started(pad=dict(midi=mf(*note(60, 0, 8), end=8), part=2, loop=True))
     at = seq.time_at(2)

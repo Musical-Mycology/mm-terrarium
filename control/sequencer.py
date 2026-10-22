@@ -86,6 +86,28 @@ class _Track:
     struck: set[int] = field(default_factory=set)  # keys since start()
 
 
+def _drop_struck_at_end(events, length: float) -> tuple[MidiEvent, ...]:
+    """A loop's events without the notes struck at or past its length (a
+    zero-length note on the end bar line, as piano.mid has): played, they
+    would sound on the next iteration's downbeat. Each dropped note-on takes
+    its paired note-off (the next of the same key) with it; a note-off past
+    the length for a note struck inside the loop is kept."""
+    open_: dict[int, list[bool]] = {}   # key -> per open note-on: dropped?
+    out = []
+    for e in events:
+        kind = e.status & 0xF0
+        if kind == 0x90:
+            dropped = e.beat >= length
+            open_.setdefault(e.data1, []).append(dropped)
+            if dropped:
+                continue
+        elif kind == 0x80 and open_.get(e.data1):
+            if open_[e.data1].pop(0):
+                continue
+        out.append(e)
+    return tuple(out)
+
+
 def _pair_notes(events) -> tuple[_Note, ...]:
     """Pair each note-on with the next note-off of the same key; a note-on
     with no later note-off has no span and is never chased."""
@@ -115,14 +137,14 @@ class Sequencer:
 
     def add_track(self, name: str, midi: MidiFile, *, part: int, loop: bool,
                   skip_beats: float = 0.0) -> None:
-        """Looped tracks repeat every `midi.loop_beats()` from grid beat 0.
-        A one-shot drops events before `skip_beats` (a lead-in) and shifts
+        """Looped tracks repeat every `midi.loop_beats()` from grid beat 0,
+        without any note struck at or past that length. A one-shot drops events before `skip_beats` (a lead-in) and shifts
         the rest so `skip_beats` lands on the beat `play_once` picks."""
         if loop:
             if skip_beats:
                 raise ValueError("skip_beats applies to one-shots only")
-            events = midi.events
             length = midi.loop_beats()
+            events = _drop_struck_at_end(midi.events, length)
         else:
             events = tuple(MidiEvent(e.beat - skip_beats, e.status, e.data1,
                                      e.data2)
