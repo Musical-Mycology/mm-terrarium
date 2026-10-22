@@ -208,6 +208,47 @@ def test_disable_releases_note_off_purged_in_horizon_window():
     ]
 
 
+def test_disable_twice_within_horizon_keeps_first_release():
+    """disable, enable, disable inside one horizon: the second purge eats the
+    first disable's releases, so the second must release those keys too."""
+    seq = started(synth=dict(midi=mf(*note(62, 0, 2), end=4), part=1,
+                             loop=True))
+    room = RoomQueue()
+    room.dispatch(seq.enable("synth", T0), T0)
+    at = T0
+    while at < seq.time_at(2):
+        room.play(at - HORIZON)
+        room.dispatch(seq.advance(at), at)
+        at += TICK
+    # the note-off at beat 2 is still queued when the purge arrives
+    for step in (seq.disable, seq.enable, seq.disable):
+        room.play(at - HORIZON)
+        room.dispatch(step("synth", at), at)
+        at += TICK
+    room.play(float("inf"))
+    assert room.hung() == (set(), set())
+
+
+def test_one_shot_restart_and_disable_within_horizon_releases_old_notes():
+    """A one-shot that ended (by presentation time) may still have its last
+    note-off queued; a restart then a disable inside the horizon purges it."""
+    seq = started(one=dict(midi=mf(*note(60, 0, 2)), part=1, loop=False))
+    room = RoomQueue()
+    room.dispatch(seq.play_once("one", T0), T0)
+    at = T0
+    while seq.is_on("one"):
+        room.play(at - HORIZON)
+        room.dispatch(seq.advance(at), at)
+        at += TICK
+    assert any(q.status == 0x81 and q.data1 == 60 for q in room.queue)
+    for step in (seq.play_once, seq.disable):
+        room.play(at - HORIZON)
+        room.dispatch(step("one", at), at)
+        at += TICK
+    room.play(float("inf"))
+    assert room.hung() == (set(), set())
+
+
 @pytest.mark.parametrize("seed", range(5))
 def test_no_stuck_notes_over_random_toggles(seed):
     # Several seeds: a hang needs a disable to land within one horizon of a

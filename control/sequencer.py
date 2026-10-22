@@ -15,12 +15,15 @@ rather than on the next bar:
   re-struck at `at`, and the cursor resumes there so the rest of the bar
   arrives from `advance` as usual.
 - `disable` purges the track's still-queued cues (MusicPurge by tag), then
-  at `at` releases every key the track has struck since it came in, and the
+  at `at` releases every key the track has struck since `start()`, and the
   sustain pedal, unconditionally. It cannot release only what it believes
   is still down: the device applies the purge on arrival, ahead of `at`, so
   it also drops cues due in that gap -- including the note-off or pedal-up
-  of a note already sounding. A redundant note-off or pedal-up is a no-op
-  on the synth; a missing one is a hung note.
+  of a note already sounding, and even an earlier disable's own releases
+  if the track was switched back on and off within that gap. So the
+  struck set is never cleared between disables (at most 128 keys). A
+  redundant note-off or pedal-up is a no-op on the synth; a missing one is
+  a hung note.
 
 One-shots (`loop=False`) start on the next whole beat via `play_once` and
 switch themselves off after their last event.
@@ -80,7 +83,7 @@ class _Track:
     origin: float = 0.0             # grid beat of track beat 0
     cursor: float = 0.0             # next grid beat not yet emitted
     cc7: int = _DEFAULT_CC7         # last CC 7 the file sent (unscaled)
-    struck: set[int] = field(default_factory=set)  # keys since enable/play
+    struck: set[int] = field(default_factory=set)  # keys since start()
 
 
 def _pair_notes(events) -> tuple[_Note, ...]:
@@ -136,7 +139,8 @@ class Sequencer:
         """Grid beat 0 is at `t0`; every track is off."""
         self._t0 = t0
         for tr in self._tracks.values():
-            self._reset(tr)
+            tr.on = False
+            tr.struck = set()
             tr.cc7 = tr.initial_cc7
 
     # -- grid -------------------------------------------------------------
@@ -182,16 +186,16 @@ class Sequencer:
 
     def disable(self, name: str, at: float) -> list:
         """Drop the track at `at`: purge its queued cues, then at `at` a
-        note-off for every key it has struck since it was enabled (or
-        played) and CC 64 = 0 -- whether or not it believes them released,
-        since the purge may have eaten the release (see the module doc)."""
+        note-off for every key it has struck since `start()` and CC 64 = 0
+        -- whether or not it believes them released, since the purge may
+        have eaten the release (see the module doc)."""
         tr = self._tracks[name]
         if not tr.on:
             return []
         out: list = [MusicPurge(self.dev, name)]
         out += [self._cue(tr, 0x80, key, 0, at) for key in sorted(tr.struck)]
         out.append(self._cue(tr, 0xB0, 64, 0, at))
-        self._reset(tr)
+        tr.on = False
         return out
 
     def play_once(self, name: str, at: float) -> list:
@@ -233,7 +237,7 @@ class Sequencer:
                 tr.cursor = end
             if not tr.loop and tr.cursor > tr.origin + tr.length \
                     and now > tr.origin + tr.length:
-                self._reset(tr)
+                tr.on = False   # its last note-off may still be queued
         out.sort(key=lambda item: item[0])
         return [cue for _, cue in out]
 
@@ -276,8 +280,3 @@ class Sequencer:
              when: float) -> MusicCue:
         return MusicCue(self.dev, (status & 0xF0) | tr.part, d1, d2, when,
                         tag=tr.name)
-
-    @staticmethod
-    def _reset(tr: _Track) -> None:
-        tr.on = False
-        tr.struck = set()
