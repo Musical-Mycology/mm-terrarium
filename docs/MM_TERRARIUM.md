@@ -33,6 +33,10 @@ developed with Roger Dannenberg.
   production game Bit; and the **beat heartbeat** (contract kit v4:
   Control answers `/game/beat`, Testshrooms beat by default; live-checked
   2026-10-09, mm-tuneshroom and mm-devshroom adoption pending).
+  **MIDI playback** on the Room speaker: a stdlib SMF reader and a
+  look-ahead sequencer drive multi-part Room roles through audio-only
+  `MusicCue`s, first used by **Deux Ara Drop** (MIDITEST Room); its
+  Console-driven listen is still Chris's to do.
   Pixel frames are RGBW on every sink (contract v5, 2026-10-14);
   mm-tuneshroom and mm-devshroom adoption pending.
 - Known limit: a 30-device simulated run aborts Arco (O2 assertion in
@@ -284,7 +288,10 @@ records).
 
 **`./smoke-test.sh`** is the Bit-first launcher: a thin wrapper that
 forwards every argument to `harness.run_stack` verbatim (spawned
-Testshrooms, `--ci` mode, profiles).
+Testshrooms, `--ci` mode, profiles). Deux Ara Drop, the music Bit, runs as
+`./smoke-test.sh --bit DeuxAraDropBit --handshake-devices 1 --console-port
+8772` and is played from the Console's gesture panel (*Front end*); it needs
+Arco and a General MIDI soundfont on the host to be heard.
 
 Both scripts, and `harness.run_stack` itself, take the flags below (see
 `.venv/bin/python -m harness.run_stack --help` for the full list):
@@ -313,6 +320,13 @@ Both scripts, and `harness.run_stack` itself, take the flags below (see
 - `--seconds SECONDS`: how long to hold the stack up. Default: forever
   (Ctrl-C), or 45s under `--ci`.
 - `--devices DEVICES`: how many simulated player devices to join.
+- `--manual-devices`: the simulated devices stay quiet (no synthetic beat
+  tap, no tilt sweep; their `o2_shroom --manual`), so a person drives them
+  from the Console's gesture panel. A Bit's `[launch] manual_devices`
+  sets it too.
+- `--device-instrument NAME`: the instrument each simulated device
+  declares (its `--instrument`); default the Bit's `[launch]
+  device_instrument`, else the Testshroom's own default (`testshroom`).
 - `--list-bits`: print every discovered Bit package (name, version, kind,
   Room types, start condition, description) and any manifest errors, then
   exit.
@@ -627,7 +641,12 @@ mutate) and `cue_horizon`, stamped at load for Bits grading input.
   + cue_horizon`, and return cues or a `str` refusal (sent as
   `/<dev>/error`, checked before iterating, and dropping the gesture's
   stream cues); a raise is `"handler error"`. `fires(at)` runs each RUNNING
-  tick after `update` and may return only `FireFunction`.
+  tick after `update` and may return `FireFunction`, `LightCue`,
+  `MusicCue`, `MusicPurge` and `PixelFlashCue` (`_FIRES_CUE_TYPES` in
+  `control/engine.py`; the timed ones carry their own `when`, and a Bit
+  that sequences music emits them from here); anything else is logged and
+  dropped, so a plain tuple or `PlayCue` is not a timed cue and lane-driving
+  stays a generator's job.
 - `data()`, `fire_function()` and `_dispatch_cues()` never raise. A gesture
   stamp over 5 s ahead (`_MAX_GESTURE_LEAD`) falls back to Control's clock
   and bumps `rejected_stamps`; a non-positive one (o2lite's -1 before sync)
@@ -947,6 +966,21 @@ Acting side: **Function** (`control/functions.py`); sensing side:
   dropped. Any non-mute fire at the surface un-mutes it first; there is no
   separate un-mute; UNLOADING clears all. A fixture's mute is keyed by its
   `@fixture:` token (`_mute_key`); a player's moves there when it binds.
+- **`MusicCue(dev, status, data1, data2, when=None, tag=None)`** is
+  audio-only MIDI for a Room fixture: it rides the Room `TimedQueue` and is
+  never fed to the fixture's light session (a note-on routed as light would
+  paint a lane). The status byte's channel nibble picks the Room role's part
+  (*Audio*). `tag` names a track; **`MusicPurge(dev, tag)`** drops whatever
+  of that tag is still queued, sound it has already presented untouched, and
+  is not gated on mute (silence is always allowed). A `MusicCue` for a muted
+  surface is dropped.
+- **`PixelFlashCue(dev, pixel, rgb, duration, when=None)`** paints one pixel
+  of a fixture a solid colour for `duration` seconds, over the frame and
+  after any `SolidCue` override, so a white flicker shows over a solid
+  base. `rgb` is 3 or 4 values (W = 0 when 3; the lexicon's white is
+  `(0, 0, 0, 255)`); an index outside the frame is ignored. Control-side at
+  the same send seams as `SolidCue`, no device-wire change; dropped when
+  muted, and a mute clears pending flashes.
 - Room fixtures have no `audio.samples`, so a Room `flash` is light-only.
 
 #### Wire JSON
@@ -1180,6 +1214,11 @@ pending) and treated as the design. In `console/agent.py`:
   Bits address `@fixture:bars`/`@fixture:fiber` and targets
   `bars[.left|center|right]`, `fiber[.b1|b2|b3]` or `primary` (both); TestBit
   and MetronomeBit list it.
+- **MIDITEST** (`rooms/MIDITEST.toml`): one 14 px `tower` fixture on the
+  `tower_sound` instrument (the Tower's model and zones plus `audio.flsyn`,
+  so it has a speaker), for MIDI playback. Its zones `bottom`/`middle`/`top`
+  split the Tower's `progress` zone into thirds; the first Room that refines
+  a model zone (*Room fixtures and the Tower*). Deux Ara Drop's only Room.
 - `[psus.<name>] amps` with `[[artnet]] psu`: outputs on one PSU sum `max_amps`
   to at most 80 % of it, across every Room (one box, one supply). An output
   with no `psu` is unchecked.
@@ -1332,8 +1371,12 @@ base64 and compare sha256 on both ends. After a Blender upgrade, re-run
 **Room fixtures and the Tower.** `_parse_room` refuses a fixture whose
 instrument disagrees with it (`fixture_instrument_mismatch`,
 `control/room_profile.py`): a declared `pixels` must equal the blocks' total,
-and a model must have one marker per pixel with each marker's zone one of the
-room zones covering it. Instrument publishes get the same check from the
+and a model must have one marker per pixel with each marker's zone honoured
+at its pixel: a room zone of that name covers it, or the room **refines** the
+model zone (every room zone covering the pixel lies wholly inside the pixels
+the model tags that zone, so a room may split `progress` into thirds). A room
+zone straddling two model zones still fails, which is what catches an
+artist's mistake. Instrument publishes get the same check from the
 other side: `publish_entry(..., rooms_root=)` (wired in the Console's Design
 Panel) refuses an instrument that would break a published room binding it,
 so a publish can never leave the Terrarium unable to boot.
@@ -1387,6 +1430,29 @@ recipe's first step.
 - **Provisional.** The type is `DeviceVoice`, not `Synth`, with no channel
   parameter (open with Roger); `ugen_manifest` v0 is shallow-validated, has no
   cross-repo contract, and never ships to a device (boundary rule 1).
+- **Multi-part Room roles.** A ROOM-role `ugen_manifest` may declare several
+  `instruments`; the list index is the **part** and gets its own voice, lane
+  map and `program` (an int 0-127, validated). A cue's status-byte channel
+  nibble selects the part (a nibble naming no declared part falls back to
+  part 0); the lobby breath and the drone address part 0. At most one part
+  sets `drums: true`: the pool gives it GM channel 9 and never lets a melodic
+  part take 9, so a manifest holds at most 16 instruments, 15 melodic
+  (`role_config.MAX_PARTS`, `MAX_MELODIC_PARTS`; a longer list or a second
+  drums part is refused at validation). The channel number never leaves
+  `harness/arco_synth.py`: `AudioBridge` asks the pool for `acquire(drums=
+  True)`. A failed grant releases the voices it already took.
+- **Music playback.** `control/midifile.py` is a stdlib SMF reader (channel
+  events on a beat timeline, malformed files raise `ValueError`).
+  `control/sequencer.py`'s `Sequencer` plays `MidiFile`s on one beat grid as
+  timed `MusicCue`s: a Bit calls `advance(at)` from its tick and a look-ahead
+  stamps each note with its own `when`, so the 44 Hz tick adds no jitter. The
+  file's own tempo is ignored, its CC 7 is scaled by a master volume, and
+  every track runs on the grid whether heard or not, so `enable`/`disable`
+  take effect at once rather than on the next bar. `disable` purges the
+  track's queued cues, then at the switch-off releases **every key the track
+  has struck since `start()`** and the sustain pedal: the device applies the
+  purge on arrival, so it also drops the note-offs of notes already
+  sounding, and the struck set is never cleared between disables.
 - `harness/arco_synth.py`'s `ArcoSynthPool`: one `Flsyn`, up to 16 voices (a
   MIDI channel each), pyarco imported in `start()`, `poll()` pumping
   `sched.poll()` from the tick (`harness/` is a holding position). No
@@ -1898,7 +1964,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   defeats terrarium_boot's implied rule). Devices (`ie<N>`) get the node,
   horizon, samples, `--exit-with-parent`, `--persist`
   (`--no-persist-shrooms` opts out), and the first `--handshake-devices N`
-  get `--handshake`; the rest only hello and end jam.
+  get `--handshake`; the rest only hello and end jam. `--device-instrument`
+  adds `--instrument` and `--manual-devices` adds `--manual` (*Running it*).
 - Named stages: `room loaded:`, transport, `Holding in SETUP` (fewer under
   `--no-bit`), then per device `clock synced at`; with a start-after-grant
   each handshake device's `HANDSHAKE VALIDATED:` (or an informational `JOIN
@@ -1941,7 +2008,10 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
 
 - **Two roles**: a player (`ShroomClient`, 48 ch, `--instrument testshroom`)
   or, `--no-join`, the Room simulator (hello only; `--room-type`/`--fixture`),
-  titled by its `dev`, printing `BROWSE_URL:` or `ROOM_URL:`.
+  titled by its `dev`, printing `BROWSE_URL:` or `ROOM_URL:`. `--manual`
+  keeps a player quiet (no beat tapper armed, no tilt sweep) while its own
+  browser page's gestures still go out; `run_stack`'s `--manual-devices`
+  passes it.
 - It syncs its clock (parent-watched), then `service_conflict` checks
   ownership: a loss prints `FATAL: service`, exit 1. A legacy heartbeat
   hello is identical to the first. `--handshake` answers each `/<dev>/handshake`
@@ -2038,10 +2108,19 @@ network makes auth a prerequisite.
   `parse_command` and shared events. Shared commands: `load_bit` (`name`,
   `overrides`, `room`), `run`, `abort`, `restart`, `list_bits`, `load_room`,
   `unload_room`. **Admin commands** (`parse_admin_command`, never from the
-  uplink): `arm_room`, `release_room`, `fire_function`, `get_design`/
-  `save_design`/`publish_design`/`clone_design` (with `kind` `instrument`
+  uplink): `arm_room`, `release_room`, `fire_function`, `gesture`,
+  `get_design`/`save_design`/`publish_design`/`clone_design` (with `kind` `instrument`
   or `room`), `bench_start`/`stop`/`fire`/`lane`, `list_captures`,
   `capture_stats`, `replay_trace`. Refusals go to the requester only.
+- **`gesture`** (`GestureCommand`) simulates a tuneshroom for a person at the
+  Console: `{dev, verb: "tap", count: 1|2}` or `{dev, verb: "tilt", gamma}`
+  (clamped to +/-90). `_handle_gesture_command` calls `GameServer.data(dev,
+  verb, args)` exactly as a real device's `/game/<verb>` would arrive, with
+  `gesture_time` `None` so Control's clock is the origin. A tap reports peak
+  0 g and 50 ms, which a Bit reads only for its `count`. Refused for an
+  admin id and for a device bound to a Room fixture (the installation, never
+  a phone); the Bit's own refusal (no such role, verb not used) comes back
+  as the `error_event`.
 - A client gets `snapshot`, then `bits_listed`; the rest is change-driven
   (`roles_changed` on LOADED and IDLE, so a tab opened before a Bit loaded
   still classes scored/jam), including the bench's five:
@@ -2092,6 +2171,12 @@ network makes auth a prerequisite.
   settled Terrarium. The picker omits disabled Bits, dims `[console]
   hidden` ones, takes `table.key` overrides and a loadable Room, disabling
   any but the active one (*Terrarium lifecycle*).
+- **Gesture panel** (`gestures.js`, `#gestureCard`): a device picker, Tap,
+  Double tap and a -90..90 tilt slider (sent at most every 50 ms, the final
+  value always lands; Level resets it to 0). Visible only in SETUP or
+  RUNNING with at least one non-fixture device; built once, and
+  `devices_changed` only refills the picker, keeping the selection.
+  `tests/js/gesture_panel.test.js`.
 - **Live view**: the Room card (`surface.js`: dot rows per block, zone bar,
   Release/Arm, an `Art-Net` chip (no Arm) when covered, `Muted`, canvas
   links `http(s)` only), Triggers (`functions.js`), Live values, status,
@@ -2258,6 +2343,22 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   `sim`). Tap: `tick`, hue step; hold: `hold`, white 1 s; swing:
   red (negative g) or blue 0.5 s; each a DEVICE trigger the Console can fire.
 
+- **DeuxAraDropBit** (`bits/deux_ara_drop/`, display name "Deux Ara Drop",
+  MIDITEST, kind `music`, one scored `player`, `DEUX_PLAYER_NODE`; `[launch]`
+  `device_instrument = "tuneshroom"`, `manual_devices = true`): MIDI loops
+  dropped in and out of a shared 130 BPM grid by one simulated player, driven
+  from the Console gesture panel. A **tap** toggles the next loop in the
+  cycle piano, drums, synth, at once and on the grid, and turns its third of
+  the Tower (`tower.bottom|middle|top`, an aurora each, hue on cc 20/21/22)
+  green on or red off; a **double tap** (`count >= 2`) starts the Arabesque
+  from the next beat (its first bar skipped) or stops it, without moving
+  the cycle, and while it plays single Tower pixels flicker white
+  (`PixelFlashCue`); **tilting** past 45 degrees ducks the mix to 0.2 until
+  the device is back within 20 degrees. The Room role declares four flsyn
+  parts (piano 0, drums 1 on the GM drum channel, synth 2, Arabesque 3),
+  volume on cc 7 and the pedal on cc 64; all timing is a `Sequencer`
+  (*Audio*) and the Bit returns its cues from `fires(at)` and the verb
+  handlers. Assets are four `.mid` files under `[assets]`.
 - **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a
   shared progress bar on every Tower. It sorts devices by id with
   `admits`: `ie<N>` takes `player`, `devtower<N>` (instrument `devtower`) takes `tower` (both
