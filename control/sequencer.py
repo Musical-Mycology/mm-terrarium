@@ -15,9 +15,12 @@ rather than on the next bar:
   re-struck at `at`, and the cursor resumes there so the rest of the bar
   arrives from `advance` as usual.
 - `disable` purges the track's still-queued cues (MusicPurge by tag), then
-  releases at `at` every key and sustain pedal the track left down. To know
-  what is down at `at` -- the queue holds cues up to `lookahead` in the
-  future -- each track keeps a short log of what it emitted.
+  at `at` releases every key the track has struck since it came in, and the
+  sustain pedal, unconditionally. It cannot release only what it believes
+  is still down: the device applies the purge on arrival, ahead of `at`, so
+  it also drops cues due in that gap -- including the note-off or pedal-up
+  of a note already sounding. A redundant note-off or pedal-up is a no-op
+  on the synth; a missing one is a hung note.
 
 One-shots (`loop=False`) start on the next whole beat via `play_once` and
 switch themselves off after their last event.
@@ -46,12 +49,6 @@ _DEFAULT_CC7 = 100
 # decimal places, so `enable(time_at(4))` lands on beat 4.0 and not on
 # 3.9999999999 (which would play the beat-4 note twice: chased, then again).
 _SNAP_DIGITS = 9
-
-# How long (seconds) emitted events stay in a track's log before they are
-# folded into its settled state. A `disable(at)` must see every event with
-# `when <= at`, and a gesture's `at` may trail the latest tick's `at` a
-# little; this is far wider than that gap while keeping the log bounded.
-_SETTLE_SECONDS = 2.0
 
 
 def _snap(beat: float) -> float:
@@ -83,9 +80,7 @@ class _Track:
     origin: float = 0.0             # grid beat of track beat 0
     cursor: float = 0.0             # next grid beat not yet emitted
     cc7: int = _DEFAULT_CC7         # last CC 7 the file sent (unscaled)
-    sounding: set[int] = field(default_factory=set)   # settled state
-    pedal: int = 0
-    log: list[tuple[float, int, int, int]] = field(default_factory=list)
+    struck: set[int] = field(default_factory=set)  # keys since enable/play
 
 
 def _pair_notes(events) -> tuple[_Note, ...]:
@@ -101,18 +96,6 @@ def _pair_notes(events) -> tuple[_Note, ...]:
             on = open_[e.data1].pop(0)
             notes.append(_Note(on.beat, e.beat, on.status, on.data1, on.data2))
     return tuple(notes)
-
-
-def _apply(sounding: set[int], pedal: int, status: int, d1: int, d2: int) -> int:
-    """Fold one emitted event into (sounding, pedal); returns the pedal."""
-    kind = status & 0xF0
-    if kind == 0x90:
-        sounding.add(d1)
-    elif kind == 0x80:
-        sounding.discard(d1)
-    elif kind == 0xB0 and d1 == 64:
-        pedal = d2
-    return pedal
 
 
 class Sequencer:
@@ -194,28 +177,21 @@ class Sequencer:
                         and base + n.on < b < base + n.off):
                     chased.add(n.key)
                     out.append(self._cue(tr, n.status, n.key, n.velocity, at))
-                    tr.log.append((b, n.status, n.key, n.velocity))
+                    tr.struck.add(n.key)
         return out
 
     def disable(self, name: str, at: float) -> list:
         """Drop the track at `at`: purge its queued cues, then at `at` a
-        note-off for every key it left sounding and CC 64 = 0 if it left the
-        sustain pedal down (as of the events emitted with `when <= at`)."""
+        note-off for every key it has struck since it was enabled (or
+        played) and CC 64 = 0 -- whether or not it believes them released,
+        since the purge may have eaten the release (see the module doc)."""
         tr = self._tracks[name]
         if not tr.on:
             return []
-        b = _snap(self.beat_at(at))
-        sounding, pedal = set(tr.sounding), tr.pedal
-        for beat, status, d1, d2 in sorted(tr.log, key=lambda e: e[0]):
-            if beat <= b:
-                pedal = _apply(sounding, pedal, status, d1, d2)
         out: list = [MusicPurge(self.dev, name)]
-        out += [self._cue(tr, 0x80, key, 0, at) for key in sorted(sounding)]
-        if pedal >= 64:
-            out.append(self._cue(tr, 0xB0, 64, 0, at))
-            pedal = 0
+        out += [self._cue(tr, 0x80, key, 0, at) for key in sorted(tr.struck)]
+        out.append(self._cue(tr, 0xB0, 64, 0, at))
         self._reset(tr)
-        tr.pedal = pedal
         return out
 
     def play_once(self, name: str, at: float) -> list:
@@ -245,7 +221,6 @@ class Sequencer:
         `when < at + lookahead`, in time order."""
         end = _snap(self.beat_at(at + self.lookahead))
         now = _snap(self.beat_at(at))
-        settle = now - _SETTLE_SECONDS * self.bpm / 60.0
         out: list[tuple[float, MusicCue]] = []
         for tr in self._tracks.values():
             if not tr.on:
@@ -253,13 +228,12 @@ class Sequencer:
             if tr.cursor < end:
                 for g, ev in self._window(tr, tr.cursor, end):
                     out.append((g, self._event_cue(tr, ev, g)))
-                    tr.log.append((g, ev.status, ev.data1, ev.data2))
+                    if ev.status & 0xF0 == 0x90:
+                        tr.struck.add(ev.data1)
                 tr.cursor = end
-            self._settle(tr, settle)
             if not tr.loop and tr.cursor > tr.origin + tr.length \
                     and now > tr.origin + tr.length:
-                self._settle(tr, math.inf)
-                tr.on = False
+                self._reset(tr)
         out.sort(key=lambda item: item[0])
         return [cue for _, cue in out]
 
@@ -303,20 +277,7 @@ class Sequencer:
         return MusicCue(self.dev, (status & 0xF0) | tr.part, d1, d2, when,
                         tag=tr.name)
 
-    def _settle(self, tr: _Track, upto: float) -> None:
-        """Fold log entries at or before grid beat `upto` into the settled
-        state, keeping the log to the last few seconds."""
-        keep = []
-        for entry in tr.log:
-            if entry[0] <= upto:
-                tr.pedal = _apply(tr.sounding, tr.pedal, *entry[1:])
-            else:
-                keep.append(entry)
-        tr.log = keep
-
     @staticmethod
     def _reset(tr: _Track) -> None:
         tr.on = False
-        tr.sounding = set()
-        tr.pedal = 0
-        tr.log = []
+        tr.struck = set()

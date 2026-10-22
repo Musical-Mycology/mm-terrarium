@@ -2,9 +2,11 @@
 
 Small MidiFiles are built inline so each test states the exact notes it is
 about; the loop, master and one-shot tests use the Deux Ara Drop assets where
-the brief names them. The stuck-note test replays every returned cue through
-a model of the Room queue (a MusicPurge drops still-queued cues of its tag
-whose `when` is after the purge's `at`).
+the brief names them. The stuck-note tests replay every returned cue through
+a model of the real Room queue: cues carry presentation times `at`, which the
+engine dispatches one cue horizon early, and a MusicPurge drops every queued
+cue of its tag that has not played by the time it arrives -- including cues
+due between its arrival and its `at`.
 """
 
 import random
@@ -21,6 +23,7 @@ ASSETS = Path(__file__).resolve().parent.parent / "bits" / "deux_ara_drop" / "as
 BPM = 130
 T0 = 100.0
 TICK = 1 / 44
+HORIZON = 0.060  # cue horizon: a cue for `at` reaches the device at at - 0.060
 
 
 def mf(*events, end=None):
@@ -57,6 +60,44 @@ def run(seq, t_from, t_to):
         out += seq.advance(t)
         t += TICK
     return out
+
+
+class RoomQueue:
+    """The device's tagged cue queue. `dispatch(cues, at)` models the engine
+    sending cues for presentation time `at`, which arrive at device time
+    `at - HORIZON`: a MusicPurge then drops every queued cue of its tag due
+    after that arrival. `play(now)` releases what is due, in time order."""
+
+    def __init__(self):
+        self.queue, self.delivered = [], []
+
+    def dispatch(self, cues, at):
+        arrival = at - HORIZON
+        for c in cues:
+            if isinstance(c, MusicPurge):
+                self.queue = [q for q in self.queue
+                              if not (q.tag == c.tag and q.when > arrival)]
+            else:
+                self.queue.append(c)
+
+    def play(self, now):
+        due = sorted((q for q in self.queue if q.when <= now),
+                     key=lambda q: q.when)
+        self.queue = [q for q in self.queue if q.when > now]
+        self.delivered.extend(due)
+
+    def hung(self):
+        """(part, key)s whose last delivered note event is a note-on, and
+        parts whose last delivered CC 64 is down."""
+        last_note, last_pedal = {}, {}
+        for c in self.delivered:
+            kind, part = c.status & 0xF0, c.status & 0x0F
+            if kind in (0x80, 0x90):
+                last_note[(part, c.data1)] = kind
+            elif kind == 0xB0 and c.data1 == 64:
+                last_pedal[part] = c.data2
+        return ({k for k, kind in last_note.items() if kind == 0x90},
+                {p for p, v in last_pedal.items() if v != 0})
 
 
 def note_ons(cues, key=None):
@@ -122,7 +163,10 @@ def test_enable_does_not_double_emit_boundary_note():
 
 
 def test_disable_purges_and_releases():
-    synth = mf((0, 0xB0, 64, 127), *note(60, 0, 8), end=8)
+    """Every key struck since enable is released, plus the pedal -- even the
+    key whose own note-off already went out."""
+    synth = mf((0, 0xB0, 64, 127), *note(60, 0, 8), *note(62, 0, 0.5),
+               *note(64, 4, 5), end=8)
     seq = started(synth=dict(midi=synth, part=1, loop=True))
     seq.enable("synth", T0)
     run(seq, T0, seq.time_at(1))
@@ -131,71 +175,72 @@ def test_disable_purges_and_releases():
     assert cues == [
         MusicPurge(ROOM, "synth"),
         MusicCue(ROOM, 0x80 | 1, 60, 0, at, tag="synth"),
+        MusicCue(ROOM, 0x80 | 1, 62, 0, at, tag="synth"),
         MusicCue(ROOM, 0xB0 | 1, 64, 0, at, tag="synth"),
     ]
     assert not seq.is_on("synth")
     assert run(seq, at, at + 5) == []
 
 
-def test_disable_ignores_events_after_at():
-    """A note-on queued past `at` is purged, so it needs no release; a pedal
-    lifted before `at` needs no CC 64 = 0."""
-    synth = mf((0, 0xB0, 64, 127), (0.5, 0xB0, 64, 0), *note(60, 1, 2),
-               *note(62, 3, 4), end=4)
-    seq = started(synth=dict(midi=synth, part=1, loop=True))
-    seq.enable("synth", T0)
-    run(seq, T0, seq.time_at(3))
-    at = seq.time_at(2.5)
-    assert seq.disable("synth", at) == [MusicPurge(ROOM, "synth")]
+def test_disable_releases_note_off_purged_in_horizon_window():
+    """A note-off due in (at - HORIZON, at] is still queued when the purge
+    arrives, so the purge eats it; disable must release the key anyway."""
+    seq = started(synth=dict(midi=mf(*note(60, 0, 1), end=4), part=1,
+                             loop=True))
+    room = RoomQueue()
+    room.dispatch(seq.enable("synth", T0), T0)
+    t = T0
+    while t < seq.time_at(1) - HORIZON:
+        room.dispatch(seq.advance(t + HORIZON), t + HORIZON)
+        room.play(t)
+        t += TICK
+    off = seq.time_at(1)
+    assert any(q.status == 0x81 and q.when == pytest.approx(off)
+               for q in room.queue)
+    at = off + HORIZON / 2   # the note-off falls in (at - HORIZON, at]
+    room.play(at - HORIZON)
+    room.dispatch(seq.disable("synth", at), at)
+    room.play(float("inf"))
+    assert room.hung() == (set(), set())
+    assert room.delivered[-2:] == [
+        MusicCue(ROOM, 0x81, 60, 0, at, tag="synth"),
+        MusicCue(ROOM, 0xB1, 64, 0, at, tag="synth"),
+    ]
 
 
-def test_no_stuck_notes_over_random_toggles():
-    rng = random.Random(20261022)
+@pytest.mark.parametrize("seed", range(5))
+def test_no_stuck_notes_over_random_toggles(seed):
+    # Several seeds: a hang needs a disable to land within one horizon of a
+    # note-off, which a single 60 s run can miss by chance.
+    rng = random.Random(seed)
     names = {"piano": 0, "drums": 9, "synth": 1}
     seq = started(**{n: dict(midi=asset(n), part=p, loop=True)
                      for n, p in names.items()})
-    queue, delivered = [], []
-
-    def dispatch(cues, at):
-        for c in cues:
-            if isinstance(c, MusicPurge):
-                queue[:] = [q for q in queue
-                            if not (q.tag == c.tag and q.when > at)]
-            else:
-                queue.append(c)
-
-    def deliver(now):
-        due = sorted((q for q in queue if q.when <= now), key=lambda q: q.when)
-        queue[:] = [q for q in queue if q.when > now]
-        delivered.extend(due)
-
+    room = RoomQueue()
     toggles = 0
-    t = T0
-    while t < T0 + 60:
+    now = T0   # device time; the engine works one horizon ahead of it
+    while now < T0 + 60:
+        at = now + HORIZON
+        room.play(now)
         if rng.random() < 0.03:
             name = rng.choice(list(names))
             if seq.is_on(name):
-                dispatch(seq.disable(name, t), t)
+                room.dispatch(seq.disable(name, at), at)
             else:
-                dispatch(seq.enable(name, t), t)
+                room.dispatch(seq.enable(name, at), at)
             toggles += 1
-        dispatch(seq.advance(t), t)
-        deliver(t)
-        t += TICK
+        room.dispatch(seq.advance(at), at)
+        now += TICK
+    at = now + HORIZON
+    room.play(now)
     for name in names:
         if seq.is_on(name):
-            dispatch(seq.disable(name, t), t)
-    deliver(float("inf"))
+            room.dispatch(seq.disable(name, at), at)
+    room.play(float("inf"))
 
     assert toggles > 40
-    ons = Counter((c.status & 0x0F, c.data1) for c in delivered
-                  if c.status & 0xF0 == 0x90)
-    offs = Counter((c.status & 0x0F, c.data1) for c in delivered
-                   if c.status & 0xF0 == 0x80)
-    assert sum(ons.values()) > 100
-    assert ons == offs
-    pedal = [c for c in delivered if c.status & 0xF0 == 0xB0 and c.data1 == 64]
-    assert not pedal or pedal[-1].data2 < 64
+    assert len(note_ons(room.delivered)) > 100
+    assert room.hung() == (set(), set())
 
 
 def test_master_scales_file_cc7():
