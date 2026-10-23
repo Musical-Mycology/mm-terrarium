@@ -177,9 +177,10 @@ def parse_handshake_args(args: list) -> tuple[str, str, str]:
 def leds_event(dev: str, channels, when: float = 0.0) -> dict:
     """channels: a flat sequence of ints, width-agnostic. This function does
     `list(channels)` with no length assertion, so any frame width rides the
-    same wire shape. A player device gets 48 (12 pixels x R, G, B, W,
-    devicelink/agent.py's _DEVICE_CHANNELS, matching harness/shroom_client.py's
-    LED_CHANNELS). A device bound as a Room fixture gets that fixture's own
+    same wire shape. A player device gets its pixels x R, G, B, W: 48 for
+    the 12 px floor (matching harness/shroom_client.py's LED_CHANNELS), more
+    when its carried instrument declares more (a devtower's 32 pixels, 128;
+    devicelink/agent.py's _device_pixels). A device bound as a Room fixture gets that fixture's own
     slice of the rendered Room frame (control/room_profile.py's
     fixture_slices: its pixel_count times 4), sent
     through control/fixture_sink.py's DeviceLinkSink.

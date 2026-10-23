@@ -618,18 +618,20 @@ def _zoned(zones):
     return RoleTable(roles={"tower": role}, node_map={"T": ["tower"]})
 
 
-def test_role_zones_within_the_twelve_pixels_validate():
+def test_role_zones_validate():
     _validate_roles(_zoned(tuple((f"p{k}", k, 1) for k in range(12))))
     _validate_roles(_zoned((("bar", 0, 10),)))
     _validate_roles(_zoned(()))
+    # Past the 12 px floor too: a wider device (a devtower's 32) is
+    # checked against its own pixels at grant, not here.
+    _validate_roles(_zoned(tuple((f"p{k}", 2 * k, 2) for k in range(16))))
 
 
 @pytest.mark.parametrize("zones, match", [
     ((("p0", 0, 1), ("p0", 1, 1)), "duplicate zone 'p0'"),
-    ((("p12", 12, 1),), "within the device's 12 pixels"),
-    ((("all", 0, 13),), "within the device's 12 pixels"),
-    ((("none", 0, 0),), "within the device's 12 pixels"),
-    ((("neg", -1, 1),), "within the device's 12 pixels"),
+    ((("none", 0, 0),), "start >= 0 and count >= 1"),
+    ((("neg", -1, 1),), "start >= 0 and count >= 1"),
+    ((("str", "0", 1),), "start >= 0 and count >= 1"),
     ((("primary", 0, 1),), "other than 'primary'"),
     ((("", 0, 1),), "other than 'primary'"),
     ((("p0", 0),), r"must be \(name, start, count\)"),
@@ -637,3 +639,14 @@ def test_role_zones_within_the_twelve_pixels_validate():
 def test_bad_role_zones_refuse_to_load(zones, match):
     with pytest.raises(ValueError, match=match):
         _validate_roles(_zoned(zones))
+
+
+def test_player_pixels_follow_the_carried_instrument_from_a_12_px_floor():
+    from types import SimpleNamespace
+
+    from control.instrument import DEFAULTSHROOM
+    from control.role_config import player_pixels
+    assert player_pixels(DEFAULTSHROOM) == 12
+    assert player_pixels(SimpleNamespace(pixels=32)) == 32
+    assert player_pixels(SimpleNamespace(pixels=0)) == 12
+    assert player_pixels(None) == 12

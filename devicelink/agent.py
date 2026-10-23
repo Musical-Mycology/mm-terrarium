@@ -37,7 +37,8 @@ from control.lobby import (DEFAULT_LOBBY, FIXTURE_FLASH_GAP_S,
                            lobby_light_manifest)
 from control.pixel_wire import CHANNELS_PER_PIXEL, solid_frame
 from control.prepare import PrepareRequest
-from control.role_config import compose_role_config, slice_light_manifest
+from control.role_config import (PLAYER_PIXELS, compose_role_config,
+                                 player_pixels, slice_light_manifest)
 from control.roles import Role, RoleClass
 from control.room_profile import RoomProfile
 from control.rooms import room_role_name
@@ -63,10 +64,12 @@ logger = logging.getLogger(__name__)
 # frames is generous headroom over the ~0.6s sys:closing signature.
 _MAX_CLOSING_FRAMES = 200
 
-# One player device's frame width: 12 pixels x 4 channels, R, G, B, W
-# (contract v5, control/pixel_wire.py). The same figure
-# harness/shroom_client.py calls LED_CHANNELS.
-_DEVICE_CHANNELS = 12 * CHANNELS_PER_PIXEL
+# A player device's frame width is its pixels x 4 channels, R, G, B, W
+# (contract v5, control/pixel_wire.py): by default 12 pixels, 48 channels
+# (the figure harness/shroom_client.py calls LED_CHANNELS), unless its
+# carried instrument declares more (a devtower's 32, 128 channels). See
+# DeviceLinkAgent._device_pixels.
+_DEVICE_CHANNELS = PLAYER_PIXELS * CHANNELS_PER_PIXEL
 
 
 @dataclass
@@ -941,6 +944,12 @@ class DeviceLinkAgent:
         color, level, _expires = entry
         return self._solid_frame(color, level, len(frame))
 
+    def _device_pixels(self, dev: str) -> int:
+        """dev's player frame width in pixels: its carried instrument's
+        (control/role_config.py's player_pixels), 12 for a dev not known."""
+        info = self.game_server.devices.get(dev)
+        return player_pixels(getattr(info, "carried", None))
+
     @staticmethod
     def _solid_frame(color, level: float, length: int) -> bytes:
         """`length` bytes of one colour at `level`, R, G, B, W."""
@@ -1190,7 +1199,8 @@ class DeviceLinkAgent:
                 if closing:
                     self._check_closing_bound(dev)
                 continue
-            frame = bytes(universe.get_frame()[:_DEVICE_CHANNELS])
+            frame = bytes(universe.get_frame()[
+                :self._device_pixels(dev) * CHANNELS_PER_PIXEL])
             # By fixture key, not raw dev: this loop renders any dev that
             # still holds a bridge (a ROOM join now drops it, but a dev can
             # be bound to a fixture some other way, e.g. a direct
@@ -1215,7 +1225,6 @@ class DeviceLinkAgent:
         # (_bases) with any override painted on top, so an invite and
         # Ready are visible before any role exists. With neither, it gets
         # one black frame and drops out.
-        black = bytes(_DEVICE_CHANNELS)
         gs = self.game_server
         bound = set(gs.room.bound.values()) if gs.room is not None else set()
         for dev in list(set(self._overrides) | self._override_only
@@ -1230,9 +1239,10 @@ class DeviceLinkAgent:
                 self._override_only.discard(dev)
                 continue
             base = self._bases.get(dev)
-            frame = black
+            channels = self._device_pixels(dev) * CHANNELS_PER_PIXEL
+            frame = bytes(channels)
             if base is not None and dev not in self._muted:
-                frame = self._solid_frame(base[0], base[1], _DEVICE_CHANNELS)
+                frame = self._solid_frame(base[0], base[1], channels)
             if dev in self._overrides:
                 frame = self._apply_override(dev, frame)
             if self._last_frames.get(dev) == frame:
@@ -1243,7 +1253,7 @@ class DeviceLinkAgent:
                     dev, frame, when=self._clock() + self._horizon))
             except Exception:
                 logger.exception("leds send for %s failed", dev)
-            if frame == black and dev not in self._bases:
+            if frame == bytes(channels) and dev not in self._bases:
                 # Nothing more to say until another override or base
                 # lands: forget the frame so this dev drops out of the loop.
                 self._override_only.discard(dev)
@@ -1459,11 +1469,14 @@ class DeviceLinkAgent:
         run, or a RUNNING walk-up) with its composed role config. Build
         dev's bridge and send /<dev>/role."""
         cap = self._capability
-        if getattr(result, "zones", ()):
-            # The role names single lights of its own (Role.zones).
-            cap = zoned_capability(dev, result.zones)
-        bridge = DeviceBridge(capability=cap, clock=self._clock)
         try:
+            if getattr(result, "zones", ()):
+                # The role names single lights of its own (Role.zones), on
+                # a surface as wide as the device's own frame. A zone past
+                # it raises: a role meant for a bigger device.
+                cap = zoned_capability(dev, result.zones,
+                                       self._device_pixels(dev))
+            bridge = DeviceBridge(capability=cap, clock=self._clock)
             bridge.on_grant(result)
         except Exception:
             logger.exception("building the LightSession for %s failed", dev)
@@ -1471,7 +1484,8 @@ class DeviceLinkAgent:
                 dev, "role", "could not build light session"))
             return
         self.bridges[dev] = bridge
-        self._universes[dev] = Universe()
+        self._universes[dev] = Universe(
+            channel_count=self._device_pixels(dev) * CHANNELS_PER_PIXEL)
         self._last_frames.pop(dev, None)
         self._closing.pop(dev, None)
         # A rejoining device must not be starved of its first breath by a

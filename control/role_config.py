@@ -41,8 +41,17 @@ def validate_role_declarations(role_table: RoleTable) -> None:
         _validate_zones(role)
 
 
-# A player device's surface: Rev 1's 12 px (devicelink/agent.py's frame).
+# A player device's surface: Rev 1's 12 px (devicelink/agent.py's frame),
+# the floor every carried instrument meets. A device whose carried
+# instrument declares more (a devtower's 32) gets that many: player_pixels.
 PLAYER_PIXELS = 12
+
+
+def player_pixels(instrument) -> int:
+    """A player device's surface and frame width in pixels: its carried
+    instrument's `pixels`, never under PLAYER_PIXELS (None or an undeclared
+    0 is the floor)."""
+    return max(getattr(instrument, "pixels", 0) or 0, PLAYER_PIXELS)
 
 
 def _validate_zones(role: Role) -> None:
@@ -59,10 +68,13 @@ def _validate_zones(role: Role) -> None:
         if name in names:
             raise ValueError(f"{where}[{idx}]: duplicate zone {name!r}")
         names.add(name)
+        # The upper bound is the granted device's own (player_pixels), so
+        # it is checked at grant, by harness/device_bridge.py's
+        # zoned_capability, not here.
         if not (isinstance(start, int) and isinstance(count, int)) \
-                or start < 0 or count < 1 or start + count > PLAYER_PIXELS:
-            raise ValueError(f"{where}[{idx}]: {name!r} must lie within "
-                             f"the device's {PLAYER_PIXELS} pixels")
+                or start < 0 or count < 1:
+            raise ValueError(f"{where}[{idx}]: {name!r} must be a pixel "
+                             "range with start >= 0 and count >= 1")
 
 
 def _validate_light_manifest(role: Role) -> None:

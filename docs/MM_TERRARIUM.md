@@ -2262,14 +2262,20 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   shared progress bar on every Tower. It sorts devices by id with
   `admits`: `ie<N>` takes `player`, `devtower<N>` (instrument `devtower`) takes `tower` (both
   unscored, uncapped JAM roles), anything else gets solo. A Tower is a
-  plain device, not a Room fixture: no Arm, no Room node, a 12 px player
-  frame. Every tap from a player adds 1% (a gesture's `count` taps add
-  that many) to one figure all Towers show on pixels 0-3, bottom first,
-  25% a light; at 100% the bar holds full. The `tower` role declares
-  `Role.zones` `p0`..`p3`, one pixel each, which `DeviceLinkAgent` builds
-  into that device's surface (`harness/device_bridge.py`'s
-  `zoned_capability`, which pads the unnamed pixels 4-11 with an
-  `unzoned4` zone so the zones tile the frame), so each light is a zone bound to an aurora held
+  plain device, not a Room fixture: no Arm, no Room node, a 32 px player
+  frame (the `devtower` instrument declares `pixels = 32`; a player
+  device's frame is its carried instrument's pixels, never under 12,
+  `control/role_config.py`'s `player_pixels`, so every other device keeps
+  12). Every tap from a player adds 1% (a gesture's `count` taps add
+  that many) to one figure all Towers show on all 32 LEDs as 16 lights of
+  two LEDs each, bottom first, 6.25% a light; at 100% the bar holds full.
+  The `tower` role declares `Role.zones` `p0`..`p15`, two pixels each
+  (`p<k>` is pixels 2k and 2k+1), which `DeviceLinkAgent` builds into a
+  surface as wide as the device's frame (`harness/device_bridge.py`'s
+  `zoned_capability`, which pads any unnamed pixels with `unzoned<start>`
+  zones so the zones tile the frame, and refuses a zone past the device's
+  pixels, so a Tower that hellos without the `devtower` instrument gets no
+  light session), so each light is a zone bound to an aurora held
   dark whose level rides its own cc lane (20 + k). A tap sends each Tower
   a `LightCue` for each light it moved, or the whole bar to a Tower that
   joined since the last tap.

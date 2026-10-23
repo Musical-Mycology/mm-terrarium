@@ -6,17 +6,20 @@ Two kinds of device take part, told apart by their dev id:
   PROGRESS_PER_TAP (1%) to one progress figure shared by all players; a
   gesture of several taps (the tap's `count`) adds that many.
 - a Tower, devtower<N> (TOWER_DEV_RE, the instrument instruments/
-  devtower.toml), takes the `tower` role. It is a player device, not a
-  Room fixture: it hellos like any device and gets its own 12 px player
-  frame at start or walk-up, no Arm and no Room node. Its taps do nothing.
+  devtower.toml, 32 pixels), takes the `tower` role. It is a player
+  device, not a Room fixture: it hellos like any device and gets its own
+  32 px player frame at start or walk-up, no Arm and no Room node. Its
+  taps do nothing.
   Every Tower shows the same bar.
 
-Progress runs 0..PROGRESS_MAX over TOWER_LIGHTS lights, pixels 0..3 of the
-Tower's frame, bottom first, 25% a light, so 1% of progress is a
-twenty-fifth of one light's level. At 100% the bar holds full and further taps do nothing;
-reload the Bit to start over.
+Progress runs 0..PROGRESS_MAX over TOWER_LIGHTS lights, the Tower's 32
+LEDs taken PIXELS_PER_LIGHT (2) at a time, bottom first: light k is pixels
+2k and 2k+1, and both light up together. That is 6.25% a light, so 1% of
+progress is 0.16 of one light's level. At 100% the bar holds full and
+further taps do nothing; reload the Bit to start over.
 
-Each light is one zone of the tower role's own surface (Role.zones, p0..p3),
+Each light is one zone of the tower role's own surface (Role.zones,
+p0..p15, two pixels each),
 bound to an aurora held at level 0 whose level rides its own cc lane
 (LIGHT_CC_BASE + k, a lane value is cc/127). A tap sends one cc to each
 light it moved, on every Tower; a Tower that joined since the last tap gets
@@ -45,7 +48,9 @@ TOWER_DEV_RE = re.compile(r"devtower\d+")
 
 PROGRESS_MAX = 100             # percent
 PROGRESS_PER_TAP = 1           # percent
-TOWER_LIGHTS = 4                # the Dev Tower's LEDs, pixels 0..3
+TOWER_PIXELS = 32               # the Dev Tower's LEDs, pixels 0..31
+PIXELS_PER_LIGHT = 2            # LEDs that light up as one
+TOWER_LIGHTS = TOWER_PIXELS // PIXELS_PER_LIGHT   # 16
 LIGHTS = tuple(f"p{k}" for k in range(TOWER_LIGHTS))
 
 # Light k's level rides cc LIGHT_CC_BASE + k, clear of cc:11, which
@@ -81,7 +86,7 @@ def is_player(dev: str) -> bool:
 
 
 class MinigameBit(Bit):
-    version = "0.3"
+    version = "0.4"
 
     def __init__(self, config=None) -> None:
         super().__init__(config)
@@ -106,7 +111,8 @@ class MinigameBit(Bit):
             capacity=None,
             scored=False,
             breath=False,                  # the bar is the whole light
-            zones=tuple((zone, k, 1) for k, zone in enumerate(LIGHTS)),
+            zones=tuple((zone, k * PIXELS_PER_LIGHT, PIXELS_PER_LIGHT)
+                        for k, zone in enumerate(LIGHTS)),
             light_manifest={"instruments": [
                 {"instrument": "aurora", "target": zone,
                  "params": {"hue": BAR_HUE, "level": 0.0},

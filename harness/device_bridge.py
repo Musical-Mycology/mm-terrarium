@@ -16,29 +16,39 @@ from luxaeterna.synth.manifest import LightManifest
 from luxaeterna.synth.session import build_session
 
 
-def zoned_capability(dev: str, zones) -> SurfaceCapability:
-    """A player device's 12 px surface carrying a role's own zones
-    (Role.zones, (name, start, count) each) plus `primary` over the whole
-    surface, which an untargeted manifest instrument resolves to -- the
-    same shape harness/room_surface.py gives a Room fixture. A role may
-    name only some pixels (a 4-light bar on the 12 px frame): the rest get
-    `unzoned<start>` filler zones, since luxaeterna wants a surface's zones
-    to tile it whole."""
+def zoned_capability(dev: str, zones,
+                     pixel_count: int = PLAYER_PIXELS) -> SurfaceCapability:
+    """A player device's surface of `pixel_count` pixels (control/
+    role_config.py's player_pixels: 12, or a devtower's 32) carrying a
+    role's own zones (Role.zones, (name, start, count) each) plus `primary`
+    over the whole surface, which an untargeted manifest instrument
+    resolves to -- the same shape harness/room_surface.py gives a Room
+    fixture. A role may name only some pixels (a bar on part of the frame):
+    the rest get `unzoned<start>` filler zones, since luxaeterna wants a
+    surface's zones to tile it whole. ValueError when a zone runs past the
+    surface: the role wants a bigger device than this one."""
     named = [Zone(name, start, count) for name, start, count in zones]
+    for z in named:
+        if z.start + z.count > pixel_count:
+            raise ValueError(f"{dev}: zone {z.name!r} (pixels {z.start}.."
+                             f"{z.start + z.count - 1}) runs past the "
+                             f"device's {pixel_count} pixels")
     return SurfaceCapability(
         surface_id=dev,
-        pixel_count=PLAYER_PIXELS,
+        pixel_count=pixel_count,
         color_order=WIRE_ORDER,
-        zones=named + _unzoned(named) + [Zone("primary", 0, PLAYER_PIXELS)],
+        zones=named + _unzoned(named, pixel_count)
+        + [Zone("primary", 0, pixel_count)],
     )
 
 
-def _unzoned(zones) -> list[Zone]:
-    """One zone per run of player pixels that `zones` leave uncovered."""
+def _unzoned(zones, pixel_count: int = PLAYER_PIXELS) -> list[Zone]:
+    """One zone per run of the surface's pixels that `zones` leave
+    uncovered."""
     covered = {p for z in zones for p in range(z.start, z.start + z.count)}
     out, start = [], None
-    for p in range(PLAYER_PIXELS + 1):
-        if p < PLAYER_PIXELS and p not in covered:
+    for p in range(pixel_count + 1):
+        if p < pixel_count and p not in covered:
             if start is None:
                 start = p
         elif start is not None:

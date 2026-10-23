@@ -19,7 +19,7 @@ from control.jam_role import is_solo_role
 from control.role_config import validate_role_declarations
 
 ROOT = Path(__file__).resolve().parents[1]
-PROGRESS_LIGHTS = 4
+PROGRESS_LIGHTS = 16               # 32 LEDs, two to a light
 TAP = ["ie1", 0.0, 80.0, 1]
 
 
@@ -47,9 +47,9 @@ def test_needs_no_room_light():
 
 # --- the tower role --------------------------------------------------------
 
-def test_the_tower_role_lights_four_single_pixel_zones():
+def test_the_tower_role_lights_sixteen_two_pixel_zones():
     tower = MinigameBit().role_table.roles["tower"]
-    assert tower.zones == tuple((f"p{k}", k, 1)
+    assert tower.zones == tuple((f"p{k}", 2 * k, 2)
                                 for k in range(PROGRESS_LIGHTS))
     assert tower.breath is False and tower.scored is False
     assert [(d["target"], d["lanes"][0]["source"], d["params"]["level"])
@@ -82,40 +82,42 @@ def _synced_bit(*devs, towers=("devtower1",)):
 
 
 @pytest.mark.parametrize("progress, levels", [
-    (0, [0.0] * 4),
-    (1, [0.04] + [0.0] * 3),
-    (25, [1.0] + [0.0] * 3),
-    (30, [1.0, 0.2] + [0.0] * 2),
-    (100, [1.0] * 4),
+    (0, [0.0] * 16),
+    (1, [0.16] + [0.0] * 15),
+    (6, [0.96] + [0.0] * 15),
+    (7, [1.0, 0.12] + [0.0] * 14),
+    (25, [1.0] * 4 + [0.0] * 12),
+    (30, [1.0] * 4 + [0.8] + [0.0] * 11),
+    (100, [1.0] * 16),
 ])
-def test_one_percent_is_a_twentyfifth_of_one_light(progress, levels):
-    assert [light_level(progress, k) for k in range(4)] == \
+def test_one_percent_is_0_16_of_one_light(progress, levels):
+    assert [light_level(progress, k) for k in range(PROGRESS_LIGHTS)] == \
         pytest.approx(levels)
 
 
 def test_a_new_tower_gets_the_whole_bar_on_the_next_tap():
     bit = _joined_bit()
     out = bit.verb_handlers()["tap"]("ie1", TAP, at=5.0)
-    assert out == [cc("devtower1", 0, 5, 5.0)] + [
+    assert out == [cc("devtower1", 0, 20, 5.0)] + [
         cc("devtower1", k, 0, 5.0) for k in range(1, PROGRESS_LIGHTS)]
 
 
 def test_each_tap_adds_one_percent_to_the_light_it_lands_in():
     bit = _synced_bit()
     tap = bit.verb_handlers()["tap"]
-    assert tap("ie1", TAP, at=5.0) == [cc("devtower1", 0, 5, 5.0)]
-    for _ in range(24):
+    assert tap("ie1", TAP, at=5.0) == [cc("devtower1", 0, 20, 5.0)]
+    for _ in range(5):
         out = tap("ie1", TAP, at=6.0)
-    assert out == [cc("devtower1", 0, 127, 6.0)]
-    assert tap("ie1", TAP, at=7.0) == [            # 26%: the second light
-        cc("devtower1", 1, 5, 7.0)]
-    assert bit.status()["progress"] == 26
+    assert out == [cc("devtower1", 0, 122, 6.0)]   # 6%: 0.96 of a light
+    assert tap("ie1", TAP, at=7.0) == [            # 7%: into the second
+        cc("devtower1", 0, 127, 7.0), cc("devtower1", 1, 15, 7.0)]
+    assert bit.status()["progress"] == 7
 
 
 def test_every_tower_shows_the_same_bar():
     bit = _synced_bit(towers=("devtower1", "devtower2"))
     assert bit.verb_handlers()["tap"]("ie1", TAP, at=1.0) == [
-        cc("devtower1", 0, 5, 1.0), cc("devtower2", 0, 5, 1.0)]
+        cc("devtower1", 0, 20, 1.0), cc("devtower2", 0, 20, 1.0)]
 
 
 def test_a_tower_joining_late_catches_up_while_the_others_get_the_change():
@@ -124,11 +126,11 @@ def test_a_tower_joining_late_catches_up_while_the_others_get_the_change():
     for _ in range(29):
         tap("ie1", TAP, at=0.0)
     bit.on_join("devtower2", "tower")
-    out = tap("ie1", TAP, at=1.0)                  # 30%
+    out = tap("ie1", TAP, at=1.0)                  # 30%: 4.8 lights
     assert [c for c in out if c.dev == "devtower1"] == \
-        [cc("devtower1", 1, 25, 1.0)]
+        [cc("devtower1", 4, 102, 1.0)]
     assert [c.data2 for c in out if c.dev == "devtower2"] == \
-        [127, 25] + [0] * 2
+        [127] * 4 + [102] + [0] * 11
 
 
 def test_every_player_fills_the_same_bar():
@@ -145,7 +147,7 @@ def test_the_bar_holds_full_at_100_percent():
     tap = bit.verb_handlers()["tap"]
     for _ in range(100):
         out = tap("ie1", TAP, at=0.0)
-    assert out == [cc("devtower1", 3, 127, 0.0)]
+    assert out == [cc("devtower1", 15, 127, 0.0)]
     assert tap("ie1", TAP, at=1.0) == []
     assert bit.status()["progress"] == 100
 
@@ -167,7 +169,7 @@ def test_taps_with_no_tower_still_count():
 def test_a_multi_tap_gesture_counts_every_tap():
     bit = _synced_bit()
     assert bit.verb_handlers()["tap"]("ie1", ["ie1", 0.0, 80.0, 2],
-                                      at=0.0) == [cc("devtower1", 0, 10, 0.0)]
+                                      at=0.0) == [cc("devtower1", 0, 41, 0.0)]
     assert bit.status()["progress"] == 2
 
 
@@ -217,7 +219,7 @@ def test_towers_players_and_strangers_each_get_their_own_role():
     assert gs.bit.status()["players"] == ["ie1", "ie2"]
     assert gs.bit.status()["towers"] == ["devtower1"]
     tower_grant = dict(grants)["devtower1"]
-    assert tower_grant.zones == tuple((f"p{k}", k, 1)
+    assert tower_grant.zones == tuple((f"p{k}", 2 * k, 2)
                                       for k in range(PROGRESS_LIGHTS))
     assert dict(grants)["ie1"].zones == ()
     # A walk-up after start is sorted the same way.
@@ -241,5 +243,5 @@ def test_a_tap_lights_every_tower_through_the_engine():
     gs.run()
     gs.data("ie1", "tap", TAP)
     lit = {(dev, d1, d2) for dev, _st, d1, d2, *_ in cues if d2}
-    assert lit == {("devtower1", LIGHT_CC_BASE, 5),
-                   ("devtower2", LIGHT_CC_BASE, 5)}
+    assert lit == {("devtower1", LIGHT_CC_BASE, 20),
+                   ("devtower2", LIGHT_CC_BASE, 20)}
