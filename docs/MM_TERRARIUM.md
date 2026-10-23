@@ -1217,8 +1217,9 @@ pending) and treated as the design. In `console/agent.py`:
 - **MIDITEST** (`rooms/MIDITEST.toml`): one 14 px `tower` fixture on the
   `tower_sound` instrument (the Tower's model and zones plus `audio.flsyn`,
   so it has a speaker), for MIDI playback. Its zones `bottom`/`middle`/`top`
-  split the Tower's `progress` zone into thirds; the first Room that refines
-  a model zone (*Room fixtures and the Tower*). Deux Ara Drop's only Room.
+  split the Tower's `progress` zone into three zones (3/2/3 pixels); the
+  first Room that refines a model zone (*Room fixtures and the Tower*).
+  Deux Ara Drop's only Room.
 - `[psus.<name>] amps` with `[[artnet]] psu`: outputs on one PSU sum `max_amps`
   to at most 80 % of it, across every Room (one box, one supply). An output
   with no `psu` is unchecked.
@@ -1374,10 +1375,11 @@ instrument disagrees with it (`fixture_instrument_mismatch`,
 and a model must have one marker per pixel with each marker's zone honoured
 at its pixel: a room zone of that name covers it, or the room **refines** the
 model zone (every room zone covering the pixel lies wholly inside the pixels
-the model tags that zone, so a room may split `progress` into thirds). A room
-zone straddling two model zones still fails, which is what catches an
-artist's mistake. Instrument publishes get the same check from the
-other side: `publish_entry(..., rooms_root=)` (wired in the Console's Design
+the model tags that zone, so a room may split `progress` into smaller zones,
+as MIDITEST's three (3/2/3) do). A room zone straddling two model zones
+still fails, which is what catches an artist's mistake. Instrument
+publishes get the same check from the other side: `publish_entry(...,
+rooms_root=)` (wired in the Console's Design
 Panel) refuses an instrument that would break a published room binding it,
 so a publish can never leave the Terrarium unable to boot.
 `rooms/TOWER.toml` is the first fixture this matters
@@ -1425,6 +1427,9 @@ recipe's first step.
   undeclared cc is dropped: a lane is a real remap seam); `start_drone` holds
   the declared drone (FluidSynth is silent without a note); `silence` is Stop's
   audio half; `play_note` rings a welcome or lobby bell on a transient voice.
+  `silence` and `on_release` send every part cc 64 = 0 and cc 7 = 100 before
+  `all_off` (FluidSynth's all-notes-off leaves pedal-held notes sounding),
+  and reach every part even when one raises.
   It **never imports pyarco**, and `feed_midi` takes no `when` (timing is
   Control's `TimedQueue`).
 - **Provisional.** The type is `DeviceVoice`, not `Synth`, with no channel
@@ -1440,7 +1445,11 @@ recipe's first step.
   (`role_config.MAX_PARTS`, `MAX_MELODIC_PARTS`; a longer list or a second
   drums part is refused at validation). The channel number never leaves
   `harness/arco_synth.py`: `AudioBridge` asks the pool for `acquire(drums=
-  True)`. A failed grant releases the voices it already took.
+  True)`. A failed grant releases the voices it already took. The limit is
+  **one drums part per pool, not per fixture**: every audio fixture's grant
+  draws on the same pool, so in a Room with two audio fixtures a Room role
+  that declares drums fails the second fixture's grant ("drum channel 9 is
+  taken"). MIDITEST has one.
 - **Music playback.** `control/midifile.py` is a stdlib SMF reader (channel
   events on a beat timeline, malformed files raise `ValueError`).
   `control/sequencer.py`'s `Sequencer` plays `MidiFile`s on one beat grid as
@@ -1452,7 +1461,11 @@ recipe's first step.
   track's queued cues, then at the switch-off releases **every key the track
   has struck since `start()`** and the sustain pedal: the device applies the
   purge on arrival, so it also drops the note-offs of notes already
-  sounding, and the struck set is never cleared between disables.
+  sounding, and the struck set is never cleared between disables. A loop
+  drops any note struck at or past its length (`piano.mid`'s zero-length
+  notes on beat 16 would sound on the next downbeat), and `enable` re-strikes
+  only a held note with at least a beat left (a kick would land off the
+  grid).
 - `harness/arco_synth.py`'s `ArcoSynthPool`: one `Flsyn`, up to 16 voices (a
   MIDI channel each), pyarco imported in `start()`, `poll()` pumping
   `sched.poll()` from the tick (`harness/` is a holding position). No
@@ -1598,7 +1611,8 @@ holds a `LightSession` per granted device and per fixture, ships
   never expires. A muted surface ignores `SolidCue` (*Cues (SolidCue,
   SURFACE, mute)*).
 - **Lobby** (*Lobby and the handshake*): FULL still breathes the light;
-  RUNNING restores the Bit's light and program.
+  RUNNING restores the Bit's light and program, and returns part 0's
+  cc:11 to 127 (the breath wrote it there directly).
 
 #### Timed cues and `cue_horizon`
 
