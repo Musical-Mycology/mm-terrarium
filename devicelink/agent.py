@@ -1013,7 +1013,11 @@ class DeviceLinkAgent:
         painted from arrival and gone at when + duration, exactly like a
         SolidCue (see _on_solid_cue). Dropped for a muted surface, for the
         same reason: a flash must not light a blackout. A pixel index outside
-        the frame is ignored when painting (_apply_pixel_flashes)."""
+        the frame is ignored when painting (_apply_pixel_flashes); one that
+        is not a number raises here, inside the engine's guarded sink call,
+        rather than later in the render loop where it would stop every
+        tick."""
+        pixel = int(pixel)
         dev = self._fixture_key(dev)
         if dev in self._muted:
             return

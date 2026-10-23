@@ -141,6 +141,24 @@ def test_out_of_range_pixel_is_ignored(two_fixture_agent):
         assert _settled(agent, main_dev) == before
 
 
+def test_float_pixel_paints_that_pixel(two_fixture_agent):
+    agent, _audio, main_dev, _accent = two_fixture_agent
+    agent._on_pixel_flash(main_dev, float(PIXEL), WHITE, 0.5, agent._clock())
+    assert _settled(agent, main_dev)[LO:HI] == bytes(WHITE)
+
+
+def test_non_numeric_pixel_is_dropped_before_the_render(two_fixture_agent):
+    """A bad pixel must fail inside the engine's guarded sink call, never
+    later in the render loop where it would take down every tick."""
+    agent, _audio, main_dev, _accent = two_fixture_agent
+    gs = agent.game_server
+    assert gs.on_pixel_flash is not None
+    gs._dispatch_cues([PixelFlashCue(main_dev, "three", WHITE, 0.5)],
+                      at=agent._clock())
+    assert agent._pixel_flashes == {}
+    agent.poll()                                   # must not raise
+
+
 def test_flash_touches_only_its_fixture(two_fixture_agent):
     agent, _audio, main_dev, accent_dev = two_fixture_agent
     agent.poll()
