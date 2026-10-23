@@ -239,6 +239,14 @@ def compose_role_config(bit_name: str, bit_version: str, role: Role, *,
     return config
 
 
+# One Flsyn carries 16 MIDI channels; an instrument's list index is its part
+# number and each part holds one of them (control/audio.py). One channel is
+# reserved for the drums part (harness/arco_synth.py), so a manifest can hold
+# at most 15 melodic instruments inside the 16 total.
+MAX_PARTS = 16
+MAX_MELODIC_PARTS = MAX_PARTS - 1
+
+
 def validate_ugen_manifest(subject: Role | dict, where: str | None = None) -> None:
     """Shallow structural validation of an authored ugen_manifest.
     Deliberately provisional (v0): instrument names and programs belong to the
@@ -260,6 +268,11 @@ def validate_ugen_manifest(subject: Role | dict, where: str | None = None) -> No
     instruments = manifest.get("instruments", [])
     if not isinstance(instruments, list):
         raise ValueError(f"{where}: 'instruments' must be a list")
+    if len(instruments) > MAX_PARTS:
+        raise ValueError(
+            f"{where}: at most {MAX_PARTS} instruments (one per MIDI "
+            f"channel), got {len(instruments)}")
+    drums_at = None
     for idx, decl in enumerate(instruments):
         decl_where = f"{where} instruments[{idx}]"
         if not isinstance(decl, dict):
@@ -267,6 +280,23 @@ def validate_ugen_manifest(subject: Role | dict, where: str | None = None) -> No
         if "instrument" not in decl:
             raise ValueError(
                 f"{decl_where}: missing required field 'instrument'")
+        program = decl.get("program")
+        if program is not None and (
+                not isinstance(program, int) or isinstance(program, bool)
+                or not 0 <= program <= 127):
+            raise ValueError(
+                f"{decl_where}: 'program' must be an int 0-127, "
+                f"got {program!r}")
+        drums = decl.get("drums", False)
+        if not isinstance(drums, bool):
+            raise ValueError(
+                f"{decl_where}: 'drums' must be a bool, got {drums!r}")
+        if drums:
+            if drums_at is not None:
+                raise ValueError(
+                    f"{decl_where}: only one instrument may set 'drums' "
+                    f"(instruments[{drums_at}] already does)")
+            drums_at = idx
         drone = decl.get("drone")
         if drone is not None:
             if not isinstance(drone, dict):
@@ -288,6 +318,11 @@ def validate_ugen_manifest(subject: Role | dict, where: str | None = None) -> No
                         f"{lane_where}: missing required field {req!r}")
             parse_cc_ref(lane["source"], f"{lane_where} source")
             parse_cc_ref(lane["dest"], f"{lane_where} dest")
+    melodic = len(instruments) - (drums_at is not None)
+    if melodic > MAX_MELODIC_PARTS:
+        raise ValueError(
+            f"{where}: at most {MAX_MELODIC_PARTS} non-drums instruments "
+            f"(one MIDI channel is reserved for drums), got {melodic}")
 
 
 def _fixture(profile, name: str):

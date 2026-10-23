@@ -141,3 +141,45 @@ def test_shutdown_before_start_is_a_noop():
     from harness.arco_synth import ArcoSynthPool
 
     ArcoSynthPool().shutdown()
+
+
+def _started_pool(**kw):
+    from harness.arco_synth import ArcoSynthPool
+
+    pool = ArcoSynthPool(**kw)
+    pool._flsyn = object()                   # pretend start() ran
+    return pool
+
+
+def test_drums_take_channel_nine():
+    pool = _started_pool()
+    assert pool.acquire(drums=True).channel == 9
+
+
+def test_melodic_voices_skip_channel_nine():
+    pool = _started_pool()
+    channels = [pool.acquire().channel for _ in range(10)]
+    assert channels == [0, 1, 2, 3, 4, 5, 6, 7, 8, 10]
+
+
+def test_second_drums_part_raises():
+    pool = _started_pool()
+    pool.acquire(drums=True)
+    with pytest.raises(RuntimeError, match="drum channel 9 is taken"):
+        pool.acquire(drums=True)
+
+
+def test_drum_channel_is_reusable_after_release():
+    pool = _started_pool()
+    kit = pool.acquire(drums=True)
+    pool.release(kit)
+    assert pool.acquire(drums=True).channel == 9
+
+
+def test_melodic_voices_run_out_before_the_drum_channel_is_touched():
+    pool = _started_pool()
+    for _ in range(15):
+        pool.acquire()
+    with pytest.raises(RuntimeError):
+        pool.acquire()                       # only 9 is left, and it is the kit's
+    assert pool.acquire(drums=True).channel == 9

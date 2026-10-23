@@ -388,6 +388,16 @@ lets a role declare its own audio, validated shallowly, with no cross-repo
 contract and no device-side parser. The real Flsyn-parameterizing schema is a
 separate spec, and this one must not be cited as precedent for its shape.
 
+*Extension (2026-10-22, Deux Ara Drop).* v0 stays unfrozen but grew two
+things so a Room role can play MIDI files. A Room-role manifest may declare
+several `instruments`: the list index is the part, the status byte's channel
+nibble selects it, and each part has its own voice, lanes and `program`
+(0-127). One instrument may set `drums: true`, which the pool puts on General
+MIDI channel 9 while keeping melodic parts off it, so a manifest holds at most
+16 instruments, 15 of them melodic. Both are validated shallowly in
+`role_config.validate_ugen_manifest`; neither is a shape the real schema is
+bound to keep.
+
 ### 9.3 New dependency, stated plainly
 
 mm-terrarium gains a **dev/test-only** dependency on pyarco, reached by

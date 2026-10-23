@@ -85,6 +85,40 @@ class LightCue:
     when: float | None = None
 
 
+@dataclass(frozen=True)
+class MusicCue:
+    """Audio-only MIDI for a Room fixture, optionally timed on the O2 clock.
+
+    Distinct from LightCue because the two have different consumers: a
+    LightCue drives the fixture's renderer and only incidentally its audio,
+    whereas a MusicCue must reach the Room speaker and NEVER the light
+    session (a note-on routed as light would paint a lane). The status
+    byte's channel nibble selects the Room role's part (see the Room music
+    wiring). `when=None` inherits the dispatching call's `at`, like LightCue.
+
+    `tag` names the track a note belongs to so a later MusicPurge can drop
+    whatever of it is still queued.
+    """
+    dev: str
+    status: int
+    data1: int
+    data2: int
+    when: float | None = None
+    tag: str | None = None
+
+
+@dataclass(frozen=True)
+class MusicPurge:
+    """Drop every still-queued MusicCue carrying `tag` on `dev`.
+
+    A distinct cue rather than a flag on MusicCue so a sequencer can cut a
+    track off (a seek, a stop, a loop restart) without emitting a note.
+    Notes already presented are unaffected: this only empties the queue.
+    """
+    dev: str
+    tag: str
+
+
 # Sentinel dev id for a cue script step addressed at whatever the firing
 # function declared as its target. Substituted during expansion
 # (control.functions.expand_script), before the cue ever reaches
@@ -141,6 +175,31 @@ class SolidCue:
     rgb: tuple
     level: float
     duration: float | None
+    when: float | None = None
+
+
+@dataclass(frozen=True)
+class PixelFlashCue:
+    """Paint ONE pixel of a fixture a solid colour for `duration` seconds,
+    over whatever the frame holds -- the single-pixel sibling of SolidCue.
+    Distinct from SolidCue (which repaints the whole frame) and from LightCue
+    (which feeds an instrument, and the lexicon has no white instrument), so
+    a Bit can flicker white on one Tower pixel while its light session keeps
+    running. Applied Control-side at the frame-building seam
+    (DeviceLinkAgent); nothing on the device wire changes.
+
+    `duration` is seconds from `when`; `when=None` follows LightCue's
+    convention: apply at the dispatch-supplied presentation time. `pixel` is
+    the pixel index within the fixture's frame (not a byte offset); an index
+    outside the frame is ignored.
+
+    `rgb` is (r, g, b) or (r, g, b, w); three values mean W = 0
+    (control/pixel_wire.py). The lexicon's white is (0, 0, 0, 255).
+    """
+    dev: str
+    pixel: int
+    rgb: tuple
+    duration: float
     when: float | None = None
 
 

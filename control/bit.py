@@ -125,13 +125,15 @@ class Bit(ABC):
         a fire reported here should be PRESENTED; Control has already added
         the installation's cue_horizon to its own clock.
 
-        May return only control.cues.FireFunction -- this is a Bit's only
-        way to report a condition it evaluated itself (no gesture, no verb)
-        without an operator's manual fire. Anything else in the returned
-        list is logged and dropped by the engine: continuous lane-driving
-        without a device doing something is exactly what a declared
-        GENERATOR Function exists to do instead (see control/
-        generator_runner.py). Default: nothing to report.
+        May return control.cues.FireFunction (a Bit's way to report a
+        condition it evaluated itself, with no gesture or operator fire),
+        the timed cues LightCue, MusicCue and PixelFlashCue (each may carry
+        its own `when`) and MusicPurge (the engine's _FIRES_CUE_TYPES).
+        Anything else in the returned list is logged and dropped by the
+        engine; a plain tuple or PlayCue is not a timed cue. A steady lane
+        value that needs no cue timing is still better declared as a
+        GENERATOR Function (see control/generator_runner.py). Default:
+        nothing to report.
         """
         return []
 

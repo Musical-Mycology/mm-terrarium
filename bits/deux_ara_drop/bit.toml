@@ -1,0 +1,32 @@
+[bit]
+name = "DeuxAraDropBit"
+version = "0.1.0"
+description = "Deux Ara Drop: tap drops piano, drums and synth loops in and out; double tap plays the Arabesque; tilt ducks the mix"
+entry = "deux_ara_drop_bit:DeuxAraDropBit"
+kind = "music"
+author = "Musical Mycology"
+requires_terrarium_api = 1
+
+[launch]
+room_types = ["MIDITEST"]
+default_room_type = "MIDITEST"
+default_devices = 1
+default_join_role = "player"
+device_instrument = "tuneshroom"
+manual_devices = true
+
+[launch.nodes]
+player = "DEUX_PLAYER_NODE"
+
+[start]
+when = "players"
+min_scored = 1
+
+[console]
+display_name = "Deux Ara Drop"
+
+[assets]
+piano = "assets/piano.mid"
+drums = "assets/drums.mid"
+synth = "assets/synth.mid"
+arabesque = "assets/arabesque.mid"

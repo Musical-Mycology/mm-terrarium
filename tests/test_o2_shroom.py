@@ -795,6 +795,20 @@ def test_main_gates_the_tilt_sweep_and_the_tapper_on_uses():
 
 
 
+def test_manual_flag_disables_synthetic_gestures():
+    """Source-level pin: --manual keeps the simulated shroom quiet. Both
+    synthetic gestures (the beat tapper and the tilt sweep) also require
+    `not args.manual`, while drain_gestures (the operator's own page) is
+    left ungated so a person can still drive the device."""
+    import inspect
+    import harness.o2_shroom as mod
+    src = inspect.getsource(mod.main)
+    assert '"--manual"' in src
+    assert "tapper.armed = (not args.manual" in src
+    assert "sweeping = (not args.manual" in src
+    assert "operator = drain_gestures(operator_input" in src
+
+
 def test_main_hands_the_role_blob_to_the_gesture_drain():
     """Source-level pin: hold and swing go out only for a role whose
     `uses` lists them (tests/test_o2_shroom_input.py), which works only

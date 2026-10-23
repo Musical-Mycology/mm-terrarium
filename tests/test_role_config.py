@@ -637,3 +637,56 @@ def test_role_zones_within_the_twelve_pixels_validate():
 def test_bad_role_zones_refuse_to_load(zones, match):
     with pytest.raises(ValueError, match=match):
         _validate_roles(_zoned(zones))
+
+
+def test_ugen_drums_must_be_bool():
+    bad = {"instruments": [{"instrument": "flsyn", "drums": 1}]}
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=bad))
+    assert "drums" in str(ei.value) and "bool" in str(ei.value)
+
+
+def test_ugen_only_one_drums_part():
+    bad = {"instruments": [{"instrument": "kit", "drums": True},
+                           {"instrument": "flsyn"},
+                           {"instrument": "kit2", "drums": True}]}
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=bad))
+    assert "drums" in str(ei.value) and "instruments[2]" in str(ei.value)
+
+
+def test_ugen_one_drums_part_among_melodic_parts_is_valid():
+    ok = {"instruments": [{"instrument": "flsyn", "program": 0},
+                          {"instrument": "kit", "drums": True},
+                          {"instrument": "flsyn", "program": 127}]}
+    validate_ugen_manifest(_role(ugen_manifest=ok))
+
+
+@pytest.mark.parametrize("program", [128, -1, "89", True, 1.5])
+def test_ugen_program_range(program):
+    bad = {"instruments": [{"instrument": "flsyn", "program": program}]}
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=bad))
+    assert "program" in str(ei.value)
+
+
+def test_ugen_at_most_16_instruments():
+    ok = {"instruments": [{"instrument": "flsyn"} for _ in range(15)]
+          + [{"instrument": "kit", "drums": True}]}
+    validate_ugen_manifest(_role(ugen_manifest=ok))
+    bad = {"instruments": [{"instrument": "flsyn"} for _ in range(16)]
+           + [{"instrument": "kit", "drums": True}]}
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=bad))
+    assert "16" in str(ei.value) and "instruments" in str(ei.value)
+
+
+def test_ugen_at_most_15_melodic_instruments():
+    # Channel 9 is reserved for drums, so 16 melodic parts cannot all be
+    # given a voice even though 16 is the total cap.
+    ok = {"instruments": [{"instrument": "flsyn"} for _ in range(15)]}
+    validate_ugen_manifest(_role(ugen_manifest=ok))
+    bad = {"instruments": [{"instrument": "flsyn"} for _ in range(16)]}
+    with pytest.raises(ValueError) as ei:
+        validate_ugen_manifest(_role(ugen_manifest=bad))
+    assert "15" in str(ei.value) and "drums" in str(ei.value)

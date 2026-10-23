@@ -29,6 +29,9 @@ from control.lobby import (BELL_DURATION_S, BELL_OFFSET_S, BELL_PROGRAM,
                            pulse_level, scale_note)
 from control.timed_queue import TimedQueue
 
+# cc:11 at rest: General MIDI's power-on expression, no attenuation.
+FULL_EXPRESSION = 127
+
 
 @dataclass
 class LobbySinks:
@@ -94,6 +97,10 @@ class LobbyRuntime:
         if self._room_program is not None:
             for name in self._s.fixture_names():
                 self._s.feed_audio(name, 0xC0, int(self._room_program), 0)
+        # The breath wrote cc:11 straight to each fixture's part 0 (tick);
+        # left where it last sat, it would duck the Bit's own sound.
+        for name in self._s.fixture_names():
+            self._s.set_audio_control(name, BREATH_CC, FULL_EXPRESSION)
         # The queue is KEPT (spec 2026-10-01 section 5.5): a ceremony
         # whose validation landed just before start still plays its bell
         # and chime. tick() drains due thunks before its _running check,

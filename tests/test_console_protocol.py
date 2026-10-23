@@ -490,3 +490,43 @@ def test_join_changed_event_shape():
     join = {"www_url": "http://10.0.0.7:8788/app/", "nodes": []}
     assert protocol.join_changed_event(join) == {"event": "join_changed",
                                                  "join": join}
+
+
+def test_parse_gesture_tap():
+    one = protocol.parse_admin_command(
+        {"command": "gesture", "dev": "ie1", "verb": "tap", "count": 1})
+    two = protocol.parse_admin_command(
+        {"command": "gesture", "dev": "ie1", "verb": "tap", "count": 2})
+    assert one == protocol.GestureCommand(
+        dev="ie1", verb="tap", args=["ie1", 0.0, 50.0, 1])
+    assert two.args == ["ie1", 0.0, 50.0, 2]
+
+
+def test_parse_gesture_tilt_clamps():
+    tilt = protocol.parse_admin_command(
+        {"command": "gesture", "dev": "ie1", "verb": "tilt", "gamma": 30})
+    assert tilt == protocol.GestureCommand(
+        dev="ie1", verb="tilt", args=["ie1", 30.0])
+    hi = protocol.parse_admin_command(
+        {"command": "gesture", "dev": "ie1", "verb": "tilt", "gamma": 400})
+    lo = protocol.parse_admin_command(
+        {"command": "gesture", "dev": "ie1", "verb": "tilt", "gamma": -400.5})
+    assert hi.args == ["ie1", 90.0]
+    assert lo.args == ["ie1", -90.0]
+
+
+def test_parse_gesture_rejects_bad():
+    base = {"command": "gesture", "dev": "ie1", "verb": "tap", "count": 1}
+    for bad in (
+        {**base, "verb": "shake"},
+        {**base, "count": 3},
+        {**base, "count": "2"},
+        {**base, "dev": ""},
+        {**base, "dev": None},
+        {"command": "gesture", "dev": "ie1", "verb": "tilt", "gamma": "x"},
+        {"command": "gesture", "dev": "ie1", "verb": "tilt"},
+        {"command": "gesture", "dev": "ie1", "verb": "tilt",
+         "gamma": float("nan")},
+    ):
+        with pytest.raises(ValueError):
+            protocol.parse_admin_command(bad)

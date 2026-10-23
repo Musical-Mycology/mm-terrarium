@@ -130,6 +130,15 @@ Error messages name the room, the fixture, the pixel index and both zone
 names, so the import's first test run tells Sophia exactly which marker is
 wrong.
 
+*Refinement (2026-10-22).* Check 2 is relaxed in one direction: a Room may
+**refine** a model zone. A marker's zone Z is also honoured when every room
+zone covering its pixel lies wholly inside the pixels the model tags Z, so a
+room can split the Tower's `progress` zone into three zones (3/2/3). A room
+zone that straddles two model zones, or a pixel in no room zone, still
+fails, so an artist's mistake is still caught. `rooms/MIDITEST.toml`
+(`bottom`, `middle`, `top` over `progress`) is the first user; the check is
+`fixture_instrument_mismatch` in `control/room_profile.py`.
+
 ### 5.4 Artist guide (`docs/instrument-model-guide.md`)
 
 One clarification: the marker number is the **frame index**. For pixels on a
