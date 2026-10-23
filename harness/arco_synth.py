@@ -52,6 +52,11 @@ def _default_soundfont(*, repo_root: str | None = None,
 
 DEFAULT_SOUNDFONT = _default_soundfont()
 
+# General MIDI percussion lives on channel 10 (1-based) = 9 (0-based) of any
+# GM soundfont. The channel stays internal to this file: callers ask for a
+# drums voice, never for a number.
+DRUM_CHANNEL = 9
+
 
 class ArcoVoice:
     """One MIDI channel on the shared Flsyn ugen.
@@ -126,13 +131,24 @@ class ArcoSynthPool:
             self.shutdown()
             raise
 
-    def acquire(self) -> ArcoVoice:
+    def acquire(self, *, drums: bool = False) -> ArcoVoice:
+        """A voice on the lowest free channel. General MIDI drums only sound
+        on channel 9 (0-based), so a drums voice takes exactly that channel
+        and a melodic voice never does, even when it is the only one left."""
         if self._flsyn is None:
             raise RuntimeError("ArcoSynthPool.start() must run before acquire()")
-        if not self._free:
-            raise RuntimeError(
-                "no free MIDI channels: one Flsyn carries 16 voices")
-        return ArcoVoice(self._flsyn, self._free.pop(0))
+        if drums:
+            if DRUM_CHANNEL not in self._free:
+                raise RuntimeError(f"drum channel {DRUM_CHANNEL} is taken")
+            self._free.remove(DRUM_CHANNEL)
+            return ArcoVoice(self._flsyn, DRUM_CHANNEL)
+        for channel in self._free:
+            if channel != DRUM_CHANNEL:
+                self._free.remove(channel)
+                return ArcoVoice(self._flsyn, channel)
+        raise RuntimeError(
+            "no free MIDI channels: one Flsyn carries 16 voices, "
+            f"and channel {DRUM_CHANNEL} is kept for drums")
 
     def release(self, voice: ArcoVoice) -> None:
         if voice.channel not in self._free:

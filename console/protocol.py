@@ -41,6 +41,7 @@ __all__ = [
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
     "room_changed_event", "join_changed_event", "room_frame_event",
     "functions_changed_event", "function_fired_event", "FireFunctionCommand",
+    "GestureCommand",
     "GetDesignCommand", "SaveDesignCommand",
     "PublishDesignCommand", "CloneDesignCommand",
     "design_row", "catalog_error_row",
@@ -51,6 +52,36 @@ __all__ = [
     "ReplayTraceCommand", "bench_started_event", "bench_frame_event",
     "captures_listed_event", "capture_stats_event", "replay_result_event",
 ]
+
+
+# What a Console-simulated tap reports: a real device measures a peak and a
+# duration; the Console has neither, and a Bit reads only the count.
+_GESTURE_TAP_PEAK_G = 0.0
+_GESTURE_TAP_DURATION_MS = 50.0
+_GESTURE_TILT_LIMIT = 90.0
+
+
+def _parse_gesture(msg: dict) -> GestureCommand:
+    dev = msg.get("dev")
+    if not isinstance(dev, str) or not dev:
+        raise ValueError("gesture requires a non-empty string 'dev'")
+    verb = msg.get("verb")
+    if verb == "tap":
+        count = msg.get("count")
+        if isinstance(count, bool) or count not in (1, 2) \
+                or not isinstance(count, int):
+            raise ValueError("gesture tap 'count' must be 1 or 2")
+        return GestureCommand(dev=dev, verb="tap", args=[
+            dev, _GESTURE_TAP_PEAK_G, _GESTURE_TAP_DURATION_MS, count])
+    if verb == "tilt":
+        gamma = msg.get("gamma")
+        if isinstance(gamma, bool) or not isinstance(gamma, (int, float)) \
+                or gamma != gamma:
+            raise ValueError("gesture tilt requires a numeric 'gamma'")
+        gamma = max(-_GESTURE_TILT_LIMIT,
+                    min(_GESTURE_TILT_LIMIT, float(gamma)))
+        return GestureCommand(dev=dev, verb="tilt", args=[dev, gamma])
+    raise ValueError("gesture 'verb' must be 'tap' or 'tilt'")
 
 
 def role_view(role, requirement=None) -> dict:
@@ -190,6 +221,15 @@ class ReleaseRoomCommand:
 class FireFunctionCommand:
     name: str
     dev: str | None = None
+
+
+@dataclass
+class GestureCommand:
+    """A simulated tuneshroom gesture. `args` is exactly what a real device's
+    /game/<verb> delivers to GameServer.data (dev first)."""
+    dev: str
+    verb: str
+    args: list
 
 
 @dataclass
@@ -356,6 +396,8 @@ def parse_admin_command(msg: dict):
         if dev is not None and not isinstance(dev, str):
             raise ValueError("fire_function 'dev' must be a string when given")
         return FireFunctionCommand(name=name, dev=dev or None)
+    if command == "gesture":
+        return _parse_gesture(msg)
     if command == "get_design":
         state = msg.get("state")
         if state not in ("published", "draft"):

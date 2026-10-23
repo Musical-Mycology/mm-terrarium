@@ -56,6 +56,11 @@ class LaunchConfig:
     transport: str = "any"
     nodes: tuple[tuple[str, str], ...] = ()
     default_join_role: str = ""
+    # The instrument the simulated player devices carry, and whether they
+    # stay quiet (no synthetic tap or tilt) so a person drives them from
+    # the Console. "" / False leave the harness defaults alone.
+    device_instrument: str = ""
+    manual_devices: bool = False
 
 
 @dataclass(frozen=True)
@@ -206,7 +211,7 @@ def _parse_identity(raw: dict, *, source: str) -> BitIdentity:
 def _parse_launch(raw: dict, *, source: str) -> LaunchConfig:
     known = {"room_types", "default_room_type", "default_devices",
               "setup_seconds", "expected_run_seconds", "transport", "nodes",
-              "default_join_role"}
+              "default_join_role", "device_instrument", "manual_devices"}
     _warn_unknown_keys(raw, known, source=source, prefix="launch")
 
     room_types = tuple(
@@ -250,6 +255,10 @@ def _parse_launch(raw: dict, *, source: str) -> LaunchConfig:
         nodes=nodes,
         default_join_role=_get(raw, "default_join_role", str, "", source=source,
                                 prefix="launch"),
+        device_instrument=_get(raw, "device_instrument", str, "", source=source,
+                                prefix="launch"),
+        manual_devices=_get(raw, "manual_devices", bool, False, source=source,
+                             prefix="launch"),
     )
 
 
@@ -443,6 +452,8 @@ def _to_raw(table_name: str, obj: Any) -> dict:
             "transport": obj.transport,
             "nodes": dict(obj.nodes),
             "default_join_role": obj.default_join_role,
+            "device_instrument": obj.device_instrument,
+            "manual_devices": obj.manual_devices,
         }
     return {f.name: getattr(obj, f.name) for f in fields(obj)}
 

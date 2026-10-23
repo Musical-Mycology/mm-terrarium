@@ -323,3 +323,24 @@ def test_lobby_max_scored_rides_merge_overrides():
     assert merged.lobby.max_scored == 2
     merged = merge_overrides(cfg, {"lobby": {"max_scored": 5}}, source="p")
     assert merged.lobby.max_scored == 5
+
+
+def test_launch_device_instrument_and_manual_parse():
+    declared = MINIMAL + (
+        '\n[launch]\ndevice_instrument = "tuneshroom"\n'
+        'manual_devices = true\n')
+    cfg = parse_manifest(declared, source="bits/test/bit.toml")
+    assert cfg.launch.device_instrument == "tuneshroom"
+    assert cfg.launch.manual_devices is True
+    absent = parse_manifest(MINIMAL, source="bits/test/bit.toml")
+    assert absent.launch.device_instrument == ""
+    assert absent.launch.manual_devices is False
+
+
+def test_launch_device_instrument_and_manual_are_known_keys(caplog):
+    declared = MINIMAL + (
+        '\n[launch]\ndevice_instrument = "tuneshroom"\n'
+        'manual_devices = true\n')
+    with caplog.at_level("WARNING"):
+        parse_manifest(declared, source="bits/test/bit.toml")
+    assert "unknown key" not in caplog.text

@@ -1,0 +1,42 @@
+description = "MIDITEST: simulated Tower with sound, for MIDI playback (Deux Ara Drop)"
+backends = ["devicelink"]
+
+[[fixtures]]
+name = "tower"
+instrument = "tower_sound"
+  [[fixtures.blocks]]
+  name = "lower"
+  start = 0
+  count = 4
+  [[fixtures.blocks]]
+  name = "upper"
+  start = 4
+  count = 4
+  [[fixtures.blocks]]
+  name = "responders"
+  start = 8
+  count = 4
+  [[fixtures.blocks]]
+  name = "par"
+  start = 12
+  count = 2
+  [[fixtures.zones]]
+  name = "bottom"
+  start = 0
+  count = 3
+  [[fixtures.zones]]
+  name = "middle"
+  start = 3
+  count = 2
+  [[fixtures.zones]]
+  name = "top"
+  start = 5
+  count = 3
+  [[fixtures.zones]]
+  name = "responder"
+  start = 8
+  count = 4
+  [[fixtures.zones]]
+  name = "beat"
+  start = 12
+  count = 2

@@ -122,6 +122,19 @@ def test_stop_silences_and_restores_the_bits_program():
     assert len(sinks.light) == n                # stopped: nothing fed
 
 
+def test_stop_returns_the_breath_cc_to_full_expression():
+    """The breath writes cc:11 straight to each fixture's part 0; the Bit
+    that follows must not inherit wherever it last sat."""
+    rt, sinks, clock = _rt()
+    rt.start()
+    _run(rt, sinks, clock, 0.5)
+    assert any(cc == BREATH_CC and v != 127 for (_f, cc, v) in sinks.controls)
+    rt.stop()
+    for name in ("main", "accent"):
+        last = [c for c in sinks.controls if c[0] == name][-1]
+        assert last == (name, BREATH_CC, 127)
+
+
 def test_join_ceremony_flashes_bells_and_chimes_in_order():
     rt, sinks, clock = _rt()
     rt.start()

@@ -339,6 +339,17 @@ def test_device_command_uses_the_configs_node_verbatim(tmp_path):
     assert command[command.index("--node") + 1] == "SOME_OTHER_NODE"
 
 
+def test_device_command_passes_instrument_and_manual(tmp_path):
+    command = device_command(
+        _cfg(tmp_path, node="N", device_instrument="tuneshroom",
+             manual_devices=True), 1, 99)
+    assert command[command.index("--instrument") + 1] == "tuneshroom"
+    assert "--manual" in command
+    default = device_command(_cfg(tmp_path, node="N"), 1, 99)
+    assert "--instrument" not in default
+    assert "--manual" not in default
+
+
 def test_device_command_omits_persist_when_opted_out(tmp_path):
     command = device_command(
         _cfg(tmp_path, node="TEST_PLAYER_NODE", persist_shrooms=False), 1, 99)
@@ -1560,3 +1571,41 @@ def test_hold_without_a_parent_watch_is_unchanged():
 def test_detach_flag_disables_the_parent_watch():
     assert parse_args(["--detach"]).detach is True
     assert parse_args([]).detach is False
+
+
+def _declaring_registry(enabled_bits_root):
+    """A registry whose MetronomeBit declares the demo launch keys."""
+    from control.bit_registry import BitRegistry
+    manifest = enabled_bits_root / "metronome" / "bit.toml"
+    text = manifest.read_text()
+    assert "[launch]\n" in text
+    manifest.write_text(text.replace(
+        "[launch]\n",
+        '[launch]\ndevice_instrument = "tuneshroom"\n'
+        "manual_devices = true\n", 1))
+    return BitRegistry.scan((enabled_bits_root,))
+
+
+def test_launch_defaults_flow_into_stack_config(enabled_bits_root):
+    from harness.run_stack import config_from_args, parse_args
+    registry = _declaring_registry(enabled_bits_root)
+    cfg = config_from_args(parse_args(["--bit", "MetronomeBit"]),
+                           registry=registry)
+    assert cfg.device_instrument == "tuneshroom"
+    assert cfg.manual_devices is True
+    # CLI flag wins over the Bit's declaration.
+    cfg = config_from_args(
+        parse_args(["--bit", "MetronomeBit",
+                    "--device-instrument", "testshroom"]),
+        registry=registry)
+    assert cfg.device_instrument == "testshroom"
+    # A Bit declaring nothing leaves both unset.
+    plain = config_from_args(parse_args([]))
+    assert plain.device_instrument is None
+    assert plain.manual_devices is False
+
+
+def test_manual_devices_flag_turns_manual_on():
+    from harness.run_stack import config_from_args, parse_args
+    cfg = config_from_args(parse_args(["--manual-devices"]))
+    assert cfg.manual_devices is True

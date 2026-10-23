@@ -383,3 +383,214 @@ def test_shutdown_shuts_the_pool_even_when_a_voice_fails_to_silence():
     with pytest.raises(BrokenPipeError):
         bridge.shutdown()
     assert pool.shut
+
+
+# --- several parts per role (Room cues pick the part by channel nibble) ------
+
+FOUR_PARTS = {
+    "instruments": [
+        {"instrument": "flsyn", "program": 0,
+         "lanes": [{"source": "cc:64", "dest": "cc:64"}]},
+        {"instrument": "kit", "drums": True,
+         "lanes": [{"source": "cc:7", "dest": "cc:7"}]},
+        {"instrument": "flsyn", "program": 90,
+         "lanes": [{"source": "cc:64", "dest": "cc:64"},
+                   {"source": "cc:7", "dest": "cc:7"}]},
+        {"instrument": "flsyn", "program": 0},
+    ],
+}
+
+
+def test_multi_part_grant():
+    pool = FakePool()
+    AudioBridge(pool).on_grant("room", _role(ugens=FOUR_PARTS))
+    assert len(pool.acquired) == 4
+    assert [v.drums for v in pool.acquired] == [False, True, False, False]
+    assert pool.acquired[0].sent == [("program", 0)]
+    assert pool.acquired[1].sent == []                 # drums: no program
+    assert pool.acquired[2].sent == [("program", 90)]
+    assert pool.acquired[3].sent == [("program", 0)]
+
+
+def test_channel_nibble_selects_part():
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    for v in pool.acquired:
+        v.sent.clear()
+    bridge.feed_midi("room", 0x92, 60, 100)
+    assert pool.acquired[2].sent == [("note_on", 60, 100)]
+    assert [pool.acquired[i].sent for i in (0, 1, 3)] == [[], [], []]
+    bridge.feed_midi("room", 0x81, 36, 0)
+    assert pool.acquired[1].sent == [("note_off", 36)]
+    bridge.feed_midi("room", 0xC3, 5, 0)
+    assert pool.acquired[3].sent == [("program", 5)]
+
+
+def test_unknown_nibble_falls_back_to_part_zero():
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("dev1", _role(ugens=PLAYER_UGENS))
+    pool.acquired[0].sent.clear()
+    bridge.feed_midi("dev1", 0x95, 60, 100)
+    assert pool.acquired[0].sent == [("note_on", 60, 100)]
+
+
+def test_cc64_and_cc7_lanes_per_part():
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    for v in pool.acquired:
+        v.sent.clear()
+    bridge.feed_midi("room", 0xB0, 64, 127)    # part 0 declares cc:64
+    bridge.feed_midi("room", 0xB0, 7, 90)      # part 0 does not declare cc:7
+    bridge.feed_midi("room", 0xB1, 7, 80)      # drums declare cc:7
+    bridge.feed_midi("room", 0xB1, 64, 127)    # drums do not declare cc:64
+    bridge.feed_midi("room", 0xB2, 64, 0)
+    bridge.feed_midi("room", 0xB2, 7, 100)
+    assert pool.acquired[0].sent == [("cc", 64, 127)]
+    assert pool.acquired[1].sent == [("cc", 7, 80)]
+    assert pool.acquired[2].sent == [("cc", 64, 0), ("cc", 7, 100)]
+    assert pool.acquired[3].sent == []
+
+
+def test_release_silences_every_part():
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    bridge.on_release("room")
+    assert all(("all_off",) in v.sent for v in pool.acquired)
+    assert pool.released == pool.acquired
+
+
+def test_silence_flushes_every_part_but_keeps_the_grant():
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    bridge.silence("room")
+    assert all(("all_off",) in v.sent for v in pool.acquired)
+    assert pool.released == []
+    bridge.feed_midi("room", 0x92, 60, 100)
+    assert ("note_on", 60, 100) in pool.acquired[2].sent
+
+
+QUIET = [("cc", 64, 0), ("cc", 7, 100), ("all_off",)]
+
+
+def test_release_lifts_the_pedal_and_restores_volume_on_every_part():
+    # all_off is fluid_synth_all_notes_off: a note held by a down sustain
+    # pedal keeps sounding through it, and the channel would go back to the
+    # pool with cc:64 down and cc:7 ducked.
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    for v in pool.acquired:
+        v.sent.clear()
+    bridge.on_release("room")
+    assert [v.sent for v in pool.acquired] == [QUIET] * 4
+    assert pool.released == pool.acquired
+
+
+def test_silence_lifts_the_pedal_and_restores_volume_on_every_part():
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    for v in pool.acquired:
+        v.sent.clear()
+    bridge.silence("room")
+    assert [v.sent for v in pool.acquired] == [QUIET] * 4
+    assert pool.released == []
+
+
+class _SecondPartDies(FakePool):
+    """A pool whose second voice raises on all_off (a dead hub)."""
+
+    def acquire(self, *, drums: bool = False):
+        from control.audio import FakeVoice
+
+        class DeadVoice(FakeVoice):
+            def all_off(self) -> None:
+                raise BrokenPipeError(32, "Broken pipe")
+
+        voice = DeadVoice() if len(self.acquired) == 1 else FakeVoice()
+        voice.drums = drums
+        self.acquired.append(voice)
+        return voice
+
+
+def test_release_frees_every_part_even_when_one_fails_to_silence():
+    pool = _SecondPartDies()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    with pytest.raises(BrokenPipeError):
+        bridge.on_release("room")
+    assert pool.released == pool.acquired
+    for i in (0, 2, 3):
+        assert pool.acquired[i].sent[-3:] == QUIET
+
+
+def test_silence_reaches_every_part_even_when_one_fails():
+    pool = _SecondPartDies()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    with pytest.raises(BrokenPipeError):
+        bridge.silence("room")
+    for i in (0, 2, 3):
+        assert pool.acquired[i].sent[-3:] == QUIET
+
+
+def test_set_control_and_drone_use_part_zero_only():
+    pool = FakePool()
+    ugens = {"instruments": [
+        {"instrument": "flsyn", "program": 89,
+         "drone": {"key": 45, "velocity": 90}},
+        {"instrument": "flsyn", "program": 1,
+         "drone": {"key": 50, "velocity": 80}},
+    ]}
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=ugens))
+    for v in pool.acquired:
+        v.sent.clear()
+    bridge.set_control("room", 11, 99)
+    bridge.start_drone("room")
+    assert pool.acquired[0].sent == [("cc", 11, 99), ("note_on", 45, 90)]
+    assert pool.acquired[1].sent == []
+    bridge.stop_drone("room")
+    assert pool.acquired[0].sent[-1] == ("note_off", 45)
+
+
+def test_failed_grant_releases_the_voices_it_already_took():
+    class ThirdAcquireFails(FakePool):
+        def acquire(self, *, drums: bool = False):
+            if len(self.acquired) == 2:
+                raise RuntimeError("no free MIDI channels")
+            return super().acquire(drums=drums)
+
+    pool = ThirdAcquireFails()
+    bridge = AudioBridge(pool)
+    with pytest.raises(RuntimeError, match="no free MIDI channels"):
+        bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    assert len(pool.acquired) == 2
+    assert pool.released == pool.acquired
+    bridge.feed_midi("room", 0x90, 60, 100)      # nothing was registered
+    assert all(("note_on", 60, 100) not in v.sent for v in pool.acquired)
+
+
+def test_failed_program_change_releases_that_voice_too():
+    from control.audio import FakeVoice
+
+    class BadProgramVoice(FakeVoice):
+        def program_change(self, prog: int) -> None:
+            raise BrokenPipeError(32, "Broken pipe")
+
+    class BadPool(FakePool):
+        def acquire(self, *, drums: bool = False):
+            voice = BadProgramVoice() if len(self.acquired) == 2 else FakeVoice()
+            voice.drums = drums
+            self.acquired.append(voice)
+            return voice
+
+    pool = BadPool()
+    with pytest.raises(BrokenPipeError):
+        AudioBridge(pool).on_grant("room", _role(ugens=FOUR_PARTS))
+    assert pool.released == pool.acquired and len(pool.acquired) == 3

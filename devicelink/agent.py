@@ -35,7 +35,7 @@ from control.lobby import (DEFAULT_LOBBY, FIXTURE_FLASH_GAP_S,
                            FIXTURE_FLASH_ON_S, GREEN, TERRARIUM_ADMIN,
                            InviteSchedule, LobbyState, StartRequest,
                            lobby_light_manifest)
-from control.pixel_wire import CHANNELS_PER_PIXEL, solid_frame
+from control.pixel_wire import CHANNELS_PER_PIXEL, rgbw, solid_frame
 from control.prepare import PrepareRequest
 from control.role_config import (PLAYER_PIXELS, compose_role_config,
                                  player_pixels, slice_light_manifest)
@@ -146,6 +146,13 @@ class DeviceLinkAgent:
         # fixture (_fixture_key).
         self._overrides: dict[str, tuple[tuple[int, int, int], float,
                                          float | None]] = {}
+        # dev -> pixel -> (rgbw, expires_at): PixelFlashCue's single-pixel
+        # overlay, painted by _apply_pixel_flashes at the same send seams as
+        # _overrides but AFTER them, so a flash shows over a solid override.
+        # Keyed like _overrides (@fixture:<name> for a Room fixture).
+        # Cleared by a mute, and wherever _overrides is dropped for a dev.
+        self._pixel_flashes: dict[str, dict[int, tuple[
+            tuple[int, int, int, int], float]]] = {}
         # Mute-blackout latches, keyed like _overrides: @fixture:<name> for a
         # Room fixture (_fixture_key), the raw dev for a player. Checked by
         # _feed_breath (skip feeding cc:11) and _on_light_cue (drop the cue),
@@ -309,8 +316,11 @@ class DeviceLinkAgent:
         game_server.on_release = self._on_release
         game_server.on_grant = self._on_grant
         game_server.on_light_cue = self._on_light_cue
+        game_server.on_music_cue = self._on_music_cue
+        game_server.on_music_purge = self._on_music_purge
         game_server.on_play_cue = self._on_play_cue
         game_server.on_solid_cue = self._on_solid_cue
+        game_server.on_pixel_flash = self._on_pixel_flash
         game_server.on_mute_change = self._on_mute_change
         if game_server.state == State.SETUP:
             self._enter_setup()
@@ -774,6 +784,7 @@ class DeviceLinkAgent:
         gone |= {fixture_dev(n) for n in self._fixtures}
         for dev in gone:
             self._overrides.pop(dev, None)
+            self._pixel_flashes.pop(dev, None)
             self._override_only.discard(dev)
             self._bases.pop(dev, None)
             self._last_frames.pop(dev, None)
@@ -912,6 +923,7 @@ class DeviceLinkAgent:
         self.transport.drop_dev(dev)
         self._canvas_urls.pop(dev, None)
         self._overrides.pop(dev, None)
+        self._pixel_flashes.pop(dev, None)
         self._override_only.discard(dev)
         self._bases.pop(dev, None)
         self._last_frames.pop(dev, None)
@@ -933,6 +945,15 @@ class DeviceLinkAgent:
                 continue
             del self._overrides[dev]
             self._invalidate_frame(dev)
+        for dev, pixels in list(self._pixel_flashes.items()):
+            lapsed = [p for p, (_rgbw, expires) in pixels.items()
+                      if now >= expires]
+            for pixel in lapsed:
+                del pixels[pixel]
+            if not pixels:
+                del self._pixel_flashes[dev]
+            if lapsed:
+                self._invalidate_frame(dev)
 
     def _apply_override(self, dev: str, frame: bytes) -> bytes:
         """Paint every pixel of `frame` the override's colour, R, G, B, W.
@@ -949,6 +970,22 @@ class DeviceLinkAgent:
         (control/role_config.py's player_pixels), 12 for a dev not known."""
         info = self.game_server.devices.get(dev)
         return player_pixels(getattr(info, "carried", None))
+
+    def _apply_pixel_flashes(self, dev: str, frame: bytes) -> bytes:
+        """Paint each live PixelFlashCue pixel's four R, G, B, W bytes over
+        `frame`, after _apply_override. A pixel index outside the frame is
+        ignored."""
+        pixels = self._pixel_flashes.get(dev)
+        if not pixels:
+            return frame
+        out = bytearray(frame)
+        for pixel, (color, _expires) in pixels.items():
+            lo = pixel * CHANNELS_PER_PIXEL
+            hi = lo + CHANNELS_PER_PIXEL
+            if pixel < 0 or hi > len(out):
+                continue
+            out[lo:hi] = bytes(color)
+        return bytes(out)
 
     @staticmethod
     def _solid_frame(color, level: float, length: int) -> bytes:
@@ -978,6 +1015,25 @@ class DeviceLinkAgent:
         self._overrides[dev] = (rgb, level, expires)
         self._invalidate_frame(dev)
 
+    def _on_pixel_flash(self, dev: str, pixel: int, rgb: tuple,
+                        duration: float, when: float) -> None:
+        """A Bit's PixelFlashCue reached the engine sink. Store the flash
+        and force a resend this tick so it goes out immediately; it is
+        painted from arrival and gone at when + duration, exactly like a
+        SolidCue (see _on_solid_cue). Dropped for a muted surface, for the
+        same reason: a flash must not light a blackout. A pixel index outside
+        the frame is ignored when painting (_apply_pixel_flashes); one that
+        is not a number raises here, inside the engine's guarded sink call,
+        rather than later in the render loop where it would stop every
+        tick."""
+        pixel = int(pixel)
+        dev = self._fixture_key(dev)
+        if dev in self._muted:
+            return
+        self._pixel_flashes.setdefault(dev, {})[pixel] = (
+            rgbw(rgb), when + duration)
+        self._invalidate_frame(dev)
+
     def _on_mute_change(self, dev: str, muted: bool) -> None:
         """Latch (or lift) a blackout override at the transport seam, per
         fixture. While muted, _feed_breath skips `dev` and _on_light_cue
@@ -992,6 +1048,9 @@ class DeviceLinkAgent:
         if muted:
             self._muted.add(key)
             self._overrides[key] = ((0, 0, 0), 0.0, None)
+            # The blackout must win: a pending flash would otherwise paint
+            # over it (_apply_pixel_flashes runs after _apply_override).
+            self._pixel_flashes.pop(key, None)
             self._invalidate_frame(key)
             # Drop cues already queued for this dev -- otherwise they drain
             # into the LightSession under the blackout override while
@@ -1069,7 +1128,7 @@ class DeviceLinkAgent:
         # voice. A fixture that lost its grant since the cue was queued (a
         # Bit<->ambient swap, or a fixture that never carried audio.* in the
         # first place) is skipped rather than fed.
-        for (name, status, d1, d2) in self._room_cues.due(self._clock()):
+        for (name, status, d1, d2, _tag) in self._room_cues.due(self._clock()):
             if self._room_audio is None or name not in self._room_audio_fixtures:
                 continue
             try:
@@ -1092,6 +1151,7 @@ class DeviceLinkAgent:
                 continue
             frame = bytes(st.universe.get_frame()[:fixture.pixel_count * fixture.channels])
             frame = self._apply_override(fixture_dev(fixture.name), frame)
+            frame = self._apply_pixel_flashes(fixture_dev(fixture.name), frame)
             if dev != st.last_dev:
                 # A rebind (or a first binding) has to resend even if this
                 # fixture's own bytes have not moved.
@@ -1208,6 +1268,7 @@ class DeviceLinkAgent:
             # under the fixture's token must still black this frame out
             # (spec 2026-09-25 mute-key-bind-migration section 3.2).
             frame = self._apply_override(self._fixture_key(dev), frame)
+            frame = self._apply_pixel_flashes(self._fixture_key(dev), frame)
             if frame != self._last_frames.get(dev):
                 self._last_frames[dev] = frame
                 # The cue's own time when a cue produced this frame, else
@@ -1227,8 +1288,8 @@ class DeviceLinkAgent:
         # one black frame and drops out.
         gs = self.game_server
         bound = set(gs.room.bound.values()) if gs.room is not None else set()
-        for dev in list(set(self._overrides) | self._override_only
-                        | set(self._bases)):
+        for dev in list(set(self._overrides) | set(self._pixel_flashes)
+                        | self._override_only | set(self._bases)):
             # Only a KNOWN device that is not a Room fixture may be painted
             # here. `bound` is checked as well as _fixture_for because
             # the two disagree while a Room is being torn down, and a
@@ -1245,6 +1306,7 @@ class DeviceLinkAgent:
                 frame = self._solid_frame(base[0], base[1], channels)
             if dev in self._overrides:
                 frame = self._apply_override(dev, frame)
+            frame = self._apply_pixel_flashes(dev, frame)
             if self._last_frames.get(dev) == frame:
                 continue
             self._last_frames[dev] = frame
@@ -1523,6 +1585,7 @@ class DeviceLinkAgent:
         self._closing.pop(dev, None)
         self._closing_revived.discard(dev)
         self._overrides.pop(dev, None)
+        self._pixel_flashes.pop(dev, None)
         self._override_only.discard(dev)
         self._bases.pop(dev, None)
 
@@ -1701,6 +1764,7 @@ class DeviceLinkAgent:
         # entirely, and _render_frames' override-only pass would keep
         # painting it.
         self._overrides.pop(dev, None)
+        self._pixel_flashes.pop(dev, None)
         self._override_only.discard(dev)
         self._bases.pop(dev, None)
         self._canvas_urls.pop(dev, None)
@@ -1808,7 +1872,8 @@ class DeviceLinkAgent:
         now = self._clock()
         st = self._fixture_for(dev)
         if st is not None:
-            self._room_cues.push(when, (st.name, status, data1, data2), now=now)
+            self._room_cues.push(when, (st.name, status, data1, data2, None),
+                                 now=now)
         feed_at = None if when is None else when - self._horizon
         if feed_at is not None and feed_at > now:
             # A Bit-declared cue further out than one horizon. Hold the
@@ -1818,6 +1883,36 @@ class DeviceLinkAgent:
                                   now=now)
             return
         self._feed_light_now(dev, status, data1, data2, when)
+
+    def _on_music_cue(self, dev: str, status: int,
+                      data1: int, data2: int,
+                      when: float | None = None,
+                      tag: str | None = None) -> None:
+        """A MusicCue is Room AUDIO only. It rides `_room_cues` so it keeps
+        the Bit's timestamp and can be purged by `tag`, but it is never fed
+        to the fixture's light session (nor queued on `_light_cues`): the
+        Tower's light is driven separately by the Bit's state, and music
+        notes must not leak into it. A dev that is not a Room fixture, or
+        is muted, is dropped (the engine already skips muted devs; this is
+        the second line of defense, as in _on_light_cue)."""
+        dev = self._fixture_key(dev)
+        if dev in self._muted:
+            return
+        st = self._fixture_for(dev)
+        if st is None:
+            return
+        self._room_cues.push(when, (st.name, status, data1, data2, tag),
+                             now=self._clock())
+
+    def _on_music_purge(self, dev: str, tag: str) -> None:
+        """Drop the fixture's not-yet-sounded cues carrying `tag`. Untagged
+        light-path entries (tag None) never match a real tag."""
+        st = self._fixture_for(dev)
+        if st is None:
+            return
+        name = st.name
+        self._room_cues.purge(
+            lambda payload: payload[0] == name and payload[4] == tag)
 
     def _on_play_cue(self, dev: str, name: str, params: str) -> None:
         """Forward a Bit's local-sample cue to the device. Unlike the light

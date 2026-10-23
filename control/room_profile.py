@@ -86,9 +86,13 @@ class RoomFixture:
 def fixture_instrument_mismatch(fixture: RoomFixture) -> str | None:
     """Why this fixture's instrument disagrees with the fixture, or None.
     A declared `pixels` must equal the blocks' total, and a model layout
-    must have one marker per pixel with each named zone covering that
-    pixel in this fixture's zones. Spec 2026-10-02 tower fixture layout,
-    section 5.3."""
+    must have one marker per pixel, and each marker's zone Z must be
+    honoured at its pixel: either a room zone named Z covers it, or the
+    room REFINES Z, meaning every room zone covering the pixel lies wholly
+    inside the pixels the model tags Z (a room may split "progress" into
+    thirds). A room zone straddling two model zones, or a pixel in no room
+    zone, is still a mismatch, which is what catches an artist's mistake.
+    Spec 2026-10-02 tower fixture layout, section 5.3."""
     inst = fixture.instrument
     count = fixture.pixel_count
     if inst.pixels and inst.pixels != count:
@@ -100,12 +104,20 @@ def fixture_instrument_mismatch(fixture: RoomFixture) -> str | None:
     if len(inst.layout) != count:
         return (f"fixture {fixture.name!r}: instrument {inst.name!r}'s model has "
                 f"{len(inst.layout)} markers but the fixture has {count} pixels")
+    model_pixels: dict[str, set[int]] = {}
+    for p in inst.layout:
+        if p.zone is not None:
+            model_pixels.setdefault(p.zone, set()).add(p.index)
     for p in inst.layout:
         if p.zone is None:
             continue
-        covering = [z.name for z in fixture.zones
-                    if z.start <= p.index < z.start + z.count]
-        if p.zone not in covering:
+        covering_zones = [z for z in fixture.zones
+                          if z.start <= p.index < z.start + z.count]
+        covering = [z.name for z in covering_zones]
+        refined = bool(covering_zones) and all(
+            set(range(z.start, z.start + z.count)) <= model_pixels[p.zone]
+            for z in covering_zones)
+        if p.zone not in covering and not refined:
             return (f"fixture {fixture.name!r}: model marker LED_{p.index:03d} "
                     f"is in zone {p.zone!r} but the room puts pixel {p.index} "
                     f"in {covering}")

@@ -2550,3 +2550,59 @@ def test_devices_view_without_a_link_source():
     gs.devices.hello("ie1", "one", "1")
     agent = ConsoleAgent(gs, FakeConsoleServer())
     assert agent._devices_view()[0]["link"] is None
+
+
+class _TapRecordingBit(TestBit):
+    """TestBit with a `tap` handler that records exactly what GameServer.data
+    hands a verb handler, so a Console gesture can be compared with a real
+    device's /game/tap."""
+
+    def verb_handlers(self) -> dict:
+        return {"tap": self._record_tap}
+
+    def _record_tap(self, dev, args, at):
+        self.taps = getattr(self, "taps", [])
+        self.taps.append((dev, list(args)))
+        return []
+
+
+def test_gesture_reaches_bit_verb_handler():
+    gs = GameServer({"TapBit": _TapRecordingBit})
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+    gs.load_bit("TapBit")
+    admit_running(gs, "ie1")
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "gesture", "dev": "ie1", "verb": "tap",
+                       "count": 2})
+    agent.poll()
+    assert gs.bit.taps == [("ie1", ["ie1", 0.0, 50.0, 2])]
+    assert not [m for _c, m in srv.sent if m.get("event") == "error"]
+
+
+def test_gesture_surfaces_the_engine_refusal():
+    gs = GameServer({"TapBit": _TapRecordingBit})
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "gesture", "dev": "ie1", "verb": "tap",
+                       "count": 1})
+    agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors[0]["command"] == "gesture"
+    assert "no Bit running" in errors[0]["message"]
+
+
+def test_gesture_refuses_fixture_and_admin():
+    gs, srv, agent = _room_console()
+    gs.admin_devices = gs.admin_devices | {"ops1"}
+    calls = []
+    gs.data = lambda *a, **kw: calls.append((a, kw))
+    srv.connect("c1")
+    for dev in ("sim-room-main", "terrarium", "ops1"):
+        srv.deliver("c1", {"command": "gesture", "dev": dev, "verb": "tilt",
+                           "gamma": 10})
+    agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert len(errors) == 3
+    assert calls == []

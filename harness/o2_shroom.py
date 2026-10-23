@@ -514,6 +514,11 @@ def main() -> None:
                              "testshroom, the harness's own catalog "
                              "instrument). Pass an empty string to stay "
                              "undeclared, resolving to defaultshroom.")
+    parser.add_argument("--manual", action="store_true",
+                        help="Stay quiet: never arm the synthetic beat "
+                             "tapper and never run the tilt sweep. Gestures "
+                             "from this device's own browser page still "
+                             "go out.")
     parser.add_argument("--no-beat", action="store_true",
                         help="behave as a legacy client: no /game/beat, "
                              "only the hello every --heartbeat-interval "
@@ -905,14 +910,16 @@ def main() -> None:
                         # begin.
                         print(f"gestures starting at {now:.3f}", flush=True)
                         # The role decides which synthetic gestures run.
-                        tapper.armed = wants_verb(client.config, "tap")
+                        tapper.armed = (not args.manual
+                                        and wants_verb(client.config, "tap"))
                         if tapper.armed:
                             print("role uses tap: beat tapper armed", flush=True)
                     operator = drain_gestures(operator_input, o2lite.send,
                                               args.dev, now, client.config)
                     if operator is not None:
                         last_operator_tilt = operator
-                    sweeping = (wants_verb(client.config, "tilt")
+                    sweeping = (not args.manual
+                                and wants_verb(client.config, "tilt")
                                 and (last_operator_tilt is None
                                      or now - last_operator_tilt >= SWEEP_RESUME_SECONDS))
                     if now >= next_tilt:

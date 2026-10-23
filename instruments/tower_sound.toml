@@ -1,0 +1,8 @@
+description = "Tower fixture with room speaker (MIDITEST): 8 progress, 4 responders, 2 PARs (14 px)"
+pixels = 14
+capabilities = ["light.surface", "audio.flsyn"]
+accepted_cues = ["midi", "play", "solid", "mute"]
+# Sophia's 2026-10-19 export, regrouped under one LEDs node (Rhino flattened
+# the sublayers), PAR markers pulled to the mast's front face, responder
+# discs given the diffusers' transmission. docs/tower-model-brief.md.
+model = "models/tower.glb"
