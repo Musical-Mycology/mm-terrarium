@@ -35,6 +35,11 @@ from control.roles import Role
 
 _CC_PREFIX = "cc:"
 
+# CC 7 (channel volume) at General MIDI power-on: what silence() and
+# on_release() put a part back to, so a ducked channel neither stays ducked
+# nor returns to the pool ducked.
+_DEFAULT_CC7 = 100
+
 # Welcome-cue instrument names, provisional v0. Names are opaque to Control
 # exactly the way light_manifest instrument names are opaque luxaeterna
 # registry names; this table is the audio-side equivalent of that registry.
@@ -338,8 +343,7 @@ class AudioBridge:
         if entry.drone_key is not None:
             entry.voice.note_off(entry.drone_key)
             entry.drone_key = None
-        for part in entry.parts:
-            part.voice.all_off()
+        self._quiet(entry.parts, release=False)
 
     def on_release(self, dev: str) -> None:
         entry = self._devices.pop(dev, None)
@@ -347,9 +351,30 @@ class AudioBridge:
             return
         if entry.drone_key is not None:
             entry.voice.note_off(entry.drone_key)
-        for part in entry.parts:
-            part.voice.all_off()
-            self._pool.release(part.voice)
+        self._quiet(entry.parts, release=True)
+
+    def _quiet(self, parts: list[_Part], *, release: bool) -> None:
+        """Every part: sustain pedal up and CC 7 back to the GM default
+        before all_off, which is fluid_synth_all_notes_off -- a note held by
+        a down pedal keeps sounding through it, and a released channel would
+        go back to the pool pedal-down and ducked. Each part is quieted (and
+        released) even if an earlier one raises; the first failure is
+        re-raised once every part has been handled."""
+        error: BaseException | None = None
+        for part in parts:
+            try:
+                try:
+                    part.voice.control_change(64, 0)
+                    part.voice.control_change(7, _DEFAULT_CC7)
+                    part.voice.all_off()
+                finally:
+                    if release:
+                        self._pool.release(part.voice)
+            except Exception as exc:
+                if error is None:
+                    error = exc
+        if error is not None:
+            raise error
 
     def shutdown(self) -> None:
         """Free every voice, then the pool. Boundary rule 1: owning the ugen id

@@ -474,6 +474,71 @@ def test_silence_flushes_every_part_but_keeps_the_grant():
     assert ("note_on", 60, 100) in pool.acquired[2].sent
 
 
+QUIET = [("cc", 64, 0), ("cc", 7, 100), ("all_off",)]
+
+
+def test_release_lifts_the_pedal_and_restores_volume_on_every_part():
+    # all_off is fluid_synth_all_notes_off: a note held by a down sustain
+    # pedal keeps sounding through it, and the channel would go back to the
+    # pool with cc:64 down and cc:7 ducked.
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    for v in pool.acquired:
+        v.sent.clear()
+    bridge.on_release("room")
+    assert [v.sent for v in pool.acquired] == [QUIET] * 4
+    assert pool.released == pool.acquired
+
+
+def test_silence_lifts_the_pedal_and_restores_volume_on_every_part():
+    pool = FakePool()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    for v in pool.acquired:
+        v.sent.clear()
+    bridge.silence("room")
+    assert [v.sent for v in pool.acquired] == [QUIET] * 4
+    assert pool.released == []
+
+
+class _SecondPartDies(FakePool):
+    """A pool whose second voice raises on all_off (a dead hub)."""
+
+    def acquire(self, *, drums: bool = False):
+        from control.audio import FakeVoice
+
+        class DeadVoice(FakeVoice):
+            def all_off(self) -> None:
+                raise BrokenPipeError(32, "Broken pipe")
+
+        voice = DeadVoice() if len(self.acquired) == 1 else FakeVoice()
+        voice.drums = drums
+        self.acquired.append(voice)
+        return voice
+
+
+def test_release_frees_every_part_even_when_one_fails_to_silence():
+    pool = _SecondPartDies()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    with pytest.raises(BrokenPipeError):
+        bridge.on_release("room")
+    assert pool.released == pool.acquired
+    for i in (0, 2, 3):
+        assert pool.acquired[i].sent[-3:] == QUIET
+
+
+def test_silence_reaches_every_part_even_when_one_fails():
+    pool = _SecondPartDies()
+    bridge = AudioBridge(pool)
+    bridge.on_grant("room", _role(ugens=FOUR_PARTS))
+    with pytest.raises(BrokenPipeError):
+        bridge.silence("room")
+    for i in (0, 2, 3):
+        assert pool.acquired[i].sent[-3:] == QUIET
+
+
 def test_set_control_and_drone_use_part_zero_only():
     pool = FakePool()
     ugens = {"instruments": [
