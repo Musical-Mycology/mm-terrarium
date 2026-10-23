@@ -2173,8 +2173,9 @@ network makes auth a prerequisite.
   any but the active one (*Terrarium lifecycle*).
 - **Gesture panel** (`gestures.js`, `#gestureCard`): a device picker, Tap,
   Double tap and a -90..90 tilt slider (sent at most every 50 ms, the final
-  value always lands; Level resets it to 0). Visible only in SETUP or
-  RUNNING with at least one non-fixture device; built once, and
+  value always lands; Level resets it to 0). Visible only in RUNNING
+  (SETUP refuses every gesture, "device not registered") with at least
+  one non-fixture device; built once, and
   `devices_changed` only refills the picker, keeping the selection.
   `tests/js/gesture_panel.test.js`.
 - **Live view**: the Room card (`surface.js`: dot rows per block, zone bar,

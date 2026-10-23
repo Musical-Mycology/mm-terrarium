@@ -39,19 +39,20 @@ const DEVICES = [
   send({ event: "snapshot", state: "IDLE", devices: DEVICES });
   assert.strictEqual(card().hidden, true, "gesture panel hidden in IDLE");
 
-  // hidden in SETUP with fixture-only devices
-  send({ event: "snapshot", state: "SETUP", devices: [DEVICES[1]] });
+  // hidden in SETUP even with a player device: the engine refuses every
+  // gesture there ("device not registered")
+  send({ event: "snapshot", state: "SETUP", devices: DEVICES });
+  assert.strictEqual(card().hidden, true, "gesture panel hidden in SETUP");
+
+  // hidden in RUNNING with fixture-only devices
+  send({ event: "snapshot", state: "RUNNING", devices: [DEVICES[1]] });
   assert.strictEqual(card().hidden, true, "fixture-only devices: hidden");
 
-  // visible in SETUP with a player device; picker offers only that device
-  send({ event: "snapshot", state: "SETUP", devices: DEVICES });
+  // visible in RUNNING with a player device; picker offers only that device
+  send({ event: "snapshot", state: "RUNNING", devices: DEVICES });
   assert.strictEqual(card().hidden, false);
   const picker = findAll(card(), (n) => n.tagName === "select")[0];
   assert.deepStrictEqual(picker.options.map((o) => o.value), ["ie1"]);
-
-  // visible in RUNNING too; hidden again when the state leaves
-  send({ event: "state_changed", state: "RUNNING" });
-  assert.strictEqual(card().hidden, false);
 
   // tap and double tap send count 1 and 2
   btn("Tap").onclick();
@@ -88,7 +89,7 @@ const DEVICES = [
     { command: "gesture", dev: "ie1", verb: "tilt", gamma: 0 });
   assert.strictEqual(String(range.value), "0");
 
-  // the panel hides once the Bit leaves SETUP/RUNNING
+  // the panel hides once the Bit leaves RUNNING
   send({ event: "state_changed", state: "COMPLETING" });
   assert.strictEqual(card().hidden, true);
 

@@ -1,8 +1,9 @@
 // Gesture panel (#gestureCard): drives a simulated tuneshroom. A person at
 // the Console picks a player device and sends Tap, Double tap, or a tilt;
 // the agent hands each to the Bit exactly as a real device's /game/<verb>
-// would arrive. Visible only while a Bit is in SETUP or RUNNING and at least
-// one non-fixture device exists.
+// would arrive. Visible only while a Bit is RUNNING and at least one
+// non-fixture device exists: in SETUP the engine refuses every gesture
+// ("device not registered").
 //
 // Rendering discipline (rule 1): the card is built once; devices_changed
 // only refills the picker (preserving the selection), never rebuilds.
@@ -102,8 +103,7 @@ function build(card) {
 
 function render() {
   const card = document.getElementById("gestureCard");
-  const live = state === "SETUP" || state === "RUNNING";
-  const visible = live && players().length > 0;
+  const visible = state === "RUNNING" && players().length > 0;
   card.hidden = !visible;
   if (!visible) return;
   if (!built) build(card);
