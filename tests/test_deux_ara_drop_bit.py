@@ -79,8 +79,17 @@ def test_tap_cycle():
     toggled = [next(c.tag for c in out if isinstance(c, MusicCue))
                for out in outs]
     assert toggled == ["piano", "drums", "synth", "piano", "drums", "synth"]
-    assert (20, 42) in _lights(outs[0])
-    assert (20, 0) in _lights(outs[3])
+    # every single tap repaints all three thirds by current state, so a tap
+    # whose LightCue a Stop's mute swallowed is corrected by the next one
+    G, R = 42, 0
+    assert [sorted(_lights(out)) for out in outs] == [
+        [(20, G), (21, R), (22, R)],
+        [(20, G), (21, G), (22, R)],
+        [(20, G), (21, G), (22, G)],
+        [(20, R), (21, G), (22, G)],
+        [(20, R), (21, R), (22, G)],
+        [(20, R), (21, R), (22, R)],
+    ]
     assert MusicPurge(ROOM, "piano") in outs[3]
 
     bit, _ = _started()

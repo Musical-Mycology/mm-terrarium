@@ -4,7 +4,8 @@ One player, on the MIDITEST Room's speaker-equipped Tower:
 
 - a single tap toggles the next loop in ORDER (piano, drums, synth, piano,
   ...): it comes in or drops out at once, on the shared beat grid, and its
-  third of the Tower turns green (on) or red (off);
+  third of the Tower turns green (on) or red (off) -- every tap repaints
+  all three thirds, so one lost to a Stop's mute is put right by the next;
 - a double tap (a tap gesture with count >= 2) starts the Arabesque from
   the top on the next beat, or stops it if it is playing, without moving
   the loop cycle; while it plays, single Tower pixels flicker white;
@@ -163,7 +164,9 @@ class DeuxAraDropBit(Bit):
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
         """A double tap toggles the Arabesque; a single tap toggles the next
-        loop in ORDER and recolours its third."""
+        loop in ORDER and repaints all three thirds, not only its own: a
+        tap during a Stop's mute has its LightCue dropped, and the next tap
+        must not leave that third's colour stale."""
         out = self._start(at)
         if _tap_count(args) >= 2:
             if self._seq.is_on(ARABESQUE):
@@ -173,11 +176,11 @@ class DeuxAraDropBit(Bit):
         self._cursor += 1
         if self._seq.is_on(name):
             out += self._seq.disable(name, at)
-            colour = RED
         else:
             out += self._seq.enable(name, at)
-            colour = GREEN
-        out.append(LightCue(ROOM, 0xB0, THIRD_CC[name], colour, when=at))
+        out += [LightCue(ROOM, 0xB0, THIRD_CC[n],
+                         GREEN if self._seq.is_on(n) else RED, when=at)
+                for n in ORDER]
         return out
 
     def _on_tilt(self, dev: str, args: list, at: float) -> list:

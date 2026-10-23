@@ -2351,7 +2351,8 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   from the Console gesture panel. A **tap** toggles the next loop in the
   cycle piano, drums, synth, at once and on the grid, and turns its third of
   the Tower (`tower.bottom|middle|top`, an aurora each, hue on cc 20/21/22)
-  green on or red off; a **double tap** (`count >= 2`) starts the Arabesque
+  green on or red off (every tap repaints all three, so one whose LightCue
+  a Stop's mute dropped is put right by the next); a **double tap** (`count >= 2`) starts the Arabesque
   from the next beat (its first bar skipped) or stops it, without moving
   the cycle, and while it plays single Tower pixels flicker white
   (`PixelFlashCue`); **tilting** past 45 degrees ducks the mix to 0.2 until
