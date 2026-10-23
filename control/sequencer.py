@@ -95,18 +95,19 @@ def _drop_struck_at_end(events, length: float) -> tuple[MidiEvent, ...]:
     """A loop's events without the notes struck at or past its length (a
     zero-length note on the end bar line, as piano.mid has): played, they
     would sound on the next iteration's downbeat. Each dropped note-on takes
-    its paired note-off (the next of the same key) with it; a note-off past
-    the length for a note struck inside the loop is kept."""
+    its paired note-off (the next of the same key, a velocity-0 note-on
+    included) with it; a note-off past the length for a note struck inside
+    the loop is kept."""
     open_: dict[int, list[bool]] = {}   # key -> per open note-on: dropped?
     out = []
     for e in events:
         kind = e.status & 0xF0
-        if kind == 0x90:
+        if kind == 0x90 and e.data2 > 0:
             dropped = e.beat >= length
             open_.setdefault(e.data1, []).append(dropped)
             if dropped:
                 continue
-        elif kind == 0x80 and open_.get(e.data1):
+        elif kind in (0x80, 0x90) and open_.get(e.data1):
             if open_[e.data1].pop(0):
                 continue
         out.append(e)

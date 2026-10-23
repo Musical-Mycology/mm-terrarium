@@ -185,6 +185,17 @@ def test_enable_chases_held_note():
     assert seq.is_on("pad")
 
 
+def test_loop_keeps_a_velocity_0_note_off_on_its_end_bar_line():
+    """A note-on with velocity 0 is a note-off, not a note struck at the
+    loop's end: dropping it would hang the note."""
+    seq = started(a=dict(midi=mf((3, 0x90, 60, 100), (4, 0x90, 60, 0), end=4),
+                         part=0, loop=True))
+    seq.enable("a", T0)
+    cues = run(seq, T0, seq.time_at(4))
+    assert any(c.status & 0xF0 == 0x90 and c.data1 == 60 and c.data2 == 0
+               and c.when == pytest.approx(seq.time_at(4)) for c in cues)
+
+
 def test_enable_does_not_chase_a_short_note():
     """A kick (0.21-0.59 beats) re-struck mid-note lands off the grid; it
     is left out, and the next kick arrives on time from advance."""
