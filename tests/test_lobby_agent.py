@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from bits.test.test_bit import TestBit
+from control.audio import AudioBridge, FakePool
 from control.bit_registry import BitRegistry
 from control.breath import BREATH_CC
 from control.engine import GameServer
@@ -82,6 +83,29 @@ def test_setup_swaps_fixtures_to_the_lobby_manifest_and_sounds_the_pad(monkeypat
     assert any(d1 == HUE_CC for (s, d1, d2) in main.fed)
     assert any(d1 == BREATH_CC for (s, d1, d2) in main.fed)
     assert any(cc == BREATH_CC for (name, cc, v) in audio.controls)
+
+
+def test_running_returns_part_0_expression_to_full(monkeypatch):
+    """The breath writes cc:11 to the fixture's part-0 voice through the
+    real AudioBridge; the Bit's own sound must not start ducked by it."""
+    clk = _Clock(100.0)
+    gs = GameServer({"TestBit": TestBit}, clock=clk)
+    gs.room = Room(name="TEST", profile=TEST_PROFILE, node_id="ROOM_TEST_NODE")
+    gs.room.bound["main"] = "sim-main"
+    gs.room.bound["accent"] = "sim-accent"
+    _fake_sessions(monkeypatch)
+    bridge = AudioBridge(FakePool())
+    agent = DeviceLinkAgent(gs, FakeServer(), room_audio=bridge, clock=clk)
+    gs.load_bit("TestBit", config=_admin_cfg())
+    _poll(agent, clk, 0.5)
+    voice = bridge._devices["main"].voice
+    breaths = [c for c in voice.sent if c[:2] == ("cc", BREATH_CC)]
+    assert breaths and breaths[-1] != ("cc", BREATH_CC, 127)
+    gs.request_start(None, TERRARIUM_ADMIN, "console")
+    assert gs.state is State.RUNNING
+    assert bridge._devices["main"].voice is voice
+    assert [c for c in voice.sent if c[:2] == ("cc", BREATH_CC)][-1] == (
+        "cc", BREATH_CC, 127)
 
 
 def test_lobby_is_off_when_the_bit_opts_out(monkeypatch):
