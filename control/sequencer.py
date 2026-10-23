@@ -11,9 +11,11 @@ switching one on or off is a question of *which* of its notes reach the
 queue, never of re-aligning it. That is what lets a tap act immediately
 rather than on the next bar:
 
-- `enable` chases: a note already under way at `at` (a pad chord) is
-  re-struck at `at`, and the cursor resumes there so the rest of the bar
-  arrives from `advance` as usual.
+- `enable` chases: a note already under way at `at` with at least
+  `_CHASE_MIN_BEATS` still to sound (a pad chord) is re-struck at `at`, and
+  the cursor resumes there so the rest of the bar arrives from `advance` as
+  usual. A shorter remainder (a kick) is left out: re-struck, it would land
+  off the grid.
 - `disable` purges the track's still-queued cues (MusicPurge by tag), then
   at `at` releases every key the track has struck since `start()`, and the
   sustain pedal, unconditionally. It cannot release only what it believes
@@ -52,6 +54,9 @@ _DEFAULT_CC7 = 100
 # decimal places, so `enable(time_at(4))` lands on beat 4.0 and not on
 # 3.9999999999 (which would play the beat-4 note twice: chased, then again).
 _SNAP_DIGITS = 9
+
+# `enable` re-strikes a note under way only if this many beats of it remain.
+_CHASE_MIN_BEATS = 1.0
 
 
 def _snap(beat: float) -> float:
@@ -185,7 +190,8 @@ class Sequencer:
     def enable(self, name: str, at: float) -> list:
         """Bring a looped track in at `at`: its current CC 7, then a note-on
         at `at` for every note struck strictly before `at` and still held
-        after it. An event exactly at `at` is left to `advance`."""
+        for at least `_CHASE_MIN_BEATS` after it. An event exactly at `at`
+        is left to `advance`."""
         tr = self._tracks[name]
         if not tr.loop:
             raise ValueError(f"{name} is a one-shot; use play_once")
@@ -200,7 +206,8 @@ class Sequencer:
             for kk in (k, k - 1):
                 base = kk * tr.length
                 if (kk >= 0 and n.key not in chased
-                        and base + n.on < b < base + n.off):
+                        and base + n.on < b
+                        and base + n.off - b >= _CHASE_MIN_BEATS):
                     chased.add(n.key)
                     out.append(self._cue(tr, n.status, n.key, n.velocity, at))
                     tr.struck.add(n.key)

@@ -185,6 +185,21 @@ def test_enable_chases_held_note():
     assert seq.is_on("pad")
 
 
+def test_enable_does_not_chase_a_short_note():
+    """A kick (0.21-0.59 beats) re-struck mid-note lands off the grid; it
+    is left out, and the next kick arrives on time from advance."""
+    seq = started(drums=dict(midi=asset("drums"), part=9, loop=True))
+    cues = seq.enable("drums", seq.time_at(0.1))
+    assert note_ons(cues) == []
+
+
+def test_enable_chases_only_a_note_with_a_beat_left():
+    seq = started(pad=dict(midi=mf(*note(60, 0, 8), end=8), part=2, loop=True))
+    assert note_ons(seq.enable("pad", seq.time_at(7))) != []    # 1.0 left
+    seq = started(pad=dict(midi=mf(*note(60, 0, 8), end=8), part=2, loop=True))
+    assert note_ons(seq.enable("pad", seq.time_at(7.5))) == []  # 0.5 left
+
+
 def test_enable_does_not_double_emit_boundary_note():
     seq = started(a=dict(midi=mf(*note(60, 4, 5), end=8), part=0, loop=True))
     at = seq.time_at(4)
