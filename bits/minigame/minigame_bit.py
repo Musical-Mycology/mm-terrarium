@@ -20,14 +20,17 @@ Progress runs 0..PROGRESS_MAX over TOWER_LIGHTS lights, the Tower's 32
 LEDs taken PIXELS_PER_LIGHT (2) at a time, bottom first: light k is pixels
 2k and 2k+1, and both light up together. That is 6.25% a light, so 1% of
 progress is 0.16 of one light's level. At 100% the bar holds full and
-further taps do nothing; reload the Bit to start over.
+further taps do nothing; the Console's Reset progress button (or a
+reload) starts over.
 
 Each light is one zone of the tower role's own surface (Role.zones,
 p0..p15, two pixels each),
 bound to an aurora held at level 0 whose level rides its own cc lane
 (LIGHT_CC_BASE + k, a lane value is cc/127). A tap sends one cc to each
 light it moved, on every Tower; a Tower that joined since the last tap gets
-the whole bar instead, so a late Tower catches up on the next tap.
+the whole bar instead, so a late Tower catches up on the next tap. A
+reset puts progress back to 0 and sends every Tower the whole (dark) bar,
+so each Tower's LEDs are rewritten whatever they last showed.
 
 Any other device falls through to its own solo role, untouched by the game.
 No scoring, and the Bit needs nothing from the Room.
@@ -65,7 +68,7 @@ BAR_HUE = 0.33                 # green
 # A tapped shroom's own flash: cyan, full on the tap, fading to dark.
 FLASH_CC = 16                  # below the Tower's lanes (20..35)
 FLASH_HUE = 0.5                # cyan
-FLASH_FADE_S = 1.0
+FLASH_FADE_S = 0.5
 
 
 def light_level(progress: int, k: int, lights: int = TOWER_LIGHTS) -> float:
@@ -100,7 +103,7 @@ def is_player(dev: str) -> bool:
 
 
 class MinigameBit(Bit):
-    version = "0.5"
+    version = "0.6"
 
     def __init__(self, config=None) -> None:
         super().__init__(config)
@@ -157,6 +160,9 @@ class MinigameBit(Bit):
     def verb_handlers(self) -> dict:
         return {"tap": self._on_tap}
 
+    def actions(self) -> dict:
+        return {"reset": ("Reset progress", self._on_reset)}
+
     def on_setup_enter(self) -> None:
         pass
 
@@ -210,6 +216,22 @@ class MinigameBit(Bit):
 
     def on_unload(self) -> None:
         pass
+
+    def _bar_cues(self, tower: str, at: float) -> list:
+        """The whole bar at the current progress, one cc per light."""
+        return [LightCue(tower, 0xB0, LIGHT_CC_BASE + k,
+                         light_value(self.progress, k), when=at)
+                for k in range(TOWER_LIGHTS)]
+
+    def _on_reset(self, at: float) -> list:
+        """The operator's reset: progress back to 0, and every Tower sent
+        the whole bar so its LEDs are refreshed even if it missed a cue."""
+        self.progress = 0
+        self._unsynced.clear()
+        out = []
+        for tower in sorted(self._towers):
+            out.extend(self._bar_cues(tower, at))
+        return out
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
         """The tapping shroom flashes cyan, and PROGRESS_PER_TAP more per

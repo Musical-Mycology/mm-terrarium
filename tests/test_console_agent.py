@@ -2606,3 +2606,45 @@ def test_gesture_refuses_fixture_and_admin():
     errors = [m for _c, m in srv.sent if m.get("event") == "error"]
     assert len(errors) == 3
     assert calls == []
+
+
+class _ResetBit(TestBit):
+    """TestBit with one operator action that counts its presses."""
+
+    presses = 0
+
+    def actions(self) -> dict:
+        return {"reset": ("Reset", self._reset)}
+
+    def _reset(self, at):
+        self.presses += 1
+        return []
+
+
+def test_bit_actions_ride_the_snapshot_and_status_broadcast():
+    gs = GameServer({"ResetBit": _ResetBit})
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+    gs.load_bit("ResetBit")
+    assert agent.snapshot()["bit_actions"] == [
+        {"name": "reset", "label": "Reset"}]
+    agent.poll()
+    status = [b for b in srv.broadcasts if b["event"] == "bit_status"]
+    assert status[-1]["actions"] == [{"name": "reset", "label": "Reset"}]
+
+
+def test_a_bit_action_command_runs_the_bit_action():
+    gs = GameServer({"ResetBit": _ResetBit})
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+    gs.load_bit("ResetBit")
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "bit_action", "name": "reset"})
+    agent.poll()
+    assert gs.bit.presses == 1
+    assert not [m for _c, m in srv.sent if m.get("event") == "error"]
+    srv.deliver("c1", {"command": "bit_action", "name": "nope"})
+    agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors[0]["command"] == "bit_action"
+    assert "unknown action" in errors[0]["message"]

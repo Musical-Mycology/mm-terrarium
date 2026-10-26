@@ -2395,7 +2395,13 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   light session), so each light is a zone bound to an aurora held
   dark whose level rides its own cc lane (20 + k). A tap sends each Tower
   a `LightCue` for each light it moved, or the whole bar to a Tower that
-  joined since the last tap.
+  joined since the last tap. Its one `Bit.actions()` entry, `reset`
+  ("Reset progress" on the Console's Bit status card, two-tap confirm),
+  puts progress back to 0 and sends every Tower all 16 lights, so the
+  LEDs are rewritten whatever they last showed. `Bit.actions()` is
+  `{name: (label, handler(at))}`; the Console sends `bit_action`, and
+  `GameServer.run_action` (SETUP/RUNNING only) dispatches the handler's
+  cues, or surfaces its str refusal.
 
 
 ### `www/` and `arcoserver/`

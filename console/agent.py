@@ -120,6 +120,7 @@ class ConsoleAgent:
         # declarations with no live values rather than failing.
         self._room_controllers = room_controllers
         self._last_status: dict | None = None
+        self._last_actions: list | None = None
         self._last_room: dict | None = None
         self._last_functions: list | None = None
         self._last_instrument_functions: dict | None = None
@@ -186,7 +187,7 @@ class ConsoleAgent:
     def _handle_command(self, msg: dict) -> dict | None:
         name = msg.get("command")
         if name in ("arm_room", "release_room", "fire_function",
-                    "gesture", "get_design", "save_design",
+                    "gesture", "bit_action", "get_design", "save_design",
                     "publish_design", "clone_design",
                     "bench_start", "bench_stop", "bench_fire", "bench_lane",
                     "list_captures", "capture_stats", "replay_trace"):
@@ -392,6 +393,11 @@ class ConsoleAgent:
             return None
         if isinstance(command, protocol.GestureCommand):
             return self._handle_gesture_command(name, command)
+        if isinstance(command, protocol.BitActionCommand):
+            reason = self.game_server.run_action(command.name)
+            if reason is not None:
+                return protocol.error_event(name, reason)
+            return None
         room_name = command.room_type
         gs = self.game_server
         if gs.room_binding is None or gs.room is None or gs.room.name != room_name:
@@ -688,6 +694,7 @@ class ConsoleAgent:
             registration=registration,
             devices=self._devices_view(),
             bit_status=self._current_status(),
+            bit_actions=self._current_actions(),
             room=self._last_room,
             functions=self._last_functions,
             terrarium_state=(
@@ -942,11 +949,24 @@ class ConsoleAgent:
             logger.exception("Bit.status raised; reporting empty status")
             return {}
 
+    def _current_actions(self) -> list:
+        bit = self.game_server.bit
+        if bit is None:
+            return []
+        try:
+            return [{"name": name, "label": label}
+                    for name, (label, _handler) in bit.actions().items()]
+        except Exception:
+            logger.exception("Bit.actions raised; reporting no actions")
+            return []
+
     def _broadcast_status_if_changed(self) -> None:
         status = self._current_status()
-        if status != self._last_status:
+        actions = self._current_actions()
+        if status != self._last_status or actions != self._last_actions:
             self._last_status = status
-            self.server.broadcast(protocol.bit_status_event(status))
+            self._last_actions = actions
+            self.server.broadcast(protocol.bit_status_event(status, actions))
 
     # --- engine observer callbacks -----------------------------------------
     def on_state_change(self, old_state: State, new_state: State) -> None:

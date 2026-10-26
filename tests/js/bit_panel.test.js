@@ -160,6 +160,35 @@ const PLAYER_ROLE = {
   send({ event: "bit_status", status: {} });
   assert.strictEqual(card.hidden, true);
 
+  // a Bit's operator actions render as buttons on the status card; each
+  // sends bit_action only on the confirming second tap, and a status tick
+  // landing mid-arm keeps the same, still-armed button
+  send({ event: "bit_status", status: { progress: 40 },
+         actions: [{ name: "reset", label: "Reset progress" }] });
+  assert.strictEqual(card.hidden, false);
+  const findText = (node, text) => {
+    if (node.tagName === "button" && node.textContent === text) return node;
+    for (const c of node.children) {
+      const found = findText(c, text);
+      if (found) return found;
+    }
+    return null;
+  };
+  const resetBtn = findText(card, "Reset progress");
+  assert.ok(resetBtn, "the action renders as a button");
+  sock.sent = [];
+  resetBtn.onclick();
+  assert.strictEqual(sock.sent.length, 0, "first tap only arms");
+  send({ event: "bit_status", status: { progress: 41 },
+         actions: [{ name: "reset", label: "Reset progress" }] });
+  assert.ok(card.innerHTML.includes("41"));
+  assert.strictEqual(findText(card, "Confirm?"), resetBtn, "armed button survives a status tick");
+  resetBtn.onclick();
+  assert.deepStrictEqual(sock.sent,
+                         [{ command: "bit_action", name: "reset" }]);
+  send({ event: "bit_status", status: {}, actions: [] });
+  assert.strictEqual(card.hidden, true);
+
   // Rendering discipline (rule 1, same as rooms.js/surface.js): an unrelated
   // event landing mid confirm-tap must never rebuild the button row and
   // silently drop the armed state (the "abort does nothing" class of bug,

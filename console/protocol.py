@@ -41,7 +41,7 @@ __all__ = [
     "ArmRoomCommand", "ReleaseRoomCommand", "parse_admin_command",
     "room_changed_event", "join_changed_event", "room_frame_event",
     "functions_changed_event", "function_fired_event", "FireFunctionCommand",
-    "GestureCommand",
+    "GestureCommand", "BitActionCommand",
     "GetDesignCommand", "SaveDesignCommand",
     "PublishDesignCommand", "CloneDesignCommand",
     "design_row", "catalog_error_row",
@@ -115,7 +115,8 @@ def device_view(info, role_name, url=None, muted=False, fixture=None,
 
 
 def snapshot_event(*, state, loaded_bit, roles,
-                   registration, devices, bit_status, room=None,
+                   registration, devices, bit_status, bit_actions=None,
+                   room=None,
                    functions=None, terrarium_state=None, rooms=None,
                    instrument_functions=None, surface_instruments=None,
                    builtins=None, designs=None, design_vocab=None,
@@ -128,6 +129,7 @@ def snapshot_event(*, state, loaded_bit, roles,
         "registration": registration,
         "devices": devices,
         "bit_status": bit_status,
+        "bit_actions": bit_actions or [],
         "room": room,
         "functions": functions or [],
         "terrarium_state": terrarium_state,
@@ -196,8 +198,10 @@ def roles_changed_event(roles: list) -> dict:
     return {"event": "roles_changed", "roles": roles}
 
 
-def bit_status_event(status) -> dict:
-    return {"event": "bit_status", "status": status}
+def bit_status_event(status, actions=None) -> dict:
+    """The Bit's status() read-out plus its operator actions, as
+    [{"name", "label"}] rows the status card renders as buttons."""
+    return {"event": "bit_status", "status": status, "actions": actions or []}
 
 
 def log_event(level: str, message: str) -> dict:
@@ -221,6 +225,11 @@ class ReleaseRoomCommand:
 class FireFunctionCommand:
     name: str
     dev: str | None = None
+
+
+@dataclass
+class BitActionCommand:
+    name: str
 
 
 @dataclass
@@ -398,6 +407,11 @@ def parse_admin_command(msg: dict):
         return FireFunctionCommand(name=name, dev=dev or None)
     if command == "gesture":
         return _parse_gesture(msg)
+    if command == "bit_action":
+        name = msg.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("bit_action requires a non-empty string 'name'")
+        return BitActionCommand(name=name)
     if command == "get_design":
         state = msg.get("state")
         if state not in ("published", "draft"):

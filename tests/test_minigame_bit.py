@@ -235,9 +235,9 @@ def test_each_shroom_flashes_on_its_own():
     bit = _synced_bit("ie1", "ie2")
     tap = bit.verb_handlers()["tap"]
     tap("ie1", TAP, at=0.0)
-    tap("ie2", ["ie2", 0.0, 80.0, 1], at=0.5)
-    assert sorted(bit.fires(1.0), key=lambda c: c.dev) == [
-        flash("ie1", 0, 1.0), flash("ie2", 64, 1.0)]
+    tap("ie2", ["ie2", 0.0, 80.0, 1], at=FLASH_FADE_S / 2)
+    assert sorted(bit.fires(FLASH_FADE_S), key=lambda c: c.dev) == [
+        flash("ie1", 0, FLASH_FADE_S), flash("ie2", 64, FLASH_FADE_S)]
 
 
 def test_a_tower_or_stranger_tap_flashes_nothing():
@@ -314,3 +314,53 @@ def test_a_tap_lights_every_tower_through_the_engine():
     assert lit == {("ie1", FLASH_CC, 127),
                    ("devtower1", LIGHT_CC_BASE, 20),
                    ("devtower2", LIGHT_CC_BASE, 20)}
+
+
+# --- the Console's reset ---------------------------------------------------
+
+def test_the_reset_action_is_offered_to_the_console():
+    label, _handler = MinigameBit().actions()["reset"]
+    assert label == "Reset progress"
+
+
+def test_reset_empties_the_bar_and_resends_every_light_to_every_tower():
+    bit = _synced_bit(towers=("devtower1", "devtower2"))
+    tap = bit.verb_handlers()["tap"]
+    for _ in range(30):
+        tap("ie1", TAP, at=0.0)
+    out = bit.actions()["reset"][1](2.0)
+    assert out == [cc(tower, k, 0, 2.0)
+                   for tower in ("devtower1", "devtower2")
+                   for k in range(PROGRESS_LIGHTS)]
+    assert bit.status()["progress"] == 0
+    assert bar(tap("ie1", TAP, at=3.0)) == [       # counting starts over
+        cc("devtower1", 0, 20, 3.0), cc("devtower2", 0, 20, 3.0)]
+
+
+def test_reset_from_full_lets_taps_fill_the_bar_again():
+    bit = _synced_bit()
+    tap = bit.verb_handlers()["tap"]
+    for _ in range(100):
+        tap("ie1", TAP, at=0.0)
+    bit.actions()["reset"][1](1.0)
+    tap("ie1", TAP, at=2.0)
+    assert bit.status()["progress"] == 1
+
+
+def test_reset_reaches_every_tower_through_the_engine():
+    gs, _ = _running_gs()
+    cues = []
+    gs.on_light_cue = lambda dev, *rest: cues.append((dev,) + tuple(rest))
+    for dev in ("ie1", "devtower1", "devtower2"):
+        gs.hello(dev, "dev", "1", instrument="testshroom")
+    gs.run()
+    for _ in range(10):
+        gs.data("ie1", "tap", TAP)
+    cues.clear()
+    assert gs.run_action("reset") is None
+    assert gs.bit.status()["progress"] == 0
+    assert sorted((dev, d1, d2) for dev, _st, d1, d2, *_ in cues) == sorted(
+        (tower, LIGHT_CC_BASE + k, 0)
+        for tower in ("devtower1", "devtower2")
+        for k in range(PROGRESS_LIGHTS))
+    assert gs.run_action("nope") == "unknown action 'nope'"

@@ -34,6 +34,7 @@ from control.start_condition import decide_start, scored_count
 from control.state import State
 from control.builtins import RESERVED_NAMES, builtin_functions
 from control.functions import (
+    FIRED_BY_ADMIN_MANUAL,
     FIRED_BY_BIT_ADJUDICATED,
     FIRED_BY_GESTURE_VERB,
     SOURCE_WIRE,
@@ -968,6 +969,30 @@ class GameServer:
             return cues or "handler refused"
         self._dispatch_cues(list(stream_cue_list) + list(cues or ()), at,
                             FIRED_BY_GESTURE_VERB)
+        return None
+
+    def run_action(self, name: str) -> str | None:
+        """Run one of the loaded Bit's operator actions (Bit.actions) and
+        dispatch the cues it returns. Returns None when run, else a refusal
+        reason, and never raises, for the same reason data() does not."""
+        if self.state not in (State.SETUP, State.RUNNING):
+            return "no Bit running"
+        try:
+            entry = self.bit.actions().get(name)
+        except Exception:
+            logger.exception("Bit.actions raised; refusing %r", name)
+            return "action error"
+        if entry is None:
+            return f"unknown action {name!r}"
+        at = self._clock() + self._horizon
+        try:
+            cues = entry[1](at)
+        except Exception:
+            logger.exception("Bit action %r raised; ignoring", name)
+            return "action error"
+        if isinstance(cues, str):
+            return cues or "action refused"
+        self._dispatch_cues(list(cues or ()), at, FIRED_BY_ADMIN_MANUAL)
         return None
 
     def _solo_gesture(self, dev: str, verb: str, args: list,

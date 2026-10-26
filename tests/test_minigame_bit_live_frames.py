@@ -165,3 +165,17 @@ def test_a_player_never_gets_the_tower_surface():
     assert cap.pixel_count == TOWER_PIXELS
     zones = {z.name: (z.start, z.count) for z in cap.zones}
     assert all(zones[f"p{k}"] == (2 * k, 2) for k in range(PROGRESS_LIGHTS))
+
+
+def test_reset_darkens_the_whole_bar_on_the_tower():
+    rig = _Rig()
+    rig.run(3.0)
+    rig.tap(50)
+    rig.run(1.0)
+    assert rig.lights()[0] > 200
+    assert rig.gs.run_action("reset") is None
+    rig.run(1.0)
+    assert rig.pixels() == [0] * TOWER_PIXELS
+    rig.tap(7)                     # and fills again from the bottom
+    rig.run(1.0)
+    assert rig.lights()[0] > 200 and rig.lights()[1:] == [0] * 15
