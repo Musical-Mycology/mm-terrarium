@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from bits.minigame.minigame_bit import (
+    FLASH_CC,
+    FLASH_FADE_S,
     LIGHT_CC_BASE,
     MINIGAME_PLAYER_NODE,
     MinigameBit,
@@ -25,6 +27,15 @@ TAP = ["ie1", 0.0, 80.0, 1]
 
 def cc(tower, k, value, when):
     return LightCue(tower, 0xB0, LIGHT_CC_BASE + k, value, when=when)
+
+
+def flash(dev, value, when):
+    return LightCue(dev, 0xB0, FLASH_CC, value, when=when)
+
+
+def bar(out):
+    """A tap's cues with the tapping shroom's flash left out."""
+    return [c for c in out if c.data1 != FLASH_CC]
 
 
 # --- the package, as the Console sees it -----------------------------------
@@ -97,7 +108,7 @@ def test_one_percent_is_0_16_of_one_light(progress, levels):
 
 def test_a_new_tower_gets_the_whole_bar_on_the_next_tap():
     bit = _joined_bit()
-    out = bit.verb_handlers()["tap"]("ie1", TAP, at=5.0)
+    out = bar(bit.verb_handlers()["tap"]("ie1", TAP, at=5.0))
     assert out == [cc("devtower1", 0, 20, 5.0)] + [
         cc("devtower1", k, 0, 5.0) for k in range(1, PROGRESS_LIGHTS)]
 
@@ -105,18 +116,18 @@ def test_a_new_tower_gets_the_whole_bar_on_the_next_tap():
 def test_each_tap_adds_one_percent_to_the_light_it_lands_in():
     bit = _synced_bit()
     tap = bit.verb_handlers()["tap"]
-    assert tap("ie1", TAP, at=5.0) == [cc("devtower1", 0, 20, 5.0)]
+    assert bar(tap("ie1", TAP, at=5.0)) == [cc("devtower1", 0, 20, 5.0)]
     for _ in range(5):
-        out = tap("ie1", TAP, at=6.0)
+        out = bar(tap("ie1", TAP, at=6.0))
     assert out == [cc("devtower1", 0, 122, 6.0)]   # 6%: 0.96 of a light
-    assert tap("ie1", TAP, at=7.0) == [            # 7%: into the second
+    assert bar(tap("ie1", TAP, at=7.0)) == [       # 7%: into the second
         cc("devtower1", 0, 127, 7.0), cc("devtower1", 1, 15, 7.0)]
     assert bit.status()["progress"] == 7
 
 
 def test_every_tower_shows_the_same_bar():
     bit = _synced_bit(towers=("devtower1", "devtower2"))
-    assert bit.verb_handlers()["tap"]("ie1", TAP, at=1.0) == [
+    assert bar(bit.verb_handlers()["tap"]("ie1", TAP, at=1.0)) == [
         cc("devtower1", 0, 20, 1.0), cc("devtower2", 0, 20, 1.0)]
 
 
@@ -126,7 +137,7 @@ def test_a_tower_joining_late_catches_up_while_the_others_get_the_change():
     for _ in range(29):
         tap("ie1", TAP, at=0.0)
     bit.on_join("devtower2", "tower")
-    out = tap("ie1", TAP, at=1.0)                  # 30%: 4.8 lights
+    out = bar(tap("ie1", TAP, at=1.0))             # 30%: 4.8 lights
     assert [c for c in out if c.dev == "devtower1"] == \
         [cc("devtower1", 4, 102, 1.0)]
     assert [c.data2 for c in out if c.dev == "devtower2"] == \
@@ -146,9 +157,9 @@ def test_the_bar_holds_full_at_100_percent():
     bit = _synced_bit()
     tap = bit.verb_handlers()["tap"]
     for _ in range(100):
-        out = tap("ie1", TAP, at=0.0)
+        out = bar(tap("ie1", TAP, at=0.0))
     assert out == [cc("devtower1", 15, 127, 0.0)]
-    assert tap("ie1", TAP, at=1.0) == []
+    assert tap("ie1", TAP, at=1.0) == [flash("ie1", 127, 1.0)]  # flash only
     assert bit.status()["progress"] == 100
 
 
@@ -162,14 +173,15 @@ def test_taps_from_a_tower_or_a_stranger_are_ignored():
 
 def test_taps_with_no_tower_still_count():
     bit = _joined_bit(towers=())
-    assert bit.verb_handlers()["tap"]("ie1", TAP, at=0.0) == []
+    assert bit.verb_handlers()["tap"]("ie1", TAP, at=0.0) == \
+        [flash("ie1", 127, 0.0)]
     assert bit.status()["progress"] == 1
 
 
 def test_a_multi_tap_gesture_counts_every_tap():
     bit = _synced_bit()
-    assert bit.verb_handlers()["tap"]("ie1", ["ie1", 0.0, 80.0, 2],
-                                      at=0.0) == [cc("devtower1", 0, 41, 0.0)]
+    assert bar(bit.verb_handlers()["tap"]("ie1", ["ie1", 0.0, 80.0, 2],
+                                          at=0.0)) == [cc("devtower1", 0, 41, 0.0)]
     assert bit.status()["progress"] == 2
 
 
@@ -177,6 +189,62 @@ def test_a_tap_with_no_count_still_counts_once():
     bit = _synced_bit()
     bit.verb_handlers()["tap"]("ie1", ["ie1"], at=0.0)
     assert bit.status()["progress"] == 1
+
+
+# --- the tap flash ----------------------------------------------------------
+
+def test_the_player_role_glows_cyan_on_its_own_lane():
+    player = MinigameBit().role_table.roles["player"]
+    assert player.breath is False
+    assert player.light_manifest["instruments"] == [
+        {"instrument": "aurora", "target": "primary",
+         "params": {"hue": 0.5, "level": 0.0},
+         "lanes": [{"source": f"cc:{FLASH_CC}", "dest": "level"}]}]
+    assert FLASH_CC not in range(LIGHT_CC_BASE,
+                                 LIGHT_CC_BASE + PROGRESS_LIGHTS)
+
+
+def test_a_tap_lights_the_shroom_at_full_first():
+    bit = _synced_bit()
+    out = bit.verb_handlers()["tap"]("ie1", TAP, at=5.0)
+    assert out[0] == flash("ie1", 127, 5.0)
+
+
+def test_the_flash_fades_to_dark_and_then_stops():
+    bit = _synced_bit()
+    bit.verb_handlers()["tap"]("ie1", TAP, at=5.0)
+    assert bit.fires(5.0) == []                     # still at full
+    assert bit.fires(5.0 + FLASH_FADE_S / 2) == [
+        flash("ie1", 64, 5.0 + FLASH_FADE_S / 2)]
+    assert bit.fires(5.0 + FLASH_FADE_S / 2) == []  # unchanged, nothing sent
+    assert bit.fires(5.0 + FLASH_FADE_S) == [flash("ie1", 0, 5.0 + FLASH_FADE_S)]
+    assert bit.fires(9.0) == []                     # done
+
+
+def test_a_tap_mid_fade_restarts_it_from_full():
+    bit = _synced_bit()
+    tap = bit.verb_handlers()["tap"]
+    tap("ie1", TAP, at=0.0)
+    bit.fires(0.75 * FLASH_FADE_S)
+    assert tap("ie1", TAP, at=0.8)[0] == flash("ie1", 127, 0.8)
+    assert bit.fires(0.8 + FLASH_FADE_S / 2) == [
+        flash("ie1", 64, 0.8 + FLASH_FADE_S / 2)]
+
+
+def test_each_shroom_flashes_on_its_own():
+    bit = _synced_bit("ie1", "ie2")
+    tap = bit.verb_handlers()["tap"]
+    tap("ie1", TAP, at=0.0)
+    tap("ie2", ["ie2", 0.0, 80.0, 1], at=0.5)
+    assert sorted(bit.fires(1.0), key=lambda c: c.dev) == [
+        flash("ie1", 0, 1.0), flash("ie2", 64, 1.0)]
+
+
+def test_a_tower_or_stranger_tap_flashes_nothing():
+    bit = _synced_bit()
+    bit.verb_handlers()["tap"]("devtower1", ["devtower1", 0.0, 80.0, 1],
+                               at=0.0)
+    assert bit.fires(0.5) == []
 
 
 def test_never_completes_on_its_own():
@@ -243,5 +311,6 @@ def test_a_tap_lights_every_tower_through_the_engine():
     gs.run()
     gs.data("ie1", "tap", TAP)
     lit = {(dev, d1, d2) for dev, _st, d1, d2, *_ in cues if d2}
-    assert lit == {("devtower1", LIGHT_CC_BASE, 20),
+    assert lit == {("ie1", FLASH_CC, 127),
+                   ("devtower1", LIGHT_CC_BASE, 20),
                    ("devtower2", LIGHT_CC_BASE, 20)}

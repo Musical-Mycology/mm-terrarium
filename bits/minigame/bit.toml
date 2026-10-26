@@ -1,7 +1,7 @@
 [bit]
 name = "MinigameBit"
-version = "0.4.0"
-description = "Tower progress bar: each tap from an ie<N> device adds 1%, shown on every devtower<N> device's 32 LEDs, two per light"
+version = "0.5.0"
+description = "Tower progress bar: each tap from an ie<N> device adds 1%, shown on every devtower<N> device's 32 LEDs, two per light; each tap flashes the tapping shroom cyan"
 entry = "minigame_bit:MinigameBit"
 kind = "tool"
 requires_terrarium_api = 1
@@ -20,4 +20,4 @@ when = "immediate"
 
 [console]
 display_name = "Minigame"
-notes = "Connect devtower<N> devices (devtower1, devtower2, ...) and ie<N> devices; any other device keeps its own solo behaviour. A Tower is a plain device, not a Room fixture: it needs no Arm and must not handshake a Room node. Every tap from an ie<N> device adds 1% to one shared progress figure, shown on every Tower's 32 LEDs as 16 lights of two LEDs each, bottom first, 6.25% a light. A Tower that connects late catches up on the next tap. At 100% the bar holds full and taps do nothing. No scoring, and it never completes on its own, so unload or reload it to start over."
+notes = "Connect devtower<N> devices (devtower1, devtower2, ...) and ie<N> devices; any other device keeps its own solo behaviour. A Tower is a plain device, not a Room fixture: it needs no Arm and must not handshake a Room node. Every tap from an ie<N> device flashes that shroom cyan, fading out over a second, and adds 1% to one shared progress figure, shown on every Tower's 32 LEDs as 16 lights of two LEDs each, bottom first, 6.25% a light. A Tower that connects late catches up on the next tap. At 100% the bar holds full and taps only flash. No scoring, and it never completes on its own, so unload or reload it to start over."

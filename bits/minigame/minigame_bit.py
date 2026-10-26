@@ -4,7 +4,11 @@ Two kinds of device take part, told apart by their dev id:
 
 - a player, ie<N> (PLAYER_DEV_RE), takes the `player` role. Every tap adds
   PROGRESS_PER_TAP (1%) to one progress figure shared by all players; a
-  gesture of several taps (the tap's `count`) adds that many.
+  gesture of several taps (the tap's `count`) adds that many. Every tap
+  also lights the tapping shroom cyan at full, fading to dark over
+  FLASH_FADE_S: an aurora on its primary surface, held at level 0, whose
+  level rides cc FLASH_CC. fires() steps the fade each tick, and a tap
+  mid-fade restarts it from full.
 - a Tower, devtower<N> (TOWER_DEV_RE, the instrument instruments/
   devtower.toml, 32 pixels), takes the `tower` role. It is a player
   device, not a Room fixture: it hellos like any device and gets its own
@@ -58,6 +62,11 @@ LIGHTS = tuple(f"p{k}" for k in range(TOWER_LIGHTS))
 LIGHT_CC_BASE = 20
 BAR_HUE = 0.33                 # green
 
+# A tapped shroom's own flash: cyan, full on the tap, fading to dark.
+FLASH_CC = 16                  # below the Tower's lanes (20..35)
+FLASH_HUE = 0.5                # cyan
+FLASH_FADE_S = 1.0
+
 
 def light_level(progress: int, k: int, lights: int = TOWER_LIGHTS) -> float:
     """Light k's level, 0..1, at `progress` percent on a bar of `lights`."""
@@ -67,6 +76,11 @@ def light_level(progress: int, k: int, lights: int = TOWER_LIGHTS) -> float:
 def light_value(progress: int, k: int) -> int:
     """Light k's cc value, 0..127, at `progress` percent."""
     return round(light_level(progress, k) * 127)
+
+
+def flash_value(elapsed: float) -> int:
+    """The flash's cc value, 127..0, `elapsed` seconds after its tap."""
+    return round(min(max(1.0 - elapsed / FLASH_FADE_S, 0.0), 1.0) * 127)
 
 
 def tap_count(args: list) -> int:
@@ -86,7 +100,7 @@ def is_player(dev: str) -> bool:
 
 
 class MinigameBit(Bit):
-    version = "0.4"
+    version = "0.5"
 
     def __init__(self, config=None) -> None:
         super().__init__(config)
@@ -95,6 +109,8 @@ class MinigameBit(Bit):
         self._towers: set[str] = set()
         # Towers granted since the last tap: they get the whole bar on it.
         self._unsynced: set[str] = set()
+        # Shrooms mid-flash: dev -> (tap time, last cc value sent).
+        self._flashes: dict[str, tuple[float, int]] = {}
 
     @property
     def role_table(self) -> RoleTable:
@@ -104,6 +120,12 @@ class MinigameBit(Bit):
             capacity=None,
             scored=False,
             uses=["tap"],
+            breath=False,                  # dark between flashes
+            light_manifest={"instruments": [
+                {"instrument": "aurora", "target": "primary",
+                 "params": {"hue": FLASH_HUE, "level": 0.0},
+                 "lanes": [{"source": f"cc:{FLASH_CC}", "dest": "level"}]},
+            ]},
         )
         tower = Role(
             name="tower",
@@ -152,6 +174,7 @@ class MinigameBit(Bit):
         self._players.discard(dev)
         self._towers.discard(dev)
         self._unsynced.discard(dev)
+        self._flashes.pop(dev, None)
         if role_name == "player":
             self._players.add(dev)
         elif role_name == "tower":
@@ -160,6 +183,20 @@ class MinigameBit(Bit):
 
     def update(self, dt: float) -> bool:
         return False   # this Bit never auto-completes; unload it from the Console
+
+    def fires(self, at: float) -> list:
+        """One step of every shroom's fade: a cc when its value moved, and
+        the last (0) ends the flash."""
+        out = []
+        for dev, (start, sent) in list(self._flashes.items()):
+            value = flash_value(at - start)
+            if value != sent:
+                out.append(LightCue(dev, 0xB0, FLASH_CC, value, when=at))
+            if value == 0:
+                del self._flashes[dev]
+            else:
+                self._flashes[dev] = (start, value)
+        return out
 
     def on_complete(self) -> None:
         pass
@@ -175,16 +212,19 @@ class MinigameBit(Bit):
         pass
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
-        """PROGRESS_PER_TAP more per tap in the gesture, shown on every
-        Tower: the lights that moved, or the whole bar on a Tower that has
-        not seen one yet. A tap from a non-player, or once the bar is full,
-        does nothing."""
-        if dev not in self._players or self.progress >= PROGRESS_MAX:
+        """The tapping shroom flashes cyan, and PROGRESS_PER_TAP more per
+        tap in the gesture shows on every Tower: the lights that moved, or
+        the whole bar on a Tower that has not seen one yet. A tap from a
+        non-player does nothing; once the bar is full it only flashes."""
+        if dev not in self._players:
             return []
+        self._flashes[dev] = (at, 127)
+        out = [LightCue(dev, 0xB0, FLASH_CC, 127, when=at)]
+        if self.progress >= PROGRESS_MAX:
+            return out
         before = self.progress
         self.progress = min(before + PROGRESS_PER_TAP * tap_count(args),
                             PROGRESS_MAX)
-        out = []
         for tower in sorted(self._towers):
             full = tower in self._unsynced
             for k in range(TOWER_LIGHTS):
