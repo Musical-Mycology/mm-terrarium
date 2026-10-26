@@ -1,36 +1,43 @@
-"""MinigameBit: a shared progress bar on every Tower, filled by taps.
+"""MinigameBit: a four-phase white build on every Tower, set from the Console.
 
 Two kinds of device take part, told apart by their dev id:
 
-- a player, ie<N> (PLAYER_DEV_RE), takes the `player` role. Every tap adds
-  PROGRESS_PER_TAP (1%) to one progress figure shared by all players; a
-  gesture of several taps (the tap's `count`) adds that many. Every tap
-  also lights the tapping shroom cyan at full, fading to dark over
-  FLASH_FADE_S: an aurora on its primary surface, held at level 0, whose
-  level rides cc FLASH_CC. fires() steps the fade each tick, and a tap
-  mid-fade restarts it from full.
+- a player, ie<N> (PLAYER_DEV_RE), takes the `player` role. Every tap
+  lights the tapping shroom purple at full, fading to dark over
+  FLASH_FADE_S, its LEDs' RGB bytes packed into the RGBW frame
+  (shroom_quads): PixelFlashCue paint over its dark aurora, not the aurora's
+  own level, whose glide (luxaeterna's ~0.15 s tau) would stretch the
+  fade's tail to most of a second. fires() steps the fade each tick, each
+  step held until the fade's end, and a tap mid-fade restarts it from
+  full. Taps move nothing on the Towers.
 - a Tower, devtower<N> (TOWER_DEV_RE, the instrument instruments/
   devtower.toml, 32 pixels), takes the `tower` role. It is a player
   device, not a Room fixture: it hellos like any device and gets its own
   32 px player frame at start or walk-up, no Arm and no Room node. Its
   taps do nothing.
-  Every Tower shows the same bar.
+  Every Tower shows the same phase.
 
-Progress runs 0..PROGRESS_MAX over TOWER_LIGHTS lights, the Tower's 32
-LEDs taken PIXELS_PER_LIGHT (2) at a time, bottom first: light k is pixels
-2k and 2k+1, and both light up together. That is 6.25% a light, so 1% of
-progress is 0.16 of one light's level. At 100% the bar holds full and
-further taps do nothing; the Console's Reset progress button (or a
-reload) starts over.
+The Tower's 32 LEDs are 16 lights of PIXELS_PER_LIGHT (2), bottom first,
+in GROUPS (4) groups of LIGHTS_PER_GROUP (4) lights, so group g is pixels
+8g..8g+7. In phase p (1..GROUPS) group p-1 blinks white at BPM, on for
+the first half of each beat, and every group below it is held solid
+white; the groups above are dark. Each blink fades in over FADE_S, holds,
+and fades out over FADE_S, ending dark at the half beat. The Console's Phase 1..4 buttons
+(Bit.actions) switch phase; the Bit starts in phase 1.
 
-Each light is one zone of the tower role's own surface (Role.zones,
-p0..p15, two pixels each),
-bound to an aurora held at level 0 whose level rides its own cc lane
-(LIGHT_CC_BASE + k, a lane value is cc/127). A tap sends one cc to each
-light it moved, on every Tower; a Tower that joined since the last tap gets
-the whole bar instead, so a late Tower catches up on the next tap. A
-reset puts progress back to 0 and sends every Tower the whole (dark) bar,
-so each Tower's LEDs are rewritten whatever they last showed.
+The aurora (lexicon) has no white, so the tower role's own light is one
+aurora held dark and the white is painted over it with PixelFlashCue,
+the way DeuxAraDropBit flickers its Tower. Each beat sends every lit
+pixel on every Tower: a blinking pixel for BLINK_ON_S, a solid one for
+HOLD_S, a little over a beat, so the next beat's refresh lands before it
+lapses. The blink's fade is stepped once a tick by fires(): a new W level
+for the group whenever it moves, each held until the blink's end, so the
+last step lapses dark on time. A Tower that joins late is picked up on the next beat. The
+beat grid runs unbroken from the first tick for the whole session: a phase
+switch never restarts it. The switch repaints at once instead: the groups
+below the new phase solid, the blinking group at the current blink's level
+(dark between blinks), and the groups above black for CLEAR_S, so nothing
+waits for an old hold to lapse.
 
 Any other device falls through to its own solo role, untouched by the game.
 No scoring, and the Bit needs nothing from the Room.
@@ -41,7 +48,7 @@ from __future__ import annotations
 import re
 
 from control.bit import Bit
-from control.cues import LightCue
+from control.cues import PixelFlashCue
 from control.functions import FunctionTable
 from control.roles import Role, RoleClass, RoleTable
 
@@ -50,48 +57,65 @@ MINIGAME_TOWER_NODE = "MINIGAME_TOWER_NODE"
 
 # The devices that play: ie1, ie2, ...
 PLAYER_DEV_RE = re.compile(r"ie\d+")
-# The devices that show the bar: devtower1, devtower2, ...
+# The devices that show the phases: devtower1, devtower2, ...
 TOWER_DEV_RE = re.compile(r"devtower\d+")
 
-PROGRESS_MAX = 100             # percent
-PROGRESS_PER_TAP = 1           # percent
 TOWER_PIXELS = 32               # the Dev Tower's LEDs, pixels 0..31
 PIXELS_PER_LIGHT = 2            # LEDs that light up as one
-TOWER_LIGHTS = TOWER_PIXELS // PIXELS_PER_LIGHT   # 16
-LIGHTS = tuple(f"p{k}" for k in range(TOWER_LIGHTS))
+LIGHTS_PER_GROUP = 4
+GROUPS = 4                      # one per phase
+GROUP_PIXELS = LIGHTS_PER_GROUP * PIXELS_PER_LIGHT   # 8
 
-# Light k's level rides cc LIGHT_CC_BASE + k, clear of cc:11, which
-# Control's breath drives (off for the tower role anyway).
-LIGHT_CC_BASE = 20
-BAR_HUE = 0.33                 # green
+BPM = 130.0
+BEAT_S = 60.0 / BPM
+BLINK_ON_S = BEAT_S / 2         # the blinking group is lit half of each beat
+FADE_S = 0.06                   # each blink's fade in, and its fade out
+HOLD_S = BEAT_S + 0.1           # a solid pixel outlasts the gap to its refresh
+CLEAR_S = 0.05                  # the black paint a phase switch clears with
+WHITE = (0, 0, 0, 255)          # the lexicon's white, on the W channel
+BLACK = (0, 0, 0, 0)
 
-# A tapped shroom's own flash: cyan, full on the tap, fading to dark.
-FLASH_CC = 16                  # below the Tower's lanes (20..35)
-FLASH_HUE = 0.5                # cyan
-FLASH_FADE_S = 0.5
+# A tapped shroom's own flash: purple on every LED, full on the tap,
+# fading to dark.
+FLASH_HUE = 0.75               # purple
+FLASH_RGB = (128, 0, 255)      # FLASH_HUE at full
+FLASH_FADE_S = 0.2             # full to dark
+FLASH_PIXELS = 4               # the devshroom's LED_COUNT (mm-devshroom)
+# The devshroom reads its /leds blob as R, G, B, three bytes a LED, not the
+# wire's R, G, B, W: its LEDs' bytes are packed across the frame's 4-byte
+# pixels, so 4 LEDs fill the first 3 frame pixels.
+SHROOM_BYTES_PER_LED = 3
 
 
-def light_level(progress: int, k: int, lights: int = TOWER_LIGHTS) -> float:
-    """Light k's level, 0..1, at `progress` percent on a bar of `lights`."""
-    return min(max(progress * lights / PROGRESS_MAX - k, 0.0), 1.0)
+def group_pixels(g: int) -> range:
+    """Group g's pixels, bottom first: 8g..8g+7."""
+    return range(g * GROUP_PIXELS, (g + 1) * GROUP_PIXELS)
 
 
-def light_value(progress: int, k: int) -> int:
-    """Light k's cc value, 0..127, at `progress` percent."""
-    return round(light_level(progress, k) * 127)
+def blink_value(t: float) -> int:
+    """The blink's W level, 0..255, `t` seconds into it: up over FADE_S,
+    full, and down over FADE_S to 0 at BLINK_ON_S."""
+    level = min(t / FADE_S, (BLINK_ON_S - t) / FADE_S, 1.0)
+    return round(max(level, 0.0) * 255)
 
 
 def flash_value(elapsed: float) -> int:
-    """The flash's cc value, 127..0, `elapsed` seconds after its tap."""
-    return round(min(max(1.0 - elapsed / FLASH_FADE_S, 0.0), 1.0) * 127)
+    """The flash's level, 255..0, `elapsed` seconds after its tap."""
+    return round(min(max(1.0 - elapsed / FLASH_FADE_S, 0.0), 1.0) * 255)
 
 
-def tap_count(args: list) -> int:
-    """The taps in one /game/tap gesture: its `count`, at least 1."""
-    try:
-        return max(int(args[3]), 1)
-    except (IndexError, TypeError, ValueError):
-        return 1
+def flash_cues(dev: str, value: int, elapsed: float, at: float) -> list:
+    """Every LED of `dev` at flash level `value`, held to the fade's end."""
+    rgb = tuple(c * value // 255 for c in FLASH_RGB)
+    return [PixelFlashCue(dev, px, quad, FLASH_FADE_S - elapsed, when=at)
+            for px, quad in enumerate(shroom_quads(rgb))]
+
+
+def shroom_quads(rgb: tuple) -> list:
+    """Every devshroom LED at `rgb`, its R, G, B bytes packed into the
+    frame's 4-byte pixels: one (r, g, b, w)-shaped slot per frame pixel."""
+    stream = bytes(rgb) * FLASH_PIXELS
+    return [tuple(stream[i:i + 4]) for i in range(0, len(stream), 4)]
 
 
 def is_tower(dev: str) -> bool:
@@ -103,17 +127,20 @@ def is_player(dev: str) -> bool:
 
 
 class MinigameBit(Bit):
-    version = "0.6"
+    version = "0.8"
 
     def __init__(self, config=None) -> None:
         super().__init__(config)
-        self.progress = 0
+        self.phase = 1
         self._players: set[str] = set()
         self._towers: set[str] = set()
-        # Towers granted since the last tap: they get the whole bar on it.
-        self._unsynced: set[str] = set()
         # Shrooms mid-flash: dev -> (tap time, last cc value sent).
         self._flashes: dict[str, tuple[float, int]] = {}
+        # When the next beat's Tower cues go out; None until the first tick.
+        self._next_beat: float | None = None
+        # The blink under way: its start, and the last W level sent.
+        self._blink_start: float | None = None
+        self._blink_sent = 0
 
     @property
     def role_table(self) -> RoleTable:
@@ -126,8 +153,7 @@ class MinigameBit(Bit):
             breath=False,                  # dark between flashes
             light_manifest={"instruments": [
                 {"instrument": "aurora", "target": "primary",
-                 "params": {"hue": FLASH_HUE, "level": 0.0},
-                 "lanes": [{"source": f"cc:{FLASH_CC}", "dest": "level"}]},
+                 "params": {"hue": FLASH_HUE, "level": 0.0}, "lanes": []},
             ]},
         )
         tower = Role(
@@ -135,15 +161,10 @@ class MinigameBit(Bit):
             role_class=RoleClass.JAM,      # every devtower<N> device
             capacity=None,
             scored=False,
-            breath=False,                  # the bar is the whole light
-            zones=tuple((zone, k * PIXELS_PER_LIGHT, PIXELS_PER_LIGHT)
-                        for k, zone in enumerate(LIGHTS)),
+            breath=False,                  # dark under the white paint
             light_manifest={"instruments": [
-                {"instrument": "aurora", "target": zone,
-                 "params": {"hue": BAR_HUE, "level": 0.0},
-                 "lanes": [{"source": f"cc:{LIGHT_CC_BASE + k}",
-                            "dest": "level"}]}
-                for k, zone in enumerate(LIGHTS)
+                {"instrument": "aurora", "target": "primary",
+                 "params": {"hue": 0.0, "level": 0.0}, "lanes": []},
             ]},
         )
         return RoleTable(roles={"player": player, "tower": tower},
@@ -161,7 +182,9 @@ class MinigameBit(Bit):
         return {"tap": self._on_tap}
 
     def actions(self) -> dict:
-        return {"reset": ("Reset progress", self._on_reset)}
+        return {f"phase{p}": (f"Phase {p}",
+                              lambda at, p=p: self._on_phase(p, at))
+                for p in range(1, GROUPS + 1)}
 
     def on_setup_enter(self) -> None:
         pass
@@ -179,29 +202,37 @@ class MinigameBit(Bit):
     def on_join(self, dev: str, role_name: str) -> None:
         self._players.discard(dev)
         self._towers.discard(dev)
-        self._unsynced.discard(dev)
         self._flashes.pop(dev, None)
         if role_name == "player":
             self._players.add(dev)
         elif role_name == "tower":
             self._towers.add(dev)
-            self._unsynced.add(dev)
 
     def update(self, dt: float) -> bool:
         return False   # this Bit never auto-completes; unload it from the Console
 
     def fires(self, at: float) -> list:
-        """One step of every shroom's fade: a cc when its value moved, and
-        the last (0) ends the flash."""
+        """One step of every shroom's fade (its pixels repainted when the
+        level moved; the last step lapses dark at the fade's end), on each beat the Towers' cues, and
+        one step of the blink's fade."""
         out = []
         for dev, (start, sent) in list(self._flashes.items()):
             value = flash_value(at - start)
-            if value != sent:
-                out.append(LightCue(dev, 0xB0, FLASH_CC, value, when=at))
+            if 0 < value != sent:
+                out.extend(flash_cues(dev, value, at - start, at))
             if value == 0:
                 del self._flashes[dev]
             else:
                 self._flashes[dev] = (start, value)
+        if self._next_beat is None:
+            self._next_beat = at
+        if at >= self._next_beat:
+            # A beat more than one late (a stalled tick) restarts the grid
+            # at `at` rather than firing a burst of missed beats.
+            beat = self._next_beat if at - self._next_beat < BEAT_S else at
+            out.extend(self._beat_cues(beat))
+            self._next_beat = beat + BEAT_S
+        out.extend(self._blink_step(at))
         return out
 
     def on_complete(self) -> None:
@@ -211,48 +242,67 @@ class MinigameBit(Bit):
         return None
 
     def status(self) -> dict:
-        return {"progress": self.progress, "players": sorted(self._players),
+        return {"phase": self.phase, "players": sorted(self._players),
                 "towers": sorted(self._towers)}
 
     def on_unload(self) -> None:
         pass
 
-    def _bar_cues(self, tower: str, at: float) -> list:
-        """The whole bar at the current progress, one cc per light."""
-        return [LightCue(tower, 0xB0, LIGHT_CC_BASE + k,
-                         light_value(self.progress, k), when=at)
-                for k in range(TOWER_LIGHTS)]
+    def _beat_cues(self, at: float) -> list:
+        """One beat on every Tower: the groups below the phase's held solid,
+        and the phase's own group's blink started (fires() steps it)."""
+        self._blink_start = at
+        self._blink_sent = 0
+        return [PixelFlashCue(tower, px, WHITE, HOLD_S, when=at)
+                for tower in sorted(self._towers)
+                for g in range(self.phase - 1)
+                for px in group_pixels(g)]
 
-    def _on_reset(self, at: float) -> list:
-        """The operator's reset: progress back to 0, and every Tower sent
-        the whole bar so its LEDs are refreshed even if it missed a cue."""
-        self.progress = 0
-        self._unsynced.clear()
-        out = []
-        for tower in sorted(self._towers):
-            out.extend(self._bar_cues(tower, at))
+    def _blink_step(self, at: float) -> list:
+        """The blinking group at its fade's level `at`, sent only when the
+        level moved, and held until the blink's end."""
+        if self._blink_start is None:
+            return []
+        t = at - self._blink_start
+        if t >= BLINK_ON_S:
+            self._blink_start = None
+            return []
+        value = blink_value(t)
+        if value == self._blink_sent:
+            return []
+        self._blink_sent = value
+        return [PixelFlashCue(tower, px, (0, 0, 0, value), BLINK_ON_S - t,
+                              when=at)
+                for tower in sorted(self._towers)
+                for px in group_pixels(self.phase - 1)]
+
+    def _on_phase(self, phase: int, at: float) -> list:
+        """The operator's Phase N button: the new phase painted at once, on
+        the running beat grid (never restarted). The groups below it solid,
+        its own group at the blink under way (black between blinks), and
+        the groups above cleared."""
+        self.phase = phase
+        towers = sorted(self._towers)
+        out = [PixelFlashCue(tower, px, WHITE, HOLD_S, when=at)
+               for tower in towers
+               for g in range(phase - 1)
+               for px in group_pixels(g)]
+        blinking = (self._blink_start is not None
+                    and at - self._blink_start < BLINK_ON_S)
+        if blinking:
+            self._blink_sent = -1          # resend the level on the new group
+        dark = range(phase if blinking else phase - 1, GROUPS)
+        out.extend(PixelFlashCue(tower, px, BLACK, CLEAR_S, when=at)
+                   for tower in towers
+                   for g in dark
+                   for px in group_pixels(g))
+        out.extend(self._blink_step(at))
         return out
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
-        """The tapping shroom flashes cyan, and PROGRESS_PER_TAP more per
-        tap in the gesture shows on every Tower: the lights that moved, or
-        the whole bar on a Tower that has not seen one yet. A tap from a
-        non-player does nothing; once the bar is full it only flashes."""
+        """The tapping shroom flashes purple. A tap from a non-player does
+        nothing."""
         if dev not in self._players:
             return []
-        self._flashes[dev] = (at, 127)
-        out = [LightCue(dev, 0xB0, FLASH_CC, 127, when=at)]
-        if self.progress >= PROGRESS_MAX:
-            return out
-        before = self.progress
-        self.progress = min(before + PROGRESS_PER_TAP * tap_count(args),
-                            PROGRESS_MAX)
-        for tower in sorted(self._towers):
-            full = tower in self._unsynced
-            for k in range(TOWER_LIGHTS):
-                value = light_value(self.progress, k)
-                if full or value != light_value(before, k):
-                    out.append(LightCue(tower, 0xB0, LIGHT_CC_BASE + k,
-                                        value, when=at))
-        self._unsynced.clear()
-        return out
+        self._flashes[dev] = (at, 255)
+        return flash_cues(dev, 255, 0.0, at)

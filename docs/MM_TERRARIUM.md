@@ -2376,29 +2376,32 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   (*Audio*) and the Bit returns its cues from `fires(at)` and the verb
   handlers. Assets are four `.mid` files under `[assets]`.
 - **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a
-  shared progress bar on every Tower. It sorts devices by id with
-  `admits`: `ie<N>` takes `player`, `devtower<N>` (instrument `devtower`) takes `tower` (both
-  unscored, uncapped JAM roles), anything else gets solo. A Tower is a
-  plain device, not a Room fixture: no Arm, no Room node, a 32 px player
-  frame (the `devtower` instrument declares `pixels = 32`; a player
-  device's frame is its carried instrument's pixels, never under 12,
+  four-phase white build on every Tower, switched from the Console. It
+  sorts devices by id with `admits`: `ie<N>` takes `player`,
+  `devtower<N>` (instrument `devtower`) takes `tower` (both unscored,
+  uncapped JAM roles), anything else gets solo. A Tower is a plain
+  device, not a Room fixture: no Arm, no Room node, a 32 px player frame
+  (the `devtower` instrument declares `pixels = 32`; a player device's
+  frame is its carried instrument's pixels, never under 12,
   `control/role_config.py`'s `player_pixels`, so every other device keeps
-  12). Every tap from a player adds 1% (a gesture's `count` taps add
-  that many) to one figure all Towers show on all 32 LEDs as 16 lights of
-  two LEDs each, bottom first, 6.25% a light; at 100% the bar holds full.
-  The `tower` role declares `Role.zones` `p0`..`p15`, two pixels each
-  (`p<k>` is pixels 2k and 2k+1), which `DeviceLinkAgent` builds into a
-  surface as wide as the device's frame (`harness/device_bridge.py`'s
-  `zoned_capability`, which pads any unnamed pixels with `unzoned<start>`
-  zones so the zones tile the frame, and refuses a zone past the device's
-  pixels, so a Tower that hellos without the `devtower` instrument gets no
-  light session), so each light is a zone bound to an aurora held
-  dark whose level rides its own cc lane (20 + k). A tap sends each Tower
-  a `LightCue` for each light it moved, or the whole bar to a Tower that
-  joined since the last tap. Its one `Bit.actions()` entry, `reset`
-  ("Reset progress" on the Console's Bit status card, two-tap confirm),
-  puts progress back to 0 and sends every Tower all 16 lights, so the
-  LEDs are rewritten whatever they last showed. `Bit.actions()` is
+  12). The 32 LEDs are four groups of four two-LED lights, bottom first
+  (group g is pixels 8g..8g+7). In phase N group N blinks white at 130
+  BPM, lit the first half of each beat with a 60 ms fade in and out
+  (stepped each tick in `fires()`), over the groups below it held
+  solid white; the groups above are dark. The aurora has no white, so the
+  `tower` role's light is one aurora held dark and `fires()` paints the
+  white over it each beat with `PixelFlashCue` (a blinking pixel for half
+  a beat, a solid one for a little over a beat, so the next refresh lands
+  first); a late Tower is picked up on the next beat. Its four
+  `Bit.actions()` entries, `phase1`..`phase4` ("Phase 1".."Phase 4" on the
+  Console's Bit status card, one click, no confirm), switch phase at once
+  on the running beat: the groups below go solid, the phase's own group
+  picks up the blink under way (dark between blinks), and the groups above
+  are painted black for 50 ms. The 130 BPM grid runs unbroken for the whole
+  session; a switch never restarts it. It starts in phase 1. Every tap from a
+  player flashes that shroom purple on every LED, full to dark in 0.2 s, painted with
+  PixelFlashCue over its dark aurora (the aurora's own level glides, which
+  stretched the fade to about a second); taps do not move the Towers. `Bit.actions()` is
   `{name: (label, handler(at))}`; the Console sends `bit_action`, and
   `GameServer.run_action` (SETUP/RUNNING only) dispatches the handler's
   cues, or surfaces its str refusal.

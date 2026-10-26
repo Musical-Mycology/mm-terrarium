@@ -522,10 +522,8 @@ function fmt(v) {
 }
 
 // The Bit's operator actions (Bit.actions), one button each under the
-// status grid. Every action changes the Bit's own state, so each takes the
-// shared two-tap confirm before it sends. Rule 1: the row is rebuilt only
-// when the action list changes, never on a status tick, so a tap that
-// moves the status mid-arm does not drop the armed state.
+// status grid. One click sends; there is no confirm. Rule 1: the row is
+// rebuilt only when the action list changes, never on a status tick.
 let statusGrid = null;
 let actionRow = null;
 let actionsSignature = null;
@@ -535,9 +533,7 @@ function buildActionRow(actions) {
   for (const { name, label } of actions) {
     const btn = mk("button", "btn small", label);
     btn.type = "button";
-    wire.reserveConfirmWidth(btn, "Confirm?");
-    btn.onclick = () => wire.confirmTap(btn, { armLabel: "Confirm?" },
-      () => wire.send("bit_action", { name }, btn));
+    btn.onclick = () => wire.send("bit_action", { name }, btn);
     row.appendChild(btn);
   }
   return row;

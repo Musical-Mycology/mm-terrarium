@@ -160,9 +160,8 @@ const PLAYER_ROLE = {
   send({ event: "bit_status", status: {} });
   assert.strictEqual(card.hidden, true);
 
-  // a Bit's operator actions render as buttons on the status card; each
-  // sends bit_action only on the confirming second tap, and a status tick
-  // landing mid-arm keeps the same, still-armed button
+  // a Bit's operator actions render as buttons on the status card; one
+  // click sends bit_action, and a status tick keeps the same button
   send({ event: "bit_status", status: { progress: 40 },
          actions: [{ name: "reset", label: "Reset progress" }] });
   assert.strictEqual(card.hidden, false);
@@ -178,14 +177,12 @@ const PLAYER_ROLE = {
   assert.ok(resetBtn, "the action renders as a button");
   sock.sent = [];
   resetBtn.onclick();
-  assert.strictEqual(sock.sent.length, 0, "first tap only arms");
+  assert.deepStrictEqual(sock.sent,
+                         [{ command: "bit_action", name: "reset" }]);
   send({ event: "bit_status", status: { progress: 41 },
          actions: [{ name: "reset", label: "Reset progress" }] });
   assert.ok(card.innerHTML.includes("41"));
-  assert.strictEqual(findText(card, "Confirm?"), resetBtn, "armed button survives a status tick");
-  resetBtn.onclick();
-  assert.deepStrictEqual(sock.sent,
-                         [{ command: "bit_action", name: "reset" }]);
+  assert.strictEqual(findText(card, "Reset progress"), resetBtn, "the button survives a status tick");
   send({ event: "bit_status", status: {}, actions: [] });
   assert.strictEqual(card.hidden, true);
 

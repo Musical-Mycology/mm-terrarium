@@ -1,12 +1,12 @@
-"""MinigameBit's progress bar, rendered the way a live run renders it.
+"""MinigameBit's four phases, rendered the way a live run renders it.
 
 test_minigame_bit.py asserts on the cues the Bit reports. This asserts on
 the bytes a Tower displays: a real GameServer, a real DeviceLinkAgent and
 real luxaeterna LightSessions, ticked at 44 Hz on a hand-advanced clock (the
 harness pattern of tests/test_metronome_bit_live_frames.py). The Tower is a
 plain devtower<N> device carrying the devtower instrument and holding the
-tower role, so its frame is its own 32 px player frame, the bar on all 32
-LEDs two to a light, while a player's stays the 12 px frame.
+tower role, so its frame is its own 32 px player frame, four groups of
+eight LEDs, while a player's stays the 12 px frame.
 """
 
 import pytest
@@ -15,7 +15,7 @@ pytest.importorskip("luxaeterna")
 
 from pathlib import Path
 
-from bits.minigame.minigame_bit import MinigameBit
+from bits.minigame.minigame_bit import BEAT_S, WHITE, MinigameBit
 from control.catalog import load_catalog
 from control.engine import GameServer
 from devicelink.contract import HELLO_INTERVAL_S
@@ -24,13 +24,12 @@ from devicelink.agent import DeviceLinkAgent
 from tests.test_devicelink_agent import FakeServer, _Clock
 
 ROOT = Path(__file__).resolve().parents[1]
-PROGRESS_LIGHTS = 16
 TOWER_PIXELS = 32
 PLAYER_PIXELS = 12
+GROUP = 8
 
 HORIZON = 0.060
 TICK = 1.0 / 44.0
-TAP = ["ie1", 0.0, 80.0, 1]
 # (client, dev, the instrument its hello declares carrying)
 DEVICES = (("c1", "devtower1", "devtower"), ("c2", "ie1", "testshroom"))
 
@@ -54,7 +53,6 @@ class _Rig:
             self._hello(client, dev, instrument)
         self.gs.run()
         self.agent.poll()
-        assert self.gs.bit.status()["players"] == ["ie1"]
         assert self.gs.bit.status()["towers"] == ["devtower1"]
         self._seen = 0
         self._last_hello = self.clk()
@@ -88,67 +86,71 @@ class _Rig:
                                                bytes(msg["args"][0])))
             self._seen = len(self.server.sent)
 
-    def tap(self, n=1):
-        for _ in range(n):
-            self.server.deliver("c2", "/game/tap", "sffi", TAP,
-                                timestamp=self.clk())
-            self.agent.poll()
+    def groups_over(self, seconds):
+        """Run `seconds` and report, per group, the set of its states seen
+        on the frames sent: 'white' (all eight LEDs full white), 'dim'
+        (all eight the same partial white, mid-fade), 'dark', or 'mixed'."""
+        start = len(self.frames)
+        self.run(seconds)
+        seen = [set() for _ in range(4)]
+        for _when, frame in self.frames[start:]:
+            px = [tuple(frame[i:i + 4]) for i in range(0, len(frame), 4)]
+            assert len(px) == TOWER_PIXELS
+            for g in range(4):
+                group = px[g * GROUP:(g + 1) * GROUP]
+                if all(p == WHITE for p in group):
+                    seen[g].add("white")
+                elif all(max(p) == 0 for p in group):
+                    seen[g].add("dark")
+                elif len(set(group)) == 1 and group[0][:3] == (0, 0, 0):
+                    seen[g].add("dim")
+                else:
+                    seen[g].add("mixed")
+        return seen
 
-    def pixels(self):
-        """Each pixel's brightness (its brightest channel) on the newest
-        frame."""
-        frame = self.frames[-1][1]
-        px = [frame[i:i + 4] for i in range(0, len(frame), 4)]
-        assert len(px) == TOWER_PIXELS
-        return [max(p) for p in px]
 
-    def lights(self):
-        """Each light's brightness: its two LEDs, which always match."""
-        px = self.pixels()
-        pairs = [px[2 * k:2 * k + 2] for k in range(PROGRESS_LIGHTS)]
-        assert all(a == b for a, b in pairs), pairs
-        return [a for a, _b in pairs]
-
-
-def test_the_bar_starts_dark():
+@pytest.mark.parametrize("phase", [1, 2, 3, 4])
+def test_each_phase_blinks_one_group_over_solid_ones(phase):
     rig = _Rig()
     rig.run(3.0)                   # clear the ~1.5 s role signature
-    assert rig.pixels() == [0] * TOWER_PIXELS
+    assert rig.gs.run_action(f"phase{phase}") is None
+    rig.run(BEAT_S)                # let the switch settle
+    seen = rig.groups_over(4 * BEAT_S)
+    for g in range(4):
+        if g < phase - 1:
+            assert seen[g] == {"white"}, (g, seen)
+        elif g == phase - 1:
+            assert seen[g] == {"white", "dim", "dark"}, (g, seen)
+        else:
+            assert seen[g] == {"dark"}, (g, seen)
 
 
-def test_taps_fill_the_bar_bottom_first_two_leds_a_light():
-    rig = _Rig()
-    rig.run(3.0)                   # clear the ~1.5 s role signature
-    rig.tap(35)                    # 35%: lights 0..4 full, light 5 at 0.6
-    rig.run(1.0)
-    lights = rig.lights()
-    assert lights[0] > 200
-    assert lights[:5] == [lights[0]] * 5
-    assert lights[5] == pytest.approx(lights[0] * 0.6, abs=3)
-    assert lights[6:] == [0] * (PROGRESS_LIGHTS - 6)
-
-
-def test_the_full_bar_lights_all_32_leds():
+def test_the_blink_is_on_the_130_bpm_beat():
     rig = _Rig()
     rig.run(3.0)
-    rig.tap(100)
-    rig.run(1.0)
-    px = rig.pixels()
-    assert px[0] > 200 and px == [px[0]] * TOWER_PIXELS
+    start = len(rig.frames)
+    rig.run(8 * BEAT_S)
+    ons = []
+    was_lit = False
+    for when, frame in rig.frames[start:]:
+        lit = max(frame[0:4]) > 0
+        if lit and not was_lit:
+            ons.append(when)
+        was_lit = lit
+    gaps = [b - a for a, b in zip(ons, ons[1:])]
+    assert len(gaps) >= 6
+    assert all(g == pytest.approx(BEAT_S, abs=TICK + 0.001) for g in gaps)
 
 
-def test_one_tap_lights_0_16_of_the_first_light():
+def test_going_back_to_phase_one_darkens_the_upper_groups():
     rig = _Rig()
-    rig.run(3.0)                   # clear the ~1.5 s role signature
-    rig.tap(7)                     # 7%: light 0 full
+    rig.run(3.0)
+    rig.gs.run_action("phase4")
     rig.run(1.0)
-    full = rig.lights()[0]
-    assert full > 200
-    rig2 = _Rig()
-    rig2.run(3.0)
-    rig2.tap(1)
-    rig2.run(1.0)
-    assert rig2.lights()[0] == pytest.approx(full * 0.16, abs=2)
+    rig.gs.run_action("phase1")
+    rig.run(0.1)                   # well inside one beat
+    seen = rig.groups_over(4 * BEAT_S)
+    assert seen[1:] == [{"dark"}] * 3
 
 
 def test_the_tower_gets_a_32_px_frame_and_a_player_keeps_12():
@@ -161,21 +163,5 @@ def test_the_tower_gets_a_32_px_frame_and_a_player_keeps_12():
 def test_a_player_never_gets_the_tower_surface():
     rig = _Rig()
     assert rig.agent.bridges["ie1"].session.cap.pixel_count == PLAYER_PIXELS
-    cap = rig.agent.bridges["devtower1"].session.cap
-    assert cap.pixel_count == TOWER_PIXELS
-    zones = {z.name: (z.start, z.count) for z in cap.zones}
-    assert all(zones[f"p{k}"] == (2 * k, 2) for k in range(PROGRESS_LIGHTS))
-
-
-def test_reset_darkens_the_whole_bar_on_the_tower():
-    rig = _Rig()
-    rig.run(3.0)
-    rig.tap(50)
-    rig.run(1.0)
-    assert rig.lights()[0] > 200
-    assert rig.gs.run_action("reset") is None
-    rig.run(1.0)
-    assert rig.pixels() == [0] * TOWER_PIXELS
-    rig.tap(7)                     # and fills again from the bottom
-    rig.run(1.0)
-    assert rig.lights()[0] > 200 and rig.lights()[1:] == [0] * 15
+    assert rig.agent.bridges["devtower1"].session.cap.pixel_count == \
+        TOWER_PIXELS
