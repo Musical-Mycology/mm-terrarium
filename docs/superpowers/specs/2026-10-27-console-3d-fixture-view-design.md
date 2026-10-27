@@ -202,8 +202,7 @@ fixtures respond. The motivating run is Deux Ara Drop on MIDITEST.
    which thread(s) call `data()` and use a lock if more than one does.
 9. **Fallback:** a fixture whose instrument has no model, whose model fails
    to load, or whose source model exceeds the artist budget
-   (`docs/instrument-model-guide.md` in mm-tuneshroom: 300k triangles,
-   20 MB) shows the flat strip, with a one-line reason on the tile. A
+   (`docs/instrument-model-guide.md`: 300,000 triangles, 20 MB) shows the flat strip, with a one-line reason on the tile. A
    browser without WebGL2 shows strips everywhere. (A layout-count mismatch
    cannot reach the Console; see section 7.)
 8. **LED rendering:** an unlit LED is a dim outlined point (matching the
