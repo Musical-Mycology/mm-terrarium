@@ -135,3 +135,110 @@ def test_a_traversal_attempt_is_refused():
             assert exc.code == 404
     finally:
         server.stop()
+
+
+# --- vendored files and the fixture route provider -------------------------
+def _get(server, path):
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=2)
+    try:
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        return resp.status, resp.read(), resp
+    finally:
+        conn.close()
+
+
+def _get_status(server, path):
+    return _get(server, path)[0]
+
+
+def _static_tree(tmp_path):
+    static = tmp_path / "static"
+    for rel, text in [("index.html", "<title>x</title>"),
+                      ("vendor/three/addons/utils/a.js", "addons"),
+                      ("vendor/three/build/a.js", "build"),
+                      ("fonts/X.ttf", "ttf")]:
+        f = static / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+    return static
+
+
+def _started(tmp_path):
+    server = ConsoleServer(port=0, static_dir=_static_tree(tmp_path))
+    server.start()
+    return server
+
+
+def test_vendor_files_are_served_by_exact_relative_path(tmp_path):
+    server = _started(tmp_path)
+    try:
+        assert _get(server, "/vendor/three/addons/utils/a.js")[1] == b"addons"
+        assert _get(server, "/vendor/three/build/a.js")[1] == b"build"
+    finally:
+        server.stop()
+
+
+def test_vendor_files_are_not_reachable_by_basename(tmp_path):
+    server = _started(tmp_path)
+    try:
+        assert _get_status(server, "/a.js") == 404
+    finally:
+        server.stop()
+
+
+def test_vendor_traversal_and_encoded_traversal_are_404(tmp_path):
+    server = _started(tmp_path)
+    try:
+        for p in ["/vendor/../server.py", "/vendor/three/../../agent.py",
+                  "/vendor/..%2fserver.py", "/vendor/%2e%2e/server.py"]:
+            assert _get_status(server, p) == 404
+    finally:
+        server.stop()
+
+
+def test_top_level_basename_rule_is_unchanged(tmp_path):
+    server = _started(tmp_path)
+    try:
+        assert _get_status(server, "/index.html") == 200
+        status, body, resp = _get(server, "/fonts/X.ttf")
+        assert (status, body) == (200, b"ttf")
+        assert resp.getheader("Content-Type") == "font/ttf"
+    finally:
+        server.stop()
+
+
+def test_route_provider_answers_unknown_paths(tmp_path):
+    server = _started(tmp_path)
+    seen = []
+
+    def provider(p):
+        seen.append(p)
+        if p == "/fixture-layout/tower.json":
+            return b"{}", "application/json", {"Cache-Control": "no-store"}
+        return None
+
+    server.set_route_provider(provider)
+    try:
+        status, body, resp = _get(server, "/fixture-layout/tower.json?sha=1")
+        assert (status, body) == (200, b"{}")
+        assert resp.getheader("Content-Type") == "application/json"
+        assert resp.getheader("Cache-Control") == "no-store"
+        assert seen == ["/fixture-layout/tower.json"]   # query stripped
+        assert _get_status(server, "/fixture-layout/x.json") == 404
+    finally:
+        server.stop()
+
+
+def test_a_raising_route_provider_is_a_404(tmp_path, caplog):
+    server = _started(tmp_path)
+
+    def boom(p):
+        raise RuntimeError("nope")
+
+    server.set_route_provider(boom)
+    try:
+        assert _get_status(server, "/fixture-model/tower.glb") == 404
+    finally:
+        server.stop()
