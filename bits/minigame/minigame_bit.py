@@ -79,7 +79,7 @@ GROUP_PIXELS = LIGHTS_PER_GROUP * PIXELS_PER_LIGHT   # 8
 RESPONDERS = 4                  # RGB responder lights, lit in order each beat
 RESPONDER_PIXELS = 24           # LEDs a responder light
 RESPONDER_FADE_S = 0.5          # a responder's fade, full to dark
-RESPONDER_RGB = (255, 214, 160)  # beige, warm enough to read as not white
+RESPONDER_RGB = (64, 48, 32)    # half-bright beige; blue kept low so it never reads white
 TOWER_PIXELS = BAR_PIXELS + RESPONDERS * RESPONDER_PIXELS   # 128
 
 BPM = 130.0
