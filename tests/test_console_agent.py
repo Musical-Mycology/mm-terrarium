@@ -2606,3 +2606,246 @@ def test_gesture_refuses_fixture_and_admin():
     errors = [m for _c, m in srv.sent if m.get("event") == "error"]
     assert len(errors) == 3
     assert calls == []
+
+
+def _modelled_profile(tmp_path):
+    from control.instrument import Instrument
+    from control.model_layout import PixelLayout
+    glb = tmp_path / "tower.glb"
+    glb.write_bytes(b"glb")
+    inst = Instrument(
+        name="tower", pixels=2, model_sha256="cd" * 32, model_path=str(glb),
+        model_bytes=3, model_triangles=1,
+        layout=tuple(PixelLayout(i, i, 0, 0, "small", None) for i in range(2)))
+    return RoomProfile(surface_id="room_model", fixtures=(
+        RoomFixture(name="tower", blocks=(RoomBlock("tower", 0, 2),),
+                    zones=(RoomZone("all", 0, 2),), instrument=inst),))
+
+
+class _RouteServer(FakeConsoleServer):
+    provider = None
+
+    def set_route_provider(self, provider):
+        self.provider = provider
+
+
+def test_model_route_404s_after_room_change(tmp_path):
+    gs = GameServer({"TestBit": TestBit}, room_binding=RoomBindingRegistry())
+    gs.room = Room(name="TEST", profile=_modelled_profile(tmp_path),
+                   node_id="ROOM_TEST_NODE")
+    srv = _RouteServer()
+    agent = ConsoleAgent(gs, srv)
+    agent.poll()
+    assert srv.provider("/fixture-model/tower.glb")[0] == b"glb"
+    gs.room = None
+    agent.poll()
+    assert srv.provider("/fixture-model/tower.glb") is None
+
+
+def test_fixture_models_rebuild_only_on_room_identity_change(tmp_path):
+    gs = GameServer({"TestBit": TestBit}, room_binding=RoomBindingRegistry())
+    profile = _modelled_profile(tmp_path)
+    gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
+    live = {"tower": {74: 1}}
+    agent = ConsoleAgent(gs, _RouteServer(), room_controllers=lambda: live)
+    first = agent._fixture_models
+    assert not agent._room_identity_changed()
+    live["tower"][74] = 99          # the room payload changes on live values
+    agent.poll()
+    assert agent._fixture_models is first
+    gs.room = Room(name="TEST", profile=_modelled_profile(tmp_path),
+                   node_id="ROOM_TEST_NODE")
+    assert agent._room_identity_changed()
+    agent.poll()
+    assert agent._fixture_models is not first
+    assert not agent._room_identity_changed()
+
+
+def test_agent_tolerates_server_without_route_provider():
+    ConsoleAgent(GameServer({"TestBit": TestBit}), FakeConsoleServer())
+
+
+def _room_frames(messages):
+    return [m for m in messages if m.get("event") == "room_frame"]
+
+
+def test_room_frame_broadcast_is_stamped_when_rendered():
+    gs, srv, agent = _room_console()
+    clock = FakeClock(5.0)
+    agent._clock = clock
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    clock.now = 5.2                    # the broadcast happens later, at poll
+    agent.poll()
+    frames = _room_frames(srv.broadcasts)
+    assert len(frames) == 1
+    assert frames[0]["t"] == 5.0
+
+
+def test_new_client_gets_latest_frame_per_fixture():
+    gs, srv, agent = _room_console()
+    clock = FakeClock(5.0)
+    agent._clock = clock
+    srv.connect("c1")
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    clock.now = 9.0
+    srv.connect("c2")
+    agent.poll()
+    sent = [m for c, m in srv.sent if c == "c2"]
+    events = [m["event"] for m in sent]
+    assert events[0] == "snapshot"
+    frames = _room_frames(sent)
+    assert len(frames) == 1
+    assert frames[0]["fixture"] == "main"
+    assert frames[0]["channels"] == [1, 2, 3]
+    assert frames[0]["t"] == 5.0
+    assert events.index("room_frame") > events.index("snapshot")
+
+
+def _switch_room(gs):
+    gs.room = make_room()
+    gs.room.name = "OTHER"
+
+
+def test_old_room_frame_is_not_replayed_after_a_room_switch():
+    gs, srv, agent = _room_console()
+    agent._clock = FakeClock(5.0)
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    _switch_room(gs)
+    agent.poll()
+    srv.connect("late")
+    agent.poll()
+    assert _room_frames([m for c, m in srv.sent if c == "late"]) == []
+
+
+def test_frame_rendered_for_new_room_before_poll_is_replayed():
+    gs, srv, agent = _room_console()
+    agent._clock = FakeClock(5.0)
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    _switch_room(gs)
+    agent.on_room_frame("main", bytes([7, 8, 9]))   # before poll sees it
+    agent.poll()
+    srv.connect("late")
+    agent.poll()
+    frames = _room_frames([m for c, m in srv.sent if c == "late"])
+    assert [f["channels"] for f in frames] == [[7, 8, 9]]
+
+
+def test_live_controller_change_does_not_drop_latest_frames():
+    gs, srv, agent = _room_console()
+    agent._clock = FakeClock(5.0)
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    agent._live_controllers["main"][74] = 12   # payload changes, Room does not
+    agent.poll()
+    assert "main" in agent._latest_room_frames
+    srv.connect("late")
+    agent.poll()
+    assert len(_room_frames([m for c, m in srv.sent if c == "late"])) == 1
+
+
+def _seen(n):
+    from control.functions import GestureSeen
+    return GestureSeen(dev="ie1", verb="tap", received=float(n),
+                       at=n + 0.06, refused=None)
+
+
+def _gestures_events(srv):
+    return [b for b in srv.broadcasts if b["event"] == "gestures"]
+
+
+def test_console_broadcasts_buffered_gestures_on_poll():
+    gs, srv, agent = _server_with_agent()
+    agent.on_gesture(_seen(1))
+    agent.poll()
+    assert _gestures_events(srv) == [{"event": "gestures", "items": [
+        {"dev": "ie1", "verb": "tap", "t": 1.0, "at": 1.06,
+         "refused": None}]}]
+    agent.poll()
+    assert len(_gestures_events(srv)) == 1
+
+
+def test_console_gesture_buffer_is_bounded():
+    gs, srv, agent = _server_with_agent()
+    for n in range(1000):
+        agent.on_gesture(_seen(n))
+    agent.poll()
+    got = _gestures_events(srv)
+    assert len(got) == 1
+    items = got[0]["items"]
+    assert len(items) == 256
+    assert items[-1]["t"] == 999.0
+    assert items[0]["t"] == 744.0
+
+
+def test_console_gestures_are_batched_per_interval():
+    from console.agent import ROOM_FRAME_INTERVAL
+    from control.functions import GestureSeen
+    gs, srv, agent = _server_with_agent()
+    clock = FakeClock(100.0)
+    agent._clock = clock
+    for n in range(100):
+        agent.on_gesture(GestureSeen(dev="d1", verb="tilt",
+                                     received=float(n), at=n + 0.06,
+                                     refused=None))
+        if n in (10, 50, 90):
+            agent.on_gesture(_seen(n))     # a tap, discrete
+    agent.poll()
+    got = _gestures_events(srv)
+    assert len(got) == 1
+    items = got[0]["items"]
+    assert [i["verb"] for i in items].count("tilt") == 1
+    tilt = [i for i in items if i["verb"] == "tilt"][0]
+    assert tilt["t"] == 99.0, "the latest tilt wins"
+    taps = [i for i in items if i["verb"] == "tap"]
+    assert [i["t"] for i in taps] == [10.0, 50.0, 90.0], "received order"
+    # a second interval with nothing new broadcasts nothing
+    clock.now += ROOM_FRAME_INTERVAL * 2
+    agent.poll()
+    assert len(_gestures_events(srv)) == 1
+
+
+def test_stream_gestures_coalesce_per_device_and_verb():
+    from control.functions import GestureSeen
+    gs, srv, agent = _server_with_agent()
+    for dev, t in (("a", 1.0), ("b", 2.0), ("a", 3.0)):
+        agent.on_gesture(GestureSeen(dev=dev, verb="tilt", received=t,
+                                     at=t, refused=None))
+    agent.poll()
+    items = _gestures_events(srv)[0]["items"]
+    assert [(i["dev"], i["t"]) for i in items] == [("b", 2.0), ("a", 3.0)]
+
+
+def test_gestures_wait_for_the_interval_then_go_out():
+    from console.agent import ROOM_FRAME_INTERVAL
+    gs, srv, agent = _server_with_agent()
+    clock = FakeClock(100.0)
+    agent._clock = clock
+    agent.on_gesture(_seen(1))
+    agent.poll()
+    agent.on_gesture(_seen(2))
+    clock.now += ROOM_FRAME_INTERVAL / 2
+    agent.poll()
+    assert len(_gestures_events(srv)) == 1, "held back inside the interval"
+    clock.now += ROOM_FRAME_INTERVAL
+    agent.poll()
+    got = _gestures_events(srv)
+    assert len(got) == 2 and got[1]["items"][0]["t"] == 2.0
+
+
+def test_frame_tagged_under_a_replaced_profile_is_not_replayed():
+    gs, srv, agent = _room_console()
+    agent._clock = FakeClock(5.0)
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    import dataclasses
+    # a new profile object (equal in value) under the same Room name
+    gs.room = dataclasses.replace(
+        gs.room, profile=dataclasses.replace(gs.room.profile))
+    assert gs.room.profile is not agent._latest_room_frames["main"][2][1]
+    agent.poll()
+    srv.connect("late")
+    agent.poll()
+    assert _room_frames([m for c, m in srv.sent if c == "late"]) == []

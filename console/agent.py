@@ -5,10 +5,12 @@ object, see console/server.py), so it is fully testable offline against an
 in-process fake. Driven from the engine tick loop via poll().
 """
 
+import collections
 import logging
 import time
 
 from console import protocol
+from console.fixture_models import build_fixture_models, fixture_route
 from control.bit_config import ManifestError
 from control.cues import fixture_dev
 from control.engine import BitLoadError, GameServer, InvalidTransition
@@ -32,6 +34,16 @@ logger = logging.getLogger(__name__)
 # DROPPED rather than queued. Boundary rule 2: nothing here may become
 # something gameplay waits on.
 ROOM_FRAME_INTERVAL = 0.1
+
+# Most gestures held between two polls. Older ones are dropped: the Console's
+# gesture ticker is a monitor, never something gameplay waits on.
+GESTURE_BUFFER = 256
+
+# Continuous verbs (a device streams them at ~20 Hz). Within one broadcast
+# batch only the latest per (dev, verb) is kept; every other verb is a
+# discrete event and is always kept. tilt is the only streaming verb in the
+# wire vocabulary (devicelink/contract.py: tap, tilt, shake, hold, swing).
+STREAM_GESTURE_VERBS = frozenset({"tilt"})
 
 # Same decimation idea as ROOM_FRAME_INTERVAL, applied to a live design-bench
 # session: the bench can tick faster than any panel needs to render.
@@ -126,6 +138,10 @@ class ConsoleAgent:
         self._last_surface_instruments: dict | None = None
         self._last_builtins: dict | None = None
         self._clock = clock
+        # Gestures seen by the engine since the last poll. A bounded deque:
+        # append is thread-safe and the oldest entry falls off when full, so
+        # whichever thread calls GameServer.data() never blocks or grows it.
+        self._pending_gestures = collections.deque(maxlen=GESTURE_BUFFER)
         # The latest not-yet-broadcast frame per fixture NAME. Each
         # fixture's entry is overwritten, not queued: see
         # _broadcast_room_frame and ROOM_FRAME_INTERVAL above. Keyed per
@@ -133,8 +149,27 @@ class ConsoleAgent:
         # on_room_frame for more than one fixture within one tick, and a
         # single slot silently starves every fixture but the last one to
         # call in that tick.
-        self._pending_room_frames: dict[str, bytes] = {}
+        self._pending_room_frames: dict[str, tuple[bytes, float]] = {}
+        # The most recent frame per fixture with its render time and the
+        # Room key current when it was rendered, kept after broadcast so a
+        # client that connects later can be shown the current state. Only
+        # entries matching the current Room key are replayed (old-Room
+        # entries are dropped lazily on replay), so a frame rendered for a
+        # new Room before poll() noticed the switch is still replayed.
+        self._latest_room_frames: dict[str, tuple[bytes, float, tuple | None]] = {}
         self._last_room_frame_at = 0.0
+        self._last_gesture_at = float("-inf")
+        # The 3D fixture view's per-fixture layout + model, served by the
+        # HTTP thread's route provider. The dict is REPLACED whole, never
+        # mutated, so the HTTP thread always reads one consistent map.
+        # `_models_room_identity` is the (room name, profile) the dict was
+        # built for; see _room_identity_changed.
+        self._fixture_models: dict = {}
+        self._models_room_identity: tuple | None = None
+        if hasattr(server, "set_route_provider"):
+            server.set_route_provider(
+                lambda path: fixture_route(self._fixture_models, path))
+        self._rebuild_fixture_models()
         game_server.add_observer(self)
         if terrarium is not None:
             terrarium.add_observer(self)
@@ -151,6 +186,13 @@ class ConsoleAgent:
             if self.registry is not None:
                 self.server.send(client, protocol.bits_listed_event(
                     self.registry.list_view(), self.registry.errors_view()))
+            key = self._room_key()
+            self._latest_room_frames = {
+                f: e for f, e in self._latest_room_frames.items()
+                if self._same_room(e[2], key)}
+            for fixture, (frame, t, _key) in self._latest_room_frames.items():
+                self.server.send(
+                    client, protocol.room_frame_event(fixture, frame, t))
         for client, msg in self.server.drain_inbound():
             error = self._handle_command(msg)
             if error is not None:
@@ -158,8 +200,30 @@ class ConsoleAgent:
         self._broadcast_status_if_changed()
         self._broadcast_room_if_changed()
         self._broadcast_room_frame()
+        self._broadcast_gestures()
         self._broadcast_functions_if_changed()
         self._tick_bench()
+
+    def _broadcast_gestures(self) -> None:
+        """At most one `gestures` event per ROOM_FRAME_INTERVAL. Stream verbs
+        are coalesced latest-wins per (dev, verb); discrete verbs all stay,
+        in received order."""
+        if not self._pending_gestures:
+            return
+        now = self._clock()
+        if now - self._last_gesture_at < ROOM_FRAME_INTERVAL:
+            return
+        self._last_gesture_at = now
+        records = list(self._pending_gestures)
+        self._pending_gestures.clear()
+        last_stream = {}
+        for i, record in enumerate(records):
+            if record.verb in STREAM_GESTURE_VERBS:
+                last_stream[(record.dev, record.verb)] = i
+        kept = [r for i, r in enumerate(records)
+                if r.verb not in STREAM_GESTURE_VERBS
+                or last_stream[(r.dev, r.verb)] == i]
+        self.server.broadcast(protocol.gestures_event(kept))
 
     def _tick_bench(self) -> None:
         if self._bench is None:
@@ -786,7 +850,44 @@ class ConsoleAgent:
         return room_view(gs.room, profile, role, controllers, urls, muted,
                          self._artnet_fixtures(gs.room.name))
 
+    def _room_identity(self) -> tuple | None:
+        room = self.game_server.room
+        return None if room is None else (room.name, room.profile)
+
+    def _room_key(self) -> tuple | None:
+        """The Room identity (name, profile object) used to tag frames. It
+        holds the profile itself, so its address cannot be reused while a
+        tagged frame is alive; compare with _same_room."""
+        return self._room_identity()
+
+    @staticmethod
+    def _same_room(a: tuple | None, b: tuple | None) -> bool:
+        if a is None or b is None:
+            return a is b
+        return a[0] == b[0] and a[1] is b[1]
+
+    def _room_identity_changed(self) -> bool:
+        """True when the loaded Room differs from the one the fixture models
+        were last built for: a different name or a different profile object
+        (compared by identity), or a Room appearing or disappearing. Unlike
+        the room payload dict, this does not change on live controller
+        values. Pure: it records nothing, so it is safe to ask repeatedly;
+        _rebuild_fixture_models is what records the new identity."""
+        current = self._room_identity()
+        last = self._models_room_identity
+        if current is None or last is None:
+            return current is not last
+        return current[0] != last[0] or current[1] is not last[1]
+
+    def _rebuild_fixture_models(self) -> None:
+        identity = self._room_identity()
+        self._fixture_models = (
+            {} if identity is None else build_fixture_models(identity[1]))
+        self._models_room_identity = identity
+
     def _broadcast_room_if_changed(self) -> None:
+        if self._room_identity_changed():
+            self._rebuild_fixture_models()
         room = self._current_room()
         if room != self._last_room:
             self._last_room = room
@@ -799,7 +900,9 @@ class ConsoleAgent:
         still renders and still gets a Console strip). Stores the LATEST
         frame per fixture; anything not yet broadcast for that fixture is
         overwritten, never queued."""
-        self._pending_room_frames[fixture] = frame
+        t = self._clock()
+        self._pending_room_frames[fixture] = (frame, t)
+        self._latest_room_frames[fixture] = (frame, t, self._room_key())
 
     def _broadcast_room_frame(self) -> None:
         if not self._pending_room_frames:
@@ -809,8 +912,8 @@ class ConsoleAgent:
             return
         pending, self._pending_room_frames = self._pending_room_frames, {}
         self._last_room_frame_at = now
-        for fixture, frame in pending.items():
-            self.server.broadcast(protocol.room_frame_event(fixture, frame))
+        for fixture, (frame, t) in pending.items():
+            self.server.broadcast(protocol.room_frame_event(fixture, frame, t))
 
     def _current_functions(self) -> list:
         bit = self.game_server.bit
@@ -1064,6 +1167,10 @@ class ConsoleAgent:
 
     def on_lobby_event(self, event: str, dev: str) -> None:
         self.server.broadcast(protocol.log_event("info", f"lobby {event}: {dev}"))
+
+    def on_gesture(self, record) -> None:
+        """Engine observer hook. Only buffers; poll() broadcasts."""
+        self._pending_gestures.append(record)
 
     def on_function_fired(self, record) -> None:
         """Engine observer hook. A fire is engine-produced and has no device

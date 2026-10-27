@@ -530,3 +530,21 @@ def test_parse_gesture_rejects_bad():
     ):
         with pytest.raises(ValueError):
             protocol.parse_admin_command(bad)
+
+
+def test_room_frame_event_carries_t():
+    assert protocol.room_frame_event("tower", b"\x01", t=12.5)["t"] == 12.5
+
+
+def test_room_frame_event_omits_t_when_not_given():
+    assert "t" not in protocol.room_frame_event("tower", b"\x01")
+
+
+def test_gestures_event_shape():
+    from control.functions import GestureSeen
+    rec = GestureSeen(dev="d", verb="tap", received=1.5, at=1.56,
+                      refused="nope")
+    assert protocol.gestures_event([rec]) == {
+        "event": "gestures", "items": [{
+            "dev": "d", "verb": "tap", "t": 1.5, "at": 1.56,
+            "refused": "nope"}]}

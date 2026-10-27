@@ -154,15 +154,19 @@ def join_changed_event(join) -> dict:
     return {"event": "join_changed", "join": join}
 
 
-def room_frame_event(fixture: str, channels) -> dict:
+def room_frame_event(fixture: str, channels, t: float | None = None) -> dict:
     """One rendered Room frame, for display only. Keyed by fixture NAME, not
     by dev: every fixture in the profile renders whether or not a device is
     bound to it, so an UNBOUND fixture's Console strip still paints.
     Decimated and droppable: see console/agent.py's ROOM_FRAME_INTERVAL. An
     int list rather than base64 for consistency with devicelink/protocol.py's
-    leds_event."""
-    return {"event": "room_frame", "fixture": fixture,
-            "channels": list(channels)}
+    leds_event. `t` is Control's clock when the frame was rendered, so the
+    browser can order and age frames; omitted when not given."""
+    event = {"event": "room_frame", "fixture": fixture,
+             "channels": list(channels)}
+    if t is not None:
+        event["t"] = t
+    return event
 
 
 def functions_changed_event(functions, instruments=None, surfaces=None,
@@ -182,6 +186,16 @@ def functions_changed_event(functions, instruments=None, surfaces=None,
 def function_fired_event(fired) -> dict:
     """One fire, as control.function_view's function_fired_view() builds it."""
     return {"event": "function_fired", "fired": fired}
+
+
+def gestures_event(records) -> dict:
+    """A batch of inbound gestures (control.functions.GestureSeen), oldest
+    first, for display only. Droppable like room_frame: each item's `t` is
+    Control's clock at arrival, `at` the presentation time, `refused` the
+    engine's verdict (None when handled)."""
+    return {"event": "gestures", "items": [
+        {"dev": r.dev, "verb": r.verb, "t": r.received, "at": r.at,
+         "refused": r.refused} for r in records]}
 
 
 def devices_changed_event(devices) -> dict:
