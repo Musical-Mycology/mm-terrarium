@@ -9,6 +9,7 @@ import logging
 import time
 
 from console import protocol
+from console.fixture_models import build_fixture_models, fixture_route
 from control.bit_config import ManifestError
 from control.cues import fixture_dev
 from control.engine import BitLoadError, GameServer, InvalidTransition
@@ -135,6 +136,17 @@ class ConsoleAgent:
         # call in that tick.
         self._pending_room_frames: dict[str, bytes] = {}
         self._last_room_frame_at = 0.0
+        # The 3D fixture view's per-fixture layout + model, served by the
+        # HTTP thread's route provider. The dict is REPLACED whole, never
+        # mutated, so the HTTP thread always reads one consistent map.
+        # `_models_room_identity` is the (room name, profile) the dict was
+        # built for; see _room_identity_changed.
+        self._fixture_models: dict = {}
+        self._models_room_identity: tuple | None = None
+        if hasattr(server, "set_route_provider"):
+            server.set_route_provider(
+                lambda path: fixture_route(self._fixture_models, path))
+        self._rebuild_fixture_models()
         game_server.add_observer(self)
         if terrarium is not None:
             terrarium.add_observer(self)
@@ -786,7 +798,32 @@ class ConsoleAgent:
         return room_view(gs.room, profile, role, controllers, urls, muted,
                          self._artnet_fixtures(gs.room.name))
 
+    def _room_identity(self) -> tuple | None:
+        room = self.game_server.room
+        return None if room is None else (room.name, room.profile)
+
+    def _room_identity_changed(self) -> bool:
+        """True when the loaded Room differs from the one the fixture models
+        were last built for: a different name or a different profile object
+        (compared by identity), or a Room appearing or disappearing. Unlike
+        the room payload dict, this does not change on live controller
+        values. Pure: it records nothing, so it is safe to ask repeatedly;
+        _rebuild_fixture_models is what records the new identity."""
+        current = self._room_identity()
+        last = self._models_room_identity
+        if current is None or last is None:
+            return current is not last
+        return current[0] != last[0] or current[1] is not last[1]
+
+    def _rebuild_fixture_models(self) -> None:
+        identity = self._room_identity()
+        self._fixture_models = (
+            {} if identity is None else build_fixture_models(identity[1]))
+        self._models_room_identity = identity
+
     def _broadcast_room_if_changed(self) -> None:
+        if self._room_identity_changed():
+            self._rebuild_fixture_models()
         room = self._current_room()
         if room != self._last_room:
             self._last_room = room

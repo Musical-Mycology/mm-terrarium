@@ -2606,3 +2606,60 @@ def test_gesture_refuses_fixture_and_admin():
     errors = [m for _c, m in srv.sent if m.get("event") == "error"]
     assert len(errors) == 3
     assert calls == []
+
+
+def _modelled_profile(tmp_path):
+    from control.instrument import Instrument
+    from control.model_layout import PixelLayout
+    glb = tmp_path / "tower.glb"
+    glb.write_bytes(b"glb")
+    inst = Instrument(
+        name="tower", pixels=2, model_sha256="cd" * 32, model_path=str(glb),
+        model_bytes=3, model_triangles=1,
+        layout=tuple(PixelLayout(i, i, 0, 0, "small", None) for i in range(2)))
+    return RoomProfile(surface_id="room_model", fixtures=(
+        RoomFixture(name="tower", blocks=(RoomBlock("tower", 0, 2),),
+                    zones=(RoomZone("all", 0, 2),), instrument=inst),))
+
+
+class _RouteServer(FakeConsoleServer):
+    provider = None
+
+    def set_route_provider(self, provider):
+        self.provider = provider
+
+
+def test_model_route_404s_after_room_change(tmp_path):
+    gs = GameServer({"TestBit": TestBit}, room_binding=RoomBindingRegistry())
+    gs.room = Room(name="TEST", profile=_modelled_profile(tmp_path),
+                   node_id="ROOM_TEST_NODE")
+    srv = _RouteServer()
+    agent = ConsoleAgent(gs, srv)
+    agent.poll()
+    assert srv.provider("/fixture-model/tower.glb")[0] == b"glb"
+    gs.room = None
+    agent.poll()
+    assert srv.provider("/fixture-model/tower.glb") is None
+
+
+def test_fixture_models_rebuild_only_on_room_identity_change(tmp_path):
+    gs = GameServer({"TestBit": TestBit}, room_binding=RoomBindingRegistry())
+    profile = _modelled_profile(tmp_path)
+    gs.room = Room(name="TEST", profile=profile, node_id="ROOM_TEST_NODE")
+    live = {"tower": {74: 1}}
+    agent = ConsoleAgent(gs, _RouteServer(), room_controllers=lambda: live)
+    first = agent._fixture_models
+    assert not agent._room_identity_changed()
+    live["tower"][74] = 99          # the room payload changes on live values
+    agent.poll()
+    assert agent._fixture_models is first
+    gs.room = Room(name="TEST", profile=_modelled_profile(tmp_path),
+                   node_id="ROOM_TEST_NODE")
+    assert agent._room_identity_changed()
+    agent.poll()
+    assert agent._fixture_models is not first
+    assert not agent._room_identity_changed()
+
+
+def test_agent_tolerates_server_without_route_provider():
+    ConsoleAgent(GameServer({"TestBit": TestBit}), FakeConsoleServer())
