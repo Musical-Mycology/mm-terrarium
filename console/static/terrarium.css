@@ -263,6 +263,17 @@ a.chip:hover, a.chip:focus-visible { color: var(--gold); border-color: var(--gol
   .viewrow { flex-direction: column; }
   .inspector { flex-basis: auto; width: 100%; }
 }
+/* the full-window 3D bump-out page (fixture3d.html) */
+.fix3d { display: flex; flex-direction: column; height: 100vh; }
+.fix3dbody { flex: 1; min-height: 0; display: flex; gap: 14px; padding: 14px 16px; }
+.fix3dview { position: relative; flex: 1; min-width: 0; background: var(--s-lowest); border: 1.5px solid var(--hair-tan); border-radius: 12px; overflow: hidden; }
+.fix3dview canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+.fix3dside { flex: 0 0 340px; min-width: 0; overflow-y: auto; }
+.fix3dside .inspector { flex-basis: auto; width: 100%; box-sizing: border-box; }
+@media (max-width: 800px) {
+  .fix3dbody { flex-direction: column; }
+  .fix3dside { flex-basis: auto; }
+}
 .instgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 10px; margin-top: 16px; }
 .inst {
   background: var(--s-high); border-radius: 12px; padding: 10px 13px;

@@ -6,13 +6,27 @@ from pathlib import Path
 STATIC = Path(__file__).resolve().parent.parent / "console" / "static"
 
 MODULES = {"wire.js", "shell.js", "bit.js", "surface.js", "functions.js",
-           "view3d.js", "inspector.js",
+           "view3d.js", "inspector.js", "fixture3d.js",
            "rail.js", "join.js", "dom.js"}
 
 
 def _text_assets() -> str:
     return "\n".join(p.read_text() for p in sorted(STATIC.glob("*"))
                      if p.suffix in (".html", ".js", ".css"))
+
+
+def test_fixture3d_page_has_one_import_map_and_one_module_entry():
+    import re
+    html = (STATIC / "fixture3d.html").read_text()
+    tags = re.findall(r"<script[^>]*>", html)
+    assert len(tags) == 2
+    maps = [t for t in tags if 'type="importmap"' in t]
+    mods = [t for t in tags if 'type="module"' in t]
+    assert len(maps) == 1 and len(mods) == 1
+    assert 'src="fixture3d.js"' in mods[0]
+    assert "shell.js" not in html
+    assert "./vendor/three/build/three.module.js" in html
+    assert "./vendor/three/addons/" in html
 
 
 def test_no_external_asset_fetches_anywhere():
