@@ -275,3 +275,17 @@ def test_provider_cannot_duplicate_framing_headers(tmp_path):
         assert resp.getheader("X-Extra") == "1"
     finally:
         server.stop()
+
+
+def test_real_vendored_three_files_are_served_as_javascript():
+    server = ConsoleServer(port=0)
+    server.start()
+    try:
+        for path in ("/vendor/three/build/three.module.js",
+                     "/vendor/three/addons/loaders/GLTFLoader.js"):
+            with urlopen(f"http://127.0.0.1:{server.port}{path}") as r:
+                assert r.status == 200
+                assert r.headers["Content-Type"].startswith("text/javascript")
+                assert len(r.read()) > 1000
+    finally:
+        server.stop()
