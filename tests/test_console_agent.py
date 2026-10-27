@@ -2744,3 +2744,31 @@ def test_live_controller_change_does_not_drop_latest_frames():
     srv.connect("late")
     agent.poll()
     assert len(_room_frames([m for c, m in srv.sent if c == "late"])) == 1
+
+
+def _seen(n):
+    from control.functions import GestureSeen
+    return GestureSeen(dev="ie1", verb="tap", received=float(n),
+                       at=n + 0.06, refused=None)
+
+
+def test_console_broadcasts_buffered_gestures_on_poll():
+    gs, srv, agent = _server_with_agent()
+    agent.on_gesture(_seen(1))
+    agent.poll()
+    got = [b for b in srv.broadcasts if b["event"] == "gesture"]
+    assert got == [{"event": "gesture", "dev": "ie1", "verb": "tap",
+                    "t": 1.0, "at": 1.06, "refused": None}]
+    agent.poll()
+    assert len([b for b in srv.broadcasts if b["event"] == "gesture"]) == 1
+
+
+def test_console_gesture_buffer_is_bounded():
+    gs, srv, agent = _server_with_agent()
+    for n in range(1000):
+        agent.on_gesture(_seen(n))
+    agent.poll()
+    got = [b for b in srv.broadcasts if b["event"] == "gesture"]
+    assert len(got) == 256
+    assert got[-1]["t"] == 999.0
+    assert got[0]["t"] == 744.0

@@ -188,6 +188,15 @@ def function_fired_event(fired) -> dict:
     return {"event": "function_fired", "fired": fired}
 
 
+def gesture_event(record) -> dict:
+    """One inbound gesture (control.functions.GestureSeen), for display only.
+    Droppable like room_frame: `t` is Control's clock at arrival, `at` the
+    presentation time, `refused` the engine's verdict (None when handled)."""
+    return {"event": "gesture", "dev": record.dev, "verb": record.verb,
+            "t": record.received, "at": record.at,
+            "refused": record.refused}
+
+
 def devices_changed_event(devices) -> dict:
     return {"event": "devices_changed", "devices": devices}
 

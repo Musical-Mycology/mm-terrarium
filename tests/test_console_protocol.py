@@ -538,3 +538,12 @@ def test_room_frame_event_carries_t():
 
 def test_room_frame_event_omits_t_when_not_given():
     assert "t" not in protocol.room_frame_event("tower", b"\x01")
+
+
+def test_gesture_event_shape():
+    from control.functions import GestureSeen
+    rec = GestureSeen(dev="d", verb="tap", received=1.5, at=1.56,
+                      refused="nope")
+    assert protocol.gesture_event(rec) == {
+        "event": "gesture", "dev": "d", "verb": "tap", "t": 1.5,
+        "at": 1.56, "refused": "nope"}

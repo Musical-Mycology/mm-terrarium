@@ -224,6 +224,23 @@ class FunctionFired:
     room_name: str | None = None
 
 
+@dataclass(frozen=True)
+class GestureSeen:
+    """One inbound gesture that reached routing, as the Console sees it.
+
+    Reported for every gesture past the "no Bit running" and "device not
+    registered" checks, handled or refused. `received` is Control's clock at
+    arrival, `at` the time the consequence is to be presented (origin plus
+    cue_horizon), and `refused` exactly what GameServer.data() returned:
+    None when handled, else the refusal reason.
+    """
+    dev: str
+    verb: str
+    received: float
+    at: float
+    refused: str | None
+
+
 def generator_lane(fn: Function) -> tuple[str, int, int]:
     """The (dev, status, data1) lane a GENERATOR Function writes to.
 

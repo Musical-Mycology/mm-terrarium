@@ -5,6 +5,7 @@ object, see console/server.py), so it is fully testable offline against an
 in-process fake. Driven from the engine tick loop via poll().
 """
 
+import collections
 import logging
 import time
 
@@ -33,6 +34,10 @@ logger = logging.getLogger(__name__)
 # DROPPED rather than queued. Boundary rule 2: nothing here may become
 # something gameplay waits on.
 ROOM_FRAME_INTERVAL = 0.1
+
+# Most gestures held between two polls. Older ones are dropped: the Console's
+# gesture ticker is a monitor, never something gameplay waits on.
+GESTURE_BUFFER = 256
 
 # Same decimation idea as ROOM_FRAME_INTERVAL, applied to a live design-bench
 # session: the bench can tick faster than any panel needs to render.
@@ -127,6 +132,10 @@ class ConsoleAgent:
         self._last_surface_instruments: dict | None = None
         self._last_builtins: dict | None = None
         self._clock = clock
+        # Gestures seen by the engine since the last poll. A bounded deque:
+        # append is thread-safe and the oldest entry falls off when full, so
+        # whichever thread calls GameServer.data() never blocks or grows it.
+        self._pending_gestures = collections.deque(maxlen=GESTURE_BUFFER)
         # The latest not-yet-broadcast frame per fixture NAME. Each
         # fixture's entry is overwritten, not queued: see
         # _broadcast_room_frame and ROOM_FRAME_INTERVAL above. Keyed per
@@ -184,8 +193,17 @@ class ConsoleAgent:
         self._broadcast_status_if_changed()
         self._broadcast_room_if_changed()
         self._broadcast_room_frame()
+        self._broadcast_gestures()
         self._broadcast_functions_if_changed()
         self._tick_bench()
+
+    def _broadcast_gestures(self) -> None:
+        while True:
+            try:
+                record = self._pending_gestures.popleft()
+            except IndexError:
+                return
+            self.server.broadcast(protocol.gesture_event(record))
 
     def _tick_bench(self) -> None:
         if self._bench is None:
@@ -1122,6 +1140,10 @@ class ConsoleAgent:
 
     def on_lobby_event(self, event: str, dev: str) -> None:
         self.server.broadcast(protocol.log_event("info", f"lobby {event}: {dev}"))
+
+    def on_gesture(self, record) -> None:
+        """Engine observer hook. Only buffers; poll() broadcasts."""
+        self._pending_gestures.append(record)
 
     def on_function_fired(self, record) -> None:
         """Engine observer hook. A fire is engine-produced and has no device
