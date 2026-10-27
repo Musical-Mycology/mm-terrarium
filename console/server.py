@@ -113,13 +113,15 @@ class ConsoleServer:
             asset = self._assets.get(name)
         if asset is None and self._route_provider is not None:
             try:
-                asset = self._route_provider(path)
+                routed = self._route_provider(path)
+                if routed is not None:
+                    body, content_type, extra = routed
+                    asset = (body, content_type)
             except Exception:
+                # Includes a malformed return (wrong arity, not a tuple).
                 logger.exception("console route provider failed for %s", path)
                 asset = None
-            if asset is not None:
-                body, content_type, extra = asset
-                asset = (body, content_type)
+                extra = {}
         if asset is None:
             headers = Headers()
             headers["Content-Length"] = "0"
@@ -127,7 +129,10 @@ class ConsoleServer:
         body, content_type = asset
         headers = Headers()
         for key, value in extra.items():
-            headers[key] = value
+            # Headers.__setitem__ appends, so the framing headers set below
+            # would be duplicated; the tuple's own values are authoritative.
+            if key.lower() not in ("content-type", "content-length"):
+                headers[key] = value
         headers["Content-Type"] = content_type
         headers["Content-Length"] = str(len(body))
         return Response(200, "OK", headers, body)

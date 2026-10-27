@@ -192,7 +192,11 @@ def test_vendor_traversal_and_encoded_traversal_are_404(tmp_path):
     server = _started(tmp_path)
     try:
         for p in ["/vendor/../server.py", "/vendor/three/../../agent.py",
-                  "/vendor/..%2fserver.py", "/vendor/%2e%2e/server.py"]:
+                  "/vendor/..%2fserver.py", "/vendor/%2e%2e/server.py",
+                  # real files, non-canonical spellings
+                  "/vendor/three/build/../build/a.js",
+                  "/vendor/three/addons/utils/%61.js",
+                  "/vendor//three/build/a.js"]:
             assert _get_status(server, p) == 404
     finally:
         server.stop()
@@ -232,6 +236,7 @@ def test_route_provider_answers_unknown_paths(tmp_path):
 
 
 def test_a_raising_route_provider_is_a_404(tmp_path, caplog):
+    import logging
     server = _started(tmp_path)
 
     def boom(p):
@@ -239,6 +244,34 @@ def test_a_raising_route_provider_is_a_404(tmp_path, caplog):
 
     server.set_route_provider(boom)
     try:
-        assert _get_status(server, "/fixture-model/tower.glb") == 404
+        with caplog.at_level(logging.ERROR, logger="console.server"):
+            assert _get_status(server, "/fixture-model/tower.glb") == 404
+        assert any("route provider failed" in r.getMessage()
+                   and r.exc_info for r in caplog.records)
+    finally:
+        server.stop()
+
+
+def test_a_malformed_route_provider_return_is_a_404(tmp_path):
+    server = _started(tmp_path)
+    try:
+        for bad in (b"body", (b"body", "text/plain"), 5):
+            server.set_route_provider(lambda p, bad=bad: bad)
+            assert _get_status(server, "/fixture-model/tower.glb") == 404
+    finally:
+        server.stop()
+
+
+def test_provider_cannot_duplicate_framing_headers(tmp_path):
+    server = _started(tmp_path)
+    server.set_route_provider(lambda p: (
+        b"abc", "application/json",
+        {"content-type": "x/y", "Content-Length": "99", "X-Extra": "1"}))
+    try:
+        status, body, resp = _get(server, "/fixture-model/tower.glb")
+        assert (status, body) == (200, b"abc")
+        assert resp.msg.get_all("Content-Type") == ["application/json"]
+        assert resp.msg.get_all("Content-Length") == ["3"]
+        assert resp.getheader("X-Extra") == "1"
     finally:
         server.stop()
