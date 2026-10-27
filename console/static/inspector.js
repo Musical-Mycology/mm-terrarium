@@ -9,10 +9,6 @@ import { gestureLabel } from "./led_inspect.js";
 
 const TRACE_W = 320;
 const TRACE_H = 96;
-// A sample at `now` (the only frame seen, e.g. the snapshot-replayed one on
-// an idle page) sits on the right edge; its held line starts this far in so
-// it is visible instead of zero-length.
-const MIN_HOLD_PX = 6;
 const CHANNELS = [
   ["r", "#e0705f"],
   ["g", "#8fc77a"],
@@ -65,7 +61,7 @@ function drawTrace(canvas, { samples, gestures, now, windowS }) {
     ctx.beginPath();
     let prevY = null;
     for (const s of samples) {
-      const x = Math.min(xOf(s.t), w - MIN_HOLD_PX);
+      const x = xOf(s.t);
       const y = yOf(s[key]);
       if (prevY === null) {
         ctx.moveTo(x, y);

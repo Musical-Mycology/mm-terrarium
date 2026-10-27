@@ -14,12 +14,29 @@ test("samples are step-held and windowed to 10 s", async () => {
   assert.deepStrictEqual(s[0], { t: 2, r: 1, g: 2, b: 3, w: 4 });
 });
 
-test("a frame inside the window keeps its own time, no carry-in needed", async () => {
+test("with no earlier frame the first sample is held back to the window start", async () => {
   const { FixtureTrace } = await import("../../console/static/led_trace.js");
   const tr = new FixtureTrace(1);
   tr.pushFrame(5, [1, 1, 1, 1]);
-  assert.deepStrictEqual(tr.samples(0, 8).map((x) => x.t), [5]);
+  // was [5] before the full-width rule: the earliest known value now holds
+  // from the window start (8 - 10), not from its own t
+  assert.deepStrictEqual(tr.samples(0, 8).map((x) => x.t), [-2]);
   assert.deepStrictEqual(tr.samples(0, 3), []);
+});
+
+test("a lone sample at now is returned at now - windowS", async () => {
+  const { FixtureTrace } = await import("../../console/static/led_trace.js");
+  const tr = new FixtureTrace(1);
+  tr.pushFrame(5, [1, 2, 3, 4]);
+  assert.deepStrictEqual(tr.samples(0, 5), [{ t: -5, r: 1, g: 2, b: 3, w: 4 }]);
+});
+
+test("later samples keep their own t when the first is held back", async () => {
+  const { FixtureTrace } = await import("../../console/static/led_trace.js");
+  const tr = new FixtureTrace(1);
+  tr.pushFrame(5, [1, 0, 0, 0]);
+  tr.pushFrame(7, [9, 0, 0, 0]);
+  assert.deepStrictEqual(tr.samples(0, 8).map((x) => [x.t, x.r]), [[-2, 1], [7, 9]]);
 });
 
 test("old frames are pruned but the newest older one is kept", async () => {

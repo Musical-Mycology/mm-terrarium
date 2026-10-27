@@ -43,6 +43,10 @@ export class FixtureTrace {
       else out.push(s);
     }
     if (carried) out.unshift(carried);
+    // No frame at or before the window start: the earliest known value is
+    // taken to have held since the window start, so a static LED (or a lone
+    // replayed frame at `now`) draws a full-width line on Control's clock.
+    else if (out.length) out[0] = { ...out[0], t: start };
     return out;
   }
 

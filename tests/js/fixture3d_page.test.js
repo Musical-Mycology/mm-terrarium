@@ -215,6 +215,8 @@ test("a pick with only the replayed frame draws the held trace at once", async (
   const before = ops.length;
   made[0].opts.onPick(0, LAYOUT);
   const drawn = ops.slice(before);
-  const spans = drawn.filter((o, i) => o.op === "lineTo" && i > 0 && drawn[i - 1].x !== o.x);
-  assert.ok(spans.length >= 1, "a held line of non-zero width: " + JSON.stringify(drawn));
+  const xs = drawn.filter((o) => o.op === "moveTo").map((o) => o.x);
+  const ends = drawn.filter((o) => o.op === "lineTo").map((o) => o.x);
+  assert.ok(xs.some((x) => x <= 1), "the held line starts at the left edge: " + JSON.stringify(drawn));
+  assert.ok(ends.includes(canvas.width), "and ends at the canvas width");
 });

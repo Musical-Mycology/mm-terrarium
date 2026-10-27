@@ -2227,7 +2227,8 @@ network makes auth a prerequisite.
   only its strip; an over-budget model (more than 300,000 triangles or 20 MB,
   [`docs/instrument-model-guide.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/instrument-model-guide.md))
   or a view that fails to load (no WebGL2, a bad `.glb`) shows the reason on
-  its tile instead and stops collecting a trace. `view3d.js` loads lazily, so
+  its tile instead and stops collecting a trace; in both cases (`showTileFallback`)
+  the tile's ↗ bump-out is hidden. `view3d.js` loads lazily, so
   a first paint never waits on three.js. Clicking an LED opens the **LED
   inspector** (`inspector.js`): the address (fixture, pixel, Room zones,
   model zone), the current RGBW, a step trace of R, G, B and W over the last
