@@ -204,3 +204,17 @@ test("a view that resolves after a rebuild is disposed and never adopted", async
     });
   }
 });
+
+test("a pick with only the replayed frame draws the held trace at once", async () => {
+  fresh();
+  await flush();
+  send(frame("tower", 200, 5));   // the snapshot-replayed frame; nothing arrives after it
+  const walk = (n) => [n, ...n.children.flatMap(walk)];
+  const canvas = walk(mount.inspector).find((n) => n.tagName === "canvas");
+  const ops = canvas.getContext("2d").ops;   // accumulates across tests
+  const before = ops.length;
+  made[0].opts.onPick(0, LAYOUT);
+  const drawn = ops.slice(before);
+  const spans = drawn.filter((o, i) => o.op === "lineTo" && i > 0 && drawn[i - 1].x !== o.x);
+  assert.ok(spans.length >= 1, "a held line of non-zero width: " + JSON.stringify(drawn));
+});
