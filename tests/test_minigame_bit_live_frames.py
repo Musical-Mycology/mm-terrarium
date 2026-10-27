@@ -5,8 +5,9 @@ the bytes a Tower displays: a real GameServer, a real DeviceLinkAgent and
 real luxaeterna LightSessions, ticked at 44 Hz on a hand-advanced clock (the
 harness pattern of tests/test_metronome_bit_live_frames.py). The Tower is a
 plain devtower<N> device carrying the devtower instrument and holding the
-tower role, so its frame is its own 32 px player frame, four groups of
-eight LEDs, while a player's stays the 12 px frame.
+tower role, so its frame is its own 128 px player frame: the bar's four
+groups of eight LEDs, then four RGB responder lights of 24, while a
+player's stays the 12 px frame.
 """
 
 import pytest
@@ -15,7 +16,15 @@ pytest.importorskip("luxaeterna")
 
 from pathlib import Path
 
-from bits.minigame.minigame_bit import BEAT_S, WHITE, MinigameBit
+from bits.minigame.minigame_bit import (
+    BAR_PIXELS,
+    BEAT_S,
+    RESPONDER_PIXELS,
+    RESPONDER_RGB,
+    RESPONDERS,
+    TOWER_PIXELS,
+    MinigameBit,
+)
 from control.catalog import load_catalog
 from control.engine import GameServer
 from devicelink.contract import HELLO_INTERVAL_S
@@ -24,8 +33,8 @@ from devicelink.agent import DeviceLinkAgent
 from tests.test_devicelink_agent import FakeServer, _Clock
 
 ROOT = Path(__file__).resolve().parents[1]
-TOWER_PIXELS = 32
 PLAYER_PIXELS = 12
+WHITE_RGB = (255, 255, 255)     # the bar's W white, folded into the blob
 GROUP = 8
 
 HORIZON = 0.060
@@ -88,25 +97,47 @@ class _Rig:
 
     def groups_over(self, seconds):
         """Run `seconds` and report, per group, the set of its states seen
-        on the frames sent: 'white' (all eight LEDs full white), 'dim'
-        (all eight the same partial white, mid-fade), 'dark', or 'mixed'."""
+        on the frames sent (R, G, B blobs, the bar's W folded in): 'white'
+        (all eight LEDs full white), 'dim' (all eight the same partial
+        white, mid-fade), 'dark', or 'mixed'."""
         start = len(self.frames)
         self.run(seconds)
         seen = [set() for _ in range(4)]
         for _when, frame in self.frames[start:]:
-            px = [tuple(frame[i:i + 4]) for i in range(0, len(frame), 4)]
+            px = [tuple(frame[i:i + 3]) for i in range(0, len(frame), 3)]
             assert len(px) == TOWER_PIXELS
-            for g in range(4):
+            for g in range(BAR_PIXELS // GROUP):
                 group = px[g * GROUP:(g + 1) * GROUP]
-                if all(p == WHITE for p in group):
+                if all(p == WHITE_RGB for p in group):
                     seen[g].add("white")
                 elif all(max(p) == 0 for p in group):
                     seen[g].add("dark")
-                elif len(set(group)) == 1 and group[0][:3] == (0, 0, 0):
+                elif len(set(group)) == 1 and len(set(group[0])) == 1:
                     seen[g].add("dim")
                 else:
                     seen[g].add("mixed")
         return seen
+
+    def responders_lit(self, seconds):
+        """Run `seconds` and report, frame by frame, which responders are
+        lit (the frame's index list), asserting each lit one is the same
+        partial-or-full beige on all 24 LEDs, R >= G >= B."""
+        start = len(self.frames)
+        self.run(seconds)
+        out = []
+        for _when, frame in self.frames[start:]:
+            lit = []
+            for r in range(RESPONDERS):
+                lo = (BAR_PIXELS + r * RESPONDER_PIXELS) * 3
+                px = {tuple(frame[i:i + 3])
+                      for i in range(lo, lo + RESPONDER_PIXELS * 3, 3)}
+                if px != {(0, 0, 0)}:
+                    assert len(px) == 1, (r, px)
+                    rgb = px.pop()
+                    assert rgb[0] >= rgb[1] >= rgb[2], (r, rgb)
+                    lit.append(r)
+            out.append(lit)
+        return out
 
 
 @pytest.mark.parametrize("phase", [1, 2, 3, 4])
@@ -131,9 +162,11 @@ def test_the_blink_is_on_the_130_bpm_beat():
     start = len(rig.frames)
     rig.run(8 * BEAT_S)
     ons = []
-    was_lit = False
-    for when, frame in rig.frames[start:]:
-        lit = max(frame[0:4]) > 0
+    # Frames go out on change only: the first may be an earlier blink's
+    # tail, not an onset.
+    was_lit = max(rig.frames[start][1][0:3]) > 0
+    for when, frame in rig.frames[start + 1:]:
+        lit = max(frame[0:3]) > 0
         if lit and not was_lit:
             ons.append(when)
         was_lit = lit
@@ -153,15 +186,27 @@ def test_going_back_to_phase_one_darkens_the_upper_groups():
     assert seen[1:] == [{"dark"}] * 3
 
 
-def test_the_tower_gets_a_32_px_frame_and_a_player_keeps_12():
+def test_the_responders_light_in_order():
     rig = _Rig()
     rig.run(3.0)
-    assert {len(f) for _when, f in rig.frames} == {TOWER_PIXELS * 4}
-    assert {len(f) for _when, f in rig.player_frames} == {PLAYER_PIXELS * 4}
+    lit = rig.responders_lit(9 * BEAT_S)
+    # a fade's tail overlaps the next responder's start, never two tails
+    assert all(len(r) <= 2 for r in lit), lit
+    order = []
+    was = set()
+    for r in lit:
+        order += sorted(set(r) - was)
+        was = set(r)
+    assert len(order) >= 8
+    first = order[0]
+    assert order == [(first + i) % RESPONDERS for i in range(len(order))]
 
 
-def test_a_player_never_gets_the_tower_surface():
+def test_a_responder_at_full_is_beige():
     rig = _Rig()
-    assert rig.agent.bridges["ie1"].session.cap.pixel_count == PLAYER_PIXELS
-    assert rig.agent.bridges["devtower1"].session.cap.pixel_count == \
-        TOWER_PIXELS
+    rig.run(3.0)
+    rig.run(4 * BEAT_S)
+    peaks = {tuple(frame[i:i + 3])
+             for _when, frame in rig.frames
+             for i in range(BAR_PIXELS * 3, TOWER_PIXELS * 3, 3)}
+    assert RESPONDER_RGB in peaks

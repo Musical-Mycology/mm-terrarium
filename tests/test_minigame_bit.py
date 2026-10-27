@@ -1,12 +1,13 @@
 """MinigameBit: the Towers' four-phase white build (bits/minigame/).
-Package discovery, the roles, the beat, the blink's fade and the phase
-cues at unit level, the tap flash, and role routing (ie<N> players,
+Package discovery, the roles, the beat, the blink's fade, the phase cues
+and the responders lit in order at unit level, the tap flash, and role routing (ie<N> players,
 devtower<N> Towers) through a real GameServer."""
 from pathlib import Path
 
 import pytest
 
 from bits.minigame.minigame_bit import (
+    BAR_PIXELS,
     BEAT_S,
     BLACK,
     BLINK_ON_S,
@@ -15,10 +16,16 @@ from bits.minigame.minigame_bit import (
     FLASH_FADE_S,
     HOLD_S,
     MINIGAME_PLAYER_NODE,
+    RESPONDER_FADE_S,
+    RESPONDER_RGB,
+    RESPONDERS,
+    TOWER_PIXELS,
     WHITE,
     MinigameBit,
     blink_value,
     group_pixels,
+    responder_pixels,
+    responder_value,
 )
 from control.bit_registry import BitRegistry
 from control.catalog import load_catalog
@@ -33,13 +40,12 @@ TICK = 1.0 / 44.0
 
 
 def flash(dev, value, when, start):
-    """The flash's 4 LEDs at purple `value`, R, G, B packed into the
-    frame's first 3 pixels, held to the fade's end."""
-    r, g, b = 128 * value // 255, 0, value
-    quads = [(r, g, b, r), (g, b, r, g), (b, r, g, b)]
-    return [PixelFlashCue(dev, px, quad,
+    """The flash's 4 LEDs at purple `value`, W at 0, held to the fade's
+    end."""
+    rgb = (128 * value // 255, 0, value, 0)
+    return [PixelFlashCue(dev, px, rgb,
                           pytest.approx(start + FLASH_FADE_S - when), when=when)
-            for px, quad in enumerate(quads)]
+            for px in range(4)]
 
 
 def towers(out):
@@ -57,6 +63,25 @@ def solid(phase):
             for g in range(phase - 1) for px in group_pixels(g)}
 
 
+def bar_cues(out):
+    """The cues among `out` on a Tower's bar, not its responders."""
+    return [c for c in out if c.pixel < BAR_PIXELS]
+
+
+def beige(v):
+    """A responder's cue colour at level `v`, W at 0."""
+    return tuple(c * v // 255 for c in RESPONDER_RGB) + (0,)
+
+
+def beat(phase, r):
+    """A beat's first cues on one Tower: the groups `phase` holds solid,
+    and responder r full, held its whole fade."""
+    out = solid(phase)
+    for px in responder_pixels(r):
+        out[px] = (beige(255), RESPONDER_FADE_S)
+    return out
+
+
 def group_w(lit, g):
     """Group g's one W level among `lit` (one Tower's cues), or None when
     the group got no cue."""
@@ -65,6 +90,19 @@ def group_w(lit, g):
         return None
     assert len(ws) == 1 and all(px in lit for px in group_pixels(g)), lit
     return ws.pop()
+
+
+def responder_lit(lit):
+    """The responders among `lit` (one Tower's cues) that got a cue, each
+    {r: its one (r, g, b, w)}, every LED of it the same."""
+    out = {}
+    for r in range(RESPONDERS):
+        cues = {lit[px][0] for px in responder_pixels(r) if px in lit}
+        if cues:
+            assert len(cues) == 1 and all(
+                px in lit for px in responder_pixels(r)), lit
+            out[r] = cues.pop()
+    return out
 
 
 def blink_levels(bit, start, dev="devtower1"):
@@ -119,6 +157,12 @@ def test_the_groups_are_four_lights_of_two_leds_bottom_first():
         list(range(8 * g, 8 * g + 8)) for g in range(4)]
 
 
+def test_the_responders_are_four_lights_of_24_after_the_bar():
+    assert [list(responder_pixels(r)) for r in range(RESPONDERS)] == [
+        list(range(32 + 24 * r, 32 + 24 * r + 24)) for r in range(4)]
+    assert TOWER_PIXELS == 32 + 96
+
+
 def test_130_bpm_lit_half_of_each_beat():
     assert BEAT_S == pytest.approx(60 / 130)
     assert BLINK_ON_S == pytest.approx(BEAT_S / 2)
@@ -164,8 +208,9 @@ def test_the_fade_steps_hold_until_the_blink_ends_and_go_dark_on_time():
     bit = _joined_bit()
     bit.fires(5.0)
     out = bit.fires(5.0 + TICK)
-    assert len(out) == 8
-    assert [c.duration for c in out] == pytest.approx([BLINK_ON_S - TICK] * 8)
+    assert len(out) == 8 + 24                  # the group and a responder
+    assert [c.duration for c in out] == pytest.approx(
+        [BLINK_ON_S - TICK] * 8 + [RESPONDER_FADE_S - TICK] * 24)
     assert {c.when for c in out} == {5.0 + TICK}
 
 
@@ -173,13 +218,64 @@ def test_a_held_level_is_not_resent():
     bit = _joined_bit()
     bit.fires(5.0)
     bit.fires(5.0 + 0.1)                       # full
-    assert bit.fires(5.0 + 0.12) == []         # still full, nothing new
+    # the blink still full, nothing new on the bar (the responder fades on)
+    out = towers(bit.fires(5.0 + 0.12))["devtower1"]
+    assert all(px >= BAR_PIXELS for px in out), out
+
+
+def test_each_beat_lights_the_next_responder_in_order():
+    bit = _joined_bit()
+    order = []
+    for n in range(9):
+        beat = 5.0 + n * BEAT_S
+        bit.fires(beat)
+        lit = responder_lit(towers(bit.fires(beat + 0.1))["devtower1"])
+        assert len(lit) == 1, lit
+        order.append(next(iter(lit)))
+    assert order == [0, 1, 2, 3, 0, 1, 2, 3, 0]
+
+
+def test_a_responder_is_beige_full_on_the_beat_fading_out():
+    bit = _joined_bit()
+    lit = towers(bit.fires(5.0))["devtower1"]
+    assert responder_lit(lit) == {0: beige(255)}
+    assert [lit[px][1] for px in responder_pixels(0)] == \
+        pytest.approx([RESPONDER_FADE_S] * 24)
+    levels = [255]
+    t = TICK
+    while t < RESPONDER_FADE_S + TICK:
+        lit = responder_lit(towers(bit.fires(5.0 + t)).get("devtower1", {}))
+        if 0 in lit:
+            v = responder_value((5.0 + t) - 5.0)
+            assert lit[0] == beige(v)
+            levels.append(v)
+        t += TICK
+    assert levels == sorted(levels, reverse=True) and len(levels) >= 15
+    # dark, by the last step's hold lapsing, at RESPONDER_FADE_S
+    assert responder_value(RESPONDER_FADE_S) == 0
+
+
+def test_a_responders_tail_overlaps_the_next_one():
+    bit = _joined_bit()
+    bit.fires(5.0)
+    lit = responder_lit(towers(bit.fires(5.0 + BEAT_S))["devtower1"])
+    assert lit == {0: beige(responder_value(BEAT_S)), 1: beige(255)}
+    assert responder_value(BEAT_S) > 0
+
+
+@pytest.mark.parametrize("phase", [1, 2, 3, 4])
+def test_the_responders_run_in_every_phase(phase):
+    bit = _joined_bit()
+    bit.fires(5.0)
+    bit._on_phase(phase, 5.01)
+    lit = responder_lit(towers(bit.fires(5.0 + BEAT_S))["devtower1"])
+    assert lit[1] == beige(255)
 
 
 def test_the_beat_repeats_at_130_bpm_and_not_between():
     bit = _joined_bit()
     blink_levels(bit, 5.0)
-    assert bit.fires(5.0 + BEAT_S - 0.01) == []
+    assert bar_cues(bit.fires(5.0 + BEAT_S - 0.01)) == []
     first = blink_levels(bit, 5.0 + BEAT_S + 0.001)
     assert max(first) == 255
 
@@ -189,7 +285,7 @@ def test_a_stalled_tick_restarts_the_grid_instead_of_bursting():
     bit.actions()["phase2"][1](0.0)
     out = bit.fires(10.0)
     assert {c.when for c in out} == {10.0}
-    assert towers(out)["devtower1"] == solid(2)
+    assert towers(out)["devtower1"] == beat(2, 0)
 
 
 @pytest.mark.parametrize("phase", [1, 2, 3, 4])
@@ -207,8 +303,11 @@ def test_each_phase_blinks_its_group_over_the_groups_below_held(phase):
             want[px] = (BLACK, CLEAR_S)
     assert out == want
     # the next beat lands on the original grid, holding the same
-    assert bit.fires(BEAT_S - 0.01) == []
-    assert towers(bit.fires(BEAT_S)).get("devtower1", {}) == solid(phase)
+    assert bar_cues(bit.fires(BEAT_S - 0.01)) == []
+    lit = towers(bit.fires(BEAT_S)).get("devtower1", {})
+    for px in responder_pixels(0):             # the last beat's fading tail
+        del lit[px]
+    assert lit == beat(phase, 1)
     assert max(blink_levels(bit, BEAT_S + TICK)) == 255
 
 
@@ -248,7 +347,7 @@ def test_going_back_a_phase_clears_the_groups_above_at_once():
     assert {out[px] for g in (1, 2, 3) for px in group_pixels(g)} == \
         {(BLACK, CLEAR_S)}
     assert out[0] == (WHITE, HOLD_S)
-    assert towers(bit.fires(2.0))["devtower1"] == solid(2)
+    assert towers(bit.fires(2.0))["devtower1"] == beat(2, 0)
 
 
 def test_the_console_gets_four_phase_buttons_in_order():
@@ -262,7 +361,7 @@ def test_every_tower_shows_the_same_phase():
     bit = _joined_bit(tower_devs=("devtower1", "devtower2"))
     bit.actions()["phase3"][1](0.0)
     assert towers(bit.fires(BEAT_S)) == {
-        "devtower1": solid(3), "devtower2": solid(3)}
+        "devtower1": beat(3, 0), "devtower2": beat(3, 0)}
     lit = towers(bit.fires(BEAT_S + FADE_S))
     assert group_w(lit["devtower1"], 2) == group_w(lit["devtower2"], 2) == 255
 
@@ -271,7 +370,7 @@ def test_a_tower_joining_late_is_picked_up_on_the_next_beat():
     bit = _joined_bit()
     bit.actions()["phase2"][1](0.0)
     bit.on_join("devtower2", "tower")
-    assert towers(bit.fires(BEAT_S))["devtower2"] == solid(2)
+    assert towers(bit.fires(BEAT_S))["devtower2"] == beat(2, 0)
 
 
 def test_no_tower_no_tower_cues():
@@ -416,8 +515,12 @@ def test_the_blink_reaches_every_tower_through_the_engine():
     now[0] += FADE_S
     gs.tick(TICK)
     assert sorted(flashes) == sorted(
-        (tower, px, WHITE) for tower in ("devtower1", "devtower2")
-        for px in group_pixels(0))
+        [(tower, px, WHITE) for tower in ("devtower1", "devtower2")
+         for px in group_pixels(0)]
+        + [(tower, px, rgb)
+           for rgb in (beige(255), beige(responder_value(FADE_S)))
+           for tower in ("devtower1", "devtower2")
+           for px in responder_pixels(0)])
 
 
 def test_a_phase_button_reaches_every_tower_through_the_engine():

@@ -1,7 +1,7 @@
 [bit]
 name = "MinigameBit"
-version = "0.8.0"
-description = "Four-phase white build on every devtower<N> device: the phase's group of four lights blinks white at 130 BPM over the groups below it held solid, switched from the Console; each tap flashes the tapping ie<N> shroom purple"
+version = "0.9.0"
+description = "Four-phase white build on every devtower<N> device: the phase's group of four lights blinks white at 130 BPM over the groups below it held solid, switched from the Console, while the four RGB responders light one a beat in order; each tap flashes the tapping ie<N> shroom purple"
 entry = "minigame_bit:MinigameBit"
 kind = "tool"
 requires_terrarium_api = 1
@@ -20,4 +20,4 @@ when = "immediate"
 
 [console]
 display_name = "Minigame"
-notes = "Connect devtower<N> devices (devtower1, devtower2, ...) and ie<N> devices; any other device keeps its own solo behaviour. A Tower is a plain device, not a Room fixture: it needs no Arm and must not handshake a Room node. Its 32 LEDs are four groups of four lights (two LEDs a light), bottom first. In phase N, group N blinks white at 130 BPM, each blink a quick fade in and out, and every group below it stays solid white; the groups above are dark. The Phase 1 to Phase 4 buttons on the Bit status card switch phase with one click (it starts in phase 1) without restarting the beat, which keeps one steady 130 BPM for the whole session, and a Tower that connects late shows the phase on the next beat. Every tap from an ie<N> device flashes that shroom purple, fading out to dark within a fifth of a second; taps do not move the Towers. No scoring, and it never completes on its own."
+notes = "Connect devtower<N> devices (devtower1, devtower2, ...) and ie<N> devices; any other device keeps its own solo behaviour. A Tower is a plain device, not a Room fixture: it needs no Arm and must not handshake a Room node. Its first 32 LEDs are four groups of four lights (two LEDs a light), bottom first; the next 96 are four RGB responder lights of 24 LEDs each. In phase N, group N blinks white at 130 BPM, each blink a quick fade in and out, and every group below it stays solid white; the groups above are dark. On every beat, in every phase, the next responder lights full beige and fades to dark over half a second (just overlapping the next one), in order 1, 2, 3, 4, 1, ... The Phase 1 to Phase 4 buttons on the Bit status card switch phase with one click (it starts in phase 1) without restarting the beat, which keeps one steady 130 BPM for the whole session, and a Tower that connects late shows the phase on the next beat. Every tap from an ie<N> device flashes that shroom purple, fading out to dark within a fifth of a second; taps do not move the Towers. No scoring, and it never completes on its own."
