@@ -68,8 +68,10 @@ TOOL_VERSION = "export_contract/1"
 # 2026-10-08) adds /game/beat and /<dev>/beat, four beat scenarios,
 # device.beats and expect_link_state, so it bumps to 4. RGBW pixel frames (spec 2026-10-14
 # rgbw-device-wire): every /leds frame is R, G, B, W, 4 per pixel, and
-# expect_frame.grb becomes expect_frame.rgbw, so it bumps to 5.
-CONTRACT_VERSION = 5
+# expect_frame.grb becomes expect_frame.rgbw, so it bumps to 5. RGB /leds
+# blobs: Control folds each pixel's W into R, G and B and sends 3 bytes a
+# pixel, and expect_frame.rgbw becomes expect_frame.rgb, so it bumps to 6.
+CONTRACT_VERSION = 6
 
 # The live bench replay's timing tolerances (spec section 4.2, "the
 # tolerances the live bench replay uses"; section 8). No single constant
@@ -232,11 +234,11 @@ STEP_SCHEMA = {
                 "args": (
                     "list; decoded arguments -- role and room args[0] "
                     "is a JSON object, leds args[0] is a list of ints "
-                    "(0-255), R, G, B, W, 4 per pixel: 48 ints (12 pixels) "
+                    "(0-255), R, G, B, 3 per pixel: 36 ints (12 pixels) "
                     "for a player device, but a Room-bound device's "
                     "frames (after an accept naming the Room node, as "
                     "in room_node_handshake_binds) are its fixture's "
-                    "pixel count x 4, which a device that only ever "
+                    "pixel count x 3, which a device that only ever "
                     "plays need not support. A "
                     "string argument may carry the $KEY placeholder "
                     "(see placeholders)."
@@ -332,12 +334,12 @@ STEP_SCHEMA = {
                 "above)."
             ),
             "fields": {
-                "rgbw": (
-                    "list of 48 ints, 0-255: 12 pixels x 4 channels, "
-                    "red-green-blue-white order. A player device's own "
-                    "frame width; no scenario asserts a Room-bound "
-                    "frame, so a runner must not apply the 48-value "
-                    "check to one."
+                "rgb": (
+                    "list of 36 ints, 0-255: 12 pixels x 3 channels, "
+                    "red-green-blue order, any white already folded in. "
+                    "A player device's own frame width; no scenario "
+                    "asserts a Room-bound frame, so a runner must not "
+                    "apply the 36-value check to one."
                 ),
             },
         },
@@ -447,9 +449,9 @@ REPLAY_NOTES = [
     "the device and must be dropped without changing state.",
     f"In timed_frames_hold_last, the two /$DEV/leds control_sends steps "
     f"at t={AUTHORED_PAIR_T} are hand-authored rather than captured from "
-    f"Control: the one with at={AUTHORED_NEWER_AT} (pure blue, RGBW "
-    f"[0, 0, 255, 0] repeated 12 times) is sent first, and the one with "
-    f"at={AUTHORED_OLDER_AT} (pure red, RGBW [255, 0, 0, 0] repeated 12 "
+    f"Control: the one with at={AUTHORED_NEWER_AT} (pure blue, RGB "
+    f"[0, 0, 255] repeated 12 times) is sent first, and the one with "
+    f"at={AUTHORED_OLDER_AT} (pure red, RGB [255, 0, 0] repeated 12 "
     f"times) is sent second, so a runner that shows whichever arrived "
     f"last would show the wrong one. Both are due by t={AUTHORED_CHECK_T}; "
     f"the expect_frame steps at t={AUTHORED_CHECK_T} and t={HOLD_CHECK_T} "

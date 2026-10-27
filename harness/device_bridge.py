@@ -19,7 +19,7 @@ from luxaeterna.synth.session import build_session
 def zoned_capability(dev: str, zones,
                      pixel_count: int = PLAYER_PIXELS) -> SurfaceCapability:
     """A player device's surface of `pixel_count` pixels (control/
-    role_config.py's player_pixels: 12, or a devtower's 32) carrying a
+    role_config.py's player_pixels: 12, or a devtower's 128) carrying a
     role's own zones (Role.zones, (name, start, count) each) plus `primary`
     over the whole surface, which an untargeted manifest instrument
     resolves to -- the same shape harness/room_surface.py gives a Room

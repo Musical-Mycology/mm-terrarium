@@ -34,8 +34,8 @@ from contract_kit.scenarios import (ACCEPT_AFTER_MS, ACCEPT_POLICY,
                                     DENY_FLASH_CHECK_T, DENY_PULSE_CHECK_T,
                                     READY_PULSE_CHECK_T,
                                     BLIP_BACK_T, BLIP_TAP_T,
-                                    AUTHORED_NEWER_AT, AUTHORED_NEWER_RGBW,
-                                    AUTHORED_OLDER_AT, AUTHORED_OLDER_RGBW,
+                                    AUTHORED_NEWER_AT, AUTHORED_NEWER_RGB,
+                                    AUTHORED_OLDER_AT, AUTHORED_OLDER_RGB,
                                     AUTHORED_PAIR_T, GOOD_ACCEPT_T,
                                     HOLD_CHECK_T, LEGACY_JOIN_T, LINK_BACK_T,
                                     LOOK_SETTLED_T, NO_SUCH_NODE,
@@ -323,8 +323,8 @@ def test_handshake_validate_then_role_reserves_then_grants_at_start():
     # flash after it, and the chime with its key placeheld.
     white, green = _kind(data, "expect_frame")[:2]
     assert white["t"] < ACCEPT_AFTER_MS < green["t"]
-    assert white["expect_frame"]["rgbw"] == [0, 0, 0, 255] * 12
-    assert green["expect_frame"]["rgbw"][:4] == [0, 255, 0, 0]   # RGBW green
+    assert white["expect_frame"]["rgb"] == [255, 255, 255] * 12  # W, folded
+    assert green["expect_frame"]["rgb"][:3] == [0, 255, 0]       # RGB green
     chime = _kind(data, "expect_play")[0]
     assert chime["expect_play"] == {"name": "chime", "params": "key=$KEY",
                                     "within_ms": 50}
@@ -333,15 +333,15 @@ def test_handshake_validate_then_role_reserves_then_grants_at_start():
     # Validation cancels the invite's queued second white flash: nothing
     # white follows /validated.
     assert not [s for s in _frames(data) if s["t"] >= ACCEPT_AFTER_MS
-                and s["control_sends"]["args"][0] == [0, 0, 0, 255] * 12]
+                and s["control_sends"]["args"][0] == [255, 255, 255] * 12]
 
     # Ready (lexicon): a dim green pulse holds until the role.
     ready = [s for s in _kind(data, "expect_frame")
              if s["t"] == READY_PULSE_CHECK_T]
     assert len(ready) == 1
-    rgbw = ready[0]["expect_frame"]["rgbw"]
-    assert rgbw == [0, rgbw[1], 0, 0] * 12
-    assert 0 < rgbw[1] <= round(PULSE_PEAK * 255)
+    rgb = ready[0]["expect_frame"]["rgb"]
+    assert rgb == [0, rgb[1], 0] * 12
+    assert 0 < rgb[1] <= round(PULSE_PEAK * 255)
 
     # Validated is a reservation: the role only arrives at start.
     role = _sends(data, "/$DEV/role")
@@ -418,7 +418,7 @@ def test_room_node_handshake_binds_with_no_validated_and_no_role():
     # The lobby's white invite flash shows before the accept.
     first = _kind(data, "expect_frame")[0]
     assert first["t"] < ROOM_ACCEPT_T
-    assert first["expect_frame"]["rgbw"] == [0, 0, 0, 255] * 12
+    assert first["expect_frame"]["rgb"] == [255, 255, 255] * 12
     accept = _kind(data, "accept")
     assert [(s["t"], s["accept"]) for s in accept] == [
         (ROOM_ACCEPT_T, {"node": ROOM_NODE_ID})]
@@ -427,10 +427,10 @@ def test_room_node_handshake_binds_with_no_validated_and_no_role():
     assert _sends(data, "/$DEV/deny") == []
     fixture_frames = [s for s in _frames(data) if s["t"] >= ROOM_ACCEPT_T]
     assert fixture_frames and fixture_frames[0]["t"] == ROOM_ACCEPT_T
-    # Room-bound frames are the fixture's width (240 for the TEST fixture),
-    # not 48: no display expectation may follow the bind.
+    # Room-bound frames are the fixture's width (180 for the TEST fixture's
+    # 60 px), not 36: no display expectation may follow the bind.
     assert all(s["t"] < ROOM_ACCEPT_T for s in _kind(data, "expect_frame"))
-    assert len(fixture_frames[0]["control_sends"]["args"][0]) == 240
+    assert len(fixture_frames[0]["control_sends"]["args"][0]) == 180
 
 
 def test_join_retired_error_answers_and_changes_nothing():
@@ -468,11 +468,11 @@ def test_timed_frames_show_at_their_stamp_then_hold():
     assert len(pair) == 2
     assert [s["control_sends"]["at"] for s in pair] == [AUTHORED_NEWER_AT,
                                                         AUTHORED_OLDER_AT]
-    assert pair[0]["control_sends"]["args"][0] == AUTHORED_NEWER_RGBW
-    assert pair[1]["control_sends"]["args"][0] == AUTHORED_OLDER_RGBW
+    assert pair[0]["control_sends"]["args"][0] == AUTHORED_NEWER_RGB
+    assert pair[1]["control_sends"]["args"][0] == AUTHORED_OLDER_RGB
     newest_check = checks[2]
     assert newest_check["t"] > AUTHORED_NEWER_AT > AUTHORED_OLDER_AT
-    assert newest_check["expect_frame"]["rgbw"] == AUTHORED_NEWER_RGBW
+    assert newest_check["expect_frame"]["rgb"] == AUTHORED_NEWER_RGB
     # Nothing real intervenes: Control had gone quiet before the settled
     # check, let alone the pair.
     real_frames = [s for s in frames if s["t"] != AUTHORED_PAIR_T]
@@ -489,7 +489,7 @@ def test_timed_frames_show_at_their_stamp_then_hold():
         "scenario no longer shows that the newest of several wins")
 
     # Clause 3: the last frame still shows almost six seconds later.
-    assert checks[-1]["expect_frame"]["rgbw"] == AUTHORED_NEWER_RGBW
+    assert checks[-1]["expect_frame"]["rgb"] == AUTHORED_NEWER_RGB
     assert checks[-1]["t"] - AUTHORED_NEWER_AT > 5000
 
 
@@ -550,15 +550,16 @@ def test_deny_leaves_the_device_hellod_with_its_heartbeat_running():
     assert _sends(data, "/$DEV/role") == []
     # Failure (lexicon): red x2 from the deny, then the white invite pulse
     # comes back, since the lobby is WAITING and the device is still invited.
-    red = [255, 0, 0, 0] * 12                                # RGBW red
+    red = [255, 0, 0] * 12                                   # RGB red
     reds = [s for s in _frames(data) if s["control_sends"]["args"][0] == red]
     assert len(reds) == 2
     assert ACCEPT_AFTER_MS <= reds[0]["t"] <= ACCEPT_AFTER_MS + 23
     flash, pulse = _kind(data, "expect_frame")
-    assert flash["t"] == DENY_FLASH_CHECK_T and flash["expect_frame"]["rgbw"] == red
-    rgbw = pulse["expect_frame"]["rgbw"]
+    assert flash["t"] == DENY_FLASH_CHECK_T and flash["expect_frame"]["rgb"] == red
+    rgb = pulse["expect_frame"]["rgb"]
     assert pulse["t"] == DENY_PULSE_CHECK_T
-    assert rgbw == [0, 0, 0, rgbw[3]] * 12 and 0 < rgbw[3] < 255
+    # The white pulse is the W die, folded into R, G and B alike.
+    assert rgb == [rgb[0]] * 36 and 0 < rgb[0] < 255
     # The heartbeat carries on, and the policy accepts only once.
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000, 10000]
     assert len(_outs(data, "/game/handshake")) == 1
@@ -582,7 +583,7 @@ def test_release_follows_the_fade_on_the_wire_but_lands_before_it_shows():
     assert any(last_frame["control_sends"]["args"][0])
     held = _kind(data, "expect_frame")[-1]
     assert held["t"] - last_frame["t"] > 5000
-    assert held["expect_frame"]["rgbw"] == last_frame["control_sends"]["args"][0]
+    assert held["expect_frame"]["rgb"] == last_frame["control_sends"]["args"][0]
 
     assert [s["t"] for s in _outs(data, "/game/hello")] == [0, 5000]
     idle = _sends(data, "/$DEV/room")[-1]["control_sends"]["args"][0]
@@ -686,7 +687,7 @@ def test_link_loss_keeps_display_holds_the_frame_and_starts_over():
     checks = _kind(data, "expect_frame")
     assert [s["t"] for s in checks] == [ROLE_SETTLED_T, 9000,
                                         LINK_BACK_T + SIGNATURE_SETTLED_MS]
-    assert checks[1]["expect_frame"]["rgbw"] == checks[0]["expect_frame"]["rgbw"]
+    assert checks[1]["expect_frame"]["rgb"] == checks[0]["expect_frame"]["rgb"]
     assert [s for s in _frames(data) if s["t"] >= LINK_BACK_T]
 
     quiet = _kind(data, "expect_quiet")[0]

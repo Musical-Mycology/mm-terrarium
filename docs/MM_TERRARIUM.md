@@ -2380,12 +2380,16 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   sorts devices by id with `admits`: `ie<N>` takes `player`,
   `devtower<N>` (instrument `devtower`) takes `tower` (both unscored,
   uncapped JAM roles), anything else gets solo. A Tower is a plain
-  device, not a Room fixture: no Arm, no Room node, a 32 px player frame
-  (the `devtower` instrument declares `pixels = 32`; a player device's
+  device, not a Room fixture: no Arm, no Room node, a 128 px player frame
+  (the `devtower` instrument declares `pixels = 128`; a player device's
   frame is its carried instrument's pixels, never under 12,
   `control/role_config.py`'s `player_pixels`, so every other device keeps
-  12). The 32 LEDs are four groups of four two-LED lights, bottom first
-  (group g is pixels 8g..8g+7). In phase N group N blinks white at 130
+  12). Its first 32 LEDs, the bar, are four groups of four two-LED
+  lights, bottom first (group g is pixels 8g..8g+7); the next 96 are four
+  RGB responder lights of 24 LEDs (responder r is pixels 32+24r..32+24r+23),
+  each painted with its colour in R, G, B and W at 0. Every beat, in every
+  phase, lights the next responder in order (1, 2, 3, 4, 1, ...) white on
+  the same fade as the bar's blink. In phase N group N blinks white at 130
   BPM, lit the first half of each beat with a 60 ms fade in and out
   (stepped each tick in `fires()`), over the groups below it held
   solid white; the groups above are dark. The aurora has no white, so the

@@ -77,7 +77,7 @@ class Role:
     # raises BitLoadError rather than silently never gating.
     requires: str | None = None
     # Extra named zones on the device's own player surface (12 px, or its
-    # carried instrument's pixels when more, e.g. a devtower's 32), as
+    # carried instrument's pixels when more, e.g. a devtower's 128), as
     # (name, start, count) pixel ranges, so this role's light_manifest can
     # target single lights (a progress bar's "p0".."p9") rather than only
     # the shroom's ring/stem. () (the default) keeps the plain shroom

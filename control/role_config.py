@@ -43,7 +43,7 @@ def validate_role_declarations(role_table: RoleTable) -> None:
 
 # A player device's surface: Rev 1's 12 px (devicelink/agent.py's frame),
 # the floor every carried instrument meets. A device whose carried
-# instrument declares more (a devtower's 32) gets that many: player_pixels.
+# instrument declares more (a devtower's 128) gets that many: player_pixels.
 PLAYER_PIXELS = 12
 
 

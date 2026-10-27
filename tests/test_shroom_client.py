@@ -119,9 +119,11 @@ def test_leds_are_forwarded_to_the_strip():
     """An untimed frame (the default) displays on arrival -- which, for this
     clock-free client, means at the next tick() of its own render loop."""
     c = client()
-    c.handle(protocol.leds_event(DEV, list(range(LED_CHANNELS))))
+    # W = 0, so the R, G, B blob reads back to the very same frame.
+    frame = [0 if i % 4 == 3 else i for i in range(LED_CHANNELS)]
+    c.handle(protocol.leds_event(DEV, frame))
     c.tick(now=0.0)
-    assert c.leds.shown[-1] == bytes(range(LED_CHANNELS))
+    assert c.leds.shown[-1] == bytes(frame)
 
 
 def test_leds_with_a_wrong_channel_count_are_dropped_not_raised():
@@ -207,9 +209,9 @@ def test_a_leds_frame_with_a_non_list_payload_is_dropped():
 
 def test_led_channel_values_are_masked_to_a_byte():
     c = client()
-    c.handle(protocol.leds_event(DEV, [300] * LED_CHANNELS))
+    c.handle(protocol.leds_event(DEV, [300, 300, 300, 0] * 12))
     c.tick(now=0.0)
-    assert all(v == 300 & 0xFF for v in c.leds.shown[-1])
+    assert c.leds.shown[-1] == bytes([300 & 0xFF] * 3 + [0]) * 12
 
 
 def test_a_rejoin_clears_the_released_flag():
@@ -312,10 +314,11 @@ def test_a_wider_client_accepts_its_own_width():
     leds = Leds()
     client = ShroomClient("sim-room", "", leds=leds, expected_channels=180)
 
-    assert client.handle(protocol.leds_event("sim-room", list(range(180)))) \
+    frame = [0 if i % 4 == 3 else i for i in range(180)]
+    assert client.handle(protocol.leds_event("sim-room", frame)) \
         == "/sim-room/leds"
     client.tick(now=1.0)
-    assert leds.shown == [bytes(v & 0xFF for v in range(180))]
+    assert leds.shown == [bytes(frame)]
 
 
 def test_a_wider_client_drops_a_thirty_six_channel_frame():

@@ -67,7 +67,7 @@ _MAX_CLOSING_FRAMES = 200
 # A player device's frame width is its pixels x 4 channels, R, G, B, W
 # (contract v5, control/pixel_wire.py): by default 12 pixels, 48 channels
 # (the figure harness/shroom_client.py calls LED_CHANNELS), unless its
-# carried instrument declares more (a devtower's 32, 128 channels). See
+# carried instrument declares more (a devtower's 128, 512 channels). See
 # DeviceLinkAgent._device_pixels.
 _DEVICE_CHANNELS = PLAYER_PIXELS * CHANNELS_PER_PIXEL
 

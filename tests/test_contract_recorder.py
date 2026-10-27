@@ -424,12 +424,12 @@ def test_expect_frame_records_the_frame_showing_not_the_one_last_sent():
 
     frames = [s["expect_frame"] for s in data["steps"] if "expect_frame" in s]
     assert len(frames) == 1
-    assert len(frames[0]["rgbw"]) == 48
-    assert all(isinstance(c, int) and 0 <= c <= 255 for c in frames[0]["rgbw"])
+    assert len(frames[0]["rgb"]) == 36
+    assert all(isinstance(c, int) and 0 <= c <= 255 for c in frames[0]["rgb"])
 
     leds = _sends(data, "/$DEV/leds")
     showing = [s for s in leds if s["control_sends"]["at"] <= 1100]
-    assert frames[0]["rgbw"] == showing[-1]["control_sends"]["args"][0]
+    assert frames[0]["rgb"] == showing[-1]["control_sends"]["args"][0]
     assert showing[-1] is not leds[-1]     # later frames are still in flight
 
 
@@ -450,7 +450,7 @@ def test_expect_frame_picks_the_newest_by_at_not_the_last_received():
     data = rec.finish()
 
     frames = [s["expect_frame"] for s in data["steps"] if "expect_frame" in s]
-    assert frames[-1]["rgbw"] == newer
+    assert frames[-1]["rgb"] == newer
 
 
 def test_expect_frame_ignores_a_frame_step_flagged_malformed():
@@ -465,8 +465,8 @@ def test_expect_frame_ignores_a_frame_step_flagged_malformed():
     data = rec.finish()
 
     grb = [s["expect_frame"] for s in data["steps"] if "expect_frame" in s][-1]
-    assert grb["rgbw"] != "not a list"
-    assert len(grb["rgbw"]) == 48
+    assert grb["rgb"] != "not a list"
+    assert len(grb["rgb"]) == 36
 
 
 def test_expect_frame_raises_rather_than_recording_nothing():
@@ -493,8 +493,8 @@ def test_expect_frame_held_repeats_the_pre_outage_frame_not_a_later_one():
     data = rec.finish()
 
     held = [s["expect_frame"] for s in data["steps"] if "expect_frame" in s]
-    assert held == [{"rgbw": pre_outage}]
-    assert held[0]["rgbw"] != later
+    assert held == [{"rgb": pre_outage}]
+    assert held[0]["rgb"] != later
 
 
 def test_expect_frame_held_raises_when_nothing_had_reached_the_device_yet():

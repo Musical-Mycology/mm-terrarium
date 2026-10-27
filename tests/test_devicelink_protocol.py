@@ -80,10 +80,17 @@ def test_deny_event_normalises_missing_hint():
 
 
 def test_leds_event_shape():
-    msg = protocol.leds_event("ie1", list(range(36)))
+    msg = protocol.leds_event("ie1", [1, 2, 3, 0] * 9)
     assert msg["address"] == "/ie1/leds"
     assert msg["typespec"] == "b"
-    assert msg["args"] == [list(range(36))]
+    assert msg["args"] == [[1, 2, 3] * 9]
+
+
+def test_leds_event_sends_r_g_b_with_w_folded_in():
+    # R, G, B, W per pixel in, R, G, B out: min(255, c + w) each.
+    msg = protocol.leds_event("ie1", [0, 0, 0, 255, 10, 20, 30, 5,
+                                      250, 0, 0, 10])
+    assert msg["args"] == [[255, 255, 255, 15, 25, 35, 255, 10, 10]]
 
 
 def test_leds_event_carries_a_display_time():

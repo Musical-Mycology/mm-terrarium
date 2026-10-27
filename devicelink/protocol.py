@@ -29,6 +29,8 @@ import math
 import re
 from dataclasses import dataclass
 
+from control.pixel_wire import rgb_blob
+
 _GAME_PREFIX = "/game/"
 
 
@@ -175,15 +177,17 @@ def parse_handshake_args(args: list) -> tuple[str, str, str]:
 
 
 def leds_event(dev: str, channels, when: float = 0.0) -> dict:
-    """channels: a flat sequence of ints, width-agnostic. This function does
-    `list(channels)` with no length assertion, so any frame width rides the
-    same wire shape. A player device gets its pixels x R, G, B, W: 48 for
-    the 12 px floor (matching harness/shroom_client.py's LED_CHANNELS), more
-    when its carried instrument declares more (a devtower's 32 pixels, 128;
-    devicelink/agent.py's _device_pixels). A device bound as a Room fixture gets that fixture's own
-    slice of the rendered Room frame (control/room_profile.py's
-    fixture_slices: its pixel_count times 4), sent
-    through control/fixture_sink.py's DeviceLinkSink.
+    """channels: a rendered RGBW frame, a flat sequence of ints, R, G, B, W
+    per pixel, any number of pixels. The blob sent is R, G, B per pixel,
+    each pixel's W folded into its R, G and B (control/pixel_wire.py's
+    rgb_blob), so the device gets 3 bytes a pixel. A player device's frame
+    is its pixels x R, G, B, W: 48 for the 12 px floor, a 36-byte blob
+    (harness/shroom_client.py's LED_CHANNELS), more when its carried
+    instrument declares more (a devtower's 128 pixels, 512, a 384-byte
+    blob; devicelink/agent.py's _device_pixels). A device bound as a Room
+    fixture gets that fixture's own slice of the rendered Room frame
+    (control/room_profile.py's fixture_slices: its pixel_count times 4),
+    sent through control/fixture_sink.py's DeviceLinkSink.
 
     `when` is an absolute O2 time at which the device should display this
     frame. 0.0 means no declared time: display on arrival, the pre-timing
@@ -191,7 +195,8 @@ def leds_event(dev: str, channels, when: float = 0.0) -> dict:
     frames, so the device schedules a FRAME, not MIDI -- see the design
     spec section 5.3.
     """
-    return _event(f"/{dev}/leds", "b", [list(channels)], timestamp=when)
+    return _event(f"/{dev}/leds", "b", [list(rgb_blob(channels))],
+                  timestamp=when)
 
 
 def release_event(dev: str) -> dict:
