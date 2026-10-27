@@ -2702,20 +2702,35 @@ def test_new_client_gets_latest_frame_per_fixture():
     assert events.index("room_frame") > events.index("snapshot")
 
 
-def test_latest_frames_are_dropped_when_the_room_changes():
+def _switch_room(gs):
+    gs.room = make_room()
+    gs.room.name = "OTHER"
+
+
+def test_old_room_frame_is_not_replayed_after_a_room_switch():
     gs, srv, agent = _room_console()
     agent._clock = FakeClock(5.0)
     agent.on_room_frame("main", bytes([1, 2, 3]))
     agent.poll()
-    assert agent._latest_room_frames
-    gs.room = make_room()
-    gs.room.name = "OTHER"             # a different Room
-    assert agent._room_identity_changed()
+    _switch_room(gs)
     agent.poll()
-    assert agent._latest_room_frames == {}
     srv.connect("late")
     agent.poll()
     assert _room_frames([m for c, m in srv.sent if c == "late"]) == []
+
+
+def test_frame_rendered_for_new_room_before_poll_is_replayed():
+    gs, srv, agent = _room_console()
+    agent._clock = FakeClock(5.0)
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    _switch_room(gs)
+    agent.on_room_frame("main", bytes([7, 8, 9]))   # before poll sees it
+    agent.poll()
+    srv.connect("late")
+    agent.poll()
+    frames = _room_frames([m for c, m in srv.sent if c == "late"])
+    assert [f["channels"] for f in frames] == [[7, 8, 9]]
 
 
 def test_live_controller_change_does_not_drop_latest_frames():

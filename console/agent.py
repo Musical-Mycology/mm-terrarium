@@ -135,11 +135,13 @@ class ConsoleAgent:
         # single slot silently starves every fixture but the last one to
         # call in that tick.
         self._pending_room_frames: dict[str, tuple[bytes, float]] = {}
-        # The most recent frame per fixture with its render time, kept after
-        # broadcast so a client that connects later can be shown the current
-        # state. Cleared when the Room changes (see
-        # _broadcast_room_if_changed), not on live controller values.
-        self._latest_room_frames: dict[str, tuple[bytes, float]] = {}
+        # The most recent frame per fixture with its render time and the
+        # Room key current when it was rendered, kept after broadcast so a
+        # client that connects later can be shown the current state. Only
+        # entries matching the current Room key are replayed (old-Room
+        # entries are dropped lazily on replay), so a frame rendered for a
+        # new Room before poll() noticed the switch is still replayed.
+        self._latest_room_frames: dict[str, tuple[bytes, float, tuple | None]] = {}
         self._last_room_frame_at = 0.0
         # The 3D fixture view's per-fixture layout + model, served by the
         # HTTP thread's route provider. The dict is REPLACED whole, never
@@ -168,7 +170,11 @@ class ConsoleAgent:
             if self.registry is not None:
                 self.server.send(client, protocol.bits_listed_event(
                     self.registry.list_view(), self.registry.errors_view()))
-            for fixture, (frame, t) in self._latest_room_frames.items():
+            key = self._room_key()
+            self._latest_room_frames = {
+                f: e for f, e in self._latest_room_frames.items()
+                if e[2] == key}
+            for fixture, (frame, t, _key) in self._latest_room_frames.items():
                 self.server.send(
                     client, protocol.room_frame_event(fixture, frame, t))
         for client, msg in self.server.drain_inbound():
@@ -810,6 +816,11 @@ class ConsoleAgent:
         room = self.game_server.room
         return None if room is None else (room.name, room.profile)
 
+    def _room_key(self) -> tuple | None:
+        """Hashable Room identity (name, id of profile) used to tag frames."""
+        identity = self._room_identity()
+        return None if identity is None else (identity[0], id(identity[1]))
+
     def _room_identity_changed(self) -> bool:
         """True when the loaded Room differs from the one the fixture models
         were last built for: a different name or a different profile object
@@ -831,10 +842,6 @@ class ConsoleAgent:
 
     def _broadcast_room_if_changed(self) -> None:
         if self._room_identity_changed():
-            # Frames belong to the old Room's fixtures. Pending frames are
-            # kept: they may already be the new Room's first render, and a
-            # fixture that does not change again would never resend one.
-            self._latest_room_frames = {}
             self._rebuild_fixture_models()
         room = self._current_room()
         if room != self._last_room:
@@ -848,9 +855,9 @@ class ConsoleAgent:
         still renders and still gets a Console strip). Stores the LATEST
         frame per fixture; anything not yet broadcast for that fixture is
         overwritten, never queued."""
-        entry = (frame, self._clock())
-        self._pending_room_frames[fixture] = entry
-        self._latest_room_frames[fixture] = entry
+        t = self._clock()
+        self._pending_room_frames[fixture] = (frame, t)
+        self._latest_room_frames[fixture] = (frame, t, self._room_key())
 
     def _broadcast_room_frame(self) -> None:
         if not self._pending_room_frames:
