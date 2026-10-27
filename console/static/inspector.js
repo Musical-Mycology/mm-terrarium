@@ -105,21 +105,36 @@ export function mountInspector(el) {
     addrEl.appendChild(mk("dd", null, v));
   };
 
+  // Gesture rows are rebuilt only when the gesture set changes, so a frame
+  // (10 Hz) never replaces a hovered row or its tooltip.
+  let gestureKey = null;
+
   return {
-    show({ address, rgbw, samples = [], gestures = [], now, windowS = 10 }) {
+    // Once per pick: the address rows.
+    select({ address }) {
       empty.hidden = true;
       detail.hidden = false;
       clear(addrEl);
       row("fixture", `${address.fixture} · pixel ${address.index}`);
       row("zones", address.roomZones.length ? address.roomZones.join(", ") : "none");
       row("model zone", address.modelZone ?? "none");
-      rgbwEl.textContent = `R ${rgbw.r}  G ${rgbw.g}  B ${rgbw.b}  W ${rgbw.w}`;
+      clear(gestureList);
+      gestureKey = null;
+    },
+    // On every frame or gesture: text and canvas in place; the gesture
+    // list only when its count or newest t changed.
+    update({ rgbw, samples = [], gestures = [], now, windowS = 10 }) {
+      const text = `R ${rgbw.r}  G ${rgbw.g}  B ${rgbw.b}  W ${rgbw.w}`;
+      if (rgbwEl.textContent !== text) rgbwEl.textContent = text;
       drawTrace(canvas, { samples, gestures, now, windowS });
+      const key = `${gestures.length}:${gestures.length ? gestures[gestures.length - 1].t : ""}`;
+      if (key === gestureKey) return;
+      gestureKey = key;
       clear(gestureList);
       for (const g of gestures) {
         const li = mk("li", g.refused ? "refused" : null,
-          `${(g.t - now).toFixed(1)} s  ${gestureLabel(g)}`);
-        li.title = `received ${Number(g.t).toFixed(2)}, cue at ${Number(g.at).toFixed(2)}`;
+          `${Number(g.t).toFixed(2)}  ${gestureLabel(g)}`);
+        li.title = `received ${Number(g.t).toFixed(2)}, cue at ${Number(g.at).toFixed(2)} (Control clock)`;
         gestureList.appendChild(li);
       }
     },
@@ -128,6 +143,7 @@ export function mountInspector(el) {
       detail.hidden = true;
       clear(addrEl);
       clear(gestureList);
+      gestureKey = null;
       rgbwEl.textContent = "";
       canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
     },

@@ -77,7 +77,11 @@ async function fetchLayout(fixture, sha) {
     throw new Error(`the LED layout could not be fetched (${e.message})`);
   }
   if (!res.ok) throw new Error(`no LED layout for ${fixture} (HTTP ${res.status})`);
-  return res.json();
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error(`the LED layout for ${fixture} is not valid JSON`);
+  }
 }
 
 async function loadModel(fixture, sha) {

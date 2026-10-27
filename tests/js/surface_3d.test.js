@@ -221,8 +221,8 @@ test("a static LED's trace is held flat to now across the full width", async () 
   const { mountInspector } = await import("../../console/static/inspector.js");
   const el = document.createElement("div");
   const insp = mountInspector(el);
-  insp.show({
-    address: { fixture: "tower", index: 0, roomZones: [], modelZone: null },
+  insp.select({ address: { fixture: "tower", index: 0, roomZones: [], modelZone: null } });
+  insp.update({
     rgbw: { r: 200, g: 0, b: 0, w: 0 },
     samples: [{ t: 40, r: 200, g: 0, b: 0, w: 0 }],
     gestures: [{ t: 45, at: 45.2, dev: "ie1", verb: "tap", refused: "busy" }],
@@ -237,4 +237,54 @@ test("a static LED's trace is held flat to now across the full width", async () 
   const dashed = ctx.calls.filter((c) => c.type === "stroke" && c.lineDash && c.lineDash.length);
   assert.strictEqual(dashed.length, 1, "one dashed gesture marker");
   assert.strictEqual(dashed[0].strokeStyle, "#c07850", "a refused gesture is terracotta");
+});
+
+test("the inspector's rows survive a second room_frame (rule: frames repaint, never rebuild)", async () => {
+  fresh();
+  await flush();
+  send({ event: "room_frame", fixture: "tower", channels: new Array(16).fill(0), t: 20 });
+  viewFor("tower").opts.onPick(1, LAYOUT);
+  send({ event: "gesture", dev: "ie1", verb: "tap", t: 21, at: 21.2, refused: null });
+  const insp = surface._inspectorEl();
+  const dds = walk(insp, (n) => n.tagName === "dd");
+  const lis = walk(insp, (n) => n.tagName === "li");
+  assert.ok(dds.length >= 3 && lis.length === 1);
+  send({ event: "room_frame", fixture: "tower", channels: [0, 0, 0, 0, 77, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], t: 22 });
+  send({ event: "room_frame", fixture: "tower", channels: [0, 0, 0, 0, 88, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], t: 23 });
+  const dds2 = walk(insp, (n) => n.tagName === "dd");
+  const lis2 = walk(insp, (n) => n.tagName === "li");
+  assert.deepStrictEqual(dds2, dds, "address rows are the same nodes");
+  assert.deepStrictEqual(lis2, lis, "gesture rows are the same nodes");
+  assert.ok(insp.textContent.includes("R 88"), "the RGBW text still updates");
+  // a new gesture does rebuild the list
+  send({ event: "gesture", dev: "ie2", verb: "shake", t: 24, at: 24.2, refused: null });
+  assert.strictEqual(walk(insp, (n) => n.tagName === "li").length, 2);
+});
+
+test("a rejected view stops collecting a trace", async () => {
+  send({ event: "snapshot", room: null });
+  made = [];
+  rejectWith = "the model failed to load (bad glb)";
+  send({ event: "snapshot", room: room() });
+  await flush();
+  assert.strictEqual(surface._traceFor("tower"), undefined);
+});
+
+test("switching Rooms disposes absent fixtures' tiles and rebuilds a changed sha", async () => {
+  fresh();
+  await flush();
+  const tower = viewFor("tower");
+  const bars = viewFor("bars");
+  const other = {
+    ...room({ towerSha: "d".repeat(64) }),
+    room_type: "OTHER",
+    fixtures: [fixture("tower", { model: { sha256: "d".repeat(64), status: "ok", reason: null } })],
+  };
+  send({ event: "room_changed", room: other });
+  await flush();
+  assert.ok(bars.disposed, "bars left the Room: its view is disposed");
+  assert.strictEqual(surface._tileFor("bars"), undefined);
+  assert.ok(tower.disposed, "tower's sha changed: the old view is disposed");
+  assert.strictEqual(viewFor("tower").opts.sha256, "d".repeat(64));
+  assert.ok(!viewFor("tower").disposed);
 });

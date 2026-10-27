@@ -156,6 +156,10 @@ export function _tileFor(name) {
   return entry ? entry.el : undefined;
 }
 
+export function _traceFor(name) {
+  return traceByName[name];
+}
+
 export function _inspectorEl() {
   return inspectorEl;
 }
@@ -430,6 +434,7 @@ function startView(name, fixture, entry) {
       view.select(selectedLed && selectedLed.name === name ? selectedLed.index : null);
     }, (err) => {
       if (entry.disposed) return;
+      delete traceByName[name];
       showTileFallback(entry, (err && err.message) || "the 3D view failed to load");
     });
 }
@@ -514,17 +519,18 @@ function pickLed(name, index, layout) {
   for (const [tileName, entry] of tileByName) {
     if (entry.view) entry.view.select(tileName === name ? index : null);
   }
+  if (inspector) inspector.select({ address: ledAddress(layout, index) });
   refreshInspector();
 }
 
+// Values only: the address rows were built by the pick (rule 1 for frames).
 function refreshInspector() {
   if (!inspector) return;
   if (!selectedLed) { inspector.clear(); return; }
-  const { name, index, layout } = selectedLed;
+  const { name, index } = selectedLed;
   const trace = traceByName[name];
   const now = latestT ?? 0;
-  inspector.show({
-    address: ledAddress(layout, index),
+  inspector.update({
     rgbw: rgbwAt(lastChannelsByName[name] || [], index),
     samples: trace ? trace.samples(index, now) : [],
     gestures: trace ? trace.gestures(now) : [],
