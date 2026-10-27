@@ -265,6 +265,10 @@ from the worktree root. `.gitignore` matches `.venv` without a trailing
 slash specifically so the symlink is ignored (a directory-only pattern does
 not match a symlink).
 
+**Never start a second stack** (`terrarium.sh`, `smoke-test.sh`) on a machine
+where one is already running: both join the O2 ensemble `arco`, and the second
+resets the first's Arco.
+
 **Test suites:**
 
 ```bash
@@ -2117,7 +2121,16 @@ network makes auth a prerequisite.
   (`.html`, `.css`, `.js`, `.ttf`, readable in one line for an
   unauthenticated server), read once, **keyed by basename**: a request path
   is cut to its last segment, so traversal 404s and no two files may share
-  a basename (`fonts/` included).
+  a basename (`fonts/` included). **`vendor/` is the exception**: its files
+  keep their directory and match on the exact undecoded request path
+  (three.js 0.169.0 under `vendor/three/`, reached through the import map in
+  `index.html` and `fixture3d.html`), so a traversal attempt simply misses.
+- **Fixture routes** (`console/fixture_models.py`, via `set_route_provider`,
+  consulted only when no asset matched): `/fixture-layout/<name>.json` (the
+  pixel layout) and `/fixture-model/<name>.glb` (the baked model, read from
+  disk on the HTTP thread). The name is an exact lookup among the **loaded
+  Room's** modelled fixtures, never joined onto a path, so an unloaded Room,
+  an unknown name or a `/` in it is a 404. `Cache-Control: no-cache`.
 - **`console/protocol.py`**: pure builders re-exporting `uplink.protocol`'s
   `parse_command` and shared events. Shared commands: `load_bit` (`name`,
   `overrides`, `room`), `run`, `abort`, `restart`, `list_bits`, `load_room`,
@@ -2149,6 +2162,17 @@ network makes auth a prerequisite.
 - Room frames go out at ~10 Hz (`ROOM_FRAME_INTERVAL`), latest per fixture,
   dropped, never queued (boundary rule 2); bench frames too
   (`BENCH_FRAME_INTERVAL`, 0.1 s). Other views rebroadcast only on change.
+  Each `room_frame` carries `t`, Control's clock when it was rendered. A new
+  client gets the latest frame per fixture of the **current Room** replayed
+  (each tagged by the Room it was rendered for, so an old Room's are
+  dropped), `t` intact, so the 3D view has something to show before the next
+  change.
+- **`gesture`** (event, not the command above): the engine's `on_gesture`
+  hook fires a `GestureSeen` (`dev`, `verb`, `received`, `at`, `refused`) for
+  every gesture of a registered device; the agent only buffers it and `poll()`
+  broadcasts, so the inspector can mark input on the trace. `rejected_stamps`
+  now also counts a bad stamp on a refused gesture (the stamp is resolved
+  once, before routing).
 - The `room` payload (*Shown by addition*, *Rooms and fixtures*): `fixtures[]`
   (`dev`, `muted`, `artnet`), `controllers` (flat, first
   fixture wins), `fixture_controllers` (no Console module reads it).
@@ -2197,6 +2221,23 @@ network makes auth a prerequisite.
   links `http(s)` only), Triggers (`functions.js`), Live values, status,
   Join, log. `decodeRgbw` (`pixels.js`) decodes the one RGBW wire, W added
   onto RGB; `design.js`'s bench paints through the same decoder.
+- **3D fixture view** ([design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-10-27-console-3d-fixture-view-design.md)):
+  the Room card shows one 3D tile (`view3d.js`, three.js) per **modelled**
+  fixture, alongside the strip, which stays. A fixture without a model keeps
+  only its strip; an over-budget model (more than 300,000 triangles or 20 MB,
+  [`docs/instrument-model-guide.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/instrument-model-guide.md))
+  or a view that fails to load (no WebGL2, a bad `.glb`) shows the reason on
+  its tile instead and stops collecting a trace. `view3d.js` loads lazily, so
+  a first paint never waits on three.js. Clicking an LED opens the **LED
+  inspector** (`inspector.js`): the address (fixture, pixel, Room zones,
+  model zone), the current RGBW, a step trace of R, G, B and W over the last
+  10 s at 10 Hz, and a marker per input gesture (a refused one in the accent
+  colour). Everything is on **Control's clock** (`createClock` in
+  `fixture_live.js`: the latest `t` of a `room_frame` or `gesture`, reset by a
+  snapshot), never the browser's. The tile's ↗ opens the full-window bump-out
+  `fixture3d.html?fixture=<name>` (`fixture3d.js`), which takes the same view
+  and inspector from `fixture_live.js` so the two cannot drift. The
+  bound-device chip now links to the device's canvas.
 - **Pickers**: All, each fixture as `@fixture:<name>` (`(unbound)`,
   `(muted)`), then unbound devices; DEVICE pickers never offer a fixture
   ("no device joined" disables Fire). A refill maps a device that just bound
@@ -2607,6 +2648,9 @@ Kept explicit so the doc does not over-claim.
   o2litepy; `control/join_info.py`'s `NATIVE_NOTE`). o2ws timing on a real,
   OS-focused phone on the venue LAN is unmeasured, and two of the three
   `www/o2ws.js` patches are not reported upstream.
+- **3D fixture view, not built**: cue attribution in the trace (which cue
+  made a change), fixtures placed in a room scene, and the phone-simulator 3D
+  view (mm-tuneshroom PR B, parked).
 - **Contract kit:** mm-devshroom's native replay environment, the live bench
   replay spike (section 8 of the device contract kit spec, *The device
   contract and `contract_kit/`*), and an executable Mushica capability-gate
