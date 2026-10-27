@@ -2663,3 +2663,69 @@ def test_fixture_models_rebuild_only_on_room_identity_change(tmp_path):
 
 def test_agent_tolerates_server_without_route_provider():
     ConsoleAgent(GameServer({"TestBit": TestBit}), FakeConsoleServer())
+
+
+def _room_frames(messages):
+    return [m for m in messages if m.get("event") == "room_frame"]
+
+
+def test_room_frame_broadcast_is_stamped_when_rendered():
+    gs, srv, agent = _room_console()
+    clock = FakeClock(5.0)
+    agent._clock = clock
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    clock.now = 5.2                    # the broadcast happens later, at poll
+    agent.poll()
+    frames = _room_frames(srv.broadcasts)
+    assert len(frames) == 1
+    assert frames[0]["t"] == 5.0
+
+
+def test_new_client_gets_latest_frame_per_fixture():
+    gs, srv, agent = _room_console()
+    clock = FakeClock(5.0)
+    agent._clock = clock
+    srv.connect("c1")
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    clock.now = 9.0
+    srv.connect("c2")
+    agent.poll()
+    sent = [m for c, m in srv.sent if c == "c2"]
+    events = [m["event"] for m in sent]
+    assert events[0] == "snapshot"
+    frames = _room_frames(sent)
+    assert len(frames) == 1
+    assert frames[0]["fixture"] == "main"
+    assert frames[0]["channels"] == [1, 2, 3]
+    assert frames[0]["t"] == 5.0
+    assert events.index("room_frame") > events.index("snapshot")
+
+
+def test_latest_frames_are_dropped_when_the_room_changes():
+    gs, srv, agent = _room_console()
+    agent._clock = FakeClock(5.0)
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    assert agent._latest_room_frames
+    gs.room = make_room()
+    gs.room.name = "OTHER"             # a different Room
+    assert agent._room_identity_changed()
+    agent.poll()
+    assert agent._latest_room_frames == {}
+    srv.connect("late")
+    agent.poll()
+    assert _room_frames([m for c, m in srv.sent if c == "late"]) == []
+
+
+def test_live_controller_change_does_not_drop_latest_frames():
+    gs, srv, agent = _room_console()
+    agent._clock = FakeClock(5.0)
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    agent._live_controllers["main"][74] = 12   # payload changes, Room does not
+    agent.poll()
+    assert "main" in agent._latest_room_frames
+    srv.connect("late")
+    agent.poll()
+    assert len(_room_frames([m for c, m in srv.sent if c == "late"])) == 1

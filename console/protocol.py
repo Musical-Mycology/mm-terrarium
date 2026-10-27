@@ -154,15 +154,19 @@ def join_changed_event(join) -> dict:
     return {"event": "join_changed", "join": join}
 
 
-def room_frame_event(fixture: str, channels) -> dict:
+def room_frame_event(fixture: str, channels, t: float | None = None) -> dict:
     """One rendered Room frame, for display only. Keyed by fixture NAME, not
     by dev: every fixture in the profile renders whether or not a device is
     bound to it, so an UNBOUND fixture's Console strip still paints.
     Decimated and droppable: see console/agent.py's ROOM_FRAME_INTERVAL. An
     int list rather than base64 for consistency with devicelink/protocol.py's
-    leds_event."""
-    return {"event": "room_frame", "fixture": fixture,
-            "channels": list(channels)}
+    leds_event. `t` is Control's clock when the frame was rendered, so the
+    browser can order and age frames; omitted when not given."""
+    event = {"event": "room_frame", "fixture": fixture,
+             "channels": list(channels)}
+    if t is not None:
+        event["t"] = t
+    return event
 
 
 def functions_changed_event(functions, instruments=None, surfaces=None,

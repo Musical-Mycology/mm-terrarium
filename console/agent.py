@@ -134,7 +134,12 @@ class ConsoleAgent:
         # on_room_frame for more than one fixture within one tick, and a
         # single slot silently starves every fixture but the last one to
         # call in that tick.
-        self._pending_room_frames: dict[str, bytes] = {}
+        self._pending_room_frames: dict[str, tuple[bytes, float]] = {}
+        # The most recent frame per fixture with its render time, kept after
+        # broadcast so a client that connects later can be shown the current
+        # state. Cleared when the Room changes (see
+        # _broadcast_room_if_changed), not on live controller values.
+        self._latest_room_frames: dict[str, tuple[bytes, float]] = {}
         self._last_room_frame_at = 0.0
         # The 3D fixture view's per-fixture layout + model, served by the
         # HTTP thread's route provider. The dict is REPLACED whole, never
@@ -163,6 +168,9 @@ class ConsoleAgent:
             if self.registry is not None:
                 self.server.send(client, protocol.bits_listed_event(
                     self.registry.list_view(), self.registry.errors_view()))
+            for fixture, (frame, t) in self._latest_room_frames.items():
+                self.server.send(
+                    client, protocol.room_frame_event(fixture, frame, t))
         for client, msg in self.server.drain_inbound():
             error = self._handle_command(msg)
             if error is not None:
@@ -823,6 +831,10 @@ class ConsoleAgent:
 
     def _broadcast_room_if_changed(self) -> None:
         if self._room_identity_changed():
+            # Frames belong to the old Room's fixtures. Pending frames are
+            # kept: they may already be the new Room's first render, and a
+            # fixture that does not change again would never resend one.
+            self._latest_room_frames = {}
             self._rebuild_fixture_models()
         room = self._current_room()
         if room != self._last_room:
@@ -836,7 +848,9 @@ class ConsoleAgent:
         still renders and still gets a Console strip). Stores the LATEST
         frame per fixture; anything not yet broadcast for that fixture is
         overwritten, never queued."""
-        self._pending_room_frames[fixture] = frame
+        entry = (frame, self._clock())
+        self._pending_room_frames[fixture] = entry
+        self._latest_room_frames[fixture] = entry
 
     def _broadcast_room_frame(self) -> None:
         if not self._pending_room_frames:
@@ -846,8 +860,8 @@ class ConsoleAgent:
             return
         pending, self._pending_room_frames = self._pending_room_frames, {}
         self._last_room_frame_at = now
-        for fixture, frame in pending.items():
-            self.server.broadcast(protocol.room_frame_event(fixture, frame))
+        for fixture, (frame, t) in pending.items():
+            self.server.broadcast(protocol.room_frame_event(fixture, frame, t))
 
     def _current_functions(self) -> list:
         bit = self.game_server.bit
