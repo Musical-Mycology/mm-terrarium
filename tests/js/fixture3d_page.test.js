@@ -150,3 +150,57 @@ test("a snapshot clears the selection", async () => {
   await flush();
   assert.ok(text(mount.inspector).includes("Click an LED"));
 });
+
+test("a snapshot restarts the Control-clock axis and the trace", async () => {
+  fresh();
+  await flush();
+  send(frame("tower", 50, 1000));
+  made[0].opts.onPick(0, LAYOUT);
+  send({ event: "gesture", dev: "ie1", verb: "tap", t: 1001, at: 1001, refused: null });
+  assert.ok(text(mount.inspector).includes("1001.00"));
+  send({ event: "snapshot", room: room() });   // a restarted Control: its clock starts again
+  made[0].opts.onPick(0, LAYOUT);
+  send(frame("tower", 60, 2));
+  const out = text(mount.inspector);
+  assert.ok(!out.includes("1001.00"), "the old gesture is gone with the old trace");
+  assert.ok(out.includes("R 60"), "the new low-t frame is shown at now = 2");
+});
+
+test("a view that resolves after a rebuild is disposed and never adopted", async () => {
+  send({ event: "snapshot", room: null });
+  made = [];
+  rejectWith = null;
+  const held = [];
+  page._setViewFactory((container, opts) => {
+    const v = { opts, painted: [], disposed: false, paint(ch) { this.painted.push(ch); },
+      select() {}, dispose() { this.disposed = true; } };
+    made.push(v);
+    return new Promise((res) => held.push(() => res(v)));
+  });
+  try {
+    send({ event: "snapshot", room: room(ok(SHA_A)) });
+    await flush();
+    send({ event: "room_changed", room: room(ok(SHA_B)) });
+    await flush();
+    assert.strictEqual(made.length, 2);
+    held[0](); held[1]();
+    await flush();
+    assert.ok(made[0].disposed, "the stale view is disposed");
+    assert.ok(!made[1].disposed);
+    send(frame("tower", 3, 1));
+    assert.strictEqual(made[0].painted.length, 0);
+    assert.strictEqual(made[1].painted.length, 1);
+    // a pick from the stale view is ignored
+    made[0].opts.onPick(1, LAYOUT);
+    assert.ok(!text(mount.inspector).includes("pixel 1"), "no address rows from a stale pick");
+  } finally {
+    page._setViewFactory(null);
+    page._setViewFactory((container, opts) => {
+      const v = { container, opts, painted: [], selected: [], disposed: false,
+        paint(ch) { this.painted.push(ch); }, select(i) { this.selected.push(i); },
+        dispose() { this.disposed = true; } };
+      made.push(v);
+      return rejectWith ? Promise.reject(new Error(rejectWith)) : Promise.resolve(v);
+    });
+  }
+});

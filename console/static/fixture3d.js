@@ -4,29 +4,20 @@
 // shell.js), takes the fixture's model from the snapshot's Room, and follows
 // room_changed, room_frame (this fixture only) and gesture.
 import * as wire from "./wire.js";
-import { mk, clear } from "./dom.js";
+import { clear } from "./dom.js";
 import { mountInspector } from "./inspector.js";
 import { FixtureTrace } from "./led_trace.js";
-import { ledAddress, rgbwAt } from "./led_inspect.js";
+import { ledAddress } from "./led_inspect.js";
+import { _setViewFactory as setSharedViewFactory, viewKey as tileKey, createClock,
+         freshTrace, refreshInspector as paintInspector, buildView } from "./fixture_live.js";
 
-// view3d.js imports three.js by bare name, so node tests never load it; the
-// page imports it on demand, as surface.js does.
-async function defaultViewFactory(container, opts) {
-  const { createFixtureView } = await import("./view3d.js");
-  return createFixtureView(container, opts);
-}
-let viewFactory = defaultViewFactory;
+// The one view factory lives in fixture_live.js; re-exported for the tests.
+export const _setViewFactory = setSharedViewFactory;
 
-export function _setViewFactory(fn) {
-  viewFactory = fn || defaultViewFactory;
-}
-
-// What the view should be, as a key that changes only when it must be
-// rebuilt (as surface.js tileKey): null means there is nothing to draw.
+// This page draws only a modelled fixture: an over-budget one is a note.
 function viewKey(fixture) {
-  const model = fixture.model || {};
-  if (model.status === "ok" && model.sha256) return `ok:${model.sha256}`;
-  return null;
+  const key = tileKey(fixture);
+  return key && key.startsWith("ok:") ? key : null;
 }
 
 function absence(name, fixture) {
@@ -44,27 +35,16 @@ export function startPage({ fixtureName, view: viewEl, inspector: inspectorEl, n
   let generation = 0;      // bumps on every rebuild so a stale factory result is dropped
   let trace = null;
   let channels = [];
-  let latestT = null;      // latest Control-clock t seen (room_frame or gesture)
+  const clock = createClock();
   let selected = null;     // {index, layout} or null
 
   if (titleEl) titleEl.textContent = `${name} · 3D`;
 
   const say = (msg) => { noteEl.textContent = msg; noteEl.hidden = !msg; };
 
-  function seeT(t) {
-    if (typeof t !== "number") return;
-    latestT = latestT === null ? t : Math.max(latestT, t);
-  }
-
   function refresh() {
     if (!selected) { inspector.clear(); return; }
-    const now = latestT ?? 0;
-    inspector.update({
-      rgbw: rgbwAt(channels, selected.index),
-      samples: trace ? trace.samples(selected.index, now) : [],
-      gestures: trace ? trace.gestures(now) : [],
-      now,
-    });
+    paintInspector(inspector, { channels, trace, index: selected.index, now: clock.now() });
   }
 
   function deselect() {
@@ -83,7 +63,8 @@ export function startPage({ fixtureName, view: viewEl, inspector: inspectorEl, n
     deselect();
   }
 
-  function pick(index, layout) {
+  function pick(index, layout, mine) {
+    if (mine !== generation) return;   // a callback from a view since replaced
     selected = { index, layout };
     if (view) view.select(index);
     inspector.select({ address: ledAddress(layout, index) });
@@ -104,28 +85,24 @@ export function startPage({ fixtureName, view: viewEl, inspector: inspectorEl, n
     trace = new FixtureTrace(fixture.pixel_count);
     say("");
     const mine = generation;
-    Promise.resolve()
-      .then(() => viewFactory(viewEl, {
-        fixture: name, sha256: fixture.model.sha256, onPick: pick,
-      }))
-      .then((v) => {
-        if (mine !== generation) { v.dispose(); return; }
-        view = v;
-        if (channels.length) v.paint(channels);
-        v.select(selected ? selected.index : null);
-      }, (err) => {
-        if (mine !== generation) return;
-        trace = null;
-        say((err && err.message) || "the 3D view failed to load");
-      });
+    buildView(viewEl, {
+      fixture: name,
+      sha256: fixture.model.sha256,
+      onPick: (index, layout) => pick(index, layout, mine),
+      channels: () => channels,
+      selectedIndex: () => null,       // selection is always cleared before a rebuild
+      isStale: () => mine !== generation,
+      onView: (v) => { view = v; },
+      onFail: (message) => { trace = null; say(message); },
+    });
   }
 
   wire.on("snapshot", (m) => {
     // A snapshot starts a connection, perhaps to a restarted Control whose
     // clock began again: drop the old time axis, the trace and the selection.
-    latestT = null;
+    clock.reset();
     channels = [];
-    if (trace) trace = new FixtureTrace(trace.pixelCount);
+    if (trace) trace = freshTrace(trace);
     deselect();
     applyRoom(m.room);
   });
@@ -133,13 +110,13 @@ export function startPage({ fixtureName, view: viewEl, inspector: inspectorEl, n
   wire.on("room_frame", (m) => {
     if (m.fixture !== name) return;
     channels = m.channels || [];
-    seeT(m.t);
+    clock.see(m.t);
     if (trace && typeof m.t === "number") trace.pushFrame(m.t, channels);
     if (view) view.paint(channels);
     if (selected) refresh();
   });
   wire.on("gesture", (m) => {
-    seeT(m.t);
+    clock.see(m.t);
     if (typeof m.t !== "number") return;
     if (trace) trace.pushGesture(m);
     if (selected) refresh();

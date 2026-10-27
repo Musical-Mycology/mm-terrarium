@@ -243,7 +243,7 @@ a.chip:hover, a.chip:focus-visible { color: var(--gold); border-color: var(--gol
 }
 .tilehead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .tileview { position: relative; height: 260px; border-radius: var(--r-input); overflow: hidden; }
-.tileview canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+.tileview canvas, .fix3dview canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
 .tile.fallback .tileview { height: auto; }
 .tilereason { margin: 0; overflow-wrap: anywhere; }
 .inspector {
@@ -267,7 +267,6 @@ a.chip:hover, a.chip:focus-visible { color: var(--gold); border-color: var(--gol
 .fix3d { display: flex; flex-direction: column; height: 100vh; }
 .fix3dbody { flex: 1; min-height: 0; display: flex; gap: 14px; padding: 14px 16px; }
 .fix3dview { position: relative; flex: 1; min-width: 0; background: var(--s-lowest); border: 1.5px solid var(--hair-tan); border-radius: 12px; overflow: hidden; }
-.fix3dview canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
 .fix3dside { flex: 0 0 340px; min-width: 0; overflow-y: auto; }
 .fix3dside .inspector { flex-basis: auto; width: 100%; box-sizing: border-box; }
 @media (max-width: 800px) {

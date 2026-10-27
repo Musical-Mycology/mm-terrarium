@@ -6,7 +6,7 @@ from pathlib import Path
 STATIC = Path(__file__).resolve().parent.parent / "console" / "static"
 
 MODULES = {"wire.js", "shell.js", "bit.js", "surface.js", "functions.js",
-           "view3d.js", "inspector.js", "fixture3d.js",
+           "view3d.js", "inspector.js", "fixture3d.js", "fixture_live.js",
            "rail.js", "join.js", "dom.js"}
 
 

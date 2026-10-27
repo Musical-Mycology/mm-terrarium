@@ -22,7 +22,9 @@ import * as wire from "./wire.js";
 import { mk, clear } from "./dom.js";
 import { decodeRgbw } from "./pixels.js";
 import { FixtureTrace } from "./led_trace.js";
-import { ledAddress, rgbwAt } from "./led_inspect.js";
+import { ledAddress } from "./led_inspect.js";
+import { _setViewFactory as setSharedViewFactory, viewKey as tileKey, createClock,
+         freshTrace, refreshInspector as paintInspector, buildView } from "./fixture_live.js";
 import { mountInspector } from "./inspector.js";
 
 const FRAME_LIVE_MS = 2000;
@@ -38,21 +40,11 @@ let armedFixtures = new Set();       // fixture names showing "Armed" until a de
 let pendingArm = null;               // fixture last sent arm_room; rolled back on its refusal
 let lastChannelsByName = {};         // fixture name -> last room_frame channels (raw RGBW)
 let traceByName = {};                // fixture name -> FixtureTrace, for tiled fixtures
-let latestT = null;                  // latest Control-clock t seen (room_frame or gesture)
+const clock = createClock();         // latest Control-clock t seen (room_frame or gesture)
 let selectedLed = null;              // {name, index, layout} picked on a tile, or null
 
-// view3d.js imports three.js by bare name, so it is loaded only when the
-// first tile needs it: node tests never touch it, and the Console's first
-// paint never waits on the three.js download.
-async function defaultViewFactory(container, opts) {
-  const { createFixtureView } = await import("./view3d.js");
-  return createFixtureView(container, opts);
-}
-let viewFactory = defaultViewFactory;
-
-export function _setViewFactory(fn) {
-  viewFactory = fn || defaultViewFactory;
-}
+// The one view factory lives in fixture_live.js; re-exported for the tests.
+export const _setViewFactory = setSharedViewFactory;
 
 // Structural elements this module owns, cached as module state rather than
 // re-located via getElementById -- the DOM stub (and, harmlessly, real
@@ -401,16 +393,6 @@ function fixtureShapeMatches(prev, next) {
 
 // ------------------------------------------------------------------- tiles
 
-// What a fixture's tile should be, as a key that changes only when the tile
-// must be rebuilt: a modelled fixture by its model's sha256, an over-budget
-// one by its reason. null means no tile (no model): the strip alone.
-function tileKey(fixture) {
-  const model = fixture.model || {};
-  if (model.status === "ok" && model.sha256) return `ok:${model.sha256}`;
-  if (model.status === "over_budget") return `over:${model.reason || ""}`;
-  return null;
-}
-
 function showTileFallback(entry, reason) {
   entry.el.classList.add("fallback");
   if (entry.popout) entry.popout.hidden = true;
@@ -419,24 +401,20 @@ function showTileFallback(entry, reason) {
 }
 
 function startView(name, fixture, entry) {
-  // Deferred a tick so the strip is in the DOM before any view work starts.
-  Promise.resolve()
-    .then(() => viewFactory(entry.viewEl, {
-      fixture: name,
-      sha256: fixture.model.sha256,
-      onPick: (index, layout) => pickLed(name, index, layout),
-    }))
-    .then((view) => {
-      if (entry.disposed) { view.dispose(); return; }
-      entry.view = view;
-      const channels = lastChannelsByName[name];
-      if (channels) view.paint(channels);
-      view.select(selectedLed && selectedLed.name === name ? selectedLed.index : null);
-    }, (err) => {
-      if (entry.disposed) return;
+  // buildView defers a tick so the strip is in the DOM before any view work.
+  buildView(entry.viewEl, {
+    fixture: name,
+    sha256: fixture.model.sha256,
+    onPick: (index, layout) => pickLed(name, index, layout),
+    channels: () => lastChannelsByName[name],
+    selectedIndex: () => (selectedLed && selectedLed.name === name ? selectedLed.index : null),
+    isStale: () => entry.disposed,
+    onView: (view) => { entry.view = view; },
+    onFail: (message) => {
       delete traceByName[name];
-      showTileFallback(entry, (err && err.message) || "the 3D view failed to load");
-    });
+      showTileFallback(entry, message);
+    },
+  });
 }
 
 function buildTile(fixture, key) {
@@ -528,19 +506,9 @@ function refreshInspector() {
   if (!inspector) return;
   if (!selectedLed) { inspector.clear(); return; }
   const { name, index } = selectedLed;
-  const trace = traceByName[name];
-  const now = latestT ?? 0;
-  inspector.update({
-    rgbw: rgbwAt(lastChannelsByName[name] || [], index),
-    samples: trace ? trace.samples(index, now) : [],
-    gestures: trace ? trace.gestures(now) : [],
-    now,
+  paintInspector(inspector, {
+    channels: lastChannelsByName[name], trace: traceByName[name], index, now: clock.now(),
   });
-}
-
-function seeT(t) {
-  if (typeof t !== "number") return;
-  latestT = latestT === null ? t : Math.max(latestT, t);
 }
 
 // ------------------------------------------------------------- instruments
@@ -936,7 +904,7 @@ function onRoomFrame(msg) {
   repaintFixture(msg.fixture);
   updateFramesChip();
 
-  seeT(msg.t);
+  clock.see(msg.t);
   const trace = traceByName[msg.fixture];
   if (trace && typeof msg.t === "number") trace.pushFrame(msg.t, channels);
   const tile = tileByName.get(msg.fixture);
@@ -946,7 +914,7 @@ function onRoomFrame(msg) {
 
 // A gesture is not tied to a fixture: it marks every tiled fixture's trace.
 function onGesture(msg) {
-  seeT(msg.t);
+  clock.see(msg.t);
   if (typeof msg.t !== "number") return;
   for (const trace of Object.values(traceByName)) trace.pushGesture(msg);
   if (selectedLed) refreshInspector();
@@ -958,9 +926,9 @@ export function init() {
   wire.on("snapshot", (m) => {
     // A snapshot starts a connection, perhaps to a restarted Control whose
     // clock began again: drop the old time axis and every trace with it.
-    latestT = null;
+    clock.reset();
     for (const name of Object.keys(traceByName)) {
-      traceByName[name] = new FixtureTrace(traceByName[name].pixelCount);
+      traceByName[name] = freshTrace(traceByName[name]);
     }
     currentRoom = m.room || null;
     render();
