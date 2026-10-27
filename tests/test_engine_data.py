@@ -625,3 +625,13 @@ def test_rejected_stamps_counts_once_per_gesture():
         gs.registration.assignments["ie1"][2])
     gs.data("ie1", "tap", ["ie1"], gesture_time=99999.0)
     assert gs.rejected_stamps == 2
+
+
+def test_unknown_verb_with_a_far_future_stamp_counts_one_rejected_stamp():
+    """Ruling 2: the stamp is resolved once, before routing, so a refused
+    (unknown-verb) gesture still counts a bad stamp, exactly once."""
+    bit, gs, watcher = _watched()
+    before = gs.rejected_stamps
+    result = gs.data("ie1", "zap", [], gesture_time=99999.0)
+    assert gs.rejected_stamps == before + 1
+    assert result == "unknown verb 'zap'"

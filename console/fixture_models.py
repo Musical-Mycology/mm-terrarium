@@ -1,8 +1,9 @@
 """What the Console's 3D fixture view fetches over HTTP: each loaded Room
-fixture's pixel layout (JSON) and its baked model (.glb).
+fixture's pixel layout (JSON) and its model (.glb, the instrument's `model_path`).
 
 Routes are keyed by fixture name in the loaded Room, never by a client path:
-`fixture_route` parses the name out of the path and does an exact dict lookup,
+`fixture_route` parses the name out of the path (percent-decoding it, since
+the client sends encodeURIComponent(name)) and does an exact dict lookup,
 so a name with `/`, `..` or anything else a fixture does not carry simply
 misses. The .glb is read from disk inside `fixture_route`, which runs on the
 HTTP thread; the tick thread only builds the (small) layout JSON.
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from urllib.parse import unquote
 
 from control.room_view import model_view_status
 
@@ -68,7 +70,7 @@ def build_fixture_models(profile) -> dict[str, FixtureModel]:
 def _name_from(path: str, prefix: str, suffix: str) -> str | None:
     if not (path.startswith(prefix) and path.endswith(suffix)):
         return None
-    name = path[len(prefix):len(path) - len(suffix)]
+    name = unquote(path[len(prefix):len(path) - len(suffix)])
     return name or None
 
 

@@ -40,7 +40,7 @@ let armedFixtures = new Set();       // fixture names showing "Armed" until a de
 let pendingArm = null;               // fixture last sent arm_room; rolled back on its refusal
 let lastChannelsByName = {};         // fixture name -> last room_frame channels (raw RGBW)
 let traceByName = {};                // fixture name -> FixtureTrace, for tiled fixtures
-const clock = createClock();         // latest Control-clock t seen (room_frame or gesture)
+const clock = createClock();         // latest Control-clock t seen (room_frame or gestures)
 let selectedLed = null;              // {name, index, layout} picked on a tile, or null
 
 // The one view factory lives in fixture_live.js; re-exported for the tests.
@@ -913,11 +913,17 @@ function onRoomFrame(msg) {
 }
 
 // A gesture is not tied to a fixture: it marks every tiled fixture's trace.
-function onGesture(msg) {
-  clock.see(msg.t);
-  if (typeof msg.t !== "number") return;
-  for (const trace of Object.values(traceByName)) trace.pushGesture(msg);
-  if (selectedLed) refreshInspector();
+// They arrive as one batch (`gestures`, oldest first), so the inspector is
+// refreshed once per batch.
+function onGestures(msg) {
+  let seen = false;
+  for (const g of msg.items || []) {
+    clock.see(g.t);
+    if (typeof g.t !== "number") continue;
+    for (const trace of Object.values(traceByName)) trace.pushGesture(g);
+    seen = true;
+  }
+  if (seen && selectedLed) refreshInspector();
 }
 
 // ---------------------------------------------------------------------- init
@@ -938,7 +944,7 @@ export function init() {
     render();
   });
   wire.on("room_frame", onRoomFrame);
-  wire.on("gesture", onGesture);
+  wire.on("gestures", onGestures);
 
   // A refused arm_room must not leave its fixture showing Armed. Not
   // cleared on room_changed: controller values make that event frequent,

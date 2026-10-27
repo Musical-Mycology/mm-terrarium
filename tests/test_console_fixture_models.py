@@ -28,6 +28,7 @@ def _models(tmp_path):
         _fixture("f", _instrument(glb)),
         _fixture("nomodel", Instrument(name="n", pixels=3)),
         _fixture("big", _instrument(glb, triangles=10**9)),
+        _fixture("tower a", _instrument(glb)),
     ))
     return build_fixture_models(profile)
 
@@ -46,7 +47,7 @@ def test_layout_json_lists_every_pixel_with_room_zones(tmp_path):
 
 
 def test_only_ok_fixtures_are_published(tmp_path):
-    assert set(_models(tmp_path)) == {"f"}
+    assert set(_models(tmp_path)) == {"f", "tower a"}
 
 
 def test_fixture_route_serves_layout_and_model(tmp_path):
@@ -65,7 +66,9 @@ def test_fixture_route_404s_unknown_fixture_and_bad_names(tmp_path):
     models = _models(tmp_path)
     for p in ["/fixture-model/nope.glb", "/fixture-model/../x.glb",
               "/fixture-layout/tower.glb", "/fixture-model/f/../f.glb",
-              "/fixture-model/.glb", "/fixture-model/f.glb/", "/fixture-model/%66.glb",
+              "/fixture-model/.glb", "/fixture-model/f.glb/",
+              "/fixture-model/..%2Fx.glb", "/fixture-model/f%2Fx.glb",
+              "/fixture-model/%2e%2e%2Ff.glb",
               "/fixture-model/nomodel.glb", "/fixture-layout/big.json", "/other"]:
         assert fixture_route(models, p) is None
 
@@ -74,3 +77,12 @@ def test_model_route_404s_when_file_vanished(tmp_path):
     models = _models(tmp_path)
     (tmp_path / "f.glb").unlink()
     assert fixture_route(models, "/fixture-model/f.glb") is None
+
+
+def test_percent_encoded_fixture_names_match_their_route(tmp_path):
+    models = _models(tmp_path)
+    body, _ctype, _headers = fixture_route(models, "/fixture-layout/tower%20a.json")
+    assert json.loads(body)["fixture"] == "tower a"
+    body, _ctype, _headers = fixture_route(models, "/fixture-model/tower%20a.glb")
+    assert body == b"glTF-bytes"
+    assert fixture_route(models, "/fixture-model/..%2Fx.glb") is None

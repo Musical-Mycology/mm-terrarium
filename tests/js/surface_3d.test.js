@@ -185,11 +185,27 @@ test("a gesture event appears in the selected LED's trace", async () => {
   await flush();
   send({ event: "room_frame", fixture: "tower", channels: new Array(16).fill(0), t: 10 });
   viewFor("tower").opts.onPick(0, LAYOUT);
-  send({ event: "gesture", dev: "ie1", verb: "tap", t: 11, at: 11.2, refused: null });
-  send({ event: "gesture", dev: "ie2", verb: "shake", t: 12, at: 12.2, refused: "busy" });
+  send({ event: "gestures", items: [{ dev: "ie1", verb: "tap", t: 11, at: 11.2, refused: null  }] });
+  send({ event: "gestures", items: [{ dev: "ie2", verb: "shake", t: 12, at: 12.2, refused: "busy"  }] });
   const text = surface._inspectorEl().textContent;
   assert.ok(text.includes("tap ie1"), text);
   assert.ok(text.includes("shake ie2 (refused: busy)"), text);
+});
+
+test("a gestures batch reaches the trace in order, and the list shows the newest 20", async () => {
+  fresh();
+  await flush();
+  send({ event: "room_frame", fixture: "tower", channels: new Array(16).fill(0), t: 30 });
+  viewFor("tower").opts.onPick(0, LAYOUT);
+  const items = [];
+  for (let i = 0; i < 25; i++) items.push({ dev: "ie1", verb: "tap", t: 31 + i * 0.1, at: 31 + i * 0.1, refused: null });
+  send({ event: "gestures", items });
+  assert.strictEqual(surface._traceFor("tower").gestures(40).length, 25, "the trace keeps every gesture");
+  const lis = walk(surface._inspectorEl(), (n) => n.tagName === "li");
+  assert.strictEqual(lis.length, 20, "the list is capped at the newest 20");
+  const text = surface._inspectorEl().textContent;
+  assert.ok(text.includes("33.40"), "newest row shown");
+  assert.ok(!text.includes("31.00 "), "oldest rows dropped from the list");
 });
 
 test("artnet_fixture_gets_3d_popout", async () => {
@@ -244,7 +260,7 @@ test("the inspector's rows survive a second room_frame (rule: frames repaint, ne
   await flush();
   send({ event: "room_frame", fixture: "tower", channels: new Array(16).fill(0), t: 20 });
   viewFor("tower").opts.onPick(1, LAYOUT);
-  send({ event: "gesture", dev: "ie1", verb: "tap", t: 21, at: 21.2, refused: null });
+  send({ event: "gestures", items: [{ dev: "ie1", verb: "tap", t: 21, at: 21.2, refused: null  }] });
   const insp = surface._inspectorEl();
   const dds = walk(insp, (n) => n.tagName === "dd");
   const lis = walk(insp, (n) => n.tagName === "li");
@@ -257,7 +273,7 @@ test("the inspector's rows survive a second room_frame (rule: frames repaint, ne
   assert.deepStrictEqual(lis2, lis, "gesture rows are the same nodes");
   assert.ok(insp.textContent.includes("R 88"), "the RGBW text still updates");
   // a new gesture does rebuild the list
-  send({ event: "gesture", dev: "ie2", verb: "shake", t: 24, at: 24.2, refused: null });
+  send({ event: "gestures", items: [{ dev: "ie2", verb: "shake", t: 24, at: 24.2, refused: null  }] });
   assert.strictEqual(walk(insp, (n) => n.tagName === "li").length, 2);
 });
 

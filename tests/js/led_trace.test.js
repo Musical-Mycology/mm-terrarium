@@ -74,3 +74,10 @@ test("a static LED's one frame is carried to the window start", async () => {
   tr.pushFrame(0, [5, 6, 7, 8]);
   assert.deepStrictEqual(tr.samples(0, 50), [{ t: 40, r: 5, g: 6, b: 7, w: 8 }]);
 });
+
+test("pushGesture drops stale gestures from the front without losing newer ones", async () => {
+  const { FixtureTrace } = await import("../../console/static/led_trace.js");
+  const tr = new FixtureTrace(1, 10);
+  for (const t of [1, 2, 8, 12, 13]) tr.pushGesture({ t, at: t, dev: "d", verb: "tap" });
+  assert.deepStrictEqual(tr.gestures(13).map((g) => g.t), [8, 12, 13]);
+});

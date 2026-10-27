@@ -29,7 +29,7 @@ export function viewKey(fixture) {
   return null;
 }
 
-// The latest Control-clock t a page has seen (room_frame or gesture), never
+// The latest Control-clock t a page has seen (room_frame or gestures), never
 // the browser's clock. A snapshot may come from a restarted Control whose
 // clock began again, so reset() drops the axis.
 export function createClock() {

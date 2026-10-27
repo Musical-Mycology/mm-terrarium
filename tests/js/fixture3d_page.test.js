@@ -138,7 +138,7 @@ test("a pick fills the inspector, and a gesture marks the trace", async () => {
   made[0].opts.onPick(1, LAYOUT);
   assert.deepStrictEqual(made[0].selected.at(-1), 1);
   assert.ok(text(mount.inspector).includes("tower · pixel 1"));
-  send({ event: "gesture", dev: "ie1", verb: "tap", t: 6, at: 6, refused: null });
+  send({ event: "gestures", items: [{ dev: "ie1", verb: "tap", t: 6, at: 6, refused: null  }] });
   assert.ok(text(mount.inspector).includes("6.00"), "the gesture row shows its Control-clock t");
 });
 
@@ -156,7 +156,7 @@ test("a snapshot restarts the Control-clock axis and the trace", async () => {
   await flush();
   send(frame("tower", 50, 1000));
   made[0].opts.onPick(0, LAYOUT);
-  send({ event: "gesture", dev: "ie1", verb: "tap", t: 1001, at: 1001, refused: null });
+  send({ event: "gestures", items: [{ dev: "ie1", verb: "tap", t: 1001, at: 1001, refused: null  }] });
   assert.ok(text(mount.inspector).includes("1001.00"));
   send({ event: "snapshot", room: room() });   // a restarted Control: its clock starts again
   made[0].opts.onPick(0, LAYOUT);

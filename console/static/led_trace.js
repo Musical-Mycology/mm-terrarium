@@ -19,8 +19,11 @@ export class FixtureTrace {
 
   pushGesture({ t, at, dev, verb, refused }) {
     this._gestures.push({ t, at, dev, verb, refused: refused ?? null });
+    // Gestures arrive in t order, so the stale ones are all at the front.
     const start = t - this.windowS;
-    this._gestures = this._gestures.filter((g) => g.t >= start);
+    let drop = 0;
+    while (drop < this._gestures.length && this._gestures[drop].t < start) drop++;
+    if (drop) this._gestures.splice(0, drop);
   }
 
   // Step-held samples for one pixel inside [now - windowS, now], oldest first.

@@ -7,6 +7,9 @@
 import { mk, clear } from "./dom.js";
 import { gestureLabel } from "./led_inspect.js";
 
+// Newest gesture rows listed; the trace canvas still marks every gesture in
+// its window.
+const GESTURE_ROWS = 20;
 const TRACE_W = 320;
 const TRACE_H = 96;
 const CHANNELS = [
@@ -131,7 +134,7 @@ export function mountInspector(el) {
       if (key === gestureKey) return;
       gestureKey = key;
       clear(gestureList);
-      for (const g of gestures) {
+      for (const g of gestures.slice(-GESTURE_ROWS)) {
         const li = mk("li", g.refused ? "refused" : null,
           `${Number(g.t).toFixed(2)}  ${gestureLabel(g)}`);
         li.title = `received ${Number(g.t).toFixed(2)}, cue at ${Number(g.at).toFixed(2)} (Control clock)`;

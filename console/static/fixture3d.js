@@ -2,7 +2,7 @@
 // The same view and inspector as the Room card's tile, with the whole window
 // to itself. It opens its own socket through wire.js (it does not load
 // shell.js), takes the fixture's model from the snapshot's Room, and follows
-// room_changed, room_frame (this fixture only) and gesture.
+// room_changed, room_frame (this fixture only) and gestures (a batch).
 import * as wire from "./wire.js";
 import { clear } from "./dom.js";
 import { mountInspector } from "./inspector.js";
@@ -115,11 +115,15 @@ export function startPage({ fixtureName, view: viewEl, inspector: inspectorEl, n
     if (view) view.paint(channels);
     if (selected) refresh();
   });
-  wire.on("gesture", (m) => {
-    clock.see(m.t);
-    if (typeof m.t !== "number") return;
-    if (trace) trace.pushGesture(m);
-    if (selected) refresh();
+  wire.on("gestures", (m) => {
+    let seen = false;
+    for (const g of m.items || []) {
+      clock.see(g.t);
+      if (typeof g.t !== "number") continue;
+      if (trace) trace.pushGesture(g);
+      seen = true;
+    }
+    if (seen && selected) refresh();
   });
 
   return { name };

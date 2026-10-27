@@ -2752,15 +2752,19 @@ def _seen(n):
                        at=n + 0.06, refused=None)
 
 
+def _gestures_events(srv):
+    return [b for b in srv.broadcasts if b["event"] == "gestures"]
+
+
 def test_console_broadcasts_buffered_gestures_on_poll():
     gs, srv, agent = _server_with_agent()
     agent.on_gesture(_seen(1))
     agent.poll()
-    got = [b for b in srv.broadcasts if b["event"] == "gesture"]
-    assert got == [{"event": "gesture", "dev": "ie1", "verb": "tap",
-                    "t": 1.0, "at": 1.06, "refused": None}]
+    assert _gestures_events(srv) == [{"event": "gestures", "items": [
+        {"dev": "ie1", "verb": "tap", "t": 1.0, "at": 1.06,
+         "refused": None}]}]
     agent.poll()
-    assert len([b for b in srv.broadcasts if b["event"] == "gesture"]) == 1
+    assert len(_gestures_events(srv)) == 1
 
 
 def test_console_gesture_buffer_is_bounded():
@@ -2768,7 +2772,80 @@ def test_console_gesture_buffer_is_bounded():
     for n in range(1000):
         agent.on_gesture(_seen(n))
     agent.poll()
-    got = [b for b in srv.broadcasts if b["event"] == "gesture"]
-    assert len(got) == 256
-    assert got[-1]["t"] == 999.0
-    assert got[0]["t"] == 744.0
+    got = _gestures_events(srv)
+    assert len(got) == 1
+    items = got[0]["items"]
+    assert len(items) == 256
+    assert items[-1]["t"] == 999.0
+    assert items[0]["t"] == 744.0
+
+
+def test_console_gestures_are_batched_per_interval():
+    from console.agent import ROOM_FRAME_INTERVAL
+    from control.functions import GestureSeen
+    gs, srv, agent = _server_with_agent()
+    clock = FakeClock(100.0)
+    agent._clock = clock
+    for n in range(100):
+        agent.on_gesture(GestureSeen(dev="d1", verb="tilt",
+                                     received=float(n), at=n + 0.06,
+                                     refused=None))
+        if n in (10, 50, 90):
+            agent.on_gesture(_seen(n))     # a tap, discrete
+    agent.poll()
+    got = _gestures_events(srv)
+    assert len(got) == 1
+    items = got[0]["items"]
+    assert [i["verb"] for i in items].count("tilt") == 1
+    tilt = [i for i in items if i["verb"] == "tilt"][0]
+    assert tilt["t"] == 99.0, "the latest tilt wins"
+    taps = [i for i in items if i["verb"] == "tap"]
+    assert [i["t"] for i in taps] == [10.0, 50.0, 90.0], "received order"
+    # a second interval with nothing new broadcasts nothing
+    clock.now += ROOM_FRAME_INTERVAL * 2
+    agent.poll()
+    assert len(_gestures_events(srv)) == 1
+
+
+def test_stream_gestures_coalesce_per_device_and_verb():
+    from control.functions import GestureSeen
+    gs, srv, agent = _server_with_agent()
+    for dev, t in (("a", 1.0), ("b", 2.0), ("a", 3.0)):
+        agent.on_gesture(GestureSeen(dev=dev, verb="tilt", received=t,
+                                     at=t, refused=None))
+    agent.poll()
+    items = _gestures_events(srv)[0]["items"]
+    assert [(i["dev"], i["t"]) for i in items] == [("b", 2.0), ("a", 3.0)]
+
+
+def test_gestures_wait_for_the_interval_then_go_out():
+    from console.agent import ROOM_FRAME_INTERVAL
+    gs, srv, agent = _server_with_agent()
+    clock = FakeClock(100.0)
+    agent._clock = clock
+    agent.on_gesture(_seen(1))
+    agent.poll()
+    agent.on_gesture(_seen(2))
+    clock.now += ROOM_FRAME_INTERVAL / 2
+    agent.poll()
+    assert len(_gestures_events(srv)) == 1, "held back inside the interval"
+    clock.now += ROOM_FRAME_INTERVAL
+    agent.poll()
+    got = _gestures_events(srv)
+    assert len(got) == 2 and got[1]["items"][0]["t"] == 2.0
+
+
+def test_frame_tagged_under_a_replaced_profile_is_not_replayed():
+    gs, srv, agent = _room_console()
+    agent._clock = FakeClock(5.0)
+    agent.on_room_frame("main", bytes([1, 2, 3]))
+    agent.poll()
+    import dataclasses
+    # a new profile object (equal in value) under the same Room name
+    gs.room = dataclasses.replace(
+        gs.room, profile=dataclasses.replace(gs.room.profile))
+    assert gs.room.profile is not agent._latest_room_frames["main"][2][1]
+    agent.poll()
+    srv.connect("late")
+    agent.poll()
+    assert _room_frames([m for c, m in srv.sent if c == "late"]) == []

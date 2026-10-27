@@ -2127,10 +2127,14 @@ network makes auth a prerequisite.
   `index.html` and `fixture3d.html`), so a traversal attempt simply misses.
 - **Fixture routes** (`console/fixture_models.py`, via `set_route_provider`,
   consulted only when no asset matched): `/fixture-layout/<name>.json` (the
-  pixel layout) and `/fixture-model/<name>.glb` (the baked model, read from
-  disk on the HTTP thread). The name is an exact lookup among the **loaded
+  pixel layout) and `/fixture-model/<name>.glb` (the instrument's
+  `model_path` source `.glb`, read from disk on the HTTP thread). The name is an exact lookup among the **loaded
   Room's** modelled fixtures, never joined onto a path, so an unloaded Room,
-  an unknown name or a `/` in it is a 404. `Cache-Control: no-cache`.
+  an unknown name or a `/` in it is a 404 (the name is percent-decoded before
+  the exact lookup, since the client sends `encodeURIComponent(name)`). The
+  routes send `Cache-Control: no-cache` and the client adds `?sha=<sha256>`,
+  so a changed model is always refetched; spec 8.2's sha-keyed client caching
+  is not implemented.
 - **`console/protocol.py`**: pure builders re-exporting `uplink.protocol`'s
   `parse_command` and shared events. Shared commands: `load_bit` (`name`,
   `overrides`, `room`), `run`, `abort`, `restart`, `list_bits`, `load_room`,
@@ -2167,10 +2171,16 @@ network makes auth a prerequisite.
   (each tagged by the Room it was rendered for, so an old Room's are
   dropped), `t` intact, so the 3D view has something to show before the next
   change.
-- **`gesture`** (event, not the command above): the engine's `on_gesture`
-  hook fires a `GestureSeen` (`dev`, `verb`, `received`, `at`, `refused`) for
-  every gesture of a registered device; the agent only buffers it and `poll()`
-  broadcasts, so the inspector can mark input on the trace. `rejected_stamps`
+- **`gestures`** (event, not the `gesture` command above): the engine's
+  `on_gesture` hook fires a `GestureSeen` (`dev`, `verb`, `received`, `at`,
+  `refused`) for every gesture of a registered device; the agent only buffers
+  it (bounded deque, 256) and `poll()` broadcasts at most once per
+  `ROOM_FRAME_INTERVAL` as ONE event `{"event": "gestures", "items": [{dev,
+  verb, t, at, refused}, ...]}`, oldest first. Within a batch the stream verbs
+  (`STREAM_GESTURE_VERBS`, `tilt`: devices send it at ~20 Hz) are coalesced
+  latest-wins per `(dev, verb)`; every discrete verb record is kept. The
+  inspector marks input on the trace (every gesture in the window) and lists
+  the newest 20. `rejected_stamps`
   now also counts a bad stamp on a refused gesture (the stamp is resolved
   once, before routing).
 - The `room` payload (*Shown by addition*, *Rooms and fixtures*): `fixtures[]`
@@ -2234,7 +2244,7 @@ network makes auth a prerequisite.
   model zone), the current RGBW, a step trace of R, G, B and W over the last
   10 s at 10 Hz, and a marker per input gesture (a refused one in the accent
   colour). Everything is on **Control's clock** (`createClock` in
-  `fixture_live.js`: the latest `t` of a `room_frame` or `gesture`, reset by a
+  `fixture_live.js`: the latest `t` of a `room_frame` or `gestures` item, reset by a
   snapshot), never the browser's. The tile's ↗ opens the full-window bump-out
   `fixture3d.html?fixture=<name>` (`fixture3d.js`), which takes the same view
   and inspector from `fixture_live.js` so the two cannot drift. The

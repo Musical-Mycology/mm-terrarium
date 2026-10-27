@@ -39,6 +39,12 @@ ROOM_FRAME_INTERVAL = 0.1
 # gesture ticker is a monitor, never something gameplay waits on.
 GESTURE_BUFFER = 256
 
+# Continuous verbs (a device streams them at ~20 Hz). Within one broadcast
+# batch only the latest per (dev, verb) is kept; every other verb is a
+# discrete event and is always kept. tilt is the only streaming verb in the
+# wire vocabulary (devicelink/contract.py: tap, tilt, shake, hold, swing).
+STREAM_GESTURE_VERBS = frozenset({"tilt"})
+
 # Same decimation idea as ROOM_FRAME_INTERVAL, applied to a live design-bench
 # session: the bench can tick faster than any panel needs to render.
 BENCH_FRAME_INTERVAL = 0.1
@@ -152,6 +158,7 @@ class ConsoleAgent:
         # new Room before poll() noticed the switch is still replayed.
         self._latest_room_frames: dict[str, tuple[bytes, float, tuple | None]] = {}
         self._last_room_frame_at = 0.0
+        self._last_gesture_at = float("-inf")
         # The 3D fixture view's per-fixture layout + model, served by the
         # HTTP thread's route provider. The dict is REPLACED whole, never
         # mutated, so the HTTP thread always reads one consistent map.
@@ -182,7 +189,7 @@ class ConsoleAgent:
             key = self._room_key()
             self._latest_room_frames = {
                 f: e for f, e in self._latest_room_frames.items()
-                if e[2] == key}
+                if self._same_room(e[2], key)}
             for fixture, (frame, t, _key) in self._latest_room_frames.items():
                 self.server.send(
                     client, protocol.room_frame_event(fixture, frame, t))
@@ -198,12 +205,25 @@ class ConsoleAgent:
         self._tick_bench()
 
     def _broadcast_gestures(self) -> None:
-        while True:
-            try:
-                record = self._pending_gestures.popleft()
-            except IndexError:
-                return
-            self.server.broadcast(protocol.gesture_event(record))
+        """At most one `gestures` event per ROOM_FRAME_INTERVAL. Stream verbs
+        are coalesced latest-wins per (dev, verb); discrete verbs all stay,
+        in received order."""
+        if not self._pending_gestures:
+            return
+        now = self._clock()
+        if now - self._last_gesture_at < ROOM_FRAME_INTERVAL:
+            return
+        self._last_gesture_at = now
+        records = list(self._pending_gestures)
+        self._pending_gestures.clear()
+        last_stream = {}
+        for i, record in enumerate(records):
+            if record.verb in STREAM_GESTURE_VERBS:
+                last_stream[(record.dev, record.verb)] = i
+        kept = [r for i, r in enumerate(records)
+                if r.verb not in STREAM_GESTURE_VERBS
+                or last_stream[(r.dev, r.verb)] == i]
+        self.server.broadcast(protocol.gestures_event(kept))
 
     def _tick_bench(self) -> None:
         if self._bench is None:
@@ -835,9 +855,16 @@ class ConsoleAgent:
         return None if room is None else (room.name, room.profile)
 
     def _room_key(self) -> tuple | None:
-        """Hashable Room identity (name, id of profile) used to tag frames."""
-        identity = self._room_identity()
-        return None if identity is None else (identity[0], id(identity[1]))
+        """The Room identity (name, profile object) used to tag frames. It
+        holds the profile itself, so its address cannot be reused while a
+        tagged frame is alive; compare with _same_room."""
+        return self._room_identity()
+
+    @staticmethod
+    def _same_room(a: tuple | None, b: tuple | None) -> bool:
+        if a is None or b is None:
+            return a is b
+        return a[0] == b[0] and a[1] is b[1]
 
     def _room_identity_changed(self) -> bool:
         """True when the loaded Room differs from the one the fixture models
