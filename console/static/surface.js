@@ -10,9 +10,20 @@
 // it, so an UNBOUND fixture gets a strip and paints its frames like any
 // other. The dev is still SHOWN (the binding chip), it is just not an
 // identity anything here is keyed on.
+//
+// A fixture whose model.status is "ok" also gets a 3D tile in a row above
+// the strips, with one LED inspector to the right of the tiles. Tiles are
+// keyed by fixture name + model sha256 and follow the same rule 1: a
+// room_changed that leaves both unchanged never rebuilds one (a WebGL
+// context and a model download per controller tick would be ruinous). The
+// strip is always built first; the 3D view arrives when it is ready, and a
+// view that fails leaves the strip with a one-line reason on the tile.
 import * as wire from "./wire.js";
 import { mk, clear } from "./dom.js";
 import { decodeRgbw } from "./pixels.js";
+import { FixtureTrace } from "./led_trace.js";
+import { ledAddress, rgbwAt } from "./led_inspect.js";
+import { mountInspector } from "./inspector.js";
 
 const FRAME_LIVE_MS = 2000;
 const PIX_PER_BLOCK = 144;
@@ -25,6 +36,23 @@ let lastPaintByName = {};            // fixture name -> [[r,g,b], ...] per pixel
 let lastFrameAt = {};                // fixture name -> ms timestamp of last room_frame
 let armedFixtures = new Set();       // fixture names showing "Armed" until a device binds or the arm_room is refused
 let pendingArm = null;               // fixture last sent arm_room; rolled back on its refusal
+let lastChannelsByName = {};         // fixture name -> last room_frame channels (raw RGBW)
+let traceByName = {};                // fixture name -> FixtureTrace, for tiled fixtures
+let latestT = null;                  // latest Control-clock t seen (room_frame or gesture)
+let selectedLed = null;              // {name, index, layout} picked on a tile, or null
+
+// view3d.js imports three.js by bare name, so it is loaded only when the
+// first tile needs it: node tests never touch it, and the Console's first
+// paint never waits on the three.js download.
+async function defaultViewFactory(container, opts) {
+  const { createFixtureView } = await import("./view3d.js");
+  return createFixtureView(container, opts);
+}
+let viewFactory = defaultViewFactory;
+
+export function _setViewFactory(fn) {
+  viewFactory = fn || defaultViewFactory;
+}
 
 // Structural elements this module owns, cached as module state rather than
 // re-located via getElementById -- the DOM stub (and, harmlessly, real
@@ -33,6 +61,11 @@ let pendingArm = null;               // fixture last sent arm_room; rolled back 
 let headEl = null;
 let bodyEl = null;
 let fixturesMountEl = null;
+let viewRowEl = null;                // tiles + inspector, above the strips
+let tilesEl = null;
+let inspectorEl = null;
+let inspector = null;                // mountInspector() handle
+let tileByName = new Map();          // fixture name -> {key, el, viewEl, popout, view, disposed}
 let framesChipEl = null;
 let instAccEl = null;
 let instSummaryMetaEl = null;
@@ -118,6 +151,15 @@ export function _muteChipFor(name) {
   return muteChipByName.get(name);
 }
 
+export function _tileFor(name) {
+  const entry = tileByName.get(name);
+  return entry ? entry.el : undefined;
+}
+
+export function _inspectorEl() {
+  return inspectorEl;
+}
+
 // -------------------------------------------------------------- painting
 
 function syncCanvasBackingSize(canvas) {
@@ -185,16 +227,16 @@ function bindingControls(fixture) {
 
   if (fixture.dev) {
     armedFixtures.delete(fixture.name);
-    const chip = mk("span", "chip sage", fixture.dev);
-    wrap.appendChild(chip);
+    // With a device canvas URL the chip itself is the link to it; the ↗
+    // belongs to the fixture's 3D tile (the bump-out view).
+    const chip = mk(fixture.url ? "a" : "span", "chip sage", fixture.dev);
     if (fixture.url) {
-      const popout = mk("a", "popout", "↗");
-      popout.href = fixture.url;
-      popout.target = "_blank";
-      popout.rel = "noopener";
-      popout.title = `Open ${fixture.name} surface`;
-      wrap.appendChild(popout);
+      chip.href = fixture.url;
+      chip.target = "_blank";
+      chip.rel = "noopener";
+      chip.title = `Open ${fixture.dev}'s canvas`;
     }
+    wrap.appendChild(chip);
     const releaseBtn = mk("button", "btn outline small", "Release");
     wire.reserveConfirmWidth(releaseBtn, "Confirm release?");
     releaseBtn.onclick = () => {
@@ -351,6 +393,148 @@ function fixtureShapeMatches(prev, next) {
   if (prev.pixel_count !== next.pixel_count) return false;
   if (JSON.stringify(prev.instrument) !== JSON.stringify(next.instrument)) return false;
   return JSON.stringify(prev.zones) === JSON.stringify(next.zones);
+}
+
+// ------------------------------------------------------------------- tiles
+
+// What a fixture's tile should be, as a key that changes only when the tile
+// must be rebuilt: a modelled fixture by its model's sha256, an over-budget
+// one by its reason. null means no tile (no model): the strip alone.
+function tileKey(fixture) {
+  const model = fixture.model || {};
+  if (model.status === "ok" && model.sha256) return `ok:${model.sha256}`;
+  if (model.status === "over_budget") return `over:${model.reason || ""}`;
+  return null;
+}
+
+function showTileFallback(entry, reason) {
+  entry.el.classList.add("fallback");
+  if (entry.popout) entry.popout.hidden = true;
+  clear(entry.viewEl);
+  entry.viewEl.appendChild(mk("p", "tilereason mono dim", reason));
+}
+
+function startView(name, fixture, entry) {
+  // Deferred a tick so the strip is in the DOM before any view work starts.
+  Promise.resolve()
+    .then(() => viewFactory(entry.viewEl, {
+      fixture: name,
+      sha256: fixture.model.sha256,
+      onPick: (index, layout) => pickLed(name, index, layout),
+    }))
+    .then((view) => {
+      if (entry.disposed) { view.dispose(); return; }
+      entry.view = view;
+      const channels = lastChannelsByName[name];
+      if (channels) view.paint(channels);
+      view.select(selectedLed && selectedLed.name === name ? selectedLed.index : null);
+    }, (err) => {
+      if (entry.disposed) return;
+      showTileFallback(entry, (err && err.message) || "the 3D view failed to load");
+    });
+}
+
+function buildTile(fixture, key) {
+  const name = fixture.name;
+  const el = mk("div", "tile");
+  const head = mk("div", "tilehead");
+  head.appendChild(mk("span", "fixname", name));
+  el.appendChild(head);
+  const viewEl = mk("div", "tileview");
+  el.appendChild(viewEl);
+  const entry = { key, el, viewEl, popout: null, view: null, disposed: false };
+
+  if (key.startsWith("over:")) {
+    showTileFallback(entry, fixture.model.reason || "model over budget");
+    return entry;
+  }
+  const popout = mk("a", "popout", "↗");
+  popout.href = `fixture3d.html?fixture=${encodeURIComponent(name)}`;
+  popout.target = "_blank";
+  popout.rel = "noopener";
+  popout.title = `Open ${name} in 3D`;
+  head.appendChild(popout);
+  entry.popout = popout;
+  traceByName[name] = new FixtureTrace(fixture.pixel_count);
+  startView(name, fixture, entry);
+  return entry;
+}
+
+function dropTile(name) {
+  const entry = tileByName.get(name);
+  if (!entry) return;
+  entry.disposed = true;
+  if (entry.view) entry.view.dispose();
+  entry.el.remove();
+  tileByName.delete(name);
+  delete traceByName[name];
+  if (selectedLed && selectedLed.name === name) {
+    selectedLed = null;
+    if (inspector) inspector.clear();
+  }
+}
+
+function dropAllTiles() {
+  for (const name of Array.from(tileByName.keys())) dropTile(name);
+}
+
+function renderTiles(room) {
+  const keys = new Map();
+  for (const fixture of room.fixtures) {
+    const key = tileKey(fixture);
+    if (key) keys.set(fixture.name, key);
+  }
+  for (const [name, entry] of Array.from(tileByName.entries())) {
+    if (keys.get(name) !== entry.key) dropTile(name);
+  }
+  // New tiles go before the nearest later surviving tile, so tiles keep
+  // the Room's fixture order.
+  for (let i = 0; i < room.fixtures.length; i++) {
+    const fixture = room.fixtures[i];
+    const key = keys.get(fixture.name);
+    if (!key || tileByName.has(fixture.name)) continue;
+    let anchor = null;
+    for (let j = i + 1; j < room.fixtures.length; j++) {
+      const later = tileByName.get(room.fixtures[j].name);
+      if (later) { anchor = later.el; break; }
+    }
+    const entry = buildTile(fixture, key);
+    if (anchor) tilesEl.insertBefore(entry.el, anchor);
+    else tilesEl.appendChild(entry.el);
+    tileByName.set(fixture.name, entry);
+  }
+  viewRowEl.hidden = tileByName.size === 0;
+}
+
+// ---------------------------------------------------------------- inspector
+
+function pickLed(name, index, layout) {
+  if (!tileByName.has(name)) return;
+  selectedLed = { name, index, layout };
+  for (const [tileName, entry] of tileByName) {
+    if (entry.view) entry.view.select(tileName === name ? index : null);
+  }
+  refreshInspector();
+}
+
+function refreshInspector() {
+  if (!inspector) return;
+  if (!selectedLed) { inspector.clear(); return; }
+  const { name, index, layout } = selectedLed;
+  const trace = traceByName[name];
+  const now = latestT ?? 0;
+  inspector.show({
+    address: ledAddress(layout, index),
+    rgbw: rgbwAt(lastChannelsByName[name] || [], index),
+    samples: trace ? trace.samples(index, now) : [],
+    gestures: trace ? trace.gestures(now) : [],
+    now,
+  });
+}
+
+function seeT(t) {
+  if (typeof t !== "number") return;
+  latestT = latestT === null ? t : Math.max(latestT, t);
 }
 
 // ------------------------------------------------------------- instruments
@@ -539,9 +723,14 @@ function updateFramesChip() {
 // -------------------------------------------------------------------- render
 
 function resetStructure() {
+  dropAllTiles();
   headEl = null;
   bodyEl = null;
   fixturesMountEl = null;
+  viewRowEl = null;
+  tilesEl = null;
+  inspectorEl = null;
+  inspector = null;
   framesChipEl = null;
   instAccEl = null;
   instSummaryMetaEl = null;
@@ -565,6 +754,7 @@ function render() {
     fixtureShapes = {};
     canvasesByName = {};
     lastPaintByName = {};
+    lastChannelsByName = {};
     lastFrameAt = {};
     armedFixtures.clear();
     pendingArm = null;
@@ -598,6 +788,18 @@ function render() {
   headRight.appendChild(framesChipEl);
   head.appendChild(headRight);
   updateFramesChip();
+
+  // Tiles and the inspector sit above the strips (spec mockup "layout A").
+  if (!viewRowEl) {
+    viewRowEl = mk("div", "viewrow");
+    tilesEl = mk("div", "tiles");
+    inspectorEl = mk("div", "inspector");
+    viewRowEl.appendChild(tilesEl);
+    viewRowEl.appendChild(inspectorEl);
+    viewRowEl.hidden = true;
+    body.appendChild(viewRowEl);
+    inspector = mountInspector(inspectorEl);
+  }
 
   if (!fixturesMountEl) {
     fixturesMountEl = document.createElement("div");
@@ -675,6 +877,7 @@ function render() {
     fixtureShapes[fixture.name] = nextShape;
   }
   canvasesByName = newCanvasesByName;
+  renderTiles(room);
 
   // Triggers accordion shell -- created ONCE here; functions.js renders into
   // #functionsMount. Sits directly under the LED rows.
@@ -719,17 +922,40 @@ function render() {
 function onRoomFrame(msg) {
   // rule 9: a frame for a fixture this panel has no strip for is a no-op.
   if (!canvasesByName[msg.fixture]) return;
-  const pixels = decodeRgbw(msg.channels || []);
+  const channels = msg.channels || [];
+  const pixels = decodeRgbw(channels);
   lastPaintByName[msg.fixture] = pixels;
+  lastChannelsByName[msg.fixture] = channels;
   lastFrameAt[msg.fixture] = Date.now();
   repaintFixture(msg.fixture);
   updateFramesChip();
+
+  seeT(msg.t);
+  const trace = traceByName[msg.fixture];
+  if (trace && typeof msg.t === "number") trace.pushFrame(msg.t, channels);
+  const tile = tileByName.get(msg.fixture);
+  if (tile && tile.view) tile.view.paint(channels);
+  if (selectedLed && selectedLed.name === msg.fixture) refreshInspector();
+}
+
+// A gesture is not tied to a fixture: it marks every tiled fixture's trace.
+function onGesture(msg) {
+  seeT(msg.t);
+  if (typeof msg.t !== "number") return;
+  for (const trace of Object.values(traceByName)) trace.pushGesture(msg);
+  if (selectedLed) refreshInspector();
 }
 
 // ---------------------------------------------------------------------- init
 
 export function init() {
   wire.on("snapshot", (m) => {
+    // A snapshot starts a connection, perhaps to a restarted Control whose
+    // clock began again: drop the old time axis and every trace with it.
+    latestT = null;
+    for (const name of Object.keys(traceByName)) {
+      traceByName[name] = new FixtureTrace(traceByName[name].pixelCount);
+    }
     currentRoom = m.room || null;
     render();
   });
@@ -738,6 +964,7 @@ export function init() {
     render();
   });
   wire.on("room_frame", onRoomFrame);
+  wire.on("gesture", onGesture);
 
   // A refused arm_room must not leave its fixture showing Armed. Not
   // cleared on room_changed: controller values make that event frequent,
