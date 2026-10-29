@@ -464,10 +464,10 @@ The end state: `./terrarium.sh --room TEST --seconds 45` runs clean.
    refuses with the fix. `./terrarium.sh --clean` skips it. The soundfont
    lands at `/usr/share/sounds/sf2/FluidR3_GM.sf2`, which
    `harness/arco_synth.py` already probes.
-2. **Sibling checkouts under `~/projects`**: `arco`
-   (`Musical-Mycology/arco`), `luxaeterna`, and `o2` from
-   `rbdannenberg/o2` (not in the Musical-Mycology org; arco's cmake finds it
-   as a sibling). `mm`'s clone-missing-repos sweep skips arco, luxaeterna
+2. **Sibling checkouts under `~/projects`**: `arco` from Roger's
+   `rbdannenberg/arco` (`Musical-Mycology/arco` is only a mirror),
+   `luxaeterna`, and `o2` from `rbdannenberg/o2` (not in the
+   Musical-Mycology org; arco's cmake finds it as a sibling). `mm`'s clone-missing-repos sweep skips arco, luxaeterna
    and mm-devshroom (no `mm-meta.yml`), so clone them by hand.
 3. **Patch and build o2.** Apply the stale cs/get fix first (*Host
    platform*): `git -C ~/projects/o2 apply
