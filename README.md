@@ -71,9 +71,8 @@ observer list as the uplink and runs entirely offline in tests. See
 ### Repos you need
 
 Clone these side by side under `~/projects`. Arco and O2 come straight from
-Roger Dannenberg's repos (the harness finds `arco` as a
-sibling of this repo's main checkout, and Arco's cmake finds `o2` as a
-sibling of `arco`):
+Roger Dannenberg's repos. The harness finds `arco` as a sibling of this
+repo's main checkout, and Arco's cmake finds `o2` as a sibling of `arco`.
 
 | Repo | What it provides |
 |---|---|
