@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import queue
 import secrets
+import sys
 from dataclasses import dataclass, field, replace
 
 from control.breath import BREATH_CC, breath_cc
@@ -109,6 +110,10 @@ class DeviceLinkAgent:
         self.transport = transport
         self._capability = capability
         self._clock = clock
+        # dev -> its tap's gesture time, from the tap's handling until the
+        # first /leds that answers it goes out (see _send), or the end of
+        # that poll() if none does.
+        self._tap_light_pending: dict[str, float] = {}
         # BootConfig.cue_horizon. Used two ways here. A frame with no cue
         # behind it (breath only) is a STREAM frame whose origin is this
         # tick, so it is stamped clock() + horizon. And a cue's session feed
@@ -910,6 +915,9 @@ class DeviceLinkAgent:
         self._render_frames()
         self._render_room()
         self._tick_audio()
+        # A tap whose Bit lit nothing this tick has no light to time; a
+        # later, unrelated frame must not be printed as its response.
+        self._tap_light_pending.clear()
 
     def _forget_reaped(self, dev: str) -> None:
         """A reaped dev that never held a role (no bridge, not mid-fade)
@@ -1612,6 +1620,10 @@ class DeviceLinkAgent:
                                        gesture_time=gesture_time)
         if reason is not None:
             self._send(dev, protocol.error_event(dev, verb, reason))
+        elif verb == "tap":
+            # The first /leds to this dev from here to the end of this poll
+            # is the tap's light: _send prints its O2 send time.
+            self._tap_light_pending[dev] = gesture_time
 
     # --- engine-owned sinks -------------------------------------------------
     def _enter_setup(self) -> None:
@@ -2000,3 +2012,10 @@ class DeviceLinkAgent:
     # --- outbound -----------------------------------------------------------
     def _send(self, dev: str, msg: dict) -> None:
         self.transport.send(dev, msg)
+        if (dev in self._tap_light_pending
+                and msg.get("address") == f"/{dev}/leds"):
+            tapped = self._tap_light_pending.pop(dev)
+            now = self._clock()
+            print(f"TAP LIGHT sent at o2 t={now:.3f} s: dev={dev} "
+                  f"tap_t={tapped:.3f} after_tap_ms={(now - tapped) * 1000:.1f}",
+                  file=sys.stderr, flush=True)

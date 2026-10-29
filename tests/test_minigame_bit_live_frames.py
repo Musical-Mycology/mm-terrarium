@@ -210,3 +210,22 @@ def test_a_responder_at_full_is_beige():
              for _when, frame in rig.frames
              for i in range(BAR_PIXELS * 3, TOWER_PIXELS * 3, 3)}
     assert RESPONDER_RGB in peaks
+
+
+def test_the_tap_light_prints_its_o2_send_time(capsys):
+    rig = _Rig()
+    rig.run(0.5)
+    capsys.readouterr()
+    tap_at = rig.clk() - 0.010
+    rig.server.deliver("c2", "/game/tap", "sffi", ["ie1", 0.0, 80.0, 1],
+                       timestamp=tap_at)
+    rig.run(TICK)
+    lines = [l for l in capsys.readouterr().err.splitlines()
+             if l.startswith("TAP LIGHT")]
+    assert len(lines) == 1, lines
+    now = rig.clk()
+    assert lines[0] == (f"TAP LIGHT sent at o2 t={now:.3f} s: dev=ie1 "
+                        f"tap_t={tap_at:.3f} "
+                        f"after_tap_ms={(now - tap_at) * 1000:.1f}")
+    rig.run(0.5)                     # the fade's later frames do not print
+    assert "TAP LIGHT" not in capsys.readouterr().err
