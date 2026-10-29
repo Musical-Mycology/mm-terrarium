@@ -274,3 +274,8 @@ has no `.venv` at all, so symlink it:
   repo's `uplink/` module (the Terrarium-side half) is implemented and
   talks outbound over a websocket, never in the real-time loop; the
   broker itself doesn't exist yet.
+
+## License
+
+MIT; see [`LICENSE`](LICENSE). Arco and O2, which this server builds on, are Roger
+Dannenberg's and carry their own terms.
