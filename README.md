@@ -70,14 +70,15 @@ observer list as the uplink and runs entirely offline in tests. See
 
 ### Repos you need
 
-Clone these side by side under `~/projects` (the harness finds `arco` as a
+Clone these side by side under `~/projects`. Arco and O2 come straight from
+Roger Dannenberg's repos (the harness finds `arco` as a
 sibling of this repo's main checkout, and Arco's cmake finds `o2` as a
 sibling of `arco`):
 
 | Repo | What it provides |
 |---|---|
 | `Musical-Mycology/mm-terrarium` | this repo: Control+GameServer, the harness, the Console and the in-repo Bits |
-| `Musical-Mycology/arco` (mirror of `rbdannenberg/arco`) | the Arco server (room O2 hub and synth), plus `pyarco/` and `o2litepy/`, reached by `PYTHONPATH` |
+| `rbdannenberg/arco` (Roger's; clone this as `origin`) | the Arco server (room O2 hub and synth), plus `pyarco/` and `o2litepy/`, reached by `PYTHONPATH` |
 | `rbdannenberg/o2` | O2, which Arco links against. Not in the Musical-Mycology org |
 | `Musical-Mycology/luxaeterna` | the light renderer, installed editable into `.venv` |
 
@@ -145,7 +146,7 @@ step) is *Linux / WSL host setup* in
    ```
 
 3. **Configure Arco** with the Ubuntu `libraries.txt` and the Linux build
-   patch (pending upstream; never commit it to the arco mirror):
+   patch (pending upstream with Roger; never commit it to arco or its MM mirror):
 
    ```bash
    cp docs/upstream/arco-libraries-ubuntu.txt ~/projects/arco/apps/common/libraries.txt
@@ -256,7 +257,8 @@ has no `.venv` at all, so symlink it:
 
 ## Relationship to other repos
 
-- **arco / o2** (rbdannenberg upstream, Musical-Mycology mirror of arco): the
+- **arco / o2** (Roger Dannenberg's `rbdannenberg/arco` and `rbdannenberg/o2`;
+  `Musical-Mycology/arco` is only a mirror, not the source to clone): the
   synthesis engine and transport this server builds on. The Arco server is
   the room's O2 hub and sole synthesizer.
 - **pyarco** and **o2litepy**: the Python layers Control drives Arco and the
