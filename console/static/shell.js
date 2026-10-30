@@ -1,6 +1,7 @@
 // Entry point: wires the top bar, the disconnect dim, and every panel.
 import * as wire from "./wire.js";
 import { init as initBit } from "./bit.js";
+import { init as initQuickPlay } from "./quickplay.js";
 import { init as initGestures } from "./gestures.js";
 import { init as initJoin } from "./join.js";
 import { init as initSurface } from "./surface.js";
@@ -78,5 +79,5 @@ wire.on("error", (m) => {
   logLine("error", `${m.command}: ${m.message}`);
 });
 
-initBit(); initGestures(); initJoin(); initSurface(); initFunctions(); initRail(); initRooms(); initBusy(); initDesign(); initBench(); initCalibrate(); initForms();
+initBit(); initQuickPlay(); initGestures(); initJoin(); initSurface(); initFunctions(); initRail(); initRooms(); initBusy(); initDesign(); initBench(); initCalibrate(); initForms();
 wire.connect();
