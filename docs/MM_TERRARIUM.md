@@ -2375,6 +2375,18 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   volume on cc 7 and the pedal on cc 64; all timing is a `Sequencer`
   (*Audio*) and the Bit returns its cues from `fires(at)` and the verb
   handlers. Assets are four `.mid` files under `[assets]`.
+- **BeatsBit** (`bits/beats/`, display name "Beats", MIDITEST, kind `music`,
+  `[start] when = "immediate"`, no simulated devices by default): one
+  `devtower<N>` takes `tower` and two `ie<N>` take `shroom` (`admits`, unscored
+  JAM roles capped at 1 and 2), anything else gets solo. Its one
+  `Bit.actions()` entry, `start` ("Start"), loops `piano.mid` at 130 BPM with
+  a `Sequencer` until unloaded, however many of those devices have joined.
+  A `MusicCue` is Room audio only, so the piano sounds from the Room's flsyn,
+  not the devtower's speaker. On every pass of the loop, the note-ons of
+  `beats1.mid` mark the piano's first measure and those of `beats2.mid` its
+  third. They are meant to flash the tower's responders; until the tower is
+  wired up, each is printed to stdout as it comes due. The roles have no light
+  or gestures yet.
 - **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a
   four-phase white build on every Tower, switched from the Console. It
   sorts devices by id with `admits`: `ie<N>` takes `player`,

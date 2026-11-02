@@ -1,0 +1,32 @@
+[bit]
+name = "BeatsBit"
+version = "0.1.0"
+description = "Beats: a devtower and two tuneshrooms connect, and the Console's Start button plays the piano loop"
+entry = "beats_bit:BeatsBit"
+kind = "music"
+author = "Musical Mycology"
+requires_terrarium_api = 1
+
+[launch]
+room_types = ["MIDITEST"]
+default_room_type = "MIDITEST"
+default_devices = 0
+default_join_role = "shroom"
+device_instrument = "tuneshroom"
+manual_devices = true
+
+[launch.nodes]
+shroom = "BEATS_SHROOM_NODE"
+tower = "BEATS_TOWER_NODE"
+
+[start]
+when = "immediate"
+
+[console]
+display_name = "Beats"
+notes = "Connect one devtower<N> device and two ie<N> tuneshrooms, and press Start on the Bit status card; it starts however many of them are connected. The piano loop plays from the Room's speaker, not the devtower's, and runs until the Bit is unloaded. While no tower is wired up, the beats of measures 1 and 3 are printed to the terrarium's console."
+
+[assets]
+piano = "assets/piano.mid"
+beats1 = "assets/beats1.mid"
+beats2 = "assets/beats2.mid"
