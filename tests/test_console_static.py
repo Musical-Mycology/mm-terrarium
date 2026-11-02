@@ -6,7 +6,7 @@ from pathlib import Path
 STATIC = Path(__file__).resolve().parent.parent / "console" / "static"
 
 MODULES = {"wire.js", "shell.js", "bit.js", "surface.js", "functions.js",
-           "rail.js", "join.js", "dom.js", "quickplay.js"}
+           "rail.js", "join.js", "dom.js"}
 
 
 def _text_assets() -> str:
@@ -114,11 +114,3 @@ def test_join_card_is_mounted_and_initialised():
     assert "qr_svg" in js
     assert "native_note" in js
     assert "app_present" in js
-
-
-def test_quick_play_is_mounted_and_initialised():
-    html = (STATIC / "index.html").read_text()
-    assert 'id="quickPlay"' in html
-    shell = (STATIC / "shell.js").read_text()
-    assert 'from "./quickplay.js"' in shell
-    assert "initQuickPlay()" in shell
