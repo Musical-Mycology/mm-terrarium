@@ -17,7 +17,10 @@ Run a client with:
 
 from __future__ import annotations
 
+import ctypes
 import os
+import threading
+import time
 
 from harness.arco_paths import sibling_path
 
@@ -56,6 +59,51 @@ DEFAULT_SOUNDFONT = _default_soundfont()
 # GM soundfont. The channel stays internal to this file: callers ask for a
 # drums voice, never for a number.
 DRUM_CHANNEL = 9
+
+
+def _hold_audio_sink_awake(seconds: float = 20.0) -> None:
+    """Read and discard the PulseAudio sink's monitor while Arco opens audio.
+
+    MEASURED 2026-11-02 under WSLg, with a bare PortAudio stream and no Arco: a
+    32-frame stream opened into the SUSPENDED RDPSink stays starved at about 3
+    callbacks a second, where 1380 are due. Arco then plays 10-20 ms scraps of
+    sound, which is heard as random beats. Output of our own will not do: Arco's
+    open failed (-9987) with a long silent stream playing, and a brief one left
+    it starved in 2 of 3 runs. Playback stays healthy after this monitor stream
+    ends. No PulseAudio means nothing to hold, which is not an error."""
+    class SampleSpec(ctypes.Structure):
+        _fields_ = [("format", ctypes.c_int), ("rate", ctypes.c_uint32),
+                    ("channels", ctypes.c_uint8)]
+
+    try:
+        pulse = ctypes.CDLL("libpulse-simple.so.0")
+    except OSError:
+        return
+    pulse.pa_simple_new.restype = ctypes.c_void_p
+    pulse.pa_simple_new.argtypes = [
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+        ctypes.c_char_p, ctypes.POINTER(SampleSpec), ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.c_void_p]
+    pulse.pa_simple_read.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                     ctypes.c_size_t, ctypes.c_void_p]
+    pulse.pa_simple_free.argtypes = [ctypes.c_void_p]
+    spec = SampleSpec(3, 44100, 2)           # 3 = PA_SAMPLE_S16LE
+    stream = pulse.pa_simple_new(None, b"terrarium", 2, b"@DEFAULT_MONITOR@",
+                                 b"hold sink awake", ctypes.byref(spec),
+                                 None, None, None)
+    if not stream:
+        return
+
+    def read_then_close() -> None:
+        chunk = ctypes.create_string_buffer(4410 * 4)     # 0.1 s
+        deadline = time.monotonic() + seconds
+        while (time.monotonic() < deadline and
+               pulse.pa_simple_read(stream, chunk, len(chunk), None) >= 0):
+            pass
+        pulse.pa_simple_free(stream)
+
+    threading.Thread(target=read_then_close, daemon=True,
+                     name="hold-audio-sink").start()
 
 
 class ArcoVoice:
@@ -121,6 +169,7 @@ class ArcoSynthPool:
         from pyarco.arco_engine import arco            # noqa: PLC0415
         from pyarco.ugens.flsyn import Flsyn           # noqa: PLC0415
 
+        _hold_audio_sink_awake()
         arco.initialize(ensemble=self._ensemble)       # raises TimeoutError if no server
         self._sched = sched
         self._arco = arco

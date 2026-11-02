@@ -60,6 +60,58 @@ def test_start_with_missing_soundfont_names_the_path_without_pyarco():
     assert missing_path in str(ei.value)
 
 
+def test_start_holds_the_audio_sink_awake_before_arco_opens_audio(
+        monkeypatch, tmp_path):
+    # Arco's stream starves if it opens into a suspended sink, so the hold has
+    # to be in place before arco.initialize(), which opens the audio.
+    import sys
+    import types
+
+    import harness.arco_synth as arco_synth
+
+    calls = []
+
+    class FakeFlsyn:
+        def __init__(self, path):
+            pass
+
+        def play(self):
+            calls.append("flsyn")
+
+    class FakeArco:
+        def initialize(self, ensemble):
+            calls.append("initialize")
+
+    modules = {
+        "pyarco": types.ModuleType("pyarco"),
+        "pyarco.sched": types.ModuleType("pyarco.sched"),
+        "pyarco.arco_engine": types.SimpleNamespace(arco=FakeArco()),
+        "pyarco.ugens": types.ModuleType("pyarco.ugens"),
+        "pyarco.ugens.flsyn": types.SimpleNamespace(Flsyn=FakeFlsyn),
+    }
+    modules["pyarco"].sched = modules["pyarco.sched"]
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(arco_synth, "_hold_audio_sink_awake",
+                        lambda: calls.append("hold"))
+    soundfont = tmp_path / "gm.sf2"
+    soundfont.write_bytes(b"")
+
+    arco_synth.ArcoSynthPool(soundfont=str(soundfont)).start()
+
+    assert calls == ["hold", "initialize", "flsyn"]
+
+
+def test_holding_the_sink_is_a_noop_without_pulseaudio(monkeypatch):
+    import harness.arco_synth as arco_synth
+
+    def no_library(name):
+        raise OSError(f"cannot load {name}")
+
+    monkeypatch.setattr(arco_synth.ctypes, "CDLL", no_library)
+    arco_synth._hold_audio_sink_awake()
+
+
 def test_quiesce_drops_handles_without_wire_traffic():
     # Room recycle calls quiesce() right when Arco is being (or already was)
     # SIGTERMed, so it must not touch the dead handles at all.
