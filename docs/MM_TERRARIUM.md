@@ -2383,10 +2383,18 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   a `Sequencer` until unloaded, however many of those devices have joined.
   A `MusicCue` is Room audio only, so the piano sounds from the Room's flsyn,
   not the devtower's speaker. On every pass of the loop, the note-ons of
-  `beats1.mid` mark the piano's first measure and those of `beats2.mid` its
-  third. They are meant to flash the tower's responders; until the tower is
-  wired up, each is printed to stdout as it comes due. The roles have no light
-  or gestures yet.
+  `beats1.mid` light the tower's four responders in the piano's first measure
+  and those of `beats2.mid` in its third, each fading out over 0.25 s. A tap on
+  either shroom blinks both purple. Measures 2 and 4 are the players' answer:
+  the same rhythm one measure after its call. Each shroom's tap takes the
+  nearest answer beat it has not yet taken within 0.25 beat either side, so the
+  window in seconds follows the tempo, and earns 1 dead on, falling linearly to
+  0 at the window's edge. A late tap is forgiven 20 ms first (`LATE_GRACE_S`),
+  and the whole judgment runs 200 ms behind the grid (`JUDGE_DELAY_S`), so dead
+  on is 200 ms after the beat; both are fixed in seconds. A beat with no tap
+  earns 0 and a stray tap earns nothing. A player's score, 0 to 1, is the mean over every answer beat closed
+  since Start, shown as `score <dev>` in `status()`. The roles stay unscored
+  JAM roles, so seating and Start are unaffected.
 - **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a
   four-phase white build on every Tower, switched from the Console. It
   sorts devices by id with `admits`: `ie<N>` takes `player`,
