@@ -158,6 +158,19 @@ class Bit(ABC):
     def on_unload(self) -> None:
         """Called once when Control enters UNLOADING, after devices are released."""
 
+    def actions(self) -> dict:
+        """Operator buttons the Terrarium Console shows on the Bit status
+        card, as {name: (label, handler)}. Empty by default.
+
+        A handler is called as handler(at) when the operator presses the
+        button, `at` being Control's clock plus the cue horizon, the same
+        origin a self-driven cue takes. It may change the Bit's own state
+        (status() reflects it on the next poll) and returns a list of cues
+        to dispatch, or a str refusal reason the Console flashes on the
+        button.
+        """
+        return {}
+
     def verb_handlers(self) -> dict:
         """Extra /game/* verb handlers this Bit adds, beyond the fixed
         lifecycle verbs Control always handles. Empty by default.

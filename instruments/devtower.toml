@@ -1,5 +1,5 @@
-description = "Dev Tower: ESP32-P4 bench board, 4-LED progress bar on a 12-px frame, speaker"
-pixels = 12
+description = "Dev Tower: ESP32-P4 bench board, 32-LED progress bar (16 two-LED lights) and 4 RGB responder lights of 24 LEDs on a 128-px frame, speaker"
+pixels = 128
 capabilities = ["light.pixels", "audio.samples"]
 accepted_cues = ["midi", "play", "solid", "mute"]
   [ambient]

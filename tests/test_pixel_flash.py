@@ -64,11 +64,13 @@ pytest.importorskip("luxaeterna")
 
 from tests.test_devicelink_agent import (  # noqa: E402
     _last_leds_payload, two_fixture_agent)
+from control.pixel_wire import rgb_blob  # noqa: E402
 
 __all__ = ["two_fixture_agent"]   # the fixture is used by name below
 
 PIXEL = 3
-LO, HI = PIXEL * 4, PIXEL * 4 + 4
+# The sent /leds blob is R, G, B a pixel, W folded in (rgb_blob).
+LO, HI = PIXEL * 3, PIXEL * 3 + 3
 
 
 def _settled(agent, main_dev):
@@ -80,34 +82,34 @@ def _settled(agent, main_dev):
 def test_flash_paints_one_pixel(two_fixture_agent):
     agent, _audio, main_dev, _accent = two_fixture_agent
     before = _settled(agent, main_dev)
-    assert before[LO:HI] != bytes(WHITE)
+    assert before[LO:HI] != rgb_blob(WHITE)
 
     agent._on_pixel_flash(main_dev, PIXEL, WHITE, 0.5, agent._clock())
     after = _settled(agent, main_dev)
 
-    assert after[LO:HI] == bytes(WHITE)
+    assert after[LO:HI] == rgb_blob(WHITE)
     assert after[:LO] == before[:LO] and after[HI:] == before[HI:]
 
 
 def test_flash_three_tuple_means_no_white(two_fixture_agent):
     agent, _audio, main_dev, _accent = two_fixture_agent
     agent._on_pixel_flash(main_dev, PIXEL, (10, 20, 30), 0.5, agent._clock())
-    assert _settled(agent, main_dev)[LO:HI] == bytes((10, 20, 30, 0))
+    assert _settled(agent, main_dev)[LO:HI] == bytes((10, 20, 30))
 
 
 def test_flash_expires(two_fixture_agent):
     agent, _audio, main_dev, _accent = two_fixture_agent
     agent._on_pixel_flash(main_dev, PIXEL, WHITE, 0.08, agent._clock())
-    assert _settled(agent, main_dev)[LO:HI] == bytes(WHITE)
+    assert _settled(agent, main_dev)[LO:HI] == rgb_blob(WHITE)
 
     # The rainbow scrolls with the clock, so compare against the session's
     # own un-overlaid frame (the universe) rather than a pre-flash capture.
     agent._clock.advance(0.1)
     sent = _settled(agent, main_dev)
     st = agent._fixtures["main"]
-    session_frame = bytes(st.universe.get_frame()[:len(sent)])
+    session_frame = rgb_blob(st.universe.get_frame()[:len(sent) // 3 * 4])
     assert sent == session_frame
-    assert sent[LO:HI] != bytes(WHITE)
+    assert sent[LO:HI] != rgb_blob(WHITE)
     assert agent._pixel_flashes == {}
 
 
@@ -144,7 +146,7 @@ def test_out_of_range_pixel_is_ignored(two_fixture_agent):
 def test_float_pixel_paints_that_pixel(two_fixture_agent):
     agent, _audio, main_dev, _accent = two_fixture_agent
     agent._on_pixel_flash(main_dev, float(PIXEL), WHITE, 0.5, agent._clock())
-    assert _settled(agent, main_dev)[LO:HI] == bytes(WHITE)
+    assert _settled(agent, main_dev)[LO:HI] == rgb_blob(WHITE)
 
 
 def test_non_numeric_pixel_is_dropped_before_the_render(two_fixture_agent):

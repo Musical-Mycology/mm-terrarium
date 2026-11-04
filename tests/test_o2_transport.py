@@ -776,3 +776,28 @@ def test_decode_blob_keeps_an_all_digit_leds_frame_as_raw_bytes():
     assert decode_blob("/ie1/leds", blob) == [53] * 36
     assert decode_blob("/ie1/role", b'{"a": 1}') == {"a": 1}
     assert decode_blob("/ie1/room", blob) == from_o2_arg(blob)
+
+
+def test_a_tap_prints_the_o2_clock_on_receipt(capsys):
+    transport, fake = _started()
+    fake.set_time(200.5)
+    fake.deliver("/game/tap", "sffi", ("ie1", 0.0, 80.0, 1), timestamp=200.25)
+    transport.drain_inbound()
+    assert capsys.readouterr().err == (
+        "TAP received at o2 t=200.500 s: count=1 peak_g=0.00 "
+        "duration_ms=80.0\n")
+
+
+def test_other_inbound_messages_do_not_print(capsys):
+    transport, fake = _started()
+    fake.deliver("/game/tilt", "sf", ("ie1", 30.0))
+    transport.drain_inbound()
+    assert capsys.readouterr().err == ""
+
+
+def test_a_malformed_tap_still_prints_without_raising(capsys):
+    transport, fake = _started()
+    fake.deliver("/game/tap", "s", ("ie1",))
+    transport.drain_inbound()
+    assert capsys.readouterr().err == (
+        "TAP received at o2 t=100.000 s: args=['ie1']\n")

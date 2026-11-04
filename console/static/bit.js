@@ -521,23 +521,44 @@ function fmt(v) {
   return String(v);
 }
 
-function renderStatus(status) {
+// The Bit's operator actions (Bit.actions), one button each under the
+// status grid. One click sends; there is no confirm. Rule 1: the row is
+// rebuilt only when the action list changes, never on a status tick.
+let statusGrid = null;
+let actionRow = null;
+let actionsSignature = null;
+
+function buildActionRow(actions) {
+  const row = mk("div", "firerow");
+  for (const { name, label } of actions) {
+    const btn = mk("button", "btn small", label);
+    btn.type = "button";
+    btn.onclick = () => wire.send("bit_action", { name }, btn);
+    row.appendChild(btn);
+  }
+  return row;
+}
+
+function renderStatus(status, actions = []) {
   const card = document.getElementById("bitStatusCard");
   const entries = Object.entries(status || {});
-  clear(card);
-  if (entries.length === 0) {
-    card.hidden = true;
-    return;
+  card.hidden = entries.length === 0 && actions.length === 0;
+  const sig = JSON.stringify(actions);
+  if (statusGrid === null || sig !== actionsSignature) {
+    clear(card);
+    statusGrid = mk("div", "statusgrid");
+    card.appendChild(statusGrid);
+    actionRow = actions.length > 0 ? buildActionRow(actions) : null;
+    if (actionRow) card.appendChild(actionRow);
+    actionsSignature = sig;
   }
-  card.hidden = false;
-  const grid = mk("div", "statusgrid");
+  clear(statusGrid);
   for (const [k, v] of entries) {
     const stat = mk("div", "stat");
     stat.appendChild(mk("div", "k", k.toUpperCase()));
     stat.appendChild(mk("div", "v", fmt(v)));
-    grid.appendChild(stat);
+    statusGrid.appendChild(stat);
   }
-  card.appendChild(grid);
 }
 
 // ------------------------------------------------------------------- init
@@ -551,7 +572,7 @@ export function init() {
     rolesByName = {};
     for (const role of m.roles || []) rolesByName[role.role] = role;
     render();
-    renderStatus(m.bit_status || {});
+    renderStatus(m.bit_status || {}, m.bit_actions || []);
   });
   wire.on("bits_listed", (m) => {
     const sig = JSON.stringify([m.bits, m.errors]);
@@ -567,7 +588,7 @@ export function init() {
     terrariumState = m.terrarium_state;
     render();
   });
-  wire.on("bit_status", (m) => renderStatus(m.status || {}));
+  wire.on("bit_status", (m) => renderStatus(m.status || {}, m.actions || []));
   wire.on("room_loaded", (m) => {
     rooms = rooms.map((r) => Object.assign({}, r, { active: r.name === m.name }));
     // Cards capture the active room at build time, so close and rebuild the picker.

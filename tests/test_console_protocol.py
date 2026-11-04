@@ -121,7 +121,9 @@ def test_incremental_event_shapes():
     assert protocol.devices_changed_event([{"dev": "ie1"}]) == {
         "event": "devices_changed", "devices": [{"dev": "ie1"}]}
     assert protocol.bit_status_event({"k": 1}) == {
-        "event": "bit_status", "status": {"k": 1}}
+        "event": "bit_status", "status": {"k": 1}, "actions": []}
+    actions = [{"name": "reset", "label": "Reset progress"}]
+    assert protocol.bit_status_event({}, actions)["actions"] == actions
     assert protocol.log_event("info", "hi") == {
         "event": "log", "level": "info", "message": "hi"}
 

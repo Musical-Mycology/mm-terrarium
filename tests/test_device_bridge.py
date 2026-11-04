@@ -92,3 +92,15 @@ def test_zoned_capability_pads_the_pixels_a_role_leaves_unnamed():
     assert [(z.name, z.start, z.count) for z in gappy.zones
             if z.name.startswith("unzoned")] == [
         ("unzoned0", 0, 2), ("unzoned5", 5, 2), ("unzoned8", 8, 4)]
+
+
+def test_zoned_capability_spans_a_wider_device_and_refuses_overflow():
+    # A devtower's 32 px: the surface, its padding and `primary` follow
+    # the device's pixel count, and a zone past it is refused.
+    from harness.device_bridge import zoned_capability
+    cap = zoned_capability("devtower1", [("p0", 0, 2), ("p1", 2, 2)], 32)
+    assert cap.pixel_count == 32
+    assert [(z.name, z.start, z.count) for z in cap.zones] == [
+        ("p0", 0, 2), ("p1", 2, 2), ("unzoned4", 4, 28), ("primary", 0, 32)]
+    with pytest.raises(ValueError, match="12 pixels"):
+        zoned_capability("devtower1", [("p15", 30, 2)])

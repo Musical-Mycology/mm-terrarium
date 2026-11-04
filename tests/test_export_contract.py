@@ -424,14 +424,14 @@ def test_contract_version_and_provenance():
     # Contract v4 (spec 2026-10-08): the beat heartbeat, on top of v3's
     # handshake (spec 2026-10-01 section 6). Contract v5 (spec 2026-10-14):
     # RGBW pixel frames.
-    assert data["contract_version"] == 5
+    assert data["contract_version"] == 6
     assert data["_provenance"] == {"commit": "abc123", "tool": "export_contract/1"}
 
 
 def test_main_writes_contract_and_scenario_files(tmp_path):
     main([str(tmp_path)])
     contract = json.loads((tmp_path / "contract.json").read_text())
-    assert contract["contract_version"] == 5
+    assert contract["contract_version"] == 6
     scenario_files = sorted(p.name for p in (tmp_path / "scenarios").glob("*.json"))
     assert scenario_files == sorted(f"{fn.__name__}.json" for fn in ALL_SCENARIOS)
 
@@ -499,14 +499,14 @@ def test_export_fails_loudly_when_a_recording_has_no_scenario(tmp_path, monkeypa
     assert not out_dir.exists() or not any(out_dir.iterdir())
 
 
-def test_contract_version_is_5():
+def test_contract_version_is_6():
     from tools.export_contract import CONTRACT_VERSION
-    assert CONTRACT_VERSION == 5
+    assert CONTRACT_VERSION == 6
 
 
 def test_export_v4_publishes_the_beat_lifecycle():
     data = export_contract(commit="abc123")
-    assert data["contract_version"] == 5
+    assert data["contract_version"] == 6
     life = data["lifecycle"]
     assert life["beat_interval_s"] == 1.0
     assert life["beat_jitter_s"] == 0.1
@@ -519,14 +519,14 @@ def test_export_v4_publishes_the_beat_lifecycle():
     assert "/game/beat" in joined and "beats" in joined
 
 
-def test_v5_every_expect_frame_is_48_rgbw(tmp_path):
+def test_v6_every_expect_frame_is_36_rgb(tmp_path):
     import json
     from tools.export_contract import CONTRACT_VERSION, main as export_main
-    assert CONTRACT_VERSION == 5
+    assert CONTRACT_VERSION == 6
     export_main([str(tmp_path)])
     for path in (tmp_path / "scenarios").glob("*.json"):
         for step in json.loads(path.read_text())["steps"]:
             ef = step.get("expect_frame")
             if ef is not None:
-                assert set(ef) == {"rgbw"}, path.name
-                assert len(ef["rgbw"]) == 48, path.name
+                assert set(ef) == {"rgb"}, path.name
+                assert len(ef["rgb"]) == 36, path.name

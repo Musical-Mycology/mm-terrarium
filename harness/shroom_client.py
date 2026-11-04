@@ -33,7 +33,7 @@ The wire, from devicelink/protocol.py and devicelink/agent.py:
     down  /<dev>/role    b    [config]       (sent at RUNNING)
     down  /<dev>/deny    ss   [reason, hint] (informational; the device is
                                          jam at start)
-    down  /<dev>/leds    b    [[48 ints]]
+    down  /<dev>/leds    b    [[36 ints]]  (R, G, B per pixel)
     down  /<dev>/play    ss   [name, params]
     down  /<dev>/release ""   []
     down  /<dev>/error   ss   [context, message]
@@ -52,6 +52,7 @@ import logging
 from collections import deque
 from typing import Callable
 
+from control.pixel_wire import blob_channels, rgbw_from_blob
 from control.timed_queue import TimedQueue
 from devicelink import protocol
 from harness import markers
@@ -59,7 +60,8 @@ from harness import markers
 logger = logging.getLogger(__name__)
 
 # 12 pixels x R, G, B, W, per protocol.leds_event (contract v5): the
-# Testshroom's own declared surface shape.
+# Testshroom's own declared surface shape. Its /leds blob is 12 x R, G, B,
+# 36 bytes (control/pixel_wire.py's blob_channels).
 LED_CHANNELS = 48
 
 # Bound on frames buffered in _pending between ticks. Under normal operation
@@ -275,11 +277,12 @@ class ShroomClient:
             logger.debug("dropping /leds with a non-list payload")
             return ""
         channels = env.args[0]
-        if len(channels) != self.expected_channels:
+        if len(channels) != blob_channels(self.expected_channels):
             logger.debug("dropping /leds with %d channels, expected %d",
-                         len(channels), self.expected_channels)
+                         len(channels), blob_channels(self.expected_channels))
             return ""
-        frame = bytes(int(v) & 0xFF for v in channels)
+        # The blob is R, G, B; the surface shows R, G, B, W (W = 0).
+        frame = rgbw_from_blob(channels)
         # timestamp 0.0 means "no declared time"; None is what TimedQueue
         # reads as that, and it must NOT count as a clamp. Buffered rather
         # than pushed here -- see _pending's docstring in __init__.

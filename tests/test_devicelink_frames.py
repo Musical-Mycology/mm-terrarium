@@ -103,13 +103,13 @@ def joined():
     return _make_rig()
 
 
-def test_emits_a_48_channel_frame(joined):
+def test_emits_a_36_channel_rgb_frame(joined):
     gs, server, agent = joined
     for _ in range(5):
         agent.poll()
     frames = server.addressed("/ie1/leds")
     assert frames, "expected at least one LED frame"
-    assert len(frames[0]["args"][0]) == 48
+    assert len(frames[0]["args"][0]) == 36     # 12 px x R, G, B
     assert all(0 <= v <= 255 for v in frames[0]["args"][0])
 
 
@@ -129,7 +129,7 @@ def test_unchanged_frame_is_sent_once(joined):
         agent.poll()
     frames = server.addressed("/ie1/leds")
     assert len(frames) == 1, "a constant frame must be sent once, not per tick"
-    assert frames[0]["args"][0] == [7] * 48
+    assert frames[0]["args"][0] == [14] * 36   # R, G, B, each + W
 
 
 def _run_hue_sweep(gs, server, agent, apply_cues: bool) -> None:

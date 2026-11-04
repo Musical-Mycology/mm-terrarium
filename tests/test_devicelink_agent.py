@@ -26,7 +26,11 @@ from control.terrarium_config import load_terrarium_config
 TEST_PROFILE = load_terrarium_config("terrarium.toml").rooms["TEST"].profile
 DEMO_PROFILE = load_terrarium_config("terrarium.toml").rooms["DEMO"].profile
 from control.state import State
+from control.pixel_wire import blob_channels
 from devicelink.agent import DeviceLinkAgent, _DEVICE_CHANNELS
+
+# A player's /leds blob: its 48-channel RGBW frame as R, G, B, 36 bytes.
+_DEVICE_BLOB = blob_channels(_DEVICE_CHANNELS)
 
 
 class FakeServer:
@@ -1638,7 +1642,7 @@ def test_bound_fixture_receives_its_own_frame_stamped_when(monkeypatch):
     agent._render_room()
     (dev, msg), = server.sent
     assert dev == "sim-room-main"
-    assert len(msg["args"][0]) == 240
+    assert len(msg["args"][0]) == 180      # 60 px x R, G, B
     assert msg["timestamp"] == 100.5
 
 
@@ -1690,8 +1694,8 @@ def test_room_frame_is_the_bound_fixtures_own_width():
     frames = [m for dev, m in server.sent if m["address"] == "/sim-room-main/leds"]
     assert frames, "the Room emitted no frame for its bound fixture"
     main = next(f for f in TEST_PROFILE.fixtures if f.name == "main")
-    assert len(frames[-1]["args"][0]) == main.pixel_count * 4
-    assert len(frames[-1]["args"][0]) == 240
+    assert len(frames[-1]["args"][0]) == main.pixel_count * 3   # R, G, B
+    assert len(frames[-1]["args"][0]) == 180
 
 
 def test_two_bound_fixtures_each_receive_their_own_width():
@@ -1713,8 +1717,8 @@ def test_two_bound_fixtures_each_receive_their_own_width():
     main_frames = [m for d, m in server.sent if m["address"] == "/sim-room-main/leds"]
     accent_frames = [m for d, m in server.sent if m["address"] == "/sim-room-accent/leds"]
     assert main_frames and accent_frames
-    assert len(main_frames[-1]["args"][0]) == 240     # main: 60 px
-    assert len(accent_frames[-1]["args"][0]) == 120    # accent: 30 px
+    assert len(main_frames[-1]["args"][0]) == 180     # main: 60 px x RGB
+    assert len(accent_frames[-1]["args"][0]) == 90     # accent: 30 px x RGB
 
 
 def test_an_unbound_second_fixture_does_not_block_the_first_from_rendering():
@@ -2358,9 +2362,9 @@ def test_room_solid_cue_paints_every_bound_fixture(two_fixture_agent):
     gs._dispatch_cues([SolidCue(ROOM, (255, 0, 0), 1.0, 5.0)], at=1.0)
     agent._render_room()
     frames = {dev: bytes(msg["args"][0]) for dev, msg in agent.transport.sent}
-    # Every fixture is RGBW on the wire (contract v5): red is R=255, W=0.
-    assert frames[main] == bytes([255, 0, 0, 0]) * 60
-    assert frames[accent] == bytes([255, 0, 0, 0]) * 30
+    # Every /leds blob is R, G, B: red is R=255.
+    assert frames[main] == bytes([255, 0, 0]) * 60
+    assert frames[accent] == bytes([255, 0, 0]) * 30
 
 
 def test_unwire_room_drops_a_muted_fixtures_latched_override(two_fixture_agent):
@@ -2504,7 +2508,7 @@ def test_a_mute_latched_while_unbound_still_blacks_the_fixture_after_a_bind(monk
     server.bind_dev("sim-room-main", "c")
     agent._render_room()
     (frame,) = [m["args"][0] for d, m in server.sent if d == "sim-room-main"]
-    assert bytes(frame) == bytes(240)
+    assert bytes(frame) == bytes(180)
 
 
 def test_a_play_cue_for_an_unbound_fixture_is_dropped_and_warned_once(monkeypatch, caplog):
@@ -2719,7 +2723,7 @@ def _player_frames_sent(server, dev="ie1"):
     out any render that goes through the fixture-shaped path."""
     return [bytes(m["args"][0]) for d, m in server.sent
             if d == dev and m["address"] == f"/{dev}/leds"
-            and len(m["args"][0]) == _DEVICE_CHANNELS]
+            and len(m["args"][0]) == _DEVICE_BLOB]
 
 
 def test_a_fixture_muted_by_its_own_token_blacks_its_bound_players_bridge(monkeypatch):
@@ -2739,7 +2743,7 @@ def test_a_fixture_muted_by_its_own_token_blacks_its_bound_players_bridge(monkey
         agent.poll()
     frames = _player_frames_sent(server)
     assert frames, "no 36-channel /ie1/leds frame was sent after the bind"
-    assert all(f == bytes(_DEVICE_CHANNELS) for f in frames)
+    assert all(f == bytes(_DEVICE_BLOB) for f in frames)
 
 
 @pytest.mark.parametrize("mute_as_player", [False, True])
@@ -2758,7 +2762,7 @@ def test_a_room_join_leaves_one_led_stream(monkeypatch, mute_as_player):
     # while player-frame absence is still checked only from here on.
     bound_fixture_frame_seen = any(
         d == "ie1" and m["address"] == "/ie1/leds"
-        and len(m["args"][0]) != _DEVICE_CHANNELS
+        and len(m["args"][0]) != _DEVICE_BLOB
         for d, m in server.sent)
     server.sent.clear()
     for _ in range(int(2.0 / (1 / 44))):

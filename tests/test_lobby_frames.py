@@ -71,10 +71,8 @@ def test_invite_paints_the_device_white_twice():
         agent.poll()
         for (_d, m) in server.sent[seen:]:
             if m["address"] == "/ie1/leds":
-                f = bytes(m["args"][0])
-                whites.append(all(b >= 250 for b in f[3::4])
-                              and not any(f[0::4]) and not any(f[1::4])
-                              and not any(f[2::4]))
+                f = bytes(m["args"][0])   # R, G, B: W folds into all three
+                whites.append(all(b >= 250 for b in f))
         seen = len(server.sent)
     # two runs of white frames with a non-white gap between
     runs = 0
