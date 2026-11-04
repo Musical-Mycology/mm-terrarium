@@ -1,0 +1,32 @@
+[bit]
+name = "BeatsBit"
+version = "0.1.0"
+description = "Beats: a devtower and two tuneshrooms connect, and the Console's Start button plays the piano loop"
+entry = "beats_bit:BeatsBit"
+kind = "music"
+author = "Musical Mycology"
+requires_terrarium_api = 1
+
+[launch]
+room_types = ["MIDITEST"]
+default_room_type = "MIDITEST"
+default_devices = 0
+default_join_role = "shroom"
+device_instrument = "tuneshroom"
+manual_devices = true
+
+[launch.nodes]
+shroom = "BEATS_SHROOM_NODE"
+tower = "BEATS_TOWER_NODE"
+
+[start]
+when = "immediate"
+
+[console]
+display_name = "Beats"
+notes = "Connect one devtower<N> device and two ie<N> tuneshrooms, and press Start on the Bit status card; it starts however many of them are connected. The piano loop plays from the Room's speaker, not the devtower's, and runs until the Bit is unloaded. The beats of measures 1 and 3 light the tower's four responders: a beat from 1 to 1.99 lights the first, 2 to 2.99 the second, 3 to 3.99 the third and 4 to 4.99 the fourth, each fading to dark over a quarter of a second. A tap on either tuneshroom blinks both purple, fading to dark within a fifth of a second, with or without Start. After Start, measures 2 and 4 are the players' answer: each player taps the rhythm of the measure before on their tuneshroom. A tap within a quarter of a beat either side of a beat earns up to 1, more the closer it is, with a tap up to 20 ms late counting as dead on and dead on itself set 200 ms after the beat, and each player's score from 0 to 1 shows on the status card."
+
+[assets]
+piano = "assets/piano.mid"
+beats1 = "assets/beats1.mid"
+beats2 = "assets/beats2.mid"

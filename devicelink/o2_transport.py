@@ -18,7 +18,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import sys
 import time
 
 from control.wire_json import dumps as _json_dumps
@@ -516,18 +515,6 @@ class O2LiteTransport:
             logger.exception("dropping /%s: unreadable arguments", address)
             return
         stamp = getattr(self._o2, "msg_timestamp", 0.0)
-        if address == "game/tap":
-            # The O2 clock on receipt, in the same shape the firmware logs
-            # its own taps, so the two can be read side by side.
-            now = self._o2.time_get()
-            try:
-                _dev, peak_g, duration_ms, count = args
-                detail = (f"count={int(count)} peak_g={float(peak_g):.2f} "
-                          f"duration_ms={float(duration_ms):.1f}")
-            except (TypeError, ValueError):
-                detail = f"args={args!r}"     # malformed: the agent drops it
-            print(f"TAP received at o2 t={now:.3f} s: {detail}",
-                  file=sys.stderr, flush=True)
         self._inbound.append((None, {
             "timestamp": stamp,
             "address": f"/{address}",

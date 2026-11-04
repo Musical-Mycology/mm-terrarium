@@ -10,7 +10,9 @@ One player, on the MIDITEST Room's speaker-equipped Tower:
   the top on the next beat, or stops it if it is playing, without moving
   the loop cycle; while it plays, single Tower pixels flicker white;
 - tilting past TIP_DEG ducks the whole mix to DUCK; it comes back only
-  once the device is within RIGHT_DEG of upright again (hysteresis).
+  once the device is within RIGHT_DEG of upright again (hysteresis);
+- the Console's Piano/Drums/Synth/Arabesque buttons (Bit.actions) toggle
+  one track each, once the round is running.
 
 All the timing lives in control.sequencer.Sequencer: this Bit only decides
 which track is on and turns its answers into cues. Every `at` it is handed
@@ -128,6 +130,22 @@ class DeuxAraDropBit(Bit):
     def verb_handlers(self) -> dict:
         return {"tap": self._on_tap, "tilt": self._on_tilt}
 
+    def actions(self) -> dict:
+        """One Console button per track, each toggling that track exactly as
+        a tap would, without moving the tap cycle. Refused until the first
+        RUNNING tick: the sequencer only advances from fires(), so a loop
+        enabled in SETUP would sit silent until Run."""
+        def toggle(name):
+            def handler(at):
+                if not self._started:
+                    return "press Run first"
+                if name == ARABESQUE:
+                    return self._toggle_arabesque(at)
+                return self._toggle_loop(name, at)
+            return handler
+        return {name: (name.capitalize(), toggle(name))
+                for name in (*ORDER, ARABESQUE)}
+
     # -- the tick ---------------------------------------------------------
 
     def update(self, dt: float) -> bool:
@@ -169,19 +187,27 @@ class DeuxAraDropBit(Bit):
         must not leave that third's colour stale."""
         out = self._start(at)
         if _tap_count(args) >= 2:
-            if self._seq.is_on(ARABESQUE):
-                return out + self._seq.disable(ARABESQUE, at)
-            return out + self._seq.play_once(ARABESQUE, at)
+            return out + self._toggle_arabesque(at)
         name = ORDER[self._cursor % len(ORDER)]
         self._cursor += 1
+        return out + self._toggle_loop(name, at)
+
+    def _toggle_loop(self, name: str, at: float) -> list:
+        """Bring loop `name` in or drop it out, then repaint all three
+        thirds (see _on_tap for why all three)."""
         if self._seq.is_on(name):
-            out += self._seq.disable(name, at)
+            out = self._seq.disable(name, at)
         else:
-            out += self._seq.enable(name, at)
+            out = self._seq.enable(name, at)
         out += [LightCue(ROOM, 0xB0, THIRD_CC[n],
                          GREEN if self._seq.is_on(n) else RED, when=at)
                 for n in ORDER]
         return out
+
+    def _toggle_arabesque(self, at: float) -> list:
+        if self._seq.is_on(ARABESQUE):
+            return self._seq.disable(ARABESQUE, at)
+        return self._seq.play_once(ARABESQUE, at)
 
     def _on_tilt(self, dev: str, args: list, at: float) -> list:
         """args: [dev, gamma]. Ducks past TIP_DEG while upright, restores

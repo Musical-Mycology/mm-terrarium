@@ -2427,6 +2427,26 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   volume on cc 7 and the pedal on cc 64; all timing is a `Sequencer`
   (*Audio*) and the Bit returns its cues from `fires(at)` and the verb
   handlers. Assets are four `.mid` files under `[assets]`.
+- **BeatsBit** (`bits/beats/`, display name "Beats", MIDITEST, kind `music`,
+  `[start] when = "immediate"`, no simulated devices by default): one
+  `devtower<N>` takes `tower` and two `ie<N>` take `shroom` (`admits`, unscored
+  JAM roles capped at 1 and 2), anything else gets solo. Its one
+  `Bit.actions()` entry, `start` ("Start"), loops `piano.mid` at 130 BPM with
+  a `Sequencer` until unloaded, however many of those devices have joined.
+  A `MusicCue` is Room audio only, so the piano sounds from the Room's flsyn,
+  not the devtower's speaker. On every pass of the loop, the note-ons of
+  `beats1.mid` light the tower's four responders in the piano's first measure
+  and those of `beats2.mid` in its third, each fading out over 0.25 s. A tap on
+  either shroom blinks both purple. Measures 2 and 4 are the players' answer:
+  the same rhythm one measure after its call. Each shroom's tap takes the
+  nearest answer beat it has not yet taken within 0.25 beat either side, so the
+  window in seconds follows the tempo, and earns 1 dead on, falling linearly to
+  0 at the window's edge. A late tap is forgiven 20 ms first (`LATE_GRACE_S`),
+  and the whole judgment runs 200 ms behind the grid (`JUDGE_DELAY_S`), so dead
+  on is 200 ms after the beat; both are fixed in seconds. A beat with no tap
+  earns 0 and a stray tap earns nothing. A player's score, 0 to 1, is the mean over every answer beat closed
+  since Start, shown as `score <dev>` in `status()`. The roles stay unscored
+  JAM roles, so seating and Start are unaffected.
 - **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a
   four-phase white build on every Tower, switched from the Console. It
   sorts devices by id with `admits`: `ie<N>` takes `player`,
