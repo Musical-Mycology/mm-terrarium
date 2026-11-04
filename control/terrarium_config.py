@@ -19,7 +19,8 @@ from control.instrument import (Instrument, InstrumentError, SoloConfig,
                                 validate_instrument,
                                 validate_instrument_manifests)
 from control.lobby import TERRARIUM_ADMIN
-from control.model_layout import ModelLayoutError, parse_model_layout, read_glb_json
+from control.model_layout import (ModelLayoutError, count_triangles, parse_model_layout,
+                                  read_glb_json)
 from control.room_profile import (RoomBlock, RoomFixture, RoomProfile,
                                   RoomZone, fixture_instrument_mismatch)
 from control.triggers import EventTrigger, StreamTrigger
@@ -515,6 +516,9 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str,
 
     model_sha256 = None
     layout: tuple = ()
+    model_path_abs: str | None = None
+    model_size = 0
+    model_tris = 0
     model_rel = iraw.get("model")
     if model_rel is not None:
         if not isinstance(model_rel, str) or not model_rel:
@@ -575,6 +579,10 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str,
                 message=f"instrument {iname!r}: {exc}") from exc
         model_sha256 = result.model_sha256
         layout = result.pixels
+        model_path_abs = str(resolved_model)
+        model_size = len(model_bytes)
+        model_tris = count_triangles(
+            read_glb_json(model_bytes, path=str(model_path)))
         _warn_if_bake_stale(model_path, model_sha256, iname)
 
     instrument = Instrument(
@@ -591,6 +599,9 @@ def _parse_instrument(iname: str, iraw: dict, *, source: str,
         solo=solo,
         model_sha256=model_sha256,
         layout=layout,
+        model_path=model_path_abs,
+        model_bytes=model_size,
+        model_triangles=model_tris,
     )
     try:
         validate_instrument(instrument)

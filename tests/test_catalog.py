@@ -393,6 +393,18 @@ def test_published_instrument_with_a_model_gets_layout_and_sha256(tmp_path):
     assert inst.model_sha256 == __import__("hashlib").sha256(glb_bytes).hexdigest()
 
 
+def test_model_instrument_records_path_bytes_and_triangles(tmp_path):
+    root = make_catalog(tmp_path)
+    (root / "models").mkdir()
+    glb_bytes = _twelve_led_glb()
+    (root / "models" / "glowcap.glb").write_bytes(glb_bytes)
+    (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/glowcap.glb"\n')
+    inst = load_catalog(root).published["glowcap"]
+    assert inst.model_path == str((root / "models" / "glowcap.glb").resolve())
+    assert inst.model_bytes == len(glb_bytes)
+    assert inst.model_triangles > 0
+
+
 def test_published_instrument_with_missing_model_file_fails_to_load(tmp_path):
     root = make_catalog(tmp_path)
     (root / "glowcap.toml").write_text(GOOD + '\nmodel = "models/nope.glb"\n')
@@ -416,6 +428,7 @@ def test_instrument_without_a_model_has_no_layout_or_sha256(tmp_path):
     inst = cat.published["glowcap"]
     assert inst.layout == ()
     assert inst.model_sha256 is None
+    assert inst.model_path is None and inst.model_bytes == 0 and inst.model_triangles == 0
 
 
 def test_published_instrument_with_absolute_model_path_is_refused(tmp_path):

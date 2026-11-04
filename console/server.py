@@ -10,6 +10,7 @@ import json
 import logging
 import threading
 from collections import deque
+from typing import Callable
 from pathlib import Path
 
 from websockets.datastructures import Headers
@@ -34,7 +35,9 @@ _CONTENT_TYPES = {
 
 
 class ConsoleServer:
-    def __init__(self, host: str = "127.0.0.1", port: int = 0):
+    def __init__(self, host: str = "127.0.0.1", port: int = 0, *,
+                 static_dir: Path | None = None):
+        static_dir = _STATIC_DIR if static_dir is None else Path(static_dir)
         self._host = host
         self._port = port
         self._server = None
@@ -43,9 +46,21 @@ class ConsoleServer:
         # console is a fixed asset set, and re-reading per request would put
         # filesystem access on a request path for no benefit.
         self._assets: dict[str, tuple[bytes, str]] = {}
-        for path in sorted(_STATIC_DIR.rglob("*")):
+        # Vendored libraries keep their directory structure (two files can
+        # share a basename), so they are keyed by exact path relative to the
+        # static dir and kept out of the basename map.
+        self._vendor_assets: dict[str, tuple[bytes, str]] = {}
+        self._route_provider: Callable[
+            [str], tuple[bytes, str, dict] | None] | None = None
+        for path in sorted(static_dir.rglob("*")):
             content_type = _CONTENT_TYPES.get(path.suffix)
-            if path.is_file() and content_type is not None:
+            if not path.is_file() or content_type is None:
+                continue
+            rel = path.relative_to(static_dir)
+            if rel.parts[0] == "vendor":
+                self._vendor_assets[rel.as_posix()] = (
+                    path.read_bytes(), content_type)
+            else:
                 self._assets[path.name] = (path.read_bytes(), content_type)
         self._lock = threading.Lock()
         self._clients: set = set()
@@ -72,21 +87,52 @@ class ConsoleServer:
     def port(self) -> int:
         return self._port
 
+    def set_route_provider(
+            self, provider: Callable[[str], tuple[bytes, str, dict] | None]
+    ) -> None:
+        """Answer paths the static maps do not know. The provider is called on
+        the HTTP thread with the query-stripped path and returns (body,
+        content_type, extra_headers), or None for a 404."""
+        self._route_provider = provider
+
     # --- HTTP: serve console/static/ assets ; let /ws upgrade --------------
     def _process_request(self, connection, request):
-        if request.path == "/ws":
+        path = request.path.split("?", 1)[0]
+        if path == "/ws":
             return None   # proceed to the websocket handshake
-        # basename only: never join the request path onto a directory, so a
-        # traversal attempt resolves to a name that is simply not in _assets.
-        name = "index.html" if request.path == "/" \
-            else request.path.lstrip("/").split("/")[-1]
-        asset = self._assets.get(name)
+        # Vendored files: exact string match on the undecoded path, so a
+        # traversal attempt (encoded or not) simply misses.
+        asset = self._vendor_assets.get(path.lstrip("/"))
+        extra: dict = {}
+        if asset is None:
+            # basename only: never join the request path onto a directory, so
+            # a traversal attempt resolves to a name that is simply not in
+            # _assets.
+            name = "index.html" if path == "/" \
+                else path.lstrip("/").split("/")[-1]
+            asset = self._assets.get(name)
+        if asset is None and self._route_provider is not None:
+            try:
+                routed = self._route_provider(path)
+                if routed is not None:
+                    body, content_type, extra = routed
+                    asset = (body, content_type)
+            except Exception:
+                # Includes a malformed return (wrong arity, not a tuple).
+                logger.exception("console route provider failed for %s", path)
+                asset = None
+                extra = {}
         if asset is None:
             headers = Headers()
             headers["Content-Length"] = "0"
             return Response(404, "Not Found", headers, b"")
         body, content_type = asset
         headers = Headers()
+        for key, value in extra.items():
+            # Headers.__setitem__ appends, so the framing headers set below
+            # would be duplicated; the tuple's own values are authoritative.
+            if key.lower() not in ("content-type", "content-length"):
+                headers[key] = value
         headers["Content-Type"] = content_type
         headers["Content-Length"] = str(len(body))
         return Response(200, "OK", headers, body)

@@ -7,7 +7,7 @@ from control.instrument import Instrument
 from control.room_profile import RoomBlock, RoomFixture, RoomProfile, RoomZone
 from control.triggers import EventTrigger
 from tests.instrument_fixtures import GENERIC_SURFACE
-from control.room_view import room_view
+from control.room_view import model_view_status, room_view
 from control.rooms import Room, room_role
 
 TEST_PROFILE = RoomProfile(surface_id="room_test", fixtures=(
@@ -319,3 +319,35 @@ def test_fixtures_default_to_not_artnet():
 def test_fixtures_carry_artnet_only_for_named_fixtures():
     view = room_view(_room(), TEST_PROFILE, _role(), {}, artnet={"accent"})
     assert [f["artnet"] for f in view["fixtures"]] == [False, True]
+
+
+def test_model_status_ok_for_a_modelled_instrument_in_budget():
+    inst = Instrument(name="t", pixels=2, model_sha256="ab" * 32, model_path="/x.glb",
+                      model_bytes=1000, model_triangles=10)
+    assert model_view_status(inst) == {"sha256": "ab" * 32, "status": "ok", "reason": None}
+
+
+def test_model_status_none_without_a_model():
+    assert model_view_status(Instrument(name="t"))["status"] == "none"
+
+
+def test_model_status_over_budget_on_triangles():
+    inst = Instrument(name="t", model_sha256="ab" * 32, model_path="/x.glb",
+                      model_bytes=1000, model_triangles=300_001)
+    s = model_view_status(inst)
+    assert s["status"] == "over_budget" and "300,001 triangles" in s["reason"]
+    assert s["reason"] == "model has 300,001 triangles; the 3D view's budget is 300,000"
+    assert s["sha256"] == "ab" * 32
+
+
+def test_model_status_over_budget_on_bytes():
+    inst = Instrument(name="t", model_sha256="ab" * 32, model_path="/x.glb",
+                      model_bytes=20 * 1024 * 1024 + 1, model_triangles=10)
+    s = model_view_status(inst)
+    assert s["status"] == "over_budget"
+    assert s["reason"] == "model is 20.0 MB; the 3D view's budget is 20 MB"
+
+
+def test_fixtures_view_rows_carry_the_model_status():
+    fixtures = _view()["fixtures"]
+    assert fixtures and all(f["model"]["status"] == "none" for f in fixtures)

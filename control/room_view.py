@@ -16,6 +16,7 @@ assert the node id and role name are absent from the serialized blob.
 from __future__ import annotations
 
 from control.functions import FunctionKind
+from control.model_layout import MODEL_VIEW_MAX_BYTES, MODEL_VIEW_MAX_TRIANGLES
 
 
 def _light_instruments(manifest: dict) -> list[dict]:
@@ -101,6 +102,28 @@ def _instrument_view(instrument) -> dict:
     }
 
 
+def model_view_status(instrument) -> dict:
+    """Whether the Console's 3D view can load this instrument's model.
+
+    `status` is "none" (no model baked), "over_budget" (a model exists but
+    exceeds the 3D view's triangle or byte budget; `sha256` is still reported)
+    or "ok". `reason` is operator-facing copy, set only when over budget.
+    """
+    sha = instrument.model_sha256
+    if sha is None:
+        return {"sha256": None, "status": "none", "reason": None}
+    if instrument.model_triangles > MODEL_VIEW_MAX_TRIANGLES:
+        reason = (f"model has {instrument.model_triangles:,} triangles; "
+                  f"the 3D view's budget is {MODEL_VIEW_MAX_TRIANGLES:,}")
+        return {"sha256": sha, "status": "over_budget", "reason": reason}
+    if instrument.model_bytes > MODEL_VIEW_MAX_BYTES:
+        mb = instrument.model_bytes / (1024 * 1024)
+        reason = (f"model is {mb:.1f} MB; "
+                  f"the 3D view's budget is {MODEL_VIEW_MAX_BYTES // (1024 * 1024)} MB")
+        return {"sha256": sha, "status": "over_budget", "reason": reason}
+    return {"sha256": sha, "status": "ok", "reason": None}
+
+
 def fixtures_view(profile, room, canvas_urls=None, muted=None, artnet=None) -> list[dict]:
     """One entry per fixture: its own pixel count, its zones (already
     namespaced <fixture>.<zone> by RoomProfile.zones), its channel offset
@@ -143,6 +166,7 @@ def fixtures_view(profile, room, canvas_urls=None, muted=None, artnet=None) -> l
             "muted": name in muted_names,
             "artnet": name in artnet_names,
             "instrument": _instrument_view(fixture.instrument),
+            "model": model_view_status(fixture.instrument),
         })
     return out
 
