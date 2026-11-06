@@ -142,16 +142,24 @@ class Sequencer:
     # -- setup ------------------------------------------------------------
 
     def add_track(self, name: str, midi: MidiFile, *, part: int, loop: bool,
-                  skip_beats: float = 0.0) -> None:
-        """Looped tracks repeat every `midi.loop_beats()` from grid beat 0,
-        without any note struck at or past that length. A one-shot drops events before `skip_beats` (a lead-in) and shifts
+                  skip_beats: float = 0.0,
+                  loop_beats: float | None = None) -> None:
+        """Looped tracks repeat every `loop_beats`, or `midi.loop_beats()`
+        when not given, from grid beat 0, without any note struck at or past
+        that length. `loop_beats` is for a file whose last note-off runs past
+        its final bar line, which `midi.loop_beats()` would round up to a bar
+        more. A one-shot drops events before `skip_beats` (a lead-in) and shifts
         the rest so `skip_beats` lands on the beat `play_once` picks."""
         if loop:
             if skip_beats:
                 raise ValueError("skip_beats applies to one-shots only")
-            length = midi.loop_beats()
+            if loop_beats is not None and loop_beats <= 0:
+                raise ValueError(f"loop_beats must be positive, got {loop_beats}")
+            length = midi.loop_beats() if loop_beats is None else loop_beats
             events = _drop_struck_at_end(midi.events, length)
         else:
+            if loop_beats is not None:
+                raise ValueError("loop_beats applies to loops only")
             events = tuple(MidiEvent(e.beat - skip_beats, e.status, e.data1,
                                      e.data2)
                            for e in midi.events if e.beat >= skip_beats)
