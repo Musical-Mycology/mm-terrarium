@@ -9,6 +9,9 @@ from control.functions import FunctionTable
 if TYPE_CHECKING:
     from control.bit_config import BitConfig
 
+# Bit.carried's key for CalibrationBit's mean tap delay, in seconds.
+MEAN_TAP_DELAY_S = "mean_tap_delay_s"
+
 
 class Bit(ABC):
     """A loadable game/experience module for the Control+GameServer.
@@ -23,6 +26,11 @@ class Bit(ABC):
         # this if it wants packaged manifest data; the default None keeps
         # every hand-constructed test Bit working unchanged.
         self.config = config
+        # Values the Terrarium keeps from one Bit to the next, for as long as
+        # its process runs: one Bit writes, a later one reads. GameServer.
+        # load_bit replaces this with its own dict, right after construction;
+        # this one keeps a hand-constructed Bit working on its own.
+        self.carried: dict = {}
 
     # Bit identity for provenance stamping (light-manifest v2 bit_version).
     # The bit *name* is the registry key GameServer loaded it under -- not

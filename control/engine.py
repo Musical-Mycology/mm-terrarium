@@ -195,6 +195,8 @@ class GameServer:
         # per-cue horizon would let two cues from one gesture land on
         # different frames and would make the clamp counters uninterpretable.
         self._horizon = cue_horizon
+        # See Bit.carried: one dict for this process, handed to every Bit.
+        self._carried: dict = {}
         # MUST be the same callable DeviceLinkAgent was built with. Two clock
         # bases is the bug that made the 2026-08-13 live run dark: Control
         # stamped frames off time.monotonic (~518,000) while the device
@@ -409,6 +411,7 @@ class GameServer:
             bit_cls = self.bit_registry[name]
             bit = bit_cls(config) if config is not None else bit_cls()
             bit.room = self.room
+            bit.carried = self._carried
             role_table = bit.role_table
             requirements = tuple(bit.instrument_requirements())
             declared_slots = {r.slot for r in requirements}
