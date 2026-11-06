@@ -1,0 +1,29 @@
+[bit]
+name = "CalibrationBit"
+version = "0.1.0"
+description = "Calibration: tuneshrooms tap along to looping wooden knocks at 75 BPM, and the Console shows the measured audio delay"
+entry = "calibration_bit:CalibrationBit"
+kind = "music"
+author = "Musical Mycology"
+requires_terrarium_api = 1
+
+[launch]
+room_types = ["MIDITEST"]
+default_room_type = "MIDITEST"
+default_devices = 0
+default_join_role = "shroom"
+device_instrument = "tuneshroom"
+manual_devices = true
+
+[launch.nodes]
+shroom = "CALIBRATION_SHROOM_NODE"
+
+[start]
+when = "immediate"
+
+[console]
+display_name = "Calibration"
+notes = "Connect ie<N> tuneshrooms and press Play on the Bit status card. calibration.mid repeats as wooden knocks at 75 BPM from the Room's speaker, not the tuneshrooms', until you press the same button, now Stop. It needs no tuneshroom connected. To measure the audio delay, tap along with the knocks you hear: each tap is timed against the nearest knock, and the status card shows the latest delay and the mean of them all, positive when late. Pressing Play starts a new measurement, and Stop keeps the last one on show. The mean carries to Beats, which holds its tower lights back by it, until a new measurement's first tap replaces it or the Terrarium restarts."
+
+[assets]
+calibration = "assets/calibration.mid"

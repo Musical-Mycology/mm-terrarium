@@ -394,3 +394,31 @@ def test_one_shot_ends_and_can_replay():
     again = run(seq, at, seq.time_at(6))
     ons = note_ons(again, 60)
     assert len(ons) == 1 and ons[0].when == pytest.approx(seq.time_at(5))
+
+
+def _bt(seq, t):
+    return round(seq.beat_at(t), 6)
+
+
+def test_loop_beats_overrides_a_note_off_past_the_last_bar_line():
+    """A note-off at 16.1 would round the loop up to 20 beats; told 16, the
+    note comes back every 16, and its late note-off still sounds."""
+    midi = mf(*note(30, 0.0, 16.1))
+    assert midi.loop_beats() == 20.0
+    seq = started(t=dict(midi=midi, part=0, loop=True, loop_beats=16.0))
+    seq.enable("t", T0)
+    cues = run(seq, T0, seq.time_at(40.0))
+    ons = [_bt(seq, c.when) for c in cues if c.status & 0xF0 == 0x90]
+    offs = [_bt(seq, c.when) for c in cues if c.status & 0xF0 == 0x80]
+    assert ons[:3] == [0.0, 16.0, 32.0]
+    assert offs[:2] == [16.1, 32.1]
+
+
+def test_loop_beats_is_refused_for_a_one_shot_or_a_bad_length():
+    seq = Sequencer(BPM)
+    with pytest.raises(ValueError, match="loops only"):
+        seq.add_track("t", mf(*note(60, 0, 1)), part=0, loop=False,
+                      loop_beats=4.0)
+    with pytest.raises(ValueError, match="positive"):
+        seq.add_track("t", mf(*note(60, 0, 1)), part=0, loop=True,
+                      loop_beats=0.0)

@@ -128,6 +128,41 @@ def test_double_tap_after_natural_end_restarts():
     assert bit.status()["arabesque"] == "playing"
 
 
+def _action(bit, name, at):
+    return bit.actions()[name][1](at)
+
+
+def test_actions_are_one_button_per_track():
+    labels = {name: entry[0] for name, entry in _bit().actions().items()}
+    assert labels == {"piano": "Piano", "drums": "Drums", "synth": "Synth",
+                      "arabesque": "Arabesque"}
+
+
+def test_actions_refused_before_running():
+    assert _action(_bit(), "piano", 10.0) == "press Run first"
+
+
+def test_actions_toggle_their_own_track_without_moving_the_cycle():
+    bit, _ = _started()
+    out = _action(bit, "drums", 11.0)
+    assert next(c.tag for c in out if isinstance(c, MusicCue)) == "drums"
+    assert sorted(_lights(out)) == [(20, 0), (21, 42), (22, 0)]
+    assert bit.status()["drums"] == "on"
+    _action(bit, "drums", 12.0)
+    assert bit.status()["drums"] == "off"
+    # the next tap still toggles piano, the first loop in ORDER
+    tapped = _tap(bit, 13.0)
+    assert next(c.tag for c in tapped if isinstance(c, MusicCue)) == "piano"
+
+
+def test_arabesque_action_starts_and_stops_it():
+    bit, _ = _started()
+    _action(bit, "arabesque", 11.0)
+    assert bit.status()["arabesque"] == "playing"
+    _action(bit, "arabesque", 12.0)
+    assert bit.status()["arabesque"] == "stopped"
+
+
 def test_tilt_hysteresis():
     bit, _ = _started()
     out = _tilt(bit, 50.0, 11.0)

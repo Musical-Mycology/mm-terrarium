@@ -102,3 +102,13 @@ def test_arco_pty_popen_launches_from_the_arcoserver_dir(monkeypatch):
     popen = _arco_popen(argparse.Namespace(arco_pty=True, arco_log="/tmp/a.log"))
     popen(["arco-server"])
     assert seen == {"cwd": ARCOSERVER_DIR, "log_path": "/tmp/a.log"}
+
+
+def test_arco_opens_output_only():
+    # Nothing in the Terrarium reads Arco's audio input (device mics are
+    # device-side). Left at its default, Arco opens a 2-in/2-out duplex
+    # stream on ALSA's pulse default, whose start times out under WSLg
+    # (PortAudio -9987, "Audio open error" in arco.log) in most runs: no
+    # sound at all, and Flsyn's queue overflows ("Ringbuffer full").
+    # Output-only starts reliably (2026-10-30).
+    assert _prefs()["in_chans"] == "0"

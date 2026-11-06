@@ -639,7 +639,9 @@ validation order, so it is how a Bit learns turn order). Optional:
 `function_table`, `room_manifests()`, `instrument_requirements()`,
 `result()` (uplink payload), `status()` (Console read-out). Class
 attributes: `version`, `room_types` (default `{"TEST"}`; override, never
-mutate) and `cue_horizon`, stamped at load for Bits grading input.
+mutate) and `cue_horizon`, stamped at load for Bits grading input. `carried`
+is a dict the GameServer stamps at load, the same one for every Bit, so a value
+one Bit writes reaches later Bits. It lives in memory, for the process's life.
 
 - `verb_handlers()` handlers run as `handler(dev, args, at)`, `at = origin
   + cue_horizon`, and return cues or a `str` refusal (sent as
@@ -1467,7 +1469,9 @@ recipe's first step.
   purge on arrival, so it also drops the note-offs of notes already
   sounding, and the struck set is never cleared between disables. A loop
   drops any note struck at or past its length (`piano.mid`'s zero-length
-  notes on beat 16 would sound on the next downbeat), and `enable` re-strikes
+  notes on beat 16 would sound on the next downbeat). A loop's length is the
+  file's end rounded up to a bar, or `add_track(..., loop_beats=)` for a file
+  whose last note-off runs past its final bar line. `enable` re-strikes
   only a held note with at least a beat left (a kick would land off the
   grid).
 - `harness/arco_synth.py`'s `ArcoSynthPool`: one `Flsyn`, up to 16 voices (a
@@ -2427,6 +2431,71 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   volume on cc 7 and the pedal on cc 64; all timing is a `Sequencer`
   (*Audio*) and the Bit returns its cues from `fires(at)` and the verb
   handlers. Assets are four `.mid` files under `[assets]`.
+- **BeatsBit** (`bits/beats/`, display name "Beats", MIDITEST, kind `music`,
+  `[start] when = "immediate"`, no simulated devices by default): one
+  `devtower<N>` takes `tower` and three `ie<N>` take `shroom` (`admits`, unscored
+  JAM roles capped at 1 and 3), anything else gets solo. `Bit.actions()` has
+  `player1`..`player3`, one per player, labelled with its shroom ("Player 1:
+  ie3", "Player 1: -" when empty). A shroom takes the first free player as it
+  connects and keeps it across a reconnect. A press moves that player on to the
+  next seated shroom in connection order, swapping with whichever player that
+  shroom was, and is refused once started. `status()` shows `player1`.. as each
+  one's device, and each printed tap line names its player, as in `tap player1
+  (ie1): ...`. A seated shroom that is no player (it connected while all three
+  were taken) does not blink or score, its taps do nothing, and a button can
+  bring it in with no reconnect. `music` ("Music: music1", refused once
+  started) moves through `MUSICS`: `music1` is `assets/music/music1/piano.mid`,
+  `music2` the seven files of `assets/music/music2/`, one `[assets]` key each.
+  `start` ("Start") loops the chosen music at 130 BPM with a `Sequencer` until
+  unloaded, however many of those devices have joined, but only its first track
+  at first: the rest come in one at a time, in `MUSICS` order, as the shared
+  progress grows. Of a music's n tracks, track k (from 0) comes in once progress
+  reaches k/n of 50, rounded up (`track_threshold`), so music2's seven enter at
+  0, 8, 15, 22, 29, 36 and 43, each on the scoring tap's own time (`Sequencer.
+  enable` chases), and `status()` shows `tracks` as in/total. This holds for any
+  music added to `MUSICS`. Every track runs on its own loop length from the same
+  beat 0 (`Track.loop_beats` pins
+  `3_HumongerBass` to 32 and `6_AGBass` to 16, whose note-offs run past the bar
+  line). The Room's flsyn parts are the same for both musics, since they are
+  fixed at load (`PART_PROGRAMS`): piano 0, the GM drum kit (music2's kick,
+  both hi-hats and Melt Kit share it), synth bass 38, polysynth pad 90 and
+  acoustic bass 32, the last three chosen from the file names, as the files
+  carry no programs. `status()` shows `music` and `state`. A `MusicCue` is Room
+  audio only, so the music sounds from the Room's flsyn, not the devtower's
+  speaker. Every four measures (`CYCLE_BEATS`, whatever the music), the note-ons
+  of `assets/judging/beats1.mid` light the tower's four responders in the
+  first measure and those of `beats2.mid` in the third, each fading out over
+  0.25 s and held behind the grid to meet the music at the speaker, since Arco takes no
+  timestamps, so the sound cannot be sent early. The hold is CalibrationBit's
+  saved mean tap delay (`Bit.carried`), else 175 ms (`LIGHT_DELAY_S`, hand-set),
+  and shows as `light delay` in `status()`. A tap on any player's shroom blinks every player's purple. Measures 2 and 4 are the players' answer:
+  the same rhythm one measure after its call. Each shroom's tap takes the
+  nearest answer beat it has not yet taken within 0.25 beat either side, so the
+  window in seconds follows the tempo, and earns 1 dead on, falling linearly to
+  0 at the window's edge. A late tap is forgiven 20 ms first (`LATE_GRACE_S`),
+  and the whole judgment runs 200 ms behind the grid (`JUDGE_DELAY_S`), so dead
+  on is 200 ms after the beat; both are fixed in seconds. A beat with no tap
+  earns 0 and a stray tap earns nothing. A player's score, 0 to 1, is the mean over every answer beat closed
+  since Start, shown as `score <dev>` in `status()`. A tap earning more than
+  0.1 also adds 1 to the players' shared progress, out of 50, which fills the
+  tower's 32-LED bar white from the bottom and shows as `progress`. The roles
+  stay unscored JAM roles, so seating and Start are unaffected.
+- **CalibrationBit** (`bits/calibration/`, display name "Calibration", MIDITEST,
+  kind `music`, `[start] when = "immediate"`, no simulated devices by default):
+  any number of `ie<N>` take `shroom` (`admits`, an unscored JAM role with no
+  light or verbs), anything else gets solo. Its one `Bit.actions()` entry, `play`
+  ("Play", "Stop" while looping), loops `calibration.mid` at 75 BPM, whatever
+  tempo the file carries, on General MIDI program 115 (Woodblock), from the
+  Room's flsyn, until pressed again. Each Play starts from the top.
+  A shroom's tap during a loop measures the audio delay: the tap's own moment
+  (`at - cue_horizon`) less the nearest knock's grid time, late positive.
+  `status()` shows `latest delay`, the signed `mean delay` and `taps`, Play
+  resets them, and Stop keeps them on show. The figure is everything from the
+  knock leaving Control to the tap being stamped, so it includes the player's
+  own timing, and a delay past half the 0.8 s knock gap reads as early against
+  the next knock. Every counted tap saves the mean in `Bit.carried`, where
+  BeatsBit reads it. It lasts until replaced or the Terrarium process exits,
+  and Play alone does not clear it.
 - **MinigameBit** (`bits/minigame/`, TEST, `MINIGAME_PLAYER_NODE`): a
   four-phase white build on every Tower, switched from the Console. It
   sorts devices by id with `admits`: `ie<N>` takes `player`,
