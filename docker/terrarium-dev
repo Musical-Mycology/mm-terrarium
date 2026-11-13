@@ -10,6 +10,9 @@ TD_CONFIG_DIR="${TD_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/terrarium-dev}
 TD_AVAHI_DIR="${TD_AVAHI_DIR:-/run/avahi-daemon}"
 TD_DBUS_SOCKET="${TD_DBUS_SOCKET:-/run/dbus/system_bus_socket}"
 TD_WSLG_DIR="${TD_WSLG_DIR:-/mnt/wslg}"
+# Optional: a PulseAudio server reached over TCP, e.g. tcp:127.0.0.1:4713 for
+# one running on Windows under WSL mirrored networking. Unset: unchanged.
+TD_PULSE_SERVER="${TD_PULSE_SERVER:-}"
 TD_RUNS_DIR="${TD_RUNS_DIR:-$HOME/terrarium-runs}"
 TD_UNAME="${TD_UNAME:-$(uname -s)}"
 LABEL="mm.terrarium-dev=1"
@@ -126,9 +129,30 @@ check_dbus() {
 
 # wslg | native | none
 audio_mode() {
-  if [ -e "$TD_WSLG_DIR/PulseServer" ]; then echo wslg
+  if [ -n "$TD_PULSE_SERVER" ]; then echo tcp
+  elif [ -e "$TD_WSLG_DIR/PulseServer" ]; then echo wslg
   elif [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -e "$XDG_RUNTIME_DIR/pulse/native" ]; then echo native
   else echo none
+  fi
+}
+
+# TD_PULSE_SERVER must be tcp:HOST[:PORT] (port 4713 if left out), and
+# something must be listening there: refuse rather than run silent.
+check_pulse_tcp() {
+  local rest host port
+  case "$TD_PULSE_SERVER" in
+    tcp:?*) rest="${TD_PULSE_SERVER#tcp:}" ;;
+    *) die "TD_PULSE_SERVER=$TD_PULSE_SERVER: expected tcp:HOST[:PORT], e.g. tcp:127.0.0.1:4713" ;;
+  esac
+  case "$rest" in
+    *:*) host="${rest%:*}"; port="${rest##*:}" ;;
+    *)   host="$rest"; port=4713 ;;
+  esac
+  case "$port" in
+    ''|*[!0-9]*) die "TD_PULSE_SERVER=$TD_PULSE_SERVER: the port must be a number" ;;
+  esac
+  if ! (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then
+    die "nothing is listening at $host:$port (TD_PULSE_SERVER=$TD_PULSE_SERVER). Start the PulseAudio server there (docker/README.md, Audio over TCP), unset TD_PULSE_SERVER to use WSLg or the local server, or pass --headless before the command to run silent."
   fi
 }
 
@@ -157,6 +181,7 @@ build_run_args() {
     case "$audio" in
       wslg)   args+=(-v "$TD_WSLG_DIR:/mnt/wslg" -e PULSE_SERVER=unix:/mnt/wslg/PulseServer) ;;
       native) args+=(-v "$XDG_RUNTIME_DIR/pulse/native:/run/pulse/native" -e PULSE_SERVER=unix:/run/pulse/native) ;;
+      tcp)    args+=(-e "PULSE_SERVER=$TD_PULSE_SERVER") ;;
     esac
   fi
   if [ -n "$co" ]; then
@@ -198,6 +223,7 @@ case "$cmd" in
     if [ "$headless" -eq 0 ]; then
       audio="$(audio_mode)"
       [ "$audio" != none ] || die "no PulseAudio socket found ($TD_WSLG_DIR/PulseServer or \$XDG_RUNTIME_DIR/pulse/native). To run silent, pass --headless before the command (terrarium-dev --headless run ...)."
+      if [ "$audio" = tcp ]; then check_pulse_tcp; fi
     fi
     check_wsl_nat
     if [ "$cmd" != shell ]; then check_one_stack; fi
