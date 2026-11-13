@@ -4,7 +4,7 @@ import pytest
 
 from control.bit_registry import BitRegistry
 from bits.beats.beats_bit import BEATS_PER_MEASURE, MUSICS
-from control.cues import ROOM, MusicCue, PixelFlashCue
+from control.cues import ROOM, MusicCue, PixelFlashCue, PlayCue
 from control.role_config import (validate_role_declarations,
                                  validate_ugen_manifest)
 from control.terrarium_config import load_terrarium_config
@@ -92,8 +92,8 @@ def test_players_follow_connection_order_until_chosen():
     assert _players(bit) == ["ie3", "ie1", "ie2"]
     assert [bit.actions()[f"player{n}"][0] for n in (1, 2, 3)] == [
         "Player 1: ie3", "Player 2: ie1", "Player 3: ie2"]
-    assert _blinked(bit.verb_handlers()["tap"]("ie2", [], 9.0)) == {
-        "ie1", "ie2", "ie3"}
+    assert _blinked(bit.verb_handlers()["tap"]("ie3", [], 9.0)) == {
+        "ie1", "ie2", "ie3"}                # player1's tap blinks them all
 
 
 def test_a_button_moves_its_player_on_and_swaps_with_the_other():
@@ -131,8 +131,10 @@ def test_a_shroom_that_is_no_player_neither_taps_nor_blinks_until_chosen():
     _press(bit, 3)                          # ie2 -> ie4, who was no player
     assert _players(bit) == ["ie3", "ie1", "ie4"]
     assert tap("ie2", [], 9.0) == []
-    assert _blinked(tap("ie4", [], 9.0)) == {"ie3", "ie1", "ie4"}
     assert "score ie4" in bit.status() and "score ie2" not in bit.status()
+    while _players(bit)[0] != "ie4":        # move player1 on to ie4
+        _press(bit, 1)
+    assert _blinked(tap("ie4", [], 9.0)) == set(_players(bit))
 
 
 def test_a_reconnect_keeps_a_players_place():
@@ -155,10 +157,11 @@ def test_a_tap_prints_which_player_it_is_from(capsys):
     bit = _three_seated()
     _press(bit, 1)
     tap = bit.verb_handlers()["tap"]
-    for dev, source in (("ie1", "player1 (ie1)"), ("ie3", "player2 (ie3)"),
-                        ("ie2", "player3 (ie2)")):
+    tap("ie1", [], 9.0)
+    assert "tap player1 (ie1): received" in capsys.readouterr().out
+    for dev in ("ie3", "ie2"):              # player2's, player3's: unprinted
         tap(dev, [], 9.0)
-        assert f"tap {source}: received" in capsys.readouterr().out
+        assert capsys.readouterr().out == ""
     _start(bit)
     tap("ie1", [], 10.0)
     assert "tap player1 (ie1): at measure 1" in capsys.readouterr().out
@@ -375,7 +378,9 @@ def test_status_tracks_devices_and_playing():
                             "light delay": "+175.0 ms",
                             "player1": "ie1", "player2": "ie2",
                             "progress": "0/50",
-                            "score ie1": 0.0, "score ie2": 0.0}
+                            "score ie1": 0.0, "score ie2": 0.0,
+                            "rating ie1": "GOOD 0 BAD 0 MISS 0",
+                            "rating ie2": "GOOD 0 BAD 0 MISS 0"}
     _start(bit)
     assert bit.status()["state"] == "playing"
 
@@ -526,11 +531,16 @@ def _flashes(cues):
 
 
 def test_shroom_role_uses_tap():
-    assert _bit().role_table.roles["shroom"].uses == ["tap"]
+    assert _bit().role_table.roles["shroom"].uses == ["tap", "swing",
+                                                      "squeeze"]
+
+
+def test_shroom_role_declares_the_guzheng_and_chime_samples():
+    assert _bit().role_table.roles["shroom"].samples == ["guzheng", "chime"]
 
 
 def test_a_tap_blinks_every_shroom_at_full_on_all_its_leds():
-    cues = _tap(_connected(), "ie1", 10.0)
+    cues = _flashes(_tap(_connected(), "ie1", 10.0))
     assert {(c.dev, c.pixel) for c in cues} \
         == {(dev, px) for dev in ("ie1", "ie2") for px in range(12)}
     assert all(c.rgb == (128, 0, 255, 0) and c.when == 10.0
@@ -539,7 +549,7 @@ def test_a_tap_blinks_every_shroom_at_full_on_all_its_leds():
 
 def test_the_blink_fades_to_dark_and_lapses_at_the_fades_end():
     bit = _connected()
-    _tap(bit, "ie2", 10.0)
+    _tap(bit, "ie1", 10.0)
     at = 10.0
     steps = []
     while at < 10.3:
@@ -558,10 +568,63 @@ def test_a_tap_mid_fade_restarts_the_blink_from_full():
     bit = _connected()
     _tap(bit, "ie1", 10.0)
     bit.fires(10.1)
-    again = _tap(bit, "ie2", 10.1)
+    again = _flashes(_tap(bit, "ie1", 10.1))
     assert all(c.rgb == (128, 0, 255, 0) and c.duration == 0.2 for c in again)
     assert [c.rgb[2] for c in _flashes(bit.fires(10.1 + TICK))
             if (c.dev, c.pixel) == ("ie1", 0)][0] < 255
+
+
+def _swing(bit, dev, at):
+    return bit.verb_handlers()["swing"](dev, [dev, 2.0, 1], at)
+
+
+def test_only_player1s_tap_blinks():
+    bit = _connected()                      # player1 ie1, player2 ie2
+    assert _flashes(_tap(bit, "ie2", 10.0)) == []
+    assert bit.fires(10.0 + TICK) == []
+    assert _blinked(_tap(bit, "ie1", 10.5)) == {"ie1", "ie2"}
+
+
+def test_only_player2s_swing_blinks_every_player_yellow():
+    bit = _connected()
+    assert _swing(bit, "ie1", 10.0) == []
+    assert bit.fires(10.0 + TICK) == []
+    cues = _swing(bit, "ie2", 10.5)
+    assert {(c.dev, c.pixel) for c in cues} \
+        == {(dev, px) for dev in ("ie1", "ie2") for px in range(12)}
+    assert all(c.rgb == (255, 200, 0, 0) and c.when == 10.5
+               and c.duration == 0.2 for c in cues)
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_a_players_squeeze_is_printed_and_plays_chime_on_its_shroom(started,
+                                                                    capsys):
+    bit = _connected()
+    if started:
+        _start(bit)
+    capsys.readouterr()
+    squeeze = bit.verb_handlers()["squeeze"]
+    assert squeeze("ie2", ["ie2", 10.0], 10.5) == [
+        PlayCue("ie2", "chime", "key=75")]
+    assert "squeeze player2 (ie2)" in capsys.readouterr().out
+    assert squeeze("ie9", ["ie9", 10.0], 10.5) == []
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("dev", ["ie1", "ie9"])  # a player, and not one
+def test_a_tilt_is_accepted_quietly(dev, capsys):
+    bit = _connected()
+    capsys.readouterr()
+    assert bit.verb_handlers()["tilt"](dev, [dev, 12.5, 10.0], 10.5) == []
+    assert capsys.readouterr().out == ""
+
+
+def test_player2s_tap_still_scores_without_blinking():
+    bit = _connected()
+    _start(bit)
+    cues = _judged_tap(bit, 4.0, dev="ie2")
+    assert not _flashes([c for c in cues if c.dev != "devtower1"])
+    assert bit._progress == 1               # judged: a dead-on tap scores
 
 
 @pytest.mark.parametrize("dev", ["devtower1", "other"])
@@ -643,16 +706,18 @@ def test_a_tap_20_ms_late_counts_as_dead_on():
 
 def test_the_grace_moves_the_late_edge_out_by_20_ms():
     """A quarter beat late took no points before the grace, and now takes
-    some; just past the moved edge still takes the beat for nothing."""
+    some, GOOD; just past the moved edge is BAD, the beat taken for nothing."""
     inside = _connected()
     inside.actions()["start"][1](10.0)
     inside.verb_handlers()["tap"]("ie1", [], _judged(4.25) + 0.010)
     assert inside._open_taps[4.0]["ie1"] > 0.0
+    assert inside._open_ratings[4.0]["ie1"] == "GOOD"
 
     outside = _connected()
     outside.actions()["start"][1](10.0)
     outside.verb_handlers()["tap"]("ie1", [], _judged(4.25) + 0.030)
-    assert not outside._open_taps
+    assert outside._open_taps[4.0]["ie1"] == 0.0
+    assert outside._open_ratings[4.0]["ie1"] == "BAD"
 
 
 def test_a_tap_200_ms_after_the_beat_is_dead_on():
@@ -662,13 +727,15 @@ def test_a_tap_200_ms_after_the_beat_is_dead_on():
     assert bit._open_taps[4.0]["ie1"] == pytest.approx(1.0)
 
 
-def test_a_tap_on_the_grid_beat_is_now_too_early_to_take_it(capsys):
-    """200 ms is wider than the window's early half at 130 BPM."""
+def test_a_tap_on_the_grid_beat_is_now_too_early_to_be_good(capsys):
+    """200 ms (0.43 beat at 130 BPM) is wider than the GOOD window's early
+    half, but inside the BAD window's."""
     bit = _connected()
     bit.actions()["start"][1](10.0)
     bit.verb_handlers()["tap"]("ie1", [], _when(4.0))
-    assert not bit._open_taps
-    assert "at measure 2 beat 1.000, took no beat" in capsys.readouterr().out
+    assert bit._open_taps[4.0]["ie1"] == 0.0
+    assert bit._open_ratings[4.0]["ie1"] == "BAD"
+    assert "measure 2 beat 1, error -0.433 beats, BAD" in capsys.readouterr().out
 
 
 def test_the_window_opens_a_quarter_beat_before_the_slid_moment():
@@ -676,28 +743,73 @@ def test_the_window_opens_a_quarter_beat_before_the_slid_moment():
     inside.actions()["start"][1](10.0)
     inside.verb_handlers()["tap"]("ie1", [], _judged(3.75) + 0.005)
     assert inside._open_taps[4.0]["ie1"] > 0.0
+    assert inside._open_ratings[4.0]["ie1"] == "GOOD"
 
     outside = _connected()
     outside.actions()["start"][1](10.0)
     outside.verb_handlers()["tap"]("ie1", [], _judged(3.75) - 0.005)
-    assert not outside._open_taps
+    assert outside._open_ratings[4.0]["ie1"] == "BAD"
 
 
 def test_the_grace_does_not_widen_the_early_edge():
     bit = _connected()
     bit.actions()["start"][1](10.0)
     bit.verb_handlers()["tap"]("ie1", [], _judged(3.75) - 0.010)
-    assert not bit._open_taps
+    assert bit._open_taps[4.0]["ie1"] == 0.0
+    assert bit._open_ratings[4.0]["ie1"] == "BAD"
 
 
 def test_the_grace_pushes_the_beats_closing_out_too():
-    """A tap at the moved edge keeps its whole slack to arrive in."""
+    """A tap at the moved BAD edge keeps its whole slack to arrive in."""
     bit = _connected()
     bit.actions()["start"][1](10.0)
-    bit._close_answers(_judged(4.25) + 0.060)
+    bit._close_answers(_judged(4.5) + 0.060)
     assert bit._answers_closed == 0
-    bit._close_answers(_judged(4.25) + 0.071)
+    bit._close_answers(_judged(4.5) + 0.071)
     assert bit._answers_closed == 1
+
+
+@pytest.mark.parametrize("error,rating", [
+    (0.0, "GOOD"), (-0.24, "GOOD"), (-0.26, "BAD"), (-0.49, "BAD"),
+    (GRACE_BEATS + 0.24, "GOOD"), (GRACE_BEATS + 0.26, "BAD"),
+    (GRACE_BEATS + 0.49, "BAD"),
+])
+def test_a_tap_inside_the_half_beat_is_good_or_bad(error, rating):
+    """The first answer beat tapped; the other seven are MISS."""
+    bit = _play(_connected(), [("ie1", 4 + error)])
+    expected = {"GOOD": 0, "BAD": 0, "MISS": len(ANSWERS) - 1}
+    expected[rating] += 1
+    assert bit.ratings("ie1") == expected
+
+
+@pytest.mark.parametrize("error", [-0.51, GRACE_BEATS + 0.51])
+def test_a_tap_past_the_half_beat_takes_no_beat(error, capsys):
+    bit = _play(_connected(), [("ie1", 4 + error)])
+    assert "took no beat" in capsys.readouterr().out
+    assert bit.ratings("ie1") == {"GOOD": 0, "BAD": 0, "MISS": len(ANSWERS)}
+
+
+def test_every_beat_with_no_tap_is_a_miss_for_every_player(capsys):
+    bit = _play(_connected(), [])
+    assert bit.ratings("ie1") == {"GOOD": 0, "BAD": 0, "MISS": len(ANSWERS)}
+    assert bit.ratings("ie2") == {"GOOD": 0, "BAD": 0, "MISS": len(ANSWERS)}
+    assert "player1 (ie1): measure 2 beat 1, MISS" in capsys.readouterr().out
+
+
+def test_each_beat_is_rated_once_per_player_as_it_closes():
+    taps = ([("ie1", b) for b in ANSWERS[:4]]          # GOOD
+            + [("ie1", b - 0.4) for b in ANSWERS[4:6]]  # BAD
+            + [("ie2", ANSWERS[0])])
+    bit = _play(_connected(), taps)
+    assert bit.ratings("ie1") == {"GOOD": 4, "BAD": 2, "MISS": 2}
+    assert bit.ratings("ie2") == {"GOOD": 1, "BAD": 0, "MISS": 7}
+    assert bit.status()["rating ie1"] == "GOOD 4 BAD 2 MISS 2"
+
+
+def test_a_bad_tap_earns_nothing_and_adds_no_progress():
+    bit = _play(_connected(), [("ie1", 4 - 0.4)])
+    assert bit.score("ie1") == 0.0
+    assert bit._progress == 0
 
 
 def test_the_window_is_in_beats_so_it_follows_the_tempo():
@@ -714,7 +826,8 @@ def test_the_window_is_in_beats_so_it_follows_the_tempo():
     fast.actions()["start"][1](10.0)
     fast.verb_handlers()["tap"]("ie1", [], 10.0 + 4 * BEAT_S + 0.2 + JUDGE_DELAY_S)
     fast._close_answers(10.0 + 100.0)
-    assert "ie1" not in fast._earned
+    assert fast._earned["ie1"] == 0.0
+    assert fast.ratings("ie1")["BAD"] == 1
 
 
 @pytest.mark.parametrize("beat", CALLS + (1, 5, 8, 10))
@@ -750,11 +863,11 @@ def test_the_answer_repeats_on_every_pass_of_the_loop():
 
 def test_score_is_the_mean_over_closed_beats_only():
     """Mid-way through the first answer measure, only the closed beats count."""
-    bit = _play(_connected(), [("ie1", 4.0)], until_beat=5.0)
+    bit = _play(_connected(), [("ie1", 4.0)], until_beat=5.2)
     assert bit._answers_closed == 1
     assert bit.score("ie1") == pytest.approx(1.0)
-    at = _when(5.0)
-    while at < _when(8.0):
+    at = _when(5.2)
+    while at < _when(8.2):
         at += TICK
         bit.fires(at)
     assert bit._answers_closed == 3
@@ -784,11 +897,28 @@ def test_a_tap_delayed_on_the_wire_still_lands_inside_the_slack():
 def test_a_tap_arriving_after_its_beat_closed_earns_nothing():
     bit = _connected()
     bit.actions()["start"][1](10.0)
-    bit.fires(_when(5.0))
+    bit.fires(_when(5.2))
     assert bit._answers_closed == 1
     bit.verb_handlers()["tap"]("ie1", [], _judged(4.0))
     bit._close_answers(_when(30.0))
     assert "ie1" not in bit._earned
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_a_tap_plays_guzheng_on_its_own_shroom_and_nothing_in_the_room(started):
+    bit = _connected()
+    if started:
+        _start(bit)
+    for dev in ("ie1", "ie2"):
+        for beat in (1.0, 5.3):             # a call and an answer measure
+            cues = _tap(bit, dev, _judged(beat))
+            assert [c for c in cues if isinstance(c, PlayCue)] == [
+                PlayCue(dev, "guzheng", "key=69")]
+            assert not [c for c in cues if isinstance(c, MusicCue)]
+
+
+def test_a_tap_from_an_unseated_device_plays_nothing():
+    assert _tap(_connected(), "ie9", 3.0) == []
 
 
 def test_tap_timing_takes_the_cue_horizon_off():

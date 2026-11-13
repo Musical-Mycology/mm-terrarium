@@ -275,9 +275,9 @@ def test_tap_plays_the_known_sample_and_stamps_a_future_look():
     assert gestures == [{"kind": "tap", "onset_t": 500, "duration_ms": 80.0}]
     taps = [s["expect_out"] for s in data["steps"]
             if s.get("expect_out", {}).get("address") == "/game/tap"]
-    assert taps[0]["args"] == ["$DEV", 0.0, 80.0, 1]
-    assert taps[0]["stamp_t"] == 500
-    assert taps[0]["typespec"] == "sffi"
+    assert taps[0]["args"] == ["$DEV", 0.0, 0.5]     # sensed_at = onset
+    assert taps[0]["stamp_t"] is None                 # sent "deliver now"
+    assert taps[0]["typespec"] == "sft"
 
 
 def test_hold_plays_the_unknown_sample_and_swing_plays_nothing():

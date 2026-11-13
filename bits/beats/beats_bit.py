@@ -60,10 +60,25 @@ paint lapses, so fires() repaints it every BAR_REFRESH_S, which also picks up a
 tower that joins late. Nothing happens at full: the bar stays full and the music
 plays on.
 
-A tap on any player's shroom blinks every player's shroom: FLASH_RGB at full on
+A tap on player1's shroom blinks every player's shroom: FLASH_RGB at full on
 all FLASH_PIXELS, fading to dark over FLASH_FADE_S, painted with PixelFlashCue
-and stepped by fires() the same way. It needs no Start, and a tap mid-fade
-restarts the blink from full. A tap from any other device does nothing.
+and stepped by fires() the same way. It needs no Start, and a blink mid-fade
+restarts from full. A swing on player2's shroom blinks the same way in
+SWING_FLASH_RGB. Only player1's taps and player2's swings blink, and only they
+are printed: the other players' taps are still judged but blink nothing, and
+their swings do nothing. A tap or swing from any other device does nothing.
+
+Any player's squeeze, with or without Start, is printed and plays
+SQUEEZE_SAMPLE on that player's own tuneshroom, the same way a tap plays
+TAP_SAMPLE: /<dev>/play SQUEEZE_SAMPLE "key=SQUEEZE_KEY", untimed. A tilt, which a tuneshroom sends every few tens of milliseconds
+whatever its role asks for, is accepted and ignored, so it draws no
+"unknown verb" error back to the device. A squeeze from any other device is not printed.
+
+Every player's tap, with or without Start and in any measure, plays
+TAP_SAMPLE on that player's own tuneshroom: a PlayCue, sent to the device as
+/<dev>/play TAP_SAMPLE "key=TAP_KEY", TAP_KEY a MIDI note number. It is
+untimed, so the shroom sounds it as the cue arrives, with no cue_horizon. The
+Room plays nothing for a tap.
 
 Call and response: an odd measure n is the responders' call, and the even
 measure n + 1 is the players' answer, the same rhythm one measure later. Each
@@ -79,6 +94,14 @@ and a tap that takes no beat earns nothing.
 A player's score, 0 to 1, is the mean over every answer beat since Start whose
 window has closed.
 
+Each answer beat is also rated, per player, as its window closes: GOOD when
+the player's tap took it within TAP_WINDOW_BEATS (and earned its points), BAD
+when the tap took it outside that but within BAD_WINDOW_BEATS (earning 0), and
+MISS when no tap took it. A tap takes the nearest beat it has not yet taken
+within BAD_WINDOW_BEATS, with the same grace and slide, and the beat closes
+once that wider window, its grace and the slack have passed. status() counts
+each player's GOOD, BAD and MISS since Start.
+
 The music's timing lives in control.sequencer.Sequencer.
 """
 
@@ -88,7 +111,7 @@ import re
 from typing import NamedTuple
 
 from control.bit import MEAN_TAP_DELAY_S, Bit
-from control.cues import ROOM, MusicCue, PixelFlashCue
+from control.cues import ROOM, MusicCue, PixelFlashCue, PlayCue
 from control.functions import FunctionTable
 from control.midifile import read_midi_file
 from control.roles import Role, RoleClass, RoleTable
@@ -171,7 +194,8 @@ RESPONDER_RGB = (64, 48, 32)    # MinigameBit's half-bright beige
 # plays the Room.
 LIGHT_DELAY_S = 0.175
 
-TAP_WINDOW_BEATS = 0.25         # either side of an answer beat
+TAP_WINDOW_BEATS = 0.25         # either side of an answer beat: GOOD
+BAD_WINDOW_BEATS = 0.5          # either side, past TAP_WINDOW_BEATS: BAD
 LATE_GRACE_S = 0.020            # how late a tap still counts as dead on
 JUDGE_DELAY_S = 0.200           # the judgment's slide behind the grid
 JUDGE_SLACK_S = 0.050           # a late tap's trip, before a beat closes
@@ -179,6 +203,14 @@ JUDGE_SLACK_S = 0.050           # a late tap's trip, before a beat closes
 FLASH_PIXELS = 12               # a tuneshroom's LEDs (8 ring + 4 stem)
 FLASH_FADE_S = 0.2              # a tap's blink, full to dark
 FLASH_RGB = (128, 0, 255)       # MinigameBit's tap purple
+SWING_FLASH_RGB = (255, 200, 0) # a swing's yellow
+TAP_SEAT = 0                    # only player1's taps blink and are printed
+SWING_SEAT = 1                  # only player2's swings blink and are printed
+
+TAP_SAMPLE = "guzheng"          # the tuneshroom's own instrument for a tap
+TAP_KEY = 69                    # A4, as a MIDI note number
+SQUEEZE_SAMPLE = "chime"        # the tuneshroom's own instrument for a squeeze
+SQUEEZE_KEY = 75                # D#5/Eb5, as a MIDI note number
 
 
 def track_threshold(k: int, tracks: int) -> int:
@@ -197,6 +229,17 @@ def bar_light_value(light: int, progress: int) -> int:
     """Bar light `light`'s W level, 0..255, at `progress`, bottom first."""
     filled = progress * BAR_LIGHTS / PROGRESS_FULL - light
     return round(min(max(filled, 0.0), 1.0) * 255)
+
+
+GOOD, BAD, MISS = "GOOD", "BAD", "MISS"
+RATINGS = (GOOD, BAD, MISS)
+
+
+def tap_rating(error_beats: float) -> str:
+    """A tap's rating `error_beats` from the beat it took: GOOD inside
+    TAP_WINDOW_BEATS, else BAD (it took the beat, so it was within
+    BAD_WINDOW_BEATS)."""
+    return GOOD if abs(error_beats) <= TAP_WINDOW_BEATS else BAD
 
 
 def tap_points(error_beats: float) -> float:
@@ -246,13 +289,17 @@ class BeatsBit(Bit):
         # Open answer beats' taps: grid beat -> {shroom: points}.
         self._open_taps: dict[float, dict[str, float]] = {}
         self._earned: dict[str, float] = {}     # shroom -> points, closed beats
+        # Open answer beats' ratings: grid beat -> {shroom: GOOD or BAD}.
+        self._open_ratings: dict[float, dict[str, str]] = {}
+        # Closed answer beats' ratings: shroom -> {GOOD/BAD/MISS: count}.
+        self._ratings: dict[str, dict[str, int]] = {}
         self._progress = 0              # the players' shared bar score
         self._tracks_in = 0             # the chosen music's tracks playing
         self._bar_refresh_at = 0.0      # when fires() next repaints the bar
         # Responders mid-fade: r -> (its beat, last level sent).
         self._responders: dict[int, tuple[float, int]] = {}
         # The shrooms' blink under way: (its tap, last level sent), or None.
-        self._flash: tuple[float, int] | None = None
+        self._flash: tuple[float, int, tuple] | None = None
         self._shrooms: list[str] = []   # seated, in the order they connected
         # Player n's shroom at index n - 1, or None while it has none.
         self._seats: list[str | None] = [None] * SHROOMS
@@ -264,8 +311,8 @@ class BeatsBit(Bit):
     @property
     def role_table(self) -> RoleTable:
         shroom = Role(name="shroom", role_class=RoleClass.JAM,
-                      capacity=SHROOMS, scored=False, uses=["tap"],
-                      light_manifest={})
+                      capacity=SHROOMS, scored=False, uses=["tap", "swing", "squeeze"],
+                      samples=[TAP_SAMPLE, SQUEEZE_SAMPLE], light_manifest={})
         tower = Role(name="tower", role_class=RoleClass.JAM,
                      capacity=TOWERS, scored=False, light_manifest={})
         return RoleTable(roles={"shroom": shroom, "tower": tower},
@@ -287,7 +334,8 @@ class BeatsBit(Bit):
         return FunctionTable(functions={})
 
     def verb_handlers(self) -> dict:
-        return {"tap": self._on_tap}
+        return {"tap": self._on_tap, "swing": self._on_swing,
+                "squeeze": self._on_squeeze, "tilt": self._on_tilt}
 
     def actions(self) -> dict:
         players = {f"player{n}": (f"Player {n}: {dev or '-'}",
@@ -321,6 +369,10 @@ class BeatsBit(Bit):
     def _playing(self) -> list[str]:
         """The shrooms that play, player1 first."""
         return [dev for dev in self._seats if dev is not None]
+
+    def _at_seat(self, dev: str, seat: int) -> bool:
+        """Whether `dev` is the player at `seat` (0 is player1)."""
+        return seat < len(self._seats) and self._seats[seat] == dev
 
     def _tap_source(self, dev: str) -> str:
         """Who a playing shroom's tap is from, as printed: "player1 (ie3)"."""
@@ -502,7 +554,7 @@ class BeatsBit(Bit):
         with JUDGE_DELAY_S off, so the grid can be judged as it stands."""
         grid_beat = self._seq.beat_at(at - self.cue_horizon)
         beat = self._seq.beat_at(at - self.cue_horizon - JUDGE_DELAY_S)
-        passes = (beat + TAP_WINDOW_BEATS) // CYCLE_BEATS
+        passes = (beat + BAD_WINDOW_BEATS) // CYCLE_BEATS
         closed_to = (self._answer_beat(self._answers_closed - 1)
                      if self._answers_closed else float("-inf"))
         grace = LATE_GRACE_S * self._seq.bpm / 60.0
@@ -514,59 +566,106 @@ class BeatsBit(Bit):
             target for target in (passes * CYCLE_BEATS + a
                                   for a in self._answers)
             if target > closed_to
-            and abs(error(target)) <= TAP_WINDOW_BEATS
+            and abs(error(target)) <= BAD_WINDOW_BEATS
             and dev not in self._open_taps.get(target, {})]
         if candidates:
             target = min(candidates, key=lambda t: abs(error(t)))
+            rating = tap_rating(error(target))
             points = tap_points(error(target))
             self._open_taps.setdefault(target, {})[dev] = points
+            self._open_ratings.setdefault(target, {})[dev] = rating
             measure, in_measure = measure_and_beat(target)
-            print(f"tap {self._tap_source(dev)}: "
-                  f"measure {measure} beat {in_measure:g}, "
-                  f"error {beat - target:+.3f} beats, points {points:.3f}",
-                  flush=True)
+            if self._at_seat(dev, TAP_SEAT):
+                print(f"tap {self._tap_source(dev)}: "
+                      f"measure {measure} beat {in_measure:g}, "
+                      f"error {beat - target:+.3f} beats, "
+                      f"{rating}, points {points:.3f}", flush=True)
             if (points > PROGRESS_MIN_POINTS
                     and self._progress < PROGRESS_FULL):
                 self._progress += 1
                 print(f"progress {self._progress}/{PROGRESS_FULL}", flush=True)
         else:
             measure, in_measure = measure_and_beat(grid_beat)
-            print(f"tap {self._tap_source(dev)}: "
-                  f"at measure {measure} beat {in_measure:.3f}, "
-                  f"took no beat", flush=True)
+            if self._at_seat(dev, TAP_SEAT):
+                print(f"tap {self._tap_source(dev)}: "
+                      f"at measure {measure} beat {in_measure:.3f}, "
+                      f"took no beat", flush=True)
 
     def _close_answers(self, at: float) -> None:
-        """Bank every answer beat whose window, with a late tap's slack, has
-        passed by the real time behind presentation time `at`."""
+        """Bank every answer beat whose BAD window, with a late tap's slack,
+        has passed by the real time behind presentation time `at`, rating it
+        for every player: the rating of the tap that took it, else MISS."""
         while self._answers:
             target = self._answer_beat(self._answers_closed)
-            deadline = (self._seq.time_at(target + TAP_WINDOW_BEATS)
+            deadline = (self._seq.time_at(target + BAD_WINDOW_BEATS)
                         + JUDGE_DELAY_S + LATE_GRACE_S + JUDGE_SLACK_S)
             if deadline > at - self.cue_horizon:
                 return
             for dev, points in self._open_taps.pop(target, {}).items():
                 self._earned[dev] = self._earned.get(dev, 0.0) + points
+            rated = self._open_ratings.pop(target, {})
+            for dev in self._playing():
+                rating = rated.get(dev, MISS)
+                counts = self._ratings.setdefault(dev, dict.fromkeys(RATINGS, 0))
+                counts[rating] += 1
+                if rating == MISS and self._at_seat(dev, TAP_SEAT):
+                    measure, in_measure = measure_and_beat(target)
+                    print(f"{self._tap_source(dev)}: measure {measure} "
+                          f"beat {in_measure:g}, MISS", flush=True)
             self._answers_closed += 1
 
     # -- the tap ----------------------------------------------------------
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
-        """A player's tap blinks every player, on this tap's own time rather
-        than the next tick, and once started is judged against the answer.
-        A tap from anything else does nothing."""
+        """Any player's tap plays TAP_SAMPLE on its own shroom and, once
+        started, is judged against the answer. player1's also blinks every
+        player purple, on this tap's own time rather than the next tick. A
+        tap from anything else does nothing."""
         if dev not in self._playing():
             return []
-        print(f"tap {self._tap_source(dev)}: "
-              f"received at o2 t={at - self.cue_horizon:.3f} s", flush=True)
+        blinks = self._at_seat(dev, TAP_SEAT)
+        if blinks:
+            print(f"tap {self._tap_source(dev)}: "
+                  f"received at o2 t={at - self.cue_horizon:.3f} s",
+                  flush=True)
         progress = self._progress
         if self._started:
             self._judge_tap(dev, at)
-        self._flash = (at, 255)
-        out = self._flash_cues(255, 0.0, at)
+        out: list = [PlayCue(dev, TAP_SAMPLE, f"key={TAP_KEY}")]
+        if blinks:
+            self._flash = (at, 255, FLASH_RGB)
+            out += self._flash_cues(255, 0.0, at, FLASH_RGB)
         if self._progress != progress:
             out += self._bar_cues(at)
             out += self._enable_due_tracks(at)
         return out
+
+    def _on_swing(self, dev: str, args: list, at: float) -> list:
+        """player2's swing blinks every player yellow and is printed. A
+        swing from anyone else does nothing."""
+        if not self._at_seat(dev, SWING_SEAT):
+            return []
+        print(f"swing {self._tap_source(dev)}: "
+              f"received at o2 t={at - self.cue_horizon:.3f} s",
+              flush=True)
+        self._flash = (at, 255, SWING_FLASH_RGB)
+        return self._flash_cues(255, 0.0, at, SWING_FLASH_RGB)
+
+    def _on_squeeze(self, dev: str, args: list, at: float) -> list:
+        """Any player's squeeze is printed and plays SQUEEZE_SAMPLE on its
+        own shroom. A squeeze from anyone else does nothing."""
+        if dev not in self._playing():
+            return []
+        print(f"squeeze {self._tap_source(dev)}: "
+              f"received at o2 t={at - self.cue_horizon:.3f} s",
+              flush=True)
+        return [PlayCue(dev, SQUEEZE_SAMPLE, f"key={SQUEEZE_KEY}")]
+
+    def _on_tilt(self, dev: str, args: list, at: float) -> list:
+        """A tilt does nothing here; handled only so Control accepts it
+        instead of answering every one with an "unknown verb" error. Not
+        printed: it streams."""
+        return []
 
     # -- the bar ----------------------------------------------------------
 
@@ -591,7 +690,7 @@ class BeatsBit(Bit):
         the last step lapses dark at the fade's end."""
         if self._flash is None:
             return []
-        start, sent = self._flash
+        start, sent, rgb = self._flash
         t = at - start
         value = fade_value(t, FLASH_FADE_S)
         if value == 0:
@@ -599,12 +698,14 @@ class BeatsBit(Bit):
             return []
         if value == sent:
             return []
-        self._flash = (start, value)
-        return self._flash_cues(value, t, at)
+        self._flash = (start, value, rgb)
+        return self._flash_cues(value, t, at, rgb)
 
-    def _flash_cues(self, value: int, t: float, at: float) -> list:
-        """Every LED of every player at `value`, held to the fade's end."""
-        rgb = tuple(c * value // 255 for c in FLASH_RGB) + (0,)
+    def _flash_cues(self, value: int, t: float, at: float,
+                    colour: tuple) -> list:
+        """Every LED of every player at `colour` scaled to `value`, held to
+        the fade's end."""
+        rgb = tuple(c * value // 255 for c in colour) + (0,)
         return [PixelFlashCue(dev, px, rgb, FLASH_FADE_S - t, when=at)
                 for dev in sorted(self._playing())
                 for px in range(FLASH_PIXELS)]
@@ -616,6 +717,11 @@ class BeatsBit(Bit):
         if not self._answers_closed:
             return 0.0
         return self._earned.get(dev, 0.0) / self._answers_closed
+
+    def ratings(self, dev: str) -> dict[str, int]:
+        """`dev`'s GOOD, BAD and MISS counts over the answer beats closed
+        since Start."""
+        return dict(self._ratings.get(dev, dict.fromkeys(RATINGS, 0)))
 
     def status(self) -> dict:
         return {"music": self._music,
@@ -629,4 +735,7 @@ class BeatsBit(Bit):
                    if dev is not None},
                 "progress": f"{self._progress}/{PROGRESS_FULL}",
                 **{f"score {dev}": round(self.score(dev), 3)
+                   for dev in sorted(self._playing())},
+                **{f"rating {dev}": " ".join(
+                       f"{r} {n}" for r, n in self.ratings(dev).items())
                    for dev in sorted(self._playing())}}

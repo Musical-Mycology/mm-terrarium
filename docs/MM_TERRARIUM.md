@@ -2061,8 +2061,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   at most every 50 ms); a 400 ms press holds; arrow keys swing 2 g.
 - A 64-deep drop-oldest queue, **stamped `o2lite.time_get()` at enqueue**
   on the websocket thread (drain-time stamps cost up to ~23 ms; `time_get`
-  is a pure read). `drain_gestures` sends `/game/tap sffi`, `/game/tilt
-  sf`, and `/game/hold sfi` (touch-down stamp) or `/game/swing sfi` only if
+  is a pure read). `drain_gestures` sends `/game/tap sft` and `/game/tilt
+  sft` (send time 0, the stamp as `sensed_at`, as Rev 1 firmware does), and `/game/hold sfi` (touch-down stamp) or `/game/swing sfi` only if
   `uses` names the verb, stricter than `wants_verb` as no pre-Rev 1 Bit
   handles either (else hold is a tap, swing dropped). A drag pauses the
   sweep `SWEEP_RESUME_SECONDS` (5) while it keeps schedule: no burst.

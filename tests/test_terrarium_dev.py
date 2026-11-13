@@ -127,6 +127,54 @@ def test_run_wires_native_pulse_when_no_wslg(h):
     assert "PULSE_SERVER=unix:/run/pulse/native" in pairs(argv, "-e")
 
 
+@pytest.fixture
+def listener():
+    """A local TCP port with something listening, as a PulseAudio server."""
+    import socket
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+    yield sock.getsockname()[1]
+    sock.close()
+
+
+def test_run_wires_tcp_pulse_ahead_of_wslg(h, listener):
+    server = f"tcp:127.0.0.1:{listener}"
+    r = launch(h, "run", TD_PULSE_SERVER=server)
+    assert r.returncode == 0, r.stderr
+    argv = run_call(h)
+    assert f"PULSE_SERVER={server}" in pairs(argv, "-e")
+    assert not any(":/mnt/wslg" in v for v in pairs(argv, "-v"))
+    assert not any("pulse/native" in v for v in pairs(argv, "-v"))
+
+
+def test_tcp_pulse_refuses_when_nothing_listens(h, listener):
+    import socket
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    closed = probe.getsockname()[1]
+    probe.close()
+    r = launch(h, "run", TD_PULSE_SERVER=f"tcp:127.0.0.1:{closed}")
+    assert r.returncode != 0
+    assert "nothing is listening" in r.stderr
+    assert not [c for c in calls(h) if c[:1] == ["run"]]
+
+
+@pytest.mark.parametrize("bad", ["unix:/tmp/pulse", "tcp:", "tcp:host:port"])
+def test_tcp_pulse_refuses_a_malformed_server(h, bad):
+    r = launch(h, "run", TD_PULSE_SERVER=bad)
+    assert r.returncode != 0
+    assert "TD_PULSE_SERVER" in r.stderr
+    assert not [c for c in calls(h) if c[:1] == ["run"]]
+
+
+def test_headless_ignores_tcp_pulse(h):
+    r = launch(h, "--headless", "run", TD_PULSE_SERVER="tcp:127.0.0.1:1")
+    assert r.returncode == 0, r.stderr
+    assert not any(e.startswith("PULSE_SERVER=")
+                   for e in pairs(run_call(h), "-e"))
+
+
 def test_refuses_without_pulse_and_suggests_headless(h):
     (h.wslg / "PulseServer").unlink()
     r = launch(h, "run")
