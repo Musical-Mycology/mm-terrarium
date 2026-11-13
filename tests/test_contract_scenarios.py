@@ -94,7 +94,7 @@ def _direction_and_verb(address):
     raise AssertionError(f"address {address!r} is neither /game/ nor /$DEV/")
 
 
-_ARG_TYPES = {"s": str, "f": float, "i": int, "b": (list, dict)}
+_ARG_TYPES = {"s": str, "f": float, "t": float, "i": int, "b": (list, dict)}
 
 
 def _contract_violation(address, typespec, args, wildcard=False):
@@ -514,16 +514,22 @@ def test_gestures_after_role_shows_all_three_shapes_and_the_pre_role_rule():
 
     shapes = {s["expect_out"]["address"]: s for s in _outs(data)
               if s["expect_out"]["address"].endswith(("tap", "hold", "swing"))}
-    assert shapes["/game/tap"]["expect_out"]["typespec"] == "sffi"
+    assert shapes["/game/tap"]["expect_out"]["typespec"] == "sft"
     assert shapes["/game/hold"]["expect_out"]["typespec"] == "sfi"
     assert shapes["/game/swing"]["expect_out"]["typespec"] == "sfi"
     gestures = list(shapes.values())
     assert len(gestures) == 3
     for step in gestures:
         assert step["t"] > role_t
+        assert step["expect_out"]["args"][0] == "$DEV"
+    # A tap goes out "deliver now" with its onset as sensed_at; hold and
+    # swing carry the onset on the O2 timestamp, and a count of 1.
+    tap = shapes["/game/tap"]
+    assert tap["expect_out"]["stamp_t"] is None
+    assert tap["expect_out"]["args"][-1] == tap["t"] / 1000.0
+    for step in (shapes["/game/hold"], shapes["/game/swing"]):
         assert step["expect_out"]["stamp_t"] == step["t"]
         assert step["expect_out"]["args"][-1] == 1          # count
-        assert step["expect_out"]["args"][0] == "$DEV"
     assert shapes["/game/hold"]["expect_out"]["args"][1] == 0.65
     assert shapes["/game/swing"]["expect_out"]["args"][1] == -2.1
 

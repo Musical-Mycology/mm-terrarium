@@ -72,6 +72,22 @@ _MAX_CLOSING_FRAMES = 200
 _DEVICE_CHANNELS = PLAYER_PIXELS * CHANNELS_PER_PIXEL
 
 
+def _gesture_time(env) -> float:
+    """When the device sensed this gesture (Design Rule 4, timestamps at the
+    source). A verb whose typespec ends in 't' (tap, tilt: devicelink/
+    contract.py) carries that time as its last argument and goes out with
+    envelope timestamp 0, which O2 reads as "deliver now"; every other verb
+    is stamped at onset on the envelope itself. -1 (no clock sync yet) or
+    anything unreadable passes through as <= 0, and GameServer then falls
+    back to its own clock."""
+    if env.typespec.endswith("t") and env.args:
+        try:
+            return float(env.args[-1])
+        except (TypeError, ValueError):
+            return 0.0
+    return env.timestamp
+
+
 @dataclass
 class _FixtureState:
     """Everything the agent holds for ONE fixture: its own session over its
@@ -1389,7 +1405,8 @@ class DeviceLinkAgent:
         elif verb == "beat":
             self._on_beat(client, dev, env.args)
         else:
-            self._on_verb(dev, verb, env.args, env.timestamp, client=client)
+            self._on_verb(dev, verb, env.args, _gesture_time(env),
+                          client=client)
 
     def _on_canvas(self, dev: str, args: list) -> None:
         try:

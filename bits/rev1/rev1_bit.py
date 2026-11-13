@@ -177,8 +177,8 @@ class Rev1Bit(Bit):
         })
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
-        """args: [dev, peak_g, duration_ms, count]. Fires tap_tick and steps
-        the hue. Every tap steps once: Rev 1 always sends count 1."""
+        """args: [dev, peak_g, sensed_at]. Fires tap_tick and steps the hue
+        once per tap."""
         value = TAP_HUE_STEPS[self._taps % len(TAP_HUE_STEPS)]
         self._taps += 1
         return [FireFunction("tap_tick", dev),

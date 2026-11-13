@@ -1418,6 +1418,31 @@ def test_unstamped_gesture_reaches_the_engine_as_zero():
     assert seen == [0.0]
 
 
+def test_sensed_at_argument_is_the_gesture_time():
+    """tap and tilt are "sft": sent deliver-now (timestamp 0) with the
+    device's onset as the trailing time argument, which Control reads in
+    place of the envelope. An unsynced device's -1 passes through so
+    GameServer falls back to its own clock."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    gs.data = lambda d, v, a, gesture_time=None: seen.append((v, gesture_time))
+    server.deliver("c1", "/game/tap", "sft", [dev, 0.0, 41.25], timestamp=0.0)
+    server.deliver("c1", "/game/tilt", "sft", [dev, 12.0, 42.5], timestamp=0.0)
+    server.deliver("c1", "/game/tap", "sft", [dev, 0.0, -1.0], timestamp=0.0)
+    agent.poll()
+    assert seen == [("tap", 41.25), ("tilt", 42.5), ("tap", -1.0)]
+
+
+def test_squeeze_reaches_the_engine_at_its_sensed_at():
+    """squeeze is "st": deliver-now, with its onset as the only time."""
+    gs, server, agent, dev, clk = _agent_with_joined_device()
+    seen = []
+    gs.data = lambda d, v, a, gesture_time=None: seen.append((v, a, gesture_time))
+    server.deliver("c1", "/game/squeeze", "st", [dev, 43.75], timestamp=0.0)
+    agent.poll()
+    assert seen == [("squeeze", [dev, 43.75], 43.75)]
+
+
 def test_room_audio_waits_for_its_moment_and_light_does_not(monkeypatch):
     """One anchor, two releases. Light is fed immediately because its frame
     still has to cross the wire; audio waits until `at` because it reaches

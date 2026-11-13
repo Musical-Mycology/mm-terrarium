@@ -224,9 +224,12 @@ def drain_gestures(q: "queue.Queue", send, dev: str, now: float,
 
     `send` has o2lite.send's signature: send(address, time, typespec,
     *args). Each gesture carries its own enqueue-time stamp (see
-    enqueue_input); that stamp is used as the send time when present,
-    with `now` -- the caller's o2lite clock reading -- as the fallback
-    for entries stamped None. Either way the stamp is still a reading
+    enqueue_input); that stamp is used when present, with `now` -- the
+    caller's o2lite clock reading -- as the fallback for entries stamped
+    None. tap and tilt carry it as their trailing sensed_at argument and
+    go out with send time 0 ("deliver now"), as the Rev 1 firmware does;
+    hold and swing carry it as the send time. A tap's count from the page
+    is no longer on the wire. Either way the stamp is still a reading
     taken somewhere inside this simulator process, because the whole
     simulator process is the device (Design Rule 4); the browser hop
     happened inside the device, and moving the stamp from drain time to
@@ -255,11 +258,10 @@ def drain_gestures(q: "queue.Queue", send, dev: str, now: float,
         kind = msg.get("type") if isinstance(msg, dict) else None
         try:
             if kind == "tap":
-                count = max(1, int(msg.get("count", 1)))
-                send("/game/tap", when, "sffi", dev, 1.0, 50.0, count)
+                send("/game/tap", 0, "sft", dev, 1.0, when)
             elif kind == "tilt":
                 gamma = max(-90.0, min(90.0, float(msg["gamma"])))
-                send("/game/tilt", when, "sf", dev, gamma)
+                send("/game/tilt", 0, "sft", dev, gamma, when)
                 tilted = when
             elif kind == "hold":
                 held = float(msg["held_seconds"])
@@ -270,7 +272,7 @@ def drain_gestures(q: "queue.Queue", send, dev: str, now: float,
                 if "hold" in (config.get("uses") or []):
                     send("/game/hold", when - held, "sfi", dev, held, 1)
                 else:
-                    send("/game/tap", when, "sffi", dev, 1.0, 50.0, 1)
+                    send("/game/tap", 0, "sft", dev, 1.0, when)
             elif kind == "swing":
                 g = float(msg["signed_peak_g"])
                 if not math.isfinite(g):
@@ -649,7 +651,7 @@ def main() -> None:
             return
         # Stamped at the display tick's own clock reading -- the moment
         # this device showed the beat -- never Control's receipt time.
-        o2lite.send("/game/tap", now, "sffi", args.dev, 1.0, 50.0, 1)
+        o2lite.send("/game/tap", 0, "sft", args.dev, 1.0, now)
         print(f"tap sent: beat {beat} at {now:.3f}", flush=True)
 
     client, backend = build(args.dev, args.node,
@@ -928,7 +930,8 @@ def main() -> None:
                             # Timestamps at the source (Design Rule 4): the
                             # device's own synced clock reading, not
                             # Control's receipt time.
-                            o2lite.send("/game/tilt", now, "sf", args.dev, gamma)
+                            o2lite.send("/game/tilt", 0, "sft", args.dev,
+                                        gamma, now)
                         # Advance even while suspended, so the sweep resumes
                         # on schedule instead of firing a backlog of overdue
                         # tilts.

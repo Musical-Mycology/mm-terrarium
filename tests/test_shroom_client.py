@@ -62,11 +62,12 @@ def test_join_carries_dev_and_node():
 
 
 def test_tilt_carries_dev_and_a_float():
-    env = protocol.decode(client().tilt(0.75))
+    env = protocol.decode(client().tilt(0.75, sensed_at=4.5))
     assert env.address == "/game/tilt"
-    assert env.typespec == "sf"
+    assert env.typespec == "sft"
     assert env.args[0] == DEV
     assert env.args[1] == pytest.approx(0.75)
+    assert env.args[2] == pytest.approx(4.5)
 
 
 def test_tilt_coerces_an_int_to_float():
@@ -283,10 +284,11 @@ def test_pending_frames_are_bounded_when_tick_is_never_called():
 
 def test_tap_encodes_the_documented_wire_row():
     client = ShroomClient("ie1", "node-a")
-    msg = client.tap(count=2)
+    msg = client.tap(sensed_at=7.25)
     assert msg["address"] == "/game/tap"
-    assert msg["typespec"] == "sffi"
-    assert msg["args"] == ["ie1", 1.0, 50.0, 2]
+    assert msg["typespec"] == "sft"
+    assert msg["args"] == ["ie1", 1.0, 7.25]
+    assert client.tap()["args"][2] == -1.0     # unsynced: Control's clock
 
 
 def test_default_width_is_still_forty_eight():
