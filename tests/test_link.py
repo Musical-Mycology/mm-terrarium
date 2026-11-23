@@ -1,3 +1,8 @@
+import itertools
+import re
+import uuid
+from datetime import datetime, timezone
+
 import pytest
 
 from bits.test.test_bit import TestBit
@@ -7,11 +12,36 @@ from control.room_binding import RoomBindingRegistry
 from tests.fakes import FakeClock
 from tests.helpers_admit import admit
 from tests.test_engine import RoomCapableBit, make_room
+from uplink import protocol
 from uplink.journal import Journal
 from uplink.link import UplinkAgent
-from uplink.transport import FakeTransport
+from uplink.transport import FakeTransport, frame_size
 
 REGISTRY = {"test_bit": TestBit}
+
+WALL = datetime(2026, 11, 23, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def fixed(**kwargs):
+    """Deterministic stamping sources: boot "boot-1", completion ids
+    uuid.UUID(int=1), (int=2), ... and a wall clock stuck at WALL."""
+    counter = itertools.count(1)
+    return dict(boot_id="boot-1", id_source=lambda: uuid.UUID(int=next(counter)),
+                wall_clock=lambda: WALL, **kwargs)
+
+
+def strip(frames):
+    """Frames without the boot_id/seq stamp, for whole-frame assertions."""
+    return [{k: v for k, v in f.items() if k not in ("boot_id", "seq")}
+            for f in frames]
+
+
+def stored(name, cid, *, boot_id="old", seq=7):
+    """A journal entry as an earlier boot would have written it."""
+    return {"event": "bit_completed", "result": None,
+            "bit": {"name": name, "version": "0"}, "players": [],
+            "completion_id": cid, "completed_at": "2026-11-22T09:00:00Z",
+            "boot_id": boot_id, "seq": seq}
 
 
 class FakeBitRegistry:
@@ -36,10 +66,10 @@ class FakeBitRegistry:
         return [{"path": "x", "message": "bad"}]
 
 
-def make_agent():
+def make_agent(**kwargs):
     server = GameServer(bit_registry=REGISTRY)
     transport = FakeTransport()
-    agent = UplinkAgent(server, transport)
+    agent = UplinkAgent(server, transport, **fixed(**kwargs))
     transport.connect()
     return agent, server, transport
 
@@ -170,7 +200,7 @@ def test_bit_completed_sent_at_completing_when_result_present():
 
     server = GameServer(bit_registry={"scoring_bit": ScoringBit})
     transport = FakeTransport()
-    UplinkAgent(server, transport)
+    UplinkAgent(server, transport, **fixed())
     transport.connect()
 
     server.load_bit("scoring_bit")
@@ -178,8 +208,11 @@ def test_bit_completed_sent_at_completing_when_result_present():
     server.tick(3.0)  # crosses TestBit's default 2.0s completion threshold
 
     completed = [m for m in transport.sent if m["event"] == "bit_completed"]
-    assert completed == [{"event": "bit_completed", "result": {"score": 99},
-                          "bit": {"name": "scoring_bit", "version": "0.1"}, "players": []}]
+    assert strip(completed) == [{
+        "event": "bit_completed", "result": {"score": 99},
+        "bit": {"name": "scoring_bit", "version": "0.1"}, "players": [],
+        "completion_id": str(uuid.UUID(int=1)),
+        "completed_at": "2026-11-23T12:00:00Z"}]
 
 
 def test_exploding_result_does_not_wedge_state_machine():
@@ -321,7 +354,7 @@ def test_reconnect_sends_resync_snapshot():
 
     agent.maintain_connection()
 
-    assert transport.sent[0] == {
+    assert strip(transport.sent)[0] == {
         "event": "state_changed", "state": "SETUP", "loaded_bit": "test_bit",
         "terrarium_state": None,
     }
@@ -338,9 +371,10 @@ def test_resync_omits_registration_snapshot_when_no_bit_loaded():
 
     agent.maintain_connection()
 
-    assert transport.sent == [
+    assert strip(transport.sent) == [
         {"event": "state_changed", "state": "IDLE", "loaded_bit": None,
          "terrarium_state": None},
+        {"event": "admin_devices_applied", "version": 0},
     ]
 
 
@@ -456,7 +490,7 @@ def test_list_bits_with_registry_sends_bits_listed():
     agent.poll()
 
     listed = [m for m in transport.sent if m["event"] == "bits_listed"]
-    assert listed == [{"event": "bits_listed",
+    assert strip(listed) == [{"event": "bits_listed",
                        "bits": [{"name": "test_bit"}],
                        "errors": [{"path": "x", "message": "bad"}]}]
 
@@ -528,7 +562,7 @@ def test_load_room_command_without_terrarium_sends_error():
     agent.poll()
 
     errors = [m for m in transport.sent if m["event"] == "error"]
-    assert errors == [{"event": "error", "command": "load_room",
+    assert strip(errors) == [{"event": "error", "command": "load_room",
                        "message": "no terrarium"}]
 
 
@@ -539,7 +573,7 @@ def test_unload_room_command_without_terrarium_sends_error():
     agent.poll()
 
     errors = [m for m in transport.sent if m["event"] == "error"]
-    assert errors == [{"event": "error", "command": "unload_room",
+    assert strip(errors) == [{"event": "error", "command": "unload_room",
                        "message": "no terrarium"}]
 
 
@@ -555,7 +589,7 @@ def test_load_room_command_drives_terrarium_and_sends_room_loaded():
     assert terrarium.state == TerrariumState.ROOM_READY
     assert [m for m in transport.sent if m["event"] == "error"] == []
     loaded = [m for m in transport.sent if m["event"] == "room_loaded"]
-    assert loaded == [{"event": "room_loaded", "name": "TEST"}]
+    assert strip(loaded) == [{"event": "room_loaded", "name": "TEST"}]
 
 
 def test_load_room_refusal_is_error_event_and_sends_room_load_failed():
@@ -570,10 +604,10 @@ def test_load_room_refusal_is_error_event_and_sends_room_load_failed():
 
     assert terrarium.state == TerrariumState.NO_ROOM
     errors = [m for m in transport.sent if m["event"] == "error"]
-    assert errors == [{"event": "error", "command": "load_room",
+    assert strip(errors) == [{"event": "error", "command": "load_room",
                        "message": "another Console owns this room"}]
     failed = [m for m in transport.sent if m["event"] == "room_load_failed"]
-    assert failed == [{"event": "room_load_failed", "name": "TEST",
+    assert strip(failed) == [{"event": "room_load_failed", "name": "TEST",
                        "reason": "another Console owns this room"}]
     assert not [m for m in transport.sent if m["event"] == "room_unloaded"]
 
@@ -591,7 +625,7 @@ def test_unload_room_command_drives_terrarium_and_sends_room_unloaded():
     assert terrarium.state == TerrariumState.NO_ROOM
     assert [m for m in transport.sent if m["event"] == "error"] == []
     unloaded = [m for m in transport.sent if m["event"] == "room_unloaded"]
-    assert unloaded == [{"event": "room_unloaded", "name": "TEST"}]
+    assert strip(unloaded) == [{"event": "room_unloaded", "name": "TEST"}]
 
 
 def test_unload_room_is_refused_while_arco_clients_are_live():
@@ -613,7 +647,7 @@ def test_unload_room_is_refused_while_arco_clients_are_live():
     agent.poll()
 
     errors = [m for m in transport.sent if m["event"] == "error"]
-    assert errors == [{"event": "error", "command": "unload_room",
+    assert strip(errors) == [{"event": "error", "command": "unload_room",
                        "message": UNLOAD_REFUSAL}]
     assert calls == []
     assert terrarium.state == TerrariumState.ROOM_READY
@@ -651,7 +685,7 @@ def test_load_bit_is_gated_while_room_not_ready():
 
     assert terrarium.gs.state.name == "IDLE"
     errors = [m for m in transport.sent if m["event"] == "error"]
-    assert errors == [{"event": "error", "command": "load_bit",
+    assert strip(errors) == [{"event": "error", "command": "load_bit",
                        "message": "no room loaded"}]
 
 
@@ -690,7 +724,7 @@ def test_resync_carries_terrarium_state_and_active_room():
     state_events = [m for m in transport.sent if m["event"] == "state_changed"]
     assert state_events[0]["terrarium_state"] == "ROOM_READY"
     loaded = [m for m in transport.sent if m["event"] == "room_loaded"]
-    assert loaded == [{"event": "room_loaded", "name": "TEST"}]
+    assert strip(loaded) == [{"event": "room_loaded", "name": "TEST"}]
 
 
 def test_resync_terrarium_state_is_none_without_terrarium():
@@ -700,9 +734,10 @@ def test_resync_terrarium_state_is_none_without_terrarium():
 
     agent.maintain_connection()
 
-    assert transport.sent == [
+    assert strip(transport.sent) == [
         {"event": "state_changed", "state": "IDLE", "loaded_bit": None,
          "terrarium_state": None},
+        {"event": "admin_devices_applied", "version": 0},
     ]
 
 
@@ -715,12 +750,12 @@ def test_room_lifecycle_event_byte_shapes():
 
     terrarium.load_room("TEST")
     loaded = next(m for m in transport.sent if m["event"] == "room_loaded")
-    assert dumps(loaded) == '{"event": "room_loaded", "name": "TEST"}'
+    assert dumps(strip([loaded])[0]) == '{"event": "room_loaded", "name": "TEST"}'
 
     transport.sent.clear()
     terrarium.unload_room()
     unloaded = next(m for m in transport.sent if m["event"] == "room_unloaded")
-    assert dumps(unloaded) == '{"event": "room_unloaded", "name": "TEST"}'
+    assert dumps(strip([unloaded])[0]) == '{"event": "room_unloaded", "name": "TEST"}'
 
 
 def test_room_load_progress_is_sent_per_stage():
@@ -738,7 +773,7 @@ def test_room_load_progress_is_sent_per_stage():
     assert "room ready" in stages
     progress_msg = next(m for m in transport.sent
                         if m["event"] == "room_load_progress")
-    assert dumps(progress_msg) == (
+    assert dumps(strip([progress_msg])[0]) == (
         '{"event": "room_load_progress", "stage": "validating"}')
 
 
@@ -774,53 +809,57 @@ def test_bit_completed_is_journaled_even_while_disconnected(tmp_path):
     server = GameServer(bit_registry=REGISTRY)
     transport = FakeTransport()
     journal = Journal(str(tmp_path / "j.jsonl"))
-    UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    UplinkAgent(server, transport, journal=journal, time_source=FakeClock(),
+                **fixed())
     _completed_round(server)          # never connected
-    assert [e["event"] for e in journal.entries()] == ["bit_completed"]
+    entries = journal.entries()
+    assert [e["event"] for e in entries] == ["bit_completed"]
+    assert entries[0]["completion_id"] == str(uuid.UUID(int=1))
     assert transport.sent == []
 
 
-def test_replay_after_resync_on_a_durable_transport_then_clear(tmp_path):
+def test_replay_after_resync_on_a_durable_transport(tmp_path):
     server = GameServer(bit_registry=REGISTRY)
     transport = FakeTransport()
     journal = Journal(str(tmp_path / "j.jsonl"))
-    journal.append({"event": "bit_completed", "bit": {"name": "old", "version": "0"},
-                    "result": None, "players": []})
-    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    journal.append(stored("old", "c-old"))
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
     agent.maintain_connection()
     events = [m["event"] for m in transport.sent]
     assert events[0] == "state_changed"
     assert events[-1] == "bit_completed"
     assert transport.sent[-1]["bit"]["name"] == "old"
-    assert journal.entries() == []
+    assert journal.entries() == [stored("old", "c-old")]   # kept until confirmed
 
 
 def test_live_send_and_journal_both_happen_when_connected(tmp_path):
     server = GameServer(bit_registry=REGISTRY)
     transport = FakeTransport()
     journal = Journal(str(tmp_path / "j.jsonl"))
-    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
     agent.maintain_connection()
     _completed_round(server)
-    assert [m for m in transport.sent if m["event"] == "bit_completed"]
-    assert len(journal.entries()) == 1       # trimmed only on the next replay
+    live = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert len(live) == 1
+    assert journal.entries() == live         # the same stamped frame
+
+    # Unconfirmed: the next connect sends it again, unchanged.
     transport.disconnect()
     transport.sent.clear()
     agent.maintain_connection()
-    assert [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == live
+
+    # Confirmed: it leaves the journal and is never replayed again.
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": [live[0]["completion_id"]]})
+    agent.poll()
     assert journal.entries() == []
-
-
-def test_non_durable_transport_replays_nothing_and_clears_nothing(tmp_path):
-    server = GameServer(bit_registry=REGISTRY)
-    transport = FakeTransport(durable=False)
-    journal = Journal(str(tmp_path / "j.jsonl"))
-    journal.append({"event": "bit_completed", "bit": {"name": "old", "version": "0"},
-                    "result": None, "players": []})
-    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    transport.disconnect()
+    transport.sent.clear()
     agent.maintain_connection()
     assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
-    assert len(journal.entries()) == 1
 
 
 def test_a_send_that_raises_mid_replay_leaves_the_journal_intact(tmp_path):
@@ -834,13 +873,15 @@ def test_a_send_that_raises_mid_replay_leaves_the_journal_intact(tmp_path):
     server = GameServer(bit_registry=REGISTRY)
     transport = DroppingTransport()
     journal = Journal(str(tmp_path / "j.jsonl"))
-    for name in ("first", "second", "third"):
-        journal.append({"event": "bit_completed", "bit": {"name": name, "version": "0"},
-                        "result": None, "players": []})
-    agent = UplinkAgent(server, transport, journal=journal, time_source=FakeClock())
+    for seq, name in enumerate(("first", "second", "third"), start=1):
+        journal.append(stored(name, f"c-{name}", seq=seq))
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
     agent.maintain_connection()          # must not raise
     assert [e["bit"]["name"] for e in journal.entries()] == ["first", "second", "third"]
     assert transport.connected is False
+    assert [m["bit"]["name"] for m in transport.sent
+            if m["event"] == "bit_completed"] == ["first"]
 
 
 def test_no_journal_means_no_replay_and_no_file(tmp_path):
@@ -901,9 +942,9 @@ def test_poll_returns_without_raising_when_receive_raises():
     agent.poll()  # must not raise
 
 
-# --- fix wave: an all-corrupt journal is still truncated on replay --------
+# --- an all-corrupt journal is purged at construction, replays nothing ----
 
-def test_all_corrupt_journal_replays_nothing_and_is_cleared(tmp_path):
+def test_all_corrupt_journal_replays_nothing_and_is_purged(tmp_path):
     path = tmp_path / "j.jsonl"
     path.write_text("not json\nalso not json\n")
     server = GameServer(bit_registry=REGISTRY)
@@ -970,3 +1011,437 @@ def test_new_broker_commands_are_ignored_by_the_agent():
         transport.push_incoming(msg)
     agent.poll()
     assert transport.sent == []
+
+
+# --- box contract (mm-fairyring spec 2026-11-23 section 4) ------------------
+
+import logging
+from datetime import timedelta
+
+from uplink.protocol import UplinkIdentity
+
+
+def stamped(transport):
+    return [m for m in transport.sent if m["event"] != "heartbeat"]
+
+
+def heartbeats(transport):
+    return [m for m in transport.sent if m["event"] == "heartbeat"]
+
+
+def test_no_identity_frame_is_sent_on_connect(caplog):
+    caplog.set_level(logging.DEBUG)
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    ident = UplinkIdentity("mm", "main-stage", "s3cr3t" * 8)
+    agent = UplinkAgent(server, transport, identity=ident,
+                        time_source=FakeClock(), **fixed())
+
+    agent.maintain_connection()
+
+    assert transport.sent[0]["event"] == "state_changed"
+    assert "identity" not in [m["event"] for m in transport.sent]
+    assert all(ident.secret not in dumps(m) for m in transport.sent)
+    assert ident.secret not in caplog.text
+
+
+def test_resync_order_ends_with_admin_devices_applied_then_journal(tmp_path):
+    terrarium = make_terrarium()
+    terrarium.load_room("TEST")
+    terrarium.gs.load_bit("RoomCapableBit")
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    journal.append(stored("old", "c-old"))
+    transport = FakeTransport()
+    agent = UplinkAgent(terrarium.gs, transport, terrarium=terrarium,
+                        journal=journal, lan_ip=lambda: "10.0.0.7",
+                        time_source=FakeClock(), **fixed())
+
+    agent.maintain_connection()
+
+    assert [m["event"] for m in transport.sent] == [
+        "state_changed", "room_loaded", "registration_changed",
+        "admin_devices_applied", "bit_completed"]
+    assert transport.sent[0]["lan_ip"] == "10.0.0.7"
+    assert strip([transport.sent[3]]) == [
+        {"event": "admin_devices_applied", "version": 0}]
+
+    # Without a room or a registration the two optional frames drop out,
+    # and the version comes from the admin_version callable.
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, time_source=FakeClock(),
+                        admin_version=lambda: 3, **fixed())
+    agent.maintain_connection()
+    assert strip(transport.sent)[1:] == [
+        {"event": "admin_devices_applied", "version": 3}]
+
+
+def test_every_frame_but_heartbeat_carries_boot_id_and_gapless_seq():
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, time_source=clock, **fixed())
+
+    agent.maintain_connection()                  # resync
+    _completed_round(server)                     # state_changed..., bit_completed
+    clock.advance(agent.HEARTBEAT_SECONDS)
+    agent.maintain_connection()                  # heartbeat
+    transport.push_incoming({"command": "restart"})
+    agent.poll()                                 # error after the heartbeat
+
+    frames = stamped(transport)
+    assert "bit_completed" in [m["event"] for m in frames]
+    assert all(m["boot_id"] == "boot-1" for m in frames)
+    assert [m["seq"] for m in frames] == list(range(1, len(frames) + 1))
+    assert heartbeats(transport) == [{"event": "heartbeat"}]
+
+    # The default boot_id is one random hex string per agent (per process).
+    a = UplinkAgent(GameServer(bit_registry=REGISTRY), FakeTransport())
+    b = UplinkAgent(GameServer(bit_registry=REGISTRY), FakeTransport())
+    assert re.fullmatch(r"[0-9a-f]{32}", a.boot_id) and a.boot_id != b.boot_id
+
+
+def test_heartbeat_is_exact_and_sent_every_60_seconds(tmp_path):
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    agent = UplinkAgent(server, transport, time_source=clock, journal=journal,
+                        **fixed())
+    agent.maintain_connection()                  # connect at t=0
+    transport.sent.clear()
+
+    clock.now = 59.9
+    agent.maintain_connection()
+    assert transport.sent == []
+    clock.now = 60.0
+    agent.maintain_connection()
+    assert transport.sent == [{"event": "heartbeat"}]
+    clock.now = 119.9
+    agent.maintain_connection()
+    assert transport.sent == [{"event": "heartbeat"}]
+    clock.now = 120.0
+    agent.maintain_connection()
+    assert transport.sent == [{"event": "heartbeat"}, {"event": "heartbeat"}]
+    assert journal.is_empty()                    # never journalled
+
+
+def test_heartbeat_timer_restarts_on_reconnect():
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, time_source=clock, **fixed())
+    agent.maintain_connection()                  # connect at t=0
+    assert agent._connected_at == 0.0
+
+    clock.now = 50.0
+    transport.disconnect()
+    agent.maintain_connection()                  # reconnect at t=50
+    assert transport.connect_count == 2
+    assert agent._connected_at == 50.0
+
+    clock.now = 60.0                             # 60 after the first connect
+    agent.maintain_connection()
+    assert heartbeats(transport) == []
+    clock.now = 109.9
+    agent.maintain_connection()
+    assert heartbeats(transport) == []
+    clock.now = 110.0                            # 60 after the reconnect
+    agent.maintain_connection()
+    assert heartbeats(transport) == [{"event": "heartbeat"}]
+
+
+def test_bit_completed_carries_completion_id_and_completed_at():
+    agent, server, transport = make_agent()
+    _completed_round(server)
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert completed[0]["completion_id"] == str(uuid.UUID(int=1))
+    assert completed[0]["completed_at"] == "2026-11-23T12:00:00Z"
+
+    # A clock in another zone is reported in UTC.
+    mountain = timezone(timedelta(hours=-7))
+    agent, server, transport = make_agent()
+    agent._wall_clock = lambda: datetime(2026, 11, 23, 5, 0, 0, tzinfo=mountain)
+    _completed_round(server)
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert completed[0]["completed_at"] == "2026-11-23T12:00:00Z"
+
+    # The defaults: a v4 uuid, lower-case and hyphenated; the real clock.
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    UplinkAgent(server, transport)
+    transport.connect()
+    _completed_round(server)
+    completed = [m for m in transport.sent if m["event"] == "bit_completed"]
+    cid = completed[0]["completion_id"]
+    assert re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", cid)
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ",
+                        completed[0]["completed_at"])
+
+
+def test_completion_is_journalled_with_its_stamp_before_the_send(tmp_path):
+    class JournalCheckingTransport(FakeTransport):
+        def __init__(self, journal):
+            super().__init__()
+            self.journal = journal
+            self.journal_at_send = []
+
+        def send(self, msg):
+            if msg.get("event") == "bit_completed":
+                self.journal_at_send.append(self.journal.entries())
+            super().send(msg)
+
+    server = GameServer(bit_registry=REGISTRY)
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    transport = JournalCheckingTransport(journal)
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+    agent.maintain_connection()
+    _completed_round(server)
+
+    sent = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert len(sent) == 1
+    assert sent[0]["boot_id"] == "boot-1" and isinstance(sent[0]["seq"], int)
+    assert transport.journal_at_send == [[sent[0]]]
+
+
+def test_frame_not_sent_while_disconnected_consumes_no_seq():
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, time_source=FakeClock(), **fixed())
+    server.load_bit("test_bit")                  # three state_changed, link down
+
+    agent.maintain_connection()                  # state, registration, admin
+    assert [m["seq"] for m in transport.sent] == [1, 2, 3]
+
+    transport.disconnect()
+    server.abort()                               # more frames while down
+    transport.sent.clear()
+    agent.maintain_connection()                  # state, admin
+    assert [m["seq"] for m in transport.sent] == [4, 5]
+
+
+def test_completion_while_disconnected_is_journalled_and_stamped(tmp_path):
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+    _completed_round(server)                     # never connected
+
+    [entry] = journal.entries()
+    assert entry["boot_id"] == "boot-1" and entry["seq"] == 1
+    assert entry["completion_id"] == str(uuid.UUID(int=1))
+    assert transport.sent == []
+
+    agent.maintain_connection()                  # resync, then the replay
+    assert [m["seq"] for m in transport.sent] == [2, 3, 1]
+    assert transport.sent[-1] == entry
+
+
+def test_replay_sends_journal_entries_with_original_boot_id_and_seq(tmp_path):
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    journal.append(stored("old", "c-old", boot_id="old", seq=7))
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+
+    agent.maintain_connection()
+
+    assert transport.sent[-1] == stored("old", "c-old", boot_id="old", seq=7)
+    assert [(m["boot_id"], m["seq"]) for m in transport.sent[:-1]] == [
+        ("boot-1", 1), ("boot-1", 2)]
+
+
+def test_replay_does_not_clear_the_journal(tmp_path):
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    journal.append(stored("old", "c-old"))
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+
+    for _ in range(2):
+        transport.sent.clear()
+        agent.maintain_connection()
+        assert [m for m in transport.sent if m["event"] == "bit_completed"] == [
+            stored("old", "c-old")]
+        assert journal.entries() == [stored("old", "c-old")]
+        transport.disconnect()
+
+
+def _journal_with(tmp_path, *names):
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    for seq, name in enumerate(names, start=1):
+        journal.append(stored(name, f"c-{name}", seq=seq))
+    return journal
+
+
+def test_completions_stored_removes_only_those_entries(tmp_path):
+    journal = _journal_with(tmp_path, "a", "b", "c")
+    agent, server, transport = make_agent(journal=journal)
+    transport.sent.clear()
+
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["c-b"]})
+    agent.poll()
+    assert [e["completion_id"] for e in journal.entries()] == ["c-a", "c-c"]
+
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["c-a", "c-c"]})
+    agent.poll()
+    assert journal.entries() == []
+    assert transport.sent == []                  # nothing is sent in reply
+
+
+def test_completions_stored_with_unknown_id_is_ignored(tmp_path):
+    journal = _journal_with(tmp_path, "a", "b")
+    before = (tmp_path / "j.jsonl").read_bytes()
+    agent, server, transport = make_agent(journal=journal)
+
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["c-zzz"]})
+    agent.poll()                                 # must not raise
+
+    assert (tmp_path / "j.jsonl").read_bytes() == before
+
+
+def test_malformed_completions_stored_leaves_journal_untouched(tmp_path):
+    journal = _journal_with(tmp_path, "a", "b")
+    before = (tmp_path / "j.jsonl").read_bytes()
+    agent, server, transport = make_agent(journal=journal)
+
+    for bad in ({"completion_ids": "c-a"}, {"completion_ids": [""]},
+                {"completion_ids": [1]}, {"completion_ids": None}, {}):
+        transport.push_incoming({"command": "completions_stored", **bad})
+        agent.poll()                             # must not raise
+
+    assert (tmp_path / "j.jsonl").read_bytes() == before
+
+
+def test_replay_skipped_on_non_durable_transport(tmp_path):
+    journal = _journal_with(tmp_path, "a")
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport(durable=False)
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+
+    agent.maintain_connection()
+
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    assert [e["completion_id"] for e in journal.entries()] == ["c-a"]
+
+
+def test_oversize_bit_completed_is_sent_with_result_dropped(tmp_path):
+    class HugeResultBit(TestBit):
+        def result(self):
+            return "x" * 40000
+
+    server = GameServer(bit_registry={"test_bit": HugeResultBit})
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+    agent.maintain_connection()
+    _completed_round(server)
+
+    [frame] = [m for m in transport.sent if m["event"] == "bit_completed"]
+    assert frame["result"] is None
+    assert frame["result_dropped"] is True
+    assert frame["completion_id"] == str(uuid.UUID(int=1))
+    assert frame_size(frame) <= agent.MAX_FRAME_BYTES
+    assert journal.entries() == [frame]
+    frames = stamped(transport)
+    assert [m["seq"] for m in frames] == list(range(1, len(frames) + 1))
+
+
+def test_bit_completed_still_oversize_after_strip_is_dropped_and_not_journalled(
+        tmp_path, monkeypatch, caplog):
+    big = [{"dev": f"dev-{i:05d}", "role": "player", "class": "scored"}
+           for i in range(1000)]
+    monkeypatch.setattr(protocol, "players_view", lambda granted: big)
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+    agent.maintain_connection()
+
+    _completed_round(server)
+
+    assert [m for m in transport.sent if m["event"] == "bit_completed"] == []
+    assert journal.is_empty()
+    frames = stamped(transport)
+    assert [m["seq"] for m in frames] == list(range(1, len(frames) + 1))
+    assert any("oversize" in r.getMessage() and r.levelno == logging.WARNING
+               for r in caplog.records)
+
+
+def test_oversize_other_frame_is_dropped_and_consumes_no_seq(caplog):
+    class HugeRegistry(FakeBitRegistry):
+        def list_view(self, *, include_hidden=True):
+            return [{"name": "x" * 40000}]
+
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, registry=HugeRegistry(),
+                        time_source=FakeClock(), **fixed())
+    agent.maintain_connection()                  # seq 1, 2
+    transport.push_incoming({"command": "list_bits"})
+    transport.push_incoming({"command": "restart"})   # an error frame next
+
+    agent.poll()
+
+    assert [m["event"] for m in transport.sent] == [
+        "state_changed", "admin_devices_applied", "error"]
+    assert [m["seq"] for m in transport.sent] == [1, 2, 3]
+    assert any("oversize" in r.getMessage() and r.levelno == logging.WARNING
+               for r in caplog.records)
+
+
+def test_unidentified_journal_entries_are_purged_at_construction(tmp_path):
+    path = tmp_path / "j.jsonl"
+    keep = dumps(stored("a", "c-a"))
+    path.write_text(
+        dumps({"event": "bit_completed", "result": None}) + "\n"
+        + "not json\n" + keep + "\n")
+    journal = Journal(str(path))
+
+    UplinkAgent(GameServer(bit_registry=REGISTRY), FakeTransport(),
+                journal=journal, **fixed())
+
+    assert path.read_text() == keep + "\n"
+
+
+def test_send_failure_right_after_connect_still_backs_off():
+    class FailsOnAdminApplied(FakeTransport):
+        def __init__(self):
+            super().__init__()
+            self.fail_count = 0
+
+        def send(self, msg):
+            if msg.get("event") == "admin_devices_applied":
+                self.fail_count += 1
+                self.connected = False
+                raise ConnectionError("dropped")
+            super().send(msg)
+
+    clock = FakeClock()
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FailsOnAdminApplied()
+    agent = UplinkAgent(server, transport, time_source=clock, **fixed())
+
+    agent.maintain_connection()                  # must not raise
+    assert transport.connect_count == 1 and transport.fail_count == 1
+    assert transport.connected is False
+
+    agent.maintain_connection()                  # same tick: backing off
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS / 2)
+    agent.maintain_connection()
+    assert transport.connect_count == 1
+
+    clock.advance(agent.INITIAL_BACKOFF_SECONDS)
+    agent.maintain_connection()
+    assert transport.connect_count == 2

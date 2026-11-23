@@ -4,6 +4,8 @@ See design spec sections 3-5.
 
 import logging
 import time
+import uuid
+from datetime import datetime, timezone
 
 from control.bit_config import ManifestError
 from control.engine import BitLoadError, GameServer, InvalidTransition
@@ -12,6 +14,7 @@ from control.rooms import non_room_counts
 from control.state import State
 from control.terrarium import TerrariumState, unload_room_refusal
 from uplink import protocol
+from uplink.transport import frame_size
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +22,19 @@ logger = logging.getLogger(__name__)
 class UplinkAgent:
     INITIAL_BACKOFF_SECONDS = 1.0
     MAX_BACKOFF_SECONDS = 30.0
+    # Box contract (mm-fairyring spec 2026-11-23 sections 4.4 and 4.8): the
+    # broker closes a connection silent for longer than its idle timeout,
+    # and closes one that sends a frame over its size limit.
+    HEARTBEAT_SECONDS = 60.0
+    MAX_FRAME_BYTES = 32000
 
     def __init__(self, game_server: GameServer, transport, *,
                  time_source=time.monotonic, registry=None, terrarium=None,
                  identity=None, lan_ip=None, journal=None,
-                 clients_live=None):
+                 clients_live=None, boot_id: str | None = None,
+                 id_source=uuid.uuid4,
+                 wall_clock=lambda: datetime.now(timezone.utc),
+                 admin_version=lambda: 0):
         self.game_server = game_server
         self.transport = transport
         self.registry = registry
@@ -31,24 +42,52 @@ class UplinkAgent:
         # caller) means no room commands and no terrarium-state stamping --
         # zero behavior change.
         self.terrarium = terrarium
-        # Identity presented first on every connect (None: a test-only or
-        # pre-config agent sends none). lan_ip is an injected callable so
-        # uplink/ never imports harness/.
+        # The box's UplinkIdentity (None: a test-only or pre-config agent).
+        # It travels in the transport's handshake headers, never as a frame;
+        # kept here for the tenant and terrarium names. lan_ip is an
+        # injected callable so uplink/ never imports harness/.
         self.identity = identity
         self._lan_ip = lan_ip
         self._time_source = time_source
         self._next_attempt_at = 0.0
         self._backoff = self.INITIAL_BACKOFF_SECONDS
+        # Every up-frame but the heartbeat carries boot_id (one per process)
+        # and seq (from 1 within it, gapless over frames that reached the
+        # wire or the journal; spec 4.2). _seq is the last seq handed out.
+        self.boot_id = boot_id if boot_id is not None else uuid.uuid4().hex
+        self._seq = 0
+        # completion_id source (uuid4) and the wall clock read only for
+        # completed_at; every timer uses time_source (monotonic).
+        self._id_source = id_source
+        self._wall_clock = wall_clock
+        # Version of the applied admin-device manifest, sent in every
+        # resync's admin_devices_applied (0: none ever applied).
+        self._admin_version = admin_version
+        # time_source() of the last successful connect, and of the last
+        # heartbeat (or the connect) the heartbeat timer counts from.
+        self._connected_at: float | None = None
+        self._heartbeat_from: float | None = None
         # See ConsoleAgent.on_terrarium_state_change's docstring: a load
         # failure lands back in NO_ROOM via ROOM_LOADING and must NOT be
         # reported as room_unloaded; only a NO_ROOM entry via ROOM_UNLOADING
         # (a normal unload) does. Captured on ROOM_UNLOADING entry, before
         # Terrarium clears .room.
         self._unloading_room_name: str | None = None
-        # uplink/journal.py Journal or None: bit_completed is appended before
-        # any send and replayed after the resync over a durable transport
-        # (spec 2026-09-13 section 6.4).
+        # uplink/journal.py Journal or None: bit_completed is appended,
+        # stamped, before any send, replayed after every resync over a
+        # durable transport, and leaves only by completions_stored or the
+        # cap (box contract spec 4.6). Entries from before completion_id
+        # can never be confirmed, so they are dropped once, here.
         self.journal = journal
+        if journal is not None:
+            try:
+                purged = journal.purge_unidentified()
+            except OSError:
+                logger.exception("could not purge unidentified journal entries")
+            else:
+                if purged:
+                    logger.warning("dropped %d journal entries with no "
+                                   "completion_id", purged)
         # Same hook ConsoleAgent takes: a callable (None = no hook) that is
         # True while Control's Arco clients are up. unload_room is refused
         # while it holds (control.terrarium.unload_room_refusal, D7).
@@ -60,10 +99,11 @@ class UplinkAgent:
     def maintain_connection(self) -> None:
         """Call once per tick-loop iteration, alongside poll(). Attempts to
         (re)connect on a backoff schedule; never blocks or raises to the
-        caller if an attempt fails."""
-        if self.transport.connected:
-            return
+        caller if an attempt fails. While connected it keeps the heartbeat."""
         now = self._time_source()
+        if self.transport.connected:
+            self._tick_connected(now)
+            return
         if now < self._next_attempt_at:
             return
         try:
@@ -74,6 +114,8 @@ class UplinkAgent:
             self._next_attempt_at = now + self._backoff
             self._backoff = min(self._backoff * 2, self.MAX_BACKOFF_SECONDS)
             return
+        self._connected_at = now
+        self._heartbeat_from = now
         try:
             self._send_resync()
             self._replay_journal()
@@ -91,10 +133,29 @@ class UplinkAgent:
         self._backoff = self.INITIAL_BACKOFF_SECONDS
         self._next_attempt_at = 0.0
 
+    def _tick_connected(self, now: float) -> None:
+        """Heartbeat every HEARTBEAT_SECONDS while connected, the first one
+        HEARTBEAT_SECONDS after the connect. A link connected by someone
+        else (tests connect the transport directly) starts the timer at the
+        first tick that sees it."""
+        if self._heartbeat_from is None:
+            self._heartbeat_from = now
+            return
+        if now - self._heartbeat_from < self.HEARTBEAT_SECONDS:
+            return
+        self._heartbeat_from = now
+        try:
+            # Exactly {"event": "heartbeat"}: not stamped (fairyring never
+            # stores it, so a seq would leave a gap) and never journalled.
+            self.transport.send(protocol.heartbeat_event())
+        except Exception:
+            logger.warning("uplink heartbeat send failed")
+
     def _replay_journal(self) -> None:
+        """Send every journal entry exactly as stored (its original boot_id
+        and seq). Sending removes nothing: only completions_stored does."""
         if self.journal is None or not getattr(self.transport, "durable", False):
             return
-        had_lines = not self.journal.is_empty()
         entries = self.journal.entries()
         for event in entries:
             if not self.transport.connected:
@@ -105,8 +166,6 @@ class UplinkAgent:
                 logger.warning("uplink dropped mid-replay; %d journal entries "
                                "kept for the next connect", len(entries))
                 return
-        if had_lines:
-            self.journal.clear()
 
     def _send_resync(self) -> None:
         terrarium_state = (
@@ -128,6 +187,7 @@ class UplinkAgent:
         if self.game_server.registration is not None:
             counts = non_room_counts(self.game_server.registration)
             self._send(protocol.registration_changed_event(counts))
+        self._send(protocol.admin_devices_applied_event(self._admin_version()))
 
     def poll(self) -> None:
         """Drain and handle any inbound commands. Call once per tick-loop
@@ -153,6 +213,23 @@ class UplinkAgent:
         self._dispatch(msg.get("command"), command)
 
     def _dispatch(self, command_name: str, command) -> None:
+        if isinstance(command, protocol.CompletionsStoredCommand):
+            if self.journal is None:
+                return
+            try:
+                removed = self.journal.remove(command.completion_ids)
+            except OSError:
+                logger.exception("could not remove confirmed journal entries")
+                return
+            logger.debug("completions_stored: %d of %d journal entries removed",
+                         removed, len(command.completion_ids))
+            return
+        if isinstance(command, protocol.SetAdminDevicesCommand):
+            logger.info("set_admin_devices received; not applied yet")
+            return
+        if isinstance(command, protocol.SessionReplacedCommand):
+            logger.info("session_replaced received; ignored for now")
+            return
         if isinstance(command, protocol.ListBitsCommand):
             if self.registry is None:
                 self._send(protocol.error_event(command_name, "no registry"))
@@ -274,25 +351,70 @@ class UplinkAgent:
             logger.exception("Bit.result raised; sending bit_completed with a null result")
             result = None
         granted = gs.registration.granted() if gs.registration is not None else []
+        completed_at = self._wall_clock().astimezone(timezone.utc)
         event = protocol.bit_completed_event(
             result, gs.bit_name or "", bit.version,
             room_name=gs.provenance.get("room_name"),
             terrarium_config_version=gs.provenance.get("terrarium_config_version"),
-            players=protocol.players_view(granted))
+            players=protocol.players_view(granted),
+            completion_id=str(self._id_source()),
+            completed_at=completed_at.strftime("%Y-%m-%dT%H:%M:%SZ"))
         self._emit_bit_completed(event)
 
     def _emit_bit_completed(self, event: dict) -> None:
+        """Stamp once, journal the stamped frame, then send that same frame:
+        a replay carries the boot_id and seq it was first given. With no
+        journal and no link the frame goes nowhere, so it takes no seq."""
+        if self.journal is None and not self.transport.connected:
+            return
+        frame = self._stamp(event)
+        if frame is None:
+            return
         if self.journal is not None:
             try:
-                self.journal.append(event)
+                self.journal.append(frame)
             except OSError:
                 logger.exception("could not journal bit_completed; sending live only")
-        self._send(event)
+        if self.transport.connected:
+            self.transport.send(frame)
 
     def on_registration_change(self) -> None:
         counts = non_room_counts(self.game_server.registration)
         self._send(protocol.registration_changed_event(counts))
 
+    def _stamp(self, msg: dict) -> dict | None:
+        """A copy of msg with boot_id and the next seq, or None when it is
+        over MAX_FRAME_BYTES (spec 4.8). The size is measured with the seq
+        the frame would get; the counter advances only when a frame is
+        returned. An oversize bit_completed loses its result first."""
+        seq = self._seq + 1
+        frame = dict(msg, boot_id=self.boot_id, seq=seq)
+        size = frame_size(frame)
+        if size > self.MAX_FRAME_BYTES:
+            event = msg.get("event")
+            if event != "bit_completed":
+                logger.warning("dropping oversize %s frame (%d bytes > %d)",
+                               event, size, self.MAX_FRAME_BYTES)
+                return None
+            frame = dict(msg, result=None, result_dropped=True,
+                         boot_id=self.boot_id, seq=seq)
+            stripped = frame_size(frame)
+            if stripped > self.MAX_FRAME_BYTES:
+                logger.warning("dropping oversize bit_completed %s (%d bytes "
+                               "> %d even without its result)",
+                               msg.get("completion_id"), stripped,
+                               self.MAX_FRAME_BYTES)
+                return None
+            logger.warning("bit_completed %s result dropped (%d bytes > %d)",
+                           msg.get("completion_id"), size, self.MAX_FRAME_BYTES)
+        self._seq = seq
+        return frame
+
     def _send(self, msg: dict) -> None:
-        if self.transport.connected:
-            self.transport.send(msg)
+        """Stamp and send. While disconnected the frame is dropped before
+        stamping, so it takes no seq. Heartbeats bypass this."""
+        if not self.transport.connected:
+            return
+        frame = self._stamp(msg)
+        if frame is not None:
+            self.transport.send(frame)
