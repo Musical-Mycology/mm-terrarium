@@ -75,8 +75,6 @@ class UplinkAgent:
             self._backoff = min(self._backoff * 2, self.MAX_BACKOFF_SECONDS)
             return
         try:
-            if self.identity is not None:
-                self._send(protocol.identity_frame(self.identity))
             self._send_resync()
             self._replay_journal()
         except Exception:

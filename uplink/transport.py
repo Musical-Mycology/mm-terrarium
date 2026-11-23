@@ -137,10 +137,7 @@ class LogTransport:
         self.connected = False
 
     def send(self, msg: dict) -> None:
-        shown = dict(msg)
-        if "secret" in shown:
-            shown["secret"] = "[redacted]"
-        logger.debug("uplink (log-only) %s", _json_dumps(shown))
+        logger.debug("uplink (log-only) %s", _json_dumps(msg))
 
     def receive(self) -> dict | None:
         return None

@@ -742,32 +742,6 @@ def test_room_load_progress_is_sent_per_stage():
         '{"event": "room_load_progress", "stage": "validating"}')
 
 
-from uplink.protocol import UplinkIdentity
-
-
-def test_identity_is_the_first_frame_on_every_connect():
-    server = GameServer(bit_registry=REGISTRY)
-    transport = FakeTransport()
-    ident = UplinkIdentity("mm", "main-stage", "ab" * 32)
-    agent = UplinkAgent(server, transport, identity=ident, time_source=FakeClock())
-    agent.maintain_connection()
-    assert transport.sent[0] == {"event": "identity", "tenant_slug": "mm",
-                                 "terrarium_name": "main-stage", "secret": "ab" * 32}
-    assert transport.sent[1]["event"] == "state_changed"
-    transport.disconnect()
-    transport.sent.clear()
-    agent.maintain_connection()
-    assert transport.sent[0]["event"] == "identity"
-
-
-def test_no_identity_means_no_identity_frame():
-    agent, server, transport = make_agent()
-    transport.disconnect()
-    transport.sent.clear()
-    agent.maintain_connection()
-    assert transport.sent[0]["event"] == "state_changed"
-
-
 def test_resync_carries_the_injected_lan_ip_and_ordinary_events_do_not():
     server = GameServer(bit_registry=REGISTRY)
     transport = FakeTransport()
@@ -880,7 +854,7 @@ def test_no_journal_means_no_replay_and_no_file(tmp_path):
 
 class SendFailsOnceTransport(FakeTransport):
     """Connects fine, but the first send() after connect raises -- e.g. the
-    identity frame or the resync hits a socket that closed right away."""
+    resync hits a socket that closed right away."""
 
     def __init__(self, fail_on: str):
         super().__init__()
@@ -890,8 +864,7 @@ class SendFailsOnceTransport(FakeTransport):
     def send(self, msg: dict) -> None:
         should_fail = (
             self.fail_count == 0
-            and ((self._fail_on == "identity" and msg.get("event") == "identity")
-                 or (self._fail_on == "resync" and msg.get("event") == "state_changed")))
+            and self._fail_on == "resync" and msg.get("event") == "state_changed")
         if should_fail:
             self.fail_count += 1
             self.connected = False
@@ -902,23 +875,6 @@ class SendFailsOnceTransport(FakeTransport):
 class ReceiveRaisesTransport(FakeTransport):
     def receive(self):
         raise ConnectionError("socket error on recv")
-
-
-def test_send_failure_on_identity_frame_does_not_raise_and_allows_reconnect():
-    from uplink.protocol import UplinkIdentity
-    clock = FakeClock()
-    server = GameServer(bit_registry=REGISTRY)
-    transport = SendFailsOnceTransport(fail_on="identity")
-    ident = UplinkIdentity("mm", "main-stage", "ab" * 32)
-    agent = UplinkAgent(server, transport, identity=ident, time_source=clock)
-
-    agent.maintain_connection()  # connects, then identity send raises
-    assert transport.fail_count == 1
-    assert transport.connected is False
-
-    clock.advance(agent.INITIAL_BACKOFF_SECONDS + 0.1)
-    agent.maintain_connection()  # backoff elapsed -- retries and connects
-    assert transport.connected is True
 
 
 def test_send_failure_on_resync_does_not_raise_and_allows_reconnect():
@@ -1003,3 +959,14 @@ def test_post_connect_send_failure_backs_off_like_a_failed_connect():
     clock.advance(agent.INITIAL_BACKOFF_SECONDS)
     agent.maintain_connection()
     assert transport.connect_count == 3
+
+
+def test_new_broker_commands_are_ignored_by_the_agent():
+    agent, server, transport = make_agent()
+    transport.sent.clear()
+    for msg in ({"command": "set_admin_devices", "version": 1, "admins": []},
+                {"command": "completions_stored", "completion_ids": ["a"]},
+                {"command": "session_replaced"}):
+        transport.push_incoming(msg)
+    agent.poll()
+    assert transport.sent == []

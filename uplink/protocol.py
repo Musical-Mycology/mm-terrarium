@@ -11,17 +11,16 @@ from control.roles import RoleClass
 
 @dataclass(frozen=True)
 class UplinkIdentity:
-    """What the box presents in the first frame of every connection (spec
-    2026-09-13 section 6.2; shape from mm-fairyring issue #1)."""
+    """What the box presents in the websocket handshake headers of every
+    connection (the broker takes identity from headers, not a frame)."""
     tenant_slug: str
     terrarium_name: str
     secret: str = field(repr=False)
 
-
-def identity_frame(identity: UplinkIdentity) -> dict:
-    return {"event": "identity", "tenant_slug": identity.tenant_slug,
-            "terrarium_name": identity.terrarium_name,
-            "secret": identity.secret}
+    def headers(self) -> dict[str, str]:
+        return {"X-Fairyring-Tenant": self.tenant_slug,
+                "X-Fairyring-Terrarium": self.terrarium_name,
+                "X-Fairyring-Secret": self.secret}
 
 
 # --- Down: fairyring -> Terrarium, one dataclass per command ---------------
@@ -69,6 +68,21 @@ class UnloadRoomCommand:
     force: bool = False
 
 
+@dataclass
+class SetAdminDevicesCommand:
+    manifest: dict      # the whole message minus "command"; the agent checks it
+
+
+@dataclass
+class CompletionsStoredCommand:
+    completion_ids: tuple[str, ...]
+
+
+@dataclass
+class SessionReplacedCommand:
+    pass
+
+
 def parse_command(msg: dict):
     """Parse an inbound down-message dict into a command object.
 
@@ -104,6 +118,19 @@ def parse_command(msg: dict):
         if not isinstance(force, bool):
             raise ValueError("unload_room 'force' must be a bool when given")
         return UnloadRoomCommand(force=force)
+    if command == "set_admin_devices":
+        return SetAdminDevicesCommand(
+            manifest={k: v for k, v in msg.items() if k != "command"})
+    if command == "completions_stored":
+        ids = msg.get("completion_ids")
+        if (not isinstance(ids, list)
+                or not all(isinstance(i, str) and i for i in ids)):
+            raise ValueError(
+                "completions_stored requires a list of non-empty string "
+                "'completion_ids'")
+        return CompletionsStoredCommand(completion_ids=tuple(ids))
+    if command == "session_replaced":
+        return SessionReplacedCommand()
     raise ValueError(f"unrecognized command: {command!r}")
 
 
@@ -145,7 +172,9 @@ def players_view(granted) -> list[dict]:
 
 def bit_completed_event(result: dict, bit_name: str = "",
                         bit_version: str = "", *, room_name=None,
-                        terrarium_config_version=None, players=()) -> dict:
+                        terrarium_config_version=None, players=(),
+                        completion_id: str | None = None,
+                        completed_at: str | None = None) -> dict:
     event = {
         "event": "bit_completed",
         "result": result,
@@ -156,6 +185,10 @@ def bit_completed_event(result: dict, bit_name: str = "",
         event["room_name"] = room_name
     if terrarium_config_version is not None:
         event["terrarium_config_version"] = terrarium_config_version
+    if completion_id is not None:
+        event["completion_id"] = completion_id
+    if completed_at is not None:
+        event["completed_at"] = completed_at
     return event
 
 
@@ -181,3 +214,11 @@ def room_load_failed_event(name: str, reason: str) -> dict:
 
 def room_load_progress_event(stage: str) -> dict:
     return {"event": "room_load_progress", "stage": stage}
+
+
+def heartbeat_event() -> dict:
+    return {"event": "heartbeat"}
+
+
+def admin_devices_applied_event(version: int) -> dict:
+    return {"event": "admin_devices_applied", "version": version}
