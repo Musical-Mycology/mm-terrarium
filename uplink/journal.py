@@ -31,8 +31,11 @@ class Journal:
         self.cap = cap
 
     def _lines(self) -> list[str]:
+        # errors="replace": bytes that are not UTF-8 become a line that is
+        # not JSON, skipped and purged like any other corrupt line, instead
+        # of a UnicodeDecodeError that would stop the box at boot.
         try:
-            with open(self.path, encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8", errors="replace") as f:
                 return [line for line in f.read().split("\n") if line]
         except FileNotFoundError:
             return []
@@ -45,8 +48,10 @@ class Journal:
             f.write(dumps(event) + "\n")
         lines = self._lines()
         if len(lines) > self.cap:
-            with open(self.path, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines[-self.cap:]) + "\n")
+            dropped = len(lines) - self.cap
+            self._rewrite(lines[-self.cap:])
+            logger.warning("journal %s over its cap of %d; dropped the %d "
+                           "oldest entries", self.path, self.cap, dropped)
 
     def _parse(self, lines: list[str] | None = None) -> list[tuple[str, dict]]:
         """(raw line, entry) for each valid line, in file order; warns once
@@ -76,6 +81,8 @@ class Journal:
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write("".join(line + "\n" for line in lines))
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, self.path)
         except BaseException:
             try:
@@ -118,11 +125,10 @@ class Journal:
         return dropped
 
     def is_empty(self) -> bool:
-        """True when the file is missing or has no raw lines at all --
-        distinct from entries() == [], which is also true when every raw
-        line is corrupt JSON. Callers that need to know whether there is
-        anything left to truncate (see _replay_journal in uplink/link.py)
-        must use this, not `not entries()`."""
+        """True when the file is missing or has no raw lines at all.
+        Distinct from entries() == [], which is also true when every raw
+        line is corrupt or has no completion_id: use this to ask whether
+        the file holds anything at all."""
         return not self._lines()
 
     def clear(self) -> None:

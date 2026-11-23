@@ -168,3 +168,65 @@ def test_failing_rewrite_leaves_original_and_no_temp_file(tmp_path, monkeypatch)
         j.remove(["a"])
     assert (tmp_path / "j.jsonl").read_bytes() == before
     assert sorted(x.name for x in tmp_path.iterdir()) == ["j.jsonl"]
+
+
+# --- final fix wave ---------------------------------------------------------
+
+def test_undecodable_bytes_are_a_corrupt_line_not_an_error(tmp_path, caplog):
+    p = tmp_path / "j.jsonl"
+    p.write_bytes(b'{"completion_id": "a"}\n\xff\xfe junk\n{"completion_id": "b"}\n')
+    j = Journal(str(p))
+    with caplog.at_level(logging.WARNING, logger="uplink.journal"):
+        assert [e["completion_id"] for e in j.entries()] == ["a", "b"]
+    assert any("line 2" in r.getMessage() for r in caplog.records)
+    assert j.is_empty() is False
+
+
+def test_undecodable_bytes_do_not_stop_append_remove_or_purge(tmp_path):
+    p = tmp_path / "j.jsonl"
+    p.write_bytes(b'{"completion_id": "a"}\n\xff\n')
+    j = Journal(str(p))
+    j.append({"completion_id": "b"})
+    assert j.remove(["a"]) == 1
+    assert j.purge_unidentified() == 1
+    assert [e["completion_id"] for e in j.entries()] == ["b"]
+    assert p.read_bytes() == b'{"completion_id": "b"}\n'
+
+
+def test_rewrite_fsyncs_before_the_replace(tmp_path, monkeypatch):
+    import uplink.journal as journal_module
+    calls = []
+    real_fsync, real_replace = journal_module.os.fsync, journal_module.os.replace
+    monkeypatch.setattr(journal_module.os, "fsync",
+                        lambda fd: (calls.append("fsync"), real_fsync(fd))[1])
+    monkeypatch.setattr(journal_module.os, "replace",
+                        lambda a, b: (calls.append("replace"), real_replace(a, b))[1])
+    j = _seed(tmp_path, ["a", "b"])
+    calls.clear()
+    j.remove(["a"])
+    assert calls == ["fsync", "replace"]
+
+
+def test_cap_trim_goes_through_the_atomic_rewrite_and_warns(tmp_path, caplog,
+                                                            monkeypatch):
+    import uplink.journal as journal_module
+    replaced = []
+    real_replace = journal_module.os.replace
+    monkeypatch.setattr(journal_module.os, "replace",
+                        lambda a, b: (replaced.append(b), real_replace(a, b))[1])
+    j = Journal(str(tmp_path / "j.jsonl"), cap=3)
+    for n in range(3):
+        j.append({"completion_id": f"c{n}"})
+    assert replaced == []                       # under the cap: plain append
+    with caplog.at_level(logging.WARNING, logger="uplink.journal"):
+        j.append({"completion_id": "c3"})
+    assert replaced == [str(tmp_path / "j.jsonl")]
+    assert [e["completion_id"] for e in j.entries()] == ["c1", "c2", "c3"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["j.jsonl"]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "1 oldest" in warnings[0].getMessage()
+
+
+def test_is_empty_docstring_no_longer_names_replay_journal():
+    assert "_replay_journal" not in Journal.is_empty.__doc__
