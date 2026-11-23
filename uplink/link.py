@@ -363,7 +363,8 @@ class UplinkAgent:
                     # rest of the buffer is still read: it may hold a
                     # session_replaced or confirmations.
                     logger.warning("uplink %r command failed (%s); continuing",
-                                   msg.get("command"), type(exc).__name__)
+                                   msg.get("command") if isinstance(msg, dict)
+                                   else None, type(exc).__name__)
                     continue
                 if replaced:
                     return
@@ -386,6 +387,10 @@ class UplinkAgent:
 
     def _handle_message(self, msg: dict) -> bool:
         """Handle one frame; True when it was session_replaced."""
+        if not isinstance(msg, dict):
+            logger.warning("dropping unparseable uplink message: not an object "
+                           "(%s)", type(msg).__name__)
+            return False
         try:
             command = protocol.parse_command(msg)
         except ValueError as exc:

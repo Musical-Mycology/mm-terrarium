@@ -2007,6 +2007,49 @@ def test_completions_stored_buffered_on_a_closed_link_still_empties_journal(
     assert transport.connected is True
 
 
+def test_non_object_frames_are_dropped_without_raising(caplog):
+    agent, server, transport = make_agent()
+    transport.sent.clear()
+    for frame in ([1], 7, "x"):
+        transport.push_incoming(frame)
+
+    with caplog.at_level(logging.WARNING):
+        agent.poll()                             # must not raise
+
+    assert transport.sent == []
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 3
+
+
+def test_a_non_object_frame_does_not_delay_the_frames_behind_it(tmp_path):
+    journal = _journal_with(tmp_path, "a")
+    agent, server, transport = make_agent(journal=journal)
+    transport.push_incoming([1])
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["c-a"]})
+
+    agent.poll()
+
+    assert journal.entries() == []
+
+
+def test_non_object_frame_on_a_closed_link_does_not_raise_from_maintain_connection(
+        tmp_path):
+    journal = _journal_with(tmp_path, "a")
+    transport = FakeTransport()
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
+                        journal=journal, time_source=FakeClock(), **fixed())
+    agent.maintain_connection()
+    transport.push_incoming([1])
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["c-a"]})
+    transport.disconnect()
+
+    agent.maintain_connection()                  # must not raise
+
+    assert journal.entries() == []
+
+
 # item 8: journal removals are batched per poll
 
 class SpyJournal(Journal):
