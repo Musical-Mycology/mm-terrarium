@@ -135,3 +135,36 @@ def test_cap_still_keeps_newest_500_by_default(tmp_path):
     ids = [e["completion_id"] for e in j.entries()]
     assert len(ids) == 500
     assert ids[0] == "c5" and ids[-1] == "c504"
+
+
+def test_remove_keeps_corrupt_and_unidentified_lines_unchanged(tmp_path):
+    p = tmp_path / "j.jsonl"
+    p.write_text('{"completion_id": "a"}\nnot json\n{"completion_id": "b"}\n'
+                 '{"n": 9}\n{"completion_id": "c"}\n')
+    j = Journal(str(p))
+    assert j.remove(["b"]) == 1
+    assert p.read_text() == ('{"completion_id": "a"}\nnot json\n'
+                             '{"n": 9}\n{"completion_id": "c"}\n')
+
+
+def test_remove_rejects_a_bare_string(tmp_path):
+    import pytest
+    j = _seed(tmp_path, ["a", "b"])
+    with pytest.raises(TypeError):
+        j.remove("abc")
+    assert [e["completion_id"] for e in j.entries()] == ["a", "b"]
+
+
+def test_failing_rewrite_leaves_original_and_no_temp_file(tmp_path, monkeypatch):
+    import pytest
+    import uplink.journal as journal_module
+    j = _seed(tmp_path, ["a", "b"])
+    before = (tmp_path / "j.jsonl").read_bytes()
+
+    def boom(src, dst):
+        raise OSError("disk")
+    monkeypatch.setattr(journal_module.os, "replace", boom)
+    with pytest.raises(OSError):
+        j.remove(["a"])
+    assert (tmp_path / "j.jsonl").read_bytes() == before
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["j.jsonl"]

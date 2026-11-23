@@ -46,11 +46,12 @@ class Journal:
             with open(self.path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines[-self.cap:]) + "\n")
 
-    def _parse(self) -> list[tuple[str, dict]]:
+    def _parse(self, lines: list[str] | None = None) -> list[tuple[str, dict]]:
         """(raw line, entry) for each valid line, in file order; warns once
         per skipped line."""
         out = []
-        for number, line in enumerate(self._lines(), start=1):
+        for number, line in enumerate(
+                self._lines() if lines is None else lines, start=1):
             try:
                 entry = json.loads(line)
             except ValueError:
@@ -83,11 +84,23 @@ class Journal:
 
     def remove(self, completion_ids: Iterable[str]) -> int:
         """Drop the entries whose completion_id is confirmed; returns how
-        many were removed. Unknown ids are ignored."""
+        many were removed. Unknown ids are ignored. Every other raw line
+        (valid, corrupt or id-less) is written back unchanged."""
+        if isinstance(completion_ids, str):
+            raise TypeError("completion_ids must be an iterable of ids, "
+                            "not a bare str")
         ids = set(completion_ids)
-        parsed = self._parse()
-        kept = [line for line, e in parsed if e["completion_id"] not in ids]
-        removed = len(parsed) - len(kept)
+        kept = []
+        removed = 0
+        for line in self._lines():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                entry = None
+            if isinstance(entry, dict) and entry.get("completion_id") in ids:
+                removed += 1
+            else:
+                kept.append(line)
         if removed:
             self._rewrite(kept)
         return removed
@@ -96,7 +109,7 @@ class Journal:
         """Rewrite keeping only what entries() returns; returns the number
         of lines dropped."""
         raw = self._lines()
-        kept = [line for line, _ in self._parse()]
+        kept = [line for line, _ in self._parse(raw)]
         dropped = len(raw) - len(kept)
         if dropped:
             self._rewrite(kept)
