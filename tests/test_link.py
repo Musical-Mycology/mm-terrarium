@@ -1005,8 +1005,7 @@ def test_post_connect_send_failure_backs_off_like_a_failed_connect():
 def test_new_broker_commands_are_ignored_by_the_agent():
     agent, server, transport = make_agent()
     transport.sent.clear()
-    for msg in ({"command": "set_admin_devices", "version": 1, "admins": []},
-                {"command": "completions_stored", "completion_ids": ["a"]},
+    for msg in ({"command": "completions_stored", "completion_ids": ["a"]},
                 {"command": "session_replaced"}):
         transport.push_incoming(msg)
     agent.poll()
@@ -1550,3 +1549,189 @@ def test_session_replaced_warns_and_notifies_without_the_secret(caplog):
     assert "acme" in notes[0] and "lobby-1" in notes[0]
     assert "s3cret-value" not in notes[0]
     assert "s3cret-value" not in caplog.text
+
+
+# --- set_admin_devices (box contract spec 4.10, issue 100) -------------------
+
+from control.admin_devices_store import APPLIED_FILENAME, AdminDevicesStore
+from control.lobby import TERRARIUM_ADMIN
+
+
+def manifest(*, version=7, devices=None, **overrides):
+    """The issue 100 payload for tenant mm, terrarium main-stage, as the
+    broker sends it (the manifest plus "command")."""
+    if devices is None:
+        devices = [("A", "active"), ("B", "lost")]
+    msg = {
+        "command": "set_admin_devices", "schema": 1, "tenant_slug": "mm",
+        "terrarium_name": "main-stage", "version": version,
+        "issued_at": "2026-09-11T18:04:00Z",
+        "issued_by": {"account_id": "acct-1", "handle": "chris"},
+        "devices": [{"gem_uid": uid, "status": status, "player_handle": "p",
+                     "added_at": "2026-09-10T12:00:00Z",
+                     "added_by_handle": "chris"}
+                    for uid, status in devices],
+    }
+    msg.update(overrides)
+    return msg
+
+
+def admin_agent(tmp_path, *, store=True, **kwargs):
+    server = GameServer(bit_registry=REGISTRY, admin_devices=["old-admin"])
+    transport = FakeTransport()
+    admin_store = (AdminDevicesStore(str(tmp_path / APPLIED_FILENAME))
+                   if store else None)
+    kwargs.setdefault("identity", UplinkIdentity("mm", "main-stage", "s" * 64))
+    agent = UplinkAgent(server, transport, admin_store=admin_store,
+                        time_source=FakeClock(), **fixed(**kwargs))
+    transport.connect()
+    return agent, server, transport, admin_store
+
+
+def deliver(agent, transport, msg):
+    transport.sent.clear()
+    transport.push_incoming(msg)
+    agent.poll()
+    return strip(transport.sent)
+
+
+def test_valid_manifest_applies_active_devices_and_reports_version(tmp_path):
+    agent, gs, transport, store = admin_agent(tmp_path)
+
+    sent = deliver(agent, transport, manifest())
+
+    assert gs.is_admin("A")
+    assert not gs.is_admin("B")
+    assert gs.is_admin(TERRARIUM_ADMIN)
+    assert not gs.is_admin("old-admin")
+    assert store.version == 7
+    assert store.devices == ("A",)
+    assert sent == [{"event": "admin_devices_applied", "version": 7}]
+
+
+def test_manifest_with_no_devices_leaves_only_the_terrarium_admin(tmp_path):
+    agent, gs, transport, store = admin_agent(tmp_path)
+
+    sent = deliver(agent, transport, manifest(version=3, devices=[]))
+
+    assert gs.admin_devices == frozenset({TERRARIUM_ADMIN})
+    assert store.version == 3
+    assert store.devices == ()
+    assert sent == [{"event": "admin_devices_applied", "version": 3}]
+
+
+@pytest.mark.parametrize("version", [7, 6, 0])
+def test_same_or_older_version_is_a_silent_noop(tmp_path, version):
+    agent, gs, transport, store = admin_agent(tmp_path)
+    deliver(agent, transport, manifest())
+    path = tmp_path / APPLIED_FILENAME
+    before = path.read_text()
+
+    sent = deliver(agent, transport, manifest(
+        version=version, devices=[("C", "active")]))
+
+    assert sent == []
+    assert path.read_text() == before
+    assert store.version == 7
+    assert store.devices == ("A",)
+    assert gs.is_admin("A") and not gs.is_admin("C")
+
+
+REFUSALS = {
+    "schema-2": (manifest(schema=2), {}),
+    "wrong-tenant": (manifest(tenant_slug="crf"), {}),
+    "wrong-terrarium": (manifest(terrarium_name="side-stage"), {}),
+    "string-version": (manifest(version="7"), {}),
+    "bool-version": (manifest(version=True), {}),
+    "devices-not-a-list": (manifest() | {"devices": {"gem_uid": "A"}}, {}),
+    "reserved-id-even-lost": (manifest(devices=[("A", "active"),
+                                                (TERRARIUM_ADMIN, "lost")]), {}),
+    "device-missing-gem-uid": (
+        manifest() | {"devices": [{"status": "active"}]}, {}),
+    "no-admin-store": (manifest(), {"store": False}),
+    "no-identity": (manifest(), {"identity": None}),
+}
+
+
+@pytest.mark.parametrize("msg,kwargs", REFUSALS.values(), ids=REFUSALS.keys())
+def test_refused_manifest(tmp_path, msg, kwargs):
+    agent, gs, transport, store = admin_agent(tmp_path, **kwargs)
+    before = gs.admin_devices
+
+    sent = deliver(agent, transport, msg)
+
+    assert len(sent) == 1
+    assert sent[0]["event"] == "error"
+    assert sent[0]["command"] == "set_admin_devices"
+    assert isinstance(sent[0]["message"], str) and sent[0]["message"]
+    assert gs.admin_devices == before
+    assert not (tmp_path / APPLIED_FILENAME).exists()
+    if store is not None:
+        assert store.version == 0 and store.devices is None
+
+
+def test_malformed_or_misaddressed_manifest_is_refused_whatever_its_version(
+        tmp_path):
+    agent, gs, transport, store = admin_agent(tmp_path)
+    deliver(agent, transport, manifest(version=7))
+
+    for msg in (manifest(version=2, tenant_slug="crf"),
+                manifest(version=2, schema=2),
+                manifest(version=2, devices=[(TERRARIUM_ADMIN, "active")])):
+        sent = deliver(agent, transport, msg)
+        assert [m["event"] for m in sent] == ["error"]
+    assert store.version == 7
+
+
+def test_failed_save_sends_error_and_keeps_the_old_admins(tmp_path):
+    agent, gs, transport, store = admin_agent(tmp_path)
+    deliver(agent, transport, manifest(version=2, devices=[("A", "active")]))
+
+    def broken_save(devices, version):
+        raise OSError("read-only filesystem")
+
+    store.save = broken_save
+    sent = deliver(agent, transport, manifest(version=3,
+                                              devices=[("B", "active")]))
+
+    assert [m["event"] for m in sent] == ["error"]
+    assert sent[0]["command"] == "set_admin_devices"
+    assert gs.is_admin("A") and not gs.is_admin("B")
+    assert store.version == 2
+    assert store.devices == ("A",)
+
+
+def test_resync_reports_the_stored_version(tmp_path):
+    AdminDevicesStore(str(tmp_path / APPLIED_FILENAME)).save(["A"], 5)
+    store = AdminDevicesStore(str(tmp_path / APPLIED_FILENAME))
+    transport = FakeTransport()
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
+                        admin_store=store, time_source=FakeClock(), **fixed())
+
+    agent.maintain_connection()
+    assert strip(transport.sent)[-1] == {
+        "event": "admin_devices_applied", "version": 5}
+
+    # A manifest applied later is what the next resync reports.
+    agent.identity = UplinkIdentity("mm", "main-stage", "s" * 64)
+    deliver(agent, transport, manifest(version=9))
+    transport.disconnect()
+    transport.sent.clear()
+    agent.maintain_connection()
+    assert strip(transport.sent)[-1] == {
+        "event": "admin_devices_applied", "version": 9}
+
+
+def test_bad_manifests_never_raise_out_of_poll(tmp_path):
+    agent, gs, transport, store = admin_agent(tmp_path)
+    for msg in ({"command": "set_admin_devices"},
+                manifest() | {"devices": [None, 3, "A"]},
+                manifest() | {"devices": [{"gem_uid": ["A"], "status": "active"}]},
+                manifest() | {"devices": [{"gem_uid": "", "status": "active"}]},
+                manifest() | {"devices": [{"gem_uid": "A", "status": None}]},
+                manifest(tenant_slug=["mm"]),
+                manifest(version=7.0),
+                manifest(version=None)):
+        sent = deliver(agent, transport, msg)
+        assert [m["event"] for m in sent] == ["error"], msg
+    assert store.version == 0

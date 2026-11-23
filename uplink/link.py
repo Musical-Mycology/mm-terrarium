@@ -41,7 +41,7 @@ class UplinkAgent:
                  clients_live=None, boot_id: str | None = None,
                  id_source=uuid.uuid4,
                  wall_clock=lambda: datetime.now(timezone.utc),
-                 admin_version=lambda: 0, notify=None):
+                 admin_version=None, notify=None, admin_store=None):
         self.game_server = game_server
         self.transport = transport
         self.registry = registry
@@ -67,8 +67,18 @@ class UplinkAgent:
         # completed_at; every timer uses time_source (monotonic).
         self._id_source = id_source
         self._wall_clock = wall_clock
+        # control/admin_devices_store.py AdminDevicesStore or None: where an
+        # applied set_admin_devices manifest is kept (spec 4.10). With none,
+        # every manifest is refused.
+        self.admin_store = admin_store
         # Version of the applied admin-device manifest, sent in every
-        # resync's admin_devices_applied (0: none ever applied).
+        # resync's admin_devices_applied (0: none ever applied). Defaults
+        # to the store's version when there is a store.
+        if admin_version is None:
+            if admin_store is not None:
+                admin_version = lambda: admin_store.version
+            else:
+                admin_version = lambda: 0
         self._admin_version = admin_version
         # time_source() of the last successful connect, and of the last
         # heartbeat (or the connect) the heartbeat timer counts from.
@@ -187,6 +197,68 @@ class UplinkAgent:
             except Exception:
                 logger.exception("session_replaced notify callback raised")
 
+    def _admin_manifest_refusal(self, manifest: dict) -> str | None:
+        """Why manifest may not be applied to this box, or None. Every check
+        but the version comparison: a malformed or misaddressed manifest is
+        refused whatever its version (spec 4.10)."""
+        if self.identity is None:
+            return "no uplink identity"
+        if manifest.get("schema") != 1:
+            return "unsupported schema"
+        if manifest.get("tenant_slug") != self.identity.tenant_slug:
+            return "tenant_slug is not this box's"
+        if manifest.get("terrarium_name") != self.identity.terrarium_name:
+            return "terrarium_name is not this box's"
+        version = manifest.get("version")
+        if not isinstance(version, int) or isinstance(version, bool):
+            return "version must be an integer"
+        devices = manifest.get("devices")
+        if not isinstance(devices, list):
+            return "devices must be a list"
+        for device in devices:
+            if not isinstance(device, dict):
+                return "each device must be an object"
+            gem_uid = device.get("gem_uid")
+            if not isinstance(gem_uid, str) or not gem_uid:
+                return "each device needs a non-empty string gem_uid"
+            if not isinstance(device.get("status"), str):
+                return "each device needs a string status"
+            if gem_uid == TERRARIUM_ADMIN:
+                return f"{TERRARIUM_ADMIN!r} is reserved and cannot be listed"
+        if self.admin_store is None:
+            return "no admin store"
+        return None
+
+    def _on_set_admin_devices(self, manifest: dict) -> None:
+        """Apply a MycoQuest admin-device manifest (spec 4.10): validate,
+        save, replace the engine's list, report the version. A version not
+        above the applied one is a silent no-op; any other failure sends
+        an error and changes nothing."""
+        reason = self._admin_manifest_refusal(manifest)
+        if reason is not None:
+            logger.warning("set_admin_devices refused: %s", reason)
+            self._send(protocol.error_event("set_admin_devices", reason))
+            return
+        version = manifest["version"]
+        if version <= self.admin_store.version:
+            logger.debug("set_admin_devices version %d not above applied %d; "
+                         "ignored", version, self.admin_store.version)
+            return
+        active = tuple(dict.fromkeys(
+            d["gem_uid"] for d in manifest["devices"]
+            if d["status"] == "active"))
+        try:
+            self.admin_store.save(active, version)
+        except OSError:
+            logger.exception("could not save admin devices version %d", version)
+            self._send(protocol.error_event(
+                "set_admin_devices", "could not save the admin list"))
+            return
+        self.game_server.set_admin_devices(active)
+        logger.info("admin devices version %d applied (%d active)",
+                    version, len(active))
+        self._send(protocol.admin_devices_applied_event(version))
+
     def _replay_journal(self) -> None:
         """Send every journal entry exactly as stored (its original boot_id
         and seq). Sending removes nothing: only completions_stored does."""
@@ -261,7 +333,7 @@ class UplinkAgent:
                          removed, len(command.completion_ids))
             return
         if isinstance(command, protocol.SetAdminDevicesCommand):
-            logger.info("set_admin_devices received; not applied yet")
+            self._on_set_admin_devices(command.manifest)
             return
         if isinstance(command, protocol.SessionReplacedCommand):
             self._on_replaced(self._time_source())
