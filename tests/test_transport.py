@@ -69,3 +69,28 @@ def test_log_transport_logs_frames_with_the_secret_redacted(caplog):
     assert "ab" * 32 not in caplog.text
     assert "[redacted]" in caplog.text
     assert '"state": "IDLE"' in caplog.text or '"state":"IDLE"' in caplog.text
+
+
+def test_fake_transport_close_counts_and_disconnects():
+    t = FakeTransport()
+    t.connect()
+    t.close()
+    t.close()
+    assert t.connected is False
+    assert t.close_count == 2
+
+
+def test_log_transport_close_never_raises():
+    t = LogTransport()
+    t.connect()
+    t.close()
+    t.close()
+    assert t.connected is False
+
+
+def test_frame_size_is_the_utf8_wire_length():
+    from control.wire_json import dumps
+    from uplink.transport import frame_size
+
+    msg = {"a": "é"}
+    assert frame_size(msg) == len(dumps(msg).encode("utf-8"))

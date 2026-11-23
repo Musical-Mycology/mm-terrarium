@@ -81,3 +81,73 @@ def test_connect_raises_when_no_server_listening():
     transport = WebSocketTransport("ws://localhost:1")  # nothing bound there
     with pytest.raises(OSError):
         transport.connect()
+
+
+def test_handshake_headers_reach_the_server():
+    seen = {}
+
+    def handler(connection):
+        for name in ("X-Fairyring-Tenant", "X-Fairyring-Terrarium",
+                     "X-Fairyring-Secret"):
+            seen[name] = connection.request.headers.get(name)
+
+    server = serve(handler, "localhost", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.socket.getsockname()[1]
+    try:
+        transport = WebSocketTransport(
+            f"ws://localhost:{port}",
+            headers={"X-Fairyring-Tenant": "mm",
+                     "X-Fairyring-Terrarium": "lobby",
+                     "X-Fairyring-Secret": "s3cret"})
+        transport.connect()
+        for _ in range(100):
+            if len(seen) == 3:
+                break
+            time.sleep(0.02)
+        transport.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+    assert seen == {"X-Fairyring-Tenant": "mm",
+                    "X-Fairyring-Terrarium": "lobby",
+                    "X-Fairyring-Secret": "s3cret"}
+
+
+def test_close_disconnects_and_is_idempotent(echo_server):
+    uri, _received = echo_server
+    transport = WebSocketTransport(uri)
+    transport.connect()
+
+    transport.close()
+    assert transport.connected is False
+    transport.close()  # a second close must not raise
+    assert transport.connected is False
+
+
+def test_close_before_connect_does_not_raise():
+    transport = WebSocketTransport("ws://localhost:1")
+    transport.close()
+    assert transport.connected is False
+
+
+def test_close_swallows_errors_from_the_socket():
+    class Boom:
+        def close(self):
+            raise OSError("boom")
+
+    transport = WebSocketTransport("ws://localhost:1")
+    transport._ws = Boom()
+    transport.connected = True
+    transport.close()
+    assert transport.connected is False
+
+
+def test_no_headers_still_connects(echo_server):
+    uri, _received = echo_server
+    transport = WebSocketTransport(uri, headers=None)
+    transport.connect()
+    assert transport.connected is True
+    transport.close()

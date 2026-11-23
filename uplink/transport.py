@@ -21,6 +21,11 @@ from control.wire_json import dumps as _json_dumps
 logger = logging.getLogger(__name__)
 
 
+def frame_size(msg: dict) -> int:
+    """Bytes the frame occupies on the wire (UTF-8 of its wire JSON)."""
+    return len(_json_dumps(msg).encode("utf-8"))
+
+
 class FakeTransport:
     """In-process test double. No socket, no server process -- tests push
     inbound messages via `push_incoming` and inspect `sent`.
@@ -32,6 +37,7 @@ class FakeTransport:
         self.sent: list[dict] = []
         self._incoming: deque[dict] = deque()
         self.connect_count = 0
+        self.close_count = 0
 
     def connect(self) -> None:
         self.connected = True
@@ -40,6 +46,10 @@ class FakeTransport:
     def disconnect(self) -> None:
         """Test helper: simulate the link dropping."""
         self.connected = False
+
+    def close(self) -> None:
+        self.connected = False
+        self.close_count += 1
 
     def send(self, msg: dict) -> None:
         self.sent.append(msg)
@@ -64,14 +74,29 @@ class WebSocketTransport:
 
     durable = True
 
-    def __init__(self, uri: str):
+    def __init__(self, uri: str, headers: dict[str, str] | None = None):
         self.uri = uri
+        self._headers = headers  # carries the secret: never logged
         self.connected = False
         self._ws = None
 
+    def __repr__(self) -> str:
+        return f"WebSocketTransport(uri={self.uri!r})"
+
     def connect(self) -> None:
-        self._ws = ws_connect(self.uri)
+        self._ws = ws_connect(self.uri, additional_headers=self._headers)
         self.connected = True
+
+    def close(self) -> None:
+        """Drop the socket if any. Never raises."""
+        self.connected = False
+        ws, self._ws = self._ws, None
+        if ws is None:
+            return
+        try:
+            ws.close()
+        except Exception:
+            pass
 
     def send(self, msg: dict) -> None:
         if not self.connected:
@@ -107,6 +132,9 @@ class LogTransport:
 
     def connect(self) -> None:
         self.connected = True
+
+    def close(self) -> None:
+        self.connected = False
 
     def send(self, msg: dict) -> None:
         shown = dict(msg)
