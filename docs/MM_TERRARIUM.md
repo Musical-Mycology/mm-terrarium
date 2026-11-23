@@ -2305,8 +2305,9 @@ network makes auth a prerequisite.
 ### `uplink/`: outbound remote control
 
 `UplinkAgent` (`uplink/link.py`) drives `GameServer` over an outbound
-websocket to the mm-fairyring broker; nothing depends on it being up,
-and only lifecycle and registration counts cross it. The wire contract is
+websocket to the mm-fairyring broker; nothing depends on it being up.
+Lifecycle events and registration counts go up it, and commands come down
+it, MycoQuest's admin-device manifests among them. The wire contract is
 section 4 of the mm-fairyring box-contract design (`docs/superpowers/specs/2026-11-23-box-contract-design.md`
 in that repo; the section below follows it) ([design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md),
 [MycoQuest handoff](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-13-mycoquest-handoff-terrarium-design.md)).
@@ -2316,7 +2317,8 @@ in that repo; the section below follows it) ([design](https://github.com/Musical
   box opens `wss://fairyring-uplink.musicalmycology.org` (its `url`, no
   path) with the headers `X-Fairyring-Tenant`, `X-Fairyring-Terrarium` and
   `X-Fairyring-Secret`. It never sends an `identity` frame. A refusal is
-  HTTP 401 inside `connect()`.
+  HTTP 401 inside `connect()`. Opening a connection gives up after 3
+  seconds and closing one after 2, because both run inside the tick loop.
 - **Resync order** on every successful connect: `state_changed` with
   `lan_ip`, `room_loaded` (when a room is loaded), `registration_changed`
   (when there is a registration), `{"event": "admin_devices_applied",
@@ -2330,7 +2332,8 @@ in that repo; the section below follows it) ([design](https://github.com/Musical
   (random, made once when the box process starts) and `seq` (counts from 1
   within a `boot_id`). `seq` is assigned when a frame is handed to the wire
   or, for `bit_completed`, to the journal, whichever comes first, and only
-  after the size check passes. A frame that is not sent gets none, so a gap
+  after the size check passes. A frame that is not sent, because the link is
+  down or the frame is oversize, gets none, so a gap
   in stored `seq` values means a frame was lost in transit. A replayed
   completion keeps its first `boot_id` and `seq`.
 - **Frame size**: the limit is 32,000 bytes (UTF-8 length of the serialized
@@ -2378,7 +2381,9 @@ in that repo; the section below follows it) ([design](https://github.com/Musical
   100): the command is the manifest plus `"command": "set_admin_devices"`.
   The box applies it when `schema` is 1, `tenant_slug` and `terrarium_name`
   equal its own, `version` is greater than the last applied version, and no
-  device is the reserved id `terrarium`. Only devices whose `status` is
+  device, active or not, is the reserved id `terrarium`. A `gem_uid` listed
+  more than once, whatever its statuses, refuses the whole manifest with the
+  reason `duplicate gem_uid`. Only devices whose `status` is
   `"active"` become admins; the version is recorded either way. Applying
   replaces the admin list in memory (the built-in `terrarium` id stays),
   writes the list and version to `admin_devices.applied.json` beside
@@ -2388,9 +2393,20 @@ in that repo; the section below follows it) ([design](https://github.com/Musical
   `bit_completed`. A manifest whose version is not greater is a no-op. Any
   other failure changes nothing and sends `{"event": "error", "command":
   "set_admin_devices", "message": ...}`; the broker offers the manifest again
-  on the next reconnect. At boot the applied file is used when it exists and
-  is valid, and this holds without an `[uplink]` table. `terrarium.toml`
-  `[admin] devices` is used only until the first manifest is applied.
+  on the next reconnect. The applied file also records the `tenant_slug` and
+  `terrarium_name` it was applied for. At boot it is used when it exists, is
+  valid and matches the box: its `terrarium_name` must equal `[terrarium]
+  name` and, when there is an `[uplink]` table, its `tenant_slug` must equal
+  `[uplink] tenant_slug`. A file that does not match (a renamed box, a new
+  tenant, a copied config directory) is ignored with a warning, and the box
+  reports version 0 so the broker offers its manifest again. Otherwise this
+  holds without an `[uplink]` table. `terrarium.toml` `[admin] devices` is
+  used only until the first manifest is applied.
+- **Operator note, first live connect**: a box that ran log-only (no
+  `[uplink] url`) holds up to 500 journalled completions. They are sent on
+  its first live connect and credited against whatever is pending then.
+  Delete `uplink_journal.jsonl` from the runs directory before first pointing
+  such a box at the live broker.
 - **Deviations from MycoQuest spec 7.2** (its section 8; mm-renquest
   mirrors them): no abort credit; `result` may be `null`; `GET /prepare` may answer 503 (all but 202/409 mean
   "cannot reach the room"); an unknown Bit is a silent 202; `lan_ip`.
@@ -2818,9 +2834,13 @@ Kept explicit so the doc does not over-claim.
   (a refused identity still replayed and cleared the journal, then
   hot-looped the reconnect; two boxes sharing an identity displaced each
   other forever) are settled by the box contract (*`uplink/`*): no identity
-  frame, a journal cleared only by `completions_stored`, a 60 to 600 second
-  back-off after `session_replaced`, and `completion_id` on every
-  `bit_completed`, so a replay cannot credit twice.
+  frame, a journal cleared only by `completions_stored`, and `completion_id`
+  on every `bit_completed`, so a replay cannot credit twice. The two-box
+  fight is handled by the 60 to 600 second back-off after
+  `session_replaced`. The fallback in section 4.9 of the box-contract design
+  (treating two early server closes in a row as a replacement, for when the
+  `session_replaced` frame does not arrive) is not built: it waits on the
+  live measurement of whether that frame arrives.
 - **`GET /join.json`** on the LAN static server (mm-tuneshroom's
   join-launcher spec, section 4.1) is unbuilt. It must serve `start: null`
   (`start_key=None`), as it omits `qr_svg`: `start` carries the key and the
