@@ -1445,3 +1445,108 @@ def test_send_failure_right_after_connect_still_backs_off():
     clock.advance(agent.INITIAL_BACKOFF_SECONDS)
     agent.maintain_connection()
     assert transport.connect_count == 2
+
+
+# --- session_replaced back-off (box contract, Task 5) -----------------------
+
+
+def replaced_agent(**kwargs):
+    clock = FakeClock()
+    transport = FakeTransport()
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
+                        time_source=clock, **fixed(**kwargs))
+    agent.maintain_connection()                  # connect at t=0
+    return agent, transport, clock
+
+
+def replace(agent, transport):
+    transport.push_incoming({"command": "session_replaced"})
+    agent.poll()
+
+
+def test_session_replaced_closes_and_waits_60_seconds():
+    agent, transport, clock = replaced_agent()
+    clock.now = 10.0
+    replace(agent, transport)
+    assert transport.connected is False and transport.close_count == 1
+
+    clock.now = 10.0 + 59.9
+    agent.maintain_connection()
+    assert transport.connect_count == 1
+    clock.now = 10.0 + 60.0
+    agent.maintain_connection()
+    assert transport.connect_count == 2 and transport.connected is True
+
+
+def test_repeated_replacement_doubles_to_a_600_second_cap():
+    agent, transport, clock = replaced_agent()
+    for wait in (60, 120, 240, 480, 600, 600):
+        replace(agent, transport)
+        start = clock.now
+        clock.now = start + wait - 0.1
+        agent.maintain_connection()
+        assert transport.connected is False, wait
+        clock.now = start + wait
+        agent.maintain_connection()
+        assert transport.connected is True, wait
+
+
+def test_replaced_wait_resets_after_300_seconds_connected():
+    agent, transport, clock = replaced_agent()
+    replace(agent, transport)                    # wait 60
+    clock.now = 60.0
+    agent.maintain_connection()                  # reconnected at 60
+    assert transport.connected is True
+
+    clock.now = 60.0 + 299.9
+    agent.maintain_connection()
+    clock.now = 60.0 + 300.0
+    agent.maintain_connection()                  # stable for 300 seconds
+    replace(agent, transport)                    # back to 60, not 120
+    start = clock.now
+    clock.now = start + 59.9
+    agent.maintain_connection()
+    assert transport.connected is False
+    clock.now = start + 60.0
+    agent.maintain_connection()
+    assert transport.connected is True
+
+
+def test_ordinary_drop_keeps_the_one_second_backoff():
+    agent, transport, clock = replaced_agent()
+    replace(agent, transport)                    # raises the replaced wait
+    clock.now = 60.0
+    agent.maintain_connection()
+    transport.disconnect()                       # an ordinary drop
+
+    agent.maintain_connection()                  # first retry is immediate
+    assert transport.connect_count == 3
+    transport.disconnect()
+    agent.maintain_connection()
+    assert transport.connect_count == 4
+    # Ordinary failures never touch the replaced wait: it is still 120.
+    replace(agent, transport)
+    start = clock.now
+    clock.now = start + 119.9
+    agent.maintain_connection()
+    assert transport.connected is False
+    clock.now = start + 120.0
+    agent.maintain_connection()
+    assert transport.connected is True
+
+
+def test_session_replaced_warns_and_notifies_without_the_secret(caplog):
+    notes = []
+    identity = UplinkIdentity("acme", "lobby-1", "s3cret-value")
+    agent, transport, clock = replaced_agent(identity=identity,
+                                             notify=notes.append)
+    with caplog.at_level(logging.WARNING, logger="uplink.link"):
+        replace(agent, transport)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING
+                and "another box is using this identity" in r.getMessage()]
+    assert len(warnings) == 1
+    assert len(notes) == 1
+    assert "acme" in notes[0] and "lobby-1" in notes[0]
+    assert "s3cret-value" not in notes[0]
+    assert "s3cret-value" not in caplog.text

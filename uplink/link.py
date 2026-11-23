@@ -27,6 +27,13 @@ class UplinkAgent:
     # and closes one that sends a frame over its size limit.
     HEARTBEAT_SECONDS = 60.0
     MAX_FRAME_BYTES = 32000
+    # Another box connected with this identity and the broker told this one
+    # to stand down (spec 4.4). Reconnecting at once would displace it and
+    # start a fight, so wait long, doubling per repeat, and start over once a
+    # connection has held for STABLE_SECONDS.
+    REPLACED_INITIAL_SECONDS = 60.0
+    REPLACED_MAX_SECONDS = 600.0
+    STABLE_SECONDS = 300.0
 
     def __init__(self, game_server: GameServer, transport, *,
                  time_source=time.monotonic, registry=None, terrarium=None,
@@ -34,7 +41,7 @@ class UplinkAgent:
                  clients_live=None, boot_id: str | None = None,
                  id_source=uuid.uuid4,
                  wall_clock=lambda: datetime.now(timezone.utc),
-                 admin_version=lambda: 0):
+                 admin_version=lambda: 0, notify=None):
         self.game_server = game_server
         self.transport = transport
         self.registry = registry
@@ -67,6 +74,10 @@ class UplinkAgent:
         # heartbeat (or the connect) the heartbeat timer counts from.
         self._connected_at: float | None = None
         self._heartbeat_from: float | None = None
+        # The wait the next session_replaced will impose, and the optional
+        # one-string operator callback (never given the secret).
+        self._replaced_wait = self.REPLACED_INITIAL_SECONDS
+        self._notify = notify
         # See ConsoleAgent.on_terrarium_state_change's docstring: a load
         # failure lands back in NO_ROOM via ROOM_LOADING and must NOT be
         # reported as room_unloaded; only a NO_ROOM entry via ROOM_UNLOADING
@@ -138,6 +149,9 @@ class UplinkAgent:
         HEARTBEAT_SECONDS after the connect. A link connected by someone
         else (tests connect the transport directly) starts the timer at the
         first tick that sees it."""
+        if (self._connected_at is not None
+                and now - self._connected_at >= self.STABLE_SECONDS):
+            self._replaced_wait = self.REPLACED_INITIAL_SECONDS
         if self._heartbeat_from is None:
             self._heartbeat_from = now
             return
@@ -150,6 +164,28 @@ class UplinkAgent:
             self.transport.send(protocol.heartbeat_event())
         except Exception:
             logger.warning("uplink heartbeat send failed")
+
+    def _on_replaced(self, now: float) -> None:
+        """Another box took this identity: close, tell the operator, and hold
+        off reconnecting for the replaced wait (then double it, to the cap).
+        The ordinary back-off is untouched; it only runs after this hold."""
+        wait = self._replaced_wait
+        self._replaced_wait = min(wait * 2, self.REPLACED_MAX_SECONDS)
+        self.transport.close()
+        self._next_attempt_at = now + wait
+        if self.identity is not None:
+            who = (f"tenant {self.identity.tenant_slug}, terrarium "
+                   f"{self.identity.terrarium_name}")
+        else:
+            who = "this box"
+        message = (f"another box is using this identity ({who}); not "
+                   f"reconnecting for {wait:.0f}s")
+        logger.warning("%s", message)
+        if self._notify is not None:
+            try:
+                self._notify(message)
+            except Exception:
+                logger.exception("session_replaced notify callback raised")
 
     def _replay_journal(self) -> None:
         """Send every journal entry exactly as stored (its original boot_id
@@ -228,7 +264,7 @@ class UplinkAgent:
             logger.info("set_admin_devices received; not applied yet")
             return
         if isinstance(command, protocol.SessionReplacedCommand):
-            logger.info("session_replaced received; ignored for now")
+            self._on_replaced(self._time_source())
             return
         if isinstance(command, protocol.ListBitsCommand):
             if self.registry is None:
