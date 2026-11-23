@@ -20,6 +20,11 @@ from control.wire_json import dumps as _json_dumps
 
 logger = logging.getLogger(__name__)
 
+# connect() and close() block the 44 Hz tick loop that calls them, so both
+# are bounded well under the library's 10 second defaults.
+OPEN_TIMEOUT_SECONDS = 3
+CLOSE_TIMEOUT_SECONDS = 2
+
 
 def frame_size(msg: dict) -> int:
     """Bytes the frame occupies on the wire (UTF-8 of its wire JSON)."""
@@ -84,7 +89,12 @@ class WebSocketTransport:
         return f"WebSocketTransport(uri={self.uri!r})"
 
     def connect(self) -> None:
-        self._ws = ws_connect(self.uri, additional_headers=self._headers)
+        # Start clean: a socket kept only so receive() could drain it is
+        # dropped, never read again.
+        self.close()
+        self._ws = ws_connect(self.uri, additional_headers=self._headers,
+                              open_timeout=OPEN_TIMEOUT_SECONDS,
+                              close_timeout=CLOSE_TIMEOUT_SECONDS)
         self.connected = True
 
     def close(self) -> None:
@@ -104,18 +114,28 @@ class WebSocketTransport:
         try:
             self._ws.send(_json_dumps(msg))
         except ConnectionClosed:
+            # The socket is kept: frames the broker sent before closing
+            # (session_replaced, completions_stored) are still read by
+            # receive().
             self.connected = False
             raise
 
     def receive(self) -> dict | None:
-        if not self.connected:
+        """The next frame, or None. Once the link is marked closed, frames
+        already received on the old socket are still returned until it has
+        none left; then the socket is dropped and this returns None."""
+        ws = self._ws
+        if ws is None:
             return None
         try:
-            raw = self._ws.recv(timeout=0)
+            raw = ws.recv(timeout=0)
         except TimeoutError:
+            if not self.connected:
+                self._ws = None
             return None
         except ConnectionClosed:
             self.connected = False
+            self._ws = None
             return None
         return json.loads(raw)
 

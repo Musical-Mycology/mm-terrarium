@@ -151,3 +151,126 @@ def test_no_headers_still_connects(echo_server):
     transport.connect()
     assert transport.connected is True
     transport.close()
+
+
+# --- final fix wave: bounded blocking calls (item 1) ------------------------
+
+def test_open_and_close_timeouts_are_3_and_2_seconds():
+    from uplink import transport as transport_module
+    assert transport_module.OPEN_TIMEOUT_SECONDS == 3
+    assert transport_module.CLOSE_TIMEOUT_SECONDS == 2
+
+
+def test_connect_passes_both_timeouts_to_the_library(monkeypatch):
+    from uplink import transport as transport_module
+    seen = {}
+
+    def fake_connect(uri, **kwargs):
+        seen.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(transport_module, "ws_connect", fake_connect)
+    WebSocketTransport("ws://localhost:1", headers={"H": "v"}).connect()
+    assert seen["open_timeout"] == 3
+    assert seen["close_timeout"] == 2
+    assert seen["additional_headers"] == {"H": "v"}
+
+
+def test_connect_to_a_silent_listener_gives_up_within_the_open_timeout():
+    import socket
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    accepted = []
+
+    def accept():
+        try:
+            conn, _ = listener.accept()   # accept, then never answer
+            accepted.append(conn)
+        except OSError:
+            pass
+
+    thread = threading.Thread(target=accept, daemon=True)
+    thread.start()
+    port = listener.getsockname()[1]
+    transport = WebSocketTransport(f"ws://127.0.0.1:{port}")
+    start = time.monotonic()
+    try:
+        with pytest.raises(Exception):
+            transport.connect()
+        elapsed = time.monotonic() - start
+    finally:
+        for conn in accepted:
+            conn.close()
+        listener.close()
+        thread.join(timeout=1)
+    assert elapsed < 5
+    assert transport.connected is False
+
+
+# --- final fix wave: a send that notices the close keeps buffered frames ----
+# (item 7)
+
+def _replacing_server():
+    """Sends session_replaced as soon as the client connects, then closes."""
+    def handler(connection):
+        connection.send(json.dumps({"command": "session_replaced"}))
+        connection.close()
+
+    server = serve(handler, "localhost", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, f"ws://localhost:{server.socket.getsockname()[1]}"
+
+
+def _send_until_it_raises(transport):
+    from websockets.exceptions import ConnectionClosed
+    for _ in range(100):
+        try:
+            transport.send({"event": "heartbeat"})
+        except ConnectionClosed:
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_receive_still_returns_a_frame_buffered_before_the_close():
+    server, thread, uri = _replacing_server()
+    try:
+        transport = WebSocketTransport(uri)
+        transport.connect()
+        assert _send_until_it_raises(transport)
+        assert transport.connected is False
+
+        assert transport.receive() == {"command": "session_replaced"}
+        assert transport.receive() is None
+        assert transport._ws is None            # the old socket is let go
+        assert transport.receive() is None
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_connect_starts_clean_after_a_closed_link_with_frames_left():
+    server, thread, uri = _replacing_server()
+    try:
+        transport = WebSocketTransport(uri)
+        transport.connect()
+        assert _send_until_it_raises(transport)
+        old = transport._ws
+
+        transport.connect()                     # reconnect before draining
+        assert transport.connected is True
+        assert transport._ws is not old
+        # Only the new connection's own frame arrives, once.
+        got = None
+        for _ in range(100):
+            got = transport.receive()
+            if got is not None:
+                break
+            time.sleep(0.02)
+        assert got == {"command": "session_replaced"}
+        transport.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
