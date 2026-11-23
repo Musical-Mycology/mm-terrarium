@@ -3446,6 +3446,95 @@ def test_build_uplink_passes_the_clients_live_hook_through():
     assert up._clients_live is live
 
 
+def test_build_uplink_websocket_sends_the_identity_headers(tmp_path):
+    from harness.terrarium_boot import _build_uplink
+    gs = GameServer({"TestBit": TestBit})
+    cfg = _CfgWithUplink(_uplink_config("ws://127.0.0.1:1/"))
+    up = _build_uplink(cfg, gs, None, None, str(tmp_path))
+    assert up.transport._headers == up.identity.headers()
+    assert up.transport._headers["X-Fairyring-Secret"] == "ab" * 32
+
+
+def test_build_uplink_hands_over_an_admin_store_beside_the_config(tmp_path):
+    from control.admin_devices_store import APPLIED_FILENAME, AdminDevicesStore
+    from harness.terrarium_boot import _build_uplink
+    gs = GameServer({"TestBit": TestBit})
+    config_path = str(tmp_path / "terrarium.toml")
+    up = _build_uplink(_CfgWithUplink(_uplink_config()), gs, None, None, None,
+                       config_path=config_path)
+    assert isinstance(up.admin_store, AdminDevicesStore)
+    assert up.admin_store.path == str(tmp_path / APPLIED_FILENAME)
+    assert not (tmp_path / "terrarium.toml").exists()
+
+
+def test_build_uplink_has_no_admin_store_without_a_config_path():
+    from harness.terrarium_boot import _build_uplink
+    gs = GameServer({"TestBit": TestBit})
+    up = _build_uplink(_CfgWithUplink(_uplink_config()), gs, None, None, None)
+    assert up.admin_store is None
+
+
+def test_build_uplink_uses_the_store_it_is_given(tmp_path):
+    from control.admin_devices_store import AdminDevicesStore
+    from harness.terrarium_boot import _build_uplink
+    gs = GameServer({"TestBit": TestBit})
+    store = AdminDevicesStore(str(tmp_path / "x.json"))
+    up = _build_uplink(_CfgWithUplink(_uplink_config()), gs, None, None, None,
+                       config_path=str(tmp_path / "terrarium.toml"),
+                       admin_store=store)
+    assert up.admin_store is store
+
+
+def test_build_uplink_notify_prints_the_replaced_marker_without_the_secret(
+        capsys):
+    from harness import markers
+    from harness.terrarium_boot import _build_uplink
+    gs = GameServer({"TestBit": TestBit})
+    up = _build_uplink(_CfgWithUplink(_uplink_config()), gs, None, None, None)
+    up._notify("another box is using this identity")
+    out = capsys.readouterr().out
+    assert out == f"{markers.SESSION_REPLACED} another box is using this identity\n"
+    assert "ab" * 32 not in out
+
+
+def _build_with_store(store):
+    from control.terrarium_config import TerrariumConfig
+    terrarium_config = TerrariumConfig(
+        schema=1, name="terrarium-boot", bit_paths=(),
+        rooms={TEST_SPEC.name: TEST_SPEC}, version="terrarium-boot",
+        admin_devices=("gem-config",))
+    return build(
+        BootConfig(room_name="TEST", bit_name="TestBit"), {"TestBit": TestBit},
+        arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC, terrarium_config=terrarium_config,
+        transport=_fake_transport(), clock=time.monotonic,
+        arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
+        room_audio=_fake_room_audio(), admin_store=store)
+
+
+def test_build_prefers_the_applied_admin_devices_over_the_config(tmp_path):
+    from control.admin_devices_store import AdminDevicesStore
+    store = AdminDevicesStore(str(tmp_path / "admin_devices.applied.json"))
+    store.save(("gem-applied",), 4)
+    gs, server, agent, arco, teardown, terrarium = _build_with_store(
+        AdminDevicesStore(store.path))
+    try:
+        assert gs.is_admin("gem-applied")
+        assert not gs.is_admin("gem-config")
+    finally:
+        shutdown(teardown, terrarium)
+
+
+def test_build_uses_the_config_admin_devices_without_an_applied_file(tmp_path):
+    from control.admin_devices_store import AdminDevicesStore
+    store = AdminDevicesStore(str(tmp_path / "admin_devices.applied.json"))
+    gs, server, agent, arco, teardown, terrarium = _build_with_store(store)
+    try:
+        assert gs.is_admin("gem-config")
+    finally:
+        shutdown(teardown, terrarium)
+
+
 def test_pump_uplink_maintains_then_polls_and_tolerates_none():
     from harness.terrarium_boot import _pump_uplink
     calls = []

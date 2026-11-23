@@ -171,15 +171,33 @@ def _arco_popen(args):
     return functools.partial(subprocess.Popen, cwd=ARCOSERVER_DIR)
 
 
+def _admin_store_for(config_path):
+    """The applied-admin-devices store beside the config file (box contract
+    2026-11-23 section 4.10), or None when no config path is known. Reads
+    the file once; never writes terrarium.toml."""
+    if config_path is None:
+        return None
+    from control.admin_devices_store import APPLIED_FILENAME, AdminDevicesStore
+    return AdminDevicesStore(os.path.join(
+        os.path.dirname(os.path.abspath(config_path)), APPLIED_FILENAME))
+
+
+def _print_session_replaced(message: str) -> None:
+    print(f"{markers.SESSION_REPLACED} {message}", flush=True)
+
+
 def _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir, *,
-                  clients_live=None):
+                  clients_live=None, config_path=None, admin_store=None):
     """Spec 2026-09-13 section 6.5: an [uplink] table is the switch. No
     table, no agent. An empty url means LogTransport (frames logged, the
     journal grows, nothing trimmed). The journal lives directly under
     runs_dir so it outlives any single run; with run records off (runs_dir
     None) there is no journal and the box keeps no state. clients_live is
     main()'s closure, shared with the Console: a broker unload_room is
-    refused while Control's Arco clients are live (D7)."""
+    refused while Control's Arco clients are live (D7). config_path is the
+    --config file: the applied admin list lives beside it. main() passes the
+    one store it also gave build(), so both read the same object; with
+    neither config_path nor admin_store there is no store."""
     cfg = terrarium_config.uplink
     if cfg is None:
         return None
@@ -187,16 +205,20 @@ def _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir, *,
     from uplink.link import UplinkAgent
     from uplink.protocol import UplinkIdentity
     from uplink.transport import LogTransport, WebSocketTransport
-    transport = WebSocketTransport(cfg.url) if cfg.url else LogTransport()
+    identity = UplinkIdentity(cfg.tenant_slug, terrarium_config.name, cfg.secret)
+    transport = (WebSocketTransport(cfg.url, headers=identity.headers())
+                 if cfg.url else LogTransport())
     journal = (Journal(os.path.join(runs_dir, JOURNAL_FILENAME))
                if runs_dir is not None else None)
     if journal is None:
         logging.getLogger(__name__).warning(
             "uplink: run records are off, so bit_completed is not journaled")
-    identity = UplinkIdentity(cfg.tenant_slug, terrarium_config.name, cfg.secret)
+    if admin_store is None:
+        admin_store = _admin_store_for(config_path)
     return UplinkAgent(gs, transport, registry=registry, terrarium=terrarium,
                        identity=identity, journal=journal, lan_ip=lan_ip,
-                       clients_live=clients_live)
+                       clients_live=clients_live, admin_store=admin_store,
+                       notify=_print_session_replaced)
 
 
 def _pump_uplink(uplink) -> None:
@@ -325,7 +347,8 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
          on_join_denied=None,
          binding_store_path: str | None = None,
          runs_dir: str | None = None, run_id: str | None = None,
-         arco_ready_timeout: float | None = None):
+         arco_ready_timeout: float | None = None,
+         admin_store=None):
     """Construct the whole stack, including a control.terrarium.Terrarium.
     Returns (game_server, devicelink_server, devicelink_agent, arco_process,
     teardown, terrarium) -- slot 2 is the transport (o2lite is the only
@@ -404,10 +427,14 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
             schema=1, name="terrarium-boot", bit_paths=(), rooms=rooms,
             version="terrarium-boot")
 
+    # The applied manifest list replaces [admin] devices once one exists.
+    admin_devices = terrarium_config.admin_devices
+    if admin_store is not None and admin_store.devices is not None:
+        admin_devices = admin_store.devices
     gs = GameServer(bit_registry, room_binding=room_binding,
                     cue_horizon=config.cue_horizon, clock=clock,
                     carried_instruments=terrarium_config.instruments,
-                    admin_devices=terrarium_config.admin_devices)
+                    admin_devices=admin_devices)
     terrarium = Terrarium(
         terrarium_config, gs, room_binding, boot_config=config,
         arco_command=arco_command, arco_process_cls=arco_process_cls,
@@ -1812,6 +1839,7 @@ def main() -> None:
     transport = O2LiteTransport()
     clock = o2lite.time_get
 
+    admin_store = _admin_store_for(args.config)
     gs, server, agent, arco, teardown, terrarium = build(
         config, registry.lazy_class_map(),
         arco_command=[args.arco_command],
@@ -1823,7 +1851,8 @@ def main() -> None:
         # The CLI override reaches Terrarium.load_room directly. Setting
         # BootConfig.arco_ready_timeout was a dead end: load_room waits on
         # the RoomSpec's value, never BootConfig's.
-        arco_ready_timeout=args.arco_ready_timeout)
+        arco_ready_timeout=args.arco_ready_timeout,
+        admin_store=admin_store)
     room_audio = getattr(agent, "room_audio", None)
     pool = room_audio.pool if room_audio is not None else None
     # `clients_stopped` is shared state between `stop_clients` and
@@ -2025,7 +2054,9 @@ def main() -> None:
             from control.prepare import PrepareAuthority
             agent.prepare_authority = PrepareAuthority(gs, registry, terrarium)
         uplink = _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir,
-                               clients_live=clients_live)
+                               clients_live=clients_live,
+                               config_path=args.config,
+                               admin_store=admin_store)
         if uplink is not None:
             mode = terrarium_config.uplink.url or "log-only"
             print(f"{markers.UPLINK} {mode} tenant={terrarium_config.uplink.tenant_slug}",

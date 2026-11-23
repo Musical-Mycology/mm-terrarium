@@ -3,9 +3,11 @@ specs/2026-09-13-mycoquest-handoff-terrarium-design.md section 6.4,
 mm-terrarium issue #103).
 
 One JSON line per event under the runs directory, appended at emit time
-whether or not the uplink is up, replayed in file order on reconnect over a
-durable transport, then cleared. Bounded by count: the newest `cap`
-entries survive. Pure stdlib plus control/wire_json.dumps.
+whether or not the uplink is up, and sent in file order on every connect
+over a durable transport. Sending removes nothing: an entry leaves only when
+the broker confirms its completion_id with completions_stored (box contract
+2026-11-23 section 4.6), or when the cap drops it. Bounded by count: the
+newest `cap` entries survive. Pure stdlib plus control/wire_json.dumps.
 """
 
 from __future__ import annotations
