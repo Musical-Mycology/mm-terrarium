@@ -171,15 +171,28 @@ def _arco_popen(args):
     return functools.partial(subprocess.Popen, cwd=ARCOSERVER_DIR)
 
 
-def _admin_store_for(config_path):
+def _admin_store_for(config_path, terrarium_config=None):
     """The applied-admin-devices store beside the config file (box contract
     2026-11-23 section 4.10), or None when no config path is known. Reads
-    the file once; never writes terrarium.toml."""
+    the file once; never writes terrarium.toml.
+
+    The file must have been applied for this box: its terrarium_name must
+    be [terrarium] name and, when there is an [uplink] table, its
+    tenant_slug must be [uplink] tenant_slug. Otherwise (a renamed box, a
+    changed tenant, a copied config directory) it reads as absent and boot
+    uses [admin] devices, as for a corrupt file."""
     if config_path is None:
         return None
     from control.admin_devices_store import APPLIED_FILENAME, AdminDevicesStore
-    return AdminDevicesStore(os.path.join(
-        os.path.dirname(os.path.abspath(config_path)), APPLIED_FILENAME))
+    terrarium_name = tenant_slug = None
+    if terrarium_config is not None:
+        terrarium_name = terrarium_config.name
+        if terrarium_config.uplink is not None:
+            tenant_slug = terrarium_config.uplink.tenant_slug
+    return AdminDevicesStore(
+        os.path.join(os.path.dirname(os.path.abspath(config_path)),
+                     APPLIED_FILENAME),
+        tenant_slug=tenant_slug, terrarium_name=terrarium_name)
 
 
 def _print_session_replaced(message: str) -> None:
@@ -205,16 +218,26 @@ def _build_uplink(terrarium_config, gs, registry, terrarium, runs_dir, *,
     from uplink.link import UplinkAgent
     from uplink.protocol import UplinkIdentity
     from uplink.transport import LogTransport, WebSocketTransport
+    log = logging.getLogger(__name__)
+    # At DEBUG the websockets library logs the handshake request headers,
+    # X-Fairyring-Secret among them. Keep it at INFO or quieter whatever the
+    # root level, so a debug run never writes the secret to control.log.
+    ws_logger = logging.getLogger("websockets")
+    if ws_logger.level == logging.NOTSET or ws_logger.level < logging.INFO:
+        ws_logger.setLevel(logging.INFO)
+    if cfg.url and not cfg.url.startswith("wss://"):
+        log.warning("uplink: [uplink] url is not wss://, so the uplink "
+                    "secret will travel unencrypted")
     identity = UplinkIdentity(cfg.tenant_slug, terrarium_config.name, cfg.secret)
     transport = (WebSocketTransport(cfg.url, headers=identity.headers())
                  if cfg.url else LogTransport())
     journal = (Journal(os.path.join(runs_dir, JOURNAL_FILENAME))
                if runs_dir is not None else None)
     if journal is None:
-        logging.getLogger(__name__).warning(
+        log.warning(
             "uplink: run records are off, so bit_completed is not journaled")
     if admin_store is None:
-        admin_store = _admin_store_for(config_path)
+        admin_store = _admin_store_for(config_path, terrarium_config)
     return UplinkAgent(gs, transport, registry=registry, terrarium=terrarium,
                        identity=identity, journal=journal, lan_ip=lan_ip,
                        clients_live=clients_live, admin_store=admin_store,
@@ -431,6 +454,10 @@ def build(config: BootConfig, bit_registry: dict, *, arco_command: list,
     admin_devices = terrarium_config.admin_devices
     if admin_store is not None and admin_store.devices is not None:
         admin_devices = admin_store.devices
+        logging.getLogger(__name__).info(
+            "using the applied admin device list in place of [admin] "
+            "devices: %d device(s), version %d", len(admin_devices),
+            admin_store.version)
     gs = GameServer(bit_registry, room_binding=room_binding,
                     cue_horizon=config.cue_horizon, clock=clock,
                     carried_instruments=terrarium_config.instruments,
@@ -1839,7 +1866,7 @@ def main() -> None:
     transport = O2LiteTransport()
     clock = o2lite.time_get
 
-    admin_store = _admin_store_for(args.config)
+    admin_store = _admin_store_for(args.config, terrarium_config)
     gs, server, agent, arco, teardown, terrarium = build(
         config, registry.lazy_class_map(),
         arco_command=[args.arco_command],

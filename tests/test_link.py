@@ -960,7 +960,8 @@ def test_all_corrupt_journal_replays_nothing_and_is_purged(tmp_path):
 
 class SendAlwaysFailsTransport(FakeTransport):
     """A broker that accepts the socket and drops it on the first frame,
-    every time (a rejected secret looks exactly like this)."""
+    every time. (A rejected secret is refused in the handshake instead: an
+    HTTP 401 raised by connect().)"""
 
     def __init__(self):
         super().__init__()
@@ -1687,7 +1688,7 @@ def test_failed_save_sends_error_and_keeps_the_old_admins(tmp_path):
     agent, gs, transport, store = admin_agent(tmp_path)
     deliver(agent, transport, manifest(version=2, devices=[("A", "active")]))
 
-    def broken_save(devices, version):
+    def broken_save(devices, version, **identity):
         raise OSError("read-only filesystem")
 
     store.save = broken_save
@@ -1702,7 +1703,8 @@ def test_failed_save_sends_error_and_keeps_the_old_admins(tmp_path):
 
 
 def test_resync_reports_the_stored_version(tmp_path):
-    AdminDevicesStore(str(tmp_path / APPLIED_FILENAME)).save(["A"], 5)
+    AdminDevicesStore(str(tmp_path / APPLIED_FILENAME)).save(
+        ["A"], 5, tenant_slug="mm", terrarium_name="main-stage")
     store = AdminDevicesStore(str(tmp_path / APPLIED_FILENAME))
     transport = FakeTransport()
     agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
@@ -1734,4 +1736,400 @@ def test_bad_manifests_never_raise_out_of_poll(tmp_path):
                 manifest(version=None)):
         sent = deliver(agent, transport, msg)
         assert [m["event"] for m in sent] == ["error"], msg
+    assert store.version == 0
+
+
+# --- final fix wave (2026-11-23 whole-branch review) ------------------------
+
+def test_valid_manifest_is_saved_with_the_agents_identity(tmp_path):
+    import json
+    agent, gs, transport, store = admin_agent(tmp_path)
+    deliver(agent, transport, manifest())
+    data = json.loads((tmp_path / APPLIED_FILENAME).read_text())
+    assert data == {"version": 7, "devices": ["A"], "tenant_slug": "mm",
+                    "terrarium_name": "main-stage"}
+    reread = AdminDevicesStore(str(tmp_path / APPLIED_FILENAME),
+                               tenant_slug="mm", terrarium_name="main-stage")
+    assert reread.version == 7 and reread.devices == ("A",)
+
+
+# item 2: undecodable journal bytes must not stop boot
+
+def test_undecodable_journal_line_is_purged_and_valid_entries_replayed(
+        tmp_path, caplog):
+    path = tmp_path / "j.jsonl"
+    path.write_bytes(dumps(stored("a", "c-a", seq=1)).encode() + b"\n"
+                     + b"\xff\xfe\n"
+                     + dumps(stored("b", "c-b", seq=2)).encode() + b"\n")
+    journal = Journal(str(path))
+    transport = FakeTransport()
+    with caplog.at_level(logging.WARNING):
+        agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
+                            journal=journal, time_source=FakeClock(), **fixed())
+    assert any("dropped 1 journal entries" in r.getMessage()
+               for r in caplog.records if r.levelno == logging.WARNING)
+    assert b"\xff" not in path.read_bytes()
+    assert "�" not in path.read_text()
+
+    agent.maintain_connection()
+    assert [m["completion_id"] for m in transport.sent
+            if m["event"] == "bit_completed"] == ["c-a", "c-b"]
+
+
+class ValueErrorJournal(Journal):
+    def purge_unidentified(self):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    def append(self, event):
+        raise ValueError("bad bytes")
+
+    def remove(self, completion_ids):
+        raise ValueError("bad bytes")
+
+
+def test_value_errors_from_the_journal_never_escape_the_agent(tmp_path):
+    journal = ValueErrorJournal(str(tmp_path / "j.jsonl"))
+    server = GameServer(bit_registry=REGISTRY)
+    transport = FakeTransport()
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())   # purge: no raise
+    agent.maintain_connection()
+    _completed_round(server)                                  # append: no raise
+    assert [m["event"] for m in transport.sent].count("bit_completed") == 1
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["x"]})
+    agent.poll()                                              # remove: no raise
+
+
+# item 3: a completion is journalled even if the preceding send raises
+
+class RaisesOnTransport(FakeTransport):
+    """Raises on the first send matching `when`; marks the link down when
+    `drop` is set (the real transport does) and leaves it up otherwise."""
+
+    def __init__(self, when, *, drop=True):
+        super().__init__()
+        self._when = when
+        self._drop = drop
+        self.raised = 0
+
+    def send(self, msg):
+        if not self.raised and self._when(msg):
+            self.raised += 1
+            if self._drop:
+                self.connected = False
+            raise ConnectionError("socket closed")
+        super().send(msg)
+
+
+def test_completion_is_journalled_when_the_completing_state_send_raises(
+        tmp_path):
+    transport = RaisesOnTransport(
+        lambda m: m.get("event") == "state_changed"
+        and m.get("state") == "COMPLETING")
+    server = GameServer(bit_registry=REGISTRY)
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+    agent.maintain_connection()
+    _completed_round(server)
+
+    assert transport.raised == 1
+    [entry] = journal.entries()
+    assert entry["event"] == "bit_completed"
+    assert entry["boot_id"] == "boot-1" and isinstance(entry["seq"], int)
+    assert entry["completion_id"] == str(uuid.UUID(int=1))
+
+
+def test_wire_order_is_unchanged_when_nothing_fails():
+    agent, server, transport = make_agent()
+    _completed_round(server)
+    events = [(m["event"], m.get("state")) for m in transport.sent]
+    i = events.index(("state_changed", "COMPLETING"))
+    assert events[i + 1] == ("bit_completed", None)
+
+
+@pytest.mark.parametrize("drop", [True, False], ids=["link-dropped", "link-up"])
+def test_failed_live_bit_completed_send_warns_once_and_stays_journalled(
+        tmp_path, caplog, drop):
+    transport = RaisesOnTransport(lambda m: m.get("event") == "bit_completed",
+                                  drop=drop)
+    server = GameServer(bit_registry=REGISTRY)
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+    agent.maintain_connection()
+    with caplog.at_level(logging.WARNING, logger="uplink.link"):
+        _completed_round(server)
+    assert transport.raised == 1
+    assert [e["completion_id"] for e in journal.entries()] == [
+        str(uuid.UUID(int=1))]
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert "live send failed; kept in the journal for the next connect" in \
+        warnings[0].getMessage()
+    assert warnings[0].name == "uplink.link"
+    assert not warnings[0].exc_info
+
+
+def test_failed_live_send_does_not_raise_out_of_on_state_change(tmp_path):
+    from control.state import State
+    transport = RaisesOnTransport(lambda m: m.get("event") == "bit_completed",
+                                  drop=False)
+    server = GameServer(bit_registry=REGISTRY)
+    journal = Journal(str(tmp_path / "j.jsonl"))
+    agent = UplinkAgent(server, transport, journal=journal,
+                        time_source=FakeClock(), **fixed())
+    agent.maintain_connection()
+    server.load_bit("test_bit")
+    agent.on_state_change(State.RUNNING, State.COMPLETING)   # must not raise
+    assert transport.raised == 1
+    assert len(journal.entries()) == 1
+
+
+# item 6: connect outcomes are visible
+
+def _invalid_status(code):
+    from websockets.datastructures import Headers
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response
+    return InvalidStatus(Response(code, "Unauthorized", Headers()))
+
+
+class ConnectRaisesTransport(FakeTransport):
+    def __init__(self, exc):
+        super().__init__()
+        self._exc = exc
+
+    def connect(self):
+        self.connect_count += 1
+        raise self._exc
+
+
+def test_a_401_logs_the_status_and_the_hint_and_not_the_secret(caplog):
+    ident = UplinkIdentity("mm", "main-stage", "s3cr3t-" * 6)
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY),
+                        ConnectRaisesTransport(_invalid_status(401)),
+                        identity=ident, time_source=FakeClock(), **fixed())
+    with caplog.at_level(logging.DEBUG):
+        agent.maintain_connection()
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    text = warning.getMessage()
+    assert "401" in text and "InvalidStatus" in text
+    assert "check [uplink] tenant_slug and secret, and [terrarium] name" in text
+    assert ident.secret not in caplog.text
+
+
+def test_another_http_status_is_logged_without_the_401_hint(caplog):
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY),
+                        ConnectRaisesTransport(_invalid_status(503)),
+                        time_source=FakeClock(), **fixed())
+    with caplog.at_level(logging.WARNING):
+        agent.maintain_connection()
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "503" in warning.getMessage()
+    assert "tenant_slug" not in warning.getMessage()
+
+
+@pytest.mark.parametrize("exc", [ConnectionRefusedError(61, "refused"),
+                                 OSError(8, "nodename nor servname")],
+                         ids=["refused", "dns"])
+def test_a_generic_connect_failure_names_its_type(caplog, exc):
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY),
+                        ConnectRaisesTransport(exc),
+                        time_source=FakeClock(), **fixed())
+    with caplog.at_level(logging.WARNING):
+        agent.maintain_connection()
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert type(exc).__name__ in warning.getMessage()
+    assert "retrying in 1.0s" in warning.getMessage()
+
+
+def test_each_successful_connect_logs_one_info_line(caplog):
+    ident = UplinkIdentity("mm", "main-stage", "s3cr3t-" * 6)
+    transport = FakeTransport()
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
+                        identity=ident, time_source=FakeClock(), **fixed())
+    with caplog.at_level(logging.INFO, logger="uplink.link"):
+        agent.maintain_connection()
+        agent.maintain_connection()              # already up: no new line
+        transport.disconnect()
+        agent.maintain_connection()
+    infos = [r for r in caplog.records if r.levelno == logging.INFO
+             and "uplink connected" in r.getMessage()]
+    assert len(infos) == 2
+    assert ident.secret not in caplog.text
+
+
+def test_connect_comment_no_longer_says_a_rejected_secret_drops_a_frame():
+    import inspect
+    source = inspect.getsource(UplinkAgent.maintain_connection)
+    assert "rejected secret looks exactly like this" not in source
+
+
+# item 7 at the agent: frames left on a closed link are drained before a
+# reconnect
+
+def test_session_replaced_buffered_before_a_failed_send_still_backs_off():
+    clock = FakeClock()
+    transport = RaisesOnTransport(lambda m: m.get("event") == "heartbeat")
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
+                        time_source=clock, **fixed())
+    agent.maintain_connection()                  # connected at t=0
+    transport.push_incoming({"command": "session_replaced"})
+    clock.now = 60.0
+    agent.maintain_connection()                  # heartbeat send raises
+    assert transport.connected is False and transport.raised == 1
+
+    agent.poll()
+    agent.maintain_connection()                  # drains, finds the command
+    assert transport.connect_count == 1
+    clock.now = 60.0 + 59.9
+    agent.maintain_connection()
+    assert transport.connect_count == 1
+    clock.now = 120.0
+    agent.maintain_connection()
+    assert transport.connect_count == 2
+
+
+def test_completions_stored_buffered_on_a_closed_link_still_empties_journal(
+        tmp_path):
+    journal = _journal_with(tmp_path, "a")
+    transport = FakeTransport()
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
+                        journal=journal, time_source=FakeClock(), **fixed())
+    agent.maintain_connection()
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["c-a"]})
+    transport.disconnect()
+    agent.maintain_connection()                  # drain, then reconnect
+    assert journal.entries() == []
+    assert transport.connected is True
+
+
+# item 8: journal removals are batched per poll
+
+class SpyJournal(Journal):
+    def __init__(self, path):
+        super().__init__(path)
+        self.remove_calls = []
+
+    def remove(self, completion_ids):
+        ids = list(completion_ids)
+        self.remove_calls.append(ids)
+        return super().remove(ids)
+
+
+def test_fifty_confirmations_in_one_poll_remove_once(tmp_path):
+    journal = SpyJournal(str(tmp_path / "j.jsonl"))
+    for n in range(50):
+        journal.append(stored("x", f"c-{n}", seq=n + 1))
+    agent, server, transport = make_agent(journal=journal)
+    for n in range(50):
+        transport.push_incoming({"command": "completions_stored",
+                                 "completion_ids": [f"c-{n}"]})
+    agent.poll()
+    assert len(journal.remove_calls) == 1
+    assert sorted(journal.remove_calls[0]) == sorted(f"c-{n}" for n in range(50))
+    assert journal.entries() == []
+
+
+def test_no_confirmations_means_no_remove(tmp_path):
+    journal = SpyJournal(str(tmp_path / "j.jsonl"))
+    agent, server, transport = make_agent(journal=journal)
+    transport.push_incoming({"command": "list_bits"})
+    agent.poll()
+    agent.poll()
+    assert journal.remove_calls == []
+
+
+def test_confirmations_are_removed_when_the_drain_ends_on_a_receive_error(
+        tmp_path):
+    class ThenRaises(FakeTransport):
+        def receive(self):
+            msg = super().receive()
+            if msg is None:
+                raise ConnectionError("recv failed")
+            return msg
+
+    journal = SpyJournal(str(tmp_path / "j.jsonl"))
+    for name in ("a", "b"):
+        journal.append(stored(name, f"c-{name}"))
+    transport = ThenRaises()
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
+                        journal=journal, time_source=FakeClock(), **fixed())
+    transport.connect()
+    for name in ("a", "b"):
+        transport.push_incoming({"command": "completions_stored",
+                                 "completion_ids": [f"c-{name}"]})
+    agent.poll()                                 # must not raise
+    assert journal.remove_calls == [["c-a", "c-b"]]
+    assert journal.entries() == []
+
+
+def test_confirmations_are_removed_when_the_drain_ends_on_session_replaced(
+        tmp_path):
+    journal = SpyJournal(str(tmp_path / "j.jsonl"))
+    for name in ("a", "b"):
+        journal.append(stored(name, f"c-{name}"))
+    agent, server, transport = make_agent(journal=journal)
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["c-a"]})
+    transport.push_incoming({"command": "session_replaced"})
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["c-b"]})
+    agent.poll()
+    assert transport.connected is False
+    assert journal.remove_calls == [["c-a"]]
+    assert [e["completion_id"] for e in journal.entries()] == ["c-b"]
+
+
+def test_a_command_whose_reply_send_raises_does_not_stop_the_drain(tmp_path):
+    journal = SpyJournal(str(tmp_path / "j.jsonl"))
+    journal.append(stored("a", "c-a"))
+    transport = RaisesOnTransport(lambda m: m.get("event") == "error")
+    agent = UplinkAgent(GameServer(bit_registry=REGISTRY), transport,
+                        journal=journal, time_source=FakeClock(), **fixed())
+    agent.maintain_connection()
+    transport.push_incoming({"command": "restart"})      # replies with an error
+    transport.push_incoming({"command": "completions_stored",
+                             "completion_ids": ["c-a"]})
+    agent.poll()                                         # must not raise
+    assert transport.raised == 1
+    assert journal.entries() == []
+
+
+# item 10: a repeated gem_uid refuses the manifest; schema must be an int
+
+@pytest.mark.parametrize("devices", [
+    [("A", "active"), ("A", "lost")],
+    [("A", "lost"), ("A", "active")],
+    [("A", "active"), ("A", "active")],
+    [("A", "lost"), ("A", "lost")],
+], ids=["active-then-lost", "lost-then-active", "both-active", "both-lost"])
+def test_a_repeated_gem_uid_refuses_the_whole_manifest(tmp_path, devices):
+    agent, gs, transport, store = admin_agent(tmp_path)
+    before = gs.admin_devices
+    sent = deliver(agent, transport, manifest(devices=devices))
+    assert sent == [{"event": "error", "command": "set_admin_devices",
+                     "message": "duplicate gem_uid"}]
+    assert gs.admin_devices == before
+    assert store.version == 0
+    assert not (tmp_path / APPLIED_FILENAME).exists()
+
+
+def test_a_repeated_gem_uid_is_refused_whatever_the_version(tmp_path):
+    agent, gs, transport, store = admin_agent(tmp_path)
+    deliver(agent, transport, manifest(version=7))
+    sent = deliver(agent, transport, manifest(
+        version=3, devices=[("A", "active"), ("A", "lost")]))
+    assert [m["message"] for m in sent] == ["duplicate gem_uid"]
+
+
+@pytest.mark.parametrize("schema", [True, 1.0, "1", None])
+def test_schema_must_be_the_integer_1(tmp_path, schema):
+    agent, gs, transport, store = admin_agent(tmp_path)
+    sent = deliver(agent, transport, manifest(schema=schema))
+    assert [m["event"] for m in sent] == ["error"]
+    assert sent[0]["message"] == "unsupported schema"
     assert store.version == 0

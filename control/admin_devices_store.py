@@ -3,7 +3,11 @@ box contract spec 2026-11-23 section 4.10, mm-terrarium issue 100).
 
 A file of the box's own beside terrarium.toml, never terrarium.toml itself:
 that file's text hash is the box's config version, so only a person may
-change it. Content: {"version": <int>, "devices": ["<gem_uid>", ...]}.
+change it. Content: {"version": <int>, "devices": ["<gem_uid>", ...],
+"tenant_slug": "<str>", "terrarium_name": "<str>"}: the identity the list was
+applied for. A file whose identity is not the box's (a changed tenant_slug or
+[terrarium] name, or a copied config directory) is treated as absent, so the
+box neither keeps another identity's admins nor reports its version.
 Written atomically (temp file in the same directory, then os.replace).
 
 The file is read once, at construction, and cached; save() updates the
@@ -33,8 +37,14 @@ def _valid(data) -> bool:
 
 
 class AdminDevicesStore:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, tenant_slug: str | None = None,
+                 terrarium_name: str | None = None) -> None:
+        """tenant_slug and terrarium_name are the identity a file must have
+        been applied for; None skips that comparison (a box with no
+        [uplink] table knows no tenant)."""
         self.path = path
+        self._expected = (("tenant_slug", tenant_slug),
+                          ("terrarium_name", terrarium_name))
         self._version = 0
         self._devices: tuple[str, ...] | None = None
         self._load()
@@ -56,6 +66,13 @@ class AdminDevicesStore:
         if not _valid(data):
             logger.warning("%s is malformed; treating it as absent", self.path)
             return
+        for key, expected in self._expected:
+            if expected is not None and data.get(key) != expected:
+                # Names the field only: neither the file's values nor its
+                # device list reach the log.
+                logger.warning("%s was applied for a different %s (or names "
+                               "none); treating it as absent", self.path, key)
+                return
         self._version = data["version"]
         self._devices = tuple(data["devices"])
 
@@ -69,11 +86,15 @@ class AdminDevicesStore:
         """The applied active gem_uids; None when there is no valid file."""
         return self._devices
 
-    def save(self, devices: Sequence[str], version: int) -> None:
-        """Write atomically, then update the cache. Raises OSError with the
-        file and the cache unchanged and no temp file left behind."""
+    def save(self, devices: Sequence[str], version: int, *, tenant_slug: str,
+             terrarium_name: str) -> None:
+        """Write atomically, with the identity the list is applied for, then
+        update the cache. Raises OSError with the file and the cache
+        unchanged and no temp file left behind."""
         devices = tuple(devices)
-        text = json.dumps({"version": version, "devices": list(devices)})
+        text = json.dumps({"version": version, "devices": list(devices),
+                           "tenant_slug": tenant_slug,
+                           "terrarium_name": terrarium_name})
         directory = os.path.dirname(self.path) or "."
         fd, tmp = tempfile.mkstemp(
             dir=directory, prefix=os.path.basename(self.path) + ".",

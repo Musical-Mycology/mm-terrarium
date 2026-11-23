@@ -3515,9 +3515,10 @@ def _build_with_store(store):
 def test_build_prefers_the_applied_admin_devices_over_the_config(tmp_path):
     from control.admin_devices_store import AdminDevicesStore
     store = AdminDevicesStore(str(tmp_path / "admin_devices.applied.json"))
-    store.save(("gem-applied",), 4)
+    store.save(("gem-applied",), 4, tenant_slug="mm",
+               terrarium_name="terrarium-boot")
     gs, server, agent, arco, teardown, terrarium = _build_with_store(
-        AdminDevicesStore(store.path))
+        AdminDevicesStore(store.path, terrarium_name="terrarium-boot"))
     try:
         assert gs.is_admin("gem-applied")
         assert not gs.is_admin("gem-config")
@@ -3702,3 +3703,184 @@ def test_build_spawns_no_simulator_for_an_artnet_covered_fixture():
     finally:
         terrarium.unload_room(force=True)
         teardown.close()
+
+
+# --- final fix wave (2026-11-23 whole-branch review) ------------------------
+
+def _applied(tmp_path, **identity):
+    from control.admin_devices_store import APPLIED_FILENAME, AdminDevicesStore
+    ident = dict(tenant_slug="mm", terrarium_name="main-stage")
+    ident.update(identity)
+    AdminDevicesStore(str(tmp_path / APPLIED_FILENAME)).save(
+        ["gem-applied"], 4, **ident)
+    return str(tmp_path / "terrarium.toml")
+
+
+class _CfgNoUplink:
+    name = "main-stage"
+    uplink = None
+
+
+def test_admin_store_for_expects_the_name_and_the_tenant(tmp_path):
+    from harness.terrarium_boot import _admin_store_for
+    config_path = _applied(tmp_path)
+    store = _admin_store_for(config_path, _CfgWithUplink(_uplink_config()))
+    assert store.version == 4 and store.devices == ("gem-applied",)
+
+
+@pytest.mark.parametrize("identity", [{"tenant_slug": "crf"},
+                                      {"terrarium_name": "side-stage"}],
+                         ids=["tenant-changed", "name-changed"])
+def test_admin_store_for_treats_another_identitys_file_as_absent(
+        tmp_path, caplog, identity):
+    from harness.terrarium_boot import _admin_store_for
+    config_path = _applied(tmp_path, **identity)
+    with caplog.at_level(logging.WARNING):
+        store = _admin_store_for(config_path, _CfgWithUplink(_uplink_config()))
+    assert store.version == 0 and store.devices is None
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+    assert "gem-applied" not in caplog.text
+
+
+def test_admin_store_for_without_uplink_compares_only_the_name(tmp_path):
+    from harness.terrarium_boot import _admin_store_for
+    config_path = _applied(tmp_path, tenant_slug="anything")
+    assert _admin_store_for(config_path, _CfgNoUplink()).devices == (
+        "gem-applied",)
+    config_path = _applied(tmp_path, terrarium_name="side-stage")
+    assert _admin_store_for(config_path, _CfgNoUplink()).devices is None
+
+
+def test_build_uplink_store_from_the_config_path_carries_the_identity(
+        tmp_path):
+    from harness.terrarium_boot import _build_uplink
+    config_path = _applied(tmp_path, terrarium_name="side-stage")
+    gs = GameServer({"TestBit": TestBit})
+    up = _build_uplink(_CfgWithUplink(_uplink_config()), gs, None, None, None,
+                       config_path=config_path)
+    assert up.admin_store.version == 0      # main-stage's box, side-stage file
+
+
+def _boot_config_with_admins(name):
+    from control.terrarium_config import TerrariumConfig
+    return TerrariumConfig(
+        schema=1, name=name, bit_paths=(), rooms={TEST_SPEC.name: TEST_SPEC},
+        version="v", admin_devices=("gem-config",))
+
+
+def _build_for(terrarium_config, store):
+    return build(
+        BootConfig(room_name="TEST", bit_name="TestBit"), {"TestBit": TestBit},
+        arco_command=["arco-server"], room_binding=RoomBindingRegistry(),
+        room_spec=TEST_SPEC, terrarium_config=terrarium_config,
+        transport=_fake_transport(), clock=time.monotonic,
+        arco_process_cls=_fake_arco, simulator_popen=FakePopen(),
+        room_audio=_fake_room_audio(), admin_store=store)
+
+
+def test_boot_falls_back_to_the_config_list_for_another_identitys_file(
+        tmp_path):
+    from harness.terrarium_boot import _admin_store_for
+    config_path = _applied(tmp_path, terrarium_name="old-name")
+    cfg = _boot_config_with_admins("main-stage")
+    gs, server, agent, arco, teardown, terrarium = _build_for(
+        cfg, _admin_store_for(config_path, cfg))
+    try:
+        assert gs.is_admin("gem-config")
+        assert not gs.is_admin("gem-applied")
+    finally:
+        shutdown(teardown, terrarium)
+
+
+def test_boot_logs_one_info_line_when_the_applied_list_is_used(tmp_path,
+                                                                caplog):
+    from harness.terrarium_boot import _admin_store_for
+    config_path = _applied(tmp_path)
+    cfg = _boot_config_with_admins("main-stage")
+    store = _admin_store_for(config_path, cfg)
+    with caplog.at_level(logging.INFO, logger="harness.terrarium_boot"):
+        gs, server, agent, arco, teardown, terrarium = _build_for(cfg, store)
+    try:
+        assert gs.is_admin("gem-applied") and not gs.is_admin("gem-config")
+        lines = [r.getMessage() for r in caplog.records
+                 if r.name == "harness.terrarium_boot"
+                 and "applied admin" in r.getMessage()]
+        assert len(lines) == 1
+        assert "1 device" in lines[0] and "version 4" in lines[0]
+        assert "gem-applied" not in caplog.text
+    finally:
+        shutdown(teardown, terrarium)
+
+
+def test_boot_logs_no_applied_line_without_an_applied_file(tmp_path, caplog):
+    from harness.terrarium_boot import _admin_store_for
+    cfg = _boot_config_with_admins("main-stage")
+    store = _admin_store_for(str(tmp_path / "terrarium.toml"), cfg)
+    with caplog.at_level(logging.INFO, logger="harness.terrarium_boot"):
+        gs, server, agent, arco, teardown, terrarium = _build_for(cfg, store)
+    try:
+        assert not [r for r in caplog.records
+                    if "applied admin" in r.getMessage()]
+    finally:
+        shutdown(teardown, terrarium)
+
+
+def test_main_builds_the_admin_store_with_the_box_identity():
+    import inspect
+    import harness.terrarium_boot as boot
+    source = inspect.getsource(boot.main)
+    assert "_admin_store_for(args.config, terrarium_config)" in source
+
+
+def test_build_uplink_keeps_websockets_debug_logging_off(tmp_path):
+    from harness.terrarium_boot import _build_uplink
+    root = logging.getLogger()
+    ws_logger = logging.getLogger("websockets")
+    old_root, old_ws = root.level, ws_logger.level
+    try:
+        root.setLevel(logging.DEBUG)
+        ws_logger.setLevel(logging.NOTSET)
+        _build_uplink(_CfgWithUplink(_uplink_config("wss://example.invalid/")),
+                      GameServer({"TestBit": TestBit}), None, None, None)
+        assert ws_logger.getEffectiveLevel() >= logging.INFO
+        assert not logging.getLogger("websockets.client").isEnabledFor(
+            logging.DEBUG)
+    finally:
+        root.setLevel(old_root)
+        ws_logger.setLevel(old_ws)
+
+
+def test_build_uplink_leaves_a_stricter_websockets_level_alone():
+    from harness.terrarium_boot import _build_uplink
+    ws_logger = logging.getLogger("websockets")
+    old = ws_logger.level
+    try:
+        ws_logger.setLevel(logging.ERROR)
+        _build_uplink(_CfgWithUplink(_uplink_config()),
+                      GameServer({"TestBit": TestBit}), None, None, None)
+        assert ws_logger.level == logging.ERROR
+    finally:
+        ws_logger.setLevel(old)
+
+
+@pytest.mark.parametrize("url", ["ws://127.0.0.1:1/", "http://x/"])
+def test_a_non_wss_uplink_url_warns_once_and_is_still_used(caplog, url):
+    from harness.terrarium_boot import _build_uplink
+    with caplog.at_level(logging.WARNING, logger="harness.terrarium_boot"):
+        up = _build_uplink(_CfgWithUplink(_uplink_config(url)),
+                           GameServer({"TestBit": TestBit}), None, None, None)
+    assert up.transport.uri == url
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING
+                and "unencrypted" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "ab" * 32 not in caplog.text
+
+
+@pytest.mark.parametrize("url", ["wss://broker.invalid/", ""],
+                         ids=["wss", "log-only"])
+def test_a_wss_or_empty_uplink_url_does_not_warn(caplog, url):
+    from harness.terrarium_boot import _build_uplink
+    with caplog.at_level(logging.WARNING, logger="harness.terrarium_boot"):
+        _build_uplink(_CfgWithUplink(_uplink_config(url)),
+                      GameServer({"TestBit": TestBit}), None, None, None)
+    assert not [r for r in caplog.records if "unencrypted" in r.getMessage()]

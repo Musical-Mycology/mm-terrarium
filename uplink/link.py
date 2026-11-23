@@ -7,6 +7,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from websockets.exceptions import InvalidStatus
+
 from control.bit_config import ManifestError
 from control.engine import BitLoadError, GameServer, InvalidTransition
 from control.lobby import TERRARIUM_ADMIN
@@ -100,10 +102,13 @@ class UplinkAgent:
         # cap (box contract spec 4.6). Entries from before completion_id
         # can never be confirmed, so they are dropped once, here.
         self.journal = journal
+        # completion_ids confirmed during the current drain, removed from
+        # the journal in one rewrite when the drain ends.
+        self._confirmed: list[str] = []
         if journal is not None:
             try:
                 purged = journal.purge_unidentified()
-            except OSError:
+            except (OSError, ValueError):
                 logger.exception("could not purge unidentified journal entries")
             else:
                 if purged:
@@ -127,24 +132,31 @@ class UplinkAgent:
             return
         if now < self._next_attempt_at:
             return
+        # Frames the broker sent just before closing (session_replaced,
+        # completions_stored) may still be buffered on the old socket when a
+        # send was the first to notice the close: handle them before
+        # reconnecting. A session_replaced among them sets the long wait.
+        self._drain()
+        if now < self._next_attempt_at:
+            return
         try:
             self.transport.connect()
-        except Exception:
-            logger.warning("uplink connect failed; retrying in %.1fs",
-                            self._backoff)
+        except Exception as exc:
+            self._log_connect_failure(exc)
             self._next_attempt_at = now + self._backoff
             self._backoff = min(self._backoff * 2, self.MAX_BACKOFF_SECONDS)
             return
+        logger.info("uplink connected (%s)", self._who())
         self._connected_at = now
         self._heartbeat_from = now
         try:
             self._send_resync()
             self._replay_journal()
         except Exception:
-            # A broker that accepts the socket and drops the first frame (a
-            # rejected secret looks exactly like this) is a failed attempt
-            # like any other: same schedule, same doubling, so the box never
-            # reconnects every tick.
+            # A refused identity never gets here: the broker answers it with
+            # HTTP 401 inside connect(). This is a socket that closed right
+            # after opening, a failed attempt like any other: same schedule,
+            # same doubling, so the box never reconnects every tick.
             logger.warning("uplink send failed right after connect; "
                             "retrying in %.1fs", self._backoff)
             self._next_attempt_at = now + self._backoff
@@ -153,6 +165,27 @@ class UplinkAgent:
         # Only a fully established link resets the schedule.
         self._backoff = self.INITIAL_BACKOFF_SECONDS
         self._next_attempt_at = 0.0
+
+    def _log_connect_failure(self, exc: Exception) -> None:
+        """One WARNING per failed connect: the exception type and, for a
+        refused handshake, the HTTP status. Never the request, its headers
+        or the secret."""
+        if isinstance(exc, InvalidStatus):
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            hint = ("; check [uplink] tenant_slug and secret, and [terrarium] "
+                    "name" if status == 401 else "")
+            logger.warning("uplink connect refused: HTTP %s (%s)%s; retrying "
+                           "in %.1fs", status, type(exc).__name__, hint,
+                           self._backoff)
+            return
+        logger.warning("uplink connect failed (%s); retrying in %.1fs",
+                       type(exc).__name__, self._backoff)
+
+    def _who(self) -> str:
+        if self.identity is None:
+            return "this box"
+        return (f"tenant {self.identity.tenant_slug}, terrarium "
+                f"{self.identity.terrarium_name}")
 
     def _tick_connected(self, now: float) -> None:
         """Heartbeat every HEARTBEAT_SECONDS while connected, the first one
@@ -183,12 +216,7 @@ class UplinkAgent:
         self._replaced_wait = min(wait * 2, self.REPLACED_MAX_SECONDS)
         self.transport.close()
         self._next_attempt_at = now + wait
-        if self.identity is not None:
-            who = (f"tenant {self.identity.tenant_slug}, terrarium "
-                   f"{self.identity.terrarium_name}")
-        else:
-            who = "this box"
-        message = (f"another box is using this identity ({who}); not "
+        message = (f"another box is using this identity ({self._who()}); not "
                    f"reconnecting for {wait:.0f}s")
         logger.warning("%s", message)
         if self._notify is not None:
@@ -203,7 +231,9 @@ class UplinkAgent:
         refused whatever its version (spec 4.10)."""
         if self.identity is None:
             return "no uplink identity"
-        if manifest.get("schema") != 1:
+        schema = manifest.get("schema")
+        if (not isinstance(schema, int) or isinstance(schema, bool)
+                or schema != 1):
             return "unsupported schema"
         if manifest.get("tenant_slug") != self.identity.tenant_slug:
             return "tenant_slug is not this box's"
@@ -215,6 +245,7 @@ class UplinkAgent:
         devices = manifest.get("devices")
         if not isinstance(devices, list):
             return "devices must be a list"
+        seen = set()
         for device in devices:
             if not isinstance(device, dict):
                 return "each device must be an object"
@@ -225,6 +256,11 @@ class UplinkAgent:
                 return "each device needs a string status"
             if gem_uid == TERRARIUM_ADMIN:
                 return f"{TERRARIUM_ADMIN!r} is reserved and cannot be listed"
+            # Whatever the statuses: an id listed twice is ambiguous, and
+            # reading it either way could grant a right the manifest denied.
+            if gem_uid in seen:
+                return "duplicate gem_uid"
+            seen.add(gem_uid)
         if self.admin_store is None:
             return "no admin store"
         return None
@@ -248,7 +284,9 @@ class UplinkAgent:
             d["gem_uid"] for d in manifest["devices"]
             if d["status"] == "active"))
         try:
-            self.admin_store.save(active, version)
+            self.admin_store.save(
+                active, version, tenant_slug=self.identity.tenant_slug,
+                terrarium_name=self.identity.terrarium_name)
         except OSError:
             logger.exception("could not save admin devices version %d", version)
             self._send(protocol.error_event(
@@ -302,35 +340,64 @@ class UplinkAgent:
         iteration, alongside GameServer.tick() -- independent of it."""
         if not self.transport.connected:
             return
-        while True:
-            try:
-                msg = self.transport.receive()
-            except Exception:
-                logger.warning("uplink receive failed; will retry next tick")
-                return
-            if msg is None:
-                return
-            self._handle_message(msg)
+        self._drain()
 
-    def _handle_message(self, msg: dict) -> None:
+    def _drain(self) -> None:
+        """Handle every frame the transport has waiting. Ends at the first
+        None, at a receive error or after a session_replaced; every
+        completion confirmed on the way is removed from the journal in one
+        rewrite at the end, however the drain ended."""
+        try:
+            while True:
+                try:
+                    msg = self.transport.receive()
+                except Exception:
+                    logger.warning("uplink receive failed; will retry next tick")
+                    return
+                if msg is None:
+                    return
+                try:
+                    replaced = self._handle_message(msg)
+                except Exception as exc:
+                    # Typically a reply send on a link that just closed. The
+                    # rest of the buffer is still read: it may hold a
+                    # session_replaced or confirmations.
+                    logger.warning("uplink %r command failed (%s); continuing",
+                                   msg.get("command"), type(exc).__name__)
+                    continue
+                if replaced:
+                    return
+        finally:
+            self._remove_confirmed()
+
+    def _remove_confirmed(self) -> None:
+        ids, self._confirmed = self._confirmed, []
+        if not ids or self.journal is None:
+            return
+        try:
+            removed = self.journal.remove(ids)
+        except (OSError, ValueError):
+            # The entries stay and are replayed and confirmed again: nothing
+            # is lost.
+            logger.exception("could not remove confirmed journal entries")
+            return
+        logger.debug("completions_stored: %d of %d journal entries removed",
+                     removed, len(ids))
+
+    def _handle_message(self, msg: dict) -> bool:
+        """Handle one frame; True when it was session_replaced."""
         try:
             command = protocol.parse_command(msg)
         except ValueError as exc:
             logger.warning("dropping unparseable uplink message: %s", exc)
-            return
+            return False
         self._dispatch(msg.get("command"), command)
+        return isinstance(command, protocol.SessionReplacedCommand)
 
     def _dispatch(self, command_name: str, command) -> None:
         if isinstance(command, protocol.CompletionsStoredCommand):
-            if self.journal is None:
-                return
-            try:
-                removed = self.journal.remove(command.completion_ids)
-            except OSError:
-                logger.exception("could not remove confirmed journal entries")
-                return
-            logger.debug("completions_stored: %d of %d journal entries removed",
-                         removed, len(command.completion_ids))
+            # Collected; _drain removes them in one rewrite when it ends.
+            self._confirmed.extend(command.completion_ids)
             return
         if isinstance(command, protocol.SetAdminDevicesCommand):
             self._on_set_admin_devices(command.manifest)
@@ -409,15 +476,19 @@ class UplinkAgent:
     def on_state_change(self, old_state: State, new_state: State) -> None:
         terrarium_state = (
             self.terrarium.state.name if self.terrarium is not None else None)
-        self._send(protocol.state_changed_event(
-            new_state.name, self.game_server.bit_name,
-            terrarium_state=terrarium_state))
-        # COMPLETING is reached only by the tick-triggered completion path;
-        # abort() skips it, so an aborted round is never reported as
-        # completed (spec 2026-09-13 section 5.3). Registration is still
-        # populated here; it is released during UNLOADING.
-        if new_state == State.COMPLETING:
-            self._send_bit_completed()
+        try:
+            self._send(protocol.state_changed_event(
+                new_state.name, self.game_server.bit_name,
+                terrarium_state=terrarium_state))
+        finally:
+            # COMPLETING is reached only by the tick-triggered completion
+            # path; abort() skips it, so an aborted round is never reported
+            # as completed (spec 2026-09-13 section 5.3). Registration is
+            # still populated here; it is released during UNLOADING. In a
+            # finally: a failed state_changed send must not cost the
+            # completion its journal entry.
+            if new_state == State.COMPLETING:
+                self._send_bit_completed()
 
     # --- terrarium observer callbacks ---------------------------------------
     def on_terrarium_state_change(self, old_state: TerrariumState,
@@ -478,13 +549,25 @@ class UplinkAgent:
         frame = self._stamp(event)
         if frame is None:
             return
+        journalled = False
         if self.journal is not None:
             try:
                 self.journal.append(frame)
-            except OSError:
+                journalled = True
+            except (OSError, ValueError):
                 logger.exception("could not journal bit_completed; sending live only")
         if self.transport.connected:
-            self.transport.send(frame)
+            try:
+                self.transport.send(frame)
+            except Exception:
+                if journalled:
+                    logger.warning("bit_completed %s live send failed; kept in "
+                                   "the journal for the next connect",
+                                   frame.get("completion_id"))
+                else:
+                    logger.warning("bit_completed %s live send failed and it "
+                                   "is not journalled; it is lost",
+                                   frame.get("completion_id"))
 
     def on_registration_change(self) -> None:
         counts = non_room_counts(self.game_server.registration)
