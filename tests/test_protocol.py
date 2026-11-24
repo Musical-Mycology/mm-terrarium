@@ -240,14 +240,72 @@ def test_bit_completed_event_always_carries_players():
     dumps(ev)     # JSON-serialisable
 
 
-from uplink.protocol import UplinkIdentity, identity_frame, state_changed_event
+from uplink.protocol import (
+    CompletionsStoredCommand,
+    SessionReplacedCommand,
+    SetAdminDevicesCommand,
+    UplinkIdentity,
+    admin_devices_applied_event,
+    heartbeat_event,
+    parse_command,
+    state_changed_event,
+)
 
 
-def test_identity_frame_shape_and_hidden_repr():
+def test_identity_headers_exact_and_hidden_repr():
     ident = UplinkIdentity("mm", "main-stage", "ab" * 32)
-    assert identity_frame(ident) == {"event": "identity", "tenant_slug": "mm",
-                                     "terrarium_name": "main-stage", "secret": "ab" * 32}
+    assert ident.headers() == {"X-Fairyring-Tenant": "mm",
+                               "X-Fairyring-Terrarium": "main-stage",
+                               "X-Fairyring-Secret": "ab" * 32}
     assert "ab" * 32 not in repr(ident)
+
+
+def test_heartbeat_event_is_exactly_the_event_key():
+    assert heartbeat_event() == {"event": "heartbeat"}
+
+
+def test_admin_devices_applied_event_shape():
+    assert admin_devices_applied_event(3) == {
+        "event": "admin_devices_applied", "version": 3}
+
+
+def test_bit_completed_completion_keys_only_when_given():
+    base = bit_completed_event({"score": 1}, "B", "0.1")
+    assert "completion_id" not in base and "completed_at" not in base
+    ev = bit_completed_event({"score": 1}, "B", "0.1", completion_id="c1",
+                             completed_at="2026-11-23T10:00:00Z")
+    assert ev["completion_id"] == "c1"
+    assert ev["completed_at"] == "2026-11-23T10:00:00Z"
+    only = bit_completed_event(None, completion_id="c2")
+    assert only["completion_id"] == "c2" and "completed_at" not in only
+
+
+def test_parse_set_admin_devices_keeps_the_whole_message_minus_command():
+    msg = {"command": "set_admin_devices", "version": 2, "admins": ["g1"]}
+    cmd = parse_command(msg)
+    assert cmd == SetAdminDevicesCommand(manifest={"version": 2, "admins": ["g1"]})
+    assert msg["command"] == "set_admin_devices"      # input not mutated
+    assert parse_command({"command": "set_admin_devices"}).manifest == {}
+
+
+def test_parse_completions_stored():
+    cmd = parse_command({"command": "completions_stored",
+                         "completion_ids": ["a", "b"]})
+    assert cmd == CompletionsStoredCommand(completion_ids=("a", "b"))
+    assert parse_command({"command": "completions_stored",
+                          "completion_ids": []}).completion_ids == ()
+
+
+@pytest.mark.parametrize("bad", ["x", None, [1], [""], ("a",)])
+def test_completions_stored_rejects_malformed_ids(bad):
+    with pytest.raises(ValueError):
+        parse_command({"command": "completions_stored", "completion_ids": bad})
+    with pytest.raises(ValueError):
+        parse_command({"command": "completions_stored"})
+
+
+def test_parse_session_replaced():
+    assert parse_command({"command": "session_replaced"}) == SessionReplacedCommand()
 
 
 def test_state_changed_event_carries_lan_ip_only_when_given():

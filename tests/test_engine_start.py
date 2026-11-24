@@ -120,3 +120,24 @@ def test_notify_lobby_reaches_observers():
     gs, obs = _loaded()
     gs.notify_lobby("invite", "ie1")
     assert obs.lobby == [("invite", "ie1")]
+
+
+def test_set_admin_devices_replaces_the_list_and_keeps_the_terrarium():
+    gs = GameServer({"TestBit": TestBit}, admin_devices=["gem-1"])
+    gs.set_admin_devices(["gem-2", "gem-3"])
+    assert gs.admin_devices == frozenset({"gem-2", "gem-3", TERRARIUM_ADMIN})
+    assert not gs.is_admin("gem-1")
+    assert gs.is_admin("gem-2")
+    assert gs.is_admin(TERRARIUM_ADMIN)
+    gs.set_admin_devices([])
+    assert gs.admin_devices == frozenset({TERRARIUM_ADMIN})
+
+
+def test_a_replaced_admin_list_governs_a_later_admin_start():
+    # No scored player, so only an admin start gets past the minimum.
+    gs, obs = _loaded(_admin_config(), admin_devices=["gem-1"])
+    gs.set_admin_devices(["gem-2"])
+    assert gs.request_start("k", "gem-1", "device") is not None
+    assert gs.state is State.SETUP
+    assert gs.request_start("k", "gem-2", "device") is None
+    assert gs.state is State.RUNNING

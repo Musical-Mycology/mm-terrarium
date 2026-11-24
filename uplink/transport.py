@@ -20,6 +20,16 @@ from control.wire_json import dumps as _json_dumps
 
 logger = logging.getLogger(__name__)
 
+# connect() and close() block the 44 Hz tick loop that calls them, so both
+# are bounded well under the library's 10 second defaults.
+OPEN_TIMEOUT_SECONDS = 3
+CLOSE_TIMEOUT_SECONDS = 2
+
+
+def frame_size(msg: dict) -> int:
+    """Bytes the frame occupies on the wire (UTF-8 of its wire JSON)."""
+    return len(_json_dumps(msg).encode("utf-8"))
+
 
 class FakeTransport:
     """In-process test double. No socket, no server process -- tests push
@@ -32,6 +42,7 @@ class FakeTransport:
         self.sent: list[dict] = []
         self._incoming: deque[dict] = deque()
         self.connect_count = 0
+        self.close_count = 0
 
     def connect(self) -> None:
         self.connected = True
@@ -40,6 +51,10 @@ class FakeTransport:
     def disconnect(self) -> None:
         """Test helper: simulate the link dropping."""
         self.connected = False
+
+    def close(self) -> None:
+        self.connected = False
+        self.close_count += 1
 
     def send(self, msg: dict) -> None:
         self.sent.append(msg)
@@ -64,14 +79,34 @@ class WebSocketTransport:
 
     durable = True
 
-    def __init__(self, uri: str):
+    def __init__(self, uri: str, headers: dict[str, str] | None = None):
         self.uri = uri
+        self._headers = headers  # carries the secret: never logged
         self.connected = False
         self._ws = None
 
+    def __repr__(self) -> str:
+        return f"WebSocketTransport(uri={self.uri!r})"
+
     def connect(self) -> None:
-        self._ws = ws_connect(self.uri)
+        # Start clean: a socket kept only so receive() could drain it is
+        # dropped, never read again.
+        self.close()
+        self._ws = ws_connect(self.uri, additional_headers=self._headers,
+                              open_timeout=OPEN_TIMEOUT_SECONDS,
+                              close_timeout=CLOSE_TIMEOUT_SECONDS)
         self.connected = True
+
+    def close(self) -> None:
+        """Drop the socket if any. Never raises."""
+        self.connected = False
+        ws, self._ws = self._ws, None
+        if ws is None:
+            return
+        try:
+            ws.close()
+        except Exception:
+            pass
 
     def send(self, msg: dict) -> None:
         if not self.connected:
@@ -79,18 +114,28 @@ class WebSocketTransport:
         try:
             self._ws.send(_json_dumps(msg))
         except ConnectionClosed:
+            # The socket is kept: frames the broker sent before closing
+            # (session_replaced, completions_stored) are still read by
+            # receive().
             self.connected = False
             raise
 
     def receive(self) -> dict | None:
-        if not self.connected:
+        """The next frame, or None. Once the link is marked closed, frames
+        already received on the old socket are still returned until it has
+        none left; then the socket is dropped and this returns None."""
+        ws = self._ws
+        if ws is None:
             return None
         try:
-            raw = self._ws.recv(timeout=0)
+            raw = ws.recv(timeout=0)
         except TimeoutError:
+            if not self.connected:
+                self._ws = None
             return None
         except ConnectionClosed:
             self.connected = False
+            self._ws = None
             return None
         return json.loads(raw)
 
@@ -108,11 +153,11 @@ class LogTransport:
     def connect(self) -> None:
         self.connected = True
 
+    def close(self) -> None:
+        self.connected = False
+
     def send(self, msg: dict) -> None:
-        shown = dict(msg)
-        if "secret" in shown:
-            shown["secret"] = "[redacted]"
-        logger.debug("uplink (log-only) %s", _json_dumps(shown))
+        logger.debug("uplink (log-only) %s", _json_dumps(msg))
 
     def receive(self) -> dict | None:
         return None

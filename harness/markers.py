@@ -150,6 +150,11 @@ PREPARE_URL = "PREPARE_URL:"
 # carries the secret. Echoed by run_stack, never waited on.
 UPLINK = "UPLINK:"
 
+# Printed when the broker reports another box is using this box's uplink
+# identity and the box backs off: "SESSION_REPLACED: <message>". Never
+# carries the secret. Echoed by run_stack, never waited on.
+SESSION_REPLACED = "SESSION_REPLACED:"
+
 READY_MARKERS = {
     "CONTROL_TRANSPORT_READY": CONTROL_TRANSPORT_READY,
     "CONTROL_SETUP_HOLD": CONTROL_SETUP_HOLD,

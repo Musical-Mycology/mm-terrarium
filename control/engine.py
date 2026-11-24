@@ -12,6 +12,7 @@ abort() -- GameServer stays agnostic to who's watching or calling either.
 import logging
 import secrets
 import time
+from typing import Iterable
 
 from control.bit import Bit
 from control.cues import (ALL, ROOM, FireFunction, LightCue, MusicCue,
@@ -559,6 +560,12 @@ class GameServer:
 
     def is_admin(self, dev: str | None) -> bool:
         return dev is not None and dev in self.admin_devices
+
+    def set_admin_devices(self, devices: Iterable[str]) -> None:
+        """Replace the admin list (an applied MycoQuest manifest, box
+        contract spec 4.10). The Terrarium itself stays an admin. Nothing
+        caches admin status: every check reads admin_devices afresh."""
+        self.admin_devices = frozenset(devices) | {TERRARIUM_ADMIN}
 
     def lobby_config(self):
         cfg = getattr(self.bit, "config", None) if self.bit is not None else None
