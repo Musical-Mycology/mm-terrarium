@@ -1,5 +1,9 @@
 # Terrarium Uplink: Remote-Driving GameServer
 
+> **Update 2026-11-23:** the box contract (`mm-fairyring` repo,
+> `docs/superpowers/specs/2026-11-23-box-contract-design.md`) replaces parts
+> of this document. It replaces the identity frame (the box now sends `X-Fairyring-Tenant`, `X-Fairyring-Terrarium` and `X-Fairyring-Secret` headers and never an `identity` frame), the clear-after-replay journal (entries now leave only on `completions_stored` or the 500 cap), and the resync order (it now includes `admin_devices_applied`, and the journal is sent last). It also adds the `heartbeat` event, `boot_id` and `seq` on every other frame, `completion_id` and `completed_at` on `bit_completed`, the 32,000 byte frame limit, and the commands `completions_stored`, `session_replaced` and `set_admin_devices`. The text below is the original and is not rewritten.
+
 **Date:** 2026-07-20
 **Status:** Approved (brainstorm session with Chris)
 **Canonical architecture:** `docs/control-gameserver-design.md` (this repo);

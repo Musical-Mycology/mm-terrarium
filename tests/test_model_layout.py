@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from control.model_layout import (ModelLayoutError, layout_to_json, parse_model_layout,
-                                  parse_source_layout, read_glb_json)
+from control.model_layout import (ModelLayoutError, count_triangles, layout_to_json,
+                                  parse_model_layout, parse_source_layout, read_glb_json)
 from tests.glb_builder import GLB_MAGIC, JSON_CHUNK_TYPE, GlbBuilder, build_glb as _build_glb
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "models"
@@ -536,3 +536,22 @@ def test_parse_source_layout_still_refuses_one_based_numbering():
                       "mesh": builder.add_box_mesh((0.0, 0.0, i / 100), 0.002)})
     with pytest.raises(ModelLayoutError, match="missing"):
         parse_source_layout(builder.build(nodes), path="one_based.glb")
+
+
+def test_count_triangles_sums_indexed_triangle_primitives():
+    gltf = {"accessors": [{"count": 30}, {"count": 12}, {"count": 9}],
+            "meshes": [{"primitives": [{"indices": 0, "attributes": {"POSITION": 2}},
+                                       {"indices": 1, "attributes": {"POSITION": 2}}]}]}
+    assert count_triangles(gltf) == 14
+
+
+def test_count_triangles_uses_position_count_without_indices():
+    gltf = {"accessors": [{"count": 9}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}]}
+    assert count_triangles(gltf) == 3
+
+
+def test_count_triangles_skips_non_triangle_modes():
+    gltf = {"accessors": [{"count": 9}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "mode": 1}]}]}
+    assert count_triangles(gltf) == 0

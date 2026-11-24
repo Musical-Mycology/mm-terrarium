@@ -557,3 +557,81 @@ def test_play_cue_can_target_the_room_too():
     gs.on_play_cue = lambda *a: seen.append(a)
     gs.data("ie1", "tilt", ["ie1", 0.0])
     assert seen == [("sim-room", "click", "")]
+
+
+# --- on_gesture observer hook -------------------------------------------
+
+class _GestureWatcher:
+    def __init__(self):
+        self.seen = []
+
+    def on_gesture(self, record):
+        self.seen.append(record)
+
+
+def _watched(bit=None):
+    bit = bit or VerbBit()
+    gs = _joined(bit)
+    watcher = _GestureWatcher()
+    gs.add_observer(watcher)
+    return bit, gs, watcher
+
+
+def test_on_gesture_fires_for_a_handled_tap():
+    bit, gs, watcher = _watched()
+    assert gs.data("ie1", "tilt", ["ie1", 1.0]) is None
+    [rec] = watcher.seen
+    assert (rec.dev, rec.verb, rec.refused) == ("ie1", "tilt", None)
+    assert rec.received == pytest.approx(1000.0)
+    assert rec.at == pytest.approx(1000.06)
+
+
+def test_on_gesture_carries_a_handler_refusal():
+    bit, gs, watcher = _watched()
+    bit.refuse_next = "nope"
+    assert gs.data("ie1", "tilt", ["ie1", 1.0]) == "nope"
+    assert [r.refused for r in watcher.seen] == ["nope"]
+
+
+def test_on_gesture_fires_for_an_unknown_verb():
+    bit, gs, watcher = _watched()
+    assert gs.data("ie1", "zap", []) == "unknown verb 'zap'"
+    assert [r.refused for r in watcher.seen] == ["unknown verb 'zap'"]
+
+
+def test_on_gesture_fires_for_a_solo_role_gesture():
+    bit, gs, watcher = _watched()
+    node, _name, role_class = gs.registration.assignments["ie1"]
+    gs.registration.assignments["ie1"] = (node, "solo:defaultshroom",
+                                          role_class)
+    assert gs.data("ie1", "tap", ["ie1"], gesture_time=999.5) is None
+    [rec] = watcher.seen
+    assert (rec.dev, rec.verb, rec.refused) == ("ie1", "tap", None)
+    assert rec.at == pytest.approx(999.56)
+
+
+def test_on_gesture_does_not_fire_before_registration():
+    bit, gs, watcher = _watched()
+    assert gs.data("nobody", "tilt", []) == "device not registered"
+    assert watcher.seen == []
+
+
+def test_rejected_stamps_counts_once_per_gesture():
+    bit, gs, watcher = _watched()
+    gs.data("ie1", "tilt", ["ie1", 1.0], gesture_time=99999.0)
+    assert gs.rejected_stamps == 1
+    gs.registration.assignments["ie1"] = (
+        gs.registration.assignments["ie1"][0], "solo:defaultshroom",
+        gs.registration.assignments["ie1"][2])
+    gs.data("ie1", "tap", ["ie1"], gesture_time=99999.0)
+    assert gs.rejected_stamps == 2
+
+
+def test_unknown_verb_with_a_far_future_stamp_counts_one_rejected_stamp():
+    """Ruling 2: the stamp is resolved once, before routing, so a refused
+    (unknown-verb) gesture still counts a bad stamp, exactly once."""
+    bit, gs, watcher = _watched()
+    before = gs.rejected_stamps
+    result = gs.data("ie1", "zap", [], gesture_time=99999.0)
+    assert gs.rejected_stamps == before + 1
+    assert result == "unknown verb 'zap'"

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fixture 3D · Terrarium Console</title>
+<link rel="stylesheet" href="terrarium.css">
+</head>
+<body data-page="fixture3d" class="fix3d">
+<div class="topbar">
+  <span class="wordmark"><span class="orn">&#10022;</span> <span id="fixTitle">3D</span></span>
+  <span id="connChip" class="chip dim">connecting&hellip;</span>
+  <span class="spacer"></span>
+</div>
+<div class="fix3dbody">
+  <div id="fixView" class="fix3dview"></div>
+  <div class="fix3dside">
+    <p id="fixNote" class="mono dim" hidden></p>
+    <div id="fixInspector"></div>
+  </div>
+</div>
+<script type="importmap">{"imports": {"three": "./vendor/three/build/three.module.js", "three/addons/": "./vendor/three/addons/"}}</script>
+<script type="module" src="fixture3d.js"></script>
+</body>
+</html>

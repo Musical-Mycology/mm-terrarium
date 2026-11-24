@@ -147,14 +147,20 @@ function el(tagName) {
         node._ctx = {
           fillStyle: null,
           calls: [],
+          // Path points, kept apart from `calls` so tests counting fills
+          // and strokes are unaffected.
+          ops: [],
+          _lineDash: [],
           clearRect() {},
           beginPath() {},
           arc() {},
           fill() {},
-          moveTo() {},
-          lineTo() {},
+          moveTo(x, y) { node._ctx.ops.push({ op: "moveTo", x, y }); },
+          lineTo(x, y) { node._ctx.ops.push({ op: "lineTo", x, y }); },
+          setLineDash(d) { node._ctx._lineDash = [...d]; },
           stroke() {
-            node._ctx.calls.push({ type: "stroke", strokeStyle: node._ctx.strokeStyle });
+            node._ctx.calls.push({ type: "stroke", strokeStyle: node._ctx.strokeStyle,
+                                   lineDash: [...node._ctx._lineDash] });
           },
           fillRect(x, y, w, h) {
             node._ctx.calls.push({ type: "fillRect", fillStyle: node._ctx.fillStyle, x, y, w, h });

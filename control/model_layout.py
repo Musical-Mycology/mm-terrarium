@@ -23,6 +23,10 @@ GLB_MAGIC = 0x46546C67          # b"glTF" little-endian
 JSON_CHUNK_TYPE = 0x4E4F534A    # b"JSON" little-endian
 DRACO_EXTENSION = "KHR_draco_mesh_compression"
 
+# Budget for the Console 3D fixture view (the model is shipped to the browser).
+MODEL_VIEW_MAX_TRIANGLES = 300_000
+MODEL_VIEW_MAX_BYTES = 20 * 1024 * 1024
+
 _LED_NAME_RE = re.compile(r"^LED_(\d{3})$")
 _ZONE_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
@@ -73,6 +77,31 @@ IDENTITY: tuple = (1.0, 0.0, 0.0, 0.0,
                    0.0, 1.0, 0.0, 0.0,
                    0.0, 0.0, 1.0, 0.0,
                    0.0, 0.0, 0.0, 1.0)
+
+
+def count_triangles(gltf: dict) -> int:
+    """Triangles in a glTF document: TRIANGLES primitives (mode absent or 4)
+    contribute index count // 3, or POSITION count // 3 when unindexed.
+    A primitive with missing or out-of-range keys is skipped, not raised on
+    (parse_model_layout already refuses malformed documents)."""
+    accessors = gltf.get("accessors") or []
+
+    def _count(idx) -> int:
+        try:
+            return int(accessors[idx]["count"])
+        except (TypeError, IndexError, KeyError, ValueError):
+            return 0
+
+    total = 0
+    for mesh in gltf.get("meshes") or []:
+        for prim in mesh.get("primitives") or []:
+            if prim.get("mode", 4) != 4:
+                continue
+            if "indices" in prim:
+                total += _count(prim["indices"]) // 3
+            else:
+                total += _count((prim.get("attributes") or {}).get("POSITION")) // 3
+    return total
 
 
 def _mat_from_trs(translation, rotation, scale) -> tuple:

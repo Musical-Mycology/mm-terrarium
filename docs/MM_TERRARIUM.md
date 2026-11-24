@@ -265,6 +265,10 @@ from the worktree root. `.gitignore` matches `.venv` without a trailing
 slash specifically so the symlink is ignored (a directory-only pattern does
 not match a symlink).
 
+**Never start a second stack** (`terrarium.sh`, `smoke-test.sh`) on a machine
+where one is already running: both join the O2 ensemble `arco`, and the second
+resets the first's Arco.
+
 **Test suites:**
 
 ```bash
@@ -460,10 +464,10 @@ The end state: `./terrarium.sh --room TEST --seconds 45` runs clean.
    refuses with the fix. `./terrarium.sh --clean` skips it. The soundfont
    lands at `/usr/share/sounds/sf2/FluidR3_GM.sf2`, which
    `harness/arco_synth.py` already probes.
-2. **Sibling checkouts under `~/projects`**: `arco`
-   (`Musical-Mycology/arco`), `luxaeterna`, and `o2` from
-   `rbdannenberg/o2` (not in the Musical-Mycology org; arco's cmake finds it
-   as a sibling). `mm`'s clone-missing-repos sweep skips arco, luxaeterna
+2. **Sibling checkouts under `~/projects`**: `arco` from Roger's
+   `rbdannenberg/arco` (`Musical-Mycology/arco` is only a mirror),
+   `luxaeterna`, and `o2` from `rbdannenberg/o2` (not in the
+   Musical-Mycology org; arco's cmake finds it as a sibling). `mm`'s clone-missing-repos sweep skips arco, luxaeterna
    and mm-devshroom (no `mm-meta.yml`), so clone them by hand.
 3. **Patch and build o2.** Apply the stale cs/get fix first (*Host
    platform*): `git -C ~/projects/o2 apply
@@ -850,7 +854,9 @@ SETUP, not FULL: /handshake │            │            │
   abort drops it. Queued white invite and red deny flashes do not survive
   `stop()`: one landing after the role would paint over `sys:loaded`.
 - `TERRARIUM_ADMIN = "terrarium"` is always admin and refused as a device id
-  before any dispatch; `[admin] devices` in `terrarium.toml` adds more.
+  before any dispatch; `[admin] devices` in `terrarium.toml` adds more, but
+  only until the first MycoQuest manifest is applied (*`uplink/`*), after which
+  `admin_devices.applied.json` beside it replaces that list.
 - **`GameServer.request_start(key, source_dev, source)` is the one start
   authority**: Console and uplink `run` (unkeyed, as the Terrarium), `GET
   /start?key=` on `harness/www_server.py` (loopback is the Terrarium;
@@ -2121,7 +2127,20 @@ network makes auth a prerequisite.
   (`.html`, `.css`, `.js`, `.ttf`, readable in one line for an
   unauthenticated server), read once, **keyed by basename**: a request path
   is cut to its last segment, so traversal 404s and no two files may share
-  a basename (`fonts/` included).
+  a basename (`fonts/` included). **`vendor/` is the exception**: its files
+  keep their directory and match on the exact undecoded request path
+  (three.js 0.169.0 under `vendor/three/`, reached through the import map in
+  `index.html` and `fixture3d.html`), so a traversal attempt simply misses.
+- **Fixture routes** (`console/fixture_models.py`, via `set_route_provider`,
+  consulted only when no asset matched): `/fixture-layout/<name>.json` (the
+  pixel layout) and `/fixture-model/<name>.glb` (the instrument's
+  `model_path` source `.glb`, read from disk on the HTTP thread). The name is an exact lookup among the **loaded
+  Room's** modelled fixtures, never joined onto a path, so an unloaded Room,
+  an unknown name or a `/` in it is a 404 (the name is percent-decoded before
+  the exact lookup, since the client sends `encodeURIComponent(name)`). The
+  routes send `Cache-Control: no-cache` and the client adds `?sha=<sha256>`,
+  so a changed model is always refetched; spec 8.2's sha-keyed client caching
+  is not implemented.
 - **`console/protocol.py`**: pure builders re-exporting `uplink.protocol`'s
   `parse_command` and shared events. Shared commands: `load_bit` (`name`,
   `overrides`, `room`), `run`, `abort`, `restart`, `list_bits`, `load_room`,
@@ -2153,6 +2172,23 @@ network makes auth a prerequisite.
 - Room frames go out at ~10 Hz (`ROOM_FRAME_INTERVAL`), latest per fixture,
   dropped, never queued (boundary rule 2); bench frames too
   (`BENCH_FRAME_INTERVAL`, 0.1 s). Other views rebroadcast only on change.
+  Each `room_frame` carries `t`, Control's clock when it was rendered. A new
+  client gets the latest frame per fixture of the **current Room** replayed
+  (each tagged by the Room it was rendered for, so an old Room's are
+  dropped), `t` intact, so the 3D view has something to show before the next
+  change.
+- **`gestures`** (event, not the `gesture` command above): the engine's
+  `on_gesture` hook fires a `GestureSeen` (`dev`, `verb`, `received`, `at`,
+  `refused`) for every gesture of a registered device; the agent only buffers
+  it (bounded deque, 256) and `poll()` broadcasts at most once per
+  `ROOM_FRAME_INTERVAL` as ONE event `{"event": "gestures", "items": [{dev,
+  verb, t, at, refused}, ...]}`, oldest first. Within a batch the stream verbs
+  (`STREAM_GESTURE_VERBS`, `tilt`: devices send it at ~20 Hz) are coalesced
+  latest-wins per `(dev, verb)`; every discrete verb record is kept. The
+  inspector marks input on the trace (every gesture in the window) and lists
+  the newest 20. `rejected_stamps`
+  now also counts a bad stamp on a refused gesture (the stamp is resolved
+  once, before routing).
 - The `room` payload (*Shown by addition*, *Rooms and fixtures*): `fixtures[]`
   (`dev`, `muted`, `artnet`), `controllers` (flat, first
   fixture wins), `fixture_controllers` (no Console module reads it).
@@ -2201,6 +2237,24 @@ network makes auth a prerequisite.
   links `http(s)` only), Triggers (`functions.js`), Live values, status,
   Join, log. `decodeRgbw` (`pixels.js`) decodes the one RGBW wire, W added
   onto RGB; `design.js`'s bench paints through the same decoder.
+- **3D fixture view** ([design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-10-27-console-3d-fixture-view-design.md)):
+  the Room card shows one 3D tile (`view3d.js`, three.js) per **modelled**
+  fixture, alongside the strip, which stays. A fixture without a model keeps
+  only its strip; an over-budget model (more than 300,000 triangles or 20 MB,
+  [`docs/instrument-model-guide.md`](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/instrument-model-guide.md))
+  or a view that fails to load (no WebGL2, a bad `.glb`) shows the reason on
+  its tile instead and stops collecting a trace; in both cases (`showTileFallback`)
+  the tile's ↗ bump-out is hidden. `view3d.js` loads lazily, so
+  a first paint never waits on three.js. Clicking an LED opens the **LED
+  inspector** (`inspector.js`): the address (fixture, pixel, Room zones,
+  model zone), the current RGBW, a step trace of R, G, B and W over the last
+  10 s at 10 Hz, and a marker per input gesture (a refused one in the accent
+  colour). Everything is on **Control's clock** (`createClock` in
+  `fixture_live.js`: the latest `t` of a `room_frame` or `gestures` item, reset by a
+  snapshot), never the browser's. The tile's ↗ opens the full-window bump-out
+  `fixture3d.html?fixture=<name>` (`fixture3d.js`), which takes the same view
+  and inspector from `fixture_live.js` so the two cannot drift. The
+  bound-device chip now links to the device's canvas.
 - **Pickers**: All, each fixture as `@fixture:<name>` (`(unbound)`,
   `(muted)`), then unbound devices; DEVICE pickers never offer a fixture
   ("no device joined" disables Fire). A refill maps a device that just bound
@@ -2255,16 +2309,50 @@ network makes auth a prerequisite.
 ### `uplink/`: outbound remote control
 
 `UplinkAgent` (`uplink/link.py`) drives `GameServer` over an outbound
-websocket to a future mm-fairyring broker; nothing depends on it being up,
-and only lifecycle and registration counts cross it ([design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md),
+websocket to the mm-fairyring broker; nothing depends on it being up.
+Lifecycle events and registration counts go up it, and commands come down
+it, MycoQuest's admin-device manifests among them. The wire contract is
+section 4 of the mm-fairyring box-contract design (`docs/superpowers/specs/2026-11-23-box-contract-design.md`
+in that repo; the section below follows it) ([design](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-07-20-terrarium-uplink-design.md),
 [MycoQuest handoff](https://github.com/Musical-Mycology/mm-terrarium/blob/main/docs/superpowers/specs/2026-09-13-mycoquest-handoff-terrarium-design.md)).
 
 - Built only with an `[uplink]` table: `tenant_slug`, `secret` (64
-  lowercase hex), `url` (empty: log-only, non-durable `LogTransport`). A
-  connect sends the identity frame (`event: "identity"`, `tenant_slug`,
-  `terrarium_name`, `secret`), the resync (`state_changed` with `lan_ip`,
-  `room_loaded`, `registration_changed`), then the journal. Backoff doubles
+  lowercase hex), `url` (empty: log-only, non-durable `LogTransport`). The
+  box opens `wss://fairyring-uplink.musicalmycology.org` (its `url`, no
+  path) with the headers `X-Fairyring-Tenant`, `X-Fairyring-Terrarium` and
+  `X-Fairyring-Secret`. It never sends an `identity` frame. A refusal is
+  HTTP 401 inside `connect()`. Opening a connection gives up after 3
+  seconds and closing one after 2, because both run inside the tick loop.
+- **Resync order** on every successful connect: `state_changed` with
+  `lan_ip`, `room_loaded` (when a room is loaded), `registration_changed`
+  (when there is a registration), `{"event": "admin_devices_applied",
+  "version": <n>}` (always; `0` when no manifest has ever been applied),
+  then every completion still in the journal. Reconnect back-off doubles
   1 s to 30 s; a send failing just after connect is a failed attempt.
+- **Heartbeat**: exactly `{"event": "heartbeat"}`, with no `boot_id` or
+  `seq`, every 60 seconds while connected, the first one 60 seconds after
+  the connect. Never journalled.
+- **Frame stamping**: every frame except the heartbeat carries `boot_id`
+  (random, made once when the box process starts) and `seq` (counts from 1
+  within a `boot_id`). `seq` is assigned when a frame is handed to the wire
+  or, for `bit_completed`, to the journal, whichever comes first, and only
+  after the size check passes. A frame that is not sent, because the link is
+  down or the frame is oversize, gets none, so a gap
+  in stored `seq` values means a frame was lost in transit. A replayed
+  completion keeps its first `boot_id` and `seq`.
+- **Frame size**: the limit is 32,000 bytes (UTF-8 length of the serialized
+  frame, leaving room for `boot_id` and `seq`). An oversize `bit_completed`
+  has `result` replaced by `null` and `"result_dropped": true` added, then
+  is journalled and sent; if it is still oversize it is dropped and logged.
+  Any other oversize frame is dropped and logged, and nothing is sent in its
+  place.
+- **`session_replaced`**: when the broker sends
+  `{"command": "session_replaced"}`, another box is using this identity. The
+  box closes its connection, logs a warning, prints a Console line starting
+  `SESSION_REPLACED:` (never the secret), and waits 60 seconds before
+  reconnecting. Each further `session_replaced` doubles the wait, to 600
+  seconds. Once a connection has stayed up for 300 seconds the wait returns
+  to 60 seconds. The ordinary back-off applies to every other drop.
 - `load_bit` needs `ROOM_READY` and ignores `room` (unlike the Console);
   `run` is `request_start` as the Terrarium; `abort` is Bit-only; `restart`
   is the soft cycle. `unload_room` gets the Console's live-clients refusal
@@ -2279,13 +2367,52 @@ and only lifecycle and registration counts cross it ([design](https://github.com
   `room_name`, `terrarium_config_version`, `result` (`null` if absent or
   raising) and `players [{dev, role, class}]` (`jam`/`scored`, the reserved
   `terrarium` id filtered as a second guard).
-- **A replay journal, not a buffer**: each `bit_completed` is appended to
-  `<runs_dir>/uplink_journal.jsonl` before any send (cap 500, newest kept);
-  after the resync, over a durable transport only, it replays in order and
-  clears, and a mid-replay failure keeps it. `--no-run-records`: no journal.
+- **A replay journal, not a buffer**: each `bit_completed` carries a
+  `completion_id` (random UUID v4, made when the round enters COMPLETING,
+  stored in the journal so a replay carries the same value) and
+  `completed_at` (the box clock, UTC, RFC 3339 with a `Z`, informational).
+  It is appended to `<runs_dir>/uplink_journal.jsonl` before any send (cap
+  500, newest kept). After the resync the box sends every entry still in the
+  journal, over a durable transport only; sending removes nothing. An entry
+  leaves only when the broker sends `{"command": "completions_stored",
+  "completion_ids": [...]}` naming its `completion_id` (unknown ids are
+  ignored) or when the 500 cap drops it. A completion confirmed live is
+  never replayed; one whose confirmation was lost is sent again on the next
+  connect, and MycoQuest ignores the second. A box with no `url` is never
+  confirmed, so its journal is trimmed by the cap alone.
+  `--no-run-records`: no journal.
+- **Admin devices from MycoQuest** (`set_admin_devices`, mm-terrarium issue
+  100): the command is the manifest plus `"command": "set_admin_devices"`.
+  The box applies it when `schema` is 1, `tenant_slug` and `terrarium_name`
+  equal its own, `version` is greater than the last applied version, and no
+  device, active or not, is the reserved id `terrarium`. A `gem_uid` listed
+  more than once, whatever its statuses, refuses the whole manifest with the
+  reason `duplicate gem_uid`. Only devices whose `status` is
+  `"active"` become admins; the version is recorded either way. Applying
+  replaces the admin list in memory (the built-in `terrarium` id stays),
+  writes the list and version to `admin_devices.applied.json` beside
+  `terrarium.toml` (`control/admin_devices_store.py`), and sends
+  `admin_devices_applied`. The box never rewrites `terrarium.toml`: its
+  config version is a hash of that file and is stamped on every
+  `bit_completed`. A manifest whose version is not greater is a no-op. Any
+  other failure changes nothing and sends `{"event": "error", "command":
+  "set_admin_devices", "message": ...}`; the broker offers the manifest again
+  on the next reconnect. The applied file also records the `tenant_slug` and
+  `terrarium_name` it was applied for. At boot it is used when it exists, is
+  valid and matches the box: its `terrarium_name` must equal `[terrarium]
+  name` and, when there is an `[uplink]` table, its `tenant_slug` must equal
+  `[uplink] tenant_slug`. A file that does not match (a renamed box, a new
+  tenant, a copied config directory) is ignored with a warning, and the box
+  reports version 0 so the broker offers its manifest again. Otherwise this
+  holds without an `[uplink]` table. `terrarium.toml` `[admin] devices` is
+  used only until the first manifest is applied.
+- **Operator note, first live connect**: a box that ran log-only (no
+  `[uplink] url`) holds up to 500 journalled completions. They are sent on
+  its first live connect and credited against whatever is pending then.
+  Delete `uplink_journal.jsonl` from the runs directory before first pointing
+  such a box at the live broker.
 - **Deviations from MycoQuest spec 7.2** (its section 8; mm-renquest
-  mirrors them): no abort credit; `result` may be `null`; the identity
-  `event` field; `GET /prepare` may answer 503 (all but 202/409 mean
+  mirrors them): no abort credit; `result` may be `null`; `GET /prepare` may answer 503 (all but 202/409 mean
   "cannot reach the room"); an unknown Bit is a silent 202; `lan_ip`.
 
 ### `capture/`: labelled sensor telemetry
@@ -2701,6 +2828,9 @@ Kept explicit so the doc does not over-claim.
   o2litepy; `control/join_info.py`'s `NATIVE_NOTE`). o2ws timing on a real,
   OS-focused phone on the venue LAN is unmeasured, and two of the three
   `www/o2ws.js` patches are not reported upstream.
+- **3D fixture view, not built**: cue attribution in the trace (which cue
+  made a change), fixtures placed in a room scene, and the phone-simulator 3D
+  view (mm-tuneshroom PR B, parked).
 - **Contract kit:** mm-devshroom's native replay environment, the live bench
   replay spike (section 8 of the device contract kit spec, *The device
   contract and `contract_kit/`*), and an executable Mushica capability-gate
@@ -2774,14 +2904,18 @@ Kept explicit so the doc does not over-claim.
   a Registration Node convention) is a later decision.
 - **mm-fairyring follow-ups here:** mm-terrarium
   [#100](https://github.com/Musical-Mycology/mm-terrarium/issues/100)
-  (a `set_admin_devices` down-command writing `[admin] devices` from a
-  MycoQuest manifest, how the admin site gets a GemID onto a box);
+  (`set_admin_devices`) and
   [#127](https://github.com/Musical-Mycology/mm-terrarium/issues/127)
-  (a refused identity still replays and clears the journal, then
-  hot-loops the reconnect); two boxes
-  sharing an identity displace each other forever, each closing the other
-  with websocket close code 4409; and
-  `bit_completed` needs a run id so a replay cannot credit a later quest.
+  (a refused identity still replayed and cleared the journal, then
+  hot-looped the reconnect; two boxes sharing an identity displaced each
+  other forever) are settled by the box contract (*`uplink/`*): no identity
+  frame, a journal cleared only by `completions_stored`, and `completion_id`
+  on every `bit_completed`, so a replay cannot credit twice. The two-box
+  fight is handled by the 60 to 600 second back-off after
+  `session_replaced`. The fallback in section 4.9 of the box-contract design
+  (treating two early server closes in a row as a replacement, for when the
+  `session_replaced` frame does not arrive) is not built: it waits on the
+  live measurement of whether that frame arrives.
 - **`GET /join.json`** on the LAN static server (mm-tuneshroom's
   join-launcher spec, section 4.1) is unbuilt. It must serve `start: null`
   (`start_key=None`), as it omits `qr_svg`: `start` carries the key and the

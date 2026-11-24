@@ -78,6 +78,9 @@ class Instrument:
     solo: SoloConfig | None = None
     model_sha256: str | None = None
     layout: tuple[PixelLayout, ...] = ()
+    model_path: str | None = None  # resolved absolute path of the .glb
+    model_bytes: int = 0
+    model_triangles: int = 0
 
 
 @dataclass(frozen=True)

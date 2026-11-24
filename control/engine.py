@@ -12,6 +12,7 @@ abort() -- GameServer stays agnostic to who's watching or calling either.
 import logging
 import secrets
 import time
+from typing import Iterable
 
 from control.bit import Bit
 from control.cues import (ALL, ROOM, FireFunction, LightCue, MusicCue,
@@ -40,6 +41,7 @@ from control.functions import (
     SOURCE_WIRE,
     Function,
     FunctionFired,
+    GestureSeen,
     FunctionKind,
     FunctionTarget,
     collect_stream_cues,
@@ -562,6 +564,12 @@ class GameServer:
     def is_admin(self, dev: str | None) -> bool:
         return dev is not None and dev in self.admin_devices
 
+    def set_admin_devices(self, devices: Iterable[str]) -> None:
+        """Replace the admin list (an applied MycoQuest manifest, box
+        contract spec 4.10). The Terrarium itself stays an admin. Nothing
+        caches admin status: every check reads admin_devices afresh."""
+        self.admin_devices = frozenset(devices) | {TERRARIUM_ADMIN}
+
     def lobby_config(self):
         cfg = getattr(self.bit, "config", None) if self.bit is not None else None
         return getattr(cfg, "lobby", None) or DEFAULT_LOBBY
@@ -939,8 +947,21 @@ class GameServer:
         if dev not in self.registration.assignments:
             return "device not registered"
         role_name = self.registration.assignments[dev][1]
+        # Resolved exactly once: _origin counts a rejected stamp as a side
+        # effect, so calling it per routing path would double-count.
+        received = self._clock()
+        at = self._origin(gesture_time) + self._horizon
+        refused = self._route_gesture(dev, verb, args, role_name, at)
+        self._notify("on_gesture", GestureSeen(
+            dev=dev, verb=verb, received=received, at=at, refused=refused))
+        return refused
+
+    def _route_gesture(self, dev: str, verb: str, args: list,
+                       role_name: str, at: float) -> str | None:
+        """Route one registered device's gesture; returns None when handled,
+        else the refusal reason (see data())."""
         if is_solo_role(role_name):
-            return self._solo_gesture(dev, verb, args, gesture_time)
+            return self._solo_gesture(dev, verb, args, at)
         try:
             handler = self.bit.verb_handlers().get(verb)
         except Exception:
@@ -950,7 +971,6 @@ class GameServer:
         streams = self._stream_functions.get(verb, ())
         if handler is None and not streams:
             return f"unknown verb {verb!r}"
-        at = self._origin(gesture_time) + self._horizon
         stream_cue_list = collect_stream_cues(streams, dev, args)
         if handler is None:
             # Legal: a verb with declared streams and no Bit handler at all.
@@ -1012,7 +1032,7 @@ class GameServer:
         return None
 
     def _solo_gesture(self, dev: str, verb: str, args: list,
-                      gesture_time: float | None) -> None:
+                      at: float) -> None:
         """A gesture from a dev holding a synthesized solo role (spec
         section 3.7): resolved against its carried instrument's
         [solo.bindings] and fired on that dev through the fire ladder.
@@ -1023,7 +1043,6 @@ class GameServer:
         fn = bindings.get(solo_event(verb, args))
         if fn is None:
             return None
-        at = self._origin(gesture_time) + self._horizon
         reason = self.fire_function(fn, fired_by=FIRED_BY_GESTURE_VERB,
                                     dev=dev, at=at)
         if reason is not None:

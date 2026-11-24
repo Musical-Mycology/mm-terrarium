@@ -1,5 +1,9 @@
 # MycoQuest handoff, Terrarium side: LAN prepare, players on bit_completed, uplink identity and replay journal
 
+> **Update 2026-11-23:** the box contract (`mm-fairyring` repo,
+> `docs/superpowers/specs/2026-11-23-box-contract-design.md`) replaces parts
+> of this document. It replaces the uplink identity frame (now handshake headers), the clear-after-replay journal (entries now leave only on `completions_stored` or the 500 cap), and the resync order (it now includes `admin_devices_applied`, and the journal is sent last). The text below is the original and is not rewritten.
+
 **Date:** 2026-09-13
 **Status:** Approved (brainstorm session with Chris; every decision below was
 answered explicitly)
