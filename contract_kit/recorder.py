@@ -593,28 +593,35 @@ class Recorder:
     # --- gestures ----------------------------------------------------------
 
     def _gesture(self, onset_t: int, kind: str, typespec: str, wire_args: tuple,
-                 step_args: list, detail: dict) -> None:
+                 step_args: list, detail: dict, *,
+                 enveloped: bool = True) -> None:
         """One classified gesture: the input step, the scripted send, and
-        the device's own expect_out, all stamped at the gesture's onset
-        (spec section 4.3, rule 5)."""
+        the device's own expect_out, all at the gesture's onset (spec
+        section 4.3, rule 5). An `enveloped` gesture carries the onset as
+        its O2 timestamp; otherwise (a typespec ending in 't', such as
+        tap) it goes out with timestamp 0, "deliver now", carries the
+        onset as its last argument, and its expect_out has no stamp_t."""
         self.advance_to(onset_t)
         self.steps.append({"t": onset_t, "gesture": {
             "kind": kind, "onset_t": onset_t, **detail}})
         self._scripted.append((onset_t, f"/game/{kind}", detail))
         self._fake.deliver(f"/game/{kind}", typespec, wire_args,
-                           timestamp=onset_t / 1000.0)
+                           timestamp=onset_t / 1000.0 if enveloped else 0.0)
         self._agent.poll()
         self.steps.append({"t": onset_t, "expect_out": {
             "address": f"/game/{kind}", "typespec": typespec,
-            "args": step_args, "stamp_t": onset_t,
+            "args": step_args, "stamp_t": onset_t if enveloped else None,
             "within_ms": DEFAULT_WITHIN_MS}})
 
     def tap(self, onset_t: int, duration_ms: float) -> None:
-        """A touch tap: peak_g is 0 on Rev 1, count is always 1."""
-        self._gesture(onset_t, "tap", "sffi",
-                      (self.dev, 0.0, float(duration_ms), 1),
-                      ["$DEV", 0.0, float(duration_ms), 1],
-                      {"duration_ms": float(duration_ms)})
+        """A touch tap: peak_g is 0 on Rev 1, and sensed_at is the onset in
+        O2 seconds. duration_ms is the touch the device classified, so it
+        stays on the gesture step but is no longer on the wire."""
+        onset_s = onset_t / 1000.0
+        self._gesture(onset_t, "tap", "sft",
+                      (self.dev, 0.0, onset_s),
+                      ["$DEV", 0.0, onset_s],
+                      {"duration_ms": float(duration_ms)}, enveloped=False)
 
     def hold(self, onset_t: int, held_s: float) -> None:
         """A touch held past the hold window, stamped at touch-down."""

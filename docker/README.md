@@ -190,6 +190,36 @@ silent (CI always does). The ALSA-to-pulse path is
 still a Phase 1 acceptance item: if the Room drone is silent without
 `--headless`, report it.
 
+### Audio over TCP (lower latency on WSL2)
+
+WSLg's audio reaches Windows over its remote-desktop channel, which adds a
+delay nothing inside Linux can tune: a tap's Room sound is heard late. To skip
+it, run a PulseAudio server on Windows itself and point the launcher at it:
+
+```bash
+export TD_PULSE_SERVER=tcp:127.0.0.1:4713   # e.g. in ~/.bashrc, WSL only
+```
+
+Set, it takes the place of WSLg or the local socket (nothing is mounted) and
+the container gets `PULSE_SERVER=$TD_PULSE_SERVER`. It must read
+`tcp:HOST[:PORT]` (port 4713 if left out), and the launcher refuses to start
+if nothing is listening there. `127.0.0.1` reaches Windows only under
+mirrored networking (above). Unset, nothing changes: WSLg on WSL2, the local
+server on Linux. `--headless` ignores it.
+
+On Windows, once:
+
+1. Install a Windows build of PulseAudio, e.g. the installer from
+   <https://github.com/pgaskin/pulseaudio-win32/releases>, and let it run as
+   a service. These builds are unofficial.
+2. In its `default.pa` (under the install folder, `etc\pulse\`), make sure
+   this line is present and not commented out, then restart the service:
+   `load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1 port=4713`.
+   The ACL keeps it to this machine; do not widen it to `0.0.0.0/0`.
+3. If Windows Firewall asks about `pulseaudio.exe`, allow private networks
+   only.
+4. Check from WSL: `bash -c 'exec 3<>/dev/tcp/127.0.0.1/4713' && echo up`.
+
 ## Building and pins
 
 `docker/build.sh` builds `ghcr.io/musical-mycology/terrarium-dev:local` for

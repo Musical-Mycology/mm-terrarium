@@ -2061,8 +2061,8 @@ ports, `runs/` logs and the pty rule are in *Running it*. `print_bit_list`
   at most every 50 ms); a 400 ms press holds; arrow keys swing 2 g.
 - A 64-deep drop-oldest queue, **stamped `o2lite.time_get()` at enqueue**
   on the websocket thread (drain-time stamps cost up to ~23 ms; `time_get`
-  is a pure read). `drain_gestures` sends `/game/tap sffi`, `/game/tilt
-  sf`, and `/game/hold sfi` (touch-down stamp) or `/game/swing sfi` only if
+  is a pure read). `drain_gestures` sends `/game/tap sft` and `/game/tilt
+  sft` (send time 0, the stamp as `sensed_at`, as Rev 1 firmware does), and `/game/hold sfi` (touch-down stamp) or `/game/swing sfi` only if
   `uses` names the verb, stricter than `wants_verb` as no pre-Rev 1 Bit
   handles either (else hold is a tap, swing dropped). A drag pauses the
   sweep `SWEEP_RESUME_SECONDS` (5) while it keeps schedule: no burst.
@@ -2392,38 +2392,44 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   (ie1): ...`. A seated shroom that is no player (it connected while all three
   were taken) does not blink or score, its taps do nothing, and a button can
   bring it in with no reconnect. `music` ("Music: music1", refused once
-  started) moves through `MUSICS`: `music1` is `assets/music/music1/piano.mid`,
-  `music2` the seven files of `assets/music/music2/`, one `[assets]` key each.
-  `start` ("Start") loops the chosen music at 130 BPM with a `Sequencer` until
-  unloaded, however many of those devices have joined, but only its first track
-  at first: the rest come in one at a time, in `MUSICS` order, as the shared
-  progress grows. Of a music's n tracks, track k (from 0) comes in once progress
-  reaches k/n of 50, rounded up (`track_threshold`), so music2's seven enter at
-  0, 8, 15, 22, 29, 36 and 43, each on the scoring tap's own time (`Sequencer.
-  enable` chases), and `status()` shows `tracks` as in/total. This holds for any
-  music added to `MUSICS`. Every track runs on its own loop length from the same
-  beat 0 (`Track.loop_beats` pins
-  `3_HumongerBass` to 32 and `6_AGBass` to 16, whose note-offs run past the bar
-  line). The Room's flsyn parts are the same for both musics, since they are
-  fixed at load (`PART_PROGRAMS`): piano 0, the GM drum kit (music2's kick,
-  both hi-hats and Melt Kit share it), synth bass 38, polysynth pad 90 and
-  acoustic bass 32, the last three chosen from the file names, as the files
+  started) moves through `MUSICS`: `music1` is the four files of
+  `assets/music/music1/` (808 Pure, Abel Bass, Basic Sine Keys, Thicket Kit),
+  one `[assets]` key each. `start` ("Start") brings in every track of the
+  chosen music together and loops them at 130 BPM with a `Sequencer` until
+  unloaded, however many of those devices have joined; `status()` shows
+  `tracks` as in/total. Every track runs on its own loop length from the same
+  beat 0 (`Track.loop_beats` pins each of music1's to 32, dropping the note
+  each file ends on at beat 32, which would otherwise round the loop up to 36
+  or 40). The Room's flsyn parts are fixed at load (`PART_PROGRAMS`): electric
+  piano 4 (Sine Keys), the GM drum kit (Thicket Kit), synth bass 38 (808) and
+  synth bass 39 (Abel Bass), chosen from the file names, as the files
   carry no programs. `status()` shows `music` and `state`. A `MusicCue` is Room
   audio only, so the music sounds from the Room's flsyn, not the devtower's
   speaker. Every four measures (`CYCLE_BEATS`, whatever the music), the note-ons
-  of `assets/judging/beats1.mid` light the tower's four responders in the
-  first measure and those of `beats2.mid` in the third, each fading out over
+  of the chosen beats' clips (`assets/judging/beatsN/*.mid`, every gesture's)
+  light the tower's four responders in the first measure only, red for
+  a tap, green for a swing and blue for a squeeze (`GESTURE_RGB`), summed where
+  gestures share a beat or one fades under another, each gesture
+  fading out over
   0.25 s and held behind the grid to meet the music at the speaker, since Arco takes no
   timestamps, so the sound cannot be sent early. The hold is CalibrationBit's
   saved mean tap delay (`Bit.carried`), else 175 ms (`LIGHT_DELAY_S`, hand-set),
-  and shows as `light delay` in `status()`. A tap on any player's shroom blinks every player's purple. Measures 2 and 4 are the players' answer:
-  the same rhythm one measure after its call. Each shroom's tap takes the
+  and shows as `light delay` in `status()`. A tap on any player's shroom blinks every player's purple. Measures 2, 3 and 4 are the players' answer:
+  measure 1's call repeated three times, each judged (`ANSWER_MEASURES`). Each shroom's tap takes the
   nearest answer beat it has not yet taken within 0.25 beat either side, so the
   window in seconds follows the tempo, and earns 1 dead on, falling linearly to
   0 at the window's edge. A late tap is forgiven 20 ms first (`LATE_GRACE_S`),
   and the whole judgment runs 200 ms behind the grid (`JUDGE_DELAY_S`), so dead
   on is 200 ms after the beat; both are fixed in seconds. A beat with no tap
-  earns 0 and a stray tap earns nothing. A player's score, 0 to 1, is the mean over every answer beat closed
+  earns 0 and a stray tap earns nothing. The Console's Beats button picks the call,
+  one of `BEATS` (beats1..beats4, fixed at Start), each a folder of one-measure
+  clips under `assets/judging/beatsN/`, one per gesture it asks for (`tap.mid`,
+  `swing.mid`, `squeeze.mid`); all of them play in measure 1, are repeated in each of measures 2, 3 and 4, and each
+  answer beat is judged for its own gesture. A judged gesture plays, when GOOD,
+  the key Basic Sine Keys has sounding at the answer beat it took (`good_key`,
+  `GOOD_KEY_TRACK`), or 49 (`BAD_TAP_KEY`) when BAD, on the shroom, guzheng
+  for a tap or swing and chime for a squeeze; unjudged, a tap plays guzheng 69,
+  a squeeze chime 75 and a swing nothing. A player's score, 0 to 1, is the mean over every answer beat closed
   since Start, shown as `score <dev>` in `status()`. A tap earning more than
   0.1 also adds 1 to the players' shared progress, out of 50, which fills the
   tower's 32-LED bar white from the bottom and shows as `progress`. The roles

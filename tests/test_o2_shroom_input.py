@@ -21,10 +21,13 @@ def _q(*msgs, stamp=None):
 
 
 def test_tap_maps_to_the_documented_wire_row_stamped_at_now():
+    """/game/tap sft [dev, peak_g, sensed_at], sent "deliver now" (time 0)
+    with the stamp as sensed_at, as Rev 1 firmware does. The page's count
+    is not on the wire."""
     sent = []
     got = drain_gestures(_q({"type": "tap", "count": 2}),
                          lambda *a: sent.append(a), "ie1", now=12.5)
-    assert sent == [("/game/tap", 12.5, "sffi", "ie1", 1.0, 50.0, 2)]
+    assert sent == [("/game/tap", 0, "sft", "ie1", 1.0, 12.5)]
     assert got is None                    # a tap is not a tilt
 
 
@@ -32,15 +35,16 @@ def test_tilt_maps_clamped_and_reports_operator_tilt_time():
     sent = []
     got = drain_gestures(_q({"type": "tilt", "gamma": 120.0}),
                          lambda *a: sent.append(a), "ie1", now=3.0)
-    assert sent == [("/game/tilt", 3.0, "sf", "ie1", 90.0)]
+    assert sent == [("/game/tilt", 0, "sft", "ie1", 90.0, 3.0)]
     assert got == 3.0
 
 
-def test_tap_count_defaults_to_1_and_is_clamped_to_at_least_1():
+def test_one_tap_message_per_tap_whatever_the_page_count():
     sent = []
-    drain_gestures(_q({"type": "tap"}, {"type": "tap", "count": 0}),
+    drain_gestures(_q({"type": "tap"}, {"type": "tap", "count": 0},
+                      {"type": "tap", "count": 2}),
                    lambda *a: sent.append(a), "ie1", now=1.0)
-    assert [s[6] for s in sent] == [1, 1]
+    assert sent == [("/game/tap", 0, "sft", "ie1", 1.0, 1.0)] * 3
 
 
 def test_unknown_type_and_bad_fields_are_dropped():
@@ -99,7 +103,7 @@ def test_a_role_without_hold_gets_a_long_press_as_a_tap():
     drain_gestures(_q({"type": "hold", "held_seconds": 1.0}),
                    lambda *a: sent.append(a), "ie1", now=2.0,
                    config={"uses": ["tap"]})
-    assert sent == [("/game/tap", 2.0, "sffi", "ie1", 1.0, 50.0, 1)]
+    assert sent == [("/game/tap", 0, "sft", "ie1", 1.0, 2.0)]
 
 
 def test_a_role_without_swing_drops_it(capsys):
@@ -133,7 +137,7 @@ def test_a_role_declaring_no_uses_gets_neither_rev1_verb():
     drain_gestures(_q({"type": "hold", "held_seconds": 1.0},
                       {"type": "swing", "signed_peak_g": 2.0}),
                    lambda *a: sent.append(a), "ie1", now=2.0, config={})
-    assert sent == [("/game/tap", 2.0, "sffi", "ie1", 1.0, 50.0, 1)]
+    assert sent == [("/game/tap", 0, "sft", "ie1", 1.0, 2.0)]
 
 
 def test_bad_hold_and_swing_fields_are_dropped():
@@ -155,12 +159,12 @@ def test_drain_empties_the_queue():
 
 def test_enqueue_drops_oldest_on_overflow():
     q = queue.Queue(maxsize=2)
-    enqueue_input(q, {"type": "tap", "count": 1}, stamp=None)
-    enqueue_input(q, {"type": "tap", "count": 2}, stamp=None)
-    enqueue_input(q, {"type": "tap", "count": 3}, stamp=None)
+    enqueue_input(q, {"type": "tap"}, stamp=1.0)
+    enqueue_input(q, {"type": "tap"}, stamp=2.0)
+    enqueue_input(q, {"type": "tap"}, stamp=3.0)
     sent = []
-    drain_gestures(q, lambda *a: sent.append(a), "ie1", now=1.0)
-    assert [s[6] for s in sent] == [2, 3]
+    drain_gestures(q, lambda *a: sent.append(a), "ie1", now=9.0)
+    assert [s[-1] for s in sent] == [2.0, 3.0]
 
 
 def test_gesture_carries_enqueue_stamp_not_drain_time():
@@ -168,9 +172,10 @@ def test_gesture_carries_enqueue_stamp_not_drain_time():
     enqueue_input(q, {"type": "tap", "count": 1}, stamp=12.345)
     sent = []
     drain_gestures(q, lambda *a: sent.append(a), "ie1", now=99.0)
-    address, when, typespec, dev, peak, dur, count = sent[0]
+    address, when, typespec, dev, peak, sensed_at = sent[0]
     assert address == "/game/tap"
-    assert when == 12.345          # the enqueue-time stamp, not 99.0
+    assert when == 0               # deliver now
+    assert sensed_at == 12.345     # the enqueue-time stamp, not 99.0
 
 
 def test_build_wires_the_queue_into_the_backend():

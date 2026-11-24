@@ -425,7 +425,8 @@ class TestBit(Bit):
         return []
 
     def _on_tap(self, dev: str, args: list, at: float) -> list:
-        """args: [dev, peak_g, duration_ms, count]. A single tap clicks, a
+        """args: [dev, peak_g, sensed_at]; a simulator may still send the old
+        [dev, peak_g, duration_ms, count]. A single tap clicks, a
         double chimes; both flash the hue lane so the tap is visible as well
         as audible, and both fire this Bit's declared flash_device function for
         the tapping device."""

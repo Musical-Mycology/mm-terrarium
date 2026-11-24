@@ -3486,11 +3486,10 @@
         "args": [
           "$DEV",
           0.0,
-          80.0,
-          1
+          6.0
         ],
-        "stamp_t": 6000,
-        "typespec": "sffi",
+        "stamp_t": null,
+        "typespec": "sft",
         "within_ms": 50
       },
       "t": 6000

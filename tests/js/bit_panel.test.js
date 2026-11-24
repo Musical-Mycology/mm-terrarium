@@ -186,6 +186,48 @@ const PLAYER_ROLE = {
   send({ event: "bit_status", status: {}, actions: [] });
   assert.strictEqual(card.hidden, true);
 
+  // an action with options renders as a labelled dropdown on the Bit's
+  // value; a pick sends bit_action with it, a refusal puts it back, and an
+  // empty value shows a disabled "-"
+  const findTag = (node, tag) => {
+    if (node.tagName === tag) return node;
+    for (const c of node.children) {
+      const found = findTag(c, tag);
+      if (found) return found;
+    }
+    return null;
+  };
+  const beatsAction = (value) => [{ name: "beats", label: "Beats",
+                                    options: ["beats1", "beats2"], value }];
+  send({ event: "bit_status", status: { beats: "beats1" },
+         actions: beatsAction("beats1") });
+  const picker = findTag(card, "select");
+  assert.ok(picker, "the action renders as a dropdown");
+  assert.ok(card.innerHTML.includes("Beats"));
+  assert.deepStrictEqual(picker.options.map((o) => o.value), ["beats1", "beats2"]);
+  assert.strictEqual(picker.value, "beats1");
+  sock.sent = [];
+  picker.value = "beats2";
+  picker.onchange();
+  assert.deepStrictEqual(sock.sent,
+                         [{ command: "bit_action", name: "beats", value: "beats2" }]);
+  send({ event: "error", command: "bit_action", message: "already started" });
+  assert.strictEqual(picker.value, "beats1", "a refused pick snaps back");
+  send({ event: "bit_status", status: { beats: "beats2" },
+         actions: beatsAction("beats2") });
+  assert.strictEqual(findTag(card, "select").value, "beats2");
+  send({ event: "bit_status", status: {},
+         actions: [{ name: "player1", label: "Player 1", options: ["ie1"], value: null }] });
+  const empty = findTag(card, "select");
+  assert.deepStrictEqual(empty.options.map((o) => [o.value, o.disabled === true]),
+                         [["", true], ["ie1", false]]);
+  assert.strictEqual(empty.value, "");
+  sock.sent = [];
+  empty.onchange();
+  assert.deepStrictEqual(sock.sent, [], "the placeholder sends nothing");
+  send({ event: "bit_status", status: {}, actions: [] });
+  assert.strictEqual(card.hidden, true);
+
   // Rendering discipline (rule 1, same as rooms.js/surface.js): an unrelated
   // event landing mid confirm-tap must never rebuild the button row and
   // silently drop the armed state (the "abort does nothing" class of bug,

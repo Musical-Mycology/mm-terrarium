@@ -167,15 +167,20 @@ class Bit(ABC):
         """Called once when Control enters UNLOADING, after devices are released."""
 
     def actions(self) -> dict:
-        """Operator buttons the Terrarium Console shows on the Bit status
-        card, as {name: (label, handler)}. Empty by default.
+        """Operator controls the Terrarium Console shows on the Bit status
+        card, as {name: (label, handler)} for a button or
+        {name: (label, handler, options, value)} for a dropdown. Empty by
+        default.
 
-        A handler is called as handler(at) when the operator presses the
-        button, `at` being Control's clock plus the cue horizon, the same
-        origin a self-driven cue takes. It may change the Bit's own state
-        (status() reflects it on the next poll) and returns a list of cues
-        to dispatch, or a str refusal reason the Console flashes on the
-        button.
+        A button's handler is called as handler(at) when the operator
+        presses it, `at` being Control's clock plus the cue horizon, the
+        same origin a self-driven cue takes. A dropdown lists `options`
+        (strings) with `value` selected, or none while `value` is None, and
+        its handler is called as handler(at, choice) when the operator picks
+        one; a choice outside `options` is refused before it is called.
+        Either may change the Bit's own state (status() and actions()
+        reflect it on the next poll) and returns a list of cues to dispatch,
+        or a str refusal reason the Console flashes on the control.
         """
         return {}
 

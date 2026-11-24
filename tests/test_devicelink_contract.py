@@ -25,7 +25,7 @@ def test_game_verbs_is_derived_from_the_up_rows():
 # its order, and deriving it from VERB_TABLE is free to produce a different one.
 EXPECTED_GAME_VERBS = frozenset({
     "hello", "handshake", "tilt", "tap", "shake", "capture", "telemetry",
-    "canvas", "start", "hold", "swing", "beat",
+    "canvas", "start", "hold", "swing", "beat", "squeeze",
 })
 
 
@@ -47,10 +47,18 @@ def test_hold_and_swing_are_new_up_rows_with_the_designed_shapes():
     assert swing.args == ("dev", "signed_peak_g", "count")
 
 
+def test_squeeze_carries_its_onset_like_tap():
+    squeeze = row_for("up", "squeeze")
+    assert squeeze.typespecs == ("st",)
+    assert squeeze.args == ("dev", "sensed_at")
+    assert squeeze.address == "/game/squeeze"
+    assert not squeeze.pre_role
+
+
 def test_hello_handshake_start_are_tcp_and_gestures_are_udp_ok():
     for verb in ("hello", "handshake", "start"):
         assert row_for("up", verb).transport == "tcp"
-    for verb in ("tap", "tilt", "shake", "hold", "swing"):
+    for verb in ("tap", "tilt", "shake", "hold", "swing", "squeeze"):
         assert row_for("up", verb).transport == "udp-ok"
 
 

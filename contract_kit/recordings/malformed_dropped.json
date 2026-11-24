@@ -1770,11 +1770,10 @@
         "args": [
           "$DEV",
           0.0,
-          80.0,
-          1
+          1.7
         ],
-        "stamp_t": 1700,
-        "typespec": "sffi",
+        "stamp_t": null,
+        "typespec": "sft",
         "within_ms": 50
       },
       "t": 1700

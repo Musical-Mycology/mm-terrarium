@@ -230,6 +230,7 @@ class FireFunctionCommand:
 @dataclass
 class BitActionCommand:
     name: str
+    value: str | None = None    # a dropdown's choice; None for a button
 
 
 @dataclass
@@ -411,7 +412,10 @@ def parse_admin_command(msg: dict):
         name = msg.get("name")
         if not isinstance(name, str) or not name:
             raise ValueError("bit_action requires a non-empty string 'name'")
-        return BitActionCommand(name=name)
+        value = msg.get("value")
+        if value is not None and not isinstance(value, str):
+            raise ValueError("bit_action 'value' must be a string when given")
+        return BitActionCommand(name=name, value=value)
     if command == "get_design":
         state = msg.get("state")
         if state not in ("published", "draft"):

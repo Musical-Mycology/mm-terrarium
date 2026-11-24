@@ -70,12 +70,20 @@ VERB_TABLE: tuple[VerbRow, ...] = (
             "echoes the latest /<dev>/handshake; node '' asks for the "
             "Bit's default scored role, else a Registration Node id. A "
             "Room node binds an armed fixture and ignores round_id."),
-    VerbRow("tap", "up", ("sffi",),
-            ("dev", "peak_g", "duration_ms", "count"), "udp-ok", False,
-            "peak_g is 0 for a touch tap (Rev 1); count is the device's "
-            "own pairing (Rev 1 sends 1). Stamped at onset. Gameplay "
-            "only: Control no longer reads taps as a lobby handshake."),
-    VerbRow("tilt", "up", ("sf",), ("dev", "gamma"), "udp-ok", False, ""),
+    VerbRow("tap", "up", ("sft",),
+            ("dev", "peak_g", "sensed_at"), "udp-ok", False,
+            "peak_g is 0 for a touch tap (Rev 1). sensed_at is the "
+            "device's O2 clock at onset (-1 before clock sync); the "
+            "message itself goes out with timestamp 0 (deliver now) and "
+            "Control reads the onset from sensed_at, not the envelope. "
+            "One message per tap: there is no count, so Control sees no "
+            "double tap. Gameplay only: Control no longer reads taps as a "
+            "lobby handshake."),
+    VerbRow("tilt", "up", ("sft",), ("dev", "gamma", "sensed_at"),
+            "udp-ok", False,
+            "gamma is the tilt in degrees. sensed_at is the device's O2 "
+            "clock when the reading was taken (-1 before clock sync); "
+            "sent with timestamp 0, as tap is."),
     VerbRow("shake", "up", ("sfff",),
             ("dev", "peak_g", "duration_ms", "sweep_deg"), "udp-ok", False, ""),
     VerbRow("hold", "up", ("sfi",), ("dev", "held_seconds", "count"),
@@ -87,6 +95,11 @@ VERB_TABLE: tuple[VerbRow, ...] = (
             "udp-ok", False,
             "New for Rev 1. Negative means left; stamped at onset. count "
             "is always 1. Waits for a role, unlike tap."),
+    VerbRow("squeeze", "up", ("st",), ("dev", "sensed_at"), "udp-ok",
+            False,
+            "Sent as a squeeze starts. sensed_at is the device's O2 clock "
+            "at onset (-1 before clock sync); sent with timestamp 0 and "
+            "read from sensed_at, as tap is. No strength or count."),
     VerbRow("canvas", "up", ("ss",), ("dev", "url"), "tcp", True,
             "Simulators only (harness/o2_shroom.py, run_stack's browser "
             "canvases); hardware and phones never send it."),

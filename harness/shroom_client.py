@@ -25,8 +25,8 @@ The wire, from devicelink/protocol.py and devicelink/agent.py:
     up    /game/handshake sss [dev, round_id, node]
     up    /game/join     ss   [dev, node]   (retired in contract v3: Control
                                          answers it with /<dev>/error)
-    up    /game/tilt     sf   [dev, gamma]
-    up    /game/tap      sffi [dev, peak_g, duration_ms, count]
+    up    /game/tilt     sft  [dev, gamma, sensed_at]
+    up    /game/tap      sft  [dev, peak_g, sensed_at]
     up    /game/shake    sfff [dev, peak_g, duration_ms, sweep_deg]
     down  /<dev>/handshake s  [round_id]   (invite; answer with /game/handshake)
     down  /<dev>/validated ss [round_id, role]
@@ -174,17 +174,18 @@ class ShroomClient:
         self.released = False
         return self._up("join", "ss", [self.dev, self.node])
 
-    def tilt(self, value: float) -> dict:
-        return self._up("tilt", "sf", [self.dev, float(value)])
+    def tilt(self, value: float, sensed_at: float = -1.0) -> dict:
+        """sensed_at is this client's O2 clock at the reading; -1 (the
+        default, as before clock sync) makes Control use its own clock."""
+        return self._up("tilt", "sft",
+                        [self.dev, float(value), float(sensed_at)])
 
-    def tap(self, peak_g: float = 1.0, duration_ms: float = 50.0,
-            count: int = 1) -> dict:
-        """The documented tap row. Defaults are the simulator's honest
-        placeholders for values a mouse cannot measure; count comes from
-        the caller's own detection."""
-        return self._up("tap", "sffi",
-                        [self.dev, float(peak_g), float(duration_ms),
-                         int(count)])
+    def tap(self, peak_g: float = 1.0, sensed_at: float = -1.0) -> dict:
+        """The documented tap row. peak_g defaults to the simulator's honest
+        placeholder for a value a mouse cannot measure; sensed_at as for
+        tilt."""
+        return self._up("tap", "sft",
+                        [self.dev, float(peak_g), float(sensed_at)])
 
     # --- inbound ---
 
