@@ -974,10 +974,12 @@ class GameServer:
                             FIRED_BY_GESTURE_VERB)
         return None
 
-    def run_action(self, name: str) -> str | None:
+    def run_action(self, name: str, value: str | None = None) -> str | None:
         """Run one of the loaded Bit's operator actions (Bit.actions) and
-        dispatch the cues it returns. Returns None when run, else a refusal
-        reason, and never raises, for the same reason data() does not."""
+        dispatch the cues it returns: a button with no `value`, a dropdown
+        with the chosen `value`, one of its options. Returns None when run,
+        else a refusal reason, and never raises, for the same reason data()
+        does not."""
         if self.state not in (State.SETUP, State.RUNNING):
             return "no Bit running"
         try:
@@ -987,9 +989,20 @@ class GameServer:
             return "action error"
         if entry is None:
             return f"unknown action {name!r}"
+        if len(entry) > 2:
+            options = list(entry[2])
+            if value is None:
+                return f"choose one of {', '.join(options) or 'nothing'}"
+            if value not in options:
+                return f"unknown choice {value!r}"
+            args = (value,)
+        elif value is not None:
+            return f"{name!r} takes no choice"
+        else:
+            args = ()
         at = self._clock() + self._horizon
         try:
-            cues = entry[1](at)
+            cues = entry[1](at, *args)
         except Exception:
             logger.exception("Bit action %r raised; ignoring", name)
             return "action error"

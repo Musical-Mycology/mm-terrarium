@@ -2621,6 +2621,22 @@ class _ResetBit(TestBit):
         return []
 
 
+class _PickBit(TestBit):
+    """TestBit with one dropdown action, refused once locked."""
+
+    picked = "a"
+    locked = False
+
+    def actions(self) -> dict:
+        return {"pick": ("Pick", self._pick, ["a", "b"], self.picked)}
+
+    def _pick(self, at, choice):
+        if self.locked:
+            return "locked"
+        self.picked = choice
+        return []
+
+
 def test_bit_actions_ride_the_snapshot_and_status_broadcast():
     gs = GameServer({"ResetBit": _ResetBit})
     srv = FakeConsoleServer()
@@ -2648,3 +2664,38 @@ def test_a_bit_action_command_runs_the_bit_action():
     errors = [m for _c, m in srv.sent if m.get("event") == "error"]
     assert errors[0]["command"] == "bit_action"
     assert "unknown action" in errors[0]["message"]
+
+
+def test_a_dropdown_action_carries_its_options_and_runs_on_a_choice():
+    gs = GameServer({"PickBit": _PickBit})
+    srv = FakeConsoleServer()
+    agent = ConsoleAgent(gs, srv)
+    gs.load_bit("PickBit")
+    assert agent.snapshot()["bit_actions"] == [
+        {"name": "pick", "label": "Pick", "options": ["a", "b"], "value": "a"}]
+    srv.connect("c1")
+    srv.deliver("c1", {"command": "bit_action", "name": "pick", "value": "b"})
+    agent.poll()
+    assert gs.bit.picked == "b"
+    status = [b for b in srv.broadcasts if b["event"] == "bit_status"]
+    assert status[-1]["actions"][0]["value"] == "b"
+    for msg, reason in (({"value": "z"}, "unknown choice 'z'"),
+                        ({}, "choose one of a, b")):
+        srv.sent.clear()
+        srv.deliver("c1", {"command": "bit_action", "name": "pick", **msg})
+        agent.poll()
+        errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+        assert errors[0]["message"] == reason
+    gs.bit.locked = True
+    srv.sent.clear()
+    srv.deliver("c1", {"command": "bit_action", "name": "pick", "value": "a"})
+    agent.poll()
+    errors = [m for _c, m in srv.sent if m.get("event") == "error"]
+    assert errors[0]["message"] == "locked" and gs.bit.picked == "b"
+
+
+def test_a_button_action_refuses_a_choice():
+    gs = GameServer({"ResetBit": _ResetBit})
+    gs.load_bit("ResetBit")
+    assert gs.run_action("reset", "x") == "'reset' takes no choice"
+    assert gs.bit.presses == 0

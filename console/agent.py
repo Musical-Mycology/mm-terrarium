@@ -38,6 +38,16 @@ ROOM_FRAME_INTERVAL = 0.1
 BENCH_FRAME_INTERVAL = 0.1
 
 
+def _action_view(name: str, entry: tuple) -> dict:
+    """One Bit.actions entry as the Console draws it: a button as
+    {name, label}, a dropdown with its `options` and selected `value` too."""
+    view = {"name": name, "label": entry[0]}
+    if len(entry) > 2:
+        view["options"] = [str(o) for o in entry[2]]
+        view["value"] = None if entry[3] is None else str(entry[3])
+    return view
+
+
 class ConsoleAgent:
     def __init__(self, game_server: GameServer, server, room_controllers=None,
                  clock=time.monotonic, registry=None, canvas_urls=None,
@@ -394,7 +404,7 @@ class ConsoleAgent:
         if isinstance(command, protocol.GestureCommand):
             return self._handle_gesture_command(name, command)
         if isinstance(command, protocol.BitActionCommand):
-            reason = self.game_server.run_action(command.name)
+            reason = self.game_server.run_action(command.name, command.value)
             if reason is not None:
                 return protocol.error_event(name, reason)
             return None
@@ -954,8 +964,8 @@ class ConsoleAgent:
         if bit is None:
             return []
         try:
-            return [{"name": name, "label": label}
-                    for name, (label, _handler) in bit.actions().items()]
+            return [_action_view(name, entry)
+                    for name, entry in bit.actions().items()]
         except Exception:
             logger.exception("Bit.actions raised; reporting no actions")
             return []

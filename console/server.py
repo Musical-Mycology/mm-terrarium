@@ -89,6 +89,11 @@ class ConsoleServer:
         headers = Headers()
         headers["Content-Type"] = content_type
         headers["Content-Length"] = str(len(body))
+        # The page's ES modules carry no version in their names, so without
+        # this a browser may run its cached bit.js etc. after a Terrarium
+        # restart serves new ones (2026-11-24: Bit action dropdowns still
+        # drew as buttons). no-cache makes it revalidate on every load.
+        headers["Cache-Control"] = "no-cache"
         return Response(200, "OK", headers, body)
 
     # --- per-connection handler thread -------------------------------------

@@ -521,22 +521,62 @@ function fmt(v) {
   return String(v);
 }
 
-// The Bit's operator actions (Bit.actions), one button each under the
-// status grid. One click sends; there is no confirm. Rule 1: the row is
-// rebuilt only when the action list changes, never on a status tick.
+// The Bit's operator actions (Bit.actions) under the status grid: a button
+// each, or a labelled dropdown for one that carries `options`. One click or
+// pick sends; there is no confirm. Rule 1: the row is rebuilt only when the
+// action list (labels, options or selected values) changes, never on a
+// status tick, so an accepted pick shows once the Bit reports it.
 let statusGrid = null;
 let actionRow = null;
 let actionsSignature = null;
+let actionPickers = [];      // [select, the Bit's selected value]
+
+function buildActionPicker(name, label, options, value) {
+  const wrap = mk("label", "actionpick");
+  wrap.appendChild(mk("span", "meta", label));
+  const select = document.createElement("select");
+  if (value === null || !options.includes(value)) {
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "-";
+    none.disabled = true;
+    select.appendChild(none);
+  }
+  for (const choice of options) {
+    const opt = document.createElement("option");
+    opt.value = choice;
+    opt.textContent = choice;
+    select.appendChild(opt);
+  }
+  select.value = value ?? "";
+  select.onchange = () => {
+    if (select.value === "") return;
+    wire.send("bit_action", { name, value: select.value }, select);
+  };
+  actionPickers.push([select, value ?? ""]);
+  wrap.appendChild(select);
+  return wrap;
+}
 
 function buildActionRow(actions) {
   const row = mk("div", "firerow");
-  for (const { name, label } of actions) {
+  actionPickers = [];
+  for (const { name, label, options, value } of actions) {
+    if (Array.isArray(options)) {
+      row.appendChild(buildActionPicker(name, label, options, value ?? null));
+      continue;
+    }
     const btn = mk("button", "btn small", label);
     btn.type = "button";
     btn.onclick = () => wire.send("bit_action", { name }, btn);
     row.appendChild(btn);
   }
   return row;
+}
+
+// A refused pick puts every dropdown back on what the Bit has selected.
+function restoreActionPickers() {
+  for (const [select, value] of actionPickers) select.value = value;
 }
 
 function renderStatus(status, actions = []) {
@@ -589,6 +629,9 @@ export function init() {
     render();
   });
   wire.on("bit_status", (m) => renderStatus(m.status || {}, m.actions || []));
+  wire.on("error", (m) => {
+    if (m.command === "bit_action") restoreActionPickers();
+  });
   wire.on("room_loaded", (m) => {
     rooms = rooms.map((r) => Object.assign({}, r, { active: r.name === m.name }));
     // Cards capture the active room at build time, so close and rebuild the picker.

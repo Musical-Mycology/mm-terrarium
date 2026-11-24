@@ -538,5 +538,11 @@ def test_parse_bit_action():
     assert protocol.parse_admin_command(
         {"command": "bit_action", "name": "reset"}) == \
         protocol.BitActionCommand(name="reset")
+    assert protocol.parse_admin_command(
+        {"command": "bit_action", "name": "beats", "value": "beats2"}) == \
+        protocol.BitActionCommand(name="beats", value="beats2")
     with pytest.raises(ValueError):
         protocol.parse_admin_command({"command": "bit_action"})
+    with pytest.raises(ValueError):
+        protocol.parse_admin_command(
+            {"command": "bit_action", "name": "beats", "value": 2})
