@@ -2533,7 +2533,7 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   carry no programs. `status()` shows `music` and `state`. A `MusicCue` is Room
   audio only, so the music sounds from the Room's flsyn, not the devtower's
   speaker. Every four measures (`CYCLE_BEATS`, whatever the music), the note-ons
-  of the chosen beats' clips (`assets/judging/beatsN/*.mid`, every gesture's)
+  of the chosen beat maps (`assets/judging/{taps,swings,squeezes}/*.mid`)
   light the tower's four responders in the first measure only, red for
   a tap, green for a swing and blue for a squeeze (`GESTURE_RGB`), summed where
   gestures share a beat or one fades under another, each gesture
@@ -2541,23 +2541,38 @@ calls `bit_cls(config)`, so an earlier parameter silently gets the
   0.25 s and held behind the grid to meet the music at the speaker, since Arco takes no
   timestamps, so the sound cannot be sent early. The hold is CalibrationBit's
   saved mean tap delay (`Bit.carried`), else 175 ms (`LIGHT_DELAY_S`, hand-set),
-  and shows as `light delay` in `status()`. A tap on any player's shroom blinks every player's purple. Measures 2, 3 and 4 are the players' answer:
+  and shows as `light delay` in `status()`. Each gesture counts from one player only (`GESTURE_SEATS`): taps from player1, swings from player2, squeezes from player3; any other player's is ignored outright (not judged, printed, sounded or blinked). Each gesture blinks only its own player's shroom (`BLINK_RGB`): player1's tap magenta, player2's swing yellow, player3's squeeze cyan. Measures 2, 3 and 4 are the players' answer:
   measure 1's call repeated three times, each judged (`ANSWER_MEASURES`). Each shroom's tap takes the
-  nearest answer beat it has not yet taken within 0.25 beat either side, so the
+  nearest answer beat it has not yet taken within 0.35 beat either side, so the
   window in seconds follows the tempo, and earns 1 dead on, falling linearly to
   0 at the window's edge. A late tap is forgiven 20 ms first (`LATE_GRACE_S`),
   and the whole judgment runs 200 ms behind the grid (`JUDGE_DELAY_S`), so dead
   on is 200 ms after the beat; both are fixed in seconds. A beat with no tap
-  earns 0 and a stray tap earns nothing. The Console's Beats button picks the call,
-  one of `BEATS` (beats1..beats4, fixed at Start), each a folder of one-measure
-  clips under `assets/judging/beatsN/`, one per gesture it asks for (`tap.mid`,
-  `swing.mid`, `squeeze.mid`); all of them play in measure 1, are repeated in each of measures 2, 3 and 4, and each
+  earns 0 and a stray tap earns nothing. The Console's Tap, Swing and Squeeze dropdowns
+  pick the call, one beat map per gesture (fixed at Start): a one-measure clip
+  `assets/judging/taps/tap-X-Y.mid` (`swings/swing-X-Y.mid`,
+  `squeezes/squeeze-X-Y.mid`), X the difficulty and Y the variation, declared in
+  bit.toml's `[assets]` as `tap-X-Y` and listed by `map_choices` by difficulty
+  then variation, after `none` (`NO_MAP`), which asks for none of that gesture;
+  each starts on its first map. A new map needs only its file and its
+  `[assets]` line. The dropdowns' call is what the Test button plays, in every cycle
+  until unloaded. The Start button instead runs the game (`_decide`):
+  `GAME_MEASURES` (80) measures, `GAME_ROUNDS` (20) one-cycle rounds, then the
+  music is disabled and no more calls light or answers open. Each round's call
+  is picked as its first light comes due, from the round before: passed when
+  each asked gesture's player had more than `PASS_SHARE` (0.5) of its answer
+  beats GOOD, else the same call again. Stage 1 plays `STAGE1_CALLS`
+  (tap-1-1, swing-1-1, squeeze-1-1) one at a time; stage 2 random difficulty-1
+  maps for all three gestures, a different call after each pass, for
+  `STAGE2_PASSES` (5) passes; stage 3 the same from difficulty 1 and 2 until
+  the end. The round's call shows on the dropdowns, and `stage` and `round`
+  in `status()`. The chosen maps all play in measure 1, are repeated in each of measures 2, 3 and 4, and each
   answer beat is judged for its own gesture. A judged gesture plays, when GOOD,
   the key Basic Sine Keys has sounding at the answer beat it took (`good_key`,
-  `GOOD_KEY_TRACK`), or 49 (`BAD_TAP_KEY`) when BAD, on the shroom, guzheng
-  for a tap or swing and chime for a squeeze; unjudged, a tap plays guzheng 69,
-  a squeeze chime 75 and a swing nothing. A player's score, 0 to 1, is the mean over every answer beat closed
-  since Start, shown as `score <dev>` in `status()`. A tap earning more than
+  `GOOD_KEY_TRACK`), or 36 (`BAD_TAP_KEY`) when BAD, on the shroom, guzheng
+  for a tap, glissando for a swing and chime for a squeeze; unjudged, a tap
+  plays guzheng 69, a swing glissando 69 and a squeeze chime 75. A player's score, 0 to 1, is the mean over every answer beat of their own
+  gesture closed since Start, and their GOOD/BAD/MISS counts cover only those beats, shown as `score <dev>` in `status()`. A tap earning more than
   0.1 also adds 1 to the players' shared progress, out of 50, which fills the
   tower's 32-LED bar white from the bottom and shows as `progress`. The roles
   stay unscored JAM roles, so seating and Start are unaffected.
